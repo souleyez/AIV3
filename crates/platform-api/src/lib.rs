@@ -236,7 +236,9 @@ const ASSISTANT_RUN_REACT_REASON_TRACE_LIMIT: usize = 240;
 const ASSISTANT_RUN_REACT_MESSAGE_TRACE_LIMIT: usize = 240;
 const ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET: usize = 1;
 const ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET: usize = 3;
+const ASSISTANT_RUN_ANSWER_QUALITY_STRONG_COMPLAINT_RETRY_BUDGET: usize = 4;
 const ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET: usize = 4;
+const ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS: usize = 1200;
 
 #[derive(Clone, Debug)]
 struct AssistantRunReactOutcome {
@@ -251,6 +253,14 @@ struct AssistantRunReactOutcome {
 struct AssistantRunReactEvent {
     event_name: String,
     payload: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssistantRunQualityBudget {
+    answer_retry_budget: usize,
+    react_step_budget: usize,
+    premium_action_budget: usize,
+    reason: &'static str,
 }
 
 fn assistant_run_react_completed_event_payload(
@@ -9167,7 +9177,40 @@ async fn create_assistant_run(
     let (runtime_manifest, mut react_trail_steps, mut output_artifacts, react_events) =
         match react_outcome {
             Some(outcome) => {
-                evidence_state = outcome.evidence_state;
+                let mut outcome = outcome;
+                evidence_state = outcome.evidence_state.clone();
+                if let Some(retry_outcome) =
+                    maybe_run_assistant_run_answer_quality_retry_for_artifacts(
+                        &state,
+                        &request,
+                        run.id,
+                        &selected_scope,
+                        &evidence_state,
+                        &outcome.output_artifacts,
+                        local_thread_id.as_deref(),
+                        &active_secret_binding_ids,
+                        current_user_id,
+                        &react_runtime,
+                        &chat_runtime,
+                    )
+                    .await?
+                {
+                    evidence_state = retry_outcome.evidence_state;
+                    outcome.runtime_manifest = retry_outcome.runtime_manifest;
+                    outcome.execution_trail_steps.push(json!({
+                        "status": "completed",
+                        "label": "回答质量门禁扩供料",
+                        "runtime_mode": react_runtime.mode.as_str(),
+                        "provider": react_runtime.provider.as_str(),
+                        "model": react_runtime.model.as_str(),
+                        "at": Utc::now(),
+                    }));
+                    outcome
+                        .execution_trail_steps
+                        .extend(retry_outcome.execution_trail_steps);
+                    outcome.output_artifacts = retry_outcome.output_artifacts;
+                    outcome.events.extend(retry_outcome.events);
+                }
                 (
                     outcome.runtime_manifest,
                     outcome.execution_trail_steps,
@@ -11790,11 +11833,21 @@ async fn enqueue_external_source_sync_for_source(
     }
 
     let sync_kind = normalize_external_source_sync_kind(request.sync_kind.as_deref())?;
-    let checkpoint = normalize_external_source_sync_object(request.checkpoint, "checkpoint")?;
+    let mut checkpoint = normalize_external_source_sync_object(request.checkpoint, "checkpoint")?;
     let connector_context =
         normalize_external_source_sync_object(request.connector_context, "connector_context")?;
     let connector_context =
         external_source_sync_connector_context_for_execution(&source, connector_context)?;
+    if sync_kind == "incremental"
+        && external_source_sync_uses_mysql(&source, &connector_context)
+        && json_object_is_empty(&checkpoint)
+    {
+        if let Some(previous_checkpoint) =
+            load_latest_successful_external_source_checkpoint(state, &source.source_id).await?
+        {
+            checkpoint = previous_checkpoint;
+        }
+    }
     let sync_run_id = Uuid::new_v4();
     create_external_sync_run(state, sync_run_id, &source, &sync_kind, &checkpoint).await?;
 
@@ -16107,12 +16160,22 @@ async fn database_source_status_summary(
     )
     .await?;
     let dataset_readiness =
-        database_source_dataset_readiness_from_tables(default_dataset_id, &table_readiness);
+        database_source_dataset_readiness_from_tables(default_dataset_id.clone(), &table_readiness);
     let recent_sync_runs = load_database_source_recent_sync_runs(state, &source.source_id).await?;
     let sync_readiness =
         database_source_sync_readiness_summary(&dataset_readiness, &recent_sync_runs);
     let semantic_profile = database_source_semantic_profile_from_config(&source.config_redacted)
         .unwrap_or(Value::Null);
+    let health_findings = database_source_health_findings(
+        config.is_some(),
+        config_error.as_deref(),
+        default_dataset_id.as_deref(),
+        &dataset,
+        &table_readiness,
+        &sync_readiness,
+        &semantic_profile,
+        &configured_tables,
+    );
 
     Ok(json!({
         "config_valid": config.is_some(),
@@ -16123,8 +16186,331 @@ async fn database_source_status_summary(
         "recent_sync_runs": recent_sync_runs,
         "sync_readiness": sync_readiness,
         "semantic_profile": semantic_profile,
+        "health_findings": health_findings,
         "generated_at": Utc::now(),
     }))
+}
+
+fn database_source_health_findings(
+    config_valid: bool,
+    config_error: Option<&str>,
+    default_dataset_id: Option<&str>,
+    dataset: &Value,
+    table_readiness: &Value,
+    sync_readiness: &Value,
+    semantic_profile: &Value,
+    configured_tables: &[String],
+) -> Value {
+    let mut findings = Vec::new();
+    if !config_valid {
+        database_source_push_health_finding(
+            &mut findings,
+            "error",
+            "database_config_invalid",
+            "数据库源配置不可用",
+            config_error.unwrap_or("database_source config is invalid"),
+            None,
+            None,
+        );
+    }
+    if default_dataset_id.is_none() {
+        database_source_push_health_finding(
+            &mut findings,
+            "warning",
+            "target_dataset_unbound",
+            "未绑定默认数据集",
+            "数据库同步需要请求显式传入数据集，或先绑定默认数据集后再同步。",
+            None,
+            None,
+        );
+    } else if dataset.is_null() {
+        database_source_push_health_finding(
+            &mut findings,
+            "error",
+            "target_dataset_missing",
+            "默认数据集不可见",
+            "配置中的默认数据集不存在、已不可见或已被移除。",
+            None,
+            None,
+        );
+    }
+
+    let semantic_configured = semantic_profile
+        .as_object()
+        .map(|object| !object.is_empty())
+        .unwrap_or(false);
+    if config_valid && !semantic_configured {
+        database_source_push_health_finding(
+            &mut findings,
+            "warning",
+            "semantic_profile_missing",
+            "缺少语义画像",
+            "建议先执行数据库画像并应用配置，方便后续问答、报表和静态页理解表字段。",
+            None,
+            None,
+        );
+    } else if config_valid && semantic_configured {
+        let semantic_table_names = semantic_profile
+            .get("tables")
+            .and_then(Value::as_array)
+            .map(|tables| {
+                tables
+                    .iter()
+                    .filter_map(|table| table.get("table").and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|table| !table.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let missing_profile_tables = configured_tables
+            .iter()
+            .filter(|table| !semantic_table_names.contains(table.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing_profile_tables.is_empty() {
+            let preview = missing_profile_tables
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            database_source_push_health_finding(
+                &mut findings,
+                "warning",
+                "semantic_profile_table_gap",
+                "语义画像缺少映射表",
+                &format!("已映射表未出现在当前语义画像中，可能需要重新画像并应用配置：{preview}"),
+                None,
+                Some(missing_profile_tables.len() as i64),
+            );
+        }
+
+        let low_confidence_tables = semantic_profile
+            .get("tables")
+            .and_then(Value::as_array)
+            .map(|tables| {
+                tables
+                    .iter()
+                    .filter(|table| {
+                        database_source_count_from_keys(
+                            table,
+                            &["mapping_confidence", "mappingConfidence"],
+                        ) > 0
+                            && database_source_count_from_keys(
+                                table,
+                                &["mapping_confidence", "mappingConfidence"],
+                            ) < 60
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if low_confidence_tables > 0 {
+            database_source_push_health_finding(
+                &mut findings,
+                "warning",
+                "semantic_profile_low_confidence",
+                "语义画像置信度偏低",
+                "部分表的推荐映射置信度较低，建议人工确认主键、标题列、正文列和指标维度。",
+                None,
+                Some(low_confidence_tables as i64),
+            );
+        }
+    }
+
+    if let Some(tables) = table_readiness.as_array() {
+        let mut empty_tables = 0_i64;
+        let mut processing_tables = 0_i64;
+        let mut failed_tables = 0_i64;
+        let mut partial_tables = 0_i64;
+        for table in tables {
+            let signal = table
+                .get("signal")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            match signal {
+                "no_documents" => empty_tables += 1,
+                "processing" => processing_tables += 1,
+                "failed" => failed_tables += 1,
+                "partial_ready" => partial_tables += 1,
+                _ => {}
+            }
+        }
+        if empty_tables > 0 {
+            database_source_push_health_finding(
+                &mut findings,
+                "warning",
+                "mapped_tables_without_documents",
+                "映射表暂无入库文档",
+                "部分已映射表还没有同步出可问答文档。",
+                None,
+                Some(empty_tables),
+            );
+        }
+        if failed_tables > 0 {
+            database_source_push_health_finding(
+                &mut findings,
+                "error",
+                "mapped_tables_index_failed",
+                "映射表索引失败",
+                "部分数据库来源文档索引失败，需要查看解析/索引任务。",
+                None,
+                Some(failed_tables),
+            );
+        }
+        if processing_tables > 0 {
+            database_source_push_health_finding(
+                &mut findings,
+                "info",
+                "mapped_tables_indexing",
+                "映射表仍在处理中",
+                "部分数据库来源文档正在解析或索引，问答可用性会稍后提升。",
+                None,
+                Some(processing_tables),
+            );
+        }
+        if partial_tables > 0 {
+            database_source_push_health_finding(
+                &mut findings,
+                "warning",
+                "mapped_tables_partial_ready",
+                "映射表部分可问",
+                "部分表已有可用索引，但仍有失败或处理中记录。",
+                None,
+                Some(partial_tables),
+            );
+        }
+    }
+
+    let sync_signal = sync_readiness
+        .get("signal")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    match sync_signal {
+        "sync_failed" => database_source_push_health_finding(
+            &mut findings,
+            "error",
+            "latest_sync_failed",
+            "最近同步失败",
+            sync_readiness
+                .get("last_error")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    sync_readiness
+                        .get("failure_kind")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                })
+                .unwrap_or("最近一次数据库同步没有成功完成。"),
+            None,
+            None,
+        ),
+        "sync_running" | "sync_queued" | "indexing" => database_source_push_health_finding(
+            &mut findings,
+            "info",
+            "sync_or_indexing_in_progress",
+            "同步或索引进行中",
+            "数据库来源数据还在同步、解析或索引中。",
+            None,
+            None,
+        ),
+        "synced_no_documents" | "no_documents" => database_source_push_health_finding(
+            &mut findings,
+            "warning",
+            "latest_sync_no_documents",
+            "最近同步没有文档",
+            "最近同步已结束，但目标数据集中还没有数据库来源文档。",
+            None,
+            None,
+        ),
+        "index_failed" => database_source_push_health_finding(
+            &mut findings,
+            "error",
+            "dataset_index_failed",
+            "数据集索引失败",
+            "数据库来源文档已入库，但索引阶段失败。",
+            None,
+            None,
+        ),
+        _ => {}
+    }
+
+    let failed_row_count = value_i64(sync_readiness, "failed_row_count");
+    if failed_row_count > 0 {
+        database_source_push_health_finding(
+            &mut findings,
+            "warning",
+            "row_conversion_failures",
+            "存在行级转换失败",
+            "部分数据库行未能转换为文档，观测页已保留少量失败样本。",
+            None,
+            Some(failed_row_count),
+        );
+    }
+
+    let blocking_count = findings
+        .iter()
+        .filter(|item| item["severity"] == json!("error"))
+        .count();
+    let warning_count = findings
+        .iter()
+        .filter(|item| item["severity"] == json!("warning"))
+        .count();
+    let info_count = findings
+        .iter()
+        .filter(|item| item["severity"] == json!("info"))
+        .count();
+    let signal = if blocking_count > 0 {
+        "blocking"
+    } else if warning_count > 0 {
+        "attention"
+    } else if info_count > 0 {
+        "in_progress"
+    } else {
+        "ok"
+    };
+    json!({
+        "signal": signal,
+        "blocking_count": blocking_count,
+        "warning_count": warning_count,
+        "info_count": info_count,
+        "items": findings,
+    })
+}
+
+fn database_source_push_health_finding(
+    findings: &mut Vec<Value>,
+    severity: &str,
+    code: &str,
+    title: &str,
+    message: &str,
+    table: Option<&str>,
+    count: Option<i64>,
+) {
+    let mut object = serde_json::Map::new();
+    object.insert("severity".to_string(), json!(severity));
+    object.insert("code".to_string(), json!(code));
+    object.insert("title".to_string(), json!(title));
+    object.insert(
+        "message".to_string(),
+        json!(database_source_health_message_excerpt(message)),
+    );
+    if let Some(table) = table.filter(|value| !value.trim().is_empty()) {
+        object.insert("table".to_string(), json!(table.trim()));
+    }
+    if let Some(count) = count {
+        object.insert("count".to_string(), json!(count.max(0)));
+    }
+    findings.push(Value::Object(object));
+}
+
+fn database_source_health_message_excerpt(message: &str) -> String {
+    message
+        .chars()
+        .filter(|ch| !ch.is_control() || ch.is_whitespace())
+        .take(180)
+        .collect()
 }
 
 async fn load_database_source_default_dataset_summary(
@@ -16509,6 +16895,7 @@ fn database_source_sync_readiness_summary(
     };
 
     let table_counts = database_source_sync_table_counts_from_counts(counts);
+    let row_failure_samples = database_source_row_failure_samples_from_counts(counts);
     json!({
         "signal": signal,
         "dataset_signal": dataset_signal,
@@ -16545,6 +16932,7 @@ fn database_source_sync_readiness_summary(
         "failed_row_count": database_source_count_from_keys(counts, &["failed_row_count"]),
         "enqueued_task_count": database_source_count_from_keys(counts, &["enqueued_task_count"]),
         "table_counts": table_counts,
+        "row_failure_samples": row_failure_samples,
         "checkpoint_summary": checkpoint_summary,
         "updated_at": latest_run.get("updated_at").cloned().unwrap_or(Value::Null),
     })
@@ -16595,6 +16983,51 @@ fn database_source_sync_table_counts_from_counts(counts: &Value) -> Value {
                 }))
             })
             .collect(),
+    )
+}
+
+fn database_source_row_failure_samples_from_counts(counts: &Value) -> Value {
+    Value::Array(
+        counts
+            .get("row_failure_samples")
+            .or_else(|| counts.get("rowFailureSamples"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .take(8)
+                    .filter_map(|item| {
+                        let object = item.as_object()?;
+                        let table = object.get("table").and_then(Value::as_str)?.trim();
+                        if table.is_empty() {
+                            return None;
+                        }
+                        let reason = object
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("row_conversion_failed")
+                            .chars()
+                            .filter(|ch| !ch.is_control() || ch.is_whitespace())
+                            .take(160)
+                            .collect::<String>();
+                        Some(json!({
+                            "table": table,
+                            "row_index": object
+                                .get("row_index")
+                                .or_else(|| object.get("rowIndex"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0),
+                            "reason": reason,
+                            "source_primary_key": object
+                                .get("source_primary_key")
+                                .or_else(|| object.get("sourcePrimaryKey"))
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
     )
 }
 
@@ -16808,6 +17241,46 @@ fn normalize_external_source_sync_object(
         "validation_error",
         format!("{field} must be a JSON object"),
     ))
+}
+
+fn json_object_is_empty(value: &Value) -> bool {
+    value
+        .as_object()
+        .map(|object| object.is_empty())
+        .unwrap_or(false)
+}
+
+async fn load_latest_successful_external_source_checkpoint(
+    state: &AppState,
+    source_id: &str,
+) -> std::result::Result<Option<Value>, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select checkpoint
+        from external_sync_runs
+        where tenant_id = $1
+          and source_id = $2
+          and status = 'succeeded'
+          and checkpoint <> '{}'::jsonb
+        order by updated_at desc
+        limit 1
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(source_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let checkpoint: Value = row.get("checkpoint");
+    if json_object_is_empty(&checkpoint) {
+        Ok(None)
+    } else {
+        Ok(Some(checkpoint))
+    }
 }
 
 async fn create_external_sync_run(
@@ -20513,6 +20986,24 @@ async fn continue_assistant_run_stream(
     Ok(sse_stream_response(stream))
 }
 
+fn assistant_run_create_request_from_continue(
+    run: &AssistantRun,
+    request: &ContinueAssistantRunRequest,
+    continue_prompt: &str,
+    selected_scope: &Value,
+) -> CreateAssistantRunRequest {
+    CreateAssistantRunRequest {
+        prompt: continue_prompt.trim().to_string(),
+        local_thread_id: run.local_thread_id.clone(),
+        startup_briefing: Some(run.startup_briefing.clone()),
+        selected_scope: Some(selected_scope.clone()),
+        scope_candidates: value_array(run.scope_candidates.clone()),
+        context_policy_hint: Some(run.context_policy.clone()),
+        current_artifact: request.current_artifact.clone(),
+        messages: request.messages.clone(),
+    }
+}
+
 async fn continue_assistant_run_loaded(
     state: &AppState,
     run_id: AssistantRunId,
@@ -20600,7 +21091,7 @@ async fn continue_assistant_run_loaded(
         None
     };
 
-    let (runtime_manifest, mut react_trail_steps, assistant_artifacts, react_events) =
+    let (mut runtime_manifest, mut react_trail_steps, mut assistant_artifacts, mut react_events) =
         match react_outcome {
             Some(outcome) => {
                 evidence_state = outcome.evidence_state;
@@ -20648,6 +21139,41 @@ async fn continue_assistant_run_loaded(
                 )
             }
         };
+    let quality_gate_request = assistant_run_create_request_from_continue(
+        &run,
+        &request,
+        &continue_prompt,
+        &selected_scope,
+    );
+    if let Some(retry_outcome) = maybe_run_assistant_run_answer_quality_retry_for_artifacts(
+        state,
+        &quality_gate_request,
+        run_id,
+        &selected_scope,
+        &evidence_state,
+        &assistant_artifacts,
+        run.local_thread_id.as_deref(),
+        active_secret_binding_ids,
+        current_user_id,
+        &react_runtime,
+        &chat_runtime,
+    )
+    .await?
+    {
+        evidence_state = retry_outcome.evidence_state;
+        runtime_manifest = retry_outcome.runtime_manifest;
+        react_trail_steps.push(json!({
+            "status": "completed",
+            "label": "回答质量门禁扩供料",
+            "runtime_mode": react_runtime.mode.as_str(),
+            "provider": react_runtime.provider.as_str(),
+            "model": react_runtime.model.as_str(),
+            "at": Utc::now(),
+        }));
+        react_trail_steps.extend(retry_outcome.execution_trail_steps);
+        assistant_artifacts = retry_outcome.output_artifacts;
+        react_events.extend(retry_outcome.events);
+    }
 
     let now = Utc::now();
     let mut execution_trail = value_array(run.execution_trail.clone());
@@ -24789,6 +25315,27 @@ fn assistant_run_direct_answer_response(output_text: String) -> LlmResponse {
     }
 }
 
+fn assistant_run_answer_quality_synthetic_response(output_text: String) -> LlmResponse {
+    LlmResponse {
+        output_text,
+        runtime: LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Placeholder,
+            provider: "platform_answer_quality_gate".to_string(),
+            model: "synthetic-candidate-answer".to_string(),
+            lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+            request_id: None,
+            finish_reason: Some(LlmFinishReason::Stop),
+            provider_failure: None,
+            latency_ms: Some(0),
+            usage: None,
+            system_prompt_key: None,
+            system_prompt_version: None,
+            tool_trace_count: 0,
+        },
+        tool_calls: Vec::new(),
+    }
+}
+
 fn escape_markdown_table_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
@@ -25367,6 +25914,41 @@ async fn complete_assistant_run_react_natural_answer_fallback(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn maybe_run_assistant_run_answer_quality_retry_for_artifacts(
+    state: &AppState,
+    request: &CreateAssistantRunRequest,
+    active_assistant_run_id: AssistantRunId,
+    selected_scope: &Value,
+    initial_evidence_state: &Value,
+    output_artifacts: &[Value],
+    local_thread_id: Option<&str>,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+    react_runtime: &LlmRuntimeSelection,
+    chat_runtime: &LlmRuntimeSelection,
+) -> std::result::Result<Option<AssistantRunReactOutcome>, ApiError> {
+    let Some(answer) = assistant_run_assistant_message_content_from_artifacts(output_artifacts)
+    else {
+        return Ok(None);
+    };
+    let response = assistant_run_answer_quality_synthetic_response(answer);
+    maybe_run_assistant_run_answer_quality_retry_for_create(
+        state,
+        request,
+        active_assistant_run_id,
+        selected_scope,
+        initial_evidence_state,
+        &response,
+        local_thread_id,
+        active_secret_binding_ids,
+        current_user_id,
+        react_runtime,
+        chat_runtime,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn maybe_run_assistant_run_answer_quality_retry_for_create(
     state: &AppState,
     request: &CreateAssistantRunRequest,
@@ -25383,7 +25965,9 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
     if chat_runtime.mode == "placeholder" || react_runtime.mode == "placeholder" {
         return Ok(None);
     }
-    let budget = assistant_run_answer_quality_retry_budget(request);
+    let quality_budget =
+        assistant_run_answer_quality_budget_for_evidence(request, initial_evidence_state);
+    let budget = quality_budget.answer_retry_budget;
     if budget == 0 {
         return Ok(None);
     }
@@ -25391,13 +25975,17 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
     let mut current_answer = initial_response.output_text.trim().to_string();
     let mut current_evidence_state = initial_evidence_state.clone();
     let mut last_outcome = None;
+    let mut budget_event_emitted = false;
 
     for attempt_index in 1..=budget {
-        let Some(reason) = assistant_run_answer_quality_retry_reason(
+        let Some(reason) = assistant_run_answer_quality_retry_reason_with_judge(
             &current_answer,
             &current_evidence_state,
             request,
-        ) else {
+            chat_runtime,
+        )
+        .await
+        else {
             break;
         };
         let retry_scope = assistant_run_answer_quality_retry_scope(
@@ -25410,6 +25998,7 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
             &retry_scope,
             attempt_index,
             budget,
+            &quality_budget,
             reason,
             &current_answer,
         );
@@ -25425,7 +26014,7 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
         retry_evidence_state = assistant_run_answer_quality_retry_evidence_state(
             retry_evidence_state,
             attempt_index,
-            budget,
+            &quality_budget,
             reason,
         );
         retry_request.selected_scope = Some(retry_scope.clone());
@@ -25456,6 +26045,25 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
         .await
         {
             Ok(mut outcome) => {
+                if !budget_event_emitted {
+                    outcome.events.insert(0, AssistantRunReactEvent {
+                        event_name: "assistant_run.answer_quality_gate.budget_selected".to_string(),
+                        payload: json!({
+                            "answer_retry_budget": quality_budget.answer_retry_budget,
+                            "react_step_budget": quality_budget.react_step_budget,
+                            "premium_action_budget": quality_budget.premium_action_budget,
+                            "reason": quality_budget.reason,
+                            "dissatisfaction": if assistant_run_request_expresses_strong_complaint(request) {
+                                "strong_complaint"
+                            } else if assistant_run_request_expresses_dissatisfaction(request) {
+                                "dissatisfied"
+                            } else {
+                                "none"
+                            },
+                        }),
+                    });
+                    budget_event_emitted = true;
+                }
                 outcome.events.insert(0, started_event);
                 outcome
             }
@@ -25488,14 +26096,17 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
         let next_answer =
             assistant_run_assistant_message_content_from_artifacts(&outcome.output_artifacts)
                 .unwrap_or_default();
-        let next_reason = assistant_run_answer_quality_retry_reason(
+        let next_reason = assistant_run_answer_quality_retry_reason_with_judge(
             &next_answer,
             &outcome.evidence_state,
             request,
-        );
+            chat_runtime,
+        )
+        .await;
         let mut outcome = outcome;
+        let retry_exhausted = next_reason.is_some() && attempt_index >= budget;
         outcome.events.push(AssistantRunReactEvent {
-            event_name: if next_reason.is_some() && attempt_index >= budget {
+            event_name: if retry_exhausted {
                 "assistant_run.answer_quality_gate.retry_exhausted".to_string()
             } else {
                 "assistant_run.answer_quality_gate.retry_completed".to_string()
@@ -25509,12 +26120,37 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
                 "assistant_message_chars": next_answer.chars().count(),
             }),
         });
+        let accepted_answer =
+            if let Some(remaining_reason) = next_reason.filter(|_| retry_exhausted) {
+                let controlled_answer = assistant_run_answer_quality_exhausted_controlled_answer(
+                    &outcome.evidence_state,
+                    request,
+                    remaining_reason,
+                );
+                outcome.output_artifacts = assistant_run_replace_assistant_message_content(
+                    outcome.output_artifacts,
+                    &controlled_answer,
+                );
+                outcome.events.push(AssistantRunReactEvent {
+                    event_name: "assistant_run.answer_quality_gate.exhausted_controlled_fallback"
+                        .to_string(),
+                    payload: json!({
+                        "attempt": attempt_index,
+                        "budget": budget,
+                        "remaining_reason": remaining_reason,
+                        "assistant_message_chars": controlled_answer.chars().count(),
+                    }),
+                });
+                controlled_answer
+            } else {
+                next_answer
+            };
         outcome.output_artifacts =
             assistant_run_sanitize_customer_facing_output_artifacts(outcome.output_artifacts);
 
-        current_answer = next_answer;
+        current_answer = accepted_answer;
         current_evidence_state = outcome.evidence_state.clone();
-        let accepted = next_reason.is_none() || attempt_index >= budget;
+        let accepted = next_reason.is_none() || retry_exhausted;
         last_outcome = Some(outcome);
         if accepted {
             break;
@@ -25524,17 +26160,135 @@ async fn maybe_run_assistant_run_answer_quality_retry_for_create(
     Ok(last_outcome)
 }
 
+fn assistant_run_replace_assistant_message_content(
+    mut output_artifacts: Vec<Value>,
+    content: &str,
+) -> Vec<Value> {
+    for artifact in output_artifacts.iter_mut() {
+        if artifact.get("type").and_then(Value::as_str) == Some("assistant_message") {
+            set_payload_string(artifact, "content", content);
+            return output_artifacts;
+        }
+    }
+    output_artifacts.push(json!({
+        "type": "assistant_message",
+        "role": ChatMessageRole::Assistant.as_str(),
+        "content": content,
+        "source": "answer_quality_gate_exhausted_controlled_fallback",
+    }));
+    output_artifacts
+}
+
+fn assistant_run_answer_quality_exhausted_controlled_answer(
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+    _remaining_reason: &str,
+) -> String {
+    let supplied_count = evidence_state
+        .get("supply_quality")
+        .and_then(|quality| quality.get("suppliedItemCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let is_dissatisfied = assistant_run_request_expresses_dissatisfaction(request);
+    if supplied_count > 0 {
+        if is_dissatisfied {
+            return "我已重新核对可见材料并扩大读取范围，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；可以指定材料、页码或表格范围继续核对。".to_string();
+        }
+        return "我已重新核对当前可见材料，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；可以指定材料、页码或表格范围继续核对。".to_string();
+    }
+    "我已尝试重新获取可见材料，但这轮没有形成可核验结论。为避免误判，我先不编造结论；可以指定材料范围或稍后再试。".to_string()
+}
+
+#[cfg(test)]
 fn assistant_run_answer_quality_retry_budget(request: &CreateAssistantRunRequest) -> usize {
-    let default_budget = if assistant_run_request_expresses_dissatisfaction(request) {
-        ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET
+    assistant_run_answer_quality_budget(request).answer_retry_budget
+}
+
+fn assistant_run_answer_quality_budget(
+    request: &CreateAssistantRunRequest,
+) -> AssistantRunQualityBudget {
+    let mut budget = if assistant_run_request_expresses_strong_complaint(request) {
+        AssistantRunQualityBudget {
+            answer_retry_budget: ASSISTANT_RUN_ANSWER_QUALITY_STRONG_COMPLAINT_RETRY_BUDGET,
+            react_step_budget: ASSISTANT_RUN_REACT_MAX_STEPS,
+            premium_action_budget: 1,
+            reason: "strong_complaint",
+        }
+    } else if assistant_run_request_expresses_dissatisfaction(request) {
+        AssistantRunQualityBudget {
+            answer_retry_budget: ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET,
+            react_step_budget: ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS,
+            premium_action_budget: 1,
+            reason: "dissatisfied",
+        }
     } else {
-        ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET
+        AssistantRunQualityBudget {
+            answer_retry_budget: ASSISTANT_RUN_ANSWER_QUALITY_DEFAULT_RETRY_BUDGET,
+            react_step_budget: ASSISTANT_RUN_REACT_DEFAULT_MAX_STEPS,
+            premium_action_budget: 0,
+            reason: "default",
+        }
     };
+    if let Some(env_budget) = assistant_run_answer_quality_retry_budget_from_env() {
+        budget.answer_retry_budget = env_budget.min(ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET);
+        budget.reason = "env_override";
+    }
+    budget.answer_retry_budget = budget
+        .answer_retry_budget
+        .min(ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET);
+    budget
+}
+
+fn assistant_run_answer_quality_budget_for_evidence(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> AssistantRunQualityBudget {
+    let mut budget = assistant_run_answer_quality_budget(request);
+    if budget.reason == "default"
+        && assistant_run_prompt_is_high_risk_quality_task(&request.prompt)
+        && assistant_run_supply_quality_suggests_parse_recovery(evidence_state)
+    {
+        budget.answer_retry_budget = budget.answer_retry_budget.max(2);
+        budget.premium_action_budget = budget.premium_action_budget.max(1);
+        budget.reason = "parse_quality_recovery";
+    }
+    budget
+}
+
+fn assistant_run_answer_quality_retry_budget_from_env() -> Option<usize> {
     std::env::var("ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(default_budget)
-        .min(ASSISTANT_RUN_ANSWER_QUALITY_MAX_RETRY_BUDGET)
+}
+
+fn assistant_run_supply_quality_suggests_parse_recovery(evidence_state: &Value) -> bool {
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return false;
+    };
+    [
+        "lowTextEvidenceCount",
+        "documentDegradedParseCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+    ]
+    .iter()
+    .any(|key| {
+        supply_quality
+            .get(*key)
+            .and_then(Value::as_u64)
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    }) || supply_quality
+        .get("notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|note| {
+            matches!(
+                note.as_str(),
+                Some("low_text_document_evidence") | Some("parse_quality_degraded")
+            )
+        })
 }
 
 fn assistant_run_request_expresses_dissatisfaction(request: &CreateAssistantRunRequest) -> bool {
@@ -25584,6 +26338,358 @@ fn assistant_run_request_expresses_dissatisfaction(request: &CreateAssistantRunR
                 "complaint",
             ],
         )
+    })
+}
+
+fn assistant_run_request_expresses_strong_complaint(request: &CreateAssistantRunRequest) -> bool {
+    let mut texts = vec![request.prompt.as_str()];
+    texts.extend(
+        request
+            .messages
+            .iter()
+            .rev()
+            .take(6)
+            .map(|message| message.content.as_str()),
+    );
+    texts.into_iter().any(|text| {
+        let lower = text.to_ascii_lowercase();
+        prompt_contains_any(
+            text,
+            &[
+                "严重不满",
+                "很不满意",
+                "非常不满意",
+                "客户很不满意",
+                "反复答错",
+                "多次答错",
+                "严重错误",
+                "线上事故",
+                "投诉",
+            ],
+        ) || ascii_prompt_contains_any(
+            &lower,
+            &[
+                "strong complaint",
+                "formal complaint",
+                "very dissatisfied",
+                "repeatedly wrong",
+                "critical failure",
+                "incident",
+                "escalation",
+            ],
+        )
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AssistantRunAnswerQualityJudgeDecision {
+    verdict: AssistantRunAnswerQualityJudgeVerdict,
+    reason: String,
+    confidence: f64,
+    customer_safe: bool,
+    required_actions: Vec<String>,
+    premium_action_allowed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AssistantRunAnswerQualityJudgeVerdict {
+    Accept,
+    Retry,
+    ControlledFallback,
+}
+
+async fn assistant_run_answer_quality_retry_reason_with_judge(
+    output_text: &str,
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+    chat_runtime: &LlmRuntimeSelection,
+) -> Option<&'static str> {
+    if let Some(reason) =
+        assistant_run_answer_quality_retry_reason(output_text, evidence_state, request)
+    {
+        return Some(reason);
+    }
+    if !assistant_run_answer_quality_judge_should_run(output_text, evidence_state, request) {
+        return None;
+    }
+    let decision = complete_assistant_run_answer_quality_judge(
+        chat_runtime,
+        request,
+        evidence_state,
+        output_text,
+    )
+    .await?;
+    assistant_run_answer_quality_retry_reason_from_judge_decision(&decision)
+}
+
+fn assistant_run_answer_quality_retry_reason_from_judge_decision(
+    decision: &AssistantRunAnswerQualityJudgeDecision,
+) -> Option<&'static str> {
+    if !decision.customer_safe {
+        return Some("model_judge_customer_unsafe_answer");
+    }
+    match decision.verdict {
+        AssistantRunAnswerQualityJudgeVerdict::Accept => None,
+        AssistantRunAnswerQualityJudgeVerdict::Retry => match decision.reason.as_str() {
+            "parse_quality_insufficient" => Some("model_judge_parse_quality_insufficient"),
+            "incomplete_task" => Some("model_judge_incomplete_task"),
+            "ungrounded" => Some("model_judge_ungrounded_answer"),
+            "low_customer_confidence" => Some("model_judge_low_customer_confidence"),
+            "unsafe_internal_leak" => Some("model_judge_customer_unsafe_answer"),
+            _ => Some("model_judge_retry"),
+        },
+        AssistantRunAnswerQualityJudgeVerdict::ControlledFallback => None,
+    }
+}
+
+fn assistant_run_answer_quality_judge_should_run(
+    output_text: &str,
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+) -> bool {
+    if !assistant_run_answer_quality_retry_allowed(output_text, evidence_state) {
+        return false;
+    }
+    if assistant_run_request_expresses_dissatisfaction(request) {
+        return true;
+    }
+    if assistant_run_answer_contains_weak_confidence_marker(output_text) {
+        return true;
+    }
+    if assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
+        return true;
+    }
+    if assistant_run_supply_quality_needs_judge(evidence_state) {
+        return true;
+    }
+    assistant_run_answer_is_short_for_structured_request(output_text, request, evidence_state)
+}
+
+fn assistant_run_prompt_is_high_risk_quality_task(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    prompt_contains_any(
+        prompt,
+        &[
+            "是谁",
+            "谁是",
+            "哪些",
+            "多少",
+            "统计",
+            "汇总",
+            "排序",
+            "排行",
+            "排名",
+            "表格",
+            "出表",
+            "缺勤",
+            "工时",
+            "最长",
+            "最短",
+            "公司名",
+            "智能家居",
+            "智能梯控",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "who",
+            "which",
+            "how many",
+            "count",
+            "statistic",
+            "sort",
+            "rank",
+            "table",
+            "absence",
+            "work hour",
+        ],
+    ) || prompt_requests_document_entity_scan(prompt)
+        || prompt_requests_company_entity_statistics(prompt)
+        || prompt_requests_table_statistics(prompt)
+        || prompt_requests_resume_skill_ranking(prompt)
+        || prompt_requests_resume_project_ranking(prompt)
+        || prompt_requests_resume_position_ranking(prompt)
+        || prompt_requests_resume_location_ranking(prompt)
+        || prompt_requests_resume_company_ranking(prompt)
+        || prompt_requests_resume_education_ranking(prompt)
+        || prompt_requests_resume_certificate_ranking(prompt)
+}
+
+fn assistant_run_supply_quality_needs_judge(evidence_state: &Value) -> bool {
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return false;
+    };
+    [
+        "fallbackChunkCount",
+        "lowTextEvidenceCount",
+        "documentDegradedParseCount",
+        "documentNotReadyCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+    ]
+    .iter()
+    .any(|key| {
+        supply_quality
+            .get(*key)
+            .and_then(Value::as_u64)
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    }) || supply_quality
+        .get("notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|note| {
+            matches!(
+                note.as_str(),
+                Some("fallback_visible_document_chunks_used")
+                    | Some("low_text_document_evidence")
+                    | Some("parse_quality_degraded")
+            )
+        })
+}
+
+fn assistant_run_answer_is_short_for_structured_request(
+    output_text: &str,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> bool {
+    if !assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
+        return false;
+    }
+    let supplied_count = evidence_state
+        .get("supply_quality")
+        .and_then(|quality| quality.get("suppliedItemCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    supplied_count > 0 && output_text.chars().count() < 80
+}
+
+async fn complete_assistant_run_answer_quality_judge(
+    chat_runtime: &LlmRuntimeSelection,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+    output_text: &str,
+) -> Option<AssistantRunAnswerQualityJudgeDecision> {
+    if chat_runtime.mode == "placeholder" || !assistant_run_answer_quality_judge_enabled() {
+        return None;
+    }
+    let provider_input =
+        build_assistant_run_answer_quality_judge_input(request, evidence_state, output_text);
+    let response = complete_assistant_run_provider(
+        MODEL_LANE_ASSISTANT_CHAT,
+        chat_runtime.mode.clone(),
+        chat_runtime.provider.clone(),
+        chat_runtime.model.clone(),
+        provider_input,
+    )
+    .await
+    .ok()?;
+    parse_assistant_run_answer_quality_judge_decision(&response.output_text)
+}
+
+fn assistant_run_answer_quality_judge_enabled() -> bool {
+    std::env::var("ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ENABLED")
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off"
+            )
+        })
+        .unwrap_or(true)
+}
+
+fn build_assistant_run_answer_quality_judge_input(
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+    output_text: &str,
+) -> String {
+    let supply_quality = evidence_state
+        .get("supply_quality")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let model_evidence_state = assistant_run_model_evidence_state(evidence_state);
+    let supply_brief = build_assistant_run_model_supply_brief(evidence_state)
+        .unwrap_or_else(|| "无供料摘要。".to_string());
+    let answer_excerpt = output_text
+        .chars()
+        .take(ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS)
+        .collect::<String>();
+    [
+        "你是 V3 AssistantRun 的内部回答质量判卷器，只能输出 JSON，不能回答用户。".to_string(),
+        "根据用户问题、供料状态、可回答证据摘要和候选答案，判断候选答案是否可以安全给客户。".to_string(),
+        "硬规则：如果已有证据但候选答案推脱、遗漏表格/统计/排序任务、没有回答实体问题、或含内部状态泄露，应 verdict=retry。".to_string(),
+        "如果解析质量明显阻塞且可通过升级解析恢复，required_actions 包含 upgrade_parse_vlm；但不要自行回答材料内容。".to_string(),
+        "如果确实不可答且没有可靠升级路径，可 verdict=controlled_fallback。".to_string(),
+        r#"只输出 JSON Schema：{"verdict":"accept|retry|controlled_fallback","reason":"ok|insufficient_evidence|ungrounded|incomplete_task|parse_quality_insufficient|low_customer_confidence|unsafe_internal_leak","confidence":0.0,"customer_safe":true,"required_actions":["retrieve_evidence","read_document_detail"],"premium_action_allowed":false}"#.to_string(),
+        format!("用户问题：{}", request.prompt.trim()),
+        format!(
+            "供料质量：{}",
+            serde_json::to_string(&supply_quality).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!("供料摘要：\n{supply_brief}"),
+        format!(
+            "可回答证据摘要：{}",
+            serde_json::to_string(&model_evidence_state).unwrap_or_else(|_| "{}".to_string())
+        ),
+        format!("候选答案：\n{answer_excerpt}"),
+    ]
+    .join("\n\n")
+}
+
+fn parse_assistant_run_answer_quality_judge_decision(
+    raw: &str,
+) -> Option<AssistantRunAnswerQualityJudgeDecision> {
+    let candidate = assistant_run_react_json_payload_candidate(raw)?;
+    let value = serde_json::from_str::<Value>(&candidate).ok()?;
+    let verdict = value.get("verdict").and_then(Value::as_str)?;
+    let verdict = match verdict.trim().to_ascii_lowercase().as_str() {
+        "accept" => AssistantRunAnswerQualityJudgeVerdict::Accept,
+        "retry" => AssistantRunAnswerQualityJudgeVerdict::Retry,
+        "controlled_fallback" | "controlled-fallback" | "fallback" => {
+            AssistantRunAnswerQualityJudgeVerdict::ControlledFallback
+        }
+        _ => return None,
+    };
+    let reason = value
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(|reason| reason.trim().to_ascii_lowercase())
+        .filter(|reason| !reason.is_empty())
+        .unwrap_or_else(|| "ok".to_string());
+    let confidence = value
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let customer_safe = value
+        .get("customer_safe")
+        .or_else(|| value.get("customerSafe"))
+        .and_then(Value::as_bool)
+        .unwrap_or(verdict == AssistantRunAnswerQualityJudgeVerdict::Accept);
+    let required_actions = value
+        .get("required_actions")
+        .or_else(|| value.get("requiredActions"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|action| !action.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let premium_action_allowed = value
+        .get("premium_action_allowed")
+        .or_else(|| value.get("premiumActionAllowed"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Some(AssistantRunAnswerQualityJudgeDecision {
+        verdict,
+        reason,
+        confidence,
+        customer_safe,
+        required_actions,
+        premium_action_allowed,
     })
 }
 
@@ -25856,6 +26962,7 @@ fn assistant_run_answer_quality_retry_request(
     retry_scope: &Value,
     attempt_index: usize,
     budget: usize,
+    quality_budget: &AssistantRunQualityBudget,
     reason: &str,
     previous_answer: &str,
 ) -> CreateAssistantRunRequest {
@@ -25873,6 +26980,9 @@ fn assistant_run_answer_quality_retry_request(
             "status": "retrying",
             "attempt": attempt_index,
             "budget": budget,
+            "reactStepBudget": quality_budget.react_step_budget,
+            "premiumActionBudget": quality_budget.premium_action_budget,
+            "premiumActionUsed": 0,
             "reason": reason,
             "strategy": "Run ReAct to expand supply/read detail before producing customer-visible text.",
             "previousAnswerExcerpt": truncate_assistant_supply_text(previous_answer, 600),
@@ -25886,7 +26996,7 @@ fn assistant_run_answer_quality_retry_request(
 fn assistant_run_answer_quality_retry_evidence_state(
     mut evidence_state: Value,
     attempt_index: usize,
-    budget: usize,
+    quality_budget: &AssistantRunQualityBudget,
     reason: &str,
 ) -> Value {
     set_payload_value(
@@ -25895,7 +27005,11 @@ fn assistant_run_answer_quality_retry_evidence_state(
         json!({
             "status": "retrying",
             "attempt": attempt_index,
-            "budget": budget,
+            "budget": quality_budget.answer_retry_budget,
+            "react_step_budget": quality_budget.react_step_budget,
+            "premium_action_budget": quality_budget.premium_action_budget,
+            "premium_action_used": 0,
+            "vlm_upgrade_document_ids": [],
             "reason": reason,
             "strategy": "detail_first_react_expand_supply",
         }),
@@ -26575,10 +27689,10 @@ fn build_assistant_run_react_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
@@ -26663,10 +27777,10 @@ fn build_assistant_run_react_continue_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
@@ -27447,12 +28561,14 @@ fn assistant_run_react_has_supply_observation(
                 .is_some_and(|status| status == "completed")
                 && observation
                     .get("action_type")
+                    .or_else(|| observation.get("actionType"))
                     .and_then(Value::as_str)
                     .is_some_and(|action_type| {
                         matches!(
                             action_type,
                             "retrieve_evidence"
                                 | "read_document_detail"
+                                | "upgrade_parse_vlm"
                                 | "recall_conversation_memory"
                         )
                     })
@@ -58961,6 +60077,219 @@ mod tests {
             assistant_run_answer_quality_retry_budget(&request),
             ASSISTANT_RUN_ANSWER_QUALITY_DISSATISFIED_RETRY_BUDGET
         );
+        assert_eq!(
+            assistant_run_answer_quality_budget(&request).premium_action_budget,
+            1
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_increases_budget_for_strong_complaint() {
+        std::env::remove_var("ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET");
+        let request = CreateAssistantRunRequest {
+            prompt: "客户很不满意，已经投诉了，前面反复答错。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        assert!(assistant_run_request_expresses_dissatisfaction(&request));
+        assert!(assistant_run_request_expresses_strong_complaint(&request));
+        assert_eq!(
+            assistant_run_answer_quality_retry_budget(&request),
+            ASSISTANT_RUN_ANSWER_QUALITY_STRONG_COMPLAINT_RETRY_BUDGET
+        );
+        assert_eq!(
+            assistant_run_answer_quality_budget(&request).premium_action_budget,
+            1
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_budget_allows_parse_recovery_premium_action() {
+        std::env::remove_var("ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET");
+        let request = CreateAssistantRunRequest {
+            prompt: "这份扫描 PDF 里邓工是谁？请直接回答。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "lowTextEvidenceCount": 1,
+                "documentDegradedParseCount": 1,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0,
+                "notes": ["low_text_document_evidence"]
+            }
+        });
+
+        let budget = assistant_run_answer_quality_budget_for_evidence(&request, &evidence_state);
+
+        assert_eq!(budget.answer_retry_budget, 2);
+        assert_eq!(budget.premium_action_budget, 1);
+        assert_eq!(budget.reason, "parse_quality_recovery");
+
+        let retry_evidence_state = assistant_run_answer_quality_retry_evidence_state(
+            json!({"status": "supplied"}),
+            1,
+            &budget,
+            "model_judge_parse_quality_insufficient",
+        );
+        assert_eq!(
+            retry_evidence_state["answer_quality_gate"]["premium_action_budget"],
+            json!(1)
+        );
+        assert_eq!(
+            retry_evidence_state["answer_quality_gate"]["premium_action_used"],
+            json!(0)
+        );
+        assert_eq!(
+            retry_evidence_state["answer_quality_gate"]["vlm_upgrade_document_ids"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_exhausted_fallback_avoids_retry_markers() {
+        let request = CreateAssistantRunRequest {
+            prompt: "客户有些不满意，重新查这份考勤表缺勤和工时。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 20,
+                "indexedEvidenceCount": 19,
+                "spreadsheetRowAnalysisCount": 1,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0
+            }
+        });
+
+        let fallback = assistant_run_answer_quality_exhausted_controlled_answer(
+            &evidence_state,
+            &request,
+            "insufficient_or_uncertain_answer",
+        );
+
+        assert!(!assistant_run_answer_contains_insufficient_evidence_marker(
+            &fallback
+        ));
+        assert!(!fallback.contains("内部"));
+        assert!(!fallback.contains("需要先检索"));
+        assert!(!fallback.contains("请继续"));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_judge_parses_fenced_json_decision() {
+        let decision = parse_assistant_run_answer_quality_judge_decision(
+            r#"```json
+{
+  "verdict": "retry",
+  "reason": "parse_quality_insufficient",
+  "confidence": 0.72,
+  "customer_safe": false,
+  "required_actions": ["read_document_detail", "upgrade_parse_vlm"],
+  "premium_action_allowed": true
+}
+```"#,
+        )
+        .expect("judge decision should parse");
+
+        assert_eq!(
+            decision.verdict,
+            AssistantRunAnswerQualityJudgeVerdict::Retry
+        );
+        assert_eq!(decision.reason, "parse_quality_insufficient");
+        assert_eq!(decision.confidence, 0.72);
+        assert!(!decision.customer_safe);
+        assert!(decision
+            .required_actions
+            .iter()
+            .any(|action| action == "upgrade_parse_vlm"));
+        assert!(decision.premium_action_allowed);
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason_from_judge_decision(&decision),
+            Some("model_judge_customer_unsafe_answer")
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_judge_runs_for_structured_short_answer() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份 doc 里邓工是谁？请直接回答。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 2,
+                "indexedEvidenceCount": 1,
+                "fallbackChunkCount": 1,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0
+            }
+        });
+
+        assert!(assistant_run_answer_quality_judge_should_run(
+            "邓工是项目负责人。",
+            &evidence_state,
+            &request,
+        ));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_judge_retry_reason_maps_incomplete_task() {
+        let decision = AssistantRunAnswerQualityJudgeDecision {
+            verdict: AssistantRunAnswerQualityJudgeVerdict::Retry,
+            reason: "incomplete_task".to_string(),
+            confidence: 0.66,
+            customer_safe: true,
+            required_actions: vec!["retrieve_evidence".to_string()],
+            premium_action_allowed: false,
+        };
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason_from_judge_decision(&decision),
+            Some("model_judge_incomplete_task")
+        );
     }
 
     #[tokio::test]
@@ -60606,6 +61935,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_source_sync_mysql_incremental_reuses_latest_success_checkpoint() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping mysql incremental checkpoint reuse test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("mysql-incremental-checkpoint-test-{}", Uuid::new_v4()),
+                "MySQL Incremental Checkpoint Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("mysql-incremental-{}", Uuid::new_v4()),
+                    title: "HY SQL 增量库".to_string(),
+                    description: Some("数据库源增量同步目标数据集。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://8.155.12.154:23306/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-incremental")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [{
+                    "table": "bi_traffic_area",
+                    "id_column": "id",
+                    "updated_at_column": "updated_at",
+                    "content_columns": ["areaname"]
+                }]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+        sqlx::query(
+            r#"
+            insert into external_sync_runs (
+                id,
+                tenant_id,
+                source_id,
+                sync_kind,
+                status,
+                checkpoint,
+                counts
+            )
+            values ($1, $2, $3, 'incremental', 'succeeded', $4, $5)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(state.tenant_id.0)
+        .bind("hy-sql-incremental")
+        .bind(json!({
+            "tables": {
+                "bi_traffic_area": {
+                    "updated_after": "2026-05-20 10:00:00",
+                    "last_id": "42"
+                }
+            }
+        }))
+        .bind(json!({"row_count": 42}))
+        .execute(state.storage.pool())
+        .await
+        .expect("previous sync run should be inserted");
+
+        let (_, Json(response)) = create_external_source_sync(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path("hy-sql-incremental".to_string()),
+            Json(CreateExternalSourceSyncRequest {
+                sync_kind: Some("incremental".to_string()),
+                dataset_id: None,
+                checkpoint: json!({}),
+                connector_context: json!({}),
+            }),
+        )
+        .await
+        .expect("mysql incremental sync should reuse latest checkpoint");
+
+        let persisted_execution = state
+            .storage
+            .workflow_executions()
+            .get_by_id(state.tenant_id, response.workflow_execution.id)
+            .await
+            .expect("workflow execution should load")
+            .expect("workflow execution should exist");
+        assert_eq!(
+            persisted_execution.context["checkpoint"]["tables"]["bi_traffic_area"]["updated_after"],
+            json!("2026-05-20 10:00:00")
+        );
+        assert_eq!(
+            persisted_execution.context["checkpoint"]["tables"]["bi_traffic_area"]["last_id"],
+            json!("42")
+        );
+    }
+
+    #[tokio::test]
     async fn external_source_sync_endpoint_enqueues_workflow_and_records_run() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
@@ -61073,15 +62537,21 @@ mod tests {
             "row_count": 1,
             "chunks_ingested": 1,
             "skipped_row_count": 0,
-            "failed_row_count": 0,
+            "failed_row_count": 1,
             "enqueued_task_count": 6,
+            "row_failure_samples": [{
+                "table": "bi_traffic_area",
+                "row_index": 3,
+                "source_primary_key": "42",
+                "reason": "mapped row has empty identity columns"
+            }],
             "ingest_table_counts": [{
                 "table": "bi_traffic_area",
                 "documents_ingested": 1,
                 "row_count": 1,
                 "chunks_ingested": 1,
                 "skipped_row_count": 0,
-                "failed_row_count": 0
+                "failed_row_count": 1
             }]
         }))
         .execute(state.storage.pool())
@@ -61234,7 +62704,44 @@ mod tests {
         );
         assert_eq!(
             response.status["sync_readiness"]["failed_row_count"],
-            json!(0)
+            json!(1)
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["row_failure_samples"][0]["source_primary_key"],
+            json!("42")
+        );
+        assert_eq!(
+            response.status["sync_readiness"]["row_failure_samples"][0]["reason"],
+            json!("mapped row has empty identity columns")
+        );
+        assert_eq!(
+            response.status["health_findings"]["signal"],
+            json!("attention")
+        );
+        assert_eq!(
+            response.status["health_findings"]["warning_count"],
+            json!(3)
+        );
+        let findings = response.status["health_findings"]["items"]
+            .as_array()
+            .expect("health findings should be an array");
+        assert!(
+            findings
+                .iter()
+                .any(|item| item["code"] == json!("mapped_tables_without_documents")),
+            "empty mapped tables should be visible as an attention finding"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|item| item["code"] == json!("semantic_profile_table_gap")),
+            "configured tables missing from the semantic profile should be visible"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|item| item["code"] == json!("row_conversion_failures")),
+            "row conversion failures should be visible as an attention finding"
         );
         assert_eq!(
             response.status["sync_readiness"]["table_counts"][0]["table"],
@@ -64804,6 +66311,9 @@ mod tests {
         assert!(input.contains("doc-orders"));
         assert!(input.contains("tool_selection_only"));
         assert!(input.contains("read_document_detail 用于需要原文措辞"));
+        assert!(input.contains("upgrade_parse_vlm 是高成本内部解析修复动作"));
+        assert!(input.contains("premium_action_budget > premium_action_used"));
+        assert!(input.contains("question_focus"));
         assert!(input.contains("web_search 用于请求 V3 受控外部/网页搜索证据"));
         assert!(input.contains("V3 search evidence"));
         assert!(input.contains("detailTargets 只是深读目标"));
@@ -65045,6 +66555,8 @@ mod tests {
         assert!(input.contains("禁止粘贴 observation JSON"));
         assert!(input.contains("tool_trace"));
         assert!(input.contains("内部 URL"));
+        assert!(input.contains("upgrade_parse_vlm 是高成本内部解析修复动作"));
+        assert!(input.contains("answerQualityGate/answer_quality_gate"));
         assert!(!input.contains("继续执行提示不应该携带完整模块正文"));
         assert!(!input.contains("continue-current-artifact-row-should-not-leak"));
     }

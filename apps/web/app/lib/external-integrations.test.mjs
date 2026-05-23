@@ -11,6 +11,7 @@ import {
   buildExternalActionTrace,
   buildThirdPartyApiUrl,
   controlResultLabel,
+  databaseSourceHealthSignalLabel,
   databaseSourceMetrics,
   databaseSourceReadiness,
   databaseSourceSummary,
@@ -323,6 +324,7 @@ test('database source observability helpers normalize redacted source summary', 
     rowCount: 128,
     skippedRowCount: 0,
     failedRowCount: 0,
+    rowFailureSamples: [],
     aclSnapshotCount: 12,
     enqueuedTaskCount: 1,
     checkpointSummary: {
@@ -416,14 +418,20 @@ test('database source status helper normalizes selected-only detail payload', ()
           row_count: 2,
           enqueued_task_count: 6,
           skipped_row_count: 0,
-          failed_row_count: 0,
+          failed_row_count: 1,
+          row_failure_samples: [{
+            table: 'bi_traffic_area',
+            row_index: 3,
+            source_primary_key: '42',
+            reason: 'mapped row has empty identity columns',
+          }],
           ingest_table_counts: [{
             table: 'bi_traffic_area',
             documents_ingested: 2,
             row_count: 2,
             chunks_ingested: 8,
             skipped_row_count: 0,
-            failed_row_count: 0,
+            failed_row_count: 1,
           }],
         },
         checkpoint: {
@@ -454,15 +462,21 @@ test('database source status helper normalizes selected-only detail payload', ()
         row_count: 2,
         chunk_count: 8,
         skipped_row_count: 0,
-        failed_row_count: 0,
+        failed_row_count: 1,
         enqueued_task_count: 6,
+        row_failure_samples: [{
+          table: 'bi_traffic_area',
+          row_index: 3,
+          source_primary_key: '42',
+          reason: 'mapped row has empty identity columns',
+        }],
         table_counts: [{
           table: 'bi_traffic_area',
           document_count: 2,
           row_count: 2,
           chunk_count: 8,
           skipped_row_count: 0,
-          failed_row_count: 0,
+          failed_row_count: 1,
         }],
         checkpoint_summary: {
           has_checkpoint: true,
@@ -476,6 +490,32 @@ test('database source status helper normalizes selected-only detail payload', ()
         },
         updated_at: '2026-05-22T02:00:00Z',
       },
+      health_findings: {
+        signal: 'attention',
+        blocking_count: 0,
+        warning_count: 3,
+        info_count: 0,
+        items: [{
+          severity: 'warning',
+          code: 'mapped_tables_without_documents',
+          title: '映射表暂无入库文档',
+          message: '部分已映射表还没有同步出可问答文档。',
+          count: 1,
+        }, {
+          severity: 'warning',
+          code: 'row_conversion_failures',
+          title: '存在行级转换失败',
+          message: '部分数据库行未能转换为文档，观测页已保留少量失败样本。',
+          count: 1,
+        }, {
+          severity: 'warning',
+          code: 'semantic_profile_table_gap',
+          title: '语义画像缺少映射表',
+          message: '已映射表未出现在当前语义画像中，可能需要重新画像并应用配置：empty_table',
+          table: 'empty_table',
+          count: 1,
+        }],
+      },
     },
   });
 
@@ -487,9 +527,21 @@ test('database source status helper normalizes selected-only detail payload', ()
   assert.equal(status.syncReadiness.enqueuedTaskCount, 6);
   assert.equal(status.syncReadiness.rowCount, 2);
   assert.equal(status.syncReadiness.skippedRowCount, 0);
-  assert.equal(status.syncReadiness.failedRowCount, 0);
+  assert.equal(status.syncReadiness.failedRowCount, 1);
+  assert.deepEqual(status.syncReadiness.rowFailureSamples, [{
+    table: 'bi_traffic_area',
+    rowIndex: 3,
+    reason: 'mapped row has empty identity columns',
+    sourcePrimaryKey: '42',
+  }]);
   assert.equal(status.syncReadiness.checkpointSummary.label, '表检查点 1 · 游标已隐藏');
   assert.equal(status.syncReadiness.checkpointSummary.tableCheckpoints[0].updatedAfterPresent, true);
+  assert.equal(status.healthFindings.signal, 'attention');
+  assert.equal(status.healthFindings.label, '需关注');
+  assert.equal(status.healthFindings.warningCount, 3);
+  assert.equal(status.healthFindings.items[0].code, 'mapped_tables_without_documents');
+  assert.equal(status.healthFindings.items[1].count, 1);
+  assert.equal(status.healthFindings.items[2].table, 'empty_table');
   assert.equal(status.semanticProfile.configured, true);
   assert.equal(status.semanticProfile.tableCount, 1);
   assert.equal(status.semanticProfile.metricCount, 3);
@@ -502,7 +554,7 @@ test('database source status helper normalizes selected-only detail payload', ()
     rowCount: 2,
     chunkCount: 8,
     skippedRowCount: 0,
-    failedRowCount: 0,
+    failedRowCount: 1,
   }]);
   assert.equal(status.tableReadiness[0].table, 'bi_traffic_area');
   assert.equal(status.tableReadiness[1].label, '未入库');
@@ -510,6 +562,7 @@ test('database source status helper normalizes selected-only detail payload', ()
   assert.equal(status.recentSyncRuns[0].workflowStage, 'completed');
   assert.equal(status.recentSyncRuns[0].enqueuedTaskCount, 6);
   assert.equal(status.recentSyncRuns[0].rowCount, 2);
+  assert.equal(status.recentSyncRuns[0].rowFailureSamples[0].sourcePrimaryKey, '42');
   assert.equal(status.recentSyncRuns[0].checkpointSummary.cursorPresent, true);
   assert.equal(status.recentSyncRuns[0].checkpointSummary.tableCount, 1);
   assert.deepEqual(status.recentSyncRuns[0].tableCounts, [{
@@ -518,7 +571,7 @@ test('database source status helper normalizes selected-only detail payload', ()
     rowCount: 2,
     chunkCount: 8,
     skippedRowCount: 0,
-    failedRowCount: 0,
+    failedRowCount: 1,
   }]);
 });
 
@@ -527,6 +580,13 @@ test('driftSignalLabel covers source recovery states', () => {
   assert.equal(driftSignalLabel('acl_stale'), 'ACL 过期');
   assert.equal(driftSignalLabel('sync_failed'), '同步失败');
   assert.equal(driftSignalLabel('sync_recovering'), '恢复中');
+});
+
+test('databaseSourceHealthSignalLabel covers selected-source health states', () => {
+  assert.equal(databaseSourceHealthSignalLabel('ok'), '健康');
+  assert.equal(databaseSourceHealthSignalLabel('attention'), '需关注');
+  assert.equal(databaseSourceHealthSignalLabel('blocking'), '阻断');
+  assert.equal(databaseSourceHealthSignalLabel('in_progress'), '处理中');
 });
 
 test('artifactSignalLabel covers publish and revoke states', () => {

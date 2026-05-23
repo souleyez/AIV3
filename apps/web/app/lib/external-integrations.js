@@ -429,6 +429,7 @@ export function normalizeDatabaseSourceStatus(raw = {}) {
         ),
         skippedRowCount: numberOrZero(counts.skipped_row_count ?? counts.skippedRowCount),
         failedRowCount: numberOrZero(counts.failed_row_count ?? counts.failedRowCount),
+        rowFailureSamples: normalizeDatabaseRowFailureSamples(counts.row_failure_samples || counts.rowFailureSamples),
         aclSnapshotCount: numberOrZero(counts.acl_snapshot_count ?? counts.aclSnapshotCount),
         enqueuedTaskCount: numberOrZero(counts.enqueued_task_count ?? counts.enqueuedTaskCount),
         tableCounts: normalizeDatabaseSyncTableCounts(counts),
@@ -455,10 +456,49 @@ export function normalizeDatabaseSourceStatus(raw = {}) {
     datasetReadiness: normalizeDatabaseReadiness(status?.dataset_readiness || {}),
     syncReadiness,
     semanticProfile: normalizeDatabaseSemanticProfile(status?.semantic_profile || status?.semanticProfile || {}),
+    healthFindings: normalizeDatabaseHealthFindings(status?.health_findings || status?.healthFindings || {}),
     tableReadiness,
     recentSyncRuns,
     generatedAt: status?.generated_at || status?.generatedAt || null,
   };
+}
+
+function normalizeDatabaseHealthFindings(raw = {}) {
+  const items = Array.isArray(raw?.items)
+    ? raw.items.map((item) => ({
+      severity: String(item?.severity || 'info').toLowerCase(),
+      code: String(item?.code || ''),
+      title: String(item?.title || ''),
+      message: String(item?.message || ''),
+      table: String(item?.table || ''),
+      count: numberOrZero(item?.count),
+    })).filter((item) => item.code || item.title || item.message)
+    : [];
+  const signal = String(raw?.signal || (items.length ? 'attention' : 'ok')).toLowerCase();
+  return {
+    configured: Boolean(raw?.signal || items.length),
+    signal,
+    label: databaseSourceHealthSignalLabel(signal),
+    blockingCount: numberOrZero(raw?.blocking_count ?? raw?.blockingCount ?? items.filter((item) => item.severity === 'error').length),
+    warningCount: numberOrZero(raw?.warning_count ?? raw?.warningCount ?? items.filter((item) => item.severity === 'warning').length),
+    infoCount: numberOrZero(raw?.info_count ?? raw?.infoCount ?? items.filter((item) => item.severity === 'info').length),
+    items: items.slice(0, 8),
+  };
+}
+
+export function databaseSourceHealthSignalLabel(signal) {
+  switch (String(signal || '').toLowerCase()) {
+    case 'ok':
+      return '健康';
+    case 'attention':
+      return '需关注';
+    case 'blocking':
+      return '阻断';
+    case 'in_progress':
+      return '处理中';
+    default:
+      return '未知';
+  }
 }
 
 function normalizeDatabaseSemanticProfile(raw = {}) {
@@ -512,6 +552,7 @@ function normalizeDatabaseSyncReadiness(raw = {}) {
     chunkCount: numberOrZero(raw?.chunk_count ?? raw?.chunkCount),
     skippedRowCount: numberOrZero(raw?.skipped_row_count ?? raw?.skippedRowCount),
     failedRowCount: numberOrZero(raw?.failed_row_count ?? raw?.failedRowCount),
+    rowFailureSamples: normalizeDatabaseRowFailureSamples(raw?.row_failure_samples || raw?.rowFailureSamples),
     enqueuedTaskCount: numberOrZero(raw?.enqueued_task_count ?? raw?.enqueuedTaskCount),
     tableCounts: normalizeDatabaseSyncTableCountRows(raw?.table_counts || raw?.tableCounts),
     checkpointSummary: normalizeDatabaseCheckpointSummary(raw?.checkpoint_summary || raw?.checkpointSummary || {}),
@@ -564,6 +605,15 @@ function databaseCheckpointSummaryLabel(summary) {
     parts.push('游标已隐藏');
   }
   return parts.length ? parts.join(' · ') : '检查点已记录';
+}
+
+function normalizeDatabaseRowFailureSamples(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    table: String(row?.table || ''),
+    rowIndex: numberOrZero(row?.row_index ?? row?.rowIndex),
+    reason: String(row?.reason || ''),
+    sourcePrimaryKey: String(row?.source_primary_key || row?.sourcePrimaryKey || ''),
+  })).filter((row) => row.table).slice(0, 8);
 }
 
 function normalizeDatabaseSyncTableCounts(counts = {}) {
@@ -728,6 +778,7 @@ export function databaseSourceSyncRuns(auditItems = [], limit = 3) {
         ),
         skippedRowCount: numberOrZero(counts.skipped_row_count ?? counts.skippedRowCount),
         failedRowCount: numberOrZero(counts.failed_row_count ?? counts.failedRowCount),
+        rowFailureSamples: normalizeDatabaseRowFailureSamples(counts.row_failure_samples || counts.rowFailureSamples),
         aclSnapshotCount: numberOrZero(counts.acl_snapshot_count),
         enqueuedTaskCount: numberOrZero(counts.enqueued_task_count),
         tableCounts: normalizeDatabaseSyncTableCounts(counts),

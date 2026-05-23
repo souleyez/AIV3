@@ -13,7 +13,7 @@ use domain_model::{
     StaticPageImageJobId, UserId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
     WorkflowExecutionId, WorkflowKind,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::{collections::BTreeMap, env, net::IpAddr, time::Duration};
 use storage::NewDocument;
 use uuid::Uuid;
@@ -27,7 +27,7 @@ use crate::{
     load_visible_dataset_for_user, load_visible_document_for_assistant_scope,
     react_static_page_operations_from_arguments, status_from_static_page_operations,
     status_from_static_page_payload, summarize_static_page_operations,
-    to_document_media_detail_view, ApiError, AppState,
+    to_document_media_detail_view, value_at_any_key, ApiError, AppState,
 };
 use workflow_engine::WorkflowSignal;
 
@@ -62,6 +62,17 @@ pub(crate) async fn execute_assistant_run_react_action(
                 state,
                 action,
                 selected_scope,
+                active_secret_binding_ids,
+                current_user_id,
+            )
+            .await
+        }
+        AssistantRunReactActionType::UpgradeParseVlm => {
+            upgrade_parse_vlm_result(
+                state,
+                action,
+                selected_scope,
+                evidence_state,
                 active_secret_binding_ids,
                 current_user_id,
             )
@@ -251,6 +262,7 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::RetrieveEvidence => "检索供料证据",
         AssistantRunReactActionType::WebSearch => "请求外部/网页搜索证据",
         AssistantRunReactActionType::ReadDocumentDetail => "读取文档详情",
+        AssistantRunReactActionType::UpgradeParseVlm => "升级 VLM 解析",
         AssistantRunReactActionType::RecallConversationMemory => "召回对话记忆",
         AssistantRunReactActionType::ListReportOptions => "列出报表选项",
         AssistantRunReactActionType::ResolveVideoUrl => "解析公开视频地址",
@@ -2913,6 +2925,625 @@ fn report_choice_items() -> Vec<Value> {
     ]
 }
 
+const REACT_UPGRADE_PARSE_VLM_MAX_DOCUMENTS: usize = 1;
+const REACT_UPGRADE_PARSE_VLM_MAX_PAGE_HINTS: usize = 5;
+
+async fn upgrade_parse_vlm_result(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    selected_scope: &Value,
+    evidence_state: &mut Value,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let requested_document_ids = requested_document_ids_from_action(action, selected_scope);
+    if requested_document_ids.is_empty() {
+        return Ok(rejected_react_tool_result(action, "document_id_required"));
+    }
+    if requested_document_ids.len() > REACT_UPGRADE_PARSE_VLM_MAX_DOCUMENTS {
+        return Ok(rejected_react_tool_result_with_details(
+            action,
+            "single_document_required",
+            json!({
+                "maxDocuments": REACT_UPGRADE_PARSE_VLM_MAX_DOCUMENTS,
+            }),
+        ));
+    }
+
+    let (premium_budget, premium_used) = answer_quality_gate_premium_budget(evidence_state);
+    if premium_used >= premium_budget {
+        return Ok(rejected_react_tool_result_with_details(
+            action,
+            "premium_action_budget_exhausted",
+            json!({
+                "premium_action_budget": premium_budget,
+                "premium_action_used": premium_used,
+            }),
+        ));
+    }
+
+    let document_id = requested_document_ids[0];
+    let document_id_text = document_id.to_string();
+    if answer_quality_gate_vlm_document_already_used(evidence_state, &document_id_text) {
+        return Ok(rejected_react_tool_result_with_details(
+            action,
+            "vlm_upgrade_already_attempted_for_document",
+            json!({
+                "document_id": document_id_text,
+            }),
+        ));
+    }
+
+    let document = match load_visible_document_for_assistant_scope(
+        state,
+        document_id,
+        active_secret_binding_ids,
+        current_user_id,
+        selected_scope,
+    )
+    .await
+    {
+        Ok(document) => document,
+        Err(_) => {
+            return Ok(rejected_react_tool_result_with_details(
+                action,
+                "document_not_visible",
+                json!({
+                    "document_id": document_id_text,
+                }),
+            ));
+        }
+    };
+
+    let selected_dataset_ids = selected_scope_id_strings(selected_scope, "dataset");
+    let selected_document_ids = selected_scope_id_strings(selected_scope, "document");
+    if !document_allowed_by_selected_scope(
+        state,
+        &document,
+        &selected_dataset_ids,
+        &selected_document_ids,
+    )
+    .await?
+    {
+        return Ok(rejected_react_tool_result_with_details(
+            action,
+            "document_not_selected",
+            json!({
+                "document_id": document_id_text,
+            }),
+        ));
+    }
+
+    let parse_quality_summary = upgrade_parse_vlm_parse_quality_summary(&document);
+    if !upgrade_parse_vlm_document_is_eligible(&document, parse_quality_summary.as_ref()) {
+        return Ok(rejected_react_tool_result_with_details(
+            action,
+            "document_not_vlm_upgrade_candidate",
+            json!({
+                "document_id": document.id.to_string(),
+                "content_type": document.content_type.clone(),
+                "parse_quality_summary": parse_quality_summary.unwrap_or(Value::Null),
+            }),
+        ));
+    }
+
+    if !upgrade_parse_vlm_evidence_suggests_recovery(evidence_state, parse_quality_summary.as_ref())
+    {
+        return Ok(rejected_react_tool_result_with_details(
+            action,
+            "parse_quality_recovery_not_indicated",
+            json!({
+                "document_id": document.id.to_string(),
+                "parse_quality_summary": parse_quality_summary.unwrap_or(Value::Null),
+            }),
+        ));
+    }
+
+    let page_hints = upgrade_parse_vlm_page_hints(action);
+    if let Some(vlm_summary) =
+        upgrade_parse_vlm_cached_summary(&document, parse_quality_summary.as_ref())
+    {
+        mark_answer_quality_gate_vlm_upgrade_used(evidence_state, &document.id.to_string());
+        let item = json!({
+            "type": "vlm_parse_upgrade",
+            "document_id": document.id.to_string(),
+            "dataset_id": document.dataset_id.to_string(),
+            "title": html_artifact_safe_summary_text(&document.title, 160),
+            "content_type": document.content_type.clone(),
+            "source": "cached_document_parse_quality",
+            "page_hint": page_hints,
+            "question_focus": react_argument_string(&action.arguments, &["question_focus", "questionFocus"])
+                .map(|value| html_artifact_safe_summary_text(&value, 240)),
+            "parse_quality_summary": parse_quality_summary.unwrap_or(Value::Null),
+            "vlm_summary": vlm_summary,
+        });
+        return Ok(AssistantRunReactToolResult {
+            observation: json!({
+                "status": "completed",
+                "action_type": action.action_type.as_str(),
+                "actionType": action.action_type.as_str(),
+                "message": "cached VLM parse summary supplied",
+                "items": [item],
+                "limits": {
+                    "maxDocuments": REACT_UPGRADE_PARSE_VLM_MAX_DOCUMENTS,
+                    "maxPageHints": REACT_UPGRADE_PARSE_VLM_MAX_PAGE_HINTS,
+                    "runtimeInvocation": false,
+                    "premiumActionBudget": premium_budget,
+                    "premiumActionUsed": premium_used + 1,
+                },
+            }),
+            trail_step: json!({
+                "status": "completed",
+                "label": "升级 VLM 解析",
+                "react_action": action.action_type.as_str(),
+                "document_id": document.id.to_string(),
+                "source": "cached_document_parse_quality",
+                "at": Utc::now(),
+            }),
+            final_answer: None,
+        });
+    }
+
+    if !document_image_vlm_runtime_configured_from_env() {
+        return Ok(rejected_react_tool_result_with_details(
+            action,
+            "vlm_runtime_unavailable",
+            json!({
+                "document_id": document.id.to_string(),
+                "content_type": document.content_type.clone(),
+                "parse_quality_summary": parse_quality_summary.unwrap_or(Value::Null),
+                "page_hint": page_hints,
+                "runtimeInvocation": false,
+            }),
+        ));
+    }
+
+    let workflow_snapshots = crate::load_latest_upload_ingest_workflow_snapshots(
+        state,
+        document.dataset_id,
+        &[document.id],
+    )
+    .await?;
+    if let Some(snapshot) = workflow_snapshots.get(&document.id) {
+        if upload_ingest_workflow_snapshot_is_active(snapshot) {
+            return Ok(rejected_react_tool_result_with_details(
+                action,
+                "vlm_reparse_already_active",
+                json!({
+                    "document_id": document.id.to_string(),
+                    "workflow": snapshot,
+                }),
+            ));
+        }
+    }
+
+    let execution = build_initial_upload_ingest_execution(state, &document)?;
+    let initial_event = build_initial_upload_ingest_event(&execution, &document);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let started = crate::apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+    mark_answer_quality_gate_vlm_upgrade_used(evidence_state, &document.id.to_string());
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "VLM reparse workflow queued",
+            "items": [{
+                "type": "vlm_parse_upgrade",
+                "status": "reparse_queued",
+                "document_id": document.id.to_string(),
+                "dataset_id": document.dataset_id.to_string(),
+                "title": html_artifact_safe_summary_text(&document.title, 160),
+                "content_type": document.content_type.clone(),
+                "source": "upload_ingest_reparse",
+                "workflow_execution_id": started.execution.id.to_string(),
+                "workflow_status": started.execution.status.as_str(),
+                "page_hint": page_hints,
+            }],
+            "limits": {
+                "maxDocuments": REACT_UPGRADE_PARSE_VLM_MAX_DOCUMENTS,
+                "maxPageHints": REACT_UPGRADE_PARSE_VLM_MAX_PAGE_HINTS,
+                "runtimeInvocation": "queued_upload_ingest",
+                "premiumActionBudget": premium_budget,
+                "premiumActionUsed": premium_used + 1,
+            },
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "升级 VLM 解析",
+            "react_action": action.action_type.as_str(),
+            "document_id": document.id.to_string(),
+            "workflow_execution_id": started.execution.id.to_string(),
+            "source": "upload_ingest_reparse",
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn answer_quality_gate_premium_budget(evidence_state: &Value) -> (usize, usize) {
+    let Some(gate) = answer_quality_gate_value(evidence_state) else {
+        return (0, 0);
+    };
+    (
+        json_usize_at_any_key(gate, &["premium_action_budget", "premiumActionBudget"]),
+        json_usize_at_any_key(gate, &["premium_action_used", "premiumActionUsed"]),
+    )
+}
+
+fn answer_quality_gate_value(evidence_state: &Value) -> Option<&Value> {
+    value_at_any_key(
+        evidence_state,
+        &["answer_quality_gate", "answerQualityGate"],
+    )
+}
+
+fn json_usize_at_any_key(value: &Value, keys: &[&str]) -> usize {
+    value_at_any_key(value, keys)
+        .and_then(Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok())
+        .unwrap_or(0)
+}
+
+fn answer_quality_gate_vlm_document_already_used(
+    evidence_state: &Value,
+    document_id: &str,
+) -> bool {
+    let Some(gate) = answer_quality_gate_value(evidence_state) else {
+        return false;
+    };
+    value_at_any_key(gate, &["vlm_upgrade_document_ids", "vlmUpgradeDocumentIds"])
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|value| value.as_str() == Some(document_id))
+}
+
+fn mark_answer_quality_gate_vlm_upgrade_used(evidence_state: &mut Value, document_id: &str) {
+    if !evidence_state.is_object() {
+        *evidence_state = json!({});
+    }
+    let Some(root) = evidence_state.as_object_mut() else {
+        return;
+    };
+    let gate_value = root
+        .entry("answer_quality_gate".to_string())
+        .or_insert_with(|| json!({}));
+    if !gate_value.is_object() {
+        *gate_value = json!({});
+    }
+    let Some(gate) = gate_value.as_object_mut() else {
+        return;
+    };
+    let used = gate
+        .get("premium_action_used")
+        .or_else(|| gate.get("premiumActionUsed"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    gate.insert("premium_action_used".to_string(), json!(used));
+    gate.insert("premiumActionUsed".to_string(), json!(used));
+
+    for key in ["vlm_upgrade_document_ids", "vlmUpgradeDocumentIds"] {
+        let entry = gate.entry(key.to_string()).or_insert_with(|| json!([]));
+        if !entry.is_array() {
+            *entry = json!([]);
+        }
+        if let Some(items) = entry.as_array_mut() {
+            if !items.iter().any(|item| item.as_str() == Some(document_id)) {
+                items.push(json!(document_id));
+            }
+        }
+    }
+}
+
+fn upgrade_parse_vlm_parse_quality_summary(document: &Document) -> Option<Value> {
+    let mut summary = Map::new();
+    if let Some(ingest) = document
+        .metadata
+        .get("ingest")
+        .filter(|value| value.is_object())
+    {
+        copy_react_json_fields(
+            ingest,
+            &mut summary,
+            &[
+                "parse_method",
+                "parse_status",
+                "parse_quality_status",
+                "cloud_structured_provider",
+            ],
+        );
+    }
+    let parse_quality = upgrade_parse_vlm_parse_quality_metadata(document)?;
+    copy_react_json_fields(
+        parse_quality,
+        &mut summary,
+        &[
+            "kind",
+            "status",
+            "text_chars",
+            "min_usable_text_chars",
+            "fallback_status",
+            "recommended_fallback",
+        ],
+    );
+    if let Some(vlm_rescue) = value_at_any_key(parse_quality, &["vlm_rescue", "vlmRescue"])
+        .filter(|value| value.is_object())
+    {
+        let mut rescue = Map::new();
+        copy_react_json_fields(vlm_rescue, &mut rescue, &["policy", "selected"]);
+        for key in ["existing", "vlm"] {
+            if let Some(report) =
+                value_at_any_key(vlm_rescue, &[key]).and_then(compact_react_parse_candidate_report)
+            {
+                rescue.insert(key.to_string(), report);
+            }
+        }
+        if !rescue.is_empty() {
+            summary.insert("vlm_rescue".to_string(), Value::Object(rescue));
+        }
+    }
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
+fn upgrade_parse_vlm_parse_quality_metadata(document: &Document) -> Option<&Value> {
+    if let Some(parse_quality) = document
+        .metadata
+        .get("ingest")
+        .and_then(|ingest| value_at_any_key(ingest, &["parse_metadata", "parseMetadata"]))
+        .and_then(|parse_metadata| {
+            value_at_any_key(parse_metadata, &["parse_quality", "parseQuality"])
+        })
+        .filter(|value| value.is_object())
+    {
+        return Some(parse_quality);
+    }
+    if let Some(parse_quality) = document
+        .metadata
+        .get("parse_metadata")
+        .or_else(|| document.metadata.get("parseMetadata"))
+        .and_then(|parse_metadata| {
+            value_at_any_key(parse_metadata, &["parse_quality", "parseQuality"])
+        })
+        .filter(|value| value.is_object())
+    {
+        return Some(parse_quality);
+    }
+    document
+        .metadata
+        .get("parse_quality")
+        .or_else(|| document.metadata.get("parseQuality"))
+        .filter(|value| value.is_object())
+}
+
+fn upgrade_parse_vlm_document_is_eligible(
+    document: &Document,
+    parse_quality_summary: Option<&Value>,
+) -> bool {
+    is_vlm_visual_document_material(document)
+        || parse_quality_summary.is_some_and(parse_quality_recommends_or_used_vlm)
+}
+
+fn is_vlm_visual_document_material(document: &Document) -> bool {
+    let content_type = document.content_type.trim().to_ascii_lowercase();
+    if content_type == "application/pdf" || content_type.starts_with("image/") {
+        return true;
+    }
+    let title = document.title.to_ascii_lowercase();
+    let object_key = document.object_key.to_ascii_lowercase();
+    [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"]
+        .iter()
+        .any(|extension| title.ends_with(extension) || object_key.ends_with(extension))
+}
+
+fn parse_quality_recommends_or_used_vlm(parse_quality_summary: &Value) -> bool {
+    let Some(serialized) = serde_json::to_string(parse_quality_summary).ok() else {
+        return false;
+    };
+    let lower = serialized.to_ascii_lowercase();
+    lower.contains("vlm")
+        || lower.contains("low_text_coverage")
+        || lower.contains("fallback_unavailable")
+        || lower.contains("missing_table")
+}
+
+fn upgrade_parse_vlm_evidence_suggests_recovery(
+    evidence_state: &Value,
+    parse_quality_summary: Option<&Value>,
+) -> bool {
+    if parse_quality_summary.is_some_and(parse_quality_recommends_or_used_vlm) {
+        return true;
+    }
+    if let Some(gate) = answer_quality_gate_value(evidence_state) {
+        let reason = value_at_any_key(gate, &["reason"])
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if reason.contains("parse_quality")
+            || reason.contains("low_text")
+            || reason.contains("vlm")
+            || reason.contains("model_judge_parse_quality")
+        {
+            return true;
+        }
+    }
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return false;
+    };
+    [
+        "lowTextEvidenceCount",
+        "documentDegradedParseCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+    ]
+    .iter()
+    .any(|key| {
+        supply_quality
+            .get(*key)
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+    }) || supply_quality
+        .get("notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|note| {
+            note.as_str().is_some_and(|note| {
+                matches!(
+                    note,
+                    "low_text_document_evidence"
+                        | "parse_quality_degraded"
+                        | "some_documents_parse_degraded"
+                )
+            })
+        })
+}
+
+fn upgrade_parse_vlm_cached_summary(
+    document: &Document,
+    parse_quality_summary: Option<&Value>,
+) -> Option<Value> {
+    if let Some(summary) = parse_quality_summary {
+        if parse_quality_has_cached_vlm(summary) {
+            return Some(json!({
+                "status": "available",
+                "source": "document_parse_quality",
+                "parse_quality_summary": summary,
+            }));
+        }
+    }
+    document
+        .metadata
+        .get("vlm")
+        .and_then(|vlm| value_at_any_key(vlm, &["payload", "summary"]))
+        .map(|payload| {
+            json!({
+                "status": "available",
+                "source": "document_metadata_vlm",
+                "payload": payload,
+            })
+        })
+}
+
+fn document_image_vlm_runtime_configured_from_env() -> bool {
+    let parse_mode = env::var("DOCUMENT_IMAGE_PARSE_MODE").unwrap_or_default();
+    let provider = env::var("DOCUMENT_IMAGE_VLM_PROVIDER").unwrap_or_default();
+    let api_key_present = env::var("MINIMAX_API_KEY")
+        .or_else(|_| env::var("MINIMAX_CN_API_KEY"))
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    parse_mode.trim().eq_ignore_ascii_case("ocr-plus-vlm")
+        && provider.trim().eq_ignore_ascii_case("minimax")
+        && api_key_present
+}
+
+fn upload_ingest_workflow_snapshot_is_active(snapshot: &Value) -> bool {
+    snapshot
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "pending" | "running"))
+        || snapshot
+            .get("latest_task")
+            .and_then(|task| task.get("status"))
+            .and_then(Value::as_str)
+            .is_some_and(|status| matches!(status, "pending" | "running"))
+}
+
+fn parse_quality_has_cached_vlm(parse_quality_summary: &Value) -> bool {
+    let Some(serialized) = serde_json::to_string(parse_quality_summary).ok() else {
+        return false;
+    };
+    let lower = serialized.to_ascii_lowercase();
+    lower.contains("vlm")
+        && (lower.contains("fallback_status\":\"used")
+            || lower.contains("vlm_fallback_used")
+            || lower.contains("parsed_with_vlm")
+            || lower.contains("selected\":\"vlm")
+            || lower.contains("pdf-vlm")
+            || lower.contains("image-vlm"))
+}
+
+fn upgrade_parse_vlm_page_hints(action: &AssistantRunNextAction) -> Vec<u64> {
+    let Some(value) = action
+        .arguments
+        .get("page_hint")
+        .or_else(|| action.arguments.get("pageHint"))
+        .or_else(|| action.arguments.get("pages"))
+    else {
+        return Vec::new();
+    };
+    let mut pages = Vec::new();
+    match value {
+        Value::Number(number) => {
+            if let Some(page) = number.as_u64() {
+                if page > 0 {
+                    pages.push(page);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                let page = item
+                    .as_u64()
+                    .or_else(|| item.as_str().and_then(|text| text.trim().parse().ok()));
+                if let Some(page) = page {
+                    if page > 0 && !pages.contains(&page) {
+                        pages.push(page);
+                    }
+                }
+                if pages.len() >= REACT_UPGRADE_PARSE_VLM_MAX_PAGE_HINTS {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+    pages
+}
+
+fn copy_react_json_fields(source: &Value, target: &mut Map<String, Value>, keys: &[&str]) {
+    for key in keys {
+        if let Some(value) = value_at_any_key(source, &[*key])
+            .filter(|value| !value.is_null())
+            .cloned()
+        {
+            target.insert((*key).to_string(), value);
+        }
+    }
+}
+
+fn compact_react_parse_candidate_report(value: &Value) -> Option<Value> {
+    let mut summary = Map::new();
+    copy_react_json_fields(
+        value,
+        &mut summary,
+        &[
+            "method",
+            "text_chars",
+            "structure_block_count",
+            "heading_count",
+            "table_signal_count",
+            "quality_score",
+        ],
+    );
+    if summary.is_empty() {
+        None
+    } else {
+        Some(Value::Object(summary))
+    }
+}
+
 const REACT_READ_DOCUMENT_MAX_DOCUMENTS: usize = 3;
 const REACT_READ_DOCUMENT_MAX_CHUNKS_PER_DOCUMENT: usize = 8;
 const REACT_READ_DOCUMENT_MAX_CHARS: usize = 8000;
@@ -4080,6 +4711,88 @@ mod tests {
         assert!(result.final_answer.is_none());
         assert!(!serialized.contains("对外集成最新状态"));
         assert!(!serialized.contains("用户询问最新进展"));
+    }
+
+    #[test]
+    fn upgrade_parse_vlm_helpers_require_budget_and_mark_usage() {
+        let document_id = DocumentId::new().to_string();
+        let mut evidence_state = json!({
+            "answer_quality_gate": {
+                "premium_action_budget": 1,
+                "premium_action_used": 0,
+                "reason": "model_judge_parse_quality_insufficient",
+                "vlm_upgrade_document_ids": []
+            },
+            "supply_quality": {
+                "lowTextEvidenceCount": 1,
+                "notes": ["low_text_document_evidence"]
+            }
+        });
+
+        assert_eq!(answer_quality_gate_premium_budget(&evidence_state), (1, 0));
+        assert!(upgrade_parse_vlm_evidence_suggests_recovery(
+            &evidence_state,
+            None
+        ));
+        assert!(!answer_quality_gate_vlm_document_already_used(
+            &evidence_state,
+            &document_id
+        ));
+
+        mark_answer_quality_gate_vlm_upgrade_used(&mut evidence_state, &document_id);
+
+        assert_eq!(answer_quality_gate_premium_budget(&evidence_state), (1, 1));
+        assert!(answer_quality_gate_vlm_document_already_used(
+            &evidence_state,
+            &document_id
+        ));
+        assert_eq!(
+            evidence_state["answer_quality_gate"]["premiumActionUsed"],
+            json!(1)
+        );
+    }
+
+    #[test]
+    fn upgrade_parse_vlm_detects_cached_vlm_parse_quality() {
+        let mut document = test_document("documents/weak-scan.pdf", "application/pdf");
+        document.title = "weak-scan.pdf".to_string();
+        document.metadata.insert(
+            "ingest".to_string(),
+            json!({
+                "parse_method": "pdf-vlm",
+                "parse_status": "parsed_with_vlm_fallback",
+                "parse_quality_status": "vlm_fallback_used",
+                "parse_metadata": {
+                    "parse_quality": {
+                        "kind": "pdf_text_extraction",
+                        "status": "vlm_fallback_used",
+                        "text_chars": 420,
+                        "fallback_status": "used",
+                        "recommended_fallback": "minimax_vlm",
+                        "vlm_rescue": {
+                            "selected": "vlm",
+                            "vlm": {"method": "pdf-vlm", "text_chars": 420, "quality_score": 420}
+                        }
+                    }
+                }
+            }),
+        );
+
+        let summary =
+            upgrade_parse_vlm_parse_quality_summary(&document).expect("parse quality summary");
+
+        assert!(upgrade_parse_vlm_document_is_eligible(
+            &document,
+            Some(&summary)
+        ));
+        assert!(parse_quality_has_cached_vlm(&summary));
+        let cached = upgrade_parse_vlm_cached_summary(&document, Some(&summary))
+            .expect("cached VLM summary");
+        assert_eq!(cached["source"], json!("document_parse_quality"));
+        assert_eq!(
+            cached["parse_quality_summary"]["vlm_rescue"]["selected"],
+            json!("vlm")
+        );
     }
 
     #[test]

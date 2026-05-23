@@ -2,7 +2,9 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use domain_model::{TenantId, WorkflowExecution, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
-use external_source_connectors::{fetch_mysql_documents, MySqlSourceConfig};
+use external_source_connectors::{
+    fetch_mysql_documents_report_with_checkpoint, MySqlSourceCheckpoint, MySqlSourceConfig,
+};
 use reqwest::blocking::Client;
 use serde_json::{json, Map, Value};
 use std::{collections::BTreeMap, time::Duration as StdDuration};
@@ -290,18 +292,25 @@ async fn build_sync_external_metadata_output(execution: &WorkflowExecution) -> R
     let connector =
         connector_fixture_for(&execution.context, ConnectorFetchScope::Metadata).await?;
     let documents = external_document_metadata_from_connector(&connector)?;
-    let table_counts = summarize_external_documents_by_table(&documents, "metadata_document_count");
+    let fetch_summary =
+        connector_database_fetch_summary(&connector, &documents, "metadata_document_count");
 
     Ok(json!({
         "source_id": context_required_string(&execution.context, "source_id")?,
         "external_sync_run_id": context_string(&execution.context, "external_sync_run_id")?,
         "document_count": documents.len(),
-        "row_count": documents.len(),
+        "row_count": fetch_summary.row_count,
         "metadata_document_count": documents.len(),
-        "metadata_row_count": documents.len(),
-        "skipped_row_count": 0,
-        "failed_row_count": 0,
-        "metadata_table_counts": table_counts,
+        "metadata_row_count": fetch_summary.row_count,
+        "skipped_row_count": fetch_summary.skipped_row_count,
+        "failed_row_count": fetch_summary.failed_row_count,
+        "row_failure_samples": fetch_summary.row_failure_samples,
+        "metadata_table_counts": fetch_summary.table_counts,
+        "next_checkpoint": connector
+            .get("next_checkpoint")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({})),
         "external_document_metadata": documents,
     }))
 }
@@ -318,18 +327,25 @@ async fn fetch_external_content(
 async fn build_fetch_external_content_output(execution: &WorkflowExecution) -> Result<Value> {
     let connector = connector_fixture_for(&execution.context, ConnectorFetchScope::Content).await?;
     let documents = external_documents_from_connector(&connector)?;
-    let table_counts = summarize_external_documents_by_table(&documents, "content_document_count");
+    let fetch_summary =
+        connector_database_fetch_summary(&connector, &documents, "content_document_count");
 
     Ok(json!({
         "source_id": context_required_string(&execution.context, "source_id")?,
         "external_sync_run_id": context_string(&execution.context, "external_sync_run_id")?,
         "document_count": documents.len(),
-        "row_count": documents.len(),
+        "row_count": fetch_summary.row_count,
         "content_document_count": documents.len(),
-        "content_row_count": documents.len(),
-        "skipped_row_count": 0,
-        "failed_row_count": 0,
-        "content_table_counts": table_counts,
+        "content_row_count": fetch_summary.row_count,
+        "skipped_row_count": fetch_summary.skipped_row_count,
+        "failed_row_count": fetch_summary.failed_row_count,
+        "row_failure_samples": fetch_summary.row_failure_samples,
+        "content_table_counts": fetch_summary.table_counts,
+        "next_checkpoint": connector
+            .get("next_checkpoint")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({})),
         "external_documents": documents,
     }))
 }
@@ -361,7 +377,8 @@ async fn connector_fixture_for(context: &Value, scope: ConnectorFetchScope) -> R
         .filter(|value| value.is_object())
         .ok_or_else(|| anyhow!("external source workflow missing connector_context"))?;
     if let Some(mysql_source) = mysql_source_config_value(connector_context) {
-        return fetch_mysql_source_connector(mysql_source, scope).await;
+        let checkpoint = context.get("checkpoint").unwrap_or(&Value::Null);
+        return fetch_mysql_source_connector(mysql_source, checkpoint, scope).await;
     }
     if let Some(http_source) = http_source_config_value(connector_context) {
         let context = context.clone();
@@ -391,6 +408,7 @@ fn mysql_source_config_value(connector_context: &Value) -> Option<&Value> {
 
 async fn fetch_mysql_source_connector(
     raw_config: &Value,
+    raw_checkpoint: &Value,
     scope: ConnectorFetchScope,
 ) -> Result<Value> {
     let fetch_documents = matches!(
@@ -400,13 +418,51 @@ async fn fetch_mysql_source_connector(
     let include_body = matches!(scope, ConnectorFetchScope::Content);
     let config = MySqlSourceConfig::from_value(raw_config)
         .map_err(|error| anyhow!("invalid mysql_source connector config: {error}"))?;
-    let documents = if fetch_documents {
-        fetch_mysql_documents(&config, include_body)
+    let checkpoint = MySqlSourceCheckpoint::from_value(raw_checkpoint)
+        .map_err(|error| anyhow!("invalid mysql_source checkpoint: {error}"))?;
+    let fetch_report = if fetch_documents {
+        fetch_mysql_documents_report_with_checkpoint(&config, include_body, &checkpoint)
             .await
             .map_err(|error| anyhow!("mysql_source connector fetch failed: {error}"))?
     } else {
-        Vec::new()
+        Default::default()
     };
+    let documents = fetch_report.documents;
+    let next_checkpoint = if fetch_report
+        .next_checkpoint
+        .as_object()
+        .map(|object| object.is_empty())
+        .unwrap_or(true)
+    {
+        mysql_next_checkpoint_from_documents(&documents)
+    } else {
+        fetch_report.next_checkpoint
+    };
+    let table_counts = fetch_report
+        .table_counts
+        .iter()
+        .map(|stats| {
+            json!({
+                "table": stats.table.clone(),
+                "document_count": stats.document_count,
+                "row_count": stats.row_count,
+                "skipped_row_count": stats.skipped_row_count,
+                "failed_row_count": stats.failed_row_count,
+            })
+        })
+        .collect::<Vec<_>>();
+    let row_failure_samples = fetch_report
+        .row_failure_samples
+        .iter()
+        .map(|sample| {
+            json!({
+                "table": sample.table.clone(),
+                "row_index": sample.row_index,
+                "reason": sample.reason.clone(),
+                "source_primary_key": sample.source_primary_key.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
     let tables = config
         .tables
         .iter()
@@ -425,9 +481,21 @@ async fn fetch_mysql_source_connector(
             "kind": "mysql_source",
             "database": config.database,
             "document_count": documents.len(),
+            "row_count": fetch_report.row_count,
+            "skipped_row_count": fetch_report.skipped_row_count,
+            "failed_row_count": fetch_report.failed_row_count,
             "table_count": tables.len(),
             "tables": tables,
-        }
+        },
+        "mysql_fetch_summary": {
+            "document_count": documents.len(),
+            "row_count": fetch_report.row_count,
+            "skipped_row_count": fetch_report.skipped_row_count,
+            "failed_row_count": fetch_report.failed_row_count,
+            "table_counts": table_counts,
+            "row_failure_samples": row_failure_samples,
+        },
+        "next_checkpoint": next_checkpoint,
     }))
 }
 
@@ -1189,7 +1257,28 @@ async fn update_external_sync_counts(
             counts.insert(key.to_string(), value.clone());
         }
     }
-    if counts.is_empty() {
+    if let Some(value) = output
+        .get("row_failure_samples")
+        .filter(|value| value.is_array())
+    {
+        counts.insert("row_failure_samples".to_string(), value.clone());
+    }
+    let next_checkpoint = output
+        .get("next_checkpoint")
+        .filter(|value| {
+            value
+                .as_object()
+                .map(|object| !object.is_empty())
+                .unwrap_or(false)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if counts.is_empty()
+        && next_checkpoint
+            .as_object()
+            .map(|object| object.is_empty())
+            .unwrap_or(true)
+    {
         return Ok(());
     }
 
@@ -1197,13 +1286,15 @@ async fn update_external_sync_counts(
         r#"
         update external_sync_runs
         set counts = counts || $3,
-            updated_at = $4
+            checkpoint = checkpoint || $4,
+            updated_at = $5
         where tenant_id = $1 and id = $2
         "#,
     )
     .bind(tenant_id.0)
     .bind(sync_run_id)
     .bind(Value::Object(counts))
+    .bind(next_checkpoint)
     .bind(Utc::now())
     .execute(storage.pool())
     .await?;
@@ -1257,6 +1348,137 @@ fn external_sync_error_excerpt(error_message: &str) -> String {
         .collect()
 }
 
+#[derive(Clone, Debug)]
+struct ConnectorDatabaseFetchSummary {
+    row_count: u64,
+    skipped_row_count: u64,
+    failed_row_count: u64,
+    row_failure_samples: Value,
+    table_counts: Value,
+}
+
+fn connector_database_fetch_summary(
+    connector: &Value,
+    documents: &[Value],
+    count_key: &str,
+) -> ConnectorDatabaseFetchSummary {
+    let Some(summary) = connector
+        .get("mysql_fetch_summary")
+        .or_else(|| connector.get("database_fetch_summary"))
+        .filter(|value| value.is_object())
+    else {
+        return ConnectorDatabaseFetchSummary {
+            row_count: documents.len() as u64,
+            skipped_row_count: 0,
+            failed_row_count: 0,
+            row_failure_samples: json!([]),
+            table_counts: summarize_external_documents_by_table(documents, count_key),
+        };
+    };
+    let table_counts = summary
+        .get("table_counts")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            Value::Array(
+                rows.iter()
+                    .filter_map(|row| {
+                        let table = string_field(row, &["table"])?;
+                        let document_count = row
+                            .get("document_count")
+                            .or_else(|| row.get("documentCount"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        Some(json!({
+                            "table": table,
+                            count_key: document_count,
+                            "row_count": row
+                                .get("row_count")
+                                .or_else(|| row.get("rowCount"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(document_count),
+                            "skipped_row_count": row
+                                .get("skipped_row_count")
+                                .or_else(|| row.get("skippedRowCount"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0),
+                            "failed_row_count": row
+                                .get("failed_row_count")
+                                .or_else(|| row.get("failedRowCount"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0),
+                        }))
+                    })
+                    .collect(),
+            )
+        })
+        .filter(|value| {
+            value
+                .as_array()
+                .map(|rows| !rows.is_empty())
+                .unwrap_or(false)
+        })
+        .unwrap_or_else(|| summarize_external_documents_by_table(documents, count_key));
+
+    ConnectorDatabaseFetchSummary {
+        row_count: summary
+            .get("row_count")
+            .or_else(|| summary.get("rowCount"))
+            .and_then(Value::as_u64)
+            .unwrap_or(documents.len() as u64),
+        skipped_row_count: summary
+            .get("skipped_row_count")
+            .or_else(|| summary.get("skippedRowCount"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        failed_row_count: summary
+            .get("failed_row_count")
+            .or_else(|| summary.get("failedRowCount"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        row_failure_samples: normalize_database_row_failure_samples(
+            summary
+                .get("row_failure_samples")
+                .or_else(|| summary.get("rowFailureSamples")),
+        ),
+        table_counts,
+    }
+}
+
+fn normalize_database_row_failure_samples(value: Option<&Value>) -> Value {
+    let rows = value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(8)
+                .filter_map(|item| {
+                    let table = string_field(item, &["table"])?;
+                    Some(json!({
+                        "table": table,
+                        "row_index": item
+                            .get("row_index")
+                            .or_else(|| item.get("rowIndex"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                        "reason": string_field(item, &["reason"])
+                            .unwrap_or_else(|| "row_conversion_failed".to_string())
+                            .chars()
+                            .filter(|ch| !ch.is_control() || ch.is_whitespace())
+                            .take(160)
+                            .collect::<String>(),
+                        "source_primary_key": string_field(
+                            item,
+                            &["source_primary_key", "sourcePrimaryKey"],
+                        )
+                        .unwrap_or_default(),
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Value::Array(rows)
+}
+
 fn summarize_external_documents_by_table(documents: &[Value], count_key: &str) -> Value {
     let mut counts = BTreeMap::<String, u64>::new();
     for document in documents {
@@ -1277,6 +1499,83 @@ fn summarize_external_documents_by_table(documents: &[Value], count_key: &str) -
             })
             .collect(),
     )
+}
+
+fn mysql_next_checkpoint_from_documents(documents: &[Value]) -> Value {
+    let mut tables = BTreeMap::<String, Map<String, Value>>::new();
+    for document in documents {
+        let table = external_document_source_table(document);
+        if table == "[unmapped]" {
+            continue;
+        }
+        let Some(metadata) = document.get("metadata").filter(|value| value.is_object()) else {
+            continue;
+        };
+        let entry = tables.entry(table).or_default();
+        if let Some(updated_at) = string_field(metadata, &["source_updated_at", "sourceUpdatedAt"])
+        {
+            update_checkpoint_max_string(entry, "updated_after", updated_at);
+        }
+        if let Some(version) = string_field(metadata, &["source_version", "sourceVersion"]) {
+            update_checkpoint_max_numeric_or_string(entry, "version_after", version);
+        }
+        let identity_columns = metadata
+            .get("source_primary_key_columns")
+            .or_else(|| metadata.get("sourcePrimaryKeyColumns"))
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(1);
+        if identity_columns == 1 {
+            if let Some(primary_key) =
+                string_field(metadata, &["source_primary_key", "sourcePrimaryKey"])
+            {
+                update_checkpoint_max_numeric_or_string(entry, "last_id", primary_key);
+            }
+        }
+    }
+    if tables.is_empty() {
+        return json!({});
+    }
+    json!({ "tables": tables })
+}
+
+fn update_checkpoint_max_string(entry: &mut Map<String, Value>, key: &str, candidate: String) {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return;
+    }
+    let should_replace = entry
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|current| candidate > current)
+        .unwrap_or(true);
+    if should_replace {
+        entry.insert(key.to_string(), Value::String(candidate.to_string()));
+    }
+}
+
+fn update_checkpoint_max_numeric_or_string(
+    entry: &mut Map<String, Value>,
+    key: &str,
+    candidate: String,
+) {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return;
+    }
+    let should_replace = entry
+        .get(key)
+        .and_then(Value::as_str)
+        .map(
+            |current| match (candidate.parse::<f64>(), current.parse::<f64>()) {
+                (Ok(candidate), Ok(current)) => candidate > current,
+                _ => candidate > current,
+            },
+        )
+        .unwrap_or(true);
+    if should_replace {
+        entry.insert(key.to_string(), Value::String(candidate.to_string()));
+    }
 }
 
 fn external_document_source_table(document: &Value) -> String {
@@ -1531,6 +1830,109 @@ mod tests {
                 "row_count": 1,
                 "skipped_row_count": 0,
                 "failed_row_count": 0
+            }])
+        );
+    }
+
+    #[test]
+    fn mysql_next_checkpoint_summarizes_table_high_water_marks() {
+        let checkpoint = mysql_next_checkpoint_from_documents(&[
+            json!({
+                "metadata": {
+                    "source_table": "bi_traffic_area",
+                    "source_primary_key": "9",
+                    "source_primary_key_columns": ["id"],
+                    "source_updated_at": "2026-05-20 10:00:00",
+                    "source_version": "12"
+                }
+            }),
+            json!({
+                "metadata": {
+                    "source_table": "bi_traffic_area",
+                    "source_primary_key": "10",
+                    "source_primary_key_columns": ["id"],
+                    "source_updated_at": "2026-05-21 09:00:00",
+                    "source_version": "13"
+                }
+            }),
+            json!({
+                "metadata": {
+                    "source_table": "composite_table",
+                    "source_primary_key": "tenant=1|id=10",
+                    "source_primary_key_columns": ["tenant", "id"],
+                    "source_updated_at": "2026-05-19 08:00:00"
+                }
+            }),
+        ]);
+
+        assert_eq!(
+            checkpoint,
+            json!({
+                "tables": {
+                    "bi_traffic_area": {
+                        "last_id": "10",
+                        "updated_after": "2026-05-21 09:00:00",
+                        "version_after": "13"
+                    },
+                    "composite_table": {
+                        "updated_after": "2026-05-19 08:00:00"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn connector_database_fetch_summary_keeps_failed_mysql_rows_visible() {
+        let documents = vec![json!({
+            "metadata": {
+                "source_table": "bi_traffic_area"
+            }
+        })];
+        let connector = json!({
+            "mysql_fetch_summary": {
+                "document_count": 1,
+                "row_count": 3,
+                "skipped_row_count": 0,
+                "failed_row_count": 2,
+                "row_failure_samples": [{
+                    "table": "bi_traffic_area",
+                    "row_index": 3,
+                    "source_primary_key": "42",
+                    "reason": "mapped row has empty identity columns"
+                }],
+                "table_counts": [{
+                    "table": "bi_traffic_area",
+                    "document_count": 1,
+                    "row_count": 3,
+                    "skipped_row_count": 0,
+                    "failed_row_count": 2
+                }]
+            }
+        });
+
+        let summary =
+            connector_database_fetch_summary(&connector, &documents, "content_document_count");
+
+        assert_eq!(summary.row_count, 3);
+        assert_eq!(summary.failed_row_count, 2);
+        assert_eq!(
+            summary.row_failure_samples,
+            json!([{
+                "table": "bi_traffic_area",
+                "row_index": 3,
+                "reason": "mapped row has empty identity columns",
+                "source_primary_key": "42"
+            }])
+        );
+        assert_eq!(
+            summary.table_counts,
+            json!([{
+                "table": "bi_traffic_area",
+                "content_document_count": 1,
+                "row_count": 3,
+                "skipped_row_count": 0,
+                "failed_row_count": 2
             }])
         );
     }

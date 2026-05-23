@@ -9,6 +9,15 @@
       "model_status=parse_degraded",
       "direct answer does not cite the one extracted character as content"
     ],
+    "observability": {
+      "original_parse_status": "parse_degraded",
+      "parse_quality_status": "low_text_coverage",
+      "parse_lifecycle": "local extraction -> parse_degraded",
+      "quality_gate_triggered_reason": "parse_quality_recovery",
+      "retry_attempts": 2,
+      "react_actions_used": ["retrieve_evidence", "read_document_detail", "upgrade_parse_vlm"],
+      "premium_action": "allowed_once_when_vlm_configured"
+    },
     "local_tests": [
       {
         "package": "ingest-worker",
@@ -34,6 +43,14 @@
       "answer is provider-authored direct text",
       "source refs point at the selected document"
     ],
+    "observability": {
+      "original_parse_status": "unit_contract",
+      "parse_quality_status": "unit_contract",
+      "quality_gate_triggered_reason": "structured_entity_question_guard",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence", "read_document_detail"],
+      "premium_action": "not_used"
+    },
     "local_tests": [
       {
         "package": "platform-api",
@@ -51,6 +68,14 @@
       "company rows include document evidence",
       "candidate_terms are not used as extra company names"
     ],
+    "observability": {
+      "original_parse_status": "unit_contract",
+      "parse_quality_status": "unit_contract",
+      "quality_gate_triggered_reason": "structured_statistics_guard",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence"],
+      "premium_action": "not_used"
+    },
     "local_tests": [
       {
         "package": "platform-api",
@@ -68,6 +93,15 @@
       "skills, companies, projects, ages, genders, education, certificates, cities, and time ranges remain available",
       "document titles or refs remain visible in table rows"
     ],
+    "requires_table": true,
+    "observability": {
+      "original_parse_status": "unit_contract",
+      "parse_quality_status": "unit_contract",
+      "quality_gate_triggered_reason": "structured_ranking_table_guard",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence"],
+      "premium_action": "not_used"
+    },
     "local_tests": [
       {
         "package": "platform-api",
@@ -84,6 +118,15 @@
       "table rows are supplied as structured scan rows",
       "section/table counts are printed by smoke report"
     ],
+    "requires_table": true,
+    "observability": {
+      "original_parse_status": "unit_contract",
+      "parse_quality_status": "unit_contract",
+      "quality_gate_triggered_reason": "table_prompt_guard",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence", "read_document_detail"],
+      "premium_action": "not_used"
+    },
     "local_tests": [
       {
         "package": "platform-api",
@@ -102,6 +145,16 @@
       "blank punch columns stay aligned with work-hour columns",
       "work-hour values include an hour unit for model-facing context"
     ],
+    "requires_table": true,
+    "requires_normalized_dates": true,
+    "observability": {
+      "original_parse_status": "xlsx_structured",
+      "parse_quality_status": "usable",
+      "quality_gate_triggered_reason": "attendance_date_format_guard",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence"],
+      "premium_action": "not_used"
+    },
     "local_tests": [
       {
         "package": "ingest-worker",
@@ -119,6 +172,14 @@
       "MiniMax VLM fallback is visible only when OCR is unavailable or insufficient",
       "fallback state is model-visible"
     ],
+    "observability": {
+      "original_parse_status": "parse_degraded",
+      "parse_quality_status": "low_text_coverage",
+      "quality_gate_triggered_reason": "parse_quality_recovery",
+      "retry_attempts": 2,
+      "react_actions_used": ["retrieve_evidence", "read_document_detail", "upgrade_parse_vlm"],
+      "premium_action": "allowed_once_when_vlm_configured"
+    },
     "local_tests": [
       {
         "package": "ingest-worker",
@@ -127,6 +188,57 @@
       {
         "package": "ingest-worker",
         "filter": "build_document_chunks_uses_paddleocr_structure_title_blocks"
+      }
+    ]
+  },
+  {
+    "id": "smart-home-customer-feedback",
+    "label": "Smart home dissatisfied-customer answer quality",
+    "fixture_kind": "doc_or_transcript",
+    "prompt": "最近的智能家居材料客户不满意，重新回答智能家居系统有哪些功能。",
+    "expected": [
+      "partial parse wording is not exposed as a customer-facing answer",
+      "quality gate retries weak partial-parse language",
+      "final answer avoids raw parse identifiers"
+    ],
+    "observability": {
+      "original_parse_status": "partial",
+      "parse_quality_status": "partial",
+      "quality_gate_triggered_reason": "partial_parse_language",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence", "read_document_detail"],
+      "premium_action": "not_used"
+    },
+    "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_answer_quality_gate_retries_unnecessary_partial_parse_language"
+      }
+    ]
+  },
+  {
+    "id": "smart-elevator-customer-feedback",
+    "label": "Smart elevator point-list customer answer quality",
+    "fixture_kind": "doc_or_table",
+    "prompt": "智能梯控/电梯点位有哪些？请按楼层和位置出表。",
+    "expected": [
+      "elevator point-list prompt is treated as structured entity/table work",
+      "final answer is table-shaped when enough evidence exists",
+      "quality smoke fails if table shape is missing"
+    ],
+    "requires_table": true,
+    "observability": {
+      "original_parse_status": "unit_contract",
+      "parse_quality_status": "unit_contract",
+      "quality_gate_triggered_reason": "structured_entity_table_guard",
+      "retry_attempts": 1,
+      "react_actions_used": ["retrieve_evidence", "read_document_detail"],
+      "premium_action": "not_used"
+    },
+    "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_document_entity_scan_detects_elevator_point_lists"
       }
     ]
   }

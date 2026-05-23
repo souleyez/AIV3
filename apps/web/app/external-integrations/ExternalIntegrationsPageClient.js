@@ -10,6 +10,7 @@ import {
   buildExternalActionTrace,
   buildThirdPartyApiUrl,
   controlResultLabel,
+  databaseSourceHealthSignalLabel,
   databaseSourceMetrics,
   databaseSourceReadiness,
   databaseSourceSummary,
@@ -475,6 +476,7 @@ export default function ExternalIntegrationsPageClient() {
   const selectedDatabaseTableReadiness = selectedDatabaseStatus?.tableReadiness || [];
   const selectedDatabaseSyncReadiness = selectedDatabaseStatus?.syncReadiness || null;
   const selectedDatabaseSemanticProfile = selectedDatabaseStatus?.semanticProfile || null;
+  const selectedDatabaseHealthFindings = selectedDatabaseStatus?.healthFindings || null;
   const selectedDatabaseSyncRuns = selectedDatabaseStatus?.recentSyncRuns?.length
     ? selectedDatabaseStatus.recentSyncRuns.slice(0, 5)
     : databaseSourceSyncRuns(auditItems, 3);
@@ -1039,6 +1041,50 @@ export default function ExternalIntegrationsPageClient() {
                       </small>
                     </div>
                   ) : null}
+                  {selectedDatabaseHealthFindings?.configured && selectedDatabaseHealthFindings.items.length ? (
+                    <div
+                      className={`external-database-health external-database-health-${selectedDatabaseHealthFindings.signal}`}
+                      aria-label="数据库源健康提示"
+                    >
+                      <div className="external-database-health-head">
+                        <strong>{databaseSourceHealthSignalLabel(selectedDatabaseHealthFindings.signal)}</strong>
+                        <span>
+                          阻断 {selectedDatabaseHealthFindings.blockingCount}
+                          {' · '}
+                          关注 {selectedDatabaseHealthFindings.warningCount}
+                          {' · '}
+                          信息 {selectedDatabaseHealthFindings.infoCount}
+                        </span>
+                      </div>
+                      <div className="external-database-health-items">
+                        {selectedDatabaseHealthFindings.items.map((item, index) => (
+                          <article key={`${item.code || item.title}:${item.table}:${index}`}>
+                            <span>{item.severity === 'error' ? '阻断' : item.severity === 'warning' ? '关注' : '信息'}</span>
+                            <strong>{item.title || item.code}</strong>
+                            <small>
+                              {item.table ? `${item.table} · ` : ''}
+                              {item.count ? `${item.count} · ` : ''}
+                              {item.message}
+                            </small>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {selectedDatabaseSyncReadiness?.rowFailureSamples?.length ? (
+                    <div className="external-database-row-failures" aria-label="数据库失败行样例">
+                      {selectedDatabaseSyncReadiness.rowFailureSamples.map((sample, index) => (
+                        <article key={`${sample.table}:${sample.rowIndex}:${index}`}>
+                          <strong>{sample.table}</strong>
+                          <span>行 {sample.rowIndex || '-'}</span>
+                          <small>
+                            {sample.sourcePrimaryKey ? `主键 ${sample.sourcePrimaryKey} · ` : ''}
+                            {sample.reason || 'row_conversion_failed'}
+                          </small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="external-database-sync-list" aria-label="数据库同步运行">
                     {auditLoading && !selectedDatabaseStatus?.recentSyncRuns?.length ? (
                       <small>同步记录读取中</small>
@@ -1065,6 +1111,7 @@ export default function ExternalIntegrationsPageClient() {
                             {run.lastError
                               || run.failureKind
                               || run.failedTaskKey
+                              || run.rowFailureSamples?.[0]?.reason
                               || run.checkpointSummary?.label
                               || run.workflowStage
                               || formatObservationTime(run.updatedAt)}

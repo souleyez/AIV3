@@ -30,6 +30,7 @@ pub(crate) enum AssistantRunReActActionType {
     RetrieveEvidence,
     WebSearch,
     ReadDocumentDetail,
+    UpgradeParseVlm,
     RecallConversationMemory,
     ListReportOptions,
     ResolveVideoUrl,
@@ -52,6 +53,7 @@ impl AssistantRunReActActionType {
             "retrieve_evidence" => Some(Self::RetrieveEvidence),
             "web_search" => Some(Self::WebSearch),
             "read_document_detail" => Some(Self::ReadDocumentDetail),
+            "upgrade_parse_vlm" => Some(Self::UpgradeParseVlm),
             "recall_conversation_memory" => Some(Self::RecallConversationMemory),
             "list_report_options" => Some(Self::ListReportOptions),
             "resolve_video_url" => Some(Self::ResolveVideoUrl),
@@ -75,6 +77,7 @@ impl AssistantRunReActActionType {
             Self::RetrieveEvidence => "retrieve_evidence",
             Self::WebSearch => "web_search",
             Self::ReadDocumentDetail => "read_document_detail",
+            Self::UpgradeParseVlm => "upgrade_parse_vlm",
             Self::RecallConversationMemory => "recall_conversation_memory",
             Self::ListReportOptions => "list_report_options",
             Self::ResolveVideoUrl => "resolve_video_url",
@@ -462,6 +465,24 @@ mod tests {
         assert_eq!(decision.action_type, AssistantRunReActActionType::WebSearch);
         assert_eq!(decision.arguments["query"], json!("V3 最新发布状态"));
         assert_eq!(decision.arguments["freshness"], json!("latest"));
+    }
+
+    #[test]
+    fn parses_upgrade_parse_vlm_action() {
+        let decision = parse_assistant_run_react_decision(
+            r#"{"status":"act","intent":"data_question","reason":"解析质量不足，需要受控升级","action":{"type":"upgrade_parse_vlm","arguments":{"document_id":"00000000-0000-0000-0000-000000000001","page_hint":[1],"question_focus":"邓工是谁"}}}"#,
+        )
+        .expect("VLM parse upgrade action should parse");
+
+        assert_eq!(
+            AssistantRunReActActionType::UpgradeParseVlm.as_str(),
+            "upgrade_parse_vlm"
+        );
+        assert_eq!(
+            decision.action_type,
+            AssistantRunReActActionType::UpgradeParseVlm
+        );
+        assert_eq!(decision.arguments["page_hint"][0], json!(1));
     }
 
     #[test]

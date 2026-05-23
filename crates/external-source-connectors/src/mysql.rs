@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{mysql::MySqlPoolOptions, MySqlPool, Row};
 use std::{
@@ -12,10 +12,13 @@ use uuid::Uuid;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_ROW_LIMIT: u32 = 1_000;
+const DEFAULT_PAGE_SIZE: u32 = 1_000;
 const MAX_TIMEOUT_MS: u64 = 120_000;
 const MAX_ROW_LIMIT: u32 = 50_000;
+const MAX_PAGE_SIZE: u32 = 5_000;
 const DEFAULT_CONTENT_TYPE: &str = "text/markdown";
 const DEFAULT_OBJECT_TYPE: &str = "document";
+const MAX_ROW_FAILURE_SAMPLES: usize = 8;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DatabaseSourceError {
@@ -46,6 +49,8 @@ pub struct MySqlSourceConfig {
     pub timeout_ms: u64,
     #[serde(default = "default_row_limit")]
     pub row_limit: u32,
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_dataset_id: Option<String>,
     #[serde(default)]
@@ -74,6 +79,57 @@ pub struct MySqlTableMapping {
     pub revision_strategy: MySqlRevisionStrategy,
     #[serde(default)]
     pub metadata_columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MySqlSourceCheckpoint {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_after: Option<String>,
+    #[serde(default)]
+    pub tables: BTreeMap<String, MySqlTableCheckpoint>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MySqlTableCheckpoint {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_after: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MySqlDocumentFetchReport {
+    pub documents: Vec<Value>,
+    pub row_count: u64,
+    pub skipped_row_count: u64,
+    pub failed_row_count: u64,
+    pub row_failure_samples: Vec<MySqlRowFailureSample>,
+    pub table_counts: Vec<MySqlTableFetchStats>,
+    pub next_checkpoint: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MySqlRowFailureSample {
+    pub table: String,
+    pub row_index: u64,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_primary_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct MySqlTableFetchStats {
+    pub table: String,
+    pub document_count: u64,
+    pub row_count: u64,
+    pub skipped_row_count: u64,
+    pub failed_row_count: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -297,6 +353,12 @@ impl MySqlSourceConfig {
                 reason: format!("must be between 1 and {MAX_ROW_LIMIT}"),
             });
         }
+        if self.page_size == 0 || self.page_size > MAX_PAGE_SIZE {
+            return Err(DatabaseSourceError::InvalidField {
+                field: "page_size",
+                reason: format!("must be between 1 and {MAX_PAGE_SIZE}"),
+            });
+        }
         if let Some(dataset_id) = self.default_dataset_id.as_deref() {
             validate_non_empty("default_dataset_id", dataset_id)?;
             Uuid::parse_str(dataset_id).map_err(|_| DatabaseSourceError::InvalidField {
@@ -335,6 +397,7 @@ impl MySqlSourceConfig {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
+        self.page_size = self.page_size.min(self.row_limit.max(1));
         for mapping in &mut self.tables {
             mapping.normalize();
         }
@@ -474,25 +537,118 @@ pub async fn fetch_mysql_documents(
     config: &MySqlSourceConfig,
     include_body: bool,
 ) -> Result<Vec<Value>, DatabaseSourceError> {
+    Ok(fetch_mysql_documents_report_with_checkpoint(
+        config,
+        include_body,
+        &MySqlSourceCheckpoint::default(),
+    )
+    .await?
+    .documents)
+}
+
+pub async fn fetch_mysql_documents_with_checkpoint(
+    config: &MySqlSourceConfig,
+    include_body: bool,
+    checkpoint: &MySqlSourceCheckpoint,
+) -> Result<Vec<Value>, DatabaseSourceError> {
+    Ok(
+        fetch_mysql_documents_report_with_checkpoint(config, include_body, checkpoint)
+            .await?
+            .documents,
+    )
+}
+
+pub async fn fetch_mysql_documents_report_with_checkpoint(
+    config: &MySqlSourceConfig,
+    include_body: bool,
+    checkpoint: &MySqlSourceCheckpoint,
+) -> Result<MySqlDocumentFetchReport, DatabaseSourceError> {
     config.validate()?;
     let pool = connect_mysql_pool(config).await?;
-    let mut documents = Vec::new();
+    let mut report = MySqlDocumentFetchReport::default();
+    let mut checkpoint_tables = BTreeMap::<String, Map<String, Value>>::new();
     for mapping in &config.tables {
-        let plan = build_mysql_document_fetch_query(config, mapping)?;
-        let rows = sqlx::query(&plan.sql)
-            .fetch_all(&pool)
-            .await
-            .map_err(sqlx_error)?;
-        for row in rows {
-            documents.push(mysql_row_to_external_document(
-                mapping,
-                &plan.columns,
-                row,
-                include_body,
-            )?);
+        let mut stats = MySqlTableFetchStats {
+            table: mapping.table.clone(),
+            ..Default::default()
+        };
+        let total_limit = config.row_limit.min(MAX_ROW_LIMIT);
+        let page_size = config.page_size.min(total_limit).min(MAX_PAGE_SIZE);
+        let mut offset = 0;
+        while offset < total_limit {
+            let page_limit = page_size.min(total_limit - offset);
+            let plan = build_mysql_document_fetch_page_query(
+                config, mapping, checkpoint, page_limit, offset,
+            )?;
+            let mut query = sqlx::query(&plan.sql);
+            for param in &plan.params {
+                query = query.bind(param);
+            }
+            let rows = query.fetch_all(&pool).await.map_err(sqlx_error)?;
+            if rows.is_empty() {
+                break;
+            }
+            let row_count = rows.len() as u32;
+            for row in rows {
+                stats.row_count += 1;
+                report.row_count += 1;
+                let values = match mysql_row_values(&plan.columns, row) {
+                    Ok(values) => values,
+                    Err(error) => {
+                        stats.failed_row_count += 1;
+                        report.failed_row_count += 1;
+                        push_mysql_row_failure_sample(
+                            &mut report.row_failure_samples,
+                            mapping,
+                            stats.row_count,
+                            &error.to_string(),
+                            None,
+                        );
+                        continue;
+                    }
+                };
+                update_mysql_checkpoint_tables_from_values(
+                    &mut checkpoint_tables,
+                    mapping,
+                    &values,
+                );
+                match mysql_values_to_external_document(mapping, &values, include_body) {
+                    Ok(document) => {
+                        stats.document_count += 1;
+                        report.documents.push(document);
+                    }
+                    Err(error) => {
+                        stats.failed_row_count += 1;
+                        report.failed_row_count += 1;
+                        let source_primary_key = mysql_optional_row_primary_key(mapping, &values);
+                        push_mysql_row_failure_sample(
+                            &mut report.row_failure_samples,
+                            mapping,
+                            stats.row_count,
+                            &error.to_string(),
+                            source_primary_key,
+                        );
+                    }
+                }
+            }
+            if row_count < page_limit {
+                break;
+            }
+            offset += row_count;
         }
+        report.table_counts.push(stats);
     }
-    Ok(documents)
+    report.skipped_row_count = report
+        .table_counts
+        .iter()
+        .map(|stats| stats.skipped_row_count)
+        .sum();
+    report.next_checkpoint = if checkpoint_tables.is_empty() {
+        Value::Object(Map::new())
+    } else {
+        json!({ "tables": checkpoint_tables })
+    };
+    Ok(report)
 }
 
 pub async fn profile_mysql_database(
@@ -1170,6 +1326,7 @@ pub struct MySqlDocumentFetchQuery {
     pub row_limit: u32,
     pub columns: Vec<String>,
     pub sql: String,
+    pub params: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1358,8 +1515,37 @@ pub fn build_mysql_document_fetch_query(
     config: &MySqlSourceConfig,
     mapping: &MySqlTableMapping,
 ) -> Result<MySqlDocumentFetchQuery, DatabaseSourceError> {
+    build_mysql_document_fetch_query_with_checkpoint(
+        config,
+        mapping,
+        &MySqlSourceCheckpoint::default(),
+    )
+}
+
+pub fn build_mysql_document_fetch_query_with_checkpoint(
+    config: &MySqlSourceConfig,
+    mapping: &MySqlTableMapping,
+    checkpoint: &MySqlSourceCheckpoint,
+) -> Result<MySqlDocumentFetchQuery, DatabaseSourceError> {
+    build_mysql_document_fetch_page_query(
+        config,
+        mapping,
+        checkpoint,
+        config.row_limit.min(MAX_ROW_LIMIT),
+        0,
+    )
+}
+
+pub fn build_mysql_document_fetch_page_query(
+    config: &MySqlSourceConfig,
+    mapping: &MySqlTableMapping,
+    checkpoint: &MySqlSourceCheckpoint,
+    limit: u32,
+    offset: u32,
+) -> Result<MySqlDocumentFetchQuery, DatabaseSourceError> {
     config.validate()?;
     mapping.validate()?;
+    let row_limit = limit.clamp(1, config.row_limit.min(MAX_ROW_LIMIT));
     let columns = preview_columns(mapping);
     let projections = columns
         .iter()
@@ -1369,16 +1555,70 @@ pub fn build_mysql_document_fetch_query(
         })
         .collect::<Result<Vec<_>, DatabaseSourceError>>()?
         .join(", ");
+    let incremental = checkpoint.table_checkpoint(&mapping.table);
+    let mut where_clause = String::new();
+    let mut order_columns = Vec::new();
+    let mut params = Vec::new();
+    if let Some(updated_after) = incremental.updated_after.as_deref() {
+        if let Some(column) = mapping.updated_at_column.as_deref() {
+            let quoted = quote_mysql_identifier(column)?;
+            where_clause = format!(" where {quoted} > ?");
+            order_columns.push(format!("{quoted} asc"));
+            params.push(updated_after.to_string());
+        }
+    }
+    if where_clause.is_empty() {
+        if let Some(version_after) = incremental.version_after.as_deref() {
+            if let Some(column) = mapping.version_column.as_deref() {
+                let quoted = quote_mysql_identifier(column)?;
+                where_clause =
+                    format!(" where cast({quoted} as decimal(30,6)) > cast(? as decimal(30,6))");
+                order_columns.push(format!("cast({quoted} as decimal(30,6)) asc"));
+                params.push(version_after.to_string());
+            }
+        }
+    }
+    if where_clause.is_empty() {
+        if let Some(last_id) = incremental.last_id.as_deref() {
+            if mapping_identity_columns(mapping).len() == 1 {
+                let quoted = quote_mysql_identifier(&mapping.id_column)?;
+                where_clause =
+                    format!(" where cast({quoted} as decimal(30,0)) > cast(? as decimal(30,0))");
+                order_columns.push(format!("cast({quoted} as decimal(30,0)) asc"));
+                params.push(last_id.to_string());
+            }
+        }
+    }
+    if where_clause.is_empty() {
+        order_columns.push(format!(
+            "{} asc",
+            quote_mysql_identifier(&mapping.id_column)?
+        ));
+    } else if !order_columns
+        .iter()
+        .any(|column| column.contains(&format!("`{}`", mapping.id_column)))
+        && mapping_identity_columns(mapping).len() == 1
+    {
+        order_columns.push(format!(
+            "{} asc",
+            quote_mysql_identifier(&mapping.id_column)?
+        ));
+    }
+    let order_by = if order_columns.is_empty() {
+        String::new()
+    } else {
+        format!(" order by {}", order_columns.join(", "))
+    };
     let sql = format!(
-        "select {projections} from {} limit {}",
+        "select {projections} from {}{where_clause}{order_by} limit {row_limit} offset {offset}",
         quote_mysql_identifier(&mapping.table)?,
-        config.row_limit.min(MAX_ROW_LIMIT)
     );
     Ok(MySqlDocumentFetchQuery {
         table: mapping.table.clone(),
-        row_limit: config.row_limit.min(MAX_ROW_LIMIT),
+        row_limit,
         columns,
         sql,
+        params,
     })
 }
 
@@ -1425,6 +1665,81 @@ from information_schema.statistics
 where table_schema = ?
 order by table_name, index_name, seq_in_index
 "#
+}
+
+impl MySqlSourceCheckpoint {
+    pub fn from_value(value: &Value) -> Result<Self, DatabaseSourceError> {
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+        let object = value
+            .as_object()
+            .ok_or_else(|| DatabaseSourceError::InvalidField {
+                field: "checkpoint",
+                reason: "checkpoint must be an object".to_string(),
+            })?;
+        let mut checkpoint = Self {
+            updated_after: checkpoint_string(object, &["updated_after", "updatedAfter"]),
+            last_id: checkpoint_string(object, &["last_id", "lastId"]),
+            version_after: checkpoint_string(object, &["version_after", "versionAfter"]),
+            tables: BTreeMap::new(),
+        };
+        if let Some(tables) = object.get("tables").and_then(Value::as_object) {
+            for (table, value) in tables {
+                validate_identifier("checkpoint.tables", table)?;
+                let Some(table_object) = value.as_object() else {
+                    return Err(DatabaseSourceError::InvalidField {
+                        field: "checkpoint.tables",
+                        reason: format!("checkpoint for table `{table}` must be an object"),
+                    });
+                };
+                checkpoint.tables.insert(
+                    table.clone(),
+                    MySqlTableCheckpoint {
+                        updated_after: checkpoint_string(
+                            table_object,
+                            &["updated_after", "updatedAfter"],
+                        ),
+                        last_id: checkpoint_string(table_object, &["last_id", "lastId"]),
+                        version_after: checkpoint_string(
+                            table_object,
+                            &["version_after", "versionAfter"],
+                        ),
+                    },
+                );
+            }
+        }
+        Ok(checkpoint)
+    }
+
+    fn table_checkpoint(&self, table: &str) -> MySqlTableCheckpoint {
+        let mut checkpoint = MySqlTableCheckpoint {
+            updated_after: self.updated_after.clone(),
+            last_id: self.last_id.clone(),
+            version_after: self.version_after.clone(),
+        };
+        if let Some(table_checkpoint) = self.tables.get(table) {
+            if table_checkpoint.updated_after.is_some() {
+                checkpoint.updated_after = table_checkpoint.updated_after.clone();
+            }
+            if table_checkpoint.last_id.is_some() {
+                checkpoint.last_id = table_checkpoint.last_id.clone();
+            }
+            if table_checkpoint.version_after.is_some() {
+                checkpoint.version_after = table_checkpoint.version_after.clone();
+            }
+        }
+        checkpoint
+    }
+}
+
+fn checkpoint_string(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| object.get(*key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 impl MySqlTableMapping {
@@ -1717,12 +2032,10 @@ fn mapping_identity_columns(mapping: &MySqlTableMapping) -> Vec<String> {
     }
 }
 
-fn mysql_row_to_external_document(
-    mapping: &MySqlTableMapping,
+fn mysql_row_values(
     columns: &[String],
     row: sqlx::mysql::MySqlRow,
-    include_body: bool,
-) -> Result<Value, DatabaseSourceError> {
+) -> Result<BTreeMap<String, String>, DatabaseSourceError> {
     let mut values = BTreeMap::new();
     for column in columns {
         let value = row
@@ -1731,9 +2044,16 @@ fn mysql_row_to_external_document(
             .unwrap_or_default();
         values.insert(column.clone(), value);
     }
+    Ok(values)
+}
 
+fn mysql_values_to_external_document(
+    mapping: &MySqlTableMapping,
+    values: &BTreeMap<String, String>,
+    include_body: bool,
+) -> Result<Value, DatabaseSourceError> {
     let identity_columns = mapping_identity_columns(mapping);
-    let primary_key = mysql_row_primary_key(mapping, &identity_columns, &values)?;
+    let primary_key = mysql_row_primary_key(mapping, &identity_columns, values)?;
     let title = mapping
         .title_column
         .as_deref()
@@ -1742,12 +2062,30 @@ fn mysql_row_to_external_document(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("{} #{}", mapping.table, primary_key));
-    let body = build_mysql_document_body(mapping, &values, &title, &primary_key);
-    let revision_external_id = build_mysql_revision_external_id(mapping, &values, &body);
+    let body = build_mysql_document_body(mapping, values, &title, &primary_key);
+    let revision_external_id = build_mysql_revision_external_id(mapping, values, &body);
     let mut metadata = Map::new();
     metadata.insert("source_kind".to_string(), json_string("mysql"));
     metadata.insert("source_table".to_string(), json_string(&mapping.table));
     metadata.insert("source_primary_key".to_string(), json_string(&primary_key));
+    if let Some(column) = mapping.updated_at_column.as_deref() {
+        if let Some(value) = values
+            .get(column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            metadata.insert("source_updated_at".to_string(), json_string(value));
+        }
+    }
+    if let Some(column) = mapping.version_column.as_deref() {
+        if let Some(value) = values
+            .get(column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            metadata.insert("source_version".to_string(), json_string(value));
+        }
+    }
     metadata.insert(
         "source_primary_key_columns".to_string(),
         Value::Array(
@@ -1788,6 +2126,109 @@ fn mysql_row_to_external_document(
         object.insert("body".to_string(), json_string(&body));
     }
     Ok(Value::Object(object))
+}
+
+fn push_mysql_row_failure_sample(
+    samples: &mut Vec<MySqlRowFailureSample>,
+    mapping: &MySqlTableMapping,
+    row_index: u64,
+    reason: &str,
+    source_primary_key: Option<String>,
+) {
+    if samples.len() >= MAX_ROW_FAILURE_SAMPLES {
+        return;
+    }
+    samples.push(MySqlRowFailureSample {
+        table: mapping.table.clone(),
+        row_index,
+        reason: row_failure_reason_excerpt(reason),
+        source_primary_key,
+    });
+}
+
+fn row_failure_reason_excerpt(reason: &str) -> String {
+    reason
+        .chars()
+        .filter(|ch| !ch.is_control() || ch.is_whitespace())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(160)
+        .collect()
+}
+
+fn mysql_optional_row_primary_key(
+    mapping: &MySqlTableMapping,
+    values: &BTreeMap<String, String>,
+) -> Option<String> {
+    let identity_columns = mapping_identity_columns(mapping);
+    mysql_row_primary_key(mapping, &identity_columns, values).ok()
+}
+
+fn update_mysql_checkpoint_tables_from_values(
+    checkpoint_tables: &mut BTreeMap<String, Map<String, Value>>,
+    mapping: &MySqlTableMapping,
+    values: &BTreeMap<String, String>,
+) {
+    let entry = checkpoint_tables.entry(mapping.table.clone()).or_default();
+    if let Some(column) = mapping.updated_at_column.as_deref() {
+        if let Some(value) = values
+            .get(column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            update_json_checkpoint_max_string(entry, "updated_after", value);
+        }
+    }
+    if let Some(column) = mapping.version_column.as_deref() {
+        if let Some(value) = values
+            .get(column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            update_json_checkpoint_max_numeric_or_string(entry, "version_after", value);
+        }
+    }
+    if mapping_identity_columns(mapping).len() == 1 {
+        if let Some(value) = values
+            .get(&mapping.id_column)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            update_json_checkpoint_max_numeric_or_string(entry, "last_id", value);
+        }
+    }
+}
+
+fn update_json_checkpoint_max_string(entry: &mut Map<String, Value>, key: &str, candidate: &str) {
+    let should_replace = entry
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|current| candidate > current)
+        .unwrap_or(true);
+    if should_replace {
+        entry.insert(key.to_string(), Value::String(candidate.to_string()));
+    }
+}
+
+fn update_json_checkpoint_max_numeric_or_string(
+    entry: &mut Map<String, Value>,
+    key: &str,
+    candidate: &str,
+) {
+    let should_replace = entry
+        .get(key)
+        .and_then(Value::as_str)
+        .map(
+            |current| match (candidate.parse::<f64>(), current.parse::<f64>()) {
+                (Ok(candidate), Ok(current)) => candidate > current,
+                _ => candidate > current,
+            },
+        )
+        .unwrap_or(true);
+    if should_replace {
+        entry.insert(key.to_string(), Value::String(candidate.to_string()));
+    }
 }
 
 fn mysql_row_primary_key(
@@ -1956,6 +2397,10 @@ fn default_row_limit() -> u32 {
     DEFAULT_ROW_LIMIT
 }
 
+fn default_page_size() -> u32 {
+    DEFAULT_PAGE_SIZE
+}
+
 fn default_object_type() -> String {
     DEFAULT_OBJECT_TYPE.to_string()
 }
@@ -2006,6 +2451,7 @@ mod tests {
         assert_eq!(config.database, "hy_sql");
         assert_eq!(config.timeout_ms, DEFAULT_TIMEOUT_MS);
         assert_eq!(config.row_limit, DEFAULT_ROW_LIMIT);
+        assert_eq!(config.page_size, DEFAULT_PAGE_SIZE);
         assert_eq!(
             config.default_dataset_id.as_deref(),
             Some("018f0000-0000-7000-9000-000000000001")
@@ -2140,6 +2586,22 @@ mod tests {
     }
 
     #[test]
+    fn mysql_source_config_rejects_invalid_page_size() {
+        let mut raw = valid_config();
+        raw["page_size"] = json!(0);
+
+        let error = MySqlSourceConfig::from_value(&raw).expect_err("page size must be positive");
+
+        assert!(matches!(
+            error,
+            DatabaseSourceError::InvalidField {
+                field: "page_size",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn redacted_summary_contains_no_secret_fields() {
         let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
 
@@ -2255,7 +2717,97 @@ mod tests {
         assert_eq!(plan.table, "documents");
         assert_eq!(plan.row_limit, 7);
         assert!(plan.sql.contains("select cast(`id` as char) as `id`"));
-        assert!(plan.sql.contains("from `documents` limit 7"));
+        assert!(plan
+            .sql
+            .contains("from `documents` order by `id` asc limit 7 offset 0"));
+        assert!(plan.params.is_empty());
+        assert!(!plan.sql.contains(';'));
+    }
+
+    #[test]
+    fn document_fetch_page_query_uses_page_size_and_offset() {
+        let mut raw = valid_config();
+        raw["row_limit"] = json!(100);
+        raw["page_size"] = json!(25);
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+
+        let plan = build_mysql_document_fetch_page_query(
+            &config,
+            &config.tables[0],
+            &MySqlSourceCheckpoint::default(),
+            config.page_size,
+            50,
+        )
+        .expect("page query builds");
+
+        assert_eq!(plan.row_limit, 25);
+        assert!(plan
+            .sql
+            .contains("from `documents` order by `id` asc limit 25 offset 50"));
+    }
+
+    #[test]
+    fn document_fetch_query_applies_table_updated_after_checkpoint() {
+        let mut raw = valid_config();
+        raw["row_limit"] = json!(25);
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let checkpoint = MySqlSourceCheckpoint::from_value(&json!({
+            "tables": {
+                "documents": {
+                    "updated_after": "2026-05-20 10:00:00",
+                    "last_id": "40"
+                }
+            }
+        }))
+        .expect("checkpoint parses");
+
+        let plan = build_mysql_document_fetch_query_with_checkpoint(
+            &config,
+            &config.tables[0],
+            &checkpoint,
+        )
+        .expect("document fetch query builds");
+
+        assert!(plan.sql.contains("where `updated_at` > ?"));
+        assert!(plan
+            .sql
+            .contains("order by `updated_at` asc, `id` asc limit 25 offset 0"));
+        assert_eq!(plan.params, vec!["2026-05-20 10:00:00"]);
+        assert!(!plan.sql.contains("last_id"));
+        assert!(!plan.sql.contains(';'));
+    }
+
+    #[test]
+    fn document_fetch_query_applies_numeric_last_id_checkpoint() {
+        let mut raw = valid_config();
+        raw["tables"][0]
+            .as_object_mut()
+            .expect("table object")
+            .remove("updated_at_column");
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let checkpoint = MySqlSourceCheckpoint::from_value(&json!({
+            "tables": {
+                "documents": {
+                    "last_id": "40"
+                }
+            }
+        }))
+        .expect("checkpoint parses");
+
+        let plan = build_mysql_document_fetch_query_with_checkpoint(
+            &config,
+            &config.tables[0],
+            &checkpoint,
+        )
+        .expect("document fetch query builds");
+
+        assert!(plan
+            .sql
+            .contains("where cast(`id` as decimal(30,0)) > cast(? as decimal(30,0))"));
+        assert!(plan
+            .sql
+            .contains("order by cast(`id` as decimal(30,0)) asc limit 1000 offset 0"));
+        assert_eq!(plan.params, vec!["40"]);
         assert!(!plan.sql.contains(';'));
     }
 

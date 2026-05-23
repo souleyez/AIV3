@@ -7283,6 +7283,123 @@ body {
   align-self: center;
 }
 
+.external-database-health {
+  display: grid;
+  gap: 8px;
+  margin: 0 14px 14px;
+  padding: 10px;
+  border: 1px solid #d9c5a8;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.external-database-health-blocking {
+  border-color: #d29a8d;
+  background: #fff4f0;
+}
+
+.external-database-health-in_progress {
+  border-color: #b8cce8;
+  background: #f4f8ff;
+}
+
+.external-database-health-ok {
+  border-color: #bfd0cb;
+  background: #f4fbf7;
+}
+
+.external-database-health-head,
+.external-database-health-items article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(70px, 0.3fr) minmax(120px, 0.8fr) minmax(180px, 1.4fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.external-database-health-head {
+  grid-template-columns: minmax(90px, 0.4fr) minmax(180px, 1fr);
+}
+
+.external-database-health-head strong,
+.external-database-health-head span,
+.external-database-health-items span,
+.external-database-health-items strong,
+.external-database-health-items small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.external-database-health-head strong,
+.external-database-health-items strong {
+  color: #213547;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.external-database-health-head span,
+.external-database-health-items span,
+.external-database-health-items small {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.external-database-health-items {
+  display: grid;
+  gap: 6px;
+}
+
+.external-database-health-items article {
+  padding-top: 7px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.external-database-health-items span {
+  justify-self: start;
+  padding: 3px 7px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.external-database-row-failures {
+  display: grid;
+  gap: 8px;
+  margin: 0 14px 14px;
+}
+
+.external-database-row-failures article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(48px, 0.25fr) minmax(140px, 1.4fr);
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid #d29a8d;
+  border-radius: 8px;
+  background: #fff4f0;
+}
+
+.external-database-row-failures strong,
+.external-database-row-failures span,
+.external-database-row-failures small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.external-database-row-failures strong {
+  color: #7a2e1e;
+  font-size: 12px;
+}
+
+.external-database-row-failures span,
+.external-database-row-failures small {
+  color: #8a4a38;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .external-database-sync-list {
   display: grid;
   gap: 8px;
@@ -7583,6 +7700,15 @@ body {
 
   .external-database-sync-list article {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .external-database-health-head,
+  .external-database-health-items article {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .external-database-row-failures article {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .external-database-sync-list article > small {
