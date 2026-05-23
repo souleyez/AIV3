@@ -26399,6 +26399,11 @@ fn assistant_run_answer_quality_exhausted_controlled_answer(
     {
         return answer;
     }
+    if let Some(answer) =
+        assistant_run_answer_quality_point_list_controlled_answer(evidence_state, request)
+    {
+        return answer;
+    }
 
     let supplied_count = evidence_state
         .get("supply_quality")
@@ -26537,6 +26542,32 @@ fn assistant_run_spreadsheet_row_analysis_document_titles(evidence_state: &Value
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn assistant_run_answer_quality_point_list_controlled_answer(
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+) -> Option<String> {
+    if !assistant_run_prompt_requests_point_list_table(&request.prompt) {
+        return None;
+    }
+    let rows = assistant_run_point_list_rows_from_retrieval_evidence(evidence_state);
+    if rows.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "根据已检索到的点位证据，智能梯控/电梯点位如下：".to_string(),
+        String::new(),
+        "| 楼层 | 位置 | 点位名称 | areaid | 类型 |".to_string(),
+        "|---|---|---|---|---|".to_string(),
+    ];
+    for row in rows {
+        lines.push(format!(
+            "| {} | {} | {} | {} | {} |",
+            row.floor, row.location, row.name, row.area_id, row.type_label
+        ));
+    }
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -26800,6 +26831,9 @@ fn assistant_run_answer_quality_judge_should_run(
     {
         return false;
     }
+    if assistant_run_answer_satisfies_retrieval_point_list(output_text, request, evidence_state) {
+        return false;
+    }
     if assistant_run_prompt_is_high_risk_quality_task(&request.prompt) {
         return true;
     }
@@ -26989,6 +27023,130 @@ fn assistant_run_answer_contains_row_terms(
         .filter_map(|key| row.get(*key).and_then(Value::as_str))
         .filter(|term| !term.trim().is_empty())
         .all(|term| output_text.contains(term))
+}
+
+fn assistant_run_answer_satisfies_retrieval_point_list(
+    output_text: &str,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+) -> bool {
+    if !assistant_run_prompt_requests_point_list_table(&request.prompt) {
+        return false;
+    }
+    if assistant_run_answer_contains_insufficient_evidence_marker(output_text)
+        || assistant_run_react_output_contains_internal_marker(output_text)
+        || !output_text.contains('|')
+    {
+        return false;
+    }
+    let rows = assistant_run_point_list_rows_from_retrieval_evidence(evidence_state);
+    if rows.is_empty() {
+        return false;
+    }
+    let matched = rows
+        .iter()
+        .filter(|row| output_text.contains(&row.name))
+        .count();
+    matched >= rows.len().min(3)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AssistantRunPointListRow {
+    floor: String,
+    location: String,
+    name: String,
+    area_id: String,
+    type_label: String,
+}
+
+fn assistant_run_prompt_requests_point_list_table(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    let has_point_subject = prompt_contains_any(
+        prompt,
+        &["智能梯控", "电梯", "扶梯", "梯控", "点位", "楼层", "位置"],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &["elevator", "escalator", "point", "floor", "location"],
+    );
+    let has_table_or_list =
+        prompt_contains_any(prompt, &["有哪些", "出表", "表格", "列出", "按楼层"])
+            || ascii_prompt_contains_any(&lower, &["list", "table"]);
+    has_point_subject && has_table_or_list
+}
+
+fn assistant_run_point_list_rows_from_retrieval_evidence(
+    evidence_state: &Value,
+) -> Vec<AssistantRunPointListRow> {
+    let mut by_name = BTreeMap::<String, AssistantRunPointListRow>::new();
+    for item in evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("retrieval_evidence"))
+    {
+        let Some(content) = item.get("content_excerpt").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = assistant_run_marker_value(content, "areaname") else {
+            continue;
+        };
+        if !assistant_run_text_has_elevator_point_signal(&name) {
+            continue;
+        }
+        let area_id = assistant_run_marker_value(content, "areaid").unwrap_or_default();
+        let (floor, location) = assistant_run_split_floor_location(&name);
+        let type_label = assistant_run_point_type_label(&name);
+        by_name
+            .entry(name.clone())
+            .or_insert(AssistantRunPointListRow {
+                floor,
+                location,
+                name,
+                area_id,
+                type_label,
+            });
+    }
+    by_name.into_values().collect()
+}
+
+fn assistant_run_marker_value(content: &str, marker: &str) -> Option<String> {
+    let marker = format!("## {marker}");
+    let tail = content.split_once(&marker)?.1.trim();
+    let value = tail.split("##").next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn assistant_run_text_has_elevator_point_signal(value: &str) -> bool {
+    prompt_contains_any(value, &["电梯", "扶梯", "梯控"])
+        || value.to_ascii_lowercase().contains("elevator")
+}
+
+fn assistant_run_point_type_label(name: &str) -> String {
+    if prompt_contains_any(name, &["扶梯", "手扶"]) {
+        "扶梯".to_string()
+    } else if prompt_contains_any(name, &["电梯", "直梯", "观光梯"]) {
+        "电梯".to_string()
+    } else {
+        "点位".to_string()
+    }
+}
+
+fn assistant_run_split_floor_location(name: &str) -> (String, String) {
+    let mut split_at = 0usize;
+    for (index, ch) in name.char_indices() {
+        if ch.is_ascii_alphanumeric() {
+            split_at = index + ch.len_utf8();
+            continue;
+        }
+        break;
+    }
+    if split_at == 0 {
+        return ("".to_string(), name.to_string());
+    }
+    let floor = name[..split_at].to_string();
+    let location = name[split_at..].trim().to_string();
+    (floor, location)
 }
 
 async fn complete_assistant_run_answer_quality_judge(
@@ -60753,6 +60911,92 @@ mod tests {
                     }
                 ]
             }]
+        })
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_judge_skips_satisfied_point_list_table() {
+        let request = CreateAssistantRunRequest {
+            prompt: "智能梯控/电梯点位有哪些？请按楼层和位置出表。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_point_list_evidence_state();
+        let answer = "| 楼层 | 位置 | 点位名称 |\n| B1F | 东电梯 | B1F东电梯 |\n| B1F | 西电梯 | B1F西电梯 |\n| B2 | 观光电梯口 | B2观光电梯口 |";
+
+        assert!(assistant_run_answer_satisfies_retrieval_point_list(
+            answer,
+            &request,
+            &evidence_state
+        ));
+        assert!(!assistant_run_answer_quality_judge_should_run(
+            answer,
+            &evidence_state,
+            &request
+        ));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_uses_point_rows_when_retry_exhausted() {
+        let request = CreateAssistantRunRequest {
+            prompt: "智能梯控/电梯点位有哪些？请按楼层和位置出表。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_point_list_evidence_state();
+
+        let fallback = assistant_run_answer_quality_exhausted_controlled_answer(
+            &evidence_state,
+            &request,
+            "model_judge_customer_unsafe_answer",
+        );
+
+        assert!(fallback.contains("| 楼层 | 位置 | 点位名称 | areaid | 类型 |"));
+        assert!(fallback.contains("| B1F | 东电梯 | B1F东电梯 | 4301116 | 电梯 |"));
+        assert!(fallback.contains("| B2 | 观光电梯口 | B2观光电梯口 | 4301101 | 电梯 |"));
+        assert!(!fallback.contains("未形成可核验结论"));
+    }
+
+    fn assistant_run_test_point_list_evidence_state() -> Value {
+        json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 6,
+                "indexedEvidenceCount": 6,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 1,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0
+            },
+            "supplied_items": [
+                {
+                    "type": "retrieval_evidence",
+                    "content_excerpt": "## areaname B1F东电梯 ## areaid 4301116 ## areatype 4 ## up 0 ## down 1"
+                },
+                {
+                    "type": "retrieval_evidence",
+                    "content_excerpt": "## areaname B1F西电梯 ## areaid 4301113 ## areatype 4 ## up 0 ## down 1"
+                },
+                {
+                    "type": "retrieval_evidence",
+                    "content_excerpt": "## areaname B2观光电梯口 ## areaid 4301101 ## areatype 4 ## up 0 ## down 1"
+                }
+            ]
         })
     }
 
