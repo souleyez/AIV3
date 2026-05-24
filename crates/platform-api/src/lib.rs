@@ -37331,6 +37331,7 @@ fn is_valid_company_name(value: &str) -> bool {
             || value.ends_with("有限责任公司")
             || value.ends_with("有限公司")
             || value.ends_with("集团"))
+        && company_name_has_meaningful_stem(value)
         && !value.contains('@')
         && !company_name_has_unbalanced_brackets(value)
         && !company_candidate_has_ocr_noise(value)
@@ -37369,6 +37370,13 @@ fn is_valid_company_name(value: &str) -> bool {
         ]
         .iter()
         .any(|prefix| value.starts_with(prefix))
+}
+
+fn company_name_has_meaningful_stem(value: &str) -> bool {
+    ["股份有限公司", "有限责任公司", "有限公司", "集团"]
+        .iter()
+        .find_map(|suffix| value.strip_suffix(suffix))
+        .is_some_and(|stem| stem.chars().filter(|ch| !ch.is_whitespace()).count() >= 2)
 }
 
 fn company_candidate_has_ocr_noise(value: &str) -> bool {

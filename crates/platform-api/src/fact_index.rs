@@ -50,6 +50,23 @@ pub fn build_document_fact_candidates(
             }
         }
 
+        for company_name in crate::extract_company_names_from_text(&chunk.content, 12) {
+            push_document_fact_candidate(
+                &mut facts,
+                &mut seen,
+                document,
+                chunk,
+                "organization",
+                &company_name,
+                "text_company_name",
+                parse_version.clone(),
+                created_at,
+            );
+            if facts.len() >= FACT_INDEX_FACT_LIMIT {
+                return facts;
+            }
+        }
+
         for term in document_chunk_noun_terms(chunk) {
             if !fact_term_is_useful(&term) {
                 continue;
@@ -571,6 +588,7 @@ mod tests {
                     "noun_terms": [
                         "公司",
                         "有限公司",
+                        "份有限公司",
                         "互联网公司",
                         "网络有限公司",
                         "北京星河科技有限公司"
@@ -586,6 +604,28 @@ mod tests {
             .map(|fact| fact.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(organizations, vec!["北京星河科技有限公司"]);
+    }
+
+    #[test]
+    fn document_fact_candidates_extract_company_names_from_chunk_text() {
+        let document = document_with_metadata(json!({}));
+        let mut chunk = document_chunk(&document, json!({ "understanding": { "noun_terms": [] } }));
+        chunk.content =
+            "任职公司：深圳星拓智能科技有限公司\n2019-2023 广州云岚数码有限公司。".to_string();
+
+        let facts = build_document_fact_candidates(&document, &[chunk], Utc::now());
+        let organizations = facts
+            .iter()
+            .filter(|fact| fact.fact_type == "organization")
+            .map(|fact| (fact.name.as_str(), fact.source_kind.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            organizations,
+            vec![
+                ("深圳星拓智能科技有限公司", "text_company_name"),
+                ("广州云岚数码有限公司", "text_company_name")
+            ]
+        );
     }
 
     #[test]
