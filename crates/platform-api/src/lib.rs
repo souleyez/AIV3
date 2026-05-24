@@ -9231,10 +9231,38 @@ async fn create_assistant_run(
             }
             None => {
                 let response = if let Some(direct_answer) =
+                    assistant_run_answer_quality_spreadsheet_controlled_answer(
+                        &evidence_state,
+                        &request,
+                    ) {
+                    let response = assistant_run_direct_answer_response(direct_answer);
+                    state
+                        .storage
+                        .assistant_runs()
+                        .append_event(
+                            state.tenant_id,
+                            run.id,
+                            &NewAssistantRunEvent {
+                                event_name:
+                                    "assistant_run.spreadsheet_row_analysis_direct_answered"
+                                        .to_string(),
+                                payload: json!({
+                                    "source": "spreadsheet_row_analysis_direct_answer",
+                                    "reason": "attendance_row_analysis_prompt",
+                                    "runtime": render_runtime_manifest(&response.runtime),
+                                }),
+                                created_at: Utc::now(),
+                            },
+                        )
+                        .await
+                        .map_err(ApiError::from_storage)?;
+                    response
+                } else if let Some(direct_answer) =
                     assistant_run_preferred_dataset_entity_scan_direct_answer(
                         &request,
                         &evidence_state,
-                    ) {
+                    )
+                {
                     let response = assistant_run_direct_answer_response(direct_answer);
                     state
                         .storage
@@ -61627,10 +61655,12 @@ mod tests {
         );
 
         assert!(fallback.contains("| 类别 | 日期 | 员工 | 班次 | 状态 |"));
+        assert!(fallback.contains("| 未打卡/不考勤 | 2026-05-13 | A5 | 坐班0900 | 未打卡 不考勤 |"));
         assert!(fallback.contains("| 最长工时 | 2026-02-07 | A8 | 休息 | 12.55小时 | 正常考勤 |"));
         assert!(
             fallback.contains("| 最短工时 | 2026-02-25 | A8 | 坐班0930 | 4.30小时 | 正常考勤 |")
         );
+        assert!(!fallback.contains("| 05-13 |"));
         assert!(fallback.contains("来源：A3-坐班0900考勤记录.xlsx"));
         assert!(!fallback.contains("未形成可核验结论"));
     }
