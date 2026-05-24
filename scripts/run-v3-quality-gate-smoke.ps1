@@ -7,6 +7,7 @@ param(
     [int] $ServerTimeoutSec = 180,
     [string] $ReportDir = "",
     [string] $CargoBin = "cargo",
+    [switch] $NoQualityGate,
     [switch] $ListCases,
     [switch] $Json
 )
@@ -25,6 +26,7 @@ $arguments = @{
     ServerTimeoutSec = $ServerTimeoutSec
     ReportDir = $ReportDir
     CargoBin = $CargoBin
+    NoQualityGate = $NoQualityGate
     ListCases = $ListCases
     Json = $Json
 }

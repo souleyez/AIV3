@@ -21,13 +21,18 @@ This directory tracks the repeatable smoke cases for the V3 parsing and answer-q
 
 `smoke-cases.json` is the machine-readable case list consumed by `scripts/run-document-quality-smoke.ps1`. Real binary paths can be supplied at runtime through environment variables or script parameters; do not commit private customer documents here.
 
-The smoke report records the quality-gate observability fields needed by the V3 answer-quality loop: original parse status, parse-quality status, quality-gate retry reason, retry attempts, ReAct actions, premium action status, final sanitizer leak check, final answer excerpt, evidence/source refs, and failure reason.
+The smoke report records the observability fields needed by the V3 answer-quality loop: original parse status, parse-quality status, quality-gate retry reason, retry attempts, ReAct actions, premium action status, answer supply sources, aggregate answer source, final sanitizer leak check, final answer excerpt, evidence/source refs, and failure reason.
+
+Global and cross-document cases can declare `expected_answer_sources` and `required_aggregate_sources`. Server-mode smoke reads `run.evidence_state.supplied_items` and `supply_quality` from AssistantRun detail, then fails aggregate/statistical cases when the observed source is only retrieval top-k instead of `dataset_fact_snapshot`, `dataset_entity_scan`, or `spreadsheet_row_analysis`.
+
+Local `local_tests` entries default to `target: "lib"`. Use `target: "bin:<name>"` for binary tests; the runner treats a zero-test match as failure unless `allow_zero_tests` is explicitly set.
 
 Convenience entrypoint:
 
 ```powershell
 .\scripts\run-v3-quality-gate-smoke.ps1 -Local -Case attendance_final
 .\scripts\run-v3-quality-gate-smoke.ps1 -Local -Case resume_company_stats
+.\scripts\run-v3-quality-gate-smoke.ps1 -Local -NoQualityGate -Case resume_company_stats
 .\scripts\run-v3-quality-gate-smoke.ps1 -ListCases
 ```
 
@@ -68,4 +73,4 @@ Private config shape:
 }
 ```
 
-Each case entry may also use `selectedScope`, `scopeCandidates`, `startupBriefing`, `contextPolicyHint`, `currentArtifact`, and `messages`. Server configs may override assertion fields such as `required_final_answer_terms`, `requires_table`, `requires_normalized_dates`, and `failure_markers` for real private materials whose exact row values differ from committed fixtures. Set `allow_auto_scope` to `true` only when the server should intentionally choose scope from visible datasets.
+Each case entry may also use `selectedScope`, `scopeCandidates`, `startupBriefing`, `contextPolicyHint`, `currentArtifact`, and `messages`. Server configs may override assertion fields such as `required_final_answer_terms`, `requires_table`, `requires_normalized_dates`, `expected_answer_sources`, `required_aggregate_sources`, and `failure_markers` for real private materials whose exact row values differ from committed fixtures. Set `allow_auto_scope` to `true` only when the server should intentionally choose scope from visible datasets. For no-gate server validation, start the target server with `ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET=0`; the smoke script can set that variable only for local unit checks.

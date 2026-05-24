@@ -49,7 +49,9 @@
       "quality_gate_triggered_reason": "structured_entity_question_guard",
       "retry_attempts": 1,
       "react_actions_used": ["retrieve_evidence", "read_document_detail"],
-      "premium_action": "not_used"
+      "premium_action": "not_used",
+      "answer_supply_sources": ["retrieval_evidence", "read_document_detail"],
+      "aggregate_answer_source": "retrieval_evidence"
     },
     "local_tests": [
       {
@@ -72,11 +74,20 @@
       "original_parse_status": "unit_contract",
       "parse_quality_status": "unit_contract",
       "quality_gate_triggered_reason": "structured_statistics_guard",
-      "retry_attempts": 1,
+      "retry_attempts": 0,
       "react_actions_used": ["retrieve_evidence"],
-      "premium_action": "not_used"
+      "premium_action": "not_used",
+      "answer_supply_sources": ["dataset_fact_snapshot", "dataset_entity_scan"],
+      "aggregate_answer_source": "dataset_fact_snapshot"
     },
+    "expect_no_quality_gate": true,
+    "expected_answer_sources": ["dataset_fact_snapshot", "dataset_entity_scan"],
+    "required_aggregate_sources": ["dataset_fact_snapshot", "dataset_entity_scan"],
     "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "assistant_run_compacts_dataset_fact_snapshot_for_model_context_and_direct_answer"
+      },
       {
         "package": "platform-api",
         "filter": "assistant_run_compact_retry_input_keeps_only_authoritative_company_rows"
@@ -98,10 +109,15 @@
       "original_parse_status": "unit_contract",
       "parse_quality_status": "unit_contract",
       "quality_gate_triggered_reason": "structured_ranking_table_guard",
-      "retry_attempts": 1,
+      "retry_attempts": 0,
       "react_actions_used": ["retrieve_evidence"],
-      "premium_action": "not_used"
+      "premium_action": "not_used",
+      "answer_supply_sources": ["dataset_entity_scan"],
+      "aggregate_answer_source": "dataset_entity_scan"
     },
+    "expect_no_quality_gate": true,
+    "expected_answer_sources": ["dataset_entity_scan"],
+    "required_aggregate_sources": ["dataset_entity_scan"],
     "local_tests": [
       {
         "package": "platform-api",
@@ -123,10 +139,15 @@
       "original_parse_status": "unit_contract",
       "parse_quality_status": "unit_contract",
       "quality_gate_triggered_reason": "table_prompt_guard",
-      "retry_attempts": 1,
+      "retry_attempts": 0,
       "react_actions_used": ["retrieve_evidence", "read_document_detail"],
-      "premium_action": "not_used"
+      "premium_action": "not_used",
+      "answer_supply_sources": ["dataset_entity_scan", "read_document_detail"],
+      "aggregate_answer_source": "dataset_entity_scan"
     },
+    "expect_no_quality_gate": true,
+    "expected_answer_sources": ["dataset_entity_scan"],
+    "required_aggregate_sources": ["dataset_entity_scan"],
     "local_tests": [
       {
         "package": "platform-api",
@@ -151,10 +172,15 @@
       "original_parse_status": "xlsx_structured",
       "parse_quality_status": "usable",
       "quality_gate_triggered_reason": "attendance_date_format_guard",
-      "retry_attempts": 1,
+      "retry_attempts": 0,
       "react_actions_used": ["retrieve_evidence"],
-      "premium_action": "not_used"
+      "premium_action": "not_used",
+      "answer_supply_sources": ["spreadsheet_row_analysis"],
+      "aggregate_answer_source": "spreadsheet_row_analysis"
     },
+    "expect_no_quality_gate": true,
+    "expected_answer_sources": ["spreadsheet_row_analysis"],
+    "required_aggregate_sources": ["spreadsheet_row_analysis"],
     "local_tests": [
       {
         "package": "ingest-worker",
@@ -191,10 +217,15 @@
       "original_parse_status": "xlsx_structured",
       "parse_quality_status": "usable",
       "quality_gate_triggered_reason": "attendance_frequent_query_guard",
-      "retry_attempts": 1,
+      "retry_attempts": 0,
       "react_actions_used": ["retrieve_evidence"],
-      "premium_action": "not_used"
+      "premium_action": "not_used",
+      "answer_supply_sources": ["spreadsheet_row_analysis"],
+      "aggregate_answer_source": "spreadsheet_row_analysis"
     },
+    "expect_no_quality_gate": true,
+    "expected_answer_sources": ["spreadsheet_row_analysis"],
+    "required_aggregate_sources": ["spreadsheet_row_analysis"],
     "local_tests": [
       {
         "package": "ingest-worker",
@@ -231,7 +262,8 @@
       },
       {
         "package": "ingest-worker",
-        "filter": "build_document_chunks_uses_paddleocr_structure_title_blocks"
+        "filter": "build_document_chunks_uses_paddleocr_structure_title_blocks",
+        "target": "bin:ingest-worker"
       }
     ]
   },
@@ -275,10 +307,15 @@
       "original_parse_status": "unit_contract",
       "parse_quality_status": "unit_contract",
       "quality_gate_triggered_reason": "structured_entity_table_guard",
-      "retry_attempts": 1,
+      "retry_attempts": 0,
       "react_actions_used": ["retrieve_evidence", "read_document_detail"],
-      "premium_action": "not_used"
+      "premium_action": "not_used",
+      "answer_supply_sources": ["dataset_entity_scan", "retrieval_evidence", "read_document_detail"],
+      "aggregate_answer_source": "dataset_entity_scan"
     },
+    "expect_no_quality_gate": true,
+    "expected_answer_sources": ["dataset_entity_scan", "retrieval_evidence"],
+    "required_aggregate_sources": ["dataset_entity_scan", "retrieval_evidence"],
     "local_tests": [
       {
         "package": "platform-api",

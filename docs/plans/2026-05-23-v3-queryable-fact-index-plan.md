@@ -4,9 +4,19 @@
 
 **Goal:** Make parsed V3 document evidence queryable and aggregatable at dataset scope so global search, cross-document statistics, table questions, and regression smokes use deterministic database-backed facts instead of retrieval top-k or ad hoc model counting.
 
-**Architecture:** Keep third-party/public API fields, URLs, auth, and response contracts unchanged. Add internal fact-index tables and snapshot supply derived from existing `documents`, `document_chunks`, parse metadata, retrieval evidence, and current runtime scan logic; AssistantRun continues to receive evidence through the existing `evidence_state.supplied_items` contract, but global/statistical prompts should prefer queryable facts and snapshot rows over raw chunk retrieval.
+**Architecture:** Keep third-party/public API fields, URLs, auth, and response contracts unchanged. Add internal fact-index tables and snapshot supply derived from existing `documents`, `document_chunks`, parse metadata, retrieval evidence, and current runtime scan logic. Run lightweight cleanup and fact extraction as an asynchronous post-ingest job after documents/chunks are stored, not as part of the synchronous parse path; AssistantRun continues to receive evidence through the existing `evidence_state.supplied_items` contract, but global/statistical prompts should prefer queryable facts and snapshot rows over raw chunk retrieval.
 
 **Tech Stack:** Rust `storage`, `platform-api`, `ingest-worker`, `retrieval-worker`; PostgreSQL JSONB plus normalized internal tables; existing AssistantRun/ReAct evidence state; existing document quality smoke scripts; 8-server validation after review.
+
+## Implementation Status
+
+- Done: Tasks 1-4 internal schema, post-ingest cleanup queue, fact extraction/backfill, and bounded `entity_rows_by_type` snapshots.
+- Done: Task 5 first pass. AssistantRun can supply `dataset_fact_snapshot`, compact it for model/retry input, convert supported snapshot rows into scan-compatible rows for existing direct answers, and expose only weak aggregate availability to ReAct planning.
+- Guardrail: fact snapshot supply is skipped for external ACL filtered scopes or explicit selected-document scopes until scoped snapshots/query filtering exist; `ASSISTANT_RUN_FACT_INDEX_ENABLED=false` disables fact-backed supply.
+- Guardrail: current snapshots only replace runtime scan for covered global entity prompts such as company/skill/project/keyword/year/section. Resume profile ranking,学历/学校, tables, and elevator point-list prompts continue to use the existing scan/detail paths.
+- Done: Task 6 first pass. Document-quality smoke now records `answer_supply_sources` and `aggregate_answer_source`, supports local `-NoQualityGate`, rejects zero-test local smoke matches, and asserts no-gate aggregate sources for resume company stats, resume ranking, attendance, table/entity, and elevator point-list cases.
+- Done: Task 7 first private 8-server smoke on 2026-05-23 against deployed HEAD `c5dbf78`: 7 configured private cases passed in no-gate mode. Observed aggregate sources were `dataset_entity_scan` for resume/smart-home/elevator and `spreadsheet_row_analysis` for attendance; `dataset_fact_snapshot` is expected only after this fact-index branch is deployed/backfilled.
+- Next: commit/deploy the fact-index implementation after operator approval, run backfill, then rerun private smoke expecting resume company statistics to prefer `dataset_fact_snapshot` while resume ranking, attendance, and point-list cases keep their guarded deterministic paths.
 
 ---
 
@@ -30,6 +40,14 @@ Internal query priority for model-facing supply:
 2. Domain-specific deterministic analysis, e.g. `spreadsheet_row_analysis`.
 3. `dataset_entity_scan` as compatibility fallback while facts backfill.
 4. Retrieval evidence and `read_document_detail` for examples, source quotes, and validation only.
+
+Post-ingest cleanup priority:
+
+1. Parsing stores raw/structured evidence exactly as today.
+2. Successful document入库 enqueues a lightweight cleanup/fact-index job.
+3. The cleanup job normalizes deterministic evidence and writes internal facts/snapshots idempotently.
+4. Cleanup failure should be retryable and observable, but must not overwrite raw parse evidence or change public API responses.
+5. Expensive enhancement, e.g. VLM re-parse or model-based repair, remains conditional and budget-gated.
 
 ## Task 1: Add Internal Fact Schema
 
@@ -104,17 +122,30 @@ cargo test -p storage initial_schema_mentions_primary_tables --lib
 
 Expected: schema and repository tests pass.
 
-## Task 2: Extract Facts During Ingest
+## Task 2: Queue Post-Ingest Cleanup And Fact Extraction
 
 **Files:**
 
 - Modify: `crates/ingest-worker/src/main.rs`
 - Modify: `crates/ingest-worker/src/lib.rs`
+- Modify: `crates/retrieval-worker/src/main.rs` if the existing worker is the better place to consume post-ingest indexing work.
 - Test: `crates/ingest-worker/src/main.rs`
 
-**Step 1: Convert chunk understanding into fact candidates**
+**Step 1: Add a post-ingest cleanup job contract**
 
-After chunks are built, derive facts from current metadata and text:
+After documents and chunks are successfully stored, enqueue a follow-up job for cleanup/fact indexing. The job payload should be internal only and include:
+
+- `tenant_id`
+- `dataset_id`
+- `document_id`
+- parse version or document updated timestamp
+- retry count / reason when available
+
+Do not change upload/parse public responses. The parse path may report success once the current document入库 work succeeds; cleanup status is tracked internally.
+
+**Step 2: Convert stored evidence into fact candidates**
+
+The cleanup job reads stored documents, chunks, and parse metadata, then derives facts from current metadata and text:
 
 - organization/company
 - person
@@ -126,9 +157,9 @@ After chunks are built, derive facts from current metadata and text:
 - year/date/time period
 - section/table/paragraph signals
 
-Keep current metadata extraction; add a parallel normalized fact output. Do not remove `candidate_terms` or existing metadata fields.
+Keep current metadata extraction; add a parallel normalized fact output. Do not remove `candidate_terms` or existing metadata fields. The cleanup output is an index derived from raw evidence, not a replacement for raw evidence.
 
-**Step 2: Add source provenance**
+**Step 3: Add source provenance**
 
 Each fact must carry:
 
@@ -139,17 +170,18 @@ Each fact must carry:
 - `source_kind`: `chunk_understanding | document_structure | spreadsheet_row | parse_metadata | vlm_metadata`
 - confidence and extraction method.
 
-**Step 3: Replace facts idempotently**
+**Step 4: Replace facts idempotently**
 
-At successful parse completion:
+At successful cleanup completion:
 
-1. Store refreshed chunks as today.
+1. Re-read the document/chunk version to avoid writing facts for stale parses.
 2. Delete/replace old facts for the document.
 3. Insert new facts.
+4. Mark cleanup/indexing status internally.
 
-If fact insertion fails, mark ingest workflow failed; do not silently produce stale aggregates.
+If fact insertion fails, retry or mark cleanup/indexing failed; do not mark the raw parse failed after it has already completed. AssistantRun must treat missing facts as unavailable and fall back to current runtime scans/retrieval.
 
-**Step 4: Verify**
+**Step 5: Verify**
 
 Run:
 
@@ -158,7 +190,7 @@ cargo test -p ingest-worker document_structure --lib
 cargo test -p ingest-worker chunk_understanding --lib
 ```
 
-Expected: existing parsing tests pass, and new fact extraction tests assert stable normalized names and source locators.
+Expected: existing parsing tests pass, parse completion does not require fact indexing to finish synchronously, and new cleanup/fact extraction tests assert stable normalized names and source locators.
 
 ## Task 3: Backfill Facts From Existing Documents
 
@@ -179,7 +211,7 @@ The CLI should accept:
 --dry-run
 ```
 
-It reads existing documents/chunks/metadata, derives facts, and prints counts by fact type without writing when `--dry-run` is set.
+It reads existing documents/chunks/metadata, runs the same cleanup/fact extraction path as the post-ingest job, and prints counts by fact type without writing when `--dry-run` is set.
 
 **Step 2: Add write mode**
 
@@ -372,4 +404,3 @@ Rollback should not require public API changes:
 - Resume company statistics, resume multi-sort, smart elevator point lists, and general entity statistics pass with answer quality gate disabled.
 - Existing public third-party request/response fields, URLs, auth, and response contracts remain unchanged.
 - ReAct remains a planner/orchestrator, not a substitute for deterministic global aggregation.
-

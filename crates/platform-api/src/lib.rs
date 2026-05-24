@@ -157,6 +157,7 @@ use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 pub mod auth_email;
 pub mod external_feishu;
 pub mod external_wecom;
+pub mod fact_index;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
@@ -23741,6 +23742,10 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
         .and_then(|quality| quality.get("mediaContextCount"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let dataset_fact_snapshot_count = supply_quality
+        .and_then(|quality| quality.get("datasetFactSnapshotCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let document_not_ready_count = supply_quality
         .and_then(|quality| quality.get("documentNotReadyCount"))
         .and_then(Value::as_u64)
@@ -23758,7 +23763,7 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
             "状态：{status}；可引用供料 {supplied_count} 条；建议细读目标 {detail_target_count} 个；兜底切片 {fallback_count} 条。"
         ),
         format!(
-            "供料质量：{supply_quality_status}；来源定位 {citation_locator_count} 个；媒体上下文 {media_context_count} 个。"
+            "供料质量：{supply_quality_status}；来源定位 {citation_locator_count} 个；库级事实快照 {dataset_fact_snapshot_count} 个；媒体上下文 {media_context_count} 个。"
         ),
         "供料只作为可引用上下文；最终正文由模型自行组织。涉及供料里的数据、指标、文档事实或产物状态时不要编造；普通常识、解释和建议可以使用模型通用知识，并区分供料事实与通用判断。detail_targets 只代表建议细读目标，不是引用依据。".to_string(),
     ];
@@ -23828,8 +23833,14 @@ fn assistant_run_model_evidence_state(evidence_state: &Value) -> Value {
         return model_state;
     };
     for item in items {
-        if item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan") {
-            *item = assistant_run_model_dataset_entity_scan_item(item);
+        match item.get("type").and_then(Value::as_str) {
+            Some("dataset_entity_scan") => {
+                *item = assistant_run_model_dataset_entity_scan_item(item);
+            }
+            Some("dataset_fact_snapshot") => {
+                *item = assistant_run_model_dataset_fact_snapshot_item(item);
+            }
+            _ => {}
         }
     }
     model_state
@@ -23871,24 +23882,47 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
     })
 }
 
+fn assistant_run_model_dataset_fact_snapshot_item(item: &Value) -> Value {
+    json!({
+        "type": "dataset_fact_snapshot",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+        "snapshot_kind": item.get("snapshot_kind").cloned().unwrap_or(Value::Null),
+        "snapshot_key": item.get("snapshot_key").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "source_document_count": item.get("source_document_count").cloned().unwrap_or(Value::Null),
+        "source_fact_count": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
+        "row_count_by_type": item.get("row_count_by_type").cloned().unwrap_or(Value::Null),
+        "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
+        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation.")),
+    })
+}
+
 fn assistant_run_compact_provider_retry_input(
     request: &CreateAssistantRunRequest,
     evidence_state: &Value,
 ) -> Option<String> {
-    let scans = assistant_run_compact_dataset_entity_scan_payloads(evidence_state);
-    if scans.is_empty() {
+    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
+        evidence_state,
+        &request.prompt,
+    );
+    let fact_snapshots = assistant_run_compact_dataset_fact_snapshot_payloads(evidence_state);
+    if scans.is_empty() && fact_snapshots.is_empty() {
         return None;
     }
 
     let mut sections = vec![
         "你是 AI 数据智能助手里的模型回答运行时。完整供料请求刚才未完成；现在系统只给你紧凑结构化供料，请直接回答用户问题。".to_string(),
         "禁止回复“已收到/处理中/稍后分析/系统将结合知识库与数据源”；如果结构化供料已经给出统计值，就按统计值直接输出。".to_string(),
-        "统计规则：company_count 是公司/组织总数；scanned_document_count 是扫描文档总数；*_rows[].document_count 是该行覆盖的文档数，不能把这些覆盖数相加当作文档总数。关键词/年份/标题/段落/表格问题优先使用 keyword_rows/year_rows/section_rows/paragraph_rows/table_rows。".to_string(),
+        "统计规则：dataset_fact_snapshot 优先于 runtime scan；company_count 是公司/组织总数；scanned_document_count 是扫描文档总数；*_rows[].document_count 是该行覆盖的文档数，不能把这些覆盖数相加当作文档总数。关键词/年份/标题/段落/表格问题优先使用 keyword_rows/year_rows/section_rows/paragraph_rows/table_rows。".to_string(),
         format!("用户问题：{}", request.prompt.trim()),
         format!(
             "紧凑结构化供料：{}",
             serde_json::to_string(&json!({
                 "status": evidence_state.get("status").cloned().unwrap_or(Value::Null),
+                "dataset_fact_snapshots": fact_snapshots,
                 "dataset_entity_scans": scans,
             }))
             .unwrap_or_else(|_| "{}".to_string())
@@ -23917,7 +23951,41 @@ fn assistant_run_compact_provider_retry_input(
     Some(sections.join("\n\n"))
 }
 
-fn assistant_run_compact_dataset_entity_scan_payloads(evidence_state: &Value) -> Vec<Value> {
+fn assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
+    evidence_state: &Value,
+    prompt: &str,
+) -> Vec<Value> {
+    assistant_run_compact_dataset_entity_scan_payloads_with_fact_snapshots(
+        evidence_state,
+        assistant_run_fact_snapshot_can_replace_dataset_entity_scan(prompt),
+    )
+}
+
+fn assistant_run_compact_dataset_entity_scan_payloads_with_fact_snapshots(
+    evidence_state: &Value,
+    include_fact_snapshots: bool,
+) -> Vec<Value> {
+    evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+                    Some("dataset_entity_scan") => {
+                        assistant_run_compact_dataset_entity_scan_payload(item)
+                    }
+                    Some("dataset_fact_snapshot") if include_fact_snapshots => {
+                        assistant_run_compact_dataset_fact_snapshot_as_scan_payload(item)
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn assistant_run_compact_dataset_fact_snapshot_payloads(evidence_state: &Value) -> Vec<Value> {
     evidence_state
         .get("supplied_items")
         .and_then(Value::as_array)
@@ -23925,11 +23993,137 @@ fn assistant_run_compact_dataset_entity_scan_payloads(evidence_state: &Value) ->
             items
                 .iter()
                 .filter(|item| {
-                    item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan")
+                    item.get("type").and_then(Value::as_str) == Some("dataset_fact_snapshot")
                 })
-                .filter_map(assistant_run_compact_dataset_entity_scan_payload)
+                .filter_map(assistant_run_compact_dataset_fact_snapshot_payload)
                 .collect()
         })
+        .unwrap_or_default()
+}
+
+fn assistant_run_compact_dataset_fact_snapshot_payload(item: &Value) -> Option<Value> {
+    let entity_rows_by_type =
+        assistant_run_compact_fact_rows_by_type(item.get("entity_rows_by_type")?);
+    if entity_rows_by_type
+        .as_object()
+        .map_or(true, |object| object.is_empty())
+    {
+        return None;
+    }
+    Some(json!({
+        "type": "dataset_fact_snapshot",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+        "snapshot_kind": item.get("snapshot_kind").cloned().unwrap_or(Value::Null),
+        "snapshot_key": item.get("snapshot_key").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").cloned().unwrap_or(Value::Null),
+        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "source_document_count": item.get("source_document_count").cloned().unwrap_or(Value::Null),
+        "source_fact_count": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
+        "row_count_by_type": item.get("row_count_by_type").cloned().unwrap_or(Value::Null),
+        "entity_rows_by_type": entity_rows_by_type,
+        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation.")),
+    }))
+}
+
+fn assistant_run_compact_dataset_fact_snapshot_as_scan_payload(item: &Value) -> Option<Value> {
+    let payload = assistant_run_compact_dataset_fact_snapshot_payload(item)?;
+    let rows_by_type = payload
+        .get("entity_rows_by_type")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let company_rows = assistant_run_fact_rows_for_type(&rows_by_type, "organization");
+    let skill_rows = assistant_run_fact_rows_for_type(&rows_by_type, "skill_technology");
+    let project_rows = assistant_run_fact_rows_for_type(&rows_by_type, "project_product_system");
+    let position_rows = assistant_run_fact_rows_for_type(&rows_by_type, "role_position");
+    let location_rows = assistant_run_fact_rows_for_type(&rows_by_type, "location_area");
+    let person_rows = assistant_run_fact_rows_for_type(&rows_by_type, "person");
+    let certificate_rows = assistant_run_fact_rows_for_type(&rows_by_type, "education_certificate");
+    let keyword_rows = assistant_run_fact_rows_for_type(&rows_by_type, "keyword");
+    let year_rows = assistant_run_fact_rows_for_type(&rows_by_type, "date_period");
+    let section_rows = assistant_run_fact_rows_for_type(&rows_by_type, "section");
+    if company_rows.is_empty()
+        && skill_rows.is_empty()
+        && project_rows.is_empty()
+        && position_rows.is_empty()
+        && location_rows.is_empty()
+        && person_rows.is_empty()
+        && certificate_rows.is_empty()
+        && keyword_rows.is_empty()
+        && year_rows.is_empty()
+        && section_rows.is_empty()
+    {
+        return None;
+    }
+    Some(json!({
+        "type": "dataset_entity_scan",
+        "source": "dataset_fact_snapshot",
+        "dataset_id": payload.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "summary": payload.get("summary").cloned().unwrap_or(Value::Null),
+        "scanned_document_count": payload.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "company_count": company_rows.len(),
+        "company_rows": company_rows,
+        "skill_rows": skill_rows,
+        "project_rows": project_rows,
+        "position_rows": position_rows,
+        "location_rows": location_rows,
+        "person_rows": person_rows,
+        "school_rows": [],
+        "degree_rows": [],
+        "certificate_rows": certificate_rows,
+        "keyword_rows": keyword_rows,
+        "year_rows": year_rows,
+        "section_rows": section_rows,
+        "paragraph_rows": [],
+        "table_rows": [],
+        "entity_rows_by_type": rows_by_type,
+        "resume_profile_rows": [],
+        "answer_guidance": "Authoritative rows converted from dataset_fact_snapshot. Use retrieval evidence only for examples, quotes, and validation.",
+        "model_note": "This compact scan is fact-snapshot backed. Use scanned_document_count as the document total; do not infer totals from retrieval chunks or summed row counts.",
+    }))
+}
+
+fn assistant_run_compact_fact_rows_by_type(rows_by_type: &Value) -> Value {
+    let Some(object) = rows_by_type.as_object() else {
+        return json!({});
+    };
+    let mut compact = Map::new();
+    for (fact_type, rows) in object {
+        let Some(rows) = rows.as_array() else {
+            continue;
+        };
+        let compact_rows = rows
+            .iter()
+            .filter_map(assistant_run_compact_fact_row)
+            .take(ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT)
+            .collect::<Vec<_>>();
+        if !compact_rows.is_empty() {
+            compact.insert(fact_type.clone(), Value::Array(compact_rows));
+        }
+    }
+    Value::Object(compact)
+}
+
+fn assistant_run_compact_fact_row(row: &Value) -> Option<Value> {
+    let name = row.get("name").and_then(Value::as_str)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "name": name,
+        "document_count": row.get("document_count").cloned().unwrap_or(Value::Null),
+        "fact_count": row.get("fact_count").cloned().unwrap_or(Value::Null),
+        "source_document_ids": row.get("source_document_ids").cloned().unwrap_or(Value::Null),
+        "source_locators": row.get("source_locators").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn assistant_run_fact_rows_for_type(rows_by_type: &Value, fact_type: &str) -> Vec<Value> {
+    rows_by_type
+        .get(fact_type)
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().cloned().collect())
         .unwrap_or_default()
 }
 
@@ -24059,7 +24253,10 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
     evidence_state: &Value,
     dimension: AssistantRunEntityScanAnswerDimension,
 ) -> Option<String> {
-    let scans = assistant_run_compact_dataset_entity_scan_payloads(evidence_state);
+    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
+        evidence_state,
+        &request.prompt,
+    );
     if scans.is_empty() {
         return None;
     }
@@ -24201,6 +24398,27 @@ enum AssistantRunEntityScanAnswerDimension {
     ResumeCertificate,
     ResumeExperience,
     ResumeProfileMatch,
+}
+
+fn assistant_run_fact_snapshot_can_replace_dataset_entity_scan(prompt: &str) -> bool {
+    if assistant_run_prompt_requests_point_list_table(prompt) {
+        return false;
+    }
+    matches!(
+        assistant_run_entity_scan_answer_dimension(prompt),
+        Some(
+            AssistantRunEntityScanAnswerDimension::Company
+                | AssistantRunEntityScanAnswerDimension::Skill
+                | AssistantRunEntityScanAnswerDimension::Project
+                | AssistantRunEntityScanAnswerDimension::Position
+                | AssistantRunEntityScanAnswerDimension::Person
+                | AssistantRunEntityScanAnswerDimension::Location
+                | AssistantRunEntityScanAnswerDimension::Certificate
+                | AssistantRunEntityScanAnswerDimension::Keyword
+                | AssistantRunEntityScanAnswerDimension::Year
+                | AssistantRunEntityScanAnswerDimension::Section
+        )
+    )
 }
 
 fn assistant_run_entity_scan_answer_dimension(
@@ -25971,7 +26189,7 @@ fn assistant_run_model_supply_item_brief(item: &Value) -> Option<String> {
             "摘要={}",
             truncate_assistant_supply_text(
                 &summary,
-                if item_type == "dataset_entity_scan" {
+                if matches!(item_type, "dataset_entity_scan" | "dataset_fact_snapshot") {
                     ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT
                 } else {
                     ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT
@@ -27764,6 +27982,7 @@ fn assistant_run_answer_reports_actual_parse_unavailable(
         "indexedEvidenceCount",
         "fallbackChunkCount",
         "datasetEntityScanCount",
+        "datasetFactSnapshotCount",
         "spreadsheetRowAnalysisCount",
         "mediaContextCount",
         "conversationMemoryItemCount",
@@ -31634,16 +31853,31 @@ async fn build_assistant_run_evidence_state(
         supplied_items.extend(parse_status_items);
 
         if dataset_entity_scan_requested {
-            let scan_items = build_assistant_run_dataset_entity_scan_supply(
+            let fact_snapshot_items = build_assistant_run_dataset_fact_snapshot_supply(
                 state,
                 &dataset,
                 current_user_id,
                 external_acl_filter.as_ref(),
                 &evidence_document_ids,
-                allow_selected_documents_without_acl_snapshot,
             )
             .await?;
-            supplied_items.extend(scan_items);
+            let fact_snapshot_available = !fact_snapshot_items.is_empty();
+            let fact_snapshot_can_replace_scan =
+                assistant_run_fact_snapshot_can_replace_dataset_entity_scan(prompt);
+            supplied_items.extend(fact_snapshot_items);
+
+            if !fact_snapshot_available || !fact_snapshot_can_replace_scan {
+                let scan_items = build_assistant_run_dataset_entity_scan_supply(
+                    state,
+                    &dataset,
+                    current_user_id,
+                    external_acl_filter.as_ref(),
+                    &evidence_document_ids,
+                    allow_selected_documents_without_acl_snapshot,
+                )
+                .await?;
+                supplied_items.extend(scan_items);
+            }
         }
 
         let database_supply_items =
@@ -31804,6 +32038,132 @@ async fn build_assistant_run_evidence_state(
         "fallback_supply_policy": if fallback_supply_count > 0 { "visible_document_chunks_when_retrieval_evidence_missing" } else { "not_used" },
         "limit": limit,
     }))
+}
+
+async fn build_assistant_run_dataset_fact_snapshot_supply(
+    state: &AppState,
+    dataset: &Dataset,
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+) -> std::result::Result<Vec<Value>, ApiError> {
+    if !assistant_run_fact_index_enabled() {
+        return Ok(Vec::new());
+    }
+    if external_acl_filter.is_some() || !selected_document_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some(snapshot) = state
+        .storage
+        .dataset_fact_snapshots()
+        .get_dataset_fact_snapshot(
+            state.tenant_id,
+            dataset.id,
+            fact_index::ENTITY_ROWS_BY_TYPE_SNAPSHOT_KIND,
+            fact_index::ENTITY_ROWS_BY_TYPE_SNAPSHOT_KEY,
+        )
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(Vec::new());
+    };
+
+    if !assistant_run_dataset_fact_snapshot_scope_is_visible(state, dataset, current_user_id)
+        .await?
+    {
+        return Ok(Vec::new());
+    }
+
+    Ok(vec![assistant_run_dataset_fact_snapshot_item(
+        dataset, &snapshot,
+    )])
+}
+
+async fn assistant_run_dataset_fact_snapshot_scope_is_visible(
+    state: &AppState,
+    dataset: &Dataset,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<bool, ApiError> {
+    let documents = list_documents_for_dataset_scope(state, dataset.id).await?;
+    Ok(documents
+        .iter()
+        .all(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id)))
+}
+
+fn assistant_run_fact_index_enabled() -> bool {
+    std::env::var("ASSISTANT_RUN_FACT_INDEX_ENABLED")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "" | "0" | "false" | "off" | "no")
+        })
+        .unwrap_or(true)
+}
+
+fn assistant_run_dataset_fact_snapshot_item(
+    dataset: &Dataset,
+    snapshot: &storage::DatasetFactSnapshot,
+) -> Value {
+    let manifest = snapshot.snapshot_manifest.clone();
+    let entity_rows_by_type = manifest
+        .get("entity_rows_by_type")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let row_count_by_type = manifest
+        .get("row_count_by_type")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let scanned_document_count = manifest
+        .get("scanned_document_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(snapshot.source_document_count);
+    let row_summary = assistant_run_dataset_fact_snapshot_row_summary(&row_count_by_type);
+    let summary = if row_summary.is_empty() {
+        format!(
+            "dataset fact snapshot: {scanned_document_count} documents, {} facts",
+            snapshot.source_fact_count
+        )
+    } else {
+        format!(
+            "dataset fact snapshot: {scanned_document_count} documents, {} facts, rows {row_summary}",
+            snapshot.source_fact_count
+        )
+    };
+
+    json!({
+        "type": "dataset_fact_snapshot",
+        "source": "dataset_fact_snapshots",
+        "dataset_id": dataset.id,
+        "dataset_key": dataset.key.clone(),
+        "dataset_title": dataset.title.clone(),
+        "snapshot_kind": snapshot.snapshot_kind.clone(),
+        "snapshot_key": snapshot.snapshot_key.clone(),
+        "scanned_document_count": scanned_document_count,
+        "source_document_count": snapshot.source_document_count,
+        "source_fact_count": snapshot.source_fact_count,
+        "row_count_by_type": row_count_by_type,
+        "entity_rows_by_type": entity_rows_by_type,
+        "snapshot_manifest": manifest,
+        "summary": summary,
+        "model_note": "Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation.",
+    })
+}
+
+fn assistant_run_dataset_fact_snapshot_row_summary(row_count_by_type: &Value) -> String {
+    row_count_by_type
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(fact_type, count)| {
+                    let count = count.as_u64()?;
+                    (count > 0).then(|| format!("{fact_type}={count}"))
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
 }
 
 async fn build_assistant_run_database_aggregate_supply(
@@ -37179,6 +37539,10 @@ fn assistant_run_supply_quality_report(
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("dataset_entity_scan"))
         .count();
+    let dataset_fact_snapshot_count = supplied_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("dataset_fact_snapshot"))
+        .count();
     let spreadsheet_row_analysis_count = supplied_items
         .iter()
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("spreadsheet_row_analysis"))
@@ -37248,6 +37612,9 @@ fn assistant_run_supply_quality_report(
     if dataset_entity_scan_count > 0 {
         notes.push("dataset_entity_scan_available");
     }
+    if dataset_fact_snapshot_count > 0 {
+        notes.push("dataset_fact_snapshot_available");
+    }
     if spreadsheet_row_analysis_count > 0 {
         notes.push("spreadsheet_row_analysis_available");
     }
@@ -37289,6 +37656,7 @@ fn assistant_run_supply_quality_report(
         "conversationMemoryItemCount": supplied_memory_items.len(),
         "mediaContextCount": media_context_count,
         "datasetEntityScanCount": dataset_entity_scan_count,
+        "datasetFactSnapshotCount": dataset_fact_snapshot_count,
         "spreadsheetRowAnalysisCount": spreadsheet_row_analysis_count,
         "documentParseStatusCount": document_parse_status_count,
         "documentNotReadyCount": document_not_ready_count,
@@ -37303,6 +37671,7 @@ fn assistant_run_supply_quality_report(
         "modelGuidance": [
             "treat supplied_items as citable context, not an answer template",
             "distinguish supplied document facts from general model knowledge",
+            "when dataset_fact_snapshot is present, use it before runtime entity scans or retrieval for dataset-level count/list/rank questions",
             "when dataset_entity_scan contains company_count and company_rows, use those as the authoritative company statistics and do not extend the list from candidate_terms",
             "when dataset_entity_scan contains scanned_document_count, use it as the total scanned document count and do not sum company_rows.document_count as total documents",
             "when spreadsheet_row_analysis is present, use its rows as the deterministic computed table for attendance, work-hour, absence, and date/time row questions",
@@ -68748,6 +69117,23 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_fact_snapshot_replaces_only_supported_global_scan_prompts() {
+        assert!(assistant_run_fact_snapshot_can_replace_dataset_entity_scan(
+            "简历库里一共提到了多少个公司名？"
+        ));
+        assert!(assistant_run_fact_snapshot_can_replace_dataset_entity_scan(
+            "按技能出现频次排序出表"
+        ));
+        assert!(!assistant_run_fact_snapshot_can_replace_dataset_entity_scan("按年龄排序出表"));
+        assert!(!assistant_run_fact_snapshot_can_replace_dataset_entity_scan("按学历汇总候选人"));
+        assert!(
+            !assistant_run_fact_snapshot_can_replace_dataset_entity_scan(
+                "智能梯控/电梯点位有哪些？请按楼层和位置出表。"
+            )
+        );
+    }
+
+    #[test]
     fn assistant_run_entity_words_without_coverage_do_not_force_scan() {
         let selected_scope = json!({
             "mode": "user_selected",
@@ -69052,6 +69438,193 @@ mod tests {
         );
         assert!(item.get("candidate_terms").is_none());
         assert!(item.get("document_hits").is_none());
+    }
+
+    #[test]
+    fn assistant_run_compacts_dataset_fact_snapshot_for_model_context_and_direct_answer() {
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "dataset_fact_snapshot",
+                "source": "dataset_fact_snapshots",
+                "dataset_id": "dataset-resume",
+                "dataset_key": "resume",
+                "snapshot_kind": "entity_rows_by_type",
+                "snapshot_key": "default",
+                "summary": "dataset fact snapshot: 3 documents, 7 facts, rows organization=2, skill_technology=1",
+                "scanned_document_count": 3,
+                "source_document_count": 3,
+                "source_fact_count": 7,
+                "row_count_by_type": {
+                    "organization": 2,
+                    "skill_technology": 1,
+                    "date_period": 1
+                },
+                "entity_rows_by_type": {
+                    "organization": [
+                        {
+                            "name": "广州冠晚网络有限公司",
+                            "normalized_name": "广州冠晚网络有限公司",
+                            "fact_count": 2,
+                            "document_count": 2,
+                            "source_document_ids": ["doc-1", "doc-2"],
+                            "source_locators": ["document://doc-1/chunks/0"]
+                        },
+                        {
+                            "name": "深圳星拓智能科技有限公司",
+                            "normalized_name": "深圳星拓智能科技有限公司",
+                            "fact_count": 1,
+                            "document_count": 1,
+                            "source_document_ids": ["doc-3"],
+                            "source_locators": ["document://doc-3/chunks/1"]
+                        }
+                    ],
+                    "skill_technology": [
+                        {"name": "Rust", "fact_count": 1, "document_count": 1}
+                    ],
+                    "date_period": [
+                        {"name": "2024", "fact_count": 3, "document_count": 3}
+                    ]
+                },
+                "snapshot_manifest": {
+                    "entity_rows_by_type": {"organization": [{"name": "raw-manifest-row"}]},
+                    "large_internal_debug": "should not enter model compact state"
+                }
+            }]
+        });
+
+        let model_state = assistant_run_model_evidence_state(&evidence);
+        let model_item = &model_state["supplied_items"][0];
+        assert_eq!(model_item["type"], json!("dataset_fact_snapshot"));
+        assert_eq!(model_item["source_fact_count"], json!(7));
+        assert!(model_item.get("snapshot_manifest").is_none());
+        assert_eq!(
+            model_item["entity_rows_by_type"]["organization"][0]["name"],
+            json!("广州冠晚网络有限公司")
+        );
+
+        let request = CreateAssistantRunRequest {
+            prompt: "简历库里一共提到了多少个公司名？".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let input = assistant_run_compact_provider_retry_input(&request, &evidence)
+            .expect("fact snapshot should produce compact retry input");
+        assert!(input.contains("\"dataset_fact_snapshots\""));
+        assert!(input.contains("\"source_fact_count\":7"));
+        assert!(input.contains("\"name\":\"广州冠晚网络有限公司\""));
+        assert!(!input.contains("large_internal_debug"));
+
+        let answer = assistant_run_dataset_entity_scan_direct_answer(&request, &evidence)
+            .expect("fact snapshot should be scan-compatible for direct company answers");
+        assert!(answer.contains("已扫描 3 份可见文档"));
+        assert!(answer.contains("共识别到 2 个公司/组织名"));
+        assert!(answer.contains("| 广州冠晚网络有限公司 | 2 |"));
+
+        let skill_request = CreateAssistantRunRequest {
+            prompt: "按技能出现频次排序出表".to_string(),
+            ..request
+        };
+        let skill_answer =
+            assistant_run_dataset_entity_scan_direct_answer(&skill_request, &evidence)
+                .expect("fact snapshot should be scan-compatible for skill answers");
+        assert!(skill_answer.contains("| Rust | 1 |"));
+    }
+
+    #[test]
+    fn assistant_run_fact_snapshot_does_not_shadow_point_list_runtime_scan() {
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "dataset_fact_snapshot",
+                    "source": "dataset_fact_snapshots",
+                    "dataset_id": "dataset-elevator",
+                    "snapshot_kind": "entity_rows_by_type",
+                    "snapshot_key": "default",
+                    "summary": "dataset fact snapshot: 2 documents",
+                    "scanned_document_count": 2,
+                    "source_fact_count": 2,
+                    "entity_rows_by_type": {
+                        "location_area": [
+                            {"name": "广州", "fact_count": 2, "document_count": 2}
+                        ]
+                    }
+                },
+                {
+                    "type": "dataset_entity_scan",
+                    "source": "visible_document_scan",
+                    "dataset_id": "dataset-elevator",
+                    "summary": "runtime point scan",
+                    "scanned_document_count": 2,
+                    "location_rows": [
+                        {"name": "B1F东电梯", "document_count": 1},
+                        {"name": "B2观光电梯口", "document_count": 1}
+                    ]
+                }
+            ]
+        });
+        let request = CreateAssistantRunRequest {
+            prompt: "智能梯控/电梯点位有哪些？请按楼层和位置出表。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
+            &evidence,
+            &request.prompt,
+        );
+
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0]["source"], json!("visible_document_scan"));
+        assert_eq!(scans[0]["location_rows"][0]["name"], json!("B1F东电梯"));
+        assert_eq!(scans[0]["location_rows"][1]["name"], json!("B2观光电梯口"));
+        assert!(!serde_json::to_string(&scans).unwrap().contains("广州"));
+    }
+
+    #[test]
+    fn assistant_run_supply_quality_reports_dataset_fact_snapshot() {
+        let report = assistant_run_supply_quality_report(
+            &json!({"mode": "user_selected"}),
+            true,
+            &[json!({
+                "type": "dataset_fact_snapshot",
+                "entity_rows_by_type": {
+                    "organization": [{"name": "广州冠晚网络有限公司", "document_count": 2}]
+                }
+            })],
+            &[json!({"id": "dataset-resume"})],
+            &[],
+            &[],
+            0,
+            4,
+        );
+
+        assert_eq!(report["status"], json!("grounded"));
+        assert_eq!(report["datasetFactSnapshotCount"], json!(1));
+        assert!(report["notes"]
+            .as_array()
+            .expect("notes should be present")
+            .iter()
+            .any(|note| note.as_str() == Some("dataset_fact_snapshot_available")));
+        assert!(report["modelGuidance"]
+            .as_array()
+            .expect("guidance should be present")
+            .iter()
+            .any(|note| note
+                .as_str()
+                .unwrap_or_default()
+                .contains("dataset_fact_snapshot is present")));
     }
 
     #[test]

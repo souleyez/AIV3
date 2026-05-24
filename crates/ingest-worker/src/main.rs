@@ -1,20 +1,24 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::{Document, DocumentLifecycle, WorkflowStatus};
-use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
+use domain_model::{Document, DocumentLifecycle, WorkflowStatus, WorkflowTask};
+use event_bus::{workflow_task_enqueued_subject, EventBus, EventEnvelope, EventSubscription};
 use ingest_worker::{
     split_text_chunks, split_text_paragraphs, IngestJob, IngestOutcome, IngestProcessor,
     LocalIngestProcessor,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use storage::{NewDocument, NewDocumentChunk, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{
+    NewDocument, NewDocumentChunk, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL,
+};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "ingest";
 const DEFAULT_WAKE_TASK_KEY: &str = "ingest_uploaded_document";
 const EXTERNAL_SOURCE_INGEST_TASK_KEY: &str = "ingest_external_content";
+const POST_INGEST_FACT_INDEX_QUEUE: &str = "retrieval";
+const POST_INGEST_FACT_INDEX_TASK_KEY: &str = "cleanup_document_facts";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_AUTO_REPARSE_MAX_ATTEMPTS: usize = 1;
 const CHUNK_NOUN_TERM_LIMIT: usize = 64;
@@ -257,6 +261,27 @@ async fn process_uploaded_document_task(
                 Utc::now(),
             )
             .await?;
+        let fact_index_task = enqueue_post_ingest_fact_index_task(
+            storage,
+            event_bus,
+            &execution,
+            updated_document.dataset_id,
+            updated_document.id,
+            &parse_status,
+            parse_quality_status.as_deref(),
+            extracted_at,
+        )
+        .await;
+        if let Err(error) = &fact_index_task {
+            tracing::warn!(
+                error = ?error,
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                document_id = %updated_document.id,
+                dataset_id = %updated_document.dataset_id,
+                "post-ingest fact index task enqueue failed; parse remains completed"
+            );
+        }
         let signal_output = json!({
             "document_id": updated_document.id,
             "dataset_id": updated_document.dataset_id,
@@ -355,6 +380,76 @@ async fn process_uploaded_document_task(
     );
 
     Ok(())
+}
+
+async fn enqueue_post_ingest_fact_index_task(
+    storage: &PgStorage,
+    event_bus: &EventBus,
+    execution: &domain_model::WorkflowExecution,
+    dataset_id: domain_model::DatasetId,
+    document_id: domain_model::DocumentId,
+    parse_status: &str,
+    parse_quality_status: Option<&str>,
+    extracted_at: chrono::DateTime<Utc>,
+) -> Result<WorkflowTask> {
+    let queued_at = Utc::now();
+    let task = build_post_ingest_fact_index_task(
+        dataset_id,
+        document_id,
+        parse_status,
+        parse_quality_status,
+        extracted_at,
+        queued_at,
+    );
+    let persisted = storage
+        .workflow_tasks()
+        .create(execution, &task, queued_at)
+        .await?;
+
+    event_bus
+        .publish(EventEnvelope {
+            subject: workflow_task_enqueued_subject(
+                POST_INGEST_FACT_INDEX_QUEUE,
+                POST_INGEST_FACT_INDEX_TASK_KEY,
+            ),
+            payload: json!({
+                "task_id": persisted.id,
+                "tenant_id": persisted.tenant_id,
+                "execution_id": persisted.execution_id,
+                "queue": persisted.queue,
+                "task_key": persisted.task_key,
+                "status": persisted.status.as_str(),
+                "available_at": persisted.available_at,
+            }),
+            published_at: persisted.created_at,
+        })
+        .await;
+
+    Ok(persisted)
+}
+
+fn build_post_ingest_fact_index_task(
+    dataset_id: domain_model::DatasetId,
+    document_id: domain_model::DocumentId,
+    parse_status: &str,
+    parse_quality_status: Option<&str>,
+    extracted_at: chrono::DateTime<Utc>,
+    available_at: chrono::DateTime<Utc>,
+) -> NewWorkflowTask {
+    NewWorkflowTask {
+        queue: POST_INGEST_FACT_INDEX_QUEUE.to_string(),
+        task_key: POST_INGEST_FACT_INDEX_TASK_KEY.to_string(),
+        payload: json!({
+            "kind": "post_ingest_fact_index",
+            "dataset_id": dataset_id,
+            "document_id": document_id,
+            "parse_status": parse_status,
+            "parse_quality_status": parse_quality_status,
+            "extracted_at": extracted_at,
+        }),
+        available_at,
+        max_attempts: 3,
+    }
 }
 
 fn auto_reparse_decision(
@@ -2304,5 +2399,29 @@ mod tests {
         assert!(noun_terms.contains(&"客户公司"));
         assert!(noun_terms.contains(&"审批流程"));
         assert!(noun_terms.contains(&"库存周转报表"));
+    }
+
+    #[test]
+    fn post_ingest_fact_index_task_is_internal_async_cleanup_work() {
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let extracted_at = Utc::now();
+        let task = build_post_ingest_fact_index_task(
+            dataset_id,
+            document_id,
+            "parsed",
+            Some("usable_text"),
+            extracted_at,
+            extracted_at,
+        );
+
+        assert_eq!(task.queue, POST_INGEST_FACT_INDEX_QUEUE);
+        assert_eq!(task.task_key, POST_INGEST_FACT_INDEX_TASK_KEY);
+        assert_eq!(task.max_attempts, 3);
+        assert_eq!(task.payload["kind"], json!("post_ingest_fact_index"));
+        assert_eq!(task.payload["dataset_id"], json!(dataset_id));
+        assert_eq!(task.payload["document_id"], json!(document_id));
+        assert_eq!(task.payload["parse_status"], json!("parsed"));
+        assert_eq!(task.payload["parse_quality_status"], json!("usable_text"));
     }
 }

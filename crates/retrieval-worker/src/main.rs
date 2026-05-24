@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::{Document, DocumentChunk, DocumentLifecycle};
+use domain_model::{Document, DocumentChunk, DocumentLifecycle, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use retrieval_worker::{
     LocalLexicalRetrievalIndexer, RetrievalChunkInput, RetrievalIndexJob, RetrievalIndexer,
@@ -12,8 +12,8 @@ use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "retrieval";
-const DEFAULT_TASK_KEY: &str = "index_retrieval_artifacts";
 const EXTERNAL_SOURCE_INDEX_TASK_KEY: &str = "index_external_retrieval";
+const POST_INGEST_FACT_INDEX_TASK_KEY: &str = "cleanup_document_facts";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 #[tokio::main]
@@ -33,12 +33,17 @@ async fn main() -> Result<()> {
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let indexer = LocalLexicalRetrievalIndexer;
-    let wake_task_key = task_key.as_deref().unwrap_or(DEFAULT_TASK_KEY);
-    let wake_subject = workflow_task_enqueued_subject(&queue, wake_task_key);
+    let wake_subject = task_key
+        .as_deref()
+        .map(|task_key| workflow_task_enqueued_subject(&queue, task_key))
+        .unwrap_or_else(|| format!("workflow.task.enqueued.{queue}.>"));
     let mut task_waker = event_bus
         .subscribe_queue_or_disabled(
             &wake_subject,
-            Some(&format!("retrieval_worker.{queue}.{wake_task_key}")),
+            Some(&format!(
+                "retrieval_worker.{queue}.{}",
+                task_key.as_deref().unwrap_or("*")
+            )),
         )
         .await;
 
@@ -92,6 +97,9 @@ async fn process_task(
             task,
         )
         .await;
+    }
+    if task.task_key == POST_INGEST_FACT_INDEX_TASK_KEY {
+        return process_post_ingest_fact_index_task(storage, task).await;
     }
 
     let execution = storage
@@ -354,6 +362,105 @@ async fn process_task(
     );
 
     Ok(())
+}
+
+async fn process_post_ingest_fact_index_task(
+    storage: &PgStorage,
+    task: WorkflowTask,
+) -> Result<()> {
+    let process_result: Result<usize> = async {
+        let dataset_id = task_payload_uuid(&task.payload, "dataset_id")
+            .map(domain_model::DatasetId)
+            .ok_or_else(|| anyhow!("fact index cleanup task missing dataset_id"))?;
+        let document_id = task_payload_uuid(&task.payload, "document_id")
+            .map(domain_model::DocumentId)
+            .ok_or_else(|| anyhow!("fact index cleanup task missing document_id"))?;
+        let document = storage
+            .documents()
+            .get_by_id(task.tenant_id, document_id)
+            .await?
+            .ok_or_else(|| anyhow!("document {} not found", document_id))?;
+        if document.dataset_id != dataset_id {
+            return Err(anyhow!(
+                "fact index cleanup task dataset_id {} does not match document {} dataset_id {}",
+                dataset_id,
+                document_id,
+                document.dataset_id
+            ));
+        }
+        let chunks = storage
+            .document_chunks()
+            .list_by_document(task.tenant_id, document_id)
+            .await?;
+        let indexed_at = Utc::now();
+        let facts = platform_api::fact_index::build_document_fact_candidates(
+            &document, &chunks, indexed_at,
+        );
+        let persisted_facts = storage
+            .document_facts()
+            .replace_document_facts(task.tenant_id, document_id, &facts)
+            .await?;
+        let snapshot = platform_api::fact_index::rebuild_dataset_entity_rows_snapshot(
+            storage,
+            task.tenant_id,
+            dataset_id,
+            50,
+            indexed_at,
+        )
+        .await?;
+
+        storage
+            .documents()
+            .update_state(
+                task.tenant_id,
+                document_id,
+                document.lifecycle.clone(),
+                Some(&document.title),
+                &json!({
+                    "fact_index": {
+                        "status": if chunks.is_empty() { "no_chunks" } else { "indexed" },
+                        "indexer": "post_ingest_cleanup_v1",
+                        "indexed_at": indexed_at,
+                        "fact_count": persisted_facts.len(),
+                        "chunk_count": chunks.len(),
+                        "source_task_id": task.id,
+                        "snapshot_kind": snapshot.snapshot_kind,
+                        "snapshot_key": snapshot.snapshot_key,
+                        "snapshot_source_fact_count": snapshot.source_fact_count,
+                        "snapshot_source_document_count": snapshot.source_document_count,
+                    }
+                }),
+                indexed_at,
+            )
+            .await?;
+
+        Ok(persisted_facts.len())
+    }
+    .await;
+
+    match process_result {
+        Ok(fact_count) => {
+            storage
+                .workflow_tasks()
+                .mark_succeeded(task.id, Utc::now())
+                .await?;
+            tracing::info!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                fact_count,
+                "post-ingest fact index cleanup task completed"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let error_message = error.to_string();
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, &error_message, Utc::now())
+                .await?;
+            Err(error)
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1062,6 +1169,13 @@ fn optional_env(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty() && value != "*")
 }
 
+fn task_payload_uuid(payload: &Value, key: &str) -> Option<uuid::Uuid> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|raw| raw.parse::<uuid::Uuid>().ok())
+}
+
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
     if let Some(event) = task_waker
         .wait_for_event(Duration::from_millis(poll_interval_ms))
@@ -1224,6 +1338,61 @@ mod tests {
             retrieval_evidence_summary(&document, &chunk, &hints, "lexical retrieval recall");
 
         assert!(summary.contains("section 固定资产申请"));
+    }
+
+    #[test]
+    fn post_ingest_fact_candidates_keep_normalized_names_and_sources() {
+        let document = document_with_metadata(json!({
+            "ingest": { "parse_method": "pdf-paddleocr" }
+        }));
+        let mut chunk = media_chunk(json!({}));
+        chunk.dataset_id = document.dataset_id;
+        chunk.document_id = document.id;
+        chunk.content =
+            "## 工作经历\n北京星河科技有限公司 2020年 任后端工程师，负责智能梯控系统。".to_string();
+        chunk
+            .metadata
+            .insert("section_title_hints".to_string(), json!(["工作经历"]));
+        chunk.metadata.insert(
+            "understanding".to_string(),
+            json!({
+                "noun_terms": [
+                    "北京星河科技有限公司",
+                    "后端工程师",
+                    "智能梯控系统"
+                ]
+            }),
+        );
+
+        let facts = platform_api::fact_index::build_document_fact_candidates(
+            &document,
+            &[chunk],
+            Utc::now(),
+        );
+
+        assert!(facts.iter().any(|fact| fact.fact_type == "section"
+            && fact.normalized_name == "工作经历"
+            && fact.source_kind == "section_title_hint"));
+        assert!(facts.iter().any(|fact| fact.fact_type == "organization"
+            && fact.normalized_name == "北京星河科技有限公司"));
+        assert!(facts
+            .iter()
+            .any(|fact| fact.fact_type == "role_position" && fact.normalized_name == "后端工程师"));
+        assert!(facts
+            .iter()
+            .any(|fact| fact.fact_type == "project_product_system"
+                && fact.normalized_name == "智能梯控系统"));
+        assert!(facts
+            .iter()
+            .any(|fact| fact.fact_type == "date_period" && fact.normalized_name == "2020年"));
+        assert!(facts.iter().all(|fact| fact
+            .source_locator
+            .as_deref()
+            .unwrap_or_default()
+            .contains("/chunks/")));
+        assert!(facts
+            .iter()
+            .all(|fact| fact.parse_version.as_deref() == Some("pdf-paddleocr")));
     }
 
     #[test]

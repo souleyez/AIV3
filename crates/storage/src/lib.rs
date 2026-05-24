@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use domain_model::{
     AssistantRun, AssistantRunEvent, AssistantRunEventId, AssistantRunId, AuthAuditEvent,
     AuthAuditEventId, AuthAuditOutcome, AuthChallengePurpose, AuthSessionMethod, ChatMessage,
@@ -95,6 +95,12 @@ pub const MODEL_GATEWAY_PROFILES_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0011_model_gateway_profiles.sql"),
 };
 
+pub const DOCUMENT_FACT_INDEX_SCHEMA: Migration = Migration {
+    version: "0012",
+    description: "document fact index",
+    sql: include_str!("../migrations/0012_document_fact_index.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -106,6 +112,7 @@ pub const MIGRATIONS: &[Migration] = &[
     VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA,
     DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA,
     MODEL_GATEWAY_PROFILES_SCHEMA,
+    DOCUMENT_FACT_INDEX_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -118,6 +125,9 @@ pub const TABLES: &[&str] = &[
     "documents",
     "dataset_document_memberships",
     "document_chunks",
+    "document_facts",
+    "document_fact_sources",
+    "dataset_fact_snapshots",
     "secret_bindings",
     "secret_grants",
     "workflow_definitions",
@@ -361,6 +371,79 @@ pub struct NewDocumentChunk {
     pub content: String,
     pub token_count: i32,
     pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewDocumentFactSource {
+    pub source_kind: String,
+    pub source_locator: Option<String>,
+    pub source_chunk_id: Option<DocumentChunkId>,
+    pub attributes: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewDocumentFact {
+    pub dataset_id: DatasetId,
+    pub document_id: DocumentId,
+    pub fact_type: String,
+    pub name: String,
+    pub normalized_name: String,
+    pub value_text: Option<String>,
+    pub value_number: Option<f64>,
+    pub value_date: Option<NaiveDate>,
+    pub attributes: Value,
+    pub confidence: f64,
+    pub source_kind: String,
+    pub source_locator: Option<String>,
+    pub source_chunk_id: Option<DocumentChunkId>,
+    pub parse_version: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub sources: Vec<NewDocumentFactSource>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DocumentFact {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub document_id: DocumentId,
+    pub fact_type: String,
+    pub name: String,
+    pub normalized_name: String,
+    pub value_text: Option<String>,
+    pub value_number: Option<f64>,
+    pub value_date: Option<NaiveDate>,
+    pub attributes: Value,
+    pub confidence: f64,
+    pub source_kind: String,
+    pub source_locator: Option<String>,
+    pub source_chunk_id: Option<DocumentChunkId>,
+    pub parse_version: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DocumentFactAggregate {
+    pub fact_type: String,
+    pub normalized_name: String,
+    pub name: String,
+    pub fact_count: i64,
+    pub document_count: i64,
+    pub source_document_ids: Vec<DocumentId>,
+    pub source_locators: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DatasetFactSnapshot {
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub snapshot_kind: String,
+    pub snapshot_key: String,
+    pub snapshot_manifest: Value,
+    pub source_fact_count: i64,
+    pub source_document_count: i64,
     pub created_at: DateTime<Utc>,
 }
 
@@ -770,6 +853,18 @@ impl PgStorage {
 
     pub fn document_chunks(&self) -> PgDocumentChunkRepository {
         PgDocumentChunkRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn document_facts(&self) -> PgDocumentFactRepository {
+        PgDocumentFactRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn dataset_fact_snapshots(&self) -> PgDatasetFactSnapshotRepository {
+        PgDatasetFactSnapshotRepository {
             pool: self.pool.clone(),
         }
     }
@@ -2280,6 +2375,276 @@ impl PgDocumentChunkRepository {
         }
 
         Ok(persisted)
+    }
+}
+
+#[derive(Clone)]
+pub struct PgDocumentFactRepository {
+    pool: PgPool,
+}
+
+impl PgDocumentFactRepository {
+    pub async fn replace_document_facts(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+        facts: &[NewDocumentFact],
+    ) -> Result<Vec<DocumentFact>> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            r#"
+            delete from document_facts
+            where tenant_id = $1 and document_id = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_id.0)
+        .execute(&mut *tx)
+        .await?;
+
+        let mut persisted = Vec::with_capacity(facts.len());
+        for fact in facts {
+            let fact_id = Uuid::new_v4();
+            let row = sqlx::query(
+                r#"
+                insert into document_facts (
+                    id,
+                    tenant_id,
+                    dataset_id,
+                    document_id,
+                    fact_type,
+                    name,
+                    normalized_name,
+                    value_text,
+                    value_number,
+                    value_date,
+                    attributes,
+                    confidence,
+                    source_kind,
+                    source_locator,
+                    source_chunk_id,
+                    parse_version,
+                    created_at
+                )
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                returning id, tenant_id, dataset_id, document_id, fact_type, name, normalized_name, value_text, value_number, value_date, attributes, confidence, source_kind, source_locator, source_chunk_id, parse_version, created_at
+                "#,
+            )
+            .bind(fact_id)
+            .bind(tenant_id.0)
+            .bind(fact.dataset_id.0)
+            .bind(fact.document_id.0)
+            .bind(&fact.fact_type)
+            .bind(&fact.name)
+            .bind(&fact.normalized_name)
+            .bind(&fact.value_text)
+            .bind(fact.value_number)
+            .bind(fact.value_date)
+            .bind(&fact.attributes)
+            .bind(fact.confidence)
+            .bind(&fact.source_kind)
+            .bind(&fact.source_locator)
+            .bind(fact.source_chunk_id.map(|chunk_id| chunk_id.0))
+            .bind(&fact.parse_version)
+            .bind(fact.created_at)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            for source in &fact.sources {
+                sqlx::query(
+                    r#"
+                    insert into document_fact_sources (
+                        id,
+                        fact_id,
+                        tenant_id,
+                        dataset_id,
+                        document_id,
+                        source_kind,
+                        source_locator,
+                        source_chunk_id,
+                        attributes,
+                        created_at
+                    )
+                    values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    "#,
+                )
+                .bind(Uuid::new_v4())
+                .bind(fact_id)
+                .bind(tenant_id.0)
+                .bind(fact.dataset_id.0)
+                .bind(fact.document_id.0)
+                .bind(&source.source_kind)
+                .bind(&source.source_locator)
+                .bind(source.source_chunk_id.map(|chunk_id| chunk_id.0))
+                .bind(&source.attributes)
+                .bind(source.created_at)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            persisted.push(map_document_fact_row(&row)?);
+        }
+
+        tx.commit().await?;
+        Ok(persisted)
+    }
+
+    pub async fn list_document_facts_by_dataset(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        fact_type: &str,
+        limit: i64,
+    ) -> Result<Vec<DocumentFact>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, dataset_id, document_id, fact_type, name, normalized_name, value_text, value_number, value_date, attributes, confidence, source_kind, source_locator, source_chunk_id, parse_version, created_at
+            from document_facts
+            where tenant_id = $1 and dataset_id = $2 and fact_type = $3
+            order by normalized_name asc, document_id asc, created_at asc
+            limit $4
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(fact_type)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_document_fact_row).collect()
+    }
+
+    pub async fn aggregate_document_facts_by_dataset(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        fact_type: &str,
+        limit: i64,
+    ) -> Result<Vec<DocumentFactAggregate>> {
+        let rows = sqlx::query(
+            r#"
+            select
+                fact_type,
+                normalized_name,
+                min(name) as name,
+                count(*)::bigint as fact_count,
+                count(distinct document_id)::bigint as document_count,
+                array_agg(distinct document_id) as source_document_ids,
+                coalesce(
+                    array_agg(distinct source_locator) filter (where source_locator is not null),
+                    '{}'::text[]
+                ) as source_locators
+            from document_facts
+            where tenant_id = $1 and dataset_id = $2 and fact_type = $3
+            group by fact_type, normalized_name
+            order by document_count desc, fact_count desc, normalized_name asc
+            limit $4
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(fact_type)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| DocumentFactAggregate {
+                fact_type: row.get("fact_type"),
+                normalized_name: row.get("normalized_name"),
+                name: row.get("name"),
+                fact_count: row.get("fact_count"),
+                document_count: row.get("document_count"),
+                source_document_ids: row
+                    .get::<Vec<Uuid>, _>("source_document_ids")
+                    .into_iter()
+                    .map(DocumentId)
+                    .collect(),
+                source_locators: row.get("source_locators"),
+            })
+            .collect())
+    }
+}
+
+#[derive(Clone)]
+pub struct PgDatasetFactSnapshotRepository {
+    pool: PgPool,
+}
+
+impl PgDatasetFactSnapshotRepository {
+    pub async fn upsert_dataset_fact_snapshot(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        snapshot_kind: &str,
+        snapshot_key: &str,
+        snapshot_manifest: &Value,
+        source_fact_count: i64,
+        source_document_count: i64,
+        created_at: DateTime<Utc>,
+    ) -> Result<DatasetFactSnapshot> {
+        let row = sqlx::query(
+            r#"
+            insert into dataset_fact_snapshots (
+                tenant_id,
+                dataset_id,
+                snapshot_kind,
+                snapshot_key,
+                snapshot_manifest,
+                source_fact_count,
+                source_document_count,
+                created_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8)
+            on conflict (tenant_id, dataset_id, snapshot_kind, snapshot_key)
+            do update set
+                snapshot_manifest = excluded.snapshot_manifest,
+                source_fact_count = excluded.source_fact_count,
+                source_document_count = excluded.source_document_count,
+                created_at = excluded.created_at
+            returning tenant_id, dataset_id, snapshot_kind, snapshot_key, snapshot_manifest, source_fact_count, source_document_count, created_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(snapshot_kind)
+        .bind(snapshot_key)
+        .bind(snapshot_manifest)
+        .bind(source_fact_count)
+        .bind(source_document_count)
+        .bind(created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_dataset_fact_snapshot_row(&row)
+    }
+
+    pub async fn get_dataset_fact_snapshot(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        snapshot_kind: &str,
+        snapshot_key: &str,
+    ) -> Result<Option<DatasetFactSnapshot>> {
+        let row = sqlx::query(
+            r#"
+            select tenant_id, dataset_id, snapshot_kind, snapshot_key, snapshot_manifest, source_fact_count, source_document_count, created_at
+            from dataset_fact_snapshots
+            where tenant_id = $1 and dataset_id = $2 and snapshot_kind = $3 and snapshot_key = $4
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(snapshot_kind)
+        .bind(snapshot_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| map_dataset_fact_snapshot_row(&row))
+            .transpose()
     }
 }
 
@@ -5896,6 +6261,43 @@ fn map_document_chunk_row(row: &sqlx::postgres::PgRow) -> Result<DocumentChunk> 
     })
 }
 
+fn map_document_fact_row(row: &sqlx::postgres::PgRow) -> Result<DocumentFact> {
+    Ok(DocumentFact {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        document_id: DocumentId(row.get::<Uuid, _>("document_id")),
+        fact_type: row.get("fact_type"),
+        name: row.get("name"),
+        normalized_name: row.get("normalized_name"),
+        value_text: row.get("value_text"),
+        value_number: row.get("value_number"),
+        value_date: row.get("value_date"),
+        attributes: row.get("attributes"),
+        confidence: row.get("confidence"),
+        source_kind: row.get("source_kind"),
+        source_locator: row.get("source_locator"),
+        source_chunk_id: row
+            .get::<Option<Uuid>, _>("source_chunk_id")
+            .map(DocumentChunkId),
+        parse_version: row.get("parse_version"),
+        created_at: row.get("created_at"),
+    })
+}
+
+fn map_dataset_fact_snapshot_row(row: &sqlx::postgres::PgRow) -> Result<DatasetFactSnapshot> {
+    Ok(DatasetFactSnapshot {
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        dataset_id: DatasetId(row.get::<Uuid, _>("dataset_id")),
+        snapshot_kind: row.get("snapshot_kind"),
+        snapshot_key: row.get("snapshot_key"),
+        snapshot_manifest: row.get("snapshot_manifest"),
+        source_fact_count: row.get("source_fact_count"),
+        source_document_count: row.get("source_document_count"),
+        created_at: row.get("created_at"),
+    })
+}
+
 fn map_report_plan_row(row: &sqlx::postgres::PgRow) -> Result<ReportPlan> {
     let status = row.get::<String, _>("status");
 
@@ -6969,6 +7371,15 @@ mod tests {
             .contains("create table if not exists document_chunks"));
         assert!(INITIAL_SCHEMA
             .sql
+            .contains("create table if not exists document_facts"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists document_fact_sources"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists dataset_fact_snapshots"));
+        assert!(INITIAL_SCHEMA
+            .sql
             .contains("create table if not exists report_plan_ast_versions"));
         assert!(INITIAL_SCHEMA
             .sql
@@ -7016,7 +7427,10 @@ mod tests {
                 .iter()
                 .map(|migration| migration.version)
                 .collect::<Vec<_>>(),
-            vec!["0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011"]
+            vec![
+                "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
+                "0012"
+            ]
         );
         assert!(MIGRATIONS
             .iter()
@@ -7042,6 +7456,9 @@ mod tests {
         assert!(MIGRATIONS
             .iter()
             .any(|migration| migration.description == "model gateway profiles"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "document fact index"));
         assert!(TABLES.contains(&"published_video_ppt_packages"));
         assert!(TABLES.contains(&"published_video_ppt_versions"));
         assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
@@ -7053,6 +7470,34 @@ mod tests {
         assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
             .sql
             .contains("unique (package_id, version_fingerprint)"));
+    }
+
+    #[test]
+    fn document_fact_index_schema_mentions_tables_and_indexes() {
+        assert!(TABLES.contains(&"document_facts"));
+        assert!(TABLES.contains(&"document_fact_sources"));
+        assert!(TABLES.contains(&"dataset_fact_snapshots"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists document_facts"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists document_fact_sources"));
+        assert!(INITIAL_SCHEMA
+            .sql
+            .contains("create table if not exists dataset_fact_snapshots"));
+        assert!(DOCUMENT_FACT_INDEX_SCHEMA
+            .sql
+            .contains("document_facts_dataset_type_name_idx"));
+        assert!(DOCUMENT_FACT_INDEX_SCHEMA
+            .sql
+            .contains("document_facts_document_type_idx"));
+        assert!(DOCUMENT_FACT_INDEX_SCHEMA
+            .sql
+            .contains("dataset_fact_snapshots_manifest_gin_idx"));
+        assert!(DOCUMENT_FACT_INDEX_SCHEMA
+            .sql
+            .contains("primary key (tenant_id, dataset_id, snapshot_kind, snapshot_key)"));
     }
 
     #[test]

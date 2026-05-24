@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("LocalUnit", "Server")]
     [string] $Mode = "LocalUnit",
     [Alias("Case")]
@@ -10,6 +10,7 @@ param(
     [string] $ReportDir = "",
     [string] $CargoBin = "cargo",
     [switch] $Local,
+    [switch] $NoQualityGate,
     [switch] $ListCases,
     [switch] $Json
 )
@@ -108,23 +109,40 @@ $defaultFailureMarkers = @(
 function Invoke-LocalCargoCheck {
     param(
         [string] $Package,
-        [string] $Filter
+        [string] $Filter,
+        [string] $Target = "lib",
+        [bool] $AllowZeroTests = $false
     )
 
+    $targetArgs = switch -Regex ($Target) {
+        "^$|^lib$" { @("--lib"); break }
+        "^all$" { @(); break }
+        "^bin:(.+)$" { @("--bin", $Matches[1]); break }
+        default { throw "Unsupported local test target '$Target'. Use lib, all, or bin:<name>." }
+    }
+    $cargoArgs = @("test", "-p", $Package) + $targetArgs + @($Filter)
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $output = & $CargoBin test -p $Package $Filter --lib 2>&1
+        $output = & $CargoBin @cargoArgs 2>&1
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
+    $outputText = ($output -join "`n")
+    $zeroTests = $outputText -match "running 0 tests"
+    $passed = $exitCode -eq 0 -and (-not $zeroTests -or $AllowZeroTests)
     [pscustomobject]@{
         package = $Package
         filter = $Filter
-        status = if ($exitCode -eq 0) { "passed" } else { "failed" }
-        exit_code = $exitCode
-        output_excerpt = (($output | Select-Object -Last 30) -join "`n")
+        target = $Target
+        status = if ($passed) { "passed" } else { "failed" }
+        exit_code = if ($passed) { $exitCode } elseif ($exitCode -eq 0 -and $zeroTests) { 1 } else { $exitCode }
+        output_excerpt = if ($exitCode -eq 0 -and $zeroTests -and -not $AllowZeroTests) {
+            "matched zero tests for target '$Target'. Configure the smoke local_tests target, e.g. bin:<name>.`n$($output | Select-Object -Last 30 | Out-String)"
+        } else {
+            (($output | Select-Object -Last 30) -join "`n")
+        }
     }
 }
 
@@ -282,6 +300,23 @@ function New-SmokeAssertionCheck {
     }
 }
 
+function Test-AnyExpectedSourcePresent {
+    param(
+        [string[]] $ObservedSources,
+        [string[]] $ExpectedSources
+    )
+
+    if ($ExpectedSources.Count -eq 0) {
+        return $true
+    }
+    foreach ($expected in $ExpectedSources) {
+        if ($ObservedSources -contains $expected) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function New-CaseResult {
     param(
         [object] $Case,
@@ -323,12 +358,26 @@ function New-CaseResult {
         $assertionChecks.Add((New-SmokeAssertionCheck -Name "required_final_answer_terms" -Passed ($missingTerms.Count -eq 0) -Message $(if ($missingTerms.Count -eq 0) { "all required final-answer terms are present" } else { "missing terms: $($missingTerms -join ', ')" })))
     }
 
-    $allChecks = @($Checks) + @($assertionChecks.ToArray())
-    $failed = @($allChecks | Where-Object { $_.status -ne "passed" })
     $qualityGateReason = Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "quality_gate_triggered_reason" -Default "not_required"
     $retryAttempts = Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "retry_attempts" -Default 0
     $reactActions = ConvertTo-StringArray (Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "react_actions_used" -Default @())
     $premiumAction = Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "premium_action" -Default "not_used"
+    $answerSupplySources = ConvertTo-StringArray (Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "answer_supply_sources" -Default @())
+    $aggregateAnswerSource = Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "aggregate_answer_source" -Default "not_observed"
+    $expectedAnswerSources = ConvertTo-StringArray (Get-CaseProperty -Object $Case -Name "expected_answer_sources" -Default @())
+    if ($expectedAnswerSources.Count -gt 0) {
+        $assertionChecks.Add((New-SmokeAssertionCheck -Name "expected_answer_supply_source" -Passed (Test-AnyExpectedSourcePresent -ObservedSources $answerSupplySources -ExpectedSources $expectedAnswerSources) -Message "expected one of: $($expectedAnswerSources -join ', '); observed: $($answerSupplySources -join ', ')"))
+    }
+    $requiredAggregateSources = ConvertTo-StringArray (Get-CaseProperty -Object $Case -Name "required_aggregate_sources" -Default @())
+    if ($requiredAggregateSources.Count -gt 0) {
+        $assertionChecks.Add((New-SmokeAssertionCheck -Name "required_aggregate_answer_source" -Passed ($requiredAggregateSources -contains $aggregateAnswerSource) -Message "expected aggregate source one of: $($requiredAggregateSources -join ', '); observed: $aggregateAnswerSource"))
+    }
+    $expectNoQualityGate = [bool](Get-CaseProperty -Object $Case -Name "expect_no_quality_gate" -Default $false)
+    if ($expectNoQualityGate) {
+        $assertionChecks.Add((New-SmokeAssertionCheck -Name "no_quality_gate_retry" -Passed ([int]$retryAttempts -eq 0) -Message "expected no answer-quality retry when no-gate smoke is active; observed retry attempts: $retryAttempts"))
+    }
+    $allChecks = @($Checks) + @($assertionChecks.ToArray())
+    $failed = @($allChecks | Where-Object { $_.status -ne "passed" })
 
     [pscustomobject]@{
         id = $Case.id
@@ -346,8 +395,10 @@ function New-CaseResult {
         entity_count = Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "entity_count" -Default $null
         quality_gate_triggered_reason = $qualityGateReason
         retry_attempts = $retryAttempts
-        react_actions_used = $reactActions
+        react_actions_used = @($reactActions)
         premium_action = $premiumAction
+        answer_supply_sources = @($answerSupplySources)
+        aggregate_answer_source = $aggregateAnswerSource
         final_sanitizer_leak_check = if ($markerHits.Count -eq 0) { "passed" } else { "failed" }
         final_answer_excerpt = $finalAnswerExcerpt
         direct_answer_text = $finalAnswerExcerpt
@@ -382,6 +433,8 @@ function New-ServerSkippedCaseResult {
         retry_attempts = 0
         react_actions_used = @()
         premium_action = "not_run"
+        answer_supply_sources = @()
+        aggregate_answer_source = "not_run"
         final_sanitizer_leak_check = "not_run"
         final_answer_excerpt = $null
         direct_answer_text = $null
@@ -515,6 +568,29 @@ function Get-AssistantEvents {
     return @($events.ToArray())
 }
 
+function Get-AssistantEvidenceState {
+    param(
+        [object] $Response,
+        [object] $Detail
+    )
+
+    foreach ($source in @($Detail, $Response)) {
+        if ($null -eq $source) {
+            continue
+        }
+        $direct = Get-PropertyByNames -Object $source -Names @("evidence_state", "evidenceState") -Default $null
+        if ($null -ne $direct) {
+            return $direct
+        }
+        $run = Get-PropertyByNames -Object $source -Names @("run", "assistant_run", "assistantRun") -Default $null
+        $fromRun = Get-PropertyByNames -Object $run -Names @("evidence_state", "evidenceState") -Default $null
+        if ($null -ne $fromRun) {
+            return $fromRun
+        }
+    }
+    return $null
+}
+
 function Get-EventPayloadValue {
     param(
         [object] $Event,
@@ -523,6 +599,17 @@ function Get-EventPayloadValue {
 
     $payload = Get-PropertyByNames -Object $Event -Names @("payload") -Default $null
     return Get-PropertyByNames -Object $payload -Names $Names -Default $null
+}
+
+function Add-UniqueString {
+    param(
+        [System.Collections.Generic.List[string]] $List,
+        [string] $Value
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Value) -and -not $List.Contains($Value)) {
+        $List.Add($Value)
+    }
 }
 
 function Convert-ServerObservability {
@@ -563,6 +650,40 @@ function Convert-ServerObservability {
 
     $observabilityJson = (@($Response, $Detail, $events) | ConvertTo-Json -Depth 20 -Compress)
     $premiumAction = if ($observabilityJson.Contains("upgrade_parse_vlm")) { "upgrade_parse_vlm_observed" } else { "not_observed" }
+    $evidenceState = Get-AssistantEvidenceState -Response $Response -Detail $Detail
+    $answerSupplySources = New-Object System.Collections.Generic.List[string]
+    $suppliedItems = Get-PropertyByNames -Object $evidenceState -Names @("supplied_items", "suppliedItems") -Default @()
+    foreach ($item in @($suppliedItems)) {
+        $itemType = Get-PropertyByNames -Object $item -Names @("type") -Default $null
+        Add-UniqueString -List $answerSupplySources -Value "$itemType"
+    }
+    foreach ($action in @($reactActions.ToArray())) {
+        if ($action -eq "read_document_detail") {
+            Add-UniqueString -List $answerSupplySources -Value "read_document_detail"
+        }
+    }
+    $supplyQuality = Get-PropertyByNames -Object $evidenceState -Names @("supply_quality", "supplyQuality") -Default $null
+    foreach ($pair in @(
+        @{ Count = @("datasetFactSnapshotCount"); Source = "dataset_fact_snapshot" },
+        @{ Count = @("spreadsheetRowAnalysisCount"); Source = "spreadsheet_row_analysis" },
+        @{ Count = @("datasetEntityScanCount"); Source = "dataset_entity_scan" },
+        @{ Count = @("indexedEvidenceCount", "fallbackChunkCount"); Source = "retrieval_evidence" }
+    )) {
+        foreach ($countName in $pair.Count) {
+            $count = Get-PropertyByNames -Object $supplyQuality -Names @($countName) -Default 0
+            if ([int]$count -gt 0) {
+                Add-UniqueString -List $answerSupplySources -Value $pair.Source
+                break
+            }
+        }
+    }
+    $aggregateAnswerSource = "not_observed"
+    foreach ($candidate in @("dataset_fact_snapshot", "spreadsheet_row_analysis", "dataset_entity_scan", "retrieval_evidence", "read_document_detail")) {
+        if ($answerSupplySources.Contains($candidate)) {
+            $aggregateAnswerSource = $candidate
+            break
+        }
+    }
 
     [pscustomobject]@{
         original_parse_status = "server_observed"
@@ -572,6 +693,80 @@ function Convert-ServerObservability {
         retry_attempts = $retryEvents.Count
         react_actions_used = @($reactActions.ToArray())
         premium_action = $premiumAction
+        answer_supply_sources = @($answerSupplySources.ToArray())
+        aggregate_answer_source = $aggregateAnswerSource
+    }
+}
+
+function ConvertFrom-Utf8JsonWebResponse {
+    param([object] $Response)
+
+    if ($null -eq $Response) {
+        return $null
+    }
+
+    $text = ""
+    if ($null -ne $Response.RawContentStream) {
+        $stream = $Response.RawContentStream
+        if ($stream.CanSeek) {
+            $stream.Position = 0
+        }
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+        try {
+            $text = $reader.ReadToEnd()
+        } finally {
+            $reader.Dispose()
+        }
+    } else {
+        $text = "$($Response.Content)"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $null
+    }
+    return $text | ConvertFrom-Json
+}
+
+function Invoke-Utf8JsonWebRequest {
+    param(
+        [ValidateSet("Get", "Post")]
+        [string] $Method,
+        [string] $Uri,
+        [hashtable] $Headers,
+        [string] $Body = "",
+        [string] $ContentType = "application/json; charset=utf-8",
+        [int] $TimeoutSec = 180
+    )
+
+    $requestArgs = @{
+        Method = $Method
+        Uri = $Uri
+        Headers = $Headers
+        TimeoutSec = $TimeoutSec
+        UseBasicParsing = $true
+    }
+    if ($Method -eq "Post") {
+        $requestArgs["ContentType"] = $ContentType
+        $requestArgs["Body"] = [System.Text.Encoding]::UTF8.GetBytes($Body)
+    }
+
+    try {
+        $webResponse = Invoke-WebRequest @requestArgs
+        return ConvertFrom-Utf8JsonWebResponse -Response $webResponse
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -ne $response -and $null -ne $response.GetResponseStream()) {
+            $stream = $response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+            try {
+                $errorText = $reader.ReadToEnd()
+            } finally {
+                $reader.Dispose()
+            }
+            $statusCode = try { [int]$response.StatusCode } catch { 0 }
+            throw "HTTP $statusCode from $Uri`: $errorText"
+        }
+        throw
     }
 }
 
@@ -617,13 +812,13 @@ function Invoke-ServerAssistantRunCase {
     $body = $payload | ConvertTo-Json -Depth 30
     $createUrl = Join-AssistantRunApiUrl -Root $BaseUrl -Path "/v1/assistant-runs"
     try {
-        $response = Invoke-RestMethod -Method Post -Uri $createUrl -Headers $headers -ContentType "application/json; charset=utf-8" -Body $body -TimeoutSec $ServerTimeoutSec
+        $response = Invoke-Utf8JsonWebRequest -Method Post -Uri $createUrl -Headers $headers -ContentType "application/json; charset=utf-8" -Body $body -TimeoutSec $ServerTimeoutSec
         $detail = $null
         $runId = Get-AssistantRunIdFromResponse -Response $response
         if (-not [string]::IsNullOrWhiteSpace($runId)) {
             $detailUrl = Join-AssistantRunApiUrl -Root $BaseUrl -Path "/v1/assistant-runs/$runId"
             try {
-                $detail = Invoke-RestMethod -Method Get -Uri $detailUrl -Headers $headers -TimeoutSec $ServerTimeoutSec
+                $detail = Invoke-Utf8JsonWebRequest -Method Get -Uri $detailUrl -Headers $headers -TimeoutSec $ServerTimeoutSec
             } catch {
                 $detail = $null
             }
@@ -668,21 +863,35 @@ if ($Mode -eq "Server") {
         $results.Add((Invoke-ServerAssistantRunCase -Case $case -CaseConfig $caseConfig))
     }
 } else {
-    foreach ($case in $cases) {
-        Write-Host ""
-        Write-Host "== $($case.label) =="
-        Write-Host "Prompt: $($case.prompt)"
-        $checks = @()
-        foreach ($test in $case.local_tests) {
-            Write-Host "cargo test -p $($test.package) $($test.filter) --lib"
-            $check = Invoke-LocalCargoCheck -Package $test.package -Filter $test.filter
-            Write-Host "$($check.status): $($test.package)::$($test.filter)"
-            $checks += $check
-            if ($check.status -ne "passed") {
-                break
+    $previousQualityGateBudget = $env:ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET
+    if ($NoQualityGate) {
+        $env:ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET = "0"
+    }
+    try {
+        foreach ($case in $cases) {
+            Write-Host ""
+            Write-Host "== $($case.label) =="
+            Write-Host "Prompt: $($case.prompt)"
+            $checks = @()
+            foreach ($test in $case.local_tests) {
+                $target = Get-PropertyByNames -Object $test -Names @("target") -Default "lib"
+                $allowZeroTests = [bool](Get-PropertyByNames -Object $test -Names @("allow_zero_tests", "allowZeroTests") -Default $false)
+                Write-Host "cargo test -p $($test.package) $($test.filter) [$target]"
+                $check = Invoke-LocalCargoCheck -Package $test.package -Filter $test.filter -Target $target -AllowZeroTests $allowZeroTests
+                Write-Host "$($check.status): $($test.package)::$($test.filter) [$target]"
+                $checks += $check
+                if ($check.status -ne "passed") {
+                    break
+                }
             }
+            $results.Add((New-CaseResult -Case $case -Checks $checks))
         }
-        $results.Add((New-CaseResult -Case $case -Checks $checks))
+    } finally {
+        if ($null -eq $previousQualityGateBudget) {
+            Remove-Item Env:\ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET -ErrorAction SilentlyContinue
+        } else {
+            $env:ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET = $previousQualityGateBudget
+        }
     }
 }
 
@@ -698,7 +907,8 @@ $report = [pscustomobject]@{
     finished_at = $finishedAt
     contract = [pscustomobject]@{
         public_api_shape = "unchanged by this smoke"
-        required_prints = "original parse status, parse-quality status, quality-gate reason, retry attempts, ReAct actions, premium action, sanitizer leak check, final answer excerpt, evidence/source refs, and failure reason"
+        answer_quality_retry_budget = if ($NoQualityGate) { "ASSISTANT_RUN_ANSWER_QUALITY_RETRY_BUDGET=0" } else { "environment_default" }
+        required_prints = "original parse status, parse-quality status, quality-gate reason, retry attempts, ReAct actions, premium action, answer supply sources, aggregate answer source, sanitizer leak check, final answer excerpt, evidence/source refs, and failure reason"
     }
     cases = $results
 }
@@ -731,6 +941,8 @@ foreach ($case in $results) {
     $lines.Add("- Retry attempts: $($case.retry_attempts)")
     $lines.Add("- ReAct actions used: $((@($case.react_actions_used) -join ', '))")
     $lines.Add("- Premium action: $($case.premium_action)")
+    $lines.Add("- Answer supply sources: $((@($case.answer_supply_sources) -join ', '))")
+    $lines.Add("- Aggregate answer source: $($case.aggregate_answer_source)")
     $lines.Add("- Final sanitizer leak check: $($case.final_sanitizer_leak_check)")
     $lines.Add("- Final answer excerpt: $($case.final_answer_excerpt)")
     $lines.Add("- Evidence/source refs: $((@($case.evidence_source_refs) -join '; '))")

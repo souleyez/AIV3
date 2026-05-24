@@ -32,6 +32,17 @@ const WEAK_ALLOWED_KEYS: &[&str] = &[
     "documentCount",
     "documents_count",
     "documentsCount",
+    "source",
+    "snapshot_kind",
+    "snapshotKind",
+    "snapshot_key",
+    "snapshotKey",
+    "source_fact_count",
+    "sourceFactCount",
+    "source_document_count",
+    "sourceDocumentCount",
+    "scanned_document_count",
+    "scannedDocumentCount",
     "estimated_word_count",
     "estimatedWordCount",
     "word_count",
@@ -143,7 +154,13 @@ pub(crate) fn build_assistant_run_react_planning_catalog(
             },
             "retrieval": {
                 "available": true,
-                "actions": ["retrieve_evidence", "read_document_detail"]
+                "actions": ["retrieve_evidence", "read_document_detail"],
+                "note": "use retrieval for examples, source quotes, validation, and document-level detail"
+            },
+            "aggregate_fact_supply": {
+                "available": true,
+                "actions": ["use_dataset_fact_snapshot", "scan_dataset_entities"],
+                "note": "for global, cross-document, count, list, and rank questions, prefer dataset_fact_snapshot or dataset_entity_scan already present in evidenceState before retrieving top-k chunks"
             },
             "conversation_memory": {
                 "available": true,
@@ -180,6 +197,12 @@ fn summarize_evidence_state(evidence_state: &Value) -> Value {
                     copy_allowed_field(item, &mut summary, "retrieval_evidence_id");
                     copy_allowed_field(item, &mut summary, "retrievalEvidenceId");
                     copy_allowed_field(item, &mut summary, "status");
+                    copy_allowed_field(item, &mut summary, "source");
+                    copy_allowed_field(item, &mut summary, "snapshot_kind");
+                    copy_allowed_field(item, &mut summary, "snapshot_key");
+                    copy_allowed_field(item, &mut summary, "source_fact_count");
+                    copy_allowed_field(item, &mut summary, "source_document_count");
+                    copy_allowed_field(item, &mut summary, "scanned_document_count");
                     if let Some(media_summary) = summarize_media_context(item) {
                         summary.insert("media".to_string(), media_summary);
                     }
@@ -215,11 +238,42 @@ fn summarize_evidence_state(evidence_state: &Value) -> Value {
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("unknown"),
+        "supplyQuality": summarize_supply_quality(evidence_state.get("supply_quality")),
         "suppliedCount": supplied_items.len(),
         "recommendedActions": recommended_actions,
         "detailTargets": detail_targets,
         "items": supplied_items,
     })
+}
+
+fn summarize_supply_quality(supply_quality: Option<&Value>) -> Value {
+    let Some(supply_quality) = supply_quality.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+    let mut summary = Map::new();
+    for key in [
+        "status",
+        "selectedDatasetCount",
+        "suppliedItemCount",
+        "indexedEvidenceCount",
+        "fallbackChunkCount",
+        "datasetFactSnapshotCount",
+        "datasetEntityScanCount",
+        "spreadsheetRowAnalysisCount",
+        "documentParseStatusCount",
+        "documentNotReadyCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+        "detailTargetCount",
+    ] {
+        if let Some(value) = supply_quality
+            .get(key)
+            .filter(|value| is_safe_scalar(value))
+        {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(summary)
 }
 
 fn summarize_detail_target(target: &Value) -> Value {
@@ -604,5 +658,52 @@ mod tests {
         assert!(!serialized.contains("屏幕文字"));
         assert!(!serialized.contains("供应商细节"));
         assert!(!serialized.contains("00:12-00:28"));
+    }
+
+    #[test]
+    fn planning_catalog_prefers_aggregate_fact_supply_without_fact_rows() {
+        let catalog = build_assistant_run_react_planning_catalog(
+            &json!({}),
+            &[],
+            &json!({"mode": "selected", "selected": [{"type": "dataset", "id": "ds-1"}]}),
+            &json!({
+                "status": "supplied",
+                "supply_quality": {
+                    "status": "grounded",
+                    "datasetFactSnapshotCount": 1,
+                    "datasetEntityScanCount": 1,
+                    "indexedEvidenceCount": 2
+                },
+                "supplied_items": [{
+                    "type": "dataset_fact_snapshot",
+                    "dataset_id": "ds-1",
+                    "source": "dataset_fact_snapshots",
+                    "snapshot_kind": "entity_rows_by_type",
+                    "snapshot_key": "default",
+                    "source_fact_count": 7,
+                    "entity_rows_by_type": {
+                        "organization": [{"name": "不应进入规划目录", "document_count": 2}]
+                    }
+                }]
+            }),
+        );
+
+        assert_eq!(
+            catalog["systemCapabilities"]["aggregate_fact_supply"]["actions"],
+            json!(["use_dataset_fact_snapshot", "scan_dataset_entities"])
+        );
+        assert_eq!(
+            catalog["evidenceState"]["supplyQuality"]["datasetFactSnapshotCount"],
+            json!(1)
+        );
+        assert_eq!(
+            catalog["evidenceState"]["items"][0]["snapshot_kind"],
+            json!("entity_rows_by_type")
+        );
+
+        let serialized = serde_json::to_string(&catalog).expect("catalog should serialize");
+        assert!(serialized.contains("dataset_fact_snapshot"));
+        assert!(serialized.contains("source_fact_count"));
+        assert!(!serialized.contains("不应进入规划目录"));
     }
 }
