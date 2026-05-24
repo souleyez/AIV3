@@ -256,11 +256,7 @@ fn push_document_fact_candidate(
 }
 
 fn classify_fact_type(term: &str, context: &str) -> &'static str {
-    let lower = term.to_ascii_lowercase();
-    if contains_any(term, &["公司", "集团", "有限公司", "股份", "企业"])
-        || lower.ends_with(" inc")
-        || lower.ends_with(" ltd")
-    {
+    if fact_term_is_valid_organization(term) {
         return "organization";
     }
     if contains_any(
@@ -299,6 +295,19 @@ fn classify_fact_type(term: &str, context: &str) -> &'static str {
         return "date_period";
     }
     "keyword"
+}
+
+fn fact_term_is_valid_organization(term: &str) -> bool {
+    let normalized = crate::normalize_document_entity_value(term);
+    if crate::is_valid_company_name(&normalized) {
+        return true;
+    }
+
+    let lower = normalized.to_ascii_lowercase();
+    let ascii_char_count = lower.chars().count();
+    ascii_char_count >= 4
+        && ascii_char_count <= 80
+        && (lower.ends_with(" inc") || lower.ends_with(" ltd"))
 }
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
@@ -550,6 +559,33 @@ mod tests {
         assert!(facts
             .iter()
             .all(|fact| fact.parse_version.as_deref() == Some("pdf-paddleocr")));
+    }
+
+    #[test]
+    fn document_fact_candidates_do_not_promote_company_suffix_noise() {
+        let document = document_with_metadata(json!({}));
+        let chunk = document_chunk(
+            &document,
+            json!({
+                "understanding": {
+                    "noun_terms": [
+                        "公司",
+                        "有限公司",
+                        "互联网公司",
+                        "网络有限公司",
+                        "北京星河科技有限公司"
+                    ]
+                }
+            }),
+        );
+
+        let facts = build_document_fact_candidates(&document, &[chunk], Utc::now());
+        let organizations = facts
+            .iter()
+            .filter(|fact| fact.fact_type == "organization")
+            .map(|fact| fact.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(organizations, vec!["北京星河科技有限公司"]);
     }
 
     #[test]
