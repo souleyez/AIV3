@@ -9222,6 +9222,26 @@ async fn create_assistant_run(
                     outcome.output_artifacts = retry_outcome.output_artifacts;
                     outcome.events.extend(retry_outcome.events);
                 }
+                if let Some(direct_answer) =
+                    assistant_run_answer_quality_spreadsheet_controlled_answer(
+                        &outcome.evidence_state,
+                        &request,
+                    )
+                {
+                    outcome.output_artifacts = assistant_run_replace_assistant_message_content(
+                        outcome.output_artifacts,
+                        &direct_answer,
+                    );
+                    outcome.events.push(AssistantRunReactEvent {
+                        event_name: "assistant_run.spreadsheet_row_analysis_direct_answered"
+                            .to_string(),
+                        payload: json!({
+                            "source": "spreadsheet_row_analysis_direct_answer",
+                            "reason": "attendance_row_analysis_prompt",
+                            "assistant_message_chars": direct_answer.chars().count(),
+                        }),
+                    });
+                }
                 (
                     outcome.runtime_manifest,
                     outcome.execution_trail_steps,
