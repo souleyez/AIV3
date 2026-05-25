@@ -34,6 +34,40 @@
 
 ---
 
+## Implementation Status - 2026-05-25
+
+- Already implemented in the fixed-escalation line: fixed task templates exist for `static_page_image2_data_publish`, `answer_quality_autofix`, and `data_ingestion_analysis`.
+- Already implemented: customer requests for data接入/入库/建表/字段映射/schema/ETL/清洗 can queue `data_ingestion_analysis` through existing chat/event fields when V3 has selected source scope and the fixed capability is enabled.
+- Already implemented: static-page advanced flow can queue Image2 preview work and continue toward generated artifacts without per-preview confirmation for new artifacts.
+- Already implemented: third-party document authorization now supports single group, multiple groups, explicit documents, and group+document union with de-duplication; this is deployed to 8 server at `c37d9638e`.
+- Partially implemented: docs and smoke scripts describe fixed task safety boundaries, but the unified executor envelope, artifact manifest, task state machine, observation surface, and end-to-end smoke matrix in this plan are not fully consolidated yet.
+- Deployment note: 8 server release builds require `CC=clang CXX=clang++` because the default GCC 10 toolchain is rejected by `aws-lc-sys`.
+- Verification 2026-05-25: local priority document-quality smoke passed on `c37d963`; 8-server services are active on `c37d9638e`; read-only fact table counts are populated. Private server smoke is waiting on a `ServerCaseConfigPath` file that is intentionally not committed with customer data.
+
+## Immediate Execution Queue - 2026-05-25
+
+1. Quality smoke first:
+   - verify the current 8-server build does not regress ordinary answers;
+   - do not tighten answer blocking until false positives are controlled.
+2. Fact aggregation second:
+   - verify `dataset_fact_snapshot` is used for full-dataset/global statistics;
+   - keep selected-document and ACL-filtered scopes on scoped detail/deterministic rows until scoped fact queries exist.
+3. Executor boundary third:
+   - formalize the shared envelope and artifact manifest using the already implemented fixed templates as concrete examples;
+   - add output validation tests before broadening auto-execution.
+4. Static-page productization fourth:
+   - keep Image2 as a visual draft/reference;
+   - final HTML must be generated from structured real-data snapshots;
+   - add version/refresh/data-quality report smoke before making overwrite/stable publish automatic.
+
+## Current Gaps - 2026-05-25
+
+- No single shared executor task envelope is enforced across all fixed templates.
+- Artifact manifests are still template-specific in several paths; static pages, image previews, reports, and data-ingestion analysis need one shared minimum shape.
+- Failed/retrying executor task statuses are not yet uniformly supplied back to model context.
+- Observation page still needs a lazy task list/detail flow that does not poll every conversation or task.
+- Private 8-server mutation smoke remains guarded and should require explicit operator approval with `-AllowServerMutation`.
+
 ## Task 1: Executor Task Envelope Contract
 
 **Files:**

@@ -58,6 +58,48 @@ Known gaps:
 - Direct answers still need a stronger evidence/no-evidence distinction, especially for third-party minimal-context callers.
 - Smoke data and regression fixtures are scattered; quality needs a small repeatable fixture set.
 
+## Implementation Status - 2026-05-25
+
+- Done: the document-quality smoke harness and fixture manifest now exist under `scripts/run-document-quality-smoke.ps1`, `scripts/run-v3-quality-gate-smoke.ps1`, and `fixtures/document-quality/`. The manifest covers one-character PDF, DOC/DOCX "邓工是谁", resume company statistics, multi-dimension resume ranking, table-heavy documents, scanned/visual PDF fallback, attendance date/work-hour formatting, smart-home dissatisfaction, and smart-elevator point-list questions.
+- Done: deterministic answer paths exist for several high-frequency cases: `spreadsheet_row_analysis` for attendance absence/work-hour/date questions, resume profile rows for company/ranking tables, selected-document detail for "邓工是谁", and queryable-fact snapshots where enabled.
+- Done: answer-quality retry/ReAct/VLM recovery logic has a bounded implementation in `docs/plans/2026-05-23-v3-quality-gate-react-vlm-plan.md`, but it must remain careful: the gate previously blocked too many normal answers, so it should not be re-enabled as a hard customer-facing block until the smoke matrix proves low false positives.
+- Current deployment: 8 server is on `c37d9638e`, with third-party group+document union scope deployed and services active.
+- Current risk: local tests cover many deterministic cases, but the current deployed build still needs a fresh private 8-server smoke pass for the priority customer cases before the gate/retry policy is tightened again.
+- Verification 2026-05-25: local priority smoke passed on HEAD `c37d963` with:
+  - `.\scripts\run-v3-quality-gate-smoke.ps1 -Local -Case @('one_character_pdf','deng_engineer','resume_company_stats','resume_ranking_table','attendance_final','attendance_frequent','smart_home','smart_elevator')`
+  - Report: `target/document-quality-smoke/document-quality-smoke-20260525T113758Z-22828.md`
+  - Observed aggregate sources: `dataset_fact_snapshot` for resume company statistics, `dataset_entity_scan` for resume ranking and smart-elevator point lists, and `spreadsheet_row_analysis` for attendance.
+  - No local priority case failed.
+- Blocker: no private `ServerCaseConfigPath` is currently present in the repo/worktree, so real 8-server customer-document smoke still needs the private case config before it can send safe scoped requests.
+
+## Immediate Execution Queue - 2026-05-25
+
+1. Re-run local smoke for the priority quality cases:
+   - `one_character_pdf`
+   - `deng_engineer`
+   - `resume_company_stats`
+   - `resume_ranking_table`
+   - `attendance_final`
+   - `attendance_frequent`
+   - `smart_home`
+   - `smart_elevator`
+2. Re-run private 8-server smoke with the configured private case file and record:
+   - final answer text;
+   - `answer_supply_sources`;
+   - `aggregate_answer_source`;
+   - whether ReAct/quality-gate was triggered;
+   - whether the answer used deterministic rows/facts instead of generic retrieval.
+3. For failures, fix in this order:
+   - wrong or missing deterministic supply;
+   - bad date/time/table formatting;
+   - missing document detail for selected-document questions;
+   - fact snapshot not supplied for global cross-document statistics;
+   - only then consider quality-gate/ReAct retry behavior.
+4. Keep the customer-facing quality gate conservative:
+   - do not block normal answers solely because they mention partial evidence;
+   - route suspicious low-quality answers to passive collection and `answer_quality_autofix`;
+   - only tighten blocking after repeated smoke passes with no normal-answer false positives.
+
 ## Phase 0: Quality Fixture And Smoke Harness
 
 **Files:**
