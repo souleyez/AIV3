@@ -465,23 +465,27 @@ Content-Type: application/json
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，V3 会去重，不重复加载同一模板文档。
 
-V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。
+V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未启用，V3 会同步生成一份内置 HTML 静态页，并在本次回复里返回 `render_output_id` 和下载/预览地址。
 
 若进入静态页/Image2 流水线，响应通常为：
 
 | 字段 | 注释 |
 | --- | --- |
-| `reply.reply_type` | `task_status` |
-| `reply.task_status` | `static_page_image2_auto_publish_pending` 或 `static_page_image_preview_queued` |
-| `reply.text` | 给用户展示的排队/处理说明；若自动发布已启用，会说明效果图无需确认并将继续发布 |
+| `reply.reply_type` | `artifact_link` 或 `task_status` |
+| `reply.task_status` | `static_page_rendered`、`static_page_image2_auto_publish_pending` 或 `static_page_image_preview_queued` |
+| `reply.text` | 给用户展示的排队/处理说明；若已直接生成 HTML，会说明可通过 `card.render_output_id` 或下载链接获取产物 |
 | `reply.card.type` | `v3_static_page_image2_pipeline` |
 | `reply.card.draft_id` | V3 静态页草稿 ID |
 | `reply.card.image_job_id` | Image2 效果图任务 ID |
+| `reply.card.render_output_id` | 已直接生成 HTML 时返回；第三方用它查询、预览或下载静态页 |
+| `reply.card.html_preview_url` | 已直接生成 HTML 时返回；浏览器 inline 预览地址 |
+| `reply.card.html_download_url` | 已直接生成 HTML 时返回；HTML 附件下载地址 |
+| `reply.card.direct_html_fallback` | `true` 表示固定 Codex 发布能力未启用，本次已走 V3 内置 HTML 直出兜底 |
 | `reply.card.auto_publish_after_preview` | `true` 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路 |
 | `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
 | `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
 
-若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致，第三方可直接展示给客户作为进度/效果图入口；后续仍按自动链路继续产出页面。第三方最终只需要读取完成后的静态页产物链接；效果图是过程预览，不是最终交付物。
+若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.render_output_id` 已存在，可直接按 3.4 查询/预览/下载；若只有 `draft_id` 和 `image_job_id`，表示当前仍在效果图或自动发布阶段，第三方继续等待 `completed` 响应或后续状态事件即可。效果图是过程预览，不是最终交付物。
 
 固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
 
@@ -502,8 +506,8 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | --- | --- |
 | `reply.reply_type` | `artifact_link`、`text` 或 `task_status` |
 | `reply.text` | 给用户展示的说明 |
-| `reply.artifact_links` | 产物预览/下载链接数组；模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
-| `reply.card` | 可能包含 `render_output_id`、`draft_id`、`image_job_id`、产物状态或结构化卡片 |
+| `reply.artifact_links` | 产物预览/下载链接数组；静态页直出 HTML 通常返回 `html_download_url`，模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
+| `reply.card` | 可能包含 `render_output_id`、`html_preview_url`、`html_download_url`、`draft_id`、`image_job_id`、产物状态或结构化卡片 |
 | `assistant_run_id` | 本次生成运行 ID |
 
 ### 3.4 查询、预览、下载产物

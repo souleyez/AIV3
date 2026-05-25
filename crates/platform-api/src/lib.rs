@@ -43399,15 +43399,31 @@ fn assistant_run_scope_with_requested_document_scope(
         );
     }
     for key in [
+        "type",
+        "platform",
         "documents",
         "selected",
         "canonical_datasets",
         "temporary_dataset",
+        "dataset_document_scope",
+        "source_document_scope",
         "available_document_source_id",
         "available_document_external_ids",
         "unresolved_document_external_ids",
         "external_document_scope_status",
         "external_document_scope_summary",
+        "dataset_external_id",
+        "dataset_external_ids",
+        "requested_dataset_external_id",
+        "requested_dataset_external_ids",
+        "conversation_external_id",
+        "channel_connection_id",
+        "tenant_external_id",
+        "bot_external_id",
+        "sender_external_id",
+        "message_external_id",
+        "v3_system_user_id",
+        "answer_policy",
     ] {
         if let Some(value) = requested_scope.get(key).cloned() {
             set_payload_value(&mut selected_scope, key, value);
@@ -84597,6 +84613,48 @@ mod tests {
             merged["supply_policy"]["recommendedActions"],
             json!(["retrieval.search"])
         );
+    }
+
+    #[test]
+    fn assistant_run_requested_external_scope_preserves_acl_bypass_metadata() {
+        let temporary_dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let planned_scope = json!({
+            "mode": "ordinary_chat",
+            "intent": "ordinary_chat",
+            "datasets": [],
+        });
+        let requested_scope = json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "external_document_scope_status": "dataset_resolved",
+            "datasets": [{"type": "dataset", "id": temporary_dataset_id}],
+            "documents": [{"type": "document", "id": document_id}],
+            "available_document_external_ids": ["doc-deng"],
+            "temporary_dataset": {
+                "id": temporary_dataset_id,
+                "source": "dataset_external_id",
+                "document_count": 1
+            },
+            "dataset_document_scope": {
+                "source": "dataset_external_id",
+                "source_id": "third-party-source-main",
+                "document_count": 1
+            }
+        });
+
+        let merged = assistant_run_scope_with_requested_document_scope(
+            planned_scope,
+            Some(&requested_scope),
+        );
+
+        assert_eq!(merged["type"], json!("external_channel"));
+        assert_eq!(merged["mode"], json!("external_document_scope"));
+        assert_eq!(
+            merged["dataset_document_scope"]["source"],
+            json!("dataset_external_id")
+        );
+        assert!(selected_scope_allows_external_document_range_without_acl_snapshot(&merged));
     }
 
     #[tokio::test]
