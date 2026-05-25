@@ -12,21 +12,22 @@
 
 - Done: Tasks 1-4 internal schema, post-ingest cleanup queue, fact extraction/backfill, and bounded `entity_rows_by_type` snapshots.
 - Done: Task 5 first pass. AssistantRun can supply `dataset_fact_snapshot`, compact it for model/retry input, convert supported snapshot rows into scan-compatible rows for existing direct answers, and expose only weak aggregate availability to ReAct planning.
-- Guardrail: fact snapshot supply is skipped for external ACL filtered scopes or explicit selected-document scopes until scoped snapshots/query filtering exist; `ASSISTANT_RUN_FACT_INDEX_ENABLED=false` disables fact-backed supply.
+- Done 2026-05-25: scoped fact aggregation landed in `d125291`. AssistantRun now builds an internal `document_facts_scoped_aggregate` snapshot for explicit selected-document scopes, third-party ACL-filtered scopes, and external temporary conversation datasets by aggregating facts over the authorized document id set. `ASSISTANT_RUN_FACT_INDEX_ENABLED=false` still disables fact-backed supply.
 - Guardrail: current snapshots only replace runtime scan for covered global entity prompts such as company/skill/project/keyword/year/section. Resume profile ranking,学历/学校, tables, and elevator point-list prompts continue to use the existing scan/detail paths.
 - Done: Task 6 first pass. Document-quality smoke now records `answer_supply_sources` and `aggregate_answer_source`, supports local `-NoQualityGate`, rejects zero-test local smoke matches, and asserts no-gate aggregate sources for resume company stats, resume ranking, attendance, table/entity, and elevator point-list cases.
 - Done: Task 7 first private 8-server smoke on 2026-05-23 against deployed HEAD `c5dbf78`: 7 configured private cases passed in no-gate mode. Observed aggregate sources were `dataset_entity_scan` for resume/smart-home/elevator and `spreadsheet_row_analysis` for attendance; `dataset_fact_snapshot` is expected only after this fact-index branch is deployed/backfilled.
 - Status 2026-05-25: the fact-index implementation has since been deployed on the 8-server line. Current deployed HEAD is `c37d9638e`; a read-only 8-server database check after the latest scope work showed `document_facts=12321`, `document_fact_sources=12321`, and `dataset_fact_snapshots=7`.
 - Next: rerun private smoke on the current 8-server HEAD expecting:
   - resume company statistics and other global entity-count questions prefer `dataset_fact_snapshot` when the scope is a full dataset/group;
-  - selected-document, external ACL-filtered, or temporary conversation scopes keep using scoped document/detail or deterministic row analysis until scoped fact queries exist;
+  - selected-document, external ACL-filtered, or temporary conversation scopes can use `document_facts_scoped_aggregate` for supported company/skill/project/keyword/year/section aggregate questions after this branch is deployed;
   - attendance remains `spreadsheet_row_analysis`;
   - resume ranking remains resume-profile deterministic rows;
   - smart-home/smart-elevator point-list questions may still use `dataset_entity_scan` until their fact snapshot kinds are explicitly promoted.
+- Verification 2026-05-25 after scoped aggregation: local priority smoke passed on `d125291`; report `target/document-quality-smoke/document-quality-smoke-20260525T115211Z-29568.md`.
 
 ## Current Gaps - 2026-05-25
 
-- Scoped fact aggregation is still missing for explicit selected-document scopes, third-party ACL-filtered scopes, and conversation temporary datasets.
+- Scoped fact aggregation is implemented locally and pushed to GitHub, but not yet deployed to 8 server or covered by private server smoke.
 - Fact snapshots are still snapshot-style supply, not an on-demand SQL aggregation API exposed to AssistantRun tools.
 - There is no dedicated "why this aggregate source was chosen" debug summary beyond smoke fields and supplied item names.
 - Post-ingest cleanup is designed to run after document入库, but the operator still needs an easy backfill/rerun command and visible per-dataset freshness.

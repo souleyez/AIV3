@@ -70,6 +70,9 @@ Known gaps:
   - Report: `target/document-quality-smoke/document-quality-smoke-20260525T113758Z-22828.md`
   - Observed aggregate sources: `dataset_fact_snapshot` for resume company statistics, `dataset_entity_scan` for resume ranking and smart-elevator point lists, and `spreadsheet_row_analysis` for attendance.
   - No local priority case failed.
+- Verification 2026-05-25 after scoped fact aggregation (`d125291`): the same local priority smoke passed again.
+  - Report: `target/document-quality-smoke/document-quality-smoke-20260525T115211Z-29568.md`
+  - Targeted tests also passed for scoped fact snapshot compaction and the existing fact snapshot direct-answer path.
 - Blocker: no private `ServerCaseConfigPath` is currently present in the repo/worktree, so real 8-server customer-document smoke still needs the private case config before it can send safe scoped requests.
 
 ## Immediate Execution Queue - 2026-05-25
