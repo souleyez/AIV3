@@ -46,7 +46,7 @@ Content-Type: application/json
 | 字段 | 必填 | 注释 |
 | --- | --- | --- |
 | `source_id` | 条件必填 | 文档源 ID；连接没有默认文档源时必填 |
-| `dataset_external_id` | 否 | 第三方稳定数据集/资料库 ID；用于自动归档。临时 UUID 会被归并到默认资料库 |
+| `dataset_external_id` | 否 | 第三方稳定数据集/资料库 ID；用于自动归档。UUID 可以使用，只要它在第三方业务侧是长期复用的稳定分组 ID |
 | `dataset_title` | 否 | 数据集名称；自动创建数据集时使用 |
 | `document_external_id` | 是 | 第三方文档 ID；聊天时放入 `available_document_external_ids` |
 | `revision_external_id` | 否 | 文档版本 ID；用于区分同一文档的不同版本 |
@@ -56,7 +56,7 @@ Content-Type: application/json
 | `metadata` | 否 | 非敏感业务元数据 |
 | `idempotency_key` | 否 | 幂等键；建议包含文档 ID 和版本 ID |
 
-`dataset_external_id` 是业务稳定分组，不是每次上传生成的任务 ID。V3 会为每个第三方连接和资料源建立对应系统账户；自动解析的数据归属该账户，普通资料库列表默认不展示系统解析源。多个第三方接入时，不同连接和资料源会落到不同系统账户，便于隔离和审计。
+`dataset_external_id` 是业务稳定分组，不是每次上传生成的任务 ID、文件 ID 或下载任务 ID。V3 会为每个第三方通道连接建立对应系统账户；该通道解析入库、文档分组移动和对话运行都归属同一个系统账户，普通资料库列表默认不展示系统解析源。多个第三方接入时，不同通道连接会落到不同系统账户，便于隔离和审计。
 
 响应：
 
@@ -145,12 +145,12 @@ Content-Type: application/json
 | 字段 | 必填 | 注释 |
 | --- | --- | --- |
 | `source_id` | 条件必填 | 文档源 ID；V3 无法从连接或文档 ID 推断时必填 |
-| `dataset_external_id` | 条件必填 | 目标第三方稳定数据集/资料库 ID；和 `dataset_id` 二选一。临时 UUID 会被归并到默认资料库 |
+| `dataset_external_id` | 条件必填 | 目标第三方稳定数据集/资料库 ID；和 `dataset_id` 二选一。UUID 可以使用，只要它在第三方业务侧是长期复用的稳定分组 ID |
 | `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 二选一 |
 | `dataset_title` | 否 | 目标数据集名称；自动创建数据集时使用 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；不传则移动同一外部文档 ID 的全部版本 |
 
-移动目标也应是业务稳定分组。若目标值被判定为临时 UUID，V3 会归并到该资料源默认资料库；响应中的 `dataset_external_id` 可能为空，以 `dataset_id` 为实际归属准。
+移动目标也应是业务稳定分组。若第三方使用 UUID 作为稳定分组 ID，V3 会按该 UUID 建立或复用对应资料库；响应中的 `dataset_id` 会回显实际归属的数据集。
 
 响应：
 
@@ -161,7 +161,7 @@ Content-Type: application/json
   "document_external_id": "doc-20260520-0001",   // 第三方文档 ID
   "revision_external_id": "rev-20260520-01",     // 本次移动限定的版本 ID；未传则为空
   "dataset_id": "5af2f8a6-0d3c-4a12-a77a-333333333333", // 目标 V3 数据集 ID
-  "dataset_external_id": "workspace-docs-new",   // 目标第三方数据集 ID；临时 UUID 被归并时可能为空
+  "dataset_external_id": "workspace-docs-new",   // 目标第三方稳定数据集/资料库 ID
   "moved_count": 1,                              // 移动的 V3 文档记录数量
   "previous_dataset_ids": [                      // 移动前的 V3 数据集 ID 列表
     "5af2f8a6-0d3c-4a12-a77a-222222222222"
@@ -287,7 +287,7 @@ Content-Type: application/json
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | ISO 8601 时间 |
 
-`dataset_external_id` / `dataset_external_ids` 可以和 `available_document_external_ids` 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 `available_document_external_ids` 或 `documentExternalId`，不传分组字段。
+`dataset_external_id` / `dataset_external_ids` 可以和 `available_document_external_ids` 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 `available_document_external_ids` 或 `documentExternalId`，不传分组字段。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会因为只传 `available_document_source_id` 自动扩大到整源文档。
 
 响应：
 
@@ -453,7 +453,7 @@ Content-Type: application/json
 }
 ```
 
-生成响应字段同 2.1。第三方接口无需新增字段；复杂建表/静态页请求继续使用 `render_mode: "artifact"`、`output_format: "image_text"`，并在模板 skill 中传 `output_type: "static_page"`。V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图用于流式/状态卡片预览，不再要求客户确认。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。
+生成响应字段同 2.1。第三方接口无需新增字段；复杂建表/静态页请求继续使用 `render_mode: "artifact"`、`output_format: "image_text"`，并在模板 skill 中传 `output_type: "static_page"`。V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。
 
 若进入静态页/Image2 流水线，响应通常为：
 
@@ -469,7 +469,7 @@ Content-Type: application/json
 | `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
 | `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
 
-若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致，第三方可直接展示给客户作为进度/效果图入口；后续仍按自动链路继续产出页面。
+若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致，第三方可直接展示给客户作为进度/效果图入口；后续仍按自动链路继续产出页面。第三方最终只需要读取完成后的静态页产物链接；效果图是过程预览，不是最终交付物。
 
 固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
 
@@ -482,7 +482,7 @@ Content-Type: application/json
 | `reply.card.codex_host_workflow_execution_id` | 固定发布任务 ID；初始响应为空时，会在最终事件中补齐 |
 | `reply.card.validation_summary` | 口径摘要，如最新快照日期、源行数、明细行数、单位策略和告警；不会包含原始明细行或内部检索日志 |
 
-如果第三方使用 `assistant_run_id` 做轮询/观测，应读取该运行下的最终状态事件 `assistant_run.external_channel_static_page_publish_completed`；事件中的 `public_url` 与 `artifact_links[0]` 是同一个最终页面链接。
+如果第三方使用 `assistant_run_id` 做轮询/观测，应读取该运行下的最终状态事件 `assistant_run.external_channel_static_page_publish_completed`；事件中的 `public_url` 与 `artifact_links[0]` 是同一个最终页面链接。第三方不需要再针对 Image2 效果图做确认、下载或二次提交。
 
 若已生成静态页/报表/HTML 产物，重点读取：
 

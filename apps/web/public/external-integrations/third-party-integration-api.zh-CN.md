@@ -143,7 +143,7 @@ V3 接收第三方消息后，会按请求内容返回以下几类结果：
 - `requires_confirmation`：需要用户确认的动作；
 - `task_status`：处理中、失败、等待外部条件或无法立即完成。
 
-文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 `dataset_external_ids` 数组。分组字段和文档 ID 可以同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档会自动去重。只有想把本次会话限制为少数具体文档时，才只传文档 ID、不传分组字段。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
+文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 `dataset_external_ids` 数组。分组字段和文档 ID 可以同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档会自动去重。只有想把本次会话限制为少数具体文档时，才只传文档 ID、不传分组字段。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会再替第三方扩大或缩小第三方内部权限。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
 
 当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。
 
@@ -388,6 +388,7 @@ SSE 事件：
 | --- | --- |
 | `external_channel.started` | V3 已通过鉴权和入参解析，开始处理本轮消息；这不是助手回复 |
 | `external_channel.delta` | 文本增量，字段为 `delta`；第三方可逐段追加到聊天气泡 |
+| `external_channel.static_page_effect_image_queued` | 静态页/Image2 链路的效果图预览事件；用于客户侧展示过程进度，不需要第三方确认 |
 | `external_channel.completed` | 完整 `ExternalChannelEventResponse`，结构与 `/events` JSON 响应一致 |
 | `error` | 本轮处理失败，包含 `status` 和 `error.code/message` |
 | `done` | 流结束标记，`ok=true/false` |
@@ -416,6 +417,7 @@ SSE data 字段说明：
 | `external_channel.started.data` | `idempotency_key` | 本轮消息幂等键 |
 | `external_channel.delta.data` | `index` | 增量片段序号，从 0 开始 |
 | `external_channel.delta.data` | `delta` | 本次追加的文本片段 |
+| `external_channel.static_page_effect_image_queued.data` | `card` | 静态页效果图任务卡片，通常包含 `draft_id`、`image_job_id`、`auto_publish_after_preview=true`、`effect_image_confirmation_required=false` |
 | `external_channel.completed.data` | `assistant_run_id` | 本轮 V3 任务 ID |
 | `external_channel.completed.data` | `response` | 与 `/events` JSON 响应同结构的最终响应 |
 | `done.data` | `ok` | SSE 流是否正常结束 |
@@ -423,7 +425,7 @@ SSE data 字段说明：
 | `error.data` | `error.code` | 稳定错误码 |
 | `error.data` | `error.message` | 错误说明，不包含密钥和敏感正文 |
 
-说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回最终响应；第三方页面不要把 `started` 渲染为助手消息。
+说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回最终响应；第三方页面不要把 `started` 渲染为助手消息。静态页生成时，Image2 效果图会通过 SSE/卡片作为过程预览出现；第三方最终接入重点仍是 `completed.response.reply.artifact_links[0]` 或最终状态事件里的 `public_url` 静态页链接，不需要为效果图单独做确认、下载或二次提交。
 
 任务状态响应示例：
 
@@ -709,7 +711,7 @@ Authorization: Bearer <V3 inbound token>
 
 - `dataset_external_id` 是第三方业务侧稳定的资料库、空间或项目 ID；可以是 UUID，只要同一个业务分组长期复用同一个值。不要传每次请求生成的临时会话 ID、文件 ID 或下载任务 ID。
 - V3 会按稳定 `dataset_external_id` 建立资料库分组；同一分组后续对话传 `dataset_external_id` 或 `dataset_external_ids` 即可授权整组文档。
-- 第三方解析自动创建的 V3 数据集和文档归属于 V3 内部第三方系统账户；系统账户按第三方连接和资料源区分，支持多个第三方隔离和审计。
+- 第三方解析自动创建的 V3 数据集和文档归属于 V3 内部第三方系统账户；系统账户按第三方通道连接区分，同一连接的解析入库、文档分组移动和对话运行使用同一个系统账户，支持多个第三方隔离和审计。
 - 这些系统自动解析源默认不出现在普通资料库列表中；第三方问答按会话授权的 `available_document_external_ids`、稳定 `dataset_external_id` 单分组或 `dataset_external_ids` 多分组供料。
 
 解析响应字段说明：
@@ -808,7 +810,7 @@ Authorization: Bearer <V3 inbound token>
 | `document_external_id` | V3 回显的第三方文档 ID |
 | `revision_external_id` | 本次限定的第三方版本 ID；未限定时为空 |
 | `dataset_id` | 移动后的 V3 数据集 UUID |
-| `dataset_external_id` | 移动后的第三方数据集或资料库 ID；临时 UUID 被归并时可能为空 |
+| `dataset_external_id` | 移动后的第三方数据集或资料库稳定 ID |
 | `moved_count` | 实际移动的 V3 文档记录数量 |
 | `previous_dataset_ids` | 移动前的 V3 数据集 UUID 列表 |
 | `documents` | 移动后的 V3 文档摘要列表 |
@@ -967,6 +969,8 @@ V3 计算有效权限时会综合：
 V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，必须先完成用户确认；确认后或无需确认的动作，会由 V3 发送到第三方配置的产物 endpoint。观测接口会返回 `artifact_summary`，用于查看发布、撤销、失败和待确认数量。
 
 页面类产物支持快速 HTML 交付模式：V3 可以按模板和聊天要求生成可浏览器打开的 HTML，并返回预览和下载地址。
+
+对于第三方发起的复杂建表/静态页请求，推荐仍走聊天入口：请求使用 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可传 `output_type: "static_page"`。V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点；服务端会继续自动生成并发布最终 generated-artifact 静态页。第三方最终只需要获取静态页链接：优先读取 `reply.reply_type=artifact_link` 时的 `reply.artifact_links[0]`，或读取最终运行事件 `assistant_run.external_channel_static_page_publish_completed` 中的 `public_url`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
 
 快速 HTML 生成可使用以下选项：
 
