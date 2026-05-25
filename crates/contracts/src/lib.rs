@@ -326,6 +326,56 @@ pub struct ExternalRequestedSkillView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalArtifactTemplateView {
+    #[serde(default, alias = "sourceId", skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(
+        default,
+        alias = "documentExternalId",
+        alias = "document_external_id",
+        alias = "templateDocumentExternalId",
+        alias = "template_document_external_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub document_external_id: Option<String>,
+    #[serde(
+        default,
+        alias = "documentId",
+        alias = "document_id",
+        alias = "templateDocumentId",
+        alias = "template_document_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub document_id: Option<String>,
+    #[serde(
+        default,
+        alias = "revisionExternalId",
+        alias = "revision",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub revision_external_id: Option<String>,
+    #[serde(
+        default,
+        alias = "outputType",
+        alias = "surface",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(
+        default,
+        alias = "templateReferenceId",
+        alias = "staticPageTemplate",
+        alias = "static_page_template",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub template_reference_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalBotMessageView {
     pub platform: ExternalChannelPlatformView,
     pub tenant_external_id: String,
@@ -364,6 +414,23 @@ pub struct ExternalBotMessageView {
         skip_serializing_if = "Option::is_none"
     )]
     pub render_mode: Option<String>,
+    #[serde(
+        default,
+        alias = "artifactType",
+        alias = "output_type",
+        alias = "outputType",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub artifact_type: Option<String>,
+    #[serde(
+        default,
+        alias = "artifactTemplate",
+        alias = "artifact_template",
+        alias = "templateRef",
+        alias = "template_ref",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub template: Option<ExternalArtifactTemplateView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mention_external_user_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

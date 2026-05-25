@@ -404,6 +404,8 @@ fn wecom_message_from_fields(
         default_prompt: None,
         output_format: None,
         render_mode: None,
+        artifact_type: None,
+        template: None,
         mention_external_user_ids: Vec::new(),
         attachment_refs: wecom_attachment_refs(fields),
         available_document_external_ids: Vec::new(),

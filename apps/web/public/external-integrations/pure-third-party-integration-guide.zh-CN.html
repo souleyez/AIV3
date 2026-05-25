@@ -564,6 +564,8 @@ Content-Type: application/json</code></pre>
   &quot;default_prompt&quot;: &quot;请面向业务用户，优先基于本轮文档回答。&quot;, // 本轮默认提示词
   &quot;output_format&quot;: &quot;rich_text&quot;,                    // 输出格式：rich_text/image_text/markdown_table/json
   &quot;render_mode&quot;: &quot;normal&quot;,                         // 输出模式：normal 普通回答；artifact 产物生成
+  &quot;artifact_type&quot;: null,                            // 可选：产物类型；静态页推荐传 static_page
+  &quot;template&quot;: null,                                 // 可选：产物模板；见 3.3
   &quot;available_document_source_id&quot;: &quot;third-party-source-main&quot;, // 本轮文档源 ID
   &quot;available_document_external_ids&quot;: [             // 本轮允许使用的文档 ID 列表
     &quot;doc-20260520-0001&quot;
@@ -579,7 +581,7 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 V3 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>artifact_type</code></td><td>产物生成建议填</td><td>推荐产物语义字段；静态页传 <code>static_page</code> 后，V3 会自动补齐产物模式和图文链路</td></tr><tr><td><code>template</code></td><td>使用模板时填</td><td>产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 V3 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
 <p><code>dataset_external_id</code> / <code>dataset_external_ids</code> 可以和 <code>available_document_external_ids</code> 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 <code>available_document_external_ids</code> 或 <code>documentExternalId</code>，不传分组字段。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会因为只传 <code>available_document_source_id</code> 自动扩大到整源文档。</p>
 <p>响应：</p>
 <figure class="code-card">
@@ -672,7 +674,7 @@ Content-Type: application/json</code></pre>
   &quot;idempotency_key&quot;: &quot;parse-template:tpl-weekly-report-001:rev-template-01&quot; // 幂等键
 }</code></pre>
   </figure>
-<h3 id="section-13">3.3 按模板生成报表</h3>
+<h3 id="section-13">3.3 按模板生成静态页/报表</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
@@ -689,33 +691,30 @@ Content-Type: application/json</code></pre>
   &quot;sender_external_id&quot;: &quot;user-10001&quot;,              // 用户 ID
   &quot;message_external_id&quot;: &quot;msg-report-20260520-0001&quot;, // 消息 ID
   &quot;message_type&quot;: &quot;text&quot;,                          // 消息类型
-  &quot;text&quot;: &quot;按周报模板生成本轮采购审批报表。&quot;,          // 用户产物生成需求
+  &quot;text&quot;: &quot;根据本轮经营数据和模板生成经营分析静态页。&quot;, // 用户产物生成需求
   &quot;default_prompt&quot;: &quot;按模板结构输出，结论面向业务负责人。&quot;, // 本轮默认提示词
-  &quot;output_format&quot;: &quot;image_text&quot;,                   // 产物型回答建议用 image_text
-  &quot;render_mode&quot;: &quot;artifact&quot;,                       // artifact 表示生成可预览/下载产物
+  &quot;artifact_type&quot;: &quot;static_page&quot;,                  // 推荐：直接声明产物类型；V3 自动进入静态页链路
+  &quot;template&quot;: {                                    // 推荐：模板作为一级业务字段传入
+    &quot;source_id&quot;: &quot;third-party-source-main&quot;,        // 模板文档源 ID
+    &quot;document_external_id&quot;: &quot;tpl-weekly-report-001&quot;, // 模板文档 ID
+    &quot;revision_external_id&quot;: &quot;rev-template-01&quot;,     // 模板版本 ID
+    &quot;mode&quot;: &quot;reference&quot;,                           // 表示模板作为结构/版式/字段参考
+    &quot;output_type&quot;: &quot;static_page&quot;                   // 模板目标产物；可省略，默认跟随 artifact_type
+  },
   &quot;available_document_source_id&quot;: &quot;third-party-source-main&quot;, // 本轮文档源 ID
-  &quot;available_document_external_ids&quot;: [             // 本轮普通文档 + 模板文档
-    &quot;doc-20260520-0001&quot;,
-    &quot;tpl-weekly-report-001&quot;
+  &quot;available_document_external_ids&quot;: [             // 本轮普通业务资料；模板文档会由 template 自动纳入可见范围
+    &quot;doc-20260520-0001&quot;
   ],
-  &quot;requested_skills&quot;: [                            // 本轮强制启用模板 skill
-    {
-      &quot;skill_id&quot;: &quot;document_template_skill&quot;,       // 固定 skill ID：按文档模板输出
-      &quot;version&quot;: &quot;2026-05-20&quot;,                     // skill 版本
-      &quot;mode&quot;: &quot;required&quot;,                          // required 表示本轮必须使用
-      &quot;arguments&quot;: {                               // 模板 skill 参数
-        &quot;template_document_external_id&quot;: &quot;tpl-weekly-report-001&quot;, // 模板文档 ID
-        &quot;source_id&quot;: &quot;third-party-source-main&quot;,    // 模板文档源 ID
-        &quot;revision_external_id&quot;: &quot;rev-template-01&quot;, // 模板版本 ID
-        &quot;output_type&quot;: &quot;static_page&quot;               // 输出产物类型
-      }
-    }
-  ],
+  &quot;dataset_external_ids&quot;: [&quot;workspace-operating-data&quot;], // 可选：本会话授权的业务资料分组
   &quot;idempotency_key&quot;: &quot;report:tenant-ext-001:msg-report-20260520-0001&quot;, // 幂等键
   &quot;received_at&quot;: &quot;2026-05-20T10:10:00Z&quot;            // 消息时间
 }</code></pre>
   </figure>
-<p>生成响应字段同 2.1。第三方接口无需新增字段；复杂建表/静态页请求继续使用 <code>render_mode: &quot;artifact&quot;</code>、<code>output_format: &quot;image_text&quot;</code>，并在模板 skill 中传 <code>output_type: &quot;static_page&quot;</code>。V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 <code>static_page_image2_data_publish</code> 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。</p>
+<p>生成响应字段同 2.1。新接入推荐使用 <code>artifact_type + template</code>：第三方不需要理解内部 <code>render_mode</code>、<code>output_format</code> 和 <code>document_template_skill</code>，V3 会自动映射为现有静态页/Image2/Codex 发布链路。模板文档只作为页面结构、版式风格和字段组织参考，事实内容仍以本会话授权资料和检索证据为准。</p>
+<p><code>template</code> 字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template.source_id</code></td><td>建议填</td><td>模板所属文档源 ID；未单独传 <code>available_document_source_id</code> 时，V3 会用它补齐</td></tr><tr><td><code>template.document_external_id</code></td><td>文档模板必填</td><td>模板文档 ID；兼容 <code>template_document_external_id</code>、<code>documentExternalId</code></td></tr><tr><td><code>template.revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>template.mode</code></td><td>否</td><td>推荐传 <code>reference</code>，表示作为结构/版式/字段参考</td></tr><tr><td><code>template.output_type</code></td><td>否</td><td><code>static_page</code>、<code>html</code>、<code>report</code>、<code>document</code>、<code>table</code>、<code>image</code> 或 <code>any</code>；不传时跟随 <code>artifact_type</code></td></tr><tr><td><code>template.template_reference_id</code></td><td>否</td><td>V3 内置静态页模板引用；使用第三方文档模板时通常不用传</td></tr></tbody></table></div>
+<p>兼容旧写法仍然有效：已接入第三方可以继续传 <code>render_mode: &quot;artifact&quot;</code>、<code>output_format: &quot;image_text&quot;</code>，并在 <code>requested_skills[].arguments.output_type</code> 中传 <code>static_page</code>。如果同时传了 <code>template</code> 和旧 <code>requested_skills</code>，V3 会去重，不重复加载同一模板文档。</p>
+<p>V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 <code>static_page_image2_data_publish</code> 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。</p>
 <p>若进入静态页/Image2 流水线，响应通常为：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>static_page_image2_auto_publish_pending</code> 或 <code>static_page_image_preview_queued</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的排队/处理说明；若自动发布已启用，会说明效果图无需确认并将继续发布</td></tr><tr><td><code>reply.card.type</code></td><td><code>v3_static_page_image2_pipeline</code></td></tr><tr><td><code>reply.card.draft_id</code></td><td>V3 静态页草稿 ID</td></tr><tr><td><code>reply.card.image_job_id</code></td><td>Image2 效果图任务 ID</td></tr><tr><td><code>reply.card.auto_publish_after_preview</code></td><td><code>true</code> 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路</td></tr><tr><td><code>reply.card.effect_image_confirmation_required</code></td><td>固定为 <code>false</code>，效果图只作为客户可见预览，不作为阻塞确认点</td></tr><tr><td><code>reply.card.codex_host_workflow_execution_id</code></td><td>初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID</td></tr></tbody></table></div>
 <p>若调用流式接口，V3 会在文本 delta 后额外输出 <code>external_channel.static_page_effect_image_queued</code> 事件，事件里的 <code>card</code> 与上表一致，第三方可直接展示给客户作为进度/效果图入口；后续仍按自动链路继续产出页面。第三方最终只需要读取完成后的静态页产物链接；效果图是过程预览，不是最终交付物。</p>

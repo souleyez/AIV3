@@ -290,6 +290,14 @@ Authorization: Bearer <V3 inbound token>
 | `available_document_external_ids` | 文档问答建议传 | 允许 V3 使用的第三方文档 ID 列表；首次传入后同一 `conversation_external_id` 后续有效；单文档可用 `documentExternalId` |
 | `dataset_external_id` | 文档分组问答建议传 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
 | `dataset_external_ids` | 多分组文档问答建议传 | 第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：`datasetExternalIds`、`availableDatasetExternalIds` |
+| `artifact_type` | 产物生成建议传 | 推荐产物语义字段；静态页传 `static_page` 后，V3 会自动进入产物模式和 Image2/Codex 静态页链路。兼容别名：`artifactType` |
+| `template` | 使用模板时传 | 产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围 |
+| `template.source_id` | 模板建议传 | 模板所属文档源 ID |
+| `template.document_external_id` | 文档模板必填 | 模板文档 ID；兼容 `template_document_external_id`、`documentExternalId` |
+| `template.revision_external_id` | 否 | 模板版本 ID |
+| `template.mode` | 否 | 推荐传 `reference` |
+| `template.output_type` | 否 | `static_page`、`html`、`report`、`document`、`table`、`image` 或 `any` |
+| `template.template_reference_id` | 否 | V3 内置静态页模板引用；使用第三方文档模板时通常不用传 |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | skill 稳定标识，建议使用英文或业务 slug |
 | `requested_skills[].version` | 否 | skill 版本或策略版本，用于版本选择和问题复现 |
@@ -970,7 +978,29 @@ V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，�
 
 页面类产物支持快速 HTML 交付模式：V3 可以按模板和聊天要求生成可浏览器打开的 HTML，并返回预览和下载地址。
 
-对于第三方发起的复杂建表/静态页请求，推荐仍走聊天入口：请求使用 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可传 `output_type: "static_page"`。V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点；服务端会继续自动生成并发布最终 generated-artifact 静态页。第三方最终只需要获取静态页链接：优先读取 `reply.reply_type=artifact_link` 时的 `reply.artifact_links[0]`，或读取最终运行事件 `assistant_run.external_channel_static_page_publish_completed` 中的 `public_url`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
+对于第三方发起的复杂建表/静态页请求，推荐仍走聊天入口，但新接入可使用更简单的产物语义字段：`artifact_type: "static_page"`，模板用一级字段 `template` 表达。V3 会自动补齐产物模式、图文输出和内部 `document_template_skill`，并把模板文档作为结构/版式/字段组织参考；事实内容仍以本会话已授权资料和检索证据为准。
+
+推荐请求片段：
+
+```json
+{
+  "text": "根据本轮经营数据和模板生成经营分析静态页",
+  "artifact_type": "static_page",
+  "template": {
+    "source_id": "third-party-source-main",
+    "document_external_id": "tpl-xinbai-static-page",
+    "revision_external_id": "v1",
+    "mode": "reference",
+    "output_type": "static_page"
+  },
+  "dataset_external_ids": ["workspace-operating-data"],
+  "available_document_external_ids": ["doc-operating-data-001"]
+}
+```
+
+兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可继续在 `requested_skills[].arguments.output_type` 中传 `static_page`。若同时传 `template` 和旧 skill，V3 会按模板文档去重。
+
+V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点；服务端会继续自动生成并发布最终 generated-artifact 静态页。第三方最终只需要获取静态页链接：优先读取 `reply.reply_type=artifact_link` 时的 `reply.artifact_links[0]`，或读取最终运行事件 `assistant_run.external_channel_static_page_publish_completed` 中的 `public_url`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
 
 快速 HTML 生成可使用以下选项：
 

@@ -245,6 +245,8 @@ Content-Type: application/json
   "default_prompt": "请面向业务用户，优先基于本轮文档回答。", // 本轮默认提示词
   "output_format": "rich_text",                    // 输出格式：rich_text/image_text/markdown_table/json
   "render_mode": "normal",                         // 输出模式：normal 普通回答；artifact 产物生成
+  "artifact_type": null,                            // 可选：产物类型；静态页推荐传 static_page
+  "template": null,                                 // 可选：产物模板；见 3.3
   "available_document_source_id": "third-party-source-main", // 本轮文档源 ID
   "available_document_external_ids": [             // 本轮允许使用的文档 ID 列表
     "doc-20260520-0001"
@@ -277,6 +279,8 @@ Content-Type: application/json
 | `default_prompt` | 否 | 本轮默认提示词；会供给模型但不越过权限和证据规则 |
 | `output_format` | 否 | `rich_text` 富文本；`image_text` 图文排版；`markdown_table` MD 表格；`json` JSON |
 | `render_mode` | 否 | `normal` 普通回答；`artifact` 生成产物 |
+| `artifact_type` | 产物生成建议填 | 推荐产物语义字段；静态页传 `static_page` 后，V3 会自动补齐产物模式和图文链路 |
+| `template` | 使用模板时填 | 产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围 |
 | `available_document_source_id` | 文档问答建议填 | 本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答 |
 | `available_document_external_ids` | 文档问答建议填 | 允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档；首次传入后同一 `conversation_external_id` 后续有效 |
 | `dataset_external_id` | 分组文档问答建议填 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID |
@@ -409,7 +413,7 @@ V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、�
 }
 ```
 
-### 3.3 按模板生成报表
+### 3.3 按模板生成静态页/报表
 
 ```http
 POST /v1/external/channels/{connection_id}/events
@@ -426,34 +430,42 @@ Content-Type: application/json
   "sender_external_id": "user-10001",              // 用户 ID
   "message_external_id": "msg-report-20260520-0001", // 消息 ID
   "message_type": "text",                          // 消息类型
-  "text": "按周报模板生成本轮采购审批报表。",          // 用户产物生成需求
+  "text": "根据本轮经营数据和模板生成经营分析静态页。", // 用户产物生成需求
   "default_prompt": "按模板结构输出，结论面向业务负责人。", // 本轮默认提示词
-  "output_format": "image_text",                   // 产物型回答建议用 image_text
-  "render_mode": "artifact",                       // artifact 表示生成可预览/下载产物
+  "artifact_type": "static_page",                  // 推荐：直接声明产物类型；V3 自动进入静态页链路
+  "template": {                                    // 推荐：模板作为一级业务字段传入
+    "source_id": "third-party-source-main",        // 模板文档源 ID
+    "document_external_id": "tpl-weekly-report-001", // 模板文档 ID
+    "revision_external_id": "rev-template-01",     // 模板版本 ID
+    "mode": "reference",                           // 表示模板作为结构/版式/字段参考
+    "output_type": "static_page"                   // 模板目标产物；可省略，默认跟随 artifact_type
+  },
   "available_document_source_id": "third-party-source-main", // 本轮文档源 ID
-  "available_document_external_ids": [             // 本轮普通文档 + 模板文档
-    "doc-20260520-0001",
-    "tpl-weekly-report-001"
+  "available_document_external_ids": [             // 本轮普通业务资料；模板文档会由 template 自动纳入可见范围
+    "doc-20260520-0001"
   ],
-  "requested_skills": [                            // 本轮强制启用模板 skill
-    {
-      "skill_id": "document_template_skill",       // 固定 skill ID：按文档模板输出
-      "version": "2026-05-20",                     // skill 版本
-      "mode": "required",                          // required 表示本轮必须使用
-      "arguments": {                               // 模板 skill 参数
-        "template_document_external_id": "tpl-weekly-report-001", // 模板文档 ID
-        "source_id": "third-party-source-main",    // 模板文档源 ID
-        "revision_external_id": "rev-template-01", // 模板版本 ID
-        "output_type": "static_page"               // 输出产物类型
-      }
-    }
-  ],
+  "dataset_external_ids": ["workspace-operating-data"], // 可选：本会话授权的业务资料分组
   "idempotency_key": "report:tenant-ext-001:msg-report-20260520-0001", // 幂等键
   "received_at": "2026-05-20T10:10:00Z"            // 消息时间
 }
 ```
 
-生成响应字段同 2.1。第三方接口无需新增字段；复杂建表/静态页请求继续使用 `render_mode: "artifact"`、`output_format: "image_text"`，并在模板 skill 中传 `output_type: "static_page"`。V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。
+生成响应字段同 2.1。新接入推荐使用 `artifact_type + template`：第三方不需要理解内部 `render_mode`、`output_format` 和 `document_template_skill`，V3 会自动映射为现有静态页/Image2/Codex 发布链路。模板文档只作为页面结构、版式风格和字段组织参考，事实内容仍以本会话授权资料和检索证据为准。
+
+`template` 字段说明：
+
+| 字段 | 必填 | 注释 |
+| --- | --- | --- |
+| `template.source_id` | 建议填 | 模板所属文档源 ID；未单独传 `available_document_source_id` 时，V3 会用它补齐 |
+| `template.document_external_id` | 文档模板必填 | 模板文档 ID；兼容 `template_document_external_id`、`documentExternalId` |
+| `template.revision_external_id` | 否 | 模板版本 ID |
+| `template.mode` | 否 | 推荐传 `reference`，表示作为结构/版式/字段参考 |
+| `template.output_type` | 否 | `static_page`、`html`、`report`、`document`、`table`、`image` 或 `any`；不传时跟随 `artifact_type` |
+| `template.template_reference_id` | 否 | V3 内置静态页模板引用；使用第三方文档模板时通常不用传 |
+
+兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，V3 会去重，不重复加载同一模板文档。
+
+V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。
 
 若进入静态页/Image2 流水线，响应通常为：
 

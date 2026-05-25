@@ -418,6 +418,8 @@ fn feishu_message_from_payload(
         default_prompt: None,
         output_format: None,
         render_mode: None,
+        artifact_type: None,
+        template: None,
         mention_external_user_ids: feishu_mentions(message, &content),
         attachment_refs: feishu_attachment_refs(&content),
         available_document_external_ids: Vec::new(),

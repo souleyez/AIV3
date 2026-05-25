@@ -94,7 +94,7 @@ export const EXTERNAL_INTEGRATION_MODES = [
       '本轮文档范围：source_id 和 document_external_ids',
       '模板列表：模板 ID、版本、输出类型',
       '模板解析：模板作为普通文档入库',
-      '按模板生成报表：document_template_skill',
+      '按模板生成产物：artifact_type + template',
       '产物查询、预览和下载链接',
     ],
     guardrail: '凭证线下交付；观测页只展示模式和文档路径，不展示 token、客户 endpoint 或密钥。',

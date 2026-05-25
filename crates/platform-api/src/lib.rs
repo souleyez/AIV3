@@ -53,9 +53,9 @@ use contracts::{
     DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentMediaDetailView,
     DocumentSummary, ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
     ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
-    ExternalActionResultCallbackResponseView, ExternalBotMessageView, ExternalBotReplyTypeView,
-    ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
-    ExternalConversationTestView, ExternalDocumentParseDetailItemView,
+    ExternalActionResultCallbackResponseView, ExternalArtifactTemplateView, ExternalBotMessageView,
+    ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelEventResponse,
+    ExternalChannelPlatformView, ExternalConversationTestView, ExternalDocumentParseDetailItemView,
     ExternalDocumentParseDocumentView, ExternalIntegrationAuditItemView,
     ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
     ExternalIntegrationControlResponse, ExternalIntegrationSummaryView, ExternalMessageTypeView,
@@ -13735,6 +13735,8 @@ fn parse_external_bot_message_payload(
                         "default_prompt",
                         "output_format",
                         "render_mode",
+                        "artifact_type",
+                        "template",
                         "mention_external_user_ids",
                         "attachment_refs",
                         "available_document_source_id",
@@ -13759,6 +13761,9 @@ fn parse_external_bot_message_payload(
                         "replyFormat",
                         "renderMode",
                         "responseMode",
+                        "artifactType",
+                        "artifactTemplate",
+                        "templateRef",
                         "mentionExternalUserIds",
                         "attachmentRefs",
                         "availableDocumentSourceId",
@@ -13779,6 +13784,7 @@ fn parse_external_bot_message_payload(
                 }),
             )
         })?;
+    validate_and_normalize_external_artifact_request(&mut message)?;
     validate_and_normalize_external_requested_skills(&mut message.requested_skills)?;
     validate_and_normalize_external_answer_policy(&mut message)?;
     Ok(message)
@@ -13810,6 +13816,13 @@ fn normalize_external_bot_message_payload(
             ("renderMode", "render_mode"),
             ("responseMode", "render_mode"),
             ("response_mode", "render_mode"),
+            ("artifactType", "artifact_type"),
+            ("outputType", "artifact_type"),
+            ("output_type", "artifact_type"),
+            ("artifactTemplate", "template"),
+            ("artifact_template", "template"),
+            ("templateRef", "template"),
+            ("template_ref", "template"),
             ("mentionExternalUserIds", "mention_external_user_ids"),
             ("attachmentRefs", "attachment_refs"),
             (
@@ -13968,6 +13981,232 @@ fn external_string_ids_from_payload_value(value: Value) -> Vec<String> {
         }
     }
     ids
+}
+
+fn normalize_external_optional_plain_field(
+    value: &mut Option<String>,
+    field_name: &str,
+    limit: usize,
+) -> std::result::Result<(), ApiError> {
+    if let Some(raw) = value.take() {
+        let normalized = raw.trim().to_string();
+        if normalized.is_empty() {
+            *value = None;
+        } else if normalized.chars().count() > limit || normalized.chars().any(char::is_control) {
+            return Err(ApiError::bad_request_with_details(
+                "external_channel_artifact_request_invalid",
+                format!("{field_name} must be printable text within {limit} characters"),
+                json!({ "reason": "invalid_artifact_template_field", "field": field_name }),
+            ));
+        } else {
+            *value = Some(normalized);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_external_artifact_type_value(value: &str) -> Option<&'static str> {
+    let compact = value
+        .trim()
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '\t' | '\n' | '\r'))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
+    match compact.as_str() {
+        "" => None,
+        "staticpage" | "webpage" | "page" | "htmlpage" => Some("static_page"),
+        "html" => Some("html"),
+        "report" => Some("report"),
+        "document" | "doc" => Some("document"),
+        "table" | "spreadsheet" => Some("table"),
+        "image" | "picture" => Some("image"),
+        "any" => Some("any"),
+        _ => None,
+    }
+}
+
+fn validate_and_normalize_external_artifact_template(
+    template: &mut ExternalArtifactTemplateView,
+) -> std::result::Result<(), ApiError> {
+    normalize_external_optional_plain_field(&mut template.source_id, "template.source_id", 128)?;
+    normalize_external_optional_plain_field(
+        &mut template.document_external_id,
+        "template.document_external_id",
+        256,
+    )?;
+    normalize_external_optional_plain_field(&mut template.document_id, "template.document_id", 64)?;
+    normalize_external_optional_plain_field(
+        &mut template.revision_external_id,
+        "template.revision_external_id",
+        128,
+    )?;
+    normalize_external_optional_plain_field(
+        &mut template.template_reference_id,
+        "template.template_reference_id",
+        128,
+    )?;
+    normalize_external_optional_plain_field(&mut template.mode, "template.mode", 32)?;
+    normalize_external_optional_plain_field(&mut template.title, "template.title", 160)?;
+    if let Some(output_type) = template.output_type.take() {
+        let normalized = output_type.trim();
+        if normalized.is_empty() {
+            template.output_type = None;
+        } else if let Some(value) = normalize_external_artifact_type_value(normalized) {
+            template.output_type = Some(value.to_string());
+        } else {
+            return Err(ApiError::bad_request_with_details(
+                "external_channel_artifact_request_invalid",
+                "template.output_type must be one of static_page, html, report, document, table, image, or any".to_string(),
+                json!({ "reason": "invalid_template_output_type" }),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn external_artifact_template_requested_skill_exists(
+    requested_skills: &[ExternalRequestedSkillView],
+    template: &ExternalArtifactTemplateView,
+) -> bool {
+    requested_skills
+        .iter()
+        .filter(|skill| external_requested_skill_mode(skill) != "disabled")
+        .filter(|skill| external_requested_skill_is_document_template(skill))
+        .any(|skill| {
+            let same_document_id = template
+                .document_id
+                .as_deref()
+                .and_then(|value| Uuid::parse_str(value.trim()).ok())
+                .map(DocumentId)
+                .is_some_and(|document_id| {
+                    external_document_template_skill_document_id(skill) == Some(document_id)
+                });
+            let same_external_id =
+                template
+                    .document_external_id
+                    .as_deref()
+                    .is_some_and(|external_id| {
+                        external_document_template_skill_external_id(skill).as_deref()
+                            == Some(external_id)
+                    });
+            same_document_id || same_external_id
+        })
+}
+
+fn external_artifact_template_to_requested_skill(
+    template: &ExternalArtifactTemplateView,
+    artifact_type: Option<&str>,
+) -> Option<ExternalRequestedSkillView> {
+    if template.document_id.is_none() && template.document_external_id.is_none() {
+        return None;
+    }
+    let mut arguments = Map::new();
+    if let Some(document_id) = template.document_id.as_deref() {
+        arguments.insert("template_document_id".to_string(), json!(document_id));
+    }
+    if let Some(document_external_id) = template.document_external_id.as_deref() {
+        arguments.insert(
+            "template_document_external_id".to_string(),
+            json!(document_external_id),
+        );
+    }
+    if let Some(source_id) = template.source_id.as_deref() {
+        arguments.insert("source_id".to_string(), json!(source_id));
+    }
+    if let Some(revision_external_id) = template.revision_external_id.as_deref() {
+        arguments.insert(
+            "revision_external_id".to_string(),
+            json!(revision_external_id),
+        );
+    }
+    if let Some(title) = template.title.as_deref() {
+        arguments.insert("template_title".to_string(), json!(title));
+    }
+    if let Some(mode) = template.mode.as_deref() {
+        arguments.insert("template_mode".to_string(), json!(mode));
+    }
+    arguments.insert(
+        "output_type".to_string(),
+        json!(template
+            .output_type
+            .as_deref()
+            .or(artifact_type)
+            .unwrap_or("any")),
+    );
+    arguments.insert(
+        "reference_source".to_string(),
+        json!("external_channel_template_field"),
+    );
+    Some(ExternalRequestedSkillView {
+        skill_id: "document_template_skill".to_string(),
+        version: template.revision_external_id.clone(),
+        mode: Some("required".to_string()),
+        arguments: Some(Value::Object(arguments)),
+    })
+}
+
+fn validate_and_normalize_external_artifact_request(
+    message: &mut ExternalBotMessageView,
+) -> std::result::Result<(), ApiError> {
+    if let Some(artifact_type) = message.artifact_type.take() {
+        let normalized = artifact_type.trim();
+        if normalized.is_empty() {
+            message.artifact_type = None;
+        } else if let Some(value) = normalize_external_artifact_type_value(normalized) {
+            message.artifact_type = Some(value.to_string());
+        } else {
+            return Err(ApiError::bad_request_with_details(
+                "external_channel_artifact_request_invalid",
+                "artifact_type must be one of static_page, html, report, document, table, image, or any".to_string(),
+                json!({ "reason": "invalid_artifact_type" }),
+            ));
+        }
+    }
+
+    let mut target_artifact_type = message.artifact_type.clone();
+    if let Some(template) = message.template.as_mut() {
+        validate_and_normalize_external_artifact_template(template)?;
+        if target_artifact_type.is_none() {
+            target_artifact_type = template.output_type.clone();
+            message.artifact_type = target_artifact_type.clone();
+        }
+        if let Some(document_external_id) = template.document_external_id.as_deref() {
+            push_string_hint(
+                &mut message.available_document_external_ids,
+                document_external_id,
+            );
+        }
+        if message.available_document_source_id.is_none() {
+            message.available_document_source_id = template.source_id.clone();
+        }
+        if !external_artifact_template_requested_skill_exists(&message.requested_skills, template) {
+            if let Some(skill) = external_artifact_template_to_requested_skill(
+                template,
+                target_artifact_type.as_deref(),
+            ) {
+                message.requested_skills.push(skill);
+            }
+        }
+    }
+
+    if target_artifact_type
+        .as_deref()
+        .is_some_and(|value| value != "any")
+        && message.render_mode.is_none()
+    {
+        message.render_mode = Some("artifact".to_string());
+    }
+
+    if target_artifact_type.as_deref() == Some("static_page") {
+        if message.render_mode.is_none() {
+            message.render_mode = Some("artifact".to_string());
+        }
+        if message.output_format.is_none() {
+            message.output_format = Some("image_text".to_string());
+        }
+    }
+
+    Ok(())
 }
 
 fn normalize_external_payload_string_case(payload: &mut Value, key: &str) {
@@ -20436,6 +20675,8 @@ fn external_bot_message_to_assistant_run_request(
         "available_document_source_id": message.available_document_source_id,
         "available_document_external_ids": message.available_document_external_ids,
         "dataset_external_id": message.dataset_external_id,
+        "artifact_type": message.artifact_type,
+        "artifact_template": message.template.as_ref().map(external_artifact_template_summary),
     });
     let mut startup_briefing = json!({
         "surface": "external_channel",
@@ -20472,6 +20713,24 @@ fn external_bot_message_to_assistant_run_request(
             answer_policy.clone(),
         );
         set_payload_value(&mut context_policy_hint, "answer_policy", answer_policy);
+    }
+    if message.artifact_type.is_some() || message.template.is_some() {
+        let artifact_request = json!({
+            "source": "external_channel_artifact_fields",
+            "artifact_type": message.artifact_type,
+            "template": message.template.as_ref().map(external_artifact_template_summary),
+            "compatibility": "mapped_to_render_mode_output_format_and_document_template_skill",
+        });
+        set_payload_value(
+            &mut startup_briefing,
+            "externalArtifactRequest",
+            artifact_request.clone(),
+        );
+        set_payload_value(
+            &mut context_policy_hint,
+            "artifact_request",
+            artifact_request,
+        );
     }
 
     CreateAssistantRunRequest {
@@ -20655,6 +20914,8 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
         "default_prompt_chars": message.default_prompt.as_ref().map(|text| text.chars().count()).unwrap_or(0),
         "output_format": message.output_format,
         "render_mode": message.render_mode,
+        "artifact_type": message.artifact_type,
+        "template": message.template.as_ref().map(external_artifact_template_summary),
         "mention_count": message.mention_external_user_ids.len(),
         "attachment_count": message.attachment_refs.len(),
         "available_document_count": message.available_document_external_ids.len(),
@@ -20672,6 +20933,19 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
             "download_url_redacted": attachment.download_url_redacted.as_ref().map(|_| "[redacted]"),
         })).collect::<Vec<_>>(),
         "received_at": message.received_at,
+    })
+}
+
+fn external_artifact_template_summary(template: &ExternalArtifactTemplateView) -> Value {
+    json!({
+        "source_id": template.source_id,
+        "document_external_id": template.document_external_id,
+        "document_id": template.document_id,
+        "revision_external_id": template.revision_external_id,
+        "output_type": template.output_type,
+        "mode": template.mode,
+        "template_reference_id": template.template_reference_id,
+        "title": template.title,
     })
 }
 
@@ -21780,6 +22054,9 @@ async fn maybe_persist_external_channel_template_html_artifact(
 fn external_channel_message_requests_template_html_artifact(
     message: &ExternalBotMessageView,
 ) -> bool {
+    if message.artifact_type.as_deref() == Some("static_page") {
+        return false;
+    }
     if message.render_mode.as_deref() != Some("artifact") {
         return false;
     }
@@ -21798,6 +22075,10 @@ fn external_channel_message_requests_static_page_artifact(
     message: &ExternalBotMessageView,
     prompt: &str,
 ) -> bool {
+    if message.artifact_type.as_deref() == Some("static_page") {
+        return true;
+    }
+
     if message.render_mode.as_deref() != Some("artifact") {
         return false;
     }
@@ -21851,6 +22132,16 @@ fn external_channel_static_page_template_reference_id(
     message: &ExternalBotMessageView,
     prompt: &str,
 ) -> Option<String> {
+    if let Some(value) = message
+        .template
+        .as_ref()
+        .and_then(|template| template.template_reference_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(value.to_string());
+    }
+
     for skill in message
         .requested_skills
         .iter()
@@ -22442,6 +22733,8 @@ fn external_channel_static_page_image2_fixed_task(
             "platform": external_channel_platform_wire_value(&message.platform),
             "conversation_external_id": message.conversation_external_id,
             "message_external_id": message.message_external_id,
+            "artifact_type": message.artifact_type,
+            "artifact_template": message.template.as_ref().map(external_artifact_template_summary),
             "output_format": message.output_format,
             "render_mode": message.render_mode,
             "requested_skills": external_requested_skills_summary(&message.requested_skills),
@@ -22718,6 +23011,16 @@ fn external_channel_static_page_source_refs_string_array(
         .unwrap_or_default()
 }
 
+fn external_channel_static_page_template_from_source_refs(
+    source_refs: &Value,
+) -> Option<ExternalArtifactTemplateView> {
+    source_refs
+        .get("artifact_template")
+        .or_else(|| source_refs.get("template"))
+        .filter(|value| !value.is_null())
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
 fn external_channel_static_page_message_from_source_refs(
     source_refs: &Value,
     connection: &ExternalChannelConnectionSummary,
@@ -22765,6 +23068,9 @@ fn external_channel_static_page_message_from_source_refs(
             .or_else(|| Some("image_text".to_string())),
         render_mode: external_channel_static_page_source_ref_string(source_refs, "render_mode")
             .or_else(|| Some("artifact".to_string())),
+        artifact_type: external_channel_static_page_source_ref_string(source_refs, "artifact_type")
+            .or_else(|| Some("static_page".to_string())),
+        template: external_channel_static_page_template_from_source_refs(source_refs),
         mention_external_user_ids: Vec::new(),
         attachment_refs: Vec::new(),
         available_document_external_ids: Vec::new(),
@@ -22983,6 +23289,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         "sender_external_id": message.sender_external_id,
         "message_external_id": message.message_external_id,
         "message_type": external_message_type_wire_value(&message.message_type),
+        "artifact_type": message.artifact_type,
+        "artifact_template": message.template.as_ref().map(external_artifact_template_summary),
         "output_format": message.output_format,
         "render_mode": message.render_mode,
         "requested_skills": external_requested_skills_summary(&message.requested_skills),
@@ -55656,7 +55964,7 @@ fn static_page_document_template_output_type_matches(snapshot: &Value) -> bool {
         .to_ascii_lowercase();
     matches!(
         output_type.as_str(),
-        "any" | "static_page" | "staticpage" | "html" | "page" | "webpage"
+        "any" | "static_page" | "static-page" | "staticpage" | "html" | "page" | "webpage"
     )
 }
 
@@ -62126,6 +62434,71 @@ mod tests {
         assert_eq!(
             message.requested_skills[0].mode.as_deref(),
             Some("required")
+        );
+    }
+
+    #[test]
+    fn external_bot_message_payload_accepts_simple_artifact_template_fields() {
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let message = parse_external_bot_message_payload(
+            json!({
+                "tenantExternalId": "tenant-ext-001",
+                "botExternalId": "bot-v3",
+                "conversationExternalId": "chat-static-page",
+                "senderExternalId": "user-ext-001",
+                "messageExternalId": "msg-static-001",
+                "text": "根据这些资料生成经营分析静态页",
+                "artifactType": "static_page",
+                "template": {
+                    "sourceId": "third-party-source-main",
+                    "documentExternalId": "tpl-xinbai-static-page",
+                    "revisionExternalId": "v1",
+                    "mode": "reference"
+                },
+                "datasetExternalIds": ["workspace-xinbai"]
+            }),
+            &connection,
+        )
+        .expect("simple artifact fields should parse");
+
+        assert_eq!(message.artifact_type.as_deref(), Some("static_page"));
+        assert_eq!(message.render_mode.as_deref(), Some("artifact"));
+        assert_eq!(message.output_format.as_deref(), Some("image_text"));
+        assert_eq!(
+            message.available_document_source_id.as_deref(),
+            Some("third-party-source-main")
+        );
+        assert_eq!(
+            message.available_document_external_ids,
+            vec!["tpl-xinbai-static-page".to_string()]
+        );
+        assert_eq!(message.requested_skills.len(), 1);
+        assert_eq!(
+            message.requested_skills[0].skill_id,
+            "document_template_skill"
+        );
+        assert_eq!(
+            external_document_template_skill_external_id(&message.requested_skills[0]).as_deref(),
+            Some("tpl-xinbai-static-page")
+        );
+        assert_eq!(
+            external_document_template_skill_output_type(&message.requested_skills[0]),
+            "static_page"
+        );
+        assert!(external_channel_message_requests_static_page_artifact(
+            &message,
+            "根据这些资料生成经营分析静态页"
+        ));
+
+        let request = external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let briefing = request.startup_briefing.expect("startup briefing");
+        assert_eq!(
+            briefing["externalArtifactRequest"]["artifact_type"],
+            json!("static_page")
         );
     }
 
