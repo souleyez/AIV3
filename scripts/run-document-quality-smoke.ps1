@@ -364,6 +364,7 @@ function New-CaseResult {
     $premiumAction = Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "premium_action" -Default "not_used"
     $answerSupplySources = ConvertTo-StringArray (Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "answer_supply_sources" -Default @())
     $aggregateAnswerSource = Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "aggregate_answer_source" -Default "not_observed"
+    $supplySelectionReasons = ConvertTo-StringArray (Get-ResultObservabilityValue -Case $Case -Observed $Observed -PreferObserved ([bool]$PreferObserved) -Name "supply_selection_reasons" -Default @())
     $expectedAnswerSources = ConvertTo-StringArray (Get-CaseProperty -Object $Case -Name "expected_answer_sources" -Default @())
     if ($expectedAnswerSources.Count -gt 0) {
         $assertionChecks.Add((New-SmokeAssertionCheck -Name "expected_answer_supply_source" -Passed (Test-AnyExpectedSourcePresent -ObservedSources $answerSupplySources -ExpectedSources $expectedAnswerSources) -Message "expected one of: $($expectedAnswerSources -join ', '); observed: $($answerSupplySources -join ', ')"))
@@ -399,6 +400,7 @@ function New-CaseResult {
         premium_action = $premiumAction
         answer_supply_sources = @($answerSupplySources)
         aggregate_answer_source = $aggregateAnswerSource
+        supply_selection_reasons = @($supplySelectionReasons)
         final_sanitizer_leak_check = if ($markerHits.Count -eq 0) { "passed" } else { "failed" }
         final_answer_excerpt = $finalAnswerExcerpt
         direct_answer_text = $finalAnswerExcerpt
@@ -435,6 +437,7 @@ function New-ServerSkippedCaseResult {
         premium_action = "not_run"
         answer_supply_sources = @()
         aggregate_answer_source = "not_run"
+        supply_selection_reasons = @()
         final_sanitizer_leak_check = "not_run"
         final_answer_excerpt = $null
         direct_answer_text = $null
@@ -663,6 +666,13 @@ function Convert-ServerObservability {
         }
     }
     $supplyQuality = Get-PropertyByNames -Object $evidenceState -Names @("supply_quality", "supplyQuality") -Default $null
+    $supplySelectionReasons = New-Object System.Collections.Generic.List[string]
+    $supplyNotes = ConvertTo-StringArray (Get-PropertyByNames -Object $supplyQuality -Names @("notes") -Default @())
+    foreach ($note in @($supplyNotes)) {
+        if ($note.StartsWith("supply_selection:")) {
+            Add-UniqueString -List $supplySelectionReasons -Value $note
+        }
+    }
     foreach ($pair in @(
         @{ Count = @("datasetFactSnapshotCount"); Source = "dataset_fact_snapshot" },
         @{ Count = @("spreadsheetRowAnalysisCount"); Source = "spreadsheet_row_analysis" },
@@ -695,6 +705,7 @@ function Convert-ServerObservability {
         premium_action = $premiumAction
         answer_supply_sources = @($answerSupplySources.ToArray())
         aggregate_answer_source = $aggregateAnswerSource
+        supply_selection_reasons = @($supplySelectionReasons.ToArray())
     }
 }
 
@@ -943,6 +954,7 @@ foreach ($case in $results) {
     $lines.Add("- Premium action: $($case.premium_action)")
     $lines.Add("- Answer supply sources: $((@($case.answer_supply_sources) -join ', '))")
     $lines.Add("- Aggregate answer source: $($case.aggregate_answer_source)")
+    $lines.Add("- Supply selection reasons: $((@($case.supply_selection_reasons) -join ', '))")
     $lines.Add("- Final sanitizer leak check: $($case.final_sanitizer_leak_check)")
     $lines.Add("- Final answer excerpt: $($case.final_answer_excerpt)")
     $lines.Add("- Evidence/source refs: $((@($case.evidence_source_refs) -join '; '))")

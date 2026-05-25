@@ -42350,6 +42350,11 @@ fn assistant_run_supply_quality_report(
     if citation_locators.is_empty() && supply_requested {
         notes.push("no_source_locator_available");
     }
+    for note in assistant_run_supply_selection_notes(supplied_items) {
+        if !notes.contains(&note) {
+            notes.push(note);
+        }
+    }
 
     json!({
         "status": status,
@@ -42389,6 +42394,63 @@ fn assistant_run_supply_quality_report(
             "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
         ],
     })
+}
+
+fn assistant_run_supply_selection_notes(supplied_items: &[Value]) -> Vec<&'static str> {
+    let mut notes = Vec::new();
+    let mut has_dataset_fact_snapshot = false;
+    let mut has_scoped_fact_snapshot = false;
+    let mut has_dataset_entity_scan = false;
+    let mut has_spreadsheet_row_analysis = false;
+
+    for item in supplied_items {
+        match item.get("type").and_then(Value::as_str) {
+            Some("dataset_fact_snapshot") => {
+                has_dataset_fact_snapshot = true;
+                if item.get("source").and_then(Value::as_str)
+                    == Some("document_facts_scoped_aggregate")
+                {
+                    has_scoped_fact_snapshot = true;
+                }
+            }
+            Some("dataset_entity_scan") => {
+                has_dataset_entity_scan = true;
+            }
+            Some("spreadsheet_row_analysis") => {
+                has_spreadsheet_row_analysis = true;
+            }
+            _ => {}
+        }
+    }
+
+    if has_scoped_fact_snapshot {
+        notes.push(
+            "supply_selection:document_facts_scoped_aggregate_selected_for_scoped_document_aggregate",
+        );
+    } else if has_dataset_fact_snapshot {
+        notes
+            .push("supply_selection:dataset_fact_snapshot_selected_for_dataset_aggregate_question");
+    }
+
+    if has_dataset_entity_scan {
+        if has_dataset_fact_snapshot {
+            notes.push(
+                "supply_selection:dataset_entity_scan_kept_for_dimensions_not_covered_by_snapshot",
+            );
+        } else {
+            notes.push(
+                "supply_selection:dataset_entity_scan_selected_when_snapshot_missing_or_runtime_scan_needed",
+            );
+        }
+    }
+
+    if has_spreadsheet_row_analysis {
+        notes.push(
+            "supply_selection:spreadsheet_row_analysis_selected_for_attendance_or_workhour_table_question",
+        );
+    }
+
+    notes
 }
 
 fn assistant_run_low_text_evidence_count(supplied_items: &[Value]) -> usize {
@@ -76920,6 +76982,16 @@ mod tests {
             .expect("notes should be present")
             .iter()
             .any(|note| note.as_str() == Some("dataset_fact_snapshot_available")));
+        assert!(report["notes"]
+            .as_array()
+            .expect("notes should be present")
+            .iter()
+            .any(|note| {
+                note.as_str()
+                == Some(
+                    "supply_selection:dataset_fact_snapshot_selected_for_dataset_aggregate_question"
+                )
+            }));
         assert!(report["modelGuidance"]
             .as_array()
             .expect("guidance should be present")
@@ -76928,6 +77000,51 @@ mod tests {
                 .as_str()
                 .unwrap_or_default()
                 .contains("dataset_fact_snapshot is present")));
+    }
+
+    #[test]
+    fn assistant_run_supply_quality_reports_scoped_scan_and_sheet_selection_reasons() {
+        let report = assistant_run_supply_quality_report(
+            &json!({"mode": "user_selected"}),
+            true,
+            &[
+                json!({
+                    "type": "dataset_fact_snapshot",
+                    "source": "document_facts_scoped_aggregate",
+                }),
+                json!({
+                    "type": "dataset_entity_scan",
+                }),
+                json!({
+                    "type": "spreadsheet_row_analysis",
+                }),
+            ],
+            &[json!({"id": "dataset-mixed"})],
+            &[],
+            &[],
+            0,
+            4,
+        );
+        let notes = report["notes"].as_array().expect("notes should be present");
+
+        assert!(notes.iter().any(|note| {
+            note.as_str()
+                == Some(
+                    "supply_selection:document_facts_scoped_aggregate_selected_for_scoped_document_aggregate",
+                )
+        }));
+        assert!(notes.iter().any(|note| {
+            note.as_str()
+                == Some(
+                    "supply_selection:dataset_entity_scan_kept_for_dimensions_not_covered_by_snapshot",
+                )
+        }));
+        assert!(notes.iter().any(|note| {
+            note.as_str()
+                == Some(
+                    "supply_selection:spreadsheet_row_analysis_selected_for_attendance_or_workhour_table_question",
+                )
+        }));
     }
 
     #[test]

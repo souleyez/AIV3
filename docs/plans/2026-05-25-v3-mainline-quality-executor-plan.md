@@ -37,6 +37,19 @@
 - Static-page no-confirm flow may create a new generated artifact only; it must not overwrite an existing customer artifact or stable URL without confirmation.
 - Keep raw credentials, database URLs, provider payloads, full stdout/stderr, and customer file dumps out of prompts, events, docs, and artifact manifests.
 
+## Execution Notes - 2026-05-25
+
+- Consolidated old active quality/executor plans into this single plan and pushed commit `d6381ac`.
+- Local priority smoke passed on HEAD `d6381ac` for one-character PDF, DOC/DOCX "邓工是谁", resume company statistics, resume ranking table, attendance date/work-hour formatting, frequent attendance query, smart-home partial-parse answer quality, and smart-elevator point-list table output.
+- Available 8-server fact snapshot probe passed against `https://v3.elepcloud.com`: resume company statistics used `dataset_fact_snapshot` with retrieval evidence as secondary supply and answered from 25 visible documents / 100 company-or-organization rows.
+- Full private 8-server smoke is still blocked locally by missing `ServerCaseConfigPath` and bearer token; only the committed/target fact-snapshot probe is available on this machine.
+- Added internal supply selection notes in existing `supply_quality.notes` and smoke summaries, without adding third-party public request/response fields:
+  - `supply_selection:dataset_fact_snapshot_selected_for_dataset_aggregate_question`;
+  - `supply_selection:document_facts_scoped_aggregate_selected_for_scoped_document_aggregate`;
+  - `supply_selection:dataset_entity_scan_kept_for_dimensions_not_covered_by_snapshot`;
+  - `supply_selection:dataset_entity_scan_selected_when_snapshot_missing_or_runtime_scan_needed`;
+  - `supply_selection:spreadsheet_row_analysis_selected_for_attendance_or_workhour_table_question`.
+
 ## Immediate Execution Queue
 
 1. **Private 8-server quality smoke**
