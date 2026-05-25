@@ -69,6 +69,13 @@ The first V3-side implementation is intentionally only a queue bridge plus dry-r
 - Browser-facing AssistantRun execution treats `codex_exec_schema`, `codex_sdk_thread`, `codex_app_server`, and `codex_mcp_server` as requested transports only. Until both the manual real-transport feature gate and the manual promotion-review gate are explicitly enabled after shadow plus allowed-host validation, V3 records fixed-field `transport_policy`, `host_invocation`, and `suggested_action` summaries and downgrades the effective transport to `codex_plan_only`.
 - No local Codex process is launched unless the worker is explicitly switched to `codex_exec` and passes the host/profile safety preflight.
 - Real `codex_exec` also requires a configured task workspace root. The agent creates a task-scoped workspace from the V3 `task_memory_space_id` and runs Codex from that directory instead of the agent's current working directory.
+- Real `codex_exec` is bounded by runtime controls:
+  - `CODEX_HOST_AGENT_TASK_TIMEOUT_MS`, default `900000`
+  - `CODEX_HOST_AGENT_HEARTBEAT_MS`, default `15000`
+  - `CODEX_HOST_AGENT_STDOUT_LIMIT_BYTES`, default `200000`
+  - `CODEX_HOST_AGENT_STDERR_LIMIT_BYTES`, default `100000`
+- The worker uses async process execution with timeout. Timeout, launch errors, non-zero exits, fixed-output parse failures, and cancellation-before/during-run are mapped to bounded failure reasons. Raw stdout/stderr are never written into AssistantRun events; only character counts and redacted report manifests are retained.
+- While a real process is running, the worker may append `codex_host_task.exec_heartbeat` events. Heartbeats include status, elapsed time, profile/command summaries, and redaction flags, but no raw prompts, stdout, stderr, provider logs, or secrets.
 
 This lets us verify V3 audit, task isolation, queue wakeup, and workflow completion before adding real host execution.
 

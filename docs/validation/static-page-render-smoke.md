@@ -32,10 +32,40 @@ This smoke complements `run-static-page-quality-smoke.sh`: quality smoke checks 
 The Image2-first advanced static-page path has an additional local fixed-template smoke:
 
 ```powershell
-.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static_page_plan_only,static_page_new_artifact,static_page_overwrite_rejected
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static-page-no-confirm
 ```
 
-This smoke is non-destructive. It validates that V3 records `codex_host.fixed_task.queued`, accepts only new `/generated-artifacts/` static-page outputs, and rejects overwrite/stable-URL style outputs for human review. It does not publish or overwrite customer artifacts.
+This smoke is non-destructive. It validates that the Image2-first static-page path exposes a no-confirm pending card, marks `effect_image_confirmation_required=false`, waits for preview-ready evidence before queuing Codex Host, accepts only new `/generated-artifacts/` static-page outputs, and converts the final publish event into an existing `artifact_link` reply. It does not publish or overwrite customer artifacts.
+
+A guarded remote readiness check may be run after deployment:
+
+```powershell
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm
+```
+
+Remote mutation remains operator-gated. Only run without `-PlanOnly` and with `-AllowServerMutation` after explicit deployment review on the approved host.
+
+## 2026-05-25 No-Confirm Static-Page Smoke Evidence
+
+- Environment: local Windows workspace, plan-only, no server writes
+- Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static-page-no-confirm -Json`
+- Result: passed
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T034437Z.json`
+- Markdown summary: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T034437Z.md`
+- Feature flags: local unit-level smoke; no `/etc/aiv3/aiv3.env` loaded
+- Image2 job id: not created in local plan-only smoke
+- Codex Host workflow id: not created in local plan-only smoke
+- Final public URL: not published in local plan-only smoke
+- Rollback: set `CODEX_HOST_TASK_ENABLED=false` and remove `static_page_image2_data_publish` from `CODEX_HOST_TASK_ALLOWLIST`
+
+Read-only deployment readiness:
+
+- Environment: `8服务器` public V3 endpoint, plan-only, no mutation
+- Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm -Json`
+- Result: passed health check; static-page mutation case skipped by guard
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T034451Z.json`
+- Health URL: `https://v3.elepcloud.com/healthz`
+- Expected artifact URL prefix for reviewed mutation smoke: `https://v3.elepcloud.com/generated-artifacts/`
 
 ## 2026-05-17 Deployment Target Evidence
 

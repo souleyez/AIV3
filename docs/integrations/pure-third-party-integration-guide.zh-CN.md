@@ -310,6 +310,40 @@ Content-Type: application/json
 
 请求体与 `POST /events` 相同。
 
+### 2.3 数据接入/入库分析请求
+
+第三方接口无需新增字段。客户可以在普通聊天消息里直接提出数据接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求，例如：
+
+```jsonc
+{
+  "platform": "generic_chat",
+  "tenant_external_id": "tenant-ext-001",
+  "bot_external_id": "bot-v3",
+  "conversation_external_id": "conv-20260520-0001",
+  "sender_external_id": "user-10001",
+  "message_external_id": "msg-data-20260520-0001",
+  "message_type": "text",
+  "text": "帮我接入这份考勤表并入库分析字段，重点看缺勤和工时长短。",
+  "available_document_source_id": "third-party-source-main",
+  "available_document_external_ids": ["attendance-202605.xlsx"],
+  "idempotency_key": "data-ingestion:tenant-ext-001:msg-data-20260520-0001",
+  "received_at": "2026-05-20T10:20:00Z"
+}
+```
+
+V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、数据库源预览交给固定 Cloudflare Codex 任务；不会把原始数据库 URL、凭据、完整表 dump 或无限制本地路径放进任务包。
+
+当服务端启用 `data_ingestion_analysis` 固定能力时，符合条件的请求会返回现有 `task_status` 形态：
+
+| 字段 | 注释 |
+| --- | --- |
+| `reply.reply_type` | `task_status` |
+| `reply.task_status` | `data_ingestion_analysis_queued` |
+| `reply.card.type` | `v3_data_ingestion_analysis` |
+| `reply.card.codex_host_workflow_execution_id` | 固定分析任务 ID |
+
+若没有选中或上传可分析的数据源/表格/文档，V3 会返回 `data_ingestion_analysis_source_required`，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。
+
 ## 3. 生成产物（报表）
 
 ### 3.1 模板列表字段
@@ -409,14 +443,45 @@ Content-Type: application/json
 }
 ```
 
-生成响应字段同 2.1。若已生成静态页/报表/HTML 产物，重点读取：
+生成响应字段同 2.1。第三方接口无需新增字段；复杂建表/静态页请求继续使用 `render_mode: "artifact"`、`output_format: "image_text"`，并在模板 skill 中传 `output_type: "static_page"`。V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图用于流式/状态卡片预览，不再要求客户确认。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。
+
+若进入静态页/Image2 流水线，响应通常为：
 
 | 字段 | 注释 |
 | --- | --- |
-| `reply.reply_type` | `artifact_link` 或 `text` |
+| `reply.reply_type` | `task_status` |
+| `reply.task_status` | `static_page_image2_auto_publish_pending` 或 `static_page_image_preview_queued` |
+| `reply.text` | 给用户展示的排队/处理说明；若自动发布已启用，会说明效果图无需确认并将继续发布 |
+| `reply.card.type` | `v3_static_page_image2_pipeline` |
+| `reply.card.draft_id` | V3 静态页草稿 ID |
+| `reply.card.image_job_id` | Image2 效果图任务 ID |
+| `reply.card.auto_publish_after_preview` | `true` 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路 |
+| `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
+| `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
+
+若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致，第三方可直接展示给客户作为进度/效果图入口；后续仍按自动链路继续产出页面。
+
+固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
+
+| 字段 | 注释 |
+| --- | --- |
+| `reply.reply_type` | `artifact_link` |
+| `reply.task_status` | `static_page_published` |
+| `reply.artifact_links[0]` | 最终 V3 generated-artifact 页面链接，例如 `https://v3.elepcloud.com/generated-artifacts/.../index.html` |
+| `reply.card.type` | `v3_static_page_image2_publish_completed` |
+| `reply.card.codex_host_workflow_execution_id` | 固定发布任务 ID；初始响应为空时，会在最终事件中补齐 |
+| `reply.card.validation_summary` | 口径摘要，如最新快照日期、源行数、明细行数、单位策略和告警；不会包含原始明细行或内部检索日志 |
+
+如果第三方使用 `assistant_run_id` 做轮询/观测，应读取该运行下的最终状态事件 `assistant_run.external_channel_static_page_publish_completed`；事件中的 `public_url` 与 `artifact_links[0]` 是同一个最终页面链接。
+
+若已生成静态页/报表/HTML 产物，重点读取：
+
+| 字段 | 注释 |
+| --- | --- |
+| `reply.reply_type` | `artifact_link`、`text` 或 `task_status` |
 | `reply.text` | 给用户展示的说明 |
 | `reply.artifact_links` | 产物预览/下载链接数组；模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
-| `reply.card` | 可能包含 `render_output_id`、产物状态或结构化卡片 |
+| `reply.card` | 可能包含 `render_output_id`、`draft_id`、`image_job_id`、产物状态或结构化卡片 |
 | `assistant_run_id` | 本次生成运行 ID |
 
 ### 3.4 查询、预览、下载产物

@@ -7,6 +7,7 @@ use contracts::{
 use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -18,6 +19,11 @@ const DEFAULT_COMPAT_PROVIDER_ENV_KEY: &str = "MINIMAX_API_KEY";
 const DEFAULT_COMPAT_PROVIDER_WIRE_API: &str = "responses";
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 const ANSWER_QUALITY_AUTOFIX: &str = "answer_quality_autofix";
+const DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
+const DEFAULT_TASK_TIMEOUT_MS: u64 = 900_000;
+const DEFAULT_HEARTBEAT_MS: u64 = 15_000;
+const DEFAULT_STDOUT_LIMIT_BYTES: usize = 200_000;
+const DEFAULT_STDERR_LIMIT_BYTES: usize = 100_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexHostTaskContext {
@@ -110,6 +116,7 @@ impl CodexHostTaskContext {
             task_memory_isolated: self.task_memory_isolated,
             task_memory_space_id: self.task_memory_space_id.clone(),
             html_artifacts,
+            fixed_task_output: None,
         })
     }
 
@@ -142,6 +149,7 @@ impl CodexHostTaskContext {
             task_memory_isolated: self.task_memory_isolated,
             task_memory_space_id: self.task_memory_space_id.clone(),
             html_artifacts,
+            fixed_task_output: None,
         })
     }
 
@@ -373,6 +381,47 @@ impl CodexProcessOutput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodexHostRuntimeConfig {
+    pub task_timeout_ms: u64,
+    pub heartbeat_ms: u64,
+    pub stdout_limit_bytes: usize,
+    pub stderr_limit_bytes: usize,
+}
+
+impl CodexHostRuntimeConfig {
+    pub fn from_env() -> Self {
+        Self {
+            task_timeout_ms: env_u64("CODEX_HOST_AGENT_TASK_TIMEOUT_MS", DEFAULT_TASK_TIMEOUT_MS),
+            heartbeat_ms: env_u64("CODEX_HOST_AGENT_HEARTBEAT_MS", DEFAULT_HEARTBEAT_MS),
+            stdout_limit_bytes: env_usize(
+                "CODEX_HOST_AGENT_STDOUT_LIMIT_BYTES",
+                DEFAULT_STDOUT_LIMIT_BYTES,
+            ),
+            stderr_limit_bytes: env_usize(
+                "CODEX_HOST_AGENT_STDERR_LIMIT_BYTES",
+                DEFAULT_STDERR_LIMIT_BYTES,
+            ),
+        }
+    }
+
+    pub fn task_timeout_ms(&self) -> u64 {
+        self.task_timeout_ms.max(1)
+    }
+
+    pub fn heartbeat_ms(&self) -> u64 {
+        self.heartbeat_ms.max(1)
+    }
+
+    pub fn stdout_limit_bytes(&self) -> usize {
+        self.stdout_limit_bytes.max(1)
+    }
+
+    pub fn stderr_limit_bytes(&self) -> usize {
+        self.stderr_limit_bytes.max(1)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexHostAgentPolicy {
     pub mode: CodexHostExecutionMode,
     pub profile: CodexHostProfile,
@@ -502,6 +551,15 @@ impl CodexHostAgentPolicy {
                     ));
                 }
             }
+            CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis => {
+                validate_data_ingestion_fixed_task(fixed_task)?;
+                if self.mode != CodexHostExecutionMode::DryRun && self.task_workspace_root.is_none()
+                {
+                    return Err(anyhow!(
+                        "data_ingestion_analysis requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for non-dry-run execution"
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -545,6 +603,7 @@ fn fixed_template_capability(capability: &str) -> Option<CodexHostFixedTaskTempl
             Some(CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish)
         }
         ANSWER_QUALITY_AUTOFIX => Some(CodexHostFixedTaskTemplateIdView::AnswerQualityAutofix),
+        DATA_INGESTION_ANALYSIS => Some(CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis),
         _ => None,
     }
 }
@@ -556,6 +615,11 @@ fn approved_remote_host_kind(host_kind: &str) -> bool {
 fn validate_static_page_fixed_task(
     fixed_task: &CodexHostFixedTaskTemplateContextView,
 ) -> Result<()> {
+    if fixed_task.template_id != CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires template_id=static_page_image2_data_publish"
+        ));
+    }
     let publish_mode = fixed_task
         .policies
         .get("publish_mode")
@@ -566,7 +630,134 @@ fn validate_static_page_fixed_task(
             "static_page_image2_data_publish requires publish_mode=new_generated_artifact_only"
         ));
     }
+    require_non_empty_value_string(
+        &fixed_task.image2,
+        "image_job_id",
+        "static_page_image2_data_publish requires image2.image_job_id",
+    )?;
+    let preview_asset_ready = non_empty_value_string(&fixed_task.image2, "preview_asset_key")
+        .is_some_and(|value| !value.is_empty());
+    let visual_contract_ready = fixed_task
+        .image2
+        .get("visual_contract_status")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "preview_ready");
+    if !visual_contract_ready && !preview_asset_ready {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires visual_contract_status=preview_ready or a non-empty preview_asset_key"
+        ));
+    }
+    if fixed_task
+        .image2
+        .get("human_confirmation_required")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires image2.human_confirmation_required=false"
+        ));
+    }
+    if fixed_task
+        .policies
+        .get("effect_image_confirmation_required")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires effect_image_confirmation_required=false"
+        ));
+    }
+    if fixed_task
+        .policies
+        .get("continue_to_publish_after_effect_image")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires continue_to_publish_after_effect_image=true"
+        ));
+    }
+    if !static_page_dataset_scope_has_selected_source(&fixed_task.dataset_scope) {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires at least one selected dataset, document, or database source"
+        ));
+    }
+    for (key, description) in [
+        ("snapshot_aggregation", "snapshot aggregation policy"),
+        ("trend_aggregation", "trend aggregation policy"),
+        ("unit_rendering", "unit rendering policy"),
+        ("detail_table_policy", "detail table policy"),
+    ] {
+        require_non_empty_value_string(
+            &fixed_task.policies,
+            key,
+            &format!("static_page_image2_data_publish requires {description}"),
+        )?;
+    }
     Ok(())
+}
+
+fn non_empty_value_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn require_non_empty_value_string<'a>(
+    value: &'a Value,
+    key: &str,
+    message: &str,
+) -> Result<&'a str> {
+    non_empty_value_string(value, key).ok_or_else(|| anyhow!(message.to_string()))
+}
+
+fn static_page_dataset_scope_has_selected_source(scope: &Value) -> bool {
+    [
+        "dataset_ids",
+        "database_source_ids",
+        "selected_document_ids",
+    ]
+    .iter()
+    .any(|key| {
+        scope
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|values| {
+                values.iter().any(|value| {
+                    value
+                        .as_str()
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+                })
+            })
+    })
+}
+
+fn data_ingestion_scope_has_selected_source(scope: &Value) -> bool {
+    [
+        "dataset_ids",
+        "database_source_ids",
+        "selected_document_ids",
+        "uploaded_file_ids",
+        "source_ids",
+        "table_ids",
+    ]
+    .iter()
+    .any(|key| {
+        scope
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|values| {
+                values.iter().any(|value| {
+                    value
+                        .as_str()
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+                })
+            })
+    })
 }
 
 fn validate_answer_quality_fixed_task(
@@ -602,6 +793,72 @@ fn answer_quality_file_scope_allowed(file: &str) -> bool {
     )
 }
 
+fn validate_data_ingestion_fixed_task(
+    fixed_task: &CodexHostFixedTaskTemplateContextView,
+) -> Result<()> {
+    if fixed_task.template_id != CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis {
+        return Err(anyhow!(
+            "data_ingestion_analysis requires template_id=data_ingestion_analysis"
+        ));
+    }
+    if !data_ingestion_scope_has_selected_source(&fixed_task.dataset_scope) {
+        return Err(anyhow!(
+            "data_ingestion_analysis requires at least one selected dataset, document, file, table, or database source"
+        ));
+    }
+    let mode = fixed_task
+        .policies
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if mode != "read_only_analysis_or_staging_spec" {
+        return Err(anyhow!(
+            "data_ingestion_analysis requires mode=read_only_analysis_or_staging_spec"
+        ));
+    }
+    let credential_policy = fixed_task
+        .policies
+        .get("credential_policy")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if credential_policy != "do_not_request_or_emit_credentials" {
+        return Err(anyhow!(
+            "data_ingestion_analysis requires credential_policy=do_not_request_or_emit_credentials"
+        ));
+    }
+    let production_write_policy = fixed_task
+        .policies
+        .get("production_write_policy")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if production_write_policy != "needs_human_confirmation" {
+        return Err(anyhow!(
+            "data_ingestion_analysis requires production_write_policy=needs_human_confirmation"
+        ));
+    }
+    if fixed_task
+        .policies
+        .get("public_api_change_allowed")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(anyhow!(
+            "data_ingestion_analysis requires public_api_change_allowed=false"
+        ));
+    }
+    if fixed_task
+        .policies
+        .get("schema_change_allowed_without_confirmation")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(anyhow!(
+            "data_ingestion_analysis requires schema_change_allowed_without_confirmation=false"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexHostExecutionDecision {
     pub mode: CodexHostExecutionMode,
@@ -625,15 +882,17 @@ fn build_codex_command_plan(
     profile: &CodexHostProfile,
     task_workspace_root: Option<&Path>,
 ) -> Result<CodexCommandPlan> {
-    let prompt = context
-        .task
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| fixed_task_prompt(context.fixed_task.as_ref()).ok())
-        .ok_or_else(|| anyhow!("Codex Host task text is required for non-dry-run planning"))?
-        .to_string();
+    let prompt = if context.fixed_task.is_some() {
+        fixed_task_prompt(context.fixed_task.as_ref())?
+    } else {
+        context
+            .task
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("Codex Host task text is required for non-dry-run planning"))?
+    };
     let sandbox = if context.capability == "propose_patch" || context.fixed_task.is_some() {
         "workspace-write"
     } else {
@@ -673,13 +932,157 @@ fn build_codex_command_plan(
 
 fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>) -> Result<String> {
     let fixed_task = fixed_task.ok_or_else(|| anyhow!("fixed task package missing"))?;
-    let package = serde_json::to_string_pretty(fixed_task)
-        .map_err(|error| anyhow!("failed to serialize fixed task package: {error}"))?;
     Ok(format!(
-        "Run the V3 fixed Cloudflare Codex task template `{}`. Use only this server-owned package and return the configured output schema.\n\n{}",
+        "Run the V3 fixed Cloudflare Codex task template `{}`. Use the files in the current task workspace. Read `task.json` and `schemas/output.schema.json`. Return exactly one final JSON object matching the configured output schema. Do not wrap the final JSON in Markdown fences. Do not modify files outside the workspace except through explicitly allowed generated-artifacts paths or allowlisted patch files. If the task cannot satisfy the no-confirm policy, return status `needs_human` with a bounded human_review_reason.\n\nExpected output schema:\n{}",
         fixed_task.template_id.as_str(),
-        package
+        fixed_task_output_schema_hint(fixed_task.template_id.as_str()),
     ))
+}
+
+fn fixed_task_output_schema_hint(template_id: &str) -> &'static str {
+    match template_id {
+        STATIC_PAGE_IMAGE2_DATA_PUBLISH => {
+            r#"{"template_id":"static_page_image2_data_publish","status":"success|needs_human|failed","artifact":{"local_path":"string","public_url":"https://v3.elepcloud.com/generated-artifacts/...","manifest_path":"string"},"validation_report":{"snapshot_policy":"string","latest_snapshot":"string|null","source_row_count":0,"current_state_row_count":0,"detail_row_count":0,"unit_policy":"string","warnings":["string"]},"source_summary":["string"],"human_review_reason":"string|null"}"#
+        }
+        ANSWER_QUALITY_AUTOFIX => {
+            r#"{"template_id":"answer_quality_autofix","status":"patch_ready|needs_human|not_system_defect|failed","failure_type":"missing_source|parse_quality|retrieval_supply|answer_policy|not_reproducible","root_cause":"string","changed_files":["string"],"tests_added":["string"],"test_commands":["string"],"risk_level":"low|medium|high","rollback_notes":"string","human_review_reason":"string|null"}"#
+        }
+        DATA_INGESTION_ANALYSIS => {
+            r#"{"template_id":"data_ingestion_analysis","status":"analysis_ready|staging_spec_ready|needs_human|failed","source_summary":["string"],"data_quality_report":{"row_count":0,"warnings":["string"],"quality_notes":["string"]},"mapping_plan":{"fields":[{"source":"string","target":"string","confidence":"high|medium|low","notes":"string"}]},"staging_spec":{"target":"string","steps":["string"]},"validation_checks":["string"],"recommended_next_actions":["string"],"production_write_requested":false,"credential_request_detected":false,"public_api_change_requested":false,"schema_change_requested":false,"human_review_reason":"string|null"}"#
+        }
+        _ => {
+            r#"{"template_id":"string","status":"success|needs_human|failed","human_review_reason":"string|null"}"#
+        }
+    }
+}
+
+pub fn extract_fixed_task_output_from_stdout(
+    raw_stdout: &[u8],
+    template_id: &str,
+) -> Result<Value> {
+    let stdout = String::from_utf8_lossy(raw_stdout);
+    for (start, ch) in stdout.char_indices().rev() {
+        if ch != '{' {
+            continue;
+        }
+        let candidate = &stdout[start..];
+        let mut deserializer = serde_json::Deserializer::from_str(candidate);
+        let Ok(value) = Value::deserialize(&mut deserializer) else {
+            continue;
+        };
+        if let Some(output) = extract_fixed_task_output_value(&value, template_id) {
+            return Ok(output.clone());
+        }
+    }
+    Err(anyhow!(
+        "fixed task output for template {template_id} was not found in Codex stdout"
+    ))
+}
+
+fn extract_fixed_task_output_value<'a>(value: &'a Value, template_id: &str) -> Option<&'a Value> {
+    if value.get("template_id").and_then(Value::as_str) == Some(template_id) {
+        return Some(value);
+    }
+    for field in [
+        "fixed_task_output",
+        "fixedTaskOutput",
+        "template_output",
+        "templateOutput",
+        "result",
+        "output",
+    ] {
+        if let Some(nested) = value.get(field) {
+            if let Some(output) = extract_fixed_task_output_value(nested, template_id) {
+                return Some(output);
+            }
+        }
+    }
+    None
+}
+
+pub fn materialize_fixed_task_bundle(
+    workspace_path: &Path,
+    context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+) -> Result<()> {
+    let Some(fixed_task) = context.fixed_task.as_ref() else {
+        return Ok(());
+    };
+    fs::create_dir_all(workspace_path).map_err(|error| {
+        anyhow!(
+            "failed to create Codex Host task workspace {}: {error}",
+            workspace_path.display()
+        )
+    })?;
+    fs::create_dir_all(workspace_path.join("schemas")).map_err(|error| {
+        anyhow!(
+            "failed to create Codex Host schema directory {}: {error}",
+            workspace_path.join("schemas").display()
+        )
+    })?;
+    fs::create_dir_all(workspace_path.join("evidence")).map_err(|error| {
+        anyhow!(
+            "failed to create Codex Host evidence directory {}: {error}",
+            workspace_path.join("evidence").display()
+        )
+    })?;
+
+    write_json_file(&workspace_path.join("task.json"), &json!(fixed_task))?;
+    let schema: Value = serde_json::from_str(fixed_task_output_schema_hint(
+        fixed_task.template_id.as_str(),
+    ))
+    .map_err(|error| anyhow!("fixed task output schema hint is invalid JSON: {error}"))?;
+    write_json_file(&workspace_path.join("schemas/output.schema.json"), &schema)?;
+    write_json_file(
+        &workspace_path.join("evidence/summary.json"),
+        &json!({
+            "template_id": fixed_task.template_id.as_str(),
+            "dataset_scope": fixed_task.dataset_scope.clone(),
+            "evidence_summary": fixed_task.evidence_summary.clone(),
+            "trace_summary": fixed_task.trace_summary.clone(),
+        }),
+    )?;
+    write_json_file(
+        &workspace_path.join("runtime.json"),
+        &json!({
+            "assistant_run_id": context.assistant_run_id.to_string(),
+            "capability": context.capability.clone(),
+            "local_thread_id": context.local_thread_id.clone(),
+            "task_memory_isolated": context.task_memory_isolated,
+            "task_memory_space_id": context.task_memory_space_id.clone(),
+            "host_kind": decision.host_kind.clone(),
+            "profile": decision.profile.safe_summary(),
+            "workspace_label": decision
+                .command_plan
+                .as_ref()
+                .and_then(|plan| plan.workspace_label.clone()),
+            "raw_prompt_exposed": false,
+            "secrets_exposed": false,
+        }),
+    )?;
+    fs::write(
+        workspace_path.join("README.md"),
+        fixed_task_bundle_readme(fixed_task.template_id.as_str()),
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write Codex Host bundle README {}: {error}",
+            workspace_path.join("README.md").display()
+        )
+    })?;
+    Ok(())
+}
+
+fn write_json_file(path: &Path, value: &Value) -> Result<()> {
+    let content = serde_json::to_string_pretty(value)
+        .map_err(|error| anyhow!("failed to serialize {}: {error}", path.display()))?;
+    fs::write(path, content).map_err(|error| anyhow!("failed to write {}: {error}", path.display()))
+}
+
+fn fixed_task_bundle_readme(template_id: &str) -> String {
+    format!(
+        "# V3 Fixed Codex Task\n\nTemplate: `{template_id}`\n\nRead `task.json` for the V3-owned fixed task package and `schemas/output.schema.json` for the required final JSON shape.\n\nRules:\n\n- Return exactly one final JSON object.\n- Do not wrap the final JSON in Markdown fences.\n- Do not emit credentials, database URLs, provider logs, raw customer documents, or raw stdout/stderr.\n- Do not change public API, auth, request/response fields, database schema, deployment config, or stable customer URLs unless the fixed task output returns `needs_human`.\n"
+    )
 }
 
 fn task_workspace_label(context: &CodexHostTaskContext) -> String {
@@ -789,6 +1192,22 @@ fn env_bool(key: &str, default: bool) -> bool {
                 "1" | "true" | "yes" | "on"
             )
         })
+        .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
         .unwrap_or(default)
 }
 
@@ -1058,6 +1477,115 @@ mod tests {
     }
 
     #[test]
+    fn plan_only_allows_data_ingestion_analysis_template() {
+        let mut context = test_context(
+            DATA_INGESTION_ANALYSIS,
+            Some("Run the fixed data-ingestion analysis template package."),
+        );
+        context.fixed_task =
+            Some(CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example());
+        let policy = fixed_task_policy(CodexHostExecutionMode::PlanOnly, DATA_INGESTION_ANALYSIS);
+
+        let decision = policy.prepare(&context).expect("decision");
+        let plan = decision.command_plan.expect("command plan");
+
+        assert_eq!(decision.host_kind, "cloudflare_codex");
+        assert_eq!(plan.sandbox, "workspace-write");
+        assert!(plan.prompt.contains("data_ingestion_analysis"));
+    }
+
+    #[test]
+    fn data_ingestion_template_requires_selected_source_scope() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example();
+        fixed_task.dataset_scope = json!({
+            "tenant_id": "tenant-1",
+            "dataset_ids": [],
+            "database_source_ids": [],
+            "selected_document_ids": [],
+            "uploaded_file_ids": []
+        });
+        let mut context = test_context(
+            DATA_INGESTION_ANALYSIS,
+            Some("Run the fixed data-ingestion analysis template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(CodexHostExecutionMode::PlanOnly, DATA_INGESTION_ANALYSIS);
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error
+            .to_string()
+            .contains("selected dataset, document, file, table, or database source"));
+    }
+
+    #[test]
+    fn data_ingestion_template_requires_read_only_analysis_policies() {
+        for (policy_key, bad_value, expected) in [
+            (
+                "mode",
+                json!("production_import"),
+                "mode=read_only_analysis_or_staging_spec",
+            ),
+            (
+                "credential_policy",
+                json!("request_credentials_if_missing"),
+                "credential_policy=do_not_request_or_emit_credentials",
+            ),
+            (
+                "production_write_policy",
+                json!("allow_without_confirmation"),
+                "production_write_policy=needs_human_confirmation",
+            ),
+            (
+                "public_api_change_allowed",
+                json!(true),
+                "public_api_change_allowed=false",
+            ),
+            (
+                "schema_change_allowed_without_confirmation",
+                json!(true),
+                "schema_change_allowed_without_confirmation=false",
+            ),
+        ] {
+            let mut fixed_task =
+                CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example();
+            fixed_task.policies[policy_key] = bad_value;
+            let mut context = test_context(
+                DATA_INGESTION_ANALYSIS,
+                Some("Run the fixed data-ingestion analysis template package."),
+            );
+            context.fixed_task = Some(fixed_task);
+            let policy =
+                fixed_task_policy(CodexHostExecutionMode::PlanOnly, DATA_INGESTION_ANALYSIS);
+
+            let error = policy.prepare(&context).expect_err("should reject");
+
+            assert!(
+                error.to_string().contains(expected),
+                "bad {policy_key} should mention {expected}, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn data_ingestion_template_rejects_unapproved_host_kind_for_plan_only() {
+        let mut context = test_context(
+            DATA_INGESTION_ANALYSIS,
+            Some("Run the fixed data-ingestion analysis template package."),
+        );
+        context.fixed_task =
+            Some(CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example());
+        let mut policy =
+            fixed_task_policy(CodexHostExecutionMode::PlanOnly, DATA_INGESTION_ANALYSIS);
+        policy.host_kind = "developer_workstation".to_string();
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error.to_string().contains("blocked on host kind"));
+    }
+
+    #[test]
     fn codex_exec_rejects_untemplated_write_capability() {
         let context = test_context(STATIC_PAGE_IMAGE2_DATA_PUBLISH, Some("Publish a page"));
         let policy = fixed_task_policy(
@@ -1092,6 +1620,108 @@ mod tests {
         assert!(error
             .to_string()
             .contains("publish_mode=new_generated_artifact_only"));
+    }
+
+    #[test]
+    fn static_page_template_requires_preview_ready_or_preview_asset_key() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.image2["visual_contract_status"] = json!("queued");
+        fixed_task.image2["preview_asset_key"] = Value::Null;
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error
+            .to_string()
+            .contains("visual_contract_status=preview_ready"));
+    }
+
+    #[test]
+    fn static_page_template_requires_dataset_or_database_scope() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.dataset_scope = json!({
+            "tenant_id": "tenant-1",
+            "dataset_ids": [],
+            "database_source_ids": [],
+            "selected_document_ids": []
+        });
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error
+            .to_string()
+            .contains("selected dataset, document, or database source"));
+    }
+
+    #[test]
+    fn static_page_template_requires_snapshot_unit_and_detail_policies() {
+        for (policy_key, expected) in [
+            ("snapshot_aggregation", "snapshot aggregation policy"),
+            ("trend_aggregation", "trend aggregation policy"),
+            ("unit_rendering", "unit rendering policy"),
+            ("detail_table_policy", "detail table policy"),
+        ] {
+            let mut fixed_task =
+                CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+            fixed_task.policies[policy_key] = Value::Null;
+            let mut context = test_context(
+                STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+                Some("Run the fixed static-page template package."),
+            );
+            context.fixed_task = Some(fixed_task);
+            let policy = fixed_task_policy(
+                CodexHostExecutionMode::PlanOnly,
+                STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            );
+
+            let error = policy.prepare(&context).expect_err("should reject");
+
+            assert!(
+                error.to_string().contains(expected),
+                "missing {policy_key} should mention {expected}, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn static_page_template_rejects_effect_image_confirmation_required_true() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.policies["effect_image_confirmation_required"] = json!(true);
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error
+            .to_string()
+            .contains("effect_image_confirmation_required=false"));
     }
 
     #[test]
@@ -1245,6 +1875,142 @@ mod tests {
         assert!(excerpt.chars().count() <= 40);
     }
 
+    #[test]
+    fn runtime_config_reads_bounded_env_values() {
+        let _timeout = TestEnvVarRestore::set("CODEX_HOST_AGENT_TASK_TIMEOUT_MS", "42");
+        let _heartbeat = TestEnvVarRestore::set("CODEX_HOST_AGENT_HEARTBEAT_MS", "invalid");
+        let _stdout = TestEnvVarRestore::set("CODEX_HOST_AGENT_STDOUT_LIMIT_BYTES", "12");
+        let _stderr = TestEnvVarRestore::set("CODEX_HOST_AGENT_STDERR_LIMIT_BYTES", "0");
+
+        let config = CodexHostRuntimeConfig::from_env();
+
+        assert_eq!(config.task_timeout_ms(), 42);
+        assert_eq!(config.heartbeat_ms(), DEFAULT_HEARTBEAT_MS);
+        assert_eq!(config.stdout_limit_bytes(), 12);
+        assert_eq!(config.stderr_limit_bytes(), DEFAULT_STDERR_LIMIT_BYTES);
+    }
+
+    #[test]
+    fn codex_exec_extracts_static_page_fixed_task_output_from_stdout() {
+        let stdout = br#"
+thinking...
+{
+  "template_id": "static_page_image2_data_publish",
+  "status": "success",
+  "artifact": {
+    "local_path": "/srv/aiv3/shared/objects/generated-artifacts/database-static-pages/run/page",
+    "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/run/page/index.html",
+    "manifest_path": "/srv/aiv3/shared/objects/generated-artifacts/database-static-pages/run/page/manifest.json"
+  },
+  "validation_report": {
+    "snapshot_policy": "latest_snapshot_for_state_modules",
+    "latest_snapshot": "2026-05-10",
+    "source_row_count": 862,
+    "current_state_row_count": 851,
+    "detail_row_count": 851,
+    "unit_policy": "raw_value_checked_then_wan_or_yi",
+    "warnings": []
+  },
+  "source_summary": ["2026-05-10 snapshot"],
+  "human_review_reason": null
+}
+"#;
+
+        let output = extract_fixed_task_output_from_stdout(stdout, STATIC_PAGE_IMAGE2_DATA_PUBLISH)
+            .expect("fixed output");
+
+        assert_eq!(
+            output["template_id"],
+            json!(STATIC_PAGE_IMAGE2_DATA_PUBLISH)
+        );
+        assert_eq!(output["status"], json!("success"));
+        assert_eq!(output["validation_report"]["detail_row_count"], json!(851));
+    }
+
+    #[test]
+    fn codex_exec_extracts_answer_quality_fixed_task_output_from_stdout() {
+        let stdout = br#"
+summary text before final output
+{"fixed_task_output":{"template_id":"answer_quality_autofix","status":"patch_ready","failure_type":"retrieval_supply","root_cause":"table rows were not supplied","changed_files":["crates/platform-api/src/lib.rs"],"tests_added":["assistant_run_answer_quality_regression"],"test_commands":["cargo test -p platform-api assistant_run_answer_quality --lib"],"risk_level":"low","rollback_notes":"revert answer quality helper change","human_review_reason":null}}
+"#;
+
+        let output = extract_fixed_task_output_from_stdout(stdout, ANSWER_QUALITY_AUTOFIX)
+            .expect("fixed output");
+
+        assert_eq!(output["template_id"], json!(ANSWER_QUALITY_AUTOFIX));
+        assert_eq!(output["status"], json!("patch_ready"));
+        assert_eq!(
+            output["changed_files"],
+            json!(["crates/platform-api/src/lib.rs"])
+        );
+    }
+
+    #[test]
+    fn codex_exec_rejects_missing_fixed_task_output_for_fixed_template() {
+        let error = extract_fixed_task_output_from_stdout(
+            b"Codex completed but did not print JSON.",
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        )
+        .expect_err("missing output should fail");
+
+        assert!(error.to_string().contains("fixed task output"));
+    }
+
+    #[test]
+    fn fixed_task_bundle_materializes_workspace_files() {
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task =
+            Some(CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example());
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+        let decision = policy.prepare(&context).expect("decision");
+        let workspace =
+            std::env::temp_dir().join(format!("v3-codex-host-bundle-test-{}", Uuid::new_v4()));
+
+        materialize_fixed_task_bundle(&workspace, &context, &decision)
+            .expect("bundle should materialize");
+
+        let task = fs::read_to_string(workspace.join("task.json")).expect("task.json");
+        let readme = fs::read_to_string(workspace.join("README.md")).expect("README.md");
+        let schema =
+            fs::read_to_string(workspace.join("schemas/output.schema.json")).expect("schema");
+        let evidence =
+            fs::read_to_string(workspace.join("evidence/summary.json")).expect("evidence");
+        let runtime = fs::read_to_string(workspace.join("runtime.json")).expect("runtime");
+
+        assert!(task.contains("\"template_id\": \"static_page_image2_data_publish\""));
+        assert!(readme.contains("Read `task.json`"));
+        assert!(schema.contains("\"template_id\""));
+        assert!(evidence.contains("\"dataset_scope\""));
+        assert!(runtime.contains("\"raw_prompt_exposed\": false"));
+        assert!(!runtime.contains("api_key"));
+        assert!(!readme.contains("DATABASE_URL"));
+    }
+
+    #[test]
+    fn fixed_task_prompt_points_to_workspace_bundle() {
+        let mut context = test_context(
+            ANSWER_QUALITY_AUTOFIX,
+            Some("Run the fixed answer-quality autofix template package."),
+        );
+        context.fixed_task =
+            Some(CodexHostFixedTaskTemplateContextView::answer_quality_autofix_example());
+        let policy = fixed_task_policy(CodexHostExecutionMode::PlanOnly, ANSWER_QUALITY_AUTOFIX);
+
+        let decision = policy.prepare(&context).expect("decision");
+        let plan = decision.command_plan.expect("command plan");
+
+        assert!(plan.prompt.contains("Read `task.json`"));
+        assert!(plan.prompt.contains("schemas/output.schema.json"));
+        assert!(plan.prompt.contains("Return exactly one final JSON object"));
+        assert!(!plan.prompt.contains("\"allowed_write_scope\""));
+    }
+
     fn fixed_task_policy(mode: CodexHostExecutionMode, capability: &str) -> CodexHostAgentPolicy {
         CodexHostAgentPolicy {
             mode,
@@ -1273,6 +2039,28 @@ mod tests {
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+        }
+    }
+
+    struct TestEnvVarRestore {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl TestEnvVarRestore {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for TestEnvVarRestore {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
         }
     }
 }

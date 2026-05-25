@@ -360,8 +360,8 @@
       <nav aria-label="文档目录">
         <a href="#section-01">文档解析</a>
 <a href="#section-06">聊天同步</a>
-<a href="#section-09">生成产物（报表）</a>
-<a href="#section-14">枚举与错误</a>
+<a href="#section-10">生成产物（报表）</a>
+<a href="#section-15">枚举与错误</a>
       </nav>
     </aside>
     <main>
@@ -604,8 +604,31 @@ Authorization: Bearer &lt;V3 inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <p>请求体与 <code>POST /events</code> 相同。</p>
-<h2 id="section-09">3. 生成产物（报表）</h2>
-<h3 id="section-10">3.1 模板列表字段</h3>
+<h3 id="section-09">2.3 数据接入/入库分析请求</h3>
+<p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出数据接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求，例如：</p>
+<figure class="code-card">
+    <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;platform&quot;: &quot;generic_chat&quot;,
+  &quot;tenant_external_id&quot;: &quot;tenant-ext-001&quot;,
+  &quot;bot_external_id&quot;: &quot;bot-v3&quot;,
+  &quot;conversation_external_id&quot;: &quot;conv-20260520-0001&quot;,
+  &quot;sender_external_id&quot;: &quot;user-10001&quot;,
+  &quot;message_external_id&quot;: &quot;msg-data-20260520-0001&quot;,
+  &quot;message_type&quot;: &quot;text&quot;,
+  &quot;text&quot;: &quot;帮我接入这份考勤表并入库分析字段，重点看缺勤和工时长短。&quot;,
+  &quot;available_document_source_id&quot;: &quot;third-party-source-main&quot;,
+  &quot;available_document_external_ids&quot;: [&quot;attendance-202605.xlsx&quot;],
+  &quot;idempotency_key&quot;: &quot;data-ingestion:tenant-ext-001:msg-data-20260520-0001&quot;,
+  &quot;received_at&quot;: &quot;2026-05-20T10:20:00Z&quot;
+}</code></pre>
+  </figure>
+<p>V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、数据库源预览交给固定 Cloudflare Codex 任务；不会把原始数据库 URL、凭据、完整表 dump 或无限制本地路径放进任务包。</p>
+<p>当服务端启用 <code>data_ingestion_analysis</code> 固定能力时，符合条件的请求会返回现有 <code>task_status</code> 形态：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>data_ingestion_analysis_queued</code></td></tr><tr><td><code>reply.card.type</code></td><td><code>v3_data_ingestion_analysis</code></td></tr><tr><td><code>reply.card.codex_host_workflow_execution_id</code></td><td>固定分析任务 ID</td></tr></tbody></table></div>
+<p>若没有选中或上传可分析的数据源/表格/文档，V3 会返回 <code>data_ingestion_analysis_source_required</code>，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。</p>
+<h2 id="section-10">3. 生成产物（报表）</h2>
+<h3 id="section-11">3.1 模板列表字段</h3>
 <p>第三方页面或第三方 AI 只需要保留下面这些模板字段；生成时把选中的模板带入 3.3。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -623,7 +646,7 @@ Content-Type: application/json</code></pre>
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template_document_external_id</code></td><td>是</td><td>模板文档 ID；必须先按 1.1 解析</td></tr><tr><td><code>source_id</code></td><td>是</td><td>模板所属文档源 ID</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>title</code></td><td>是</td><td>模板展示名</td></tr><tr><td><code>output_type</code></td><td>是</td><td><code>static_page</code>、<code>html</code>、<code>report</code> 或 <code>any</code></td></tr><tr><td><code>description</code></td><td>否</td><td>模板说明</td></tr><tr><td><code>tags</code></td><td>否</td><td>模板标签</td></tr></tbody></table></div>
-<h3 id="section-11">3.2 模板解析</h3>
+<h3 id="section-12">3.2 模板解析</h3>
 <p>模板也是文档，用 1.1 的解析接口。建议在 <code>metadata</code> 标记模板用途。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -644,7 +667,7 @@ Content-Type: application/json</code></pre>
   &quot;idempotency_key&quot;: &quot;parse-template:tpl-weekly-report-001:rev-template-01&quot; // 幂等键
 }</code></pre>
   </figure>
-<h3 id="section-12">3.3 按模板生成报表</h3>
+<h3 id="section-13">3.3 按模板生成报表</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
@@ -687,9 +710,16 @@ Content-Type: application/json</code></pre>
   &quot;received_at&quot;: &quot;2026-05-20T10:10:00Z&quot;            // 消息时间
 }</code></pre>
   </figure>
-<p>生成响应字段同 2.1。若已生成静态页/报表/HTML 产物，重点读取：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code> 或 <code>text</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的说明</td></tr><tr><td><code>reply.artifact_links</code></td><td>产物预览/下载链接数组；模板 HTML 产物会返回 <code>/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0</code></td></tr><tr><td><code>reply.card</code></td><td>可能包含 <code>render_output_id</code>、产物状态或结构化卡片</td></tr><tr><td><code>assistant_run_id</code></td><td>本次生成运行 ID</td></tr></tbody></table></div>
-<h3 id="section-13">3.4 查询、预览、下载产物</h3>
+<p>生成响应字段同 2.1。第三方接口无需新增字段；复杂建表/静态页请求继续使用 <code>render_mode: &quot;artifact&quot;</code>、<code>output_format: &quot;image_text&quot;</code>，并在模板 skill 中传 <code>output_type: &quot;static_page&quot;</code>。V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图用于流式/状态卡片预览，不再要求客户确认。若服务端已启用 <code>static_page_image2_data_publish</code> 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面。</p>
+<p>若进入静态页/Image2 流水线，响应通常为：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>static_page_image2_auto_publish_pending</code> 或 <code>static_page_image_preview_queued</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的排队/处理说明；若自动发布已启用，会说明效果图无需确认并将继续发布</td></tr><tr><td><code>reply.card.type</code></td><td><code>v3_static_page_image2_pipeline</code></td></tr><tr><td><code>reply.card.draft_id</code></td><td>V3 静态页草稿 ID</td></tr><tr><td><code>reply.card.image_job_id</code></td><td>Image2 效果图任务 ID</td></tr><tr><td><code>reply.card.auto_publish_after_preview</code></td><td><code>true</code> 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路</td></tr><tr><td><code>reply.card.effect_image_confirmation_required</code></td><td>固定为 <code>false</code>，效果图只作为客户可见预览，不作为阻塞确认点</td></tr><tr><td><code>reply.card.codex_host_workflow_execution_id</code></td><td>初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID</td></tr></tbody></table></div>
+<p>若调用流式接口，V3 会在文本 delta 后额外输出 <code>external_channel.static_page_effect_image_queued</code> 事件，事件里的 <code>card</code> 与上表一致，第三方可直接展示给客户作为进度/效果图入口；后续仍按自动链路继续产出页面。</p>
+<p>固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 <code>reply</code> 对象：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>static_page_published</code></td></tr><tr><td><code>reply.artifact_links[0]</code></td><td>最终 V3 generated-artifact 页面链接，例如 <code>https://v3.elepcloud.com/generated-artifacts/.../index.html</code></td></tr><tr><td><code>reply.card.type</code></td><td><code>v3_static_page_image2_publish_completed</code></td></tr><tr><td><code>reply.card.codex_host_workflow_execution_id</code></td><td>固定发布任务 ID；初始响应为空时，会在最终事件中补齐</td></tr><tr><td><code>reply.card.validation_summary</code></td><td>口径摘要，如最新快照日期、源行数、明细行数、单位策略和告警；不会包含原始明细行或内部检索日志</td></tr></tbody></table></div>
+<p>如果第三方使用 <code>assistant_run_id</code> 做轮询/观测，应读取该运行下的最终状态事件 <code>assistant_run.external_channel_static_page_publish_completed</code>；事件中的 <code>public_url</code> 与 <code>artifact_links[0]</code> 是同一个最终页面链接。</p>
+<p>若已生成静态页/报表/HTML 产物，重点读取：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code>、<code>text</code> 或 <code>task_status</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的说明</td></tr><tr><td><code>reply.artifact_links</code></td><td>产物预览/下载链接数组；模板 HTML 产物会返回 <code>/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0</code></td></tr><tr><td><code>reply.card</code></td><td>可能包含 <code>render_output_id</code>、<code>draft_id</code>、<code>image_job_id</code>、产物状态或结构化卡片</td></tr><tr><td><code>assistant_run_id</code></td><td>本次生成运行 ID</td></tr></tbody></table></div>
+<h3 id="section-14">3.4 查询、预览、下载产物</h3>
 <p>模板 HTML 产物直接下载：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -714,13 +744,13 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>artifact_id</code></td><td>HTML 产物下载必填</td><td><code>reply.artifact_links</code> 中的 HTML artifact ID</td></tr><tr><td><code>file_index</code></td><td>HTML 产物下载必填</td><td>文件序号；当前模板 HTML 产物固定传 <code>0</code></td></tr><tr><td><code>render_output_id</code></td><td>静态页/报表必填</td><td>V3 生成的静态页/报表渲染 ID</td></tr></tbody></table></div>
-<h2 id="section-14">4. 枚举与错误</h2>
-<h3 id="section-15">4.1 <code>output_format</code></h3>
+<h2 id="section-15">4. 枚举与错误</h2>
+<h3 id="section-16">4.1 <code>output_format</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>rich_text</code></td><td>富文本回答</td></tr><tr><td><code>image_text</code></td><td>图文排版回答</td></tr><tr><td><code>markdown_table</code></td><td>MD 表格回答</td></tr><tr><td><code>json</code></td><td>JSON 回答</td></tr></tbody></table></div>
 <p>中文值也可传：<code>富文本</code>、<code>图文排版</code>、<code>MD表格</code>、<code>JSON</code>。</p>
-<h3 id="section-16">4.2 <code>render_mode</code></h3>
+<h3 id="section-17">4.2 <code>render_mode</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>normal</code></td><td>普通聊天回答</td></tr><tr><td><code>artifact</code></td><td>生成可预览/下载产物</td></tr></tbody></table></div>
-<h3 id="section-17">4.3 错误格式</h3>
+<h3 id="section-18">4.3 错误格式</h3>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{

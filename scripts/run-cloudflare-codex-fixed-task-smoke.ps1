@@ -12,6 +12,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $AllCases = @(
+    "static-page-no-confirm",
+    "data-ingestion-analysis",
     "static_page_plan_only",
     "static_page_new_artifact",
     "static_page_overwrite_rejected",
@@ -20,17 +22,30 @@ $AllCases = @(
     "runtime_summary"
 )
 
+$CaseAliases = @{
+    "static_page_no_confirm" = "static-page-no-confirm"
+    "static-page-image2-data-publish" = "static-page-no-confirm"
+    "static_page_image2_data_publish" = "static-page-no-confirm"
+    "data_ingestion_analysis" = "data-ingestion-analysis"
+    "data-ingestion" = "data-ingestion-analysis"
+}
+
 function Resolve-SmokeCases {
     param([string[]] $Requested)
     if ($Requested.Count -eq 0 -or $Requested -contains "all") {
         return $AllCases
     }
+    $resolved = New-Object System.Collections.Generic.List[string]
     foreach ($item in $Requested) {
-        if ($AllCases -notcontains $item) {
+        $caseId = if ($CaseAliases.ContainsKey($item)) { $CaseAliases[$item] } else { $item }
+        if ($AllCases -notcontains $caseId) {
             throw "Unknown fixed-task smoke case '$item'. Known cases: $($AllCases -join ', ')"
         }
+        if (-not $resolved.Contains($caseId)) {
+            $resolved.Add($caseId) | Out-Null
+        }
     }
-    return $Requested
+    return $resolved.ToArray()
 }
 
 function New-SmokeResult {
@@ -58,6 +73,71 @@ function Invoke-CheckedCommand {
     [ordered]@{
         exit_code = $exitCode
         output = ($output -join "`n")
+    }
+}
+
+function New-CommandDetail {
+    param(
+        [string] $Command,
+        [object] $Result
+    )
+    $excerpt = ""
+    if ($Result.exit_code -ne 0 -and -not [string]::IsNullOrWhiteSpace($Result.output)) {
+        $excerpt = $Result.output.Substring(0, [Math]::Min(4000, $Result.output.Length))
+    }
+    [ordered]@{
+        command = $Command
+        exit_code = $Result.exit_code
+        failure_excerpt = $excerpt
+    }
+}
+
+function Invoke-LocalCaseSmoke {
+    param(
+        [string] $CaseId,
+        [string] $CargoBin
+    )
+
+    $commands = New-Object System.Collections.Generic.List[object]
+    switch ($CaseId) {
+        "static-page-no-confirm" {
+            $commands.Add([string[]]@("test", "-p", "platform-api", "external_channel_static_page", "--lib")) | Out-Null
+            $commands.Add([string[]]@("test", "-p", "platform-api", "codex_host_fixed_task", "--lib")) | Out-Null
+            $commands.Add([string[]]@("test", "-p", "codex-host-agent", "static_page", "--lib")) | Out-Null
+        }
+        "answer_quality_autofix" {
+            $commands.Add([string[]]@("test", "-p", "platform-api", "answer_quality_autofix", "--lib")) | Out-Null
+            $commands.Add([string[]]@("test", "-p", "codex-host-agent", "answer_quality", "--lib")) | Out-Null
+        }
+        "data-ingestion-analysis" {
+            $commands.Add([string[]]@("test", "-p", "contracts", "data_ingestion", "--lib")) | Out-Null
+            $commands.Add([string[]]@("test", "-p", "codex-host-agent", "data_ingestion", "--lib")) | Out-Null
+            $commands.Add([string[]]@("test", "-p", "platform-api", "data_ingestion", "--lib")) | Out-Null
+            $commands.Add([string[]]@("test", "-p", "platform-api", "codex_host_fixed_task", "--lib")) | Out-Null
+        }
+        default {
+            $commands.Add([string[]]@("test", "-p", "platform-api", "codex_host_fixed_task", "--lib")) | Out-Null
+        }
+    }
+
+    $details = New-Object System.Collections.Generic.List[object]
+    $failed = $false
+    foreach ($args in $commands.ToArray()) {
+        $result = Invoke-CheckedCommand -FilePath $CargoBin -Arguments $args
+        $commandText = "$CargoBin $($args -join ' ')"
+        $details.Add((New-CommandDetail -Command $commandText -Result $result)) | Out-Null
+        if ($result.exit_code -ne 0) {
+            $failed = $true
+        }
+    }
+
+    [ordered]@{
+        status = if ($failed) { "failed" } else { "passed" }
+        details = [ordered]@{
+            plan_only = $true
+            no_server_writes = $true
+            commands = $details.ToArray()
+        }
     }
 }
 
@@ -115,20 +195,11 @@ $mode = if ($Local -or [string]::IsNullOrWhiteSpace($BaseUrl)) { "local_plan_onl
 $results = New-Object System.Collections.Generic.List[object]
 
 if ($mode -eq "local_plan_only") {
-    $commandResult = Invoke-CheckedCommand -FilePath $CargoBin -Arguments @(
-        "test",
-        "-p",
-        "platform-api",
-        "codex_host_fixed_task",
-        "--lib"
-    )
-    $status = if ($commandResult.exit_code -eq 0) { "passed" } else { "failed" }
-    $details = [ordered]@{
-        command = "$CargoBin test -p platform-api codex_host_fixed_task --lib"
-        exit_code = $commandResult.exit_code
-    }
     foreach ($caseId in $selectedCases) {
+        $caseSmoke = Invoke-LocalCaseSmoke -CaseId $caseId -CargoBin $CargoBin
         $message = switch ($caseId) {
+            "static-page-no-confirm" { "Image2-first static-page path exposes a no-confirm pending card, queues Codex Host only after preview-ready evidence, validates fixed output, and returns a final artifact-link reply." }
+            "data-ingestion-analysis" { "Data-ingestion analysis path detects customer source-analysis requests, packages only V3-selected scope, validates read-only/staging outputs, and routes unsafe credential/schema/API/write requests to human review." }
             "static_page_plan_only" { "Fixed static-page queued audit package is safe and bounded." }
             "static_page_new_artifact" { "New generated-artifact output validation is accepted." }
             "static_page_overwrite_rejected" { "Non generated-artifact URL is rejected for human review." }
@@ -137,7 +208,7 @@ if ($mode -eq "local_plan_only") {
             "runtime_summary" { "Runtime diagnostics summarize fixed-task status without raw prompt data." }
             default { "Fixed-task smoke case ran." }
         }
-        $results.Add((New-SmokeResult -CaseId $caseId -Status $status -Message $message -Details $details))
+        $results.Add((New-SmokeResult -CaseId $caseId -Status $caseSmoke.status -Message $message -Details $caseSmoke.details))
     }
 } else {
     $base = $BaseUrl.TrimEnd("/")
@@ -152,7 +223,18 @@ if ($mode -eq "local_plan_only") {
 
     if ($PlanOnly -or -not $AllowServerMutation) {
         foreach ($caseId in $selectedCases) {
-            $results.Add((New-SmokeResult -CaseId $caseId -Status "skipped" -Message "Server mutation smoke is guarded. Re-run on an approved host with -AllowServerMutation after deployment review." -Details @{ base_url = $BaseUrl; plan_only = [bool]$PlanOnly }))
+            $guardDetails = @{
+                base_url = $BaseUrl
+                plan_only = [bool]$PlanOnly
+                customer_confirmation_required = $false
+            }
+            if ($caseId -eq "static-page-no-confirm") {
+                $guardDetails.expected_final_url_prefix = "$base/generated-artifacts/"
+            } elseif ($caseId -eq "data-ingestion-analysis") {
+                $guardDetails.expected_output_statuses = @("analysis_ready", "staging_spec_ready", "needs_human", "failed")
+                $guardDetails.production_writes_allowed = $false
+            }
+            $results.Add((New-SmokeResult -CaseId $caseId -Status "skipped" -Message "Server mutation smoke is guarded. Re-run on an approved host with -AllowServerMutation after deployment review." -Details $guardDetails))
         }
     } else {
         foreach ($caseId in $selectedCases) {

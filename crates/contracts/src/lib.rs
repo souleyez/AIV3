@@ -1368,6 +1368,7 @@ impl CodexHostTaskRequestView {
 pub enum CodexHostFixedTaskTemplateIdView {
     StaticPageImage2DataPublish,
     AnswerQualityAutofix,
+    DataIngestionAnalysis,
 }
 
 impl CodexHostFixedTaskTemplateIdView {
@@ -1375,6 +1376,7 @@ impl CodexHostFixedTaskTemplateIdView {
         match self {
             Self::StaticPageImage2DataPublish => "static_page_image2_data_publish",
             Self::AnswerQualityAutofix => "answer_quality_autofix",
+            Self::DataIngestionAnalysis => "data_ingestion_analysis",
         }
     }
 }
@@ -1384,6 +1386,7 @@ impl CodexHostFixedTaskTemplateIdView {
 pub enum CodexHostFixedTaskHumanReviewPolicyView {
     AutoForNewGeneratedArtifact,
     AutoForDiagnosisAndPatchProposal,
+    AutoForReadOnlyAnalysisOrStagingSpec,
     RequiredForExceptions,
 }
 
@@ -1452,13 +1455,24 @@ impl CodexHostFixedTaskTemplateContextView {
             image2: json!({
                 "prompt_text": "Image2 visual brief",
                 "image_job_id": "image-job-1",
-                "visual_contract_url": "https://v3.elepcloud.com/generated-artifacts/example.png"
+                "image_job_status": "preview_ready",
+                "visual_contract_status": "preview_ready",
+                "visual_contract_url": "https://v3.elepcloud.com/generated-artifacts/example.png",
+                "preview_asset_key": "static-page-previews/example.png",
+                "customer_preview_delivery": "stream_event_or_status_card",
+                "human_confirmation_required": false
             }),
             policies: json!({
                 "snapshot_aggregation": "latest_snapshot_for_state_modules",
                 "trend_aggregation": "date_series_only_for_trends",
                 "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
-                "publish_mode": "new_generated_artifact_only"
+                "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
+                "publish_mode": "new_generated_artifact_only",
+                "effect_image_confirmation_required": false,
+                "continue_to_publish_after_effect_image": true,
+                "public_api_change_allowed": false,
+                "auth_change_allowed": false,
+                "schema_change_allowed": false
             }),
             low_quality_signals: Vec::new(),
             user_question: None,
@@ -1515,6 +1529,53 @@ impl CodexHostFixedTaskTemplateContextView {
                 CodexHostFixedTaskHumanReviewPolicyView::AutoForDiagnosisAndPatchProposal,
         }
     }
+
+    pub fn data_ingestion_analysis_example() -> Self {
+        Self {
+            template_id: CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis,
+            version: 1,
+            assistant_run_id: Some(AssistantRunId::new().to_string()),
+            draft_id: None,
+            case_id: Some("data-ingestion-case-1".to_string()),
+            dataset_scope: json!({
+                "tenant_id": "tenant-1",
+                "dataset_ids": ["dataset-attendance-1"],
+                "database_source_ids": ["source-operating-db-1"],
+                "selected_document_ids": ["doc-attendance-sheet-1"],
+                "uploaded_file_ids": ["file-attendance-xlsx-1"]
+            }),
+            requirements: json!({
+                "user_goal": "分析考勤表缺勤、工时长短，并提出入库字段映射建议",
+                "intent": "data_ingestion_analysis",
+                "requested_outputs": [
+                    "data_quality_report",
+                    "field_mapping_plan",
+                    "validation_sql",
+                    "recommended_next_actions"
+                ]
+            }),
+            image2: Value::Null,
+            policies: json!({
+                "mode": "read_only_analysis_or_staging_spec",
+                "credential_policy": "do_not_request_or_emit_credentials",
+                "production_write_policy": "needs_human_confirmation",
+                "public_api_change_allowed": false,
+                "schema_change_allowed_without_confirmation": false
+            }),
+            low_quality_signals: Vec::new(),
+            user_question: Some("帮我接入这份考勤表并入库分析字段".to_string()),
+            customer_answer: None,
+            evidence_summary: json!({
+                "source_visibility": "v3_selected_scope_only",
+                "sample_rows_available": true,
+                "raw_credentials_supplied": false
+            }),
+            trace_summary: Value::Null,
+            allowed_write_scope: None,
+            human_review_policy:
+                CodexHostFixedTaskHumanReviewPolicyView::AutoForReadOnlyAnalysisOrStagingSpec,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1555,6 +1616,24 @@ pub struct CodexHostFixedTaskOutputView {
     pub validation_report: Option<CodexHostFixedTaskValidationReportView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_summary: Vec<String>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub data_quality_report: Value,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub mapping_plan: Value,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub staging_spec: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validation_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommended_next_actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_write_requested: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_request_detected: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_api_change_requested: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_change_requested: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1726,6 +1805,8 @@ pub struct CodexHostTaskOutputView {
     pub task_memory_space_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub html_artifacts: Vec<HtmlArtifactManifestView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_task_output: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5457,6 +5538,88 @@ mod tests {
         assert_eq!(
             encoded["human_review_policy"],
             json!("auto_for_diagnosis_and_patch_proposal")
+        );
+    }
+
+    #[test]
+    fn codex_host_data_ingestion_template_context_round_trips() {
+        let context = CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example();
+        let encoded = serde_json::to_value(&context).expect("encoded");
+
+        assert_eq!(encoded["template_id"], json!("data_ingestion_analysis"));
+        assert_eq!(
+            encoded["policies"]["mode"],
+            json!("read_only_analysis_or_staging_spec")
+        );
+        assert_eq!(
+            encoded["policies"]["credential_policy"],
+            json!("do_not_request_or_emit_credentials")
+        );
+        assert_eq!(
+            encoded["policies"]["production_write_policy"],
+            json!("needs_human_confirmation")
+        );
+        assert_eq!(
+            encoded["human_review_policy"],
+            json!("auto_for_read_only_analysis_or_staging_spec")
+        );
+    }
+
+    #[test]
+    fn codex_host_data_ingestion_output_schema_accepts_analysis_ready() {
+        let output: CodexHostFixedTaskOutputView = serde_json::from_value(json!({
+            "template_id": "data_ingestion_analysis",
+            "status": "analysis_ready",
+            "source_summary": ["考勤表 sample rows available"],
+            "data_quality_report": {
+                "row_count": 128,
+                "warnings": ["日期列需规范化"]
+            },
+            "mapping_plan": {
+                "fields": [
+                    {"source": "员工姓名", "target": "employee_name", "confidence": "high"},
+                    {"source": "出勤日期", "target": "attendance_date", "confidence": "high"}
+                ]
+            },
+            "validation_checks": ["date_parse_check", "work_hour_range_check"],
+            "recommended_next_actions": ["生成 staging import spec 后由 V3 审核执行"],
+            "human_review_reason": null
+        }))
+        .expect("output");
+
+        assert_eq!(
+            output.template_id,
+            CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis
+        );
+        assert_eq!(output.status, "analysis_ready");
+        assert_eq!(output.validation_checks.len(), 2);
+        assert!(output.data_quality_report.is_object());
+        assert!(output.mapping_plan.is_object());
+    }
+
+    #[test]
+    fn codex_host_data_ingestion_output_schema_requires_human_for_production_write() {
+        let output: CodexHostFixedTaskOutputView = serde_json::from_value(json!({
+            "template_id": "data_ingestion_analysis",
+            "status": "needs_human",
+            "source_summary": ["用户要求直接覆盖生产表"],
+            "data_quality_report": {
+                "row_count": 128,
+                "warnings": []
+            },
+            "validation_checks": ["production_write_guard"],
+            "production_write_requested": true,
+            "schema_change_requested": true,
+            "human_review_reason": "production_write_or_schema_change_requires_confirmation"
+        }))
+        .expect("output");
+
+        assert_eq!(output.status, "needs_human");
+        assert_eq!(output.production_write_requested, Some(true));
+        assert_eq!(output.schema_change_requested, Some(true));
+        assert_eq!(
+            output.human_review_reason.as_deref(),
+            Some("production_write_or_schema_change_requires_confirmation")
         );
     }
 

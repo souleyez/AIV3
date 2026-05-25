@@ -31,6 +31,9 @@ No-confirm conditions:
 
 - The task creates a new artifact path under `/generated-artifacts/`.
 - The data scope comes from V3-selected datasets, documents, or database sources.
+- V3 has already produced an Image2 effect preview or preview asset for the same draft.
+- The customer may view the effect image in the stream/status card, but no customer confirmation is required before V3 continues to Codex execution.
+- The fixed task declares `effect_image_confirmation_required=false` and `continue_to_publish_after_effect_image=true`.
 - The output includes a validation report with latest snapshot, row counts, unit policy, and warnings.
 - The task does not overwrite, revoke, or replace an existing customer artifact.
 - The task does not change V3 source code, public API, auth, schema, deployment config, or third-party integration contracts.
@@ -67,13 +70,17 @@ Fixed input package:
   "image2": {
     "prompt_text": "string",
     "image_job_id": "string",
-    "visual_contract_url": "https://..."
+    "visual_contract_url": "https://...",
+    "visual_contract_status": "preview_ready",
+    "preview_asset_key": "string"
   },
   "policies": {
     "snapshot_aggregation": "latest_snapshot_for_state_modules",
     "trend_aggregation": "date_series_only_for_trends",
     "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
-    "publish_mode": "new_generated_artifact_only"
+    "publish_mode": "new_generated_artifact_only",
+    "effect_image_confirmation_required": false,
+    "continue_to_publish_after_effect_image": true
   }
 }
 ```
@@ -183,6 +190,107 @@ Fixed output schema:
 }
 ```
 
+## Template: `data_ingestion_analysis`
+
+Purpose:
+
+- Analyze customer requests for data接入, 入库, 建表, 字段映射, 清洗, schema, ETL, or database/source analysis.
+- Profile only V3-selected files, documents, datasets, tables, or configured database-source previews.
+- Produce a data-quality report, field mapping plan, validation checks, and recommended next actions.
+- Optionally produce a staging/import specification when the target remains V3-managed and non-production.
+
+No-confirm conditions:
+
+- The task is read-only analysis or a staging-spec proposal.
+- The source scope comes from V3-selected materials only.
+- The task never requests or emits credentials, database URLs, provider logs, or raw customer documents.
+- The task does not change public API, auth, third-party request/response fields, database schema, deploy config, or production data.
+- The output contains source summary, data-quality report, validation checks, and recommended next actions.
+
+Human confirmation is required when:
+
+- A credential, database URL, new connection secret, or expanded source permission is needed.
+- A production table write, overwrite, schema migration, or destructive import is requested.
+- A public API, auth, request/response field, URL, or third-party integration behavior change is proposed.
+- The selected source scope is missing or too ambiguous to profile safely.
+- The output contains sensitive connection text or cannot produce the required validation checks.
+
+Fixed input package:
+
+```json
+{
+  "template_id": "data_ingestion_analysis",
+  "version": 1,
+  "assistant_run_id": "uuid",
+  "case_id": "uuid",
+  "dataset_scope": {
+    "tenant_id": "uuid",
+    "dataset_ids": ["uuid"],
+    "database_source_ids": ["uuid"],
+    "selected_document_ids": ["uuid"],
+    "uploaded_file_ids": ["uuid"]
+  },
+  "requirements": {
+    "user_goal": "string",
+    "intent": "data_ingestion_analysis",
+    "requested_outputs": [
+      "data_quality_report",
+      "field_mapping_plan",
+      "validation_sql",
+      "recommended_next_actions"
+    ]
+  },
+  "evidence_summary": {
+    "source_visibility": "v3_selected_scope_only",
+    "sample_rows_available": true,
+    "raw_credentials_supplied": false
+  },
+  "policies": {
+    "mode": "read_only_analysis_or_staging_spec",
+    "credential_policy": "do_not_request_or_emit_credentials",
+    "production_write_policy": "needs_human_confirmation",
+    "public_api_change_allowed": false,
+    "schema_change_allowed_without_confirmation": false
+  }
+}
+```
+
+Fixed output schema:
+
+```json
+{
+  "template_id": "data_ingestion_analysis",
+  "status": "analysis_ready|staging_spec_ready|needs_human|failed",
+  "source_summary": ["string"],
+  "data_quality_report": {
+    "row_count": 0,
+    "warnings": ["string"],
+    "quality_notes": ["string"]
+  },
+  "mapping_plan": {
+    "fields": [
+      {
+        "source": "string",
+        "target": "string",
+        "confidence": "high|medium|low",
+        "notes": "string"
+      }
+    ]
+  },
+  "staging_spec": {
+    "target": "string",
+    "steps": ["string"]
+  },
+  "validation_checks": ["string"],
+  "recommended_next_actions": ["string"],
+  "production_write_requested": false,
+  "credential_request_detected": false,
+  "public_api_change_requested": false,
+  "schema_change_requested": false,
+  "human_review_reason": "string|null"
+}
+```
+
 ## Audit Events
 
 V3 should record bounded, redacted events for fixed template work:
@@ -229,8 +337,35 @@ CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES=
 
 Disable a single template by removing its capability from both V3 `CODEX_HOST_TASK_ALLOWLIST` and the host profile `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES`.
 
+## Smoke
+
+Run the local no-confirm static-page smoke before private deployment checks:
+
+```powershell
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static-page-no-confirm
+```
+
+It exercises the third-party static-page detection, Image2 no-confirm pending card, preview-ready Codex Host queue gate, fixed output validation, generated-artifact URL validation, and final `artifact_link` reply conversion. It does not contact the 8 server or write customer artifacts.
+
+After deployment, a guarded readiness check may run against the 8 server:
+
+```powershell
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm
+```
+
+Actual remote mutation is not part of routine smoke. It requires explicit operator review plus `-AllowServerMutation`, and the output must still create only a new `/generated-artifacts/` URL.
+
+Run the local data-ingestion analysis smoke before enabling the template for customer requests:
+
+```powershell
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case data-ingestion-analysis
+```
+
+It exercises customer intent detection, V3-selected source packaging, host preflight, fixed output validation, and unsafe credential/schema/API/production-write guards. It does not contact the 8 server or write any database.
+
 Rollback must preserve these fallbacks:
 
 - static-page direct generation still works when Codex Host is disabled;
 - low-quality case collection can continue without patch generation;
+- data-ingestion requests fall back to normal V3 chat behavior or source-required status when fixed execution is disabled;
 - no customer-facing answer is blocked by this asynchronous autofix path.

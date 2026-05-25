@@ -64,7 +64,7 @@ sha1 = "0.10.6"
 sha2 = "0.10.9"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "mysql", "uuid", "chrono", "json"] }
 thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.48.0", features = ["macros", "process", "rt-multi-thread", "signal"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1.18.1", features = ["serde", "v4"] }

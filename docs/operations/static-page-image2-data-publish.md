@@ -80,6 +80,23 @@ Fixed-template phase:
 - Enable write-capable artifact edits only in isolated workspaces.
 - Store output as V3 artifacts, not raw Codex HTML.
 
+## Fixed-Task Preconditions
+
+V3 may stream the Image2 effect-card to the customer immediately, but it must not enqueue `static_page_image2_data_publish` until the Image2 workflow has succeeded and the image job has a non-empty `preview_asset_key`.
+
+The host task package must include:
+
+- `image2.image_job_id`
+- `image2.visual_contract_status=preview_ready` or a non-empty `image2.preview_asset_key`
+- `image2.human_confirmation_required=false`
+- `policies.publish_mode=new_generated_artifact_only`
+- `policies.effect_image_confirmation_required=false`
+- `policies.continue_to_publish_after_effect_image=true`
+- at least one selected dataset, document, or database source
+- snapshot, trend, unit, and detail-table policies
+
+If any item is missing, V3 should keep the draft/image job state visible, record a preflight rejection when appropriate, and avoid starting Codex Host.
+
 Do not allow:
 
 - user-controlled CLI flags

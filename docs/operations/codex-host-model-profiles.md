@@ -92,7 +92,7 @@ kind = "codex-native"
 enabled = false
 transport = "exec_schema"
 model = "gpt-5.3-codex"
-allowed_capabilities = ["static_page_image2_data_publish", "answer_quality_autofix"]
+allowed_capabilities = ["static_page_image2_data_publish", "answer_quality_autofix", "data_ingestion_analysis"]
 
 [profiles.deepseek-private-reference]
 kind = "codex-compatible-shim"
@@ -193,7 +193,7 @@ Cloudflare Codex fixed templates are a narrower execution profile, not a free-fo
 ```text
 profile=cloudflare-codex-fixed-tasks
 transport=exec_schema
-allowed_templates=static_page_image2_data_publish, answer_quality_autofix
+allowed_templates=static_page_image2_data_publish, answer_quality_autofix, data_ingestion_analysis
 task_source=server_owned_template_package_only
 user_prompt_cli_flags_allowed=false
 ```
@@ -201,6 +201,8 @@ user_prompt_cli_flags_allowed=false
 `static_page_image2_data_publish` may publish a new generated artifact without per-task human confirmation only when V3 validates `publish_mode=new_generated_artifact_only`, artifact path is under `/generated-artifacts/`, and the output contains a snapshot/date/unit validation report. Overwrite, stable URL replacement, source-code changes, credential/scope expansion, and uncertain口径 still require human confirmation.
 
 `answer_quality_autofix` may diagnose and propose low-risk answer-quality patches without per-task confirmation only inside the fixed answer-quality allowlist. It must not deploy automatically and must not touch public API, auth, schema, static-page product code, third-party contracts, or unrelated files.
+
+`data_ingestion_analysis` may run without per-task confirmation only as read-only profiling or a staging/import-spec proposal over V3-selected sources. It must not request or emit credentials/database URLs, write production tables, migrate schema, change public API/auth/third-party fields, or expand source permissions. Any such request returns `needs_human`.
 
 ## MiniMax Experiment Boundary
 

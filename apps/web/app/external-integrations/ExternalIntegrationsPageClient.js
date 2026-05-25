@@ -38,6 +38,7 @@ import {
 import { applyDatabaseSourceProfile } from '../lib/database-source';
 
 const REFRESH_INTERVAL_MS = 15000;
+const CODEX_EXECUTOR_TASK_LIMIT = 20;
 
 const PRODUCT_FEATURES = [
   '文档入库',
@@ -168,6 +169,68 @@ function JsonPreview({ value }) {
   return <pre className="external-json-preview">{text}</pre>;
 }
 
+function normalizeWorkflowStatusKey(status) {
+  return String(status || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s-]+/g, '_')
+    .toLowerCase();
+}
+
+function workflowStatusLabel(status) {
+  const normalized = normalizeWorkflowStatusKey(status);
+  const labels = {
+    pending: '等待',
+    running: '运行中',
+    succeeded: '成功',
+    failed: '失败',
+    cancelled: '取消',
+    dead_lettered: '死信',
+  };
+  return labels[normalized] || status || '未知';
+}
+
+function workflowStatusClass(status) {
+  const normalized = normalizeWorkflowStatusKey(status);
+  return `external-conversation-status external-executor-status-${normalized || 'unknown'}`;
+}
+
+function normalizeCodexExecutorTask(item = {}) {
+  return {
+    id: item.id || '',
+    kind: item.kind || '',
+    status: item.status || '',
+    stage: item.stage || '',
+    updatedAt: item.updated_at || item.updatedAt || null,
+  };
+}
+
+function codexExecutorInspectSummary(detail = {}) {
+  const execution = detail.execution || {};
+  const runtime = detail.execution_scope_runtime || detail.executionScopeRuntime || {};
+  const prettySummaries = Array.isArray(detail.pretty_summaries)
+    ? detail.pretty_summaries
+    : Array.isArray(detail.prettySummaries)
+      ? detail.prettySummaries
+      : [];
+  return {
+    execution: {
+      id: execution.id || '',
+      kind: execution.kind || '',
+      status: execution.status || '',
+      stage: execution.stage || '',
+      updated_at: execution.updated_at || execution.updatedAt || null,
+    },
+    runtime: {
+      status: runtime.status || '',
+      latest_finish_reason: runtime.latest_finish_reason || runtime.latestFinishReason || '',
+      invocation_count: runtime.invocation_count || runtime.invocationCount || 0,
+      tool_execution_count: runtime.tool_execution_count || runtime.toolExecutionCount || 0,
+    },
+    pretty_summaries: prettySummaries,
+    model_facing: detail.model_facing || detail.modelFacing || null,
+  };
+}
+
 function readInitialUrlState() {
   if (typeof window === 'undefined') {
     return {};
@@ -203,6 +266,11 @@ export default function ExternalIntegrationsPageClient() {
   const [conversationTests, setConversationTests] = useState([]);
   const [conversationTestsOpen, setConversationTestsOpen] = useState(false);
   const [conversationAccessRequired, setConversationAccessRequired] = useState(false);
+  const [codexExecutorOpen, setCodexExecutorOpen] = useState(false);
+  const [codexExecutorTasks, setCodexExecutorTasks] = useState([]);
+  const [codexExecutorAccessRequired, setCodexExecutorAccessRequired] = useState(false);
+  const [selectedCodexExecutorTaskId, setSelectedCodexExecutorTaskId] = useState('');
+  const [codexExecutorTaskDetail, setCodexExecutorTaskDetail] = useState(null);
   const [selectedId, setSelectedId] = useState('');
   const [auditItems, setAuditItems] = useState([]);
   const [auditFilterKey, setAuditFilterKey] = useState('all');
@@ -211,6 +279,8 @@ export default function ExternalIntegrationsPageClient() {
   const [databaseStatusById, setDatabaseStatusById] = useState({});
   const [loading, setLoading] = useState(true);
   const [conversationTestsLoading, setConversationTestsLoading] = useState(false);
+  const [codexExecutorTasksLoading, setCodexExecutorTasksLoading] = useState(false);
+  const [codexExecutorDetailLoading, setCodexExecutorDetailLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [actionDetailLoading, setActionDetailLoading] = useState(false);
   const [databaseStatusLoading, setDatabaseStatusLoading] = useState(false);
@@ -312,6 +382,54 @@ export default function ExternalIntegrationsPageClient() {
     }
   }
 
+  async function loadCodexExecutorTasks() {
+    setCodexExecutorTasksLoading(true);
+    try {
+      const payload = await fetchJson(
+        `/api/v3/external/codex-executor-tasks?limit=${CODEX_EXECUTOR_TASK_LIMIT}`,
+      );
+      setCodexExecutorAccessRequired(false);
+      setCodexExecutorTasks(Array.isArray(payload?.tasks)
+        ? payload.tasks.map(normalizeCodexExecutorTask)
+        : []);
+    } catch (loadError) {
+      if (loadError?.status === 401 || loadError?.code === 'external_observability_access_required') {
+        setCodexExecutorAccessRequired(true);
+        setCodexExecutorTasks([]);
+        return;
+      }
+      setCodexExecutorTasks([]);
+      setError(loadError instanceof Error ? loadError.message : 'Codex 执行器任务读取失败');
+    } finally {
+      setCodexExecutorTasksLoading(false);
+    }
+  }
+
+  async function loadCodexExecutorTaskDetail(executionId) {
+    if (!executionId) {
+      setCodexExecutorTaskDetail(null);
+      return;
+    }
+    setCodexExecutorDetailLoading(true);
+    try {
+      const detail = await fetchJson(
+        `/api/v3/external/codex-executor-tasks/${encodeURIComponent(executionId)}/runtime-inspect`,
+      );
+      setCodexExecutorAccessRequired(false);
+      setCodexExecutorTaskDetail(detail);
+    } catch (loadError) {
+      if (loadError?.status === 401 || loadError?.code === 'external_observability_access_required') {
+        setCodexExecutorAccessRequired(true);
+        setCodexExecutorTaskDetail(null);
+        return;
+      }
+      setCodexExecutorTaskDetail(null);
+      setError(loadError instanceof Error ? loadError.message : 'Codex 执行器任务详情读取失败');
+    } finally {
+      setCodexExecutorDetailLoading(false);
+    }
+  }
+
   function toggleConversationTests() {
     if (conversationTestsOpen) {
       setConversationTestsOpen(false);
@@ -320,6 +438,24 @@ export default function ExternalIntegrationsPageClient() {
       return;
     }
     setConversationTestsOpen(true);
+  }
+
+  function toggleCodexExecutorPanel() {
+    if (codexExecutorOpen) {
+      setCodexExecutorOpen(false);
+      setCodexExecutorTasks([]);
+      setSelectedCodexExecutorTaskId('');
+      setCodexExecutorTaskDetail(null);
+      setCodexExecutorAccessRequired(false);
+      return;
+    }
+    setCodexExecutorOpen(true);
+  }
+
+  function selectCodexExecutorTask(executionId) {
+    setSelectedCodexExecutorTaskId(executionId);
+    setCodexExecutorTaskDetail(null);
+    loadCodexExecutorTaskDetail(executionId);
   }
 
   async function loadActionDetail(integrationId, actionId) {
@@ -500,6 +636,12 @@ export default function ExternalIntegrationsPageClient() {
   }, [selectedId, conversationTestsOpen]);
 
   useEffect(() => {
+    if (codexExecutorOpen) {
+      loadCodexExecutorTasks();
+    }
+  }, [codexExecutorOpen]);
+
+  useEffect(() => {
     replaceUrlState({ integrationId: selectedId, auditFilterKey, actionId: selectedActionId });
   }, [selectedId, auditFilterKey, selectedActionId]);
 
@@ -524,6 +666,10 @@ export default function ExternalIntegrationsPageClient() {
   const selectedDatabaseSyncRuns = selectedDatabaseStatus?.recentSyncRuns?.length
     ? selectedDatabaseStatus.recentSyncRuns.slice(0, 5)
     : databaseSourceSyncRuns(auditItems, 3);
+  const selectedCodexExecutorTask = codexExecutorTasks.find((task) => task.id === selectedCodexExecutorTaskId) || null;
+  const codexExecutorInspect = codexExecutorTaskDetail
+    ? codexExecutorInspectSummary(codexExecutorTaskDetail)
+    : null;
   const totals = {
     pending: metricTotal(integrations, 'pendingActionCount'),
     blocked: metricTotal(integrations, 'blockedActionCount'),
@@ -802,6 +948,132 @@ export default function ExternalIntegrationsPageClient() {
             {!conversationTestsLoading && !conversationTests.length ? (
               <div className="external-empty-state">暂无外部对话测试记录</div>
             ) : null}
+          </div>
+        )}
+      </section>
+
+      <section className="external-panel external-executor-panel external-executor-mini" aria-label="Codex 执行器任务">
+        <div className="external-panel-head">
+          <div>
+            <h2>Codex 执行器任务</h2>
+            <p>
+              {codexExecutorOpen
+                ? codexExecutorTasksLoading
+                  ? '读取中'
+                  : `最近 ${codexExecutorTasks.length} 条 · 详情按需加载`
+                : '默认收起，打开后只拉轻量任务列表'}
+            </p>
+          </div>
+          <div className="external-conversation-actions">
+            {codexExecutorOpen ? (
+              <button
+                type="button"
+                className="external-refresh-button"
+                disabled={codexExecutorTasksLoading}
+                onClick={loadCodexExecutorTasks}
+              >
+                刷新
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="external-refresh-button external-conversation-toggle"
+              onClick={toggleCodexExecutorPanel}
+            >
+              {codexExecutorOpen ? '关闭' : '打开'}
+            </button>
+          </div>
+        </div>
+        {!codexExecutorOpen ? (
+          <div className="external-empty-state">不打开不读取执行器任务；选择某条任务后才读取 runtime inspect。</div>
+        ) : codexExecutorAccessRequired ? (
+          <form className="external-conversation-access-form" action="/external-integrations/access" method="post">
+            <label>
+              <span>执行器观测访问密钥</span>
+              <input name="access_key" type="password" autoComplete="current-password" required />
+            </label>
+            <button type="submit">解锁执行器观测</button>
+          </form>
+        ) : (
+          <div className="external-executor-layout">
+            <div className="external-executor-list" aria-label="Codex 执行器任务列表">
+              {codexExecutorTasks.map((task) => (
+                <button
+                  type="button"
+                  key={task.id}
+                  className={`external-executor-task${selectedCodexExecutorTaskId === task.id ? ' is-selected' : ''}`}
+                  onClick={() => selectCodexExecutorTask(task.id)}
+                >
+                  <span className={workflowStatusClass(task.status)}>
+                    {workflowStatusLabel(task.status)}
+                  </span>
+                  <strong>{task.stage || 'run_codex_host_task'}</strong>
+                  <small>{task.id}</small>
+                  <time>{formatObservationTime(task.updatedAt)}</time>
+                </button>
+              ))}
+              {!codexExecutorTasksLoading && !codexExecutorTasks.length ? (
+                <div className="external-empty-state">暂无 Codex 执行器任务</div>
+              ) : null}
+            </div>
+            <div className="external-executor-detail" aria-label="Codex 执行器任务详情">
+              <div className="external-executor-detail-head">
+                <div>
+                  <span>任务详情</span>
+                  <strong>{selectedCodexExecutorTask?.stage || '未选择'}</strong>
+                </div>
+                <button
+                  type="button"
+                  disabled={!selectedCodexExecutorTaskId || codexExecutorDetailLoading}
+                  onClick={() => loadCodexExecutorTaskDetail(selectedCodexExecutorTaskId)}
+                >
+                  {codexExecutorDetailLoading ? '读取中' : '刷新详情'}
+                </button>
+              </div>
+              {!selectedCodexExecutorTaskId ? (
+                <div className="external-empty-state">选择左侧任务后才读取详情。</div>
+              ) : codexExecutorDetailLoading ? (
+                <div className="external-empty-state">runtime inspect 读取中</div>
+              ) : codexExecutorInspect ? (
+                <>
+                  <div className="external-executor-summary">
+                    <div>
+                      <span>状态</span>
+                      <strong>{workflowStatusLabel(codexExecutorInspect.execution.status)}</strong>
+                    </div>
+                    <div>
+                      <span>阶段</span>
+                      <strong>{codexExecutorInspect.execution.stage || '-'}</strong>
+                    </div>
+                    <div>
+                      <span>模型调用</span>
+                      <strong>{codexExecutorInspect.runtime.invocation_count}</strong>
+                    </div>
+                    <div>
+                      <span>工具执行</span>
+                      <strong>{codexExecutorInspect.runtime.tool_execution_count}</strong>
+                    </div>
+                  </div>
+                  {codexExecutorInspect.pretty_summaries.length ? (
+                    <div className="external-executor-pretty">
+                      {codexExecutorInspect.pretty_summaries.map((summary, index) => (
+                        <article key={`${typeof summary === 'string' ? summary.slice(0, 24) : summary.title || 'summary'}:${index}`}>
+                          <strong>{typeof summary === 'string' ? `摘要 ${index + 1}` : summary.title || `摘要 ${index + 1}`}</strong>
+                          <span>
+                            {typeof summary === 'string'
+                              ? summary
+                              : summary.body || summary.text || JSON.stringify(summary)}
+                          </span>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+                  <JsonPreview value={codexExecutorTaskDetail} />
+                </>
+              ) : (
+                <div className="external-empty-state">未读取到任务详情</div>
+              )}
+            </div>
           </div>
         )}
       </section>

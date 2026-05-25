@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use codex_host_agent::{
-    safe_log_excerpt, CodexCommandPlan, CodexHostAgentPolicy, CodexHostExecutionDecision,
-    CodexHostExecutionMode, CodexHostTaskContext, CodexProcessOutput,
+    extract_fixed_task_output_from_stdout, materialize_fixed_task_bundle, safe_log_excerpt,
+    CodexCommandPlan, CodexHostAgentPolicy, CodexHostExecutionDecision, CodexHostExecutionMode,
+    CodexHostRuntimeConfig, CodexHostTaskContext, CodexProcessOutput,
 };
 use contracts::CodexHostTaskOutputView;
 use domain_model::{AssistantRunId, WorkflowKind};
@@ -11,9 +12,9 @@ use event_bus::{
     EventSubscription,
 };
 use serde_json::{json, Map, Value};
-use std::process::Command;
 use storage::{NewAssistantRunEvent, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
-use tokio::time::Duration;
+use tokio::process::Command;
+use tokio::time::{Duration, Instant};
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "codex_host";
@@ -34,6 +35,7 @@ async fn main() -> Result<()> {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_POLL_INTERVAL_MS);
     let execution_policy = CodexHostAgentPolicy::from_env()?;
+    let runtime_config = CodexHostRuntimeConfig::from_env();
 
     let storage = PgStorage::connect(&database_url).await?;
     let workflow_catalog = workflow_definitions::catalog();
@@ -56,6 +58,10 @@ async fn main() -> Result<()> {
         profile_id = %execution_policy.profile.id,
         profile_kind = %execution_policy.profile.kind,
         host_kind = %execution_policy.host_kind,
+        task_timeout_ms = runtime_config.task_timeout_ms(),
+        heartbeat_ms = runtime_config.heartbeat_ms(),
+        stdout_limit_bytes = runtime_config.stdout_limit_bytes(),
+        stderr_limit_bytes = runtime_config.stderr_limit_bytes(),
         "codex-host-agent polling started"
     );
 
@@ -71,6 +77,7 @@ async fn main() -> Result<()> {
                     &workflow_catalog,
                     &event_bus,
                     &execution_policy,
+                    &runtime_config,
                     task,
                 )
                 .await
@@ -94,6 +101,7 @@ async fn process_task(
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
     execution_policy: &CodexHostAgentPolicy,
+    runtime_config: &CodexHostRuntimeConfig,
     task: domain_model::WorkflowTask,
 ) -> Result<()> {
     let execution = storage
@@ -101,6 +109,13 @@ async fn process_task(
         .get_by_id(task.tenant_id, task.execution_id)
         .await?
         .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
+    if execution.status == domain_model::WorkflowStatus::Cancelled {
+        storage
+            .workflow_tasks()
+            .mark_failed(task.id, "workflow_cancelled_before_start", Utc::now())
+            .await?;
+        return Ok(());
+    }
     if execution.kind != WorkflowKind::CodexHostTask {
         return Err(anyhow!(
             "workflow execution {} has unexpected kind {}",
@@ -120,7 +135,16 @@ async fn process_task(
                     .command_plan
                     .as_ref()
                     .ok_or_else(|| anyhow!("codex_exec mode missing command plan"))?;
-                run_codex_exec(command_plan, &task_context, &decision)?
+                run_codex_exec_with_heartbeat(
+                    storage,
+                    task.tenant_id,
+                    task.execution_id,
+                    command_plan,
+                    &task_context,
+                    &decision,
+                    runtime_config,
+                )
+                .await?
             }
         };
         let event_name = codex_host_task_event_name(&output);
@@ -213,10 +237,101 @@ async fn append_assistant_event(
     Ok(())
 }
 
-fn run_codex_exec(
+async fn run_codex_exec_with_heartbeat(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    execution_id: domain_model::WorkflowExecutionId,
     command_plan: &CodexCommandPlan,
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
+    runtime_config: &CodexHostRuntimeConfig,
+) -> Result<serde_json::Value> {
+    let started_at = Instant::now();
+    let mut heartbeat_interval =
+        tokio::time::interval(Duration::from_millis(runtime_config.heartbeat_ms()));
+    let mut heartbeat_count = 0usize;
+    let exec = run_codex_exec(command_plan, task_context, decision, runtime_config);
+    tokio::pin!(exec);
+
+    loop {
+        tokio::select! {
+            result = &mut exec => return result,
+            _ = heartbeat_interval.tick() => {
+                heartbeat_count += 1;
+                if codex_host_execution_cancelled(storage, tenant_id, execution_id).await? {
+                    return Err(anyhow!("Codex Host command cancelled before completion"));
+                }
+                let payload = codex_exec_heartbeat_payload(
+                    command_plan,
+                    task_context,
+                    decision,
+                    started_at.elapsed().as_millis() as u64,
+                    heartbeat_count,
+                );
+                if let Err(error) = append_assistant_event(
+                    storage,
+                    tenant_id,
+                    task_context.assistant_run_id,
+                    "codex_host_task.exec_heartbeat",
+                    payload,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = ?error,
+                        execution_id = %execution_id,
+                        "failed to append Codex Host heartbeat event"
+                    );
+                }
+            }
+        }
+    }
+}
+
+async fn codex_host_execution_cancelled(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    execution_id: domain_model::WorkflowExecutionId,
+) -> Result<bool> {
+    let Some(execution) = storage
+        .workflow_executions()
+        .get_by_id(tenant_id, execution_id)
+        .await?
+    else {
+        return Ok(false);
+    };
+    Ok(execution.status == domain_model::WorkflowStatus::Cancelled)
+}
+
+fn codex_exec_heartbeat_payload(
+    command_plan: &CodexCommandPlan,
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    elapsed_ms: u64,
+    heartbeat_count: usize,
+) -> Value {
+    json!({
+        "mode": "codex_exec",
+        "status": "running",
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "host_kind": decision.host_kind.clone(),
+        "profile": decision.profile.safe_summary(),
+        "command_plan": command_plan.safe_summary(),
+        "elapsed_ms": elapsed_ms,
+        "heartbeat_count": heartbeat_count,
+        "raw_prompt_exposed": false,
+        "stdout_exposed": false,
+        "stderr_exposed": false,
+        "secrets_exposed": false,
+    })
+}
+
+async fn run_codex_exec(
+    command_plan: &CodexCommandPlan,
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    runtime_config: &CodexHostRuntimeConfig,
 ) -> Result<serde_json::Value> {
     if let Some(workspace_path) = command_plan.workspace_path.as_ref() {
         std::fs::create_dir_all(workspace_path).map_err(|error| {
@@ -225,35 +340,55 @@ fn run_codex_exec(
                 workspace_path.display()
             )
         })?;
+        materialize_fixed_task_bundle(workspace_path, task_context, decision)?;
     }
     let mut command = Command::new(&command_plan.program);
     command.args(command_plan.process_args());
     if let Some(workspace_path) = command_plan.workspace_path.as_ref() {
         command.current_dir(workspace_path);
     }
-    let output = command
-        .output()
-        .map_err(|error| anyhow!("failed to launch Codex Host command: {error}"))?;
+    command.kill_on_drop(true);
+    let output = tokio::time::timeout(
+        Duration::from_millis(runtime_config.task_timeout_ms()),
+        command.output(),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "Codex Host command timed out after {}ms; stdout_chars=0; stderr_chars=0",
+            runtime_config.task_timeout_ms()
+        )
+    })?
+    .map_err(|error| anyhow!("failed to launch Codex Host command: {error}"))?;
     let process_output = CodexProcessOutput {
         exit_code: output.status.code(),
-        stdout_excerpt: safe_log_excerpt(&output.stdout, 2_000),
-        stderr_excerpt: safe_log_excerpt(&output.stderr, 2_000),
+        stdout_excerpt: safe_log_excerpt(&output.stdout, runtime_config.stdout_limit_bytes()),
+        stderr_excerpt: safe_log_excerpt(&output.stderr, runtime_config.stderr_limit_bytes()),
     };
 
     if !output.status.success() {
         return Err(anyhow!(
-            "Codex Host command failed with status {:?}; stdout_chars={}; stderr_chars={}",
+            "Codex Host command failed: kind=non_zero_exit exit_code={:?}; stdout_chars={}; stderr_chars={}",
             process_output.exit_code,
             process_output.stdout_excerpt.chars().count(),
             process_output.stderr_excerpt.chars().count()
         ));
     }
 
+    let fixed_task_output = task_context
+        .fixed_task
+        .as_ref()
+        .map(|fixed_task| {
+            extract_fixed_task_output_from_stdout(&output.stdout, fixed_task.template_id.as_str())
+        })
+        .transpose()?;
+
     Ok(codex_exec_output(
         command_plan,
         task_context,
         decision,
         process_output,
+        fixed_task_output,
     ))
 }
 
@@ -262,6 +397,7 @@ fn codex_exec_output(
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
     process_output: CodexProcessOutput,
+    fixed_task_output: Option<Value>,
 ) -> serde_json::Value {
     let html_artifacts = vec![task_context.html_report_artifact(
         "codex_exec",
@@ -288,6 +424,7 @@ fn codex_exec_output(
         task_memory_isolated: task_context.task_memory_isolated,
         task_memory_space_id: task_context.task_memory_space_id.clone(),
         html_artifacts,
+        fixed_task_output,
     })
 }
 
@@ -526,7 +663,13 @@ mod tests {
             stderr_excerpt: String::new(),
         };
 
-        let output = codex_exec_output(&command_plan, &task_context, &decision, process_output);
+        let output = codex_exec_output(
+            &command_plan,
+            &task_context,
+            &decision,
+            process_output,
+            None,
+        );
 
         assert_eq!(output["mode"], json!("codex_exec"));
         assert_eq!(output["codex_invoked"], json!(true));
@@ -557,6 +700,141 @@ mod tests {
     }
 
     #[test]
+    fn codex_exec_output_keeps_fixed_task_output_without_raw_stdout() {
+        let mut task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:static-page".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+        };
+        task_context.capability = task_context
+            .fixed_task
+            .as_ref()
+            .expect("fixed task")
+            .template_id
+            .as_str()
+            .to_string();
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string(), "--ephemeral".to_string()],
+            prompt: "Run fixed static-page package".to_string(),
+            sandbox: "workspace-write".to_string(),
+            workspace_path: Some(std::path::PathBuf::from(
+                "D:/codex-host/tasks/codex-host-static-page",
+            )),
+            workspace_label: Some("codex-host-static-page".to_string()),
+        };
+        let decision = CodexHostExecutionDecision {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: codex_host_agent::CodexHostProfile {
+                id: "cloudflare-fixed".to_string(),
+                kind: "codex-native".to_string(),
+                model: Some("gpt-5.3-codex".to_string()),
+                provider_id: None,
+                base_url: None,
+                env_key: None,
+                wire_api: None,
+                allowed_capabilities: vec!["static_page_image2_data_publish".to_string()],
+            },
+            host_kind: "cloudflare_codex".to_string(),
+            command_plan: Some(command_plan.clone()),
+        };
+        let fixed_task_output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/static-page/index.html"
+            },
+            "validation_report": {
+                "source_row_count": 1
+            }
+        });
+        let process_output = CodexProcessOutput {
+            exit_code: Some(0),
+            stdout_excerpt: "raw public url and internal notes".to_string(),
+            stderr_excerpt: "stderr internals".to_string(),
+        };
+
+        let output = codex_exec_output(
+            &command_plan,
+            &task_context,
+            &decision,
+            process_output,
+            Some(fixed_task_output.clone()),
+        );
+        let serialized = output.to_string();
+
+        assert_eq!(output["fixed_task_output"], fixed_task_output);
+        assert_eq!(output["process"]["stdout_excerpt"], json!(""));
+        assert_eq!(output["process"]["stderr_excerpt"], json!(""));
+        assert!(!serialized.contains("raw public url and internal notes"));
+        assert!(!serialized.contains("stderr internals"));
+    }
+
+    #[tokio::test]
+    async fn codex_exec_nonzero_exit_returns_bounded_error() {
+        let (task_context, command_plan, decision) = codex_exec_test_context(false);
+        let runtime_config = CodexHostRuntimeConfig {
+            task_timeout_ms: 10_000,
+            heartbeat_ms: 1_000,
+            stdout_limit_bytes: 80,
+            stderr_limit_bytes: 80,
+        };
+
+        let error = run_codex_exec(&command_plan, &task_context, &decision, &runtime_config)
+            .await
+            .expect_err("non-zero command should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("kind=non_zero_exit"));
+        assert!(message.contains("stdout_chars="));
+        assert!(message.contains("stderr_chars="));
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("api_key"));
+    }
+
+    #[tokio::test]
+    async fn codex_exec_timeout_returns_bounded_error() {
+        let (task_context, command_plan, decision) = codex_exec_test_context(true);
+        let runtime_config = CodexHostRuntimeConfig {
+            task_timeout_ms: 50,
+            heartbeat_ms: 1_000,
+            stdout_limit_bytes: 80,
+            stderr_limit_bytes: 80,
+        };
+
+        let error = run_codex_exec(&command_plan, &task_context, &decision, &runtime_config)
+            .await
+            .expect_err("timeout command should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("timed out"));
+        assert!(message.contains("stdout_chars=0"));
+        assert!(message.contains("stderr_chars=0"));
+        assert!(!message.contains("timeout-secret"));
+    }
+
+    #[test]
+    fn codex_exec_heartbeat_payload_is_bounded() {
+        let (task_context, command_plan, decision) = codex_exec_test_context(false);
+
+        let payload = codex_exec_heartbeat_payload(&command_plan, &task_context, &decision, 123, 2);
+        let serialized = payload.to_string();
+
+        assert_eq!(payload["status"], json!("running"));
+        assert_eq!(payload["raw_prompt_exposed"], json!(false));
+        assert_eq!(payload["stdout_exposed"], json!(false));
+        assert_eq!(payload["stderr_exposed"], json!(false));
+        assert_eq!(payload["heartbeat_count"], json!(2));
+        assert!(!serialized.contains("inspect secret prompt"));
+    }
+
+    #[test]
     fn codex_host_task_event_name_follows_output_mode() {
         assert_eq!(
             codex_host_task_event_name(&json!({"mode": "dry_run"})),
@@ -574,5 +852,78 @@ mod tests {
             codex_host_task_event_name(&json!({"mode": "unexpected"})),
             "codex_host_task.completed"
         );
+    }
+
+    fn codex_exec_test_context(
+        slow: bool,
+    ) -> (
+        CodexHostTaskContext,
+        CodexCommandPlan,
+        CodexHostExecutionDecision,
+    ) {
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "inspect_project".to_string(),
+            task: Some("inspect secret prompt".to_string()),
+            local_thread_id: Some("thread-a".to_string()),
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
+        };
+        let command_plan = codex_exec_test_command_plan(slow);
+        let decision = CodexHostExecutionDecision {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: codex_host_agent::CodexHostProfile {
+                id: "readonly".to_string(),
+                kind: "codex-native".to_string(),
+                model: Some("gpt-5.3-codex".to_string()),
+                provider_id: None,
+                base_url: None,
+                env_key: None,
+                wire_api: None,
+                allowed_capabilities: vec!["inspect_project".to_string()],
+            },
+            host_kind: "windows_jump".to_string(),
+            command_plan: Some(command_plan.clone()),
+        };
+        (task_context, command_plan, decision)
+    }
+
+    #[cfg(windows)]
+    fn codex_exec_test_command_plan(slow: bool) -> CodexCommandPlan {
+        let script = if slow {
+            "Start-Sleep -Milliseconds 1000; Write-Output 'timeout-secret'"
+        } else {
+            "Write-Output 'ok'; Write-Output 'api_key=secret'; Write-Error 'stderr secret'; exit 7"
+        };
+        CodexCommandPlan {
+            program: "powershell".to_string(),
+            args_without_prompt: vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                script.to_string(),
+            ],
+            prompt: "inspect secret prompt".to_string(),
+            sandbox: "read-only".to_string(),
+            workspace_path: None,
+            workspace_label: Some("test-workspace".to_string()),
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn codex_exec_test_command_plan(slow: bool) -> CodexCommandPlan {
+        let script = if slow {
+            "sleep 1; printf '%s\n' 'timeout-secret'"
+        } else {
+            "printf '%s\n' 'ok'; printf '%s\n' 'api_key=secret'; printf '%s\n' 'stderr secret' 1>&2; exit 7"
+        };
+        CodexCommandPlan {
+            program: "sh".to_string(),
+            args_without_prompt: vec!["-c".to_string(), script.to_string()],
+            prompt: "inspect secret prompt".to_string(),
+            sandbox: "read-only".to_string(),
+            workspace_path: None,
+            workspace_label: Some("test-workspace".to_string()),
+        }
     }
 }
