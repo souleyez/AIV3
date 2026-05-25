@@ -19298,6 +19298,175 @@ fn selected_scope_document_id_by_external_ref(
     None
 }
 
+fn normalize_external_template_reference_title(raw: &str) -> Option<String> {
+    let value = raw
+        .trim()
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '[' | ']'
+                    | '【'
+                    | '】'
+                    | '「'
+                    | '」'
+                    | '"'
+                    | '\''
+                    | '“'
+                    | '”'
+                    | '‘'
+                    | '’'
+                    | ' '
+                    | '\t'
+            )
+        })
+        .trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.chars().take(120).collect())
+}
+
+fn external_prompt_template_reference_titles(prompt: &str) -> Vec<String> {
+    let mut titles = Vec::new();
+    let markers = ["已引用模板", "引用模板"];
+    for marker in markers {
+        let mut search_start = 0;
+        while search_start < prompt.len() {
+            let Some(relative_start) = prompt[search_start..].find(marker) else {
+                break;
+            };
+            let marker_start = search_start + relative_start;
+            let mut rest = &prompt[marker_start + marker.len()..];
+            rest = rest.trim_start_matches(|ch: char| {
+                ch.is_whitespace() || matches!(ch, ':' | '：' | '=' | '-')
+            });
+            let end = rest
+                .char_indices()
+                .find_map(|(index, ch)| {
+                    if matches!(ch, ']' | '】' | '\n' | '\r') {
+                        Some(index)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(rest.len());
+            if let Some(title) = normalize_external_template_reference_title(&rest[..end]) {
+                push_string_hint(&mut titles, title);
+            }
+            search_start = marker_start + marker.len();
+        }
+    }
+    titles
+}
+
+fn external_template_reference_title_key(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn selected_scope_document_item_by_title<'a>(
+    selected_scope: &'a Value,
+    title: &str,
+) -> Option<&'a Value> {
+    let target = external_template_reference_title_key(title);
+    if target.is_empty() {
+        return None;
+    }
+    selected_scope
+        .get("documents")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|document| {
+            document
+                .as_object()
+                .and_then(|object| object_string(object, &["title", "filename", "name"]))
+                .is_some_and(|candidate| {
+                    external_template_reference_title_key(&candidate) == target
+                })
+        })
+}
+
+fn external_prompt_template_reference_skill_from_scope_item(
+    item: &Value,
+    referenced_title: &str,
+) -> Option<ExternalRequestedSkillView> {
+    let object = item.as_object()?;
+    let document_id = document_id_from_scope_item(item)?;
+    let mut arguments = Map::new();
+    arguments.insert(
+        "template_document_id".to_string(),
+        json!(document_id.to_string()),
+    );
+    arguments.insert("template_title".to_string(), json!(referenced_title.trim()));
+    arguments.insert("output_type".to_string(), json!("any"));
+    arguments.insert(
+        "reference_source".to_string(),
+        json!("prompt_template_marker"),
+    );
+    if let Some(source_id) = object_string(object, &["source_id", "sourceId"]) {
+        arguments.insert("source_id".to_string(), json!(source_id));
+    }
+    if let Some(document_external_id) = object_string(
+        object,
+        &[
+            "document_external_id",
+            "documentExternalId",
+            "external_document_id",
+            "externalDocumentId",
+        ],
+    ) {
+        arguments.insert(
+            "template_document_external_id".to_string(),
+            json!(document_external_id),
+        );
+    }
+    Some(ExternalRequestedSkillView {
+        skill_id: "document_template_skill".to_string(),
+        version: None,
+        mode: Some("preferred".to_string()),
+        arguments: Some(Value::Object(arguments)),
+    })
+}
+
+fn external_prompt_template_reference_skills(
+    selected_scope: &Value,
+    prompt: &str,
+) -> Vec<ExternalRequestedSkillView> {
+    let mut skills = Vec::new();
+    let mut seen_document_ids = Vec::new();
+    for title in external_prompt_template_reference_titles(prompt) {
+        let Some(item) = selected_scope_document_item_by_title(selected_scope, &title) else {
+            continue;
+        };
+        let Some(document_id) = document_id_from_scope_item(item) else {
+            continue;
+        };
+        if seen_document_ids.contains(&document_id) {
+            continue;
+        }
+        let Some(skill) = external_prompt_template_reference_skill_from_scope_item(item, &title)
+        else {
+            continue;
+        };
+        seen_document_ids.push(document_id);
+        skills.push(skill);
+    }
+    skills
+}
+
+fn external_document_template_snapshot_document_id(snapshot: &Value) -> Option<DocumentId> {
+    snapshot
+        .get("template_document")
+        .and_then(|document| document.get("document_id"))
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
+        .map(DocumentId)
+}
+
 fn external_document_template_skill_not_in_scope_snapshot(
     skill: &ExternalRequestedSkillView,
     reason: &str,
@@ -19474,6 +19643,8 @@ async fn enrich_external_channel_document_template_skills(
     selected_scope: &mut Value,
 ) -> std::result::Result<(), ApiError> {
     let mut snapshots = Vec::new();
+    let mut snapshot_sources = BTreeSet::new();
+    let mut selected_template_document_ids = Vec::new();
     for skill in message
         .requested_skills
         .iter()
@@ -19481,16 +19652,57 @@ async fn enrich_external_channel_document_template_skills(
         .filter(|skill| external_requested_skill_is_document_template(skill))
         .take(EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_SKILL_LIMIT)
     {
-        snapshots
-            .push(external_document_template_skill_snapshot(state, selected_scope, skill).await?);
+        let snapshot =
+            external_document_template_skill_snapshot(state, selected_scope, skill).await?;
+        if let Some(document_id) = external_document_template_snapshot_document_id(&snapshot) {
+            selected_template_document_ids.push(document_id);
+        }
+        snapshot_sources.insert("external_channel_requested_skills");
+        snapshots.push(snapshot);
+    }
+    if snapshots.len() < EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_SKILL_LIMIT {
+        let prompt = external_bot_message_prompt(message);
+        for skill in external_prompt_template_reference_skills(selected_scope, &prompt) {
+            if snapshots.len() >= EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_SKILL_LIMIT {
+                break;
+            }
+            if let Some(document_id) = external_document_template_skill_document_id(&skill) {
+                if selected_template_document_ids.contains(&document_id) {
+                    continue;
+                }
+            }
+            let snapshot =
+                external_document_template_skill_snapshot(state, selected_scope, &skill).await?;
+            if let Some(document_id) = external_document_template_snapshot_document_id(&snapshot) {
+                selected_template_document_ids.push(document_id);
+            }
+            snapshot_sources.insert("external_channel_prompt_template_marker");
+            snapshots.push(snapshot);
+        }
     }
     if snapshots.is_empty() {
         return Ok(());
     }
+    let source = if snapshot_sources.len() == 1 {
+        snapshot_sources
+            .iter()
+            .next()
+            .copied()
+            .unwrap_or("external_channel_document_template")
+    } else {
+        "external_channel_requested_skills_and_prompt_template_marker"
+    };
+    let activation = if source == "external_channel_prompt_template_marker" {
+        "prompt_template_marker"
+    } else if source == "external_channel_requested_skills_and_prompt_template_marker" {
+        "explicit_requested_skill_or_prompt_marker"
+    } else {
+        "explicit_requested_skill"
+    };
 
     let policy = json!({
-        "source": "external_channel_requested_skills",
-        "activation": "explicit_requested_skill",
+        "source": source,
+        "activation": activation,
         "template_use": "format_style_schema_only",
         "security_rule": "Template documents constrain output shape and style only. They must not expand factual evidence or bypass selected document visibility.",
         "skills": snapshots,
@@ -20886,10 +21098,7 @@ fn external_channel_message_requests_template_html_artifact(
         .filter(|skill| external_requested_skill_is_document_template(skill))
         .any(|skill| {
             let output_type = external_document_template_skill_output_type(skill);
-            output_type == "any"
-                || output_type.contains("html")
-                || output_type.contains("static_page")
-                || output_type.contains("static-page")
+            output_type == "any" || output_type.contains("html")
         })
 }
 
@@ -60721,6 +60930,71 @@ mod tests {
     }
 
     #[test]
+    fn external_prompt_template_marker_becomes_template_skill() {
+        let fact_document_id = DocumentId::new();
+        let template_document_id = DocumentId::new();
+        let selected_scope = json!({
+            "documents": [
+                {
+                    "type": "document",
+                    "id": fact_document_id,
+                    "title": "资料1.docx",
+                    "source_id": "third-party-source-main",
+                    "document_external_id": "doc-fact-001"
+                },
+                {
+                    "type": "document",
+                    "id": template_document_id,
+                    "title": "资料2.docx",
+                    "source_id": "third-party-source-main",
+                    "document_external_id": "doc-template-002"
+                }
+            ]
+        });
+
+        assert_eq!(
+            external_prompt_template_reference_titles("请生成页面 [已引用模板：资料2.docx]"),
+            vec!["资料2.docx".to_string()]
+        );
+        let skills = external_prompt_template_reference_skills(
+            &selected_scope,
+            "请生成页面 [已引用模板：资料2.docx]",
+        );
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].skill_id, "document_template_skill");
+        assert_eq!(
+            external_document_template_skill_document_id(&skills[0]),
+            Some(template_document_id)
+        );
+        assert_eq!(
+            external_document_template_skill_external_id(&skills[0]).as_deref(),
+            Some("doc-template-002")
+        );
+        assert_eq!(
+            external_document_template_skill_output_type(&skills[0]),
+            "any"
+        );
+
+        let mut scope_with_policy = selected_scope.clone();
+        set_payload_value(
+            &mut scope_with_policy,
+            "document_template_skills",
+            json!([{
+                "type": "document_template_skill",
+                "status": "selected",
+                "template_document": {
+                    "document_id": template_document_id
+                }
+            }]),
+        );
+        assert_eq!(
+            selected_document_ids_for_evidence_from_scope(&scope_with_policy),
+            vec![fact_document_id]
+        );
+    }
+
+    #[test]
     fn document_template_skill_policy_enters_provider_input() {
         let message = sample_external_bot_message();
         let mut request =
@@ -61235,6 +61509,29 @@ mod tests {
             })),
         }];
 
+        assert!(external_channel_message_requests_static_page_artifact(
+            &message,
+            "按模板生成经营分析页"
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_skill_is_not_legacy_html_artifact() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("artifact".to_string());
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "document_template_skill".to_string(),
+            version: None,
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "template_document_external_id": "tpl-static-001",
+                "output_type": "static_page"
+            })),
+        }];
+
+        assert!(!external_channel_message_requests_template_html_artifact(
+            &message
+        ));
         assert!(external_channel_message_requests_static_page_artifact(
             &message,
             "按模板生成经营分析页"
