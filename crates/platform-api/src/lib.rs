@@ -24775,7 +24775,7 @@ async fn create_static_page_render_for_draft(
         None
     } else {
         let image_job =
-            resolve_confirmed_static_page_image_job(state, &draft, request.image_job_id).await?;
+            resolve_static_page_render_image_job(state, &draft, request.image_job_id).await?;
         ensure_static_page_preview_contract_current(&draft, image_job.as_ref())?;
         image_job
     };
@@ -24934,7 +24934,7 @@ async fn create_static_page_render_for_draft(
     let render_summary = if request.direct_html {
         "最终静态页已按快速 HTML 交付模式生成，未经过效果图确认。"
     } else {
-        "最终静态页已根据确认效果图和模块规划生成。"
+        "最终静态页已根据效果图和模块规划生成。"
     };
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
@@ -55085,11 +55085,17 @@ fn derive_static_page_draft_title(prompt: &str) -> String {
 
 fn build_static_page_source_refs(run: &AssistantRun) -> Value {
     json!({
+        "source": "local_chat_static_page_image2_pipeline",
         "assistant_run_id": run.id,
         "local_thread_id": run.local_thread_id,
         "output_artifact_count": value_array(run.output_artifacts.clone()).len(),
         "evidence_status": run.evidence_state.get("status").cloned().unwrap_or(Value::Null),
         "supplied_evidence_count": assistant_run_evidence_supplied_count(&run.evidence_state),
+        "auto_publish_generated_artifact": true,
+        "effect_image_confirmation_required": false,
+        "continue_to_publish_after_effect_image": true,
+        "fixed_task_template_id": "static_page_image2_data_publish",
+        "customer_preview_delivery": "stream_event_or_status_card",
     })
 }
 
@@ -55184,12 +55190,12 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         "design_contract": {
             "contract_source": "StaticPageDraft",
             "visual_source": "effect image is a preview contract, not final source code",
-            "final_source": "confirmed effect image visual blueprint + real data_snapshot",
+            "final_source": "generated effect image visual blueprint + real data_snapshot",
             "editable_core": "DOM text + SVG/chart components + safe ECharts JSON options",
         },
         "image_first_contract": {
             "role": "requirements_to_image2_then_image_to_html",
-            "rule": "Generate the effect image from requirements first; after confirmation, infer the visual layout from the image and bind real data_snapshot into HTML.",
+            "rule": "Generate the effect image from requirements first; then infer the visual layout from the image and bind real data_snapshot into HTML.",
             "fake_data_allowed": false
         },
         "selected_scope": draft.selected_scope,
@@ -58048,7 +58054,7 @@ fn build_static_page_preview_contract(
         "imageJobId": Value::Null,
         "assetKey": Value::Null,
         "confirmedAt": Value::Null,
-        "renderExpectation": "final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image",
+        "renderExpectation": "final HTML/CSS/SVG should reproduce the generated preview without baking editable text or charts into the image",
     });
     if let Some(patch) = patch {
         merge_json_value(&mut contract, &patch);
@@ -58268,7 +58274,37 @@ async fn load_visible_static_page_image_job(
     Ok(job)
 }
 
-async fn resolve_confirmed_static_page_image_job(
+fn static_page_draft_allows_preview_ready_render(draft: &StaticPageDraft) -> bool {
+    draft
+        .source_refs
+        .get("effect_image_confirmation_required")
+        .and_then(Value::as_bool)
+        == Some(false)
+        && draft
+            .source_refs
+            .get("continue_to_publish_after_effect_image")
+            .and_then(Value::as_bool)
+            == Some(true)
+}
+
+fn static_page_image_job_has_preview_asset(job: &StaticPageImageJob) -> bool {
+    job.preview_asset_key
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn static_page_image_job_ready_for_render(
+    draft: &StaticPageDraft,
+    job: &StaticPageImageJob,
+) -> bool {
+    matches!(job.status, StaticPageImageJobStatus::Confirmed)
+        || (static_page_draft_allows_preview_ready_render(draft)
+            && matches!(job.status, StaticPageImageJobStatus::PreviewReady)
+            && static_page_image_job_has_preview_asset(job))
+}
+
+async fn resolve_static_page_render_image_job(
     state: &AppState,
     draft: &StaticPageDraft,
     requested_job_id: Option<StaticPageImageJobId>,
@@ -58283,12 +58319,12 @@ async fn resolve_confirmed_static_page_image_job(
             .await
             .map_err(ApiError::from_storage)?
             .into_iter()
-            .find(|job| matches!(job.status, StaticPageImageJobStatus::Confirmed))
+            .find(|job| static_page_image_job_ready_for_render(draft, job))
     };
     let Some(job) = job else {
         return Err(ApiError::bad_request(
             "static_page_preview_not_confirmed",
-            "confirm an effect preview before rendering the final static page".to_string(),
+            "generate an effect preview before rendering the final static page".to_string(),
         ));
     };
     if job.draft_id != draft.id {
@@ -58297,10 +58333,10 @@ async fn resolve_confirmed_static_page_image_job(
             "image job does not belong to this static page draft".to_string(),
         ));
     }
-    if !matches!(job.status, StaticPageImageJobStatus::Confirmed) {
+    if !static_page_image_job_ready_for_render(draft, &job) {
         return Err(ApiError::bad_request(
             "static_page_preview_not_confirmed",
-            "confirm an effect preview before rendering the final static page".to_string(),
+            "generate an effect preview before rendering the final static page".to_string(),
         ));
     }
     Ok(Some(job))
@@ -58368,26 +58404,36 @@ fn ensure_static_page_preview_contract_current(
             None,
         )
     });
-    if static_page_preview_contract_status(&preview_contract) != Some("confirmed") {
+    let allow_preview_ready = static_page_draft_allows_preview_ready_render(draft)
+        && image_job.is_some_and(|job| {
+            matches!(job.status, StaticPageImageJobStatus::PreviewReady)
+                && static_page_image_job_has_preview_asset(job)
+        });
+    let contract_status = static_page_preview_contract_status(&preview_contract);
+    let status_current = contract_status == Some("confirmed")
+        || (allow_preview_ready && contract_status == Some("preview_ready"));
+    if !status_current {
         return Err(ApiError::bad_request(
             "static_page_preview_stale",
-            "current static page draft needs a fresh confirmed effect preview before rendering"
-                .to_string(),
+            "current static page draft needs a fresh effect preview before rendering".to_string(),
         ));
     }
-    if static_page_preview_contract_fingerprint(&preview_contract).as_deref()
-        != Some(current_fingerprint.as_str())
-    {
+    let contract_fingerprint = static_page_preview_contract_fingerprint(&preview_contract);
+    let job_fingerprint = image_job.and_then(static_page_image_job_prompt_fingerprint);
+    let has_matching_fingerprint = contract_fingerprint.as_deref()
+        == Some(current_fingerprint.as_str())
+        || job_fingerprint.as_deref() == Some(current_fingerprint.as_str());
+    if !has_matching_fingerprint {
         return Err(ApiError::bad_request(
             "static_page_preview_stale",
-            "confirmed effect preview does not match the current static page draft".to_string(),
+            "effect preview does not match the current static page draft".to_string(),
         ));
     }
-    if let Some(job_fingerprint) = image_job.and_then(static_page_image_job_prompt_fingerprint) {
+    if let Some(job_fingerprint) = job_fingerprint {
         if job_fingerprint != current_fingerprint {
             return Err(ApiError::bad_request(
                 "static_page_preview_stale",
-                "confirmed effect preview was generated for an older static page draft".to_string(),
+                "effect preview was generated for an older static page draft".to_string(),
             ));
         }
     }
@@ -78706,6 +78752,83 @@ mod tests {
         let error = ensure_static_page_preview_contract_current(&draft, Some(&job))
             .expect_err("stale preview should be rejected");
         assert_eq!(error.payload.code, "static_page_preview_stale");
+    }
+
+    #[test]
+    fn static_page_render_guard_accepts_preview_ready_auto_continue_job() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let draft_id = StaticPageDraftId::new();
+        let assistant_run_id = AssistantRunId::new();
+        let job_id = StaticPageImageJobId::new();
+        let queued_payload = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "risk",
+                    "title": "风险提示",
+                    "content": "库存压力可控。"
+                }]
+            }),
+            &[json!({
+                "type": "queue_image_job",
+                "jobId": job_id,
+                "queuePosition": 1,
+            })],
+            Some("效果图任务已进入资源队列。"),
+        );
+        let preview_ready_payload = apply_static_page_operations_to_payload(
+            queued_payload.clone(),
+            &[json!({
+                "type": "mark_preview_ready",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/auto-preview.png",
+                    "imageJobId": job_id,
+                }
+            })],
+            Some("效果图已生成。"),
+        );
+        let draft = StaticPageDraft {
+            id: draft_id,
+            tenant_id,
+            owner_user_id: None,
+            assistant_run_id,
+            title: "经营风险静态页".to_string(),
+            status: StaticPageDraftStatus::Previewed,
+            selected_scope: Value::Null,
+            visibility_snapshot: Value::Null,
+            source_refs: json!({
+                "effect_image_confirmation_required": false,
+                "continue_to_publish_after_effect_image": true,
+                "auto_publish_generated_artifact": true
+            }),
+            draft_payload: preview_ready_payload,
+            created_at: now,
+            updated_at: now,
+        };
+        let job = StaticPageImageJob {
+            id: job_id,
+            tenant_id,
+            draft_id,
+            assistant_run_id,
+            status: StaticPageImageJobStatus::PreviewReady,
+            queue_position: None,
+            image_prompt_payload: json!({
+                "preview_contract": queued_payload["previewContract"].clone()
+            }),
+            preview_asset_key: Some("static-page-previews/auto-preview.png".to_string()),
+            failure_reason: None,
+            confirmed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(static_page_image_job_ready_for_render(&draft, &job));
+        ensure_static_page_preview_contract_current(&draft, Some(&job))
+            .expect("preview-ready image should render for auto-continue drafts");
     }
 
     #[test]

@@ -142,7 +142,7 @@ function FinalRenderStatusCard({
     ? manifest.queue_copy || '最终静态页正在后台制作，可以继续聊天。资源排队时可联系商务开通高级用户跳过等待。'
     : failed
       ? manifest.workflow?.lastError?.message || manifest.workflow?.lastError || '可以直接重试，或调整模块后重新生成。'
-      : manifest.workflow?.cancelReason || '可以按当前确认效果重新发起最终静态页生成。';
+      : manifest.workflow?.cancelReason || '可以按当前效果图重新发起最终静态页生成。';
 
   return (
     <div className={`static-page-final-status-card ${failed ? 'failed' : cancelled ? 'cancelled' : 'pending'}`}>
@@ -252,9 +252,9 @@ export default function StaticPageFinalRender({
       <section className={`static-page-final-render locked${compact ? ' compact' : ''}`}>
         <div className="static-page-final-head">
           <span>最终静态页</span>
-          <strong>等待效果图确认</strong>
+          <strong>等待效果图</strong>
         </div>
-        <p>{blockReason || '先确认效果图，再按效果制作可交付静态页。'}</p>
+        <p>{blockReason || '先生成效果图，再按效果制作可交付静态页。'}</p>
         <button
           type="button"
           className="ghost-btn compact-action-btn"
@@ -363,7 +363,7 @@ export default function StaticPageFinalRender({
             {finalStatus === 'rendered'
               ? draft.finalPage?.directHtml
                 ? '后端 renderer 已按快速 HTML 模式生成静态页。'
-                : '后端 renderer 已按确认效果图和模块规划生成静态页。'
+                : '后端 renderer 已按效果图和模块规划生成静态页。'
               : PENDING_FINAL_STATUSES.has(finalStatus)
                 ? '后台生成不会阻塞当前对话；完成后会在右侧成品栏保留。'
                 : finalStatus === 'mock_ready'

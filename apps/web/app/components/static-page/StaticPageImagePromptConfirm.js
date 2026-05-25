@@ -12,7 +12,7 @@ function promptConfirmStatus(draft = {}) {
   const previewStale = draft.previewContract?.status === 'stale' || draft.imageJob?.status === 'stale';
   const jobStatus = previewStale ? 'stale' : (draft.imageJob?.status || draft.previewContract?.status || 'idle');
   if (['queued', 'running'].includes(jobStatus)) return '效果图正在生成中';
-  if (jobStatus === 'preview_ready') return '效果图已返回，回到对话确认即可继续';
+  if (jobStatus === 'preview_ready') return '效果图已返回，正在继续生成页面';
   if (jobStatus === 'failed') return '上次作图失败，可以修改文案后重试';
   if (jobStatus === 'stale') return '规划已更新，需要重新请求作图';
   return '确认后会提交当前文字给作图队列';

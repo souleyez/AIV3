@@ -482,7 +482,7 @@ function formatStaticPageWorkspaceForModel(workspace) {
       parts.push('用户要求调整静态页时，应优先围绕当前打开草稿做模块级标题、内容、数据、图表、布局或风格变更。');
     }
     if (workspace.previewStale) {
-      parts.push('当前规划已变更，旧效果图和最终页不能继续复用，应先重新生成并确认效果图。');
+      parts.push('当前规划已变更，旧效果图和最终页不能继续复用，应先重新生成效果图。');
     }
     if (workspace.canExportFinal) {
       parts.push('当前静态页已可导出 index.html 和 ZIP 交付包。');

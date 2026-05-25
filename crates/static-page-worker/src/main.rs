@@ -859,7 +859,7 @@ fn mark_draft_preview_ready(payload: &Value, job: &StaticPageImageJob, asset_key
             "id": job.id,
             "status": "preview_ready",
             "queuePosition": null,
-            "queueMessage": "效果图已生成，等待客户确认。",
+            "queueMessage": "效果图已生成，将自动继续制作页面。",
         }),
     );
     object.insert(
@@ -880,7 +880,7 @@ fn mark_draft_preview_ready(payload: &Value, job: &StaticPageImageJob, asset_key
         "imageJobId": job.id,
         "assetKey": asset_key,
         "queuePosition": null,
-        "renderExpectation": "final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image",
+        "renderExpectation": "final HTML/CSS/SVG should reproduce the generated preview without baking editable text or charts into the image",
     });
     object.insert("previewContract".to_string(), preview_contract.clone());
     object.insert("preview_contract".to_string(), preview_contract);
@@ -911,7 +911,7 @@ fn mark_draft_image_job_failed(
         "assetKey": null,
         "queuePosition": null,
         "failureReason": error_message,
-        "renderExpectation": "final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image",
+        "renderExpectation": "final HTML/CSS/SVG should reproduce the generated preview without baking editable text or charts into the image",
     });
     object.insert("previewContract".to_string(), preview_contract.clone());
     object.insert("preview_contract".to_string(), preview_contract);

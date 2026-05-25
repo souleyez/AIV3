@@ -4,7 +4,7 @@ const JOB_LABELS = {
   idle: '待生成',
   queued: '资源排队中',
   running: '生成中',
-  preview_ready: '效果图待确认',
+  preview_ready: '效果图已生成',
   failed: '生成失败',
   confirmed: '效果图已确认',
   stale: '规划已变更',
@@ -60,7 +60,7 @@ export default function StaticPageEffectPreview({
   }
 
   function confirmPreview() {
-    onApplyOperation?.({ type: 'confirm_preview' });
+    onApplyOperation?.({ type: 'request_final_render' });
   }
 
   return (
@@ -90,7 +90,7 @@ export default function StaticPageEffectPreview({
       {previewStale ? (
         <div className="static-page-stale-card">
           <strong>规划已经改过</strong>
-          <span>上一张效果图和最终静态页已失效，需要重新生成后再确认。</span>
+          <span>上一张效果图和最终静态页已失效，需要重新生成。</span>
         </div>
       ) : null}
 
@@ -100,7 +100,7 @@ export default function StaticPageEffectPreview({
             <img src={previewAssetKey} alt={preview.title || '静态页效果图'} loading="lazy" />
             <figcaption>
               <span>{preview.title || '静态页效果图'}</span>
-              <strong>{preview.subtitle || '由远程生图队列生成，等待客户确认'}</strong>
+              <strong>{preview.subtitle || '由远程生图队列生成，将自动继续制作页面'}</strong>
             </figcaption>
           </figure>
         ) : (
@@ -116,7 +116,7 @@ export default function StaticPageEffectPreview({
         )
       ) : (
         <div className="static-page-preview-placeholder">
-          <strong>先生成一张效果图给客户确认</strong>
+          <strong>先生成一张效果图</strong>
           <p>后端会通过 Codex 远程队列生成真实图片，等待中仍可继续修改规划。</p>
         </div>
       )}
@@ -134,7 +134,7 @@ export default function StaticPageEffectPreview({
         ) : null}
         {hasPreview ? (
           <button type="button" className="primary-btn compact-action-btn" onClick={confirmPreview} disabled={confirmed}>
-            {confirmed ? '效果图已确认' : '确认效果图'}
+            {confirmed ? '页面已提交' : '按效果制作静态页'}
           </button>
         ) : null}
         {hasPreview ? (

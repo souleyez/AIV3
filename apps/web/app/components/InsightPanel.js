@@ -26,7 +26,7 @@ const SURFACE_LABELS = {
 const STATIC_PAGE_STATUS_LABELS = {
   planning: '规划中',
   queued: '效果图排队',
-  preview_ready: '待确认效果图',
+  preview_ready: '效果图已生成',
   effect_confirmed: '效果图已确认',
   rendering: '生成中',
   failed: '生成失败',

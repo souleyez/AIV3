@@ -662,9 +662,28 @@ test('final render can only start from current confirmed preview with ready data
   assert.equal(canRequestStaticPageFinalRender(failedFinalRender), true);
   assert.equal(staticPageFinalRenderBlockReason(failedFinalRender), '');
   assert.equal(canRequestStaticPageFinalRender(stale), false);
-  assert.match(staticPageFinalRenderBlockReason(stale), /重新生成并确认效果图/);
+  assert.match(staticPageFinalRenderBlockReason(stale), /重新生成效果图/);
   assert.equal(canRequestStaticPageFinalRender(missingAsset), false);
   assert.match(staticPageFinalRenderBlockReason(missingAsset), /资源缺失/);
+});
+
+test('final render can start from generated preview without manual confirmation', () => {
+  const queued = applyStaticPageOperation(makeDefaultStaticPageChartDataReady(buildInitialStaticPageDraft()), {
+    type: 'queue_image_job',
+    jobId: 'job-preview-1',
+  });
+  const previewReady = applyStaticPageOperation(queued, {
+    type: 'mark_preview_ready',
+    previewImage: { assetKey: 'preview-ready-1.png' },
+  });
+  const rendering = applyStaticPageOperation(previewReady, { type: 'request_final_render' });
+
+  assert.equal(previewReady.status, 'preview_ready');
+  assert.equal(previewReady.previewContract.status, 'preview_ready');
+  assert.equal(canRequestStaticPageFinalRender(previewReady), true);
+  assert.equal(staticPageFinalRenderBlockReason(previewReady), '');
+  assert.equal(rendering.status, 'rendering');
+  assert.equal(rendering.finalPage.payload.previewImage.assetKey, 'preview-ready-1.png');
 });
 
 test('direct HTML render can start before preview confirmation when data is ready', () => {
@@ -701,7 +720,7 @@ test('final render gate blocks historical confirmed previews with weak module da
   assert.match(staticPageDirectHtmlBlockReason(confirmed), /快速 HTML 生成要求/);
   assert.match(staticPageFinalRenderBlockReason(confirmed), /最终页面生成要求/);
   assert.match(staticPageFinalRenderBlockReason(confirmed), /needs_sample_rows/);
-  assert.match(staticPageFinalRenderBlockReason(confirmed), /重新生成并确认效果图/);
+  assert.match(staticPageFinalRenderBlockReason(confirmed), /重新生成效果图/);
 });
 
 test('final render request accepts backend rendered output', () => {

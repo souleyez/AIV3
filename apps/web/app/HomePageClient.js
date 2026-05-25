@@ -835,6 +835,7 @@ export default function HomePageClient() {
   const messageLoadIdRef = useRef(0);
   const reportDetailLoadIdRef = useRef(0);
   const fileInputRef = useRef(null);
+  const staticPageAutoRenderKeysRef = useRef(new Set());
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -1079,7 +1080,13 @@ export default function HomePageClient() {
       local_draft_id: draft?.localDraftId || draft?.id || '',
       dataset_id: draft?.datasetId || null,
       chat_session_id: draft?.sessionId || null,
-      source: draft?.source || {},
+      source: 'local_chat_static_page_image2_pipeline',
+      client_source: draft?.source || {},
+      auto_publish_generated_artifact: true,
+      effect_image_confirmation_required: false,
+      continue_to_publish_after_effect_image: true,
+      fixed_task_template_id: 'static_page_image2_data_publish',
+      customer_preview_delivery: 'stream_event_or_status_card',
     };
   }
 
@@ -1176,11 +1183,28 @@ export default function HomePageClient() {
         status,
         queuePosition: imageJob.queue_position ?? null,
         queueMessage: imageJob.failure_reason
-          || (status === 'preview_ready' ? '效果图已生成，等待客户确认。' : STATIC_PAGE_QUEUE_MESSAGE),
+          || (status === 'preview_ready' ? '效果图已生成，将自动继续制作页面。' : STATIC_PAGE_QUEUE_MESSAGE),
       },
       previewImage: imageJob.preview_asset_key
         ? buildConfirmedStaticPagePreview(draft, imageJob, draft.previewImage)
         : draft.previewImage,
+      previewContract: imageJob.preview_asset_key && status === 'preview_ready'
+        ? {
+            ...(draft.previewContract || {}),
+            status: 'preview_ready',
+            imageJobId: imageJob.id,
+            assetKey: imageJob.preview_asset_key,
+            queuePosition: null,
+          }
+        : imageJob.preview_asset_key && status === 'confirmed'
+          ? {
+              ...(draft.previewContract || {}),
+              status: 'confirmed',
+              imageJobId: imageJob.id,
+              assetKey: imageJob.preview_asset_key,
+              queuePosition: null,
+            }
+          : draft.previewContract,
     };
   }
 
@@ -1533,10 +1557,15 @@ export default function HomePageClient() {
     const directHtml = Boolean(operation.directHtml || operation.finalPage?.directHtml);
     let draft = baseDraft;
     let imageJobId = isBackendStaticPageImageJobId(draft.imageJob?.id) ? draft.imageJob.id : '';
-    if (!directHtml && draft.imageJob?.status !== 'confirmed') {
-      const confirmed = await confirmBackendStaticPagePreview(draft, operation);
-      draft = confirmed.draft;
-      imageJobId = confirmed.imageJob?.id || draft.imageJob?.id || imageJobId;
+    if (!directHtml) {
+      if (!imageJobId) {
+        const ensured = await ensureBackendStaticPageImageJob(draft, operation);
+        draft = ensured.draft || draft;
+        imageJobId = ensured.imageJob?.id || draft.imageJob?.id || imageJobId;
+      }
+      if (!canRequestStaticPageFinalRender(draft)) {
+        throw new Error(staticPageFinalRenderBlockReason(draft) || '效果图还未准备好。');
+      }
     }
     const response = await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/renders`, {
       method: 'POST',
@@ -1572,7 +1601,7 @@ export default function HomePageClient() {
     setBanner(renderStatus === 'rendered'
       ? directHtml
         ? '快速 HTML 已生成，可以下载 index.html。'
-        : '最终静态页已按确认效果图生成。'
+        : '最终静态页已按效果图生成。'
       : '最终静态页已进入后台制作队列，可以继续聊天；完成后会保存在右侧成品栏。');
     if (typeof window !== 'undefined') {
       window.setTimeout(() => {
@@ -3174,7 +3203,7 @@ export default function HomePageClient() {
 
     if (['queued', 'running'].includes(jobStatus)) {
       setStaticPageEditorOpen(false);
-      setBanner('效果图正在生成中；资源返回后会停在主聊天区等待确认。');
+      setBanner('效果图正在生成中；资源返回后会自动继续制作页面。');
       return draft;
     }
 
@@ -3194,8 +3223,8 @@ export default function HomePageClient() {
         || draft.previewContract?.status === 'confirmed';
 
       if (canContinueToRender) {
-        if (draft.previewContract?.status === 'confirmed' && !canRequestStaticPageFinalRender(draft)) {
-          setBanner(staticPageFinalRenderBlockReason(draft) || '效果图确认状态缺少资源，请重新发起效果图。');
+        if (!canRequestStaticPageFinalRender(draft)) {
+          setBanner(staticPageFinalRenderBlockReason(draft) || '效果图资源缺失，请重新发起效果图。');
           return draft;
         }
 
@@ -3210,14 +3239,11 @@ export default function HomePageClient() {
 
         const confirmedDraft = draft.previewContract?.status === 'confirmed'
           ? draft
-          : replaceDraftWithOperation(draft, {
-              type: 'confirm_preview',
-              previewImage: draft.previewImage || buildMockStaticPagePreview(draft),
-            });
+          : draft;
         const renderedDraft = replaceDraftWithOperation(confirmedDraft, { type: 'request_final_render' });
         setStaticPageEditorOpen(false);
         setMobilePanel('chat');
-        setBanner('已按确认效果图生成本地静态页模拟结果；接入后端时会进入正式后台渲染。');
+        setBanner('已按效果图生成本地静态页模拟结果；接入后端时会进入正式后台渲染。');
         return renderedDraft;
       }
 
@@ -3668,8 +3694,70 @@ export default function HomePageClient() {
     }
     setStaticPageEditorOpen(false);
     setMobilePanel('chat');
-    setBanner('效果图已生成，已回到主聊天区。满意就点“效果图——生成页面”；不满意就回到模块编辑。');
+    setBanner('效果图已生成，正在自动继续制作静态页。');
   }, [activeStaticPageDraft?.id, activeStaticPageDraft?.imageJob?.status, staticPageEditorOpen]);
+
+  useEffect(() => {
+    const draft = activeStaticPageDraft;
+    const backendDraftId = draft?.backendDraftId;
+    const jobId = draft?.imageJob?.id || draft?.previewContract?.imageJobId || '';
+    const jobStatus = draft?.imageJob?.status || draft?.previewContract?.status || '';
+    const previewAssetKey = draft?.previewImage?.assetKey || draft?.previewContract?.assetKey || '';
+    const finalStatus = draft?.finalPage?.status || '';
+
+    if (
+      !backendDraftId
+      || jobStatus !== 'preview_ready'
+      || !previewAssetKey
+      || staticPageActionBusy
+      || ['queued', 'rendering', 'rendered', 'mock_ready'].includes(finalStatus)
+    ) {
+      return;
+    }
+
+    const autoRenderKey = `${backendDraftId}:${jobId}:${previewAssetKey}`;
+    if (staticPageAutoRenderKeysRef.current.has(autoRenderKey)) {
+      return;
+    }
+
+    if (!canRequestStaticPageFinalRender(draft)) {
+      setBanner(staticPageFinalRenderBlockReason(draft) || '效果图已生成，但最终页面生成条件还未满足。');
+      return;
+    }
+
+    staticPageAutoRenderKeysRef.current.add(autoRenderKey);
+    setStaticPageActionBusy(true);
+    const optimisticDraft = replaceDraftWithOperation(draft, {
+      type: 'request_final_render',
+      finalPage: {
+        status: 'queued',
+        renderer: 'platform-api-static-page-renderer',
+        renderOutputId: '',
+        imageJobId: jobId || null,
+        directHtml: false,
+        assetManifest: {
+          status: 'queued',
+          queue_copy: '最终静态页正在后台制作，可以继续聊天或修改其他内容。',
+        },
+      },
+    });
+    createBackendStaticPageRender(optimisticDraft, {
+      previewImage: draft.previewImage || buildMockStaticPagePreview(draft),
+    }).catch((syncError) => {
+      staticPageAutoRenderKeysRef.current.delete(autoRenderKey);
+      replaceStaticPageDraft(draft.id, draft);
+      setBanner('');
+      setError(`静态页未进入后台制作：${staticPagePreviewGateErrorMessage(syncError, '后端渲染暂不可用')}。`);
+    }).finally(() => setStaticPageActionBusy(false));
+  }, [
+    activeStaticPageDraft?.backendDraftId,
+    activeStaticPageDraft?.imageJob?.id,
+    activeStaticPageDraft?.imageJob?.status,
+    activeStaticPageDraft?.previewImage?.assetKey,
+    activeStaticPageDraft?.previewContract?.assetKey,
+    activeStaticPageDraft?.finalPage?.status,
+    staticPageActionBusy,
+  ]);
 
   useEffect(() => {
     const backendDraftId = activeStaticPageDraft?.backendDraftId;

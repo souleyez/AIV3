@@ -118,7 +118,7 @@ function StaticPageNoticePreview({
     return (
       <div className="static-page-notice-queue subtle">
         <strong>等待效果图</strong>
-        <span>当前只需要确认生图文案；效果图满意后再生成最终静态页。</span>
+        <span>当前只需要确认提交给作图的文字；效果图返回后会继续生成最终静态页。</span>
       </div>
     );
   }
@@ -129,7 +129,7 @@ function StaticPageNoticePreview({
         <img src={previewAssetKey} alt={preview.title || '静态页效果图'} loading="lazy" />
         <figcaption>
           <span>{preview.title || '静态页效果图'}</span>
-          <strong>{preview.subtitle || '等待确认后生成页面'}</strong>
+          <strong>{preview.subtitle || '效果图已返回，正在继续生成页面'}</strong>
         </figcaption>
       </figure>
     );
@@ -138,7 +138,7 @@ function StaticPageNoticePreview({
   return (
     <div className="static-page-notice-preview">
       <span>{preview.title || '效果图视觉合同'}</span>
-      <strong>{preview.subtitle || '效果图已返回，等待确认'}</strong>
+      <strong>{preview.subtitle || '效果图已返回，正在继续生成页面'}</strong>
       <div className="static-page-notice-preview-lines">
         {(preview.modules || modules).slice(0, 8).map((module) => (
           <i key={module.id || module.title} style={{ width: modulePreviewWidth(module) }} title={module.title} />
@@ -165,7 +165,7 @@ function modulePreviewWidth(module) {
 function statusLabel(jobStatus, finalStatus, draftStatus) {
   if (finalStatus === 'rendered' || draftStatus === 'rendered') return '页面已生成';
   if (['queued', 'rendering'].includes(finalStatus)) return '页面制作中';
-  if (jobStatus === 'preview_ready') return '效果图待确认';
+  if (jobStatus === 'preview_ready') return '效果图已生成';
   if (jobStatus === 'confirmed' || draftStatus === 'effect_confirmed') return '效果图已确认';
   if (jobStatus === 'queued') return '效果图排队中';
   if (jobStatus === 'running') return '效果图生成中';

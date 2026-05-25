@@ -84,7 +84,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         escape_html(&request.title),
         escape_html(
             &static_page_payload_string(&request.draft_payload, &["modelSummary", "model_summary"])
-                .unwrap_or_else(|| "按确认效果图和模块规划生成静态页。".to_string()),
+                .unwrap_or_else(|| "按效果图和模块规划生成静态页。".to_string()),
         ),
         module_html,
         echarts_hydration_script,
@@ -571,7 +571,7 @@ fn module_data_quality_action(status: &str, sample_rows: usize) -> &'static str 
             "可直接交付；如客户要求精确口径，可继续补充字段说明。"
         }
         ("confirmed", _) => "已确认绑定但缺少可渲染数据行，建议补充模块数据后重新生成效果图。",
-        ("missing", _) => "补充该模块的数据行或绑定字段后，重新生成并确认效果图。",
+        ("missing", _) => "补充该模块的数据行或绑定字段后，重新生成效果图。",
         _ if sample_rows == 0 => "先确认字段来源和样本数据，否则最终页只能显示数据待确认。",
         _ => "交付前建议确认字段口径、样本数据和图表类型。",
     }

@@ -411,7 +411,7 @@ export function buildStaticPagePreviewContract(draft, patch = {}) {
     imageJobId: null,
     assetKey: null,
     confirmedAt: null,
-    renderExpectation: 'final HTML/CSS/SVG should reproduce the confirmed preview without baking editable text or charts into the image',
+    renderExpectation: 'final HTML/CSS/SVG should reproduce the generated preview without baking editable text or charts into the image',
   };
   return {
     ...base,
@@ -1671,15 +1671,23 @@ export function staticPagePreviewBlockReason(draft = {}) {
 
 export function staticPageFinalRenderBlockReason(draft = {}) {
   if (draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale') {
-    return '规划已经改过，需要重新生成并确认效果图。';
+    return '规划已经改过，需要重新生成效果图。';
   }
   const finalStatus = draft?.finalPage?.status || '';
   const retryableFinalStatus = finalStatus === 'failed' || finalStatus === 'cancelled';
-  if (draft?.status !== 'effect_confirmed' && !retryableFinalStatus) {
-    return '先确认效果图，再按效果制作可交付静态页。';
+  const previewStatus = draft?.previewContract?.status || '';
+  const imageJobStatus = draft?.imageJob?.status || '';
+  const previewReady = previewStatus === 'preview_ready'
+    || previewStatus === 'confirmed'
+    || imageJobStatus === 'preview_ready'
+    || imageJobStatus === 'confirmed'
+    || draft?.status === 'preview_ready'
+    || draft?.status === 'effect_confirmed';
+  if (!previewReady && !retryableFinalStatus) {
+    return '先生成效果图，再按效果制作可交付静态页。';
   }
-  if (draft?.previewContract?.status !== 'confirmed') {
-    return '效果图确认状态未同步，请刷新或重新确认效果图。';
+  if (!['preview_ready', 'confirmed'].includes(previewStatus) && !retryableFinalStatus) {
+    return '效果图状态未同步，请刷新或重新生成效果图。';
   }
   if (!draft?.previewImage?.assetKey && !draft?.previewContract?.assetKey) {
     return '效果图资源缺失，请重新生成效果图。';
@@ -1687,7 +1695,7 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
   return staticPageDataQualityBlockReason(
     draft,
     '最终页面生成要求',
-    '请先让 V3 补充样本行、重新匹配字段或修复模块数据，然后重新生成并确认效果图。',
+    '请先让 V3 补充样本行、重新匹配字段或修复模块数据，然后重新生成效果图。',
     { mode: 'final' },
   );
 }
@@ -2081,7 +2089,7 @@ export function buildStaticPageImagePromptText(draft = {}) {
     dataRequirementLines.length ? '真实数据摘要：' : '',
     ...dataRequirementLines.map((line) => `- ${line}`),
     '后续制作与发布要求：',
-    `- 视觉稿确认后，系统应按 ${productionRules.workflow} 制作真实数据 HTML。`,
+    `- 视觉稿生成后，系统应按 ${productionRules.workflow} 制作真实数据 HTML。`,
     '- 高级取数、口径纠偏、明细补齐或发布类需求，可升级为 V3 受控 Codex Host 固定模板任务；新 generated-artifact 产物发布可自动执行，覆盖旧产物、稳定链接替换、口径不确定或扩大权限仍需人工确认。',
     '视觉要求：画面像客户汇报页或经营分析页，不要浏览器边框，不要后台管理系统，不要出现可编辑文本框或拖拽编辑框。',
     '重点：中文标题清晰，图表关系可信，适合客户直接看效果；不要生成假数字、假门店、假品牌。',
@@ -2206,8 +2214,8 @@ export function buildStaticPageFinalRenderPayload(draft) {
     previewContract: draft.previewContract || buildStaticPagePreviewContract(draft),
     previewImage: draft.previewImage,
     imageFirstContract: {
-      role: 'confirmed_effect_image_to_html_blueprint',
-      rule: 'Use the confirmed effect image as the visual blueprint, then bind real dataSnapshot values into DOM/SVG/HTML.',
+      role: 'generated_effect_image_to_html_blueprint',
+      rule: 'Use the generated effect image as the visual blueprint, then bind real dataSnapshot values into DOM/SVG/HTML.',
       dataRequirements: buildStaticPageImageDataRequirementLines({ ...draft, dataSnapshot }),
       fakeDataAllowed: false,
     },
