@@ -1,6 +1,6 @@
 # V3 纯第三方简单版接口文档
 
-**版本：** 2026-05-20  
+**版本：** 2026-05-25  
 **Base URL：** `https://v3.elepcloud.com`  
 **鉴权：** `Authorization: Bearer <V3 inbound token>`  
 **请求格式：** `Content-Type: application/json`
@@ -26,7 +26,7 @@ Content-Type: application/json
 ```jsonc
 {
   "source_id": "third-party-source-main",          // 文档源 ID；连接未配置默认文档源时必填
-  "dataset_external_id": "workspace-docs-main",    // 第三方数据集/资料库 ID；没有可省略
+  "dataset_external_id": "workspace-docs-main",    // 第三方稳定数据集/资料库 ID；没有可省略，不要传临时 UUID
   "dataset_title": "默认资料库",                    // 数据集展示名；自动创建数据集时使用
   "document_external_id": "doc-20260520-0001",     // 第三方文档 ID；后续聊天用它指定文档范围
   "revision_external_id": "rev-20260520-01",       // 文档版本 ID；同一文档更新时传新版本
@@ -46,7 +46,7 @@ Content-Type: application/json
 | 字段 | 必填 | 注释 |
 | --- | --- | --- |
 | `source_id` | 条件必填 | 文档源 ID；连接没有默认文档源时必填 |
-| `dataset_external_id` | 否 | 第三方数据集/资料库 ID；用于自动归档 |
+| `dataset_external_id` | 否 | 第三方稳定数据集/资料库 ID；用于自动归档。临时 UUID 会被归并到默认资料库 |
 | `dataset_title` | 否 | 数据集名称；自动创建数据集时使用 |
 | `document_external_id` | 是 | 第三方文档 ID；聊天时放入 `available_document_external_ids` |
 | `revision_external_id` | 否 | 文档版本 ID；用于区分同一文档的不同版本 |
@@ -55,6 +55,8 @@ Content-Type: application/json
 | `content_url` | 是 | 文件下载地址；生产只接受 HTTPS |
 | `metadata` | 否 | 非敏感业务元数据 |
 | `idempotency_key` | 否 | 幂等键；建议包含文档 ID 和版本 ID |
+
+`dataset_external_id` 是业务稳定分组，不是每次上传生成的任务 ID。V3 会为每个第三方连接和资料源建立对应系统账户；自动解析的数据归属该账户，普通资料库列表默认不展示系统解析源。多个第三方接入时，不同连接和资料源会落到不同系统账户，便于隔离和审计。
 
 响应：
 
@@ -132,7 +134,7 @@ Content-Type: application/json
 ```jsonc
 {
   "source_id": "third-party-source-main",       // 文档源 ID；连接已配置默认源时可省略
-  "dataset_external_id": "workspace-docs-new",  // 目标第三方数据集/资料库 ID；不存在时 V3 自动创建
+  "dataset_external_id": "workspace-docs-new",  // 目标第三方稳定数据集/资料库 ID；不存在时 V3 自动创建
   "dataset_title": "新资料库",                   // 目标数据集展示名；自动创建时使用
   "revision_external_id": "rev-20260520-01"     // 可选；只移动指定版本。不传则移动同一文档 ID 下所有版本
 }
@@ -143,10 +145,12 @@ Content-Type: application/json
 | 字段 | 必填 | 注释 |
 | --- | --- | --- |
 | `source_id` | 条件必填 | 文档源 ID；V3 无法从连接或文档 ID 推断时必填 |
-| `dataset_external_id` | 条件必填 | 目标第三方数据集/资料库 ID；和 `dataset_id` 二选一 |
+| `dataset_external_id` | 条件必填 | 目标第三方稳定数据集/资料库 ID；和 `dataset_id` 二选一。临时 UUID 会被归并到默认资料库 |
 | `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 二选一 |
 | `dataset_title` | 否 | 目标数据集名称；自动创建数据集时使用 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；不传则移动同一外部文档 ID 的全部版本 |
+
+移动目标也应是业务稳定分组。若目标值被判定为临时 UUID，V3 会归并到该资料源默认资料库；响应中的 `dataset_external_id` 可能为空，以 `dataset_id` 为实际归属准。
 
 响应：
 
@@ -157,7 +161,7 @@ Content-Type: application/json
   "document_external_id": "doc-20260520-0001",   // 第三方文档 ID
   "revision_external_id": "rev-20260520-01",     // 本次移动限定的版本 ID；未传则为空
   "dataset_id": "5af2f8a6-0d3c-4a12-a77a-333333333333", // 目标 V3 数据集 ID
-  "dataset_external_id": "workspace-docs-new",   // 目标第三方数据集 ID
+  "dataset_external_id": "workspace-docs-new",   // 目标第三方数据集 ID；临时 UUID 被归并时可能为空
   "moved_count": 1,                              // 移动的 V3 文档记录数量
   "previous_dataset_ids": [                      // 移动前的 V3 数据集 ID 列表
     "5af2f8a6-0d3c-4a12-a77a-222222222222"

@@ -198,6 +198,8 @@ const ASSISTANT_RUN_DATABASE_SCHEMA_TABLE_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT: usize = 2;
 const ASSISTANT_RUN_DATABASE_AGGREGATE_REQUEST_LIMIT: usize = 4;
 const ASSISTANT_RUN_DETAIL_TARGET_LIMIT: usize = 3;
+const EXTERNAL_SYSTEM_USER_EMAIL_DOMAIN: &str = "aidp.local";
+const EXTERNAL_SYSTEM_USER_SLUG_LIMIT: usize = 24;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
@@ -5371,6 +5373,56 @@ async fn current_auth_user_id(
         .map(|(user, _session)| user.id))
 }
 
+async fn ensure_external_system_user(
+    state: &AppState,
+    scope_kind: &str,
+    scope_id: &str,
+    display_label: &str,
+) -> std::result::Result<User, ApiError> {
+    let email = external_system_user_email(scope_kind, scope_id);
+    let display_name = external_system_user_display_name(display_label, scope_id);
+    state
+        .storage
+        .users()
+        .ensure_by_email(state.tenant_id, &email, Some(&display_name))
+        .await
+        .map_err(ApiError::from_storage)
+}
+
+fn external_system_user_email(scope_kind: &str, scope_id: &str) -> String {
+    let scope_kind = external_document_parse_dataset_key_component(scope_kind);
+    let scope_id = scope_id.trim();
+    let mut slug = external_document_parse_dataset_key_component(scope_id);
+    if slug.len() > EXTERNAL_SYSTEM_USER_SLUG_LIMIT {
+        slug.truncate(EXTERNAL_SYSTEM_USER_SLUG_LIMIT);
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+    }
+    let hash = sha256_hex([scope_kind.as_bytes(), b":", scope_id.as_bytes()]);
+    format!(
+        "third-party-{}-{}-{}@{}",
+        scope_kind,
+        slug,
+        &hash[..12],
+        EXTERNAL_SYSTEM_USER_EMAIL_DOMAIN
+    )
+}
+
+fn external_system_user_display_name(display_label: &str, fallback: &str) -> String {
+    let label = display_label.trim();
+    let label = if label.is_empty() {
+        fallback.trim()
+    } else {
+        label
+    };
+    if label.is_empty() {
+        "第三方系统账户".to_string()
+    } else {
+        format!("第三方系统账户 - {label}")
+    }
+}
+
 async fn require_model_gateway_operator_session(
     state: &AppState,
     headers: &HeaderMap,
@@ -6538,6 +6590,29 @@ fn dataset_is_visible_for_request(
     (dataset_is_visible(dataset, active_secret_binding_ids, current_user_id)
         && dataset_local_scope_is_visible(dataset, local_thread_id))
         || dataset_is_visible_by_local_thread_scope(dataset, local_thread_id)
+}
+
+fn dataset_is_hidden_from_standard_dataset_list(dataset: &Dataset) -> bool {
+    dataset_is_external_temporary_scope(dataset)
+        || dataset_is_system_external_document_parse_source(dataset)
+}
+
+fn dataset_is_system_external_document_parse_source(dataset: &Dataset) -> bool {
+    if dataset.key.starts_with("external-parse-dataset-") {
+        return true;
+    }
+    dataset
+        .metadata
+        .get("external_source")
+        .or_else(|| dataset.metadata.get("externalSource"))
+        .and_then(Value::as_object)
+        .and_then(|external_source| {
+            external_source
+                .get("created_by")
+                .or_else(|| external_source.get("createdBy"))
+        })
+        .and_then(Value::as_str)
+        == Some("external_document_parse")
 }
 
 fn filter_visible_datasets(
@@ -7956,6 +8031,7 @@ async fn list_datasets(
     )
     .into_iter()
     .filter(|dataset| dataset.lifecycle != DatasetLifecycle::Archived)
+    .filter(|dataset| !dataset_is_hidden_from_standard_dataset_list(dataset))
     .collect::<Vec<_>>();
     let visible_datasets =
         enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
@@ -8964,7 +9040,10 @@ async fn create_assistant_run(
         &active_secret_binding_ids,
         current_user_id,
         header_local_thread_id.as_deref(),
-    );
+    )
+    .into_iter()
+    .filter(|dataset| !dataset_is_hidden_from_standard_dataset_list(dataset))
+    .collect::<Vec<_>>();
     let visible_datasets =
         enrich_visible_datasets_for_scope_planning(&state, visible_datasets, current_user_id)
             .await?;
@@ -11739,8 +11818,11 @@ async fn create_external_source_sync(
 ) -> std::result::Result<(StatusCode, Json<CreateExternalSourceSyncResponse>), ApiError> {
     validate_required("source_id", &source_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let source = load_external_source_connection(&state, &source_id).await?;
+    let external_system_user =
+        ensure_external_system_user(&state, "source", &source.source_id, &source.display_name)
+            .await?;
+    let current_user_id = Some(external_system_user.id);
     let mut request = request;
     request.dataset_id = resolve_effective_external_source_sync_dataset_id(
         &state,
@@ -12062,7 +12144,6 @@ async fn create_external_document_parse(
     let source_id = resolve_external_document_parse_source_id(&request, &connection)?;
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let current_user_id = current_auth_user_id(&state, &headers).await?;
     let source = load_external_source_connection(&state, &source_id).await?;
     if source.disabled_at.is_some() {
         return Err(ApiError::forbidden(
@@ -12070,6 +12151,14 @@ async fn create_external_document_parse(
             format!("external source connection {} is disabled", source_id),
         ));
     }
+    let external_system_user = ensure_external_system_user(
+        &state,
+        "channel-source",
+        &format!("{connection_id}:{source_id}"),
+        &format!("{connection_id} / {}", source.display_name),
+    )
+    .await?;
+    let current_user_id = Some(external_system_user.id);
     let resolved_dataset = resolve_external_document_parse_dataset(
         &state,
         &request,
@@ -12113,6 +12202,7 @@ async fn create_external_document_parse(
                         "dataset_id": resolved_dataset.dataset.id,
                         "dataset_key": resolved_dataset.dataset.key.clone(),
                         "dataset_external_id": resolved_dataset.dataset_external_id.clone(),
+                        "requested_dataset_external_id": resolved_dataset.requested_dataset_external_id.clone(),
                         "document_external_id": request.document_external_id.clone(),
                         "revision_external_id": request.revision_external_id.clone(),
                         "external_parse_request_id": request.idempotency_key.clone(),
@@ -12128,6 +12218,7 @@ async fn create_external_document_parse(
                             "mode": resolved_dataset.resolution_mode,
                             "auto_created": resolved_dataset.auto_created,
                             "requested_dataset_key": resolved_dataset.requested_dataset_key,
+                            "requested_dataset_external_id": resolved_dataset.requested_dataset_external_id.clone(),
                             "v3_dataset_id": resolved_dataset.dataset.id,
                             "v3_dataset_key": resolved_dataset.dataset.key.clone(),
                         },
@@ -12173,6 +12264,7 @@ async fn create_external_document_parse(
 struct ResolvedExternalDocumentParseDataset {
     dataset: Dataset,
     dataset_external_id: Option<String>,
+    requested_dataset_external_id: Option<String>,
     requested_dataset_key: String,
     resolution_mode: &'static str,
     auto_created: bool,
@@ -12200,7 +12292,10 @@ async fn resolve_external_document_parse_dataset(
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<ResolvedExternalDocumentParseDataset, ApiError> {
-    let dataset_external_id = trim_optional(request.dataset_external_id.clone());
+    let requested_dataset_external_id = trim_optional(request.dataset_external_id.clone());
+    let dataset_external_id = effective_external_document_parse_dataset_external_id(
+        requested_dataset_external_id.as_deref(),
+    );
     if let Some(dataset_id) = request.dataset_id {
         let dataset = load_visible_dataset_for_user(
             state,
@@ -12213,6 +12308,7 @@ async fn resolve_external_document_parse_dataset(
             requested_dataset_key: dataset.key.clone(),
             dataset,
             dataset_external_id,
+            requested_dataset_external_id,
             resolution_mode: "provided_dataset_id",
             auto_created: false,
         });
@@ -12232,6 +12328,7 @@ async fn resolve_external_document_parse_dataset(
         return Ok(ResolvedExternalDocumentParseDataset {
             dataset,
             dataset_external_id,
+            requested_dataset_external_id,
             requested_dataset_key,
             resolution_mode: "source_dataset_reused",
             auto_created: false,
@@ -12260,6 +12357,7 @@ async fn resolve_external_document_parse_dataset(
                     "connector_kind": source.connector_kind.clone(),
                     "display_name": source.display_name.clone(),
                     "dataset_external_id": dataset_external_id.clone(),
+                    "requested_dataset_external_id": requested_dataset_external_id.clone(),
                     "created_by": "external_document_parse",
                     "created_at": Utc::now(),
                 },
@@ -12271,10 +12369,24 @@ async fn resolve_external_document_parse_dataset(
     Ok(ResolvedExternalDocumentParseDataset {
         dataset,
         dataset_external_id,
+        requested_dataset_external_id,
         requested_dataset_key,
         resolution_mode: "source_dataset_created",
         auto_created: true,
     })
+}
+
+fn effective_external_document_parse_dataset_external_id(value: Option<&str>) -> Option<String> {
+    let value = value.map(str::trim).filter(|value| !value.is_empty())?;
+    if external_document_parse_dataset_external_id_looks_transient(value) {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn external_document_parse_dataset_external_id_looks_transient(value: &str) -> bool {
+    Uuid::parse_str(value).is_ok()
 }
 
 fn external_document_parse_dataset_title(
@@ -12518,7 +12630,14 @@ async fn update_external_document_dataset(
     }
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let external_system_user = ensure_external_system_user(
+        &state,
+        "channel-source",
+        &format!("{connection_id}:{source_id}"),
+        &format!("{connection_id} / {}", source.display_name),
+    )
+    .await?;
+    let current_user_id = Some(external_system_user.id);
     let resolve_request = CreateExternalDocumentParseRequest {
         source_id: source_id.clone(),
         dataset_id: request.dataset_id,
@@ -12635,6 +12754,11 @@ fn external_document_dataset_move_metadata(
     );
     set_payload_value(
         &mut external_source,
+        "requested_dataset_external_id",
+        json!(resolved_dataset.requested_dataset_external_id.clone()),
+    );
+    set_payload_value(
+        &mut external_source,
         "document_external_id",
         json!(document_external_id),
     );
@@ -12670,6 +12794,7 @@ fn external_document_dataset_move_metadata(
             "target_dataset_id": resolved_dataset.dataset.id,
             "target_dataset_key": resolved_dataset.dataset.key.clone(),
             "target_dataset_external_id": resolved_dataset.dataset_external_id.clone(),
+            "requested_dataset_external_id": resolved_dataset.requested_dataset_external_id.clone(),
             "resolution_mode": resolved_dataset.resolution_mode,
             "auto_created_dataset": resolved_dataset.auto_created
         }
@@ -14179,6 +14304,14 @@ async fn ingest_external_channel_message_with_connection(
         &mut assistant_request.scope_candidates,
     )
     .await?;
+    let external_system_user =
+        ensure_external_system_user(state, "channel", connection_id, connection_id).await?;
+    let external_system_user_id = Some(external_system_user.id);
+    set_payload_value(
+        &mut selected_scope,
+        "v3_system_user_id",
+        json!(external_system_user.id),
+    );
     assistant_request.selected_scope = Some(selected_scope.clone());
     for candidate in &mut assistant_request.scope_candidates {
         if candidate.get("type").and_then(Value::as_str) == Some("external_channel") {
@@ -14200,7 +14333,7 @@ async fn ingest_external_channel_message_with_connection(
         assistant_request.prompt.trim(),
         assistant_request.local_thread_id.as_deref(),
         &[],
-        None,
+        external_system_user_id,
     )
     .await?;
     let evidence_status = external_evidence_state
@@ -14213,7 +14346,7 @@ async fn ingest_external_channel_message_with_connection(
         .create(
             state.tenant_id,
             &NewAssistantRun {
-                user_id: None,
+                user_id: external_system_user_id,
                 local_thread_id: assistant_request.local_thread_id.clone(),
                 user_prompt: assistant_request.prompt.trim().to_string(),
                 startup_briefing: startup_briefing.clone(),
@@ -17733,11 +17866,14 @@ async fn resolve_effective_external_source_sync_dataset_id(
         .await?;
         return Ok(Some(dataset_id));
     }
-    if let Some(dataset_external_id) = trim_optional(request_dataset_external_id) {
+    if let Some(requested_dataset_external_id) = trim_optional(request_dataset_external_id) {
+        let dataset_external_id = effective_external_document_parse_dataset_external_id(Some(
+            requested_dataset_external_id.as_str(),
+        ));
         let dataset = resolve_external_source_sync_dataset_by_external_id(
             state,
             source,
-            &dataset_external_id,
+            dataset_external_id.as_deref(),
             trim_optional(request_dataset_title).as_deref(),
             connector_context,
             active_secret_binding_ids,
@@ -17762,14 +17898,14 @@ async fn resolve_effective_external_source_sync_dataset_id(
 async fn resolve_external_source_sync_dataset_by_external_id(
     state: &AppState,
     source: &ExternalSourceConnectionSummary,
-    dataset_external_id: &str,
+    dataset_external_id: Option<&str>,
     dataset_title: Option<&str>,
     connector_context: &Value,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<Dataset, ApiError> {
     let requested_dataset_key =
-        external_document_parse_dataset_key(&source.source_id, Some(dataset_external_id));
+        external_document_parse_dataset_key(&source.source_id, dataset_external_id);
     if let Some(dataset) = state
         .storage
         .datasets()
@@ -62694,6 +62830,25 @@ mod tests {
             first.reply.target_conversation_external_id,
             "chat-risk-room"
         );
+        let run = storage
+            .assistant_runs()
+            .get_by_id(tenant.id, first.assistant_run_id.expect("assistant run id"))
+            .await
+            .expect("assistant run lookup should succeed")
+            .expect("assistant run should exist");
+        let run_user_id = run
+            .user_id
+            .expect("external channel runs should belong to the third-party system user");
+        let run_user = storage
+            .users()
+            .get_by_id(tenant.id, run_user_id)
+            .await
+            .expect("run user lookup should succeed")
+            .expect("run user should exist");
+        assert_eq!(
+            run_user.email,
+            external_system_user_email("channel", "generic-chat-main")
+        );
 
         let duplicate = post_json_request(
             app,
@@ -83730,6 +83885,20 @@ mod tests {
             "external-source-src-auto-docs-dataset-third-party-main"
         );
         assert_eq!(created_dataset.title, "Third-party Main Docs");
+        let owner_user_id = created_dataset
+            .owner_user_id
+            .expect("external parse dataset should belong to the third-party system user");
+        let owner_user = state
+            .storage
+            .users()
+            .get_by_id(state.tenant_id, owner_user_id)
+            .await
+            .expect("system owner lookup should succeed")
+            .expect("system owner should exist");
+        assert_eq!(
+            owner_user.email,
+            external_system_user_email("channel-source", "generic-chat-main:src-auto-docs")
+        );
         assert_eq!(
             created_dataset
                 .metadata
@@ -83747,6 +83916,7 @@ mod tests {
             .await
             .expect("document lookup should succeed")
             .expect("document should be created");
+        assert_eq!(document.owner_user_id, created_dataset.owner_user_id);
         let external_source = document
             .metadata
             .get("external_source")
@@ -83779,6 +83949,12 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        let Json(listed_datasets) = list_datasets(State(state.clone()), HeaderMap::new())
+            .await
+            .expect("standard dataset list should load");
+        assert!(!listed_datasets
+            .iter()
+            .any(|dataset| dataset.id == created_dataset.id));
 
         let source = load_external_source_connection(&state, "src-auto-docs")
             .await
@@ -84239,6 +84415,75 @@ mod tests {
         assert!(dataset_local_scope_is_visible(&dataset, Some("thread-a")));
         assert!(!dataset_local_scope_is_visible(&dataset, Some("thread-b")));
         assert!(!dataset_local_scope_is_visible(&dataset, None));
+    }
+
+    #[test]
+    fn standard_dataset_list_hides_system_external_parse_sources() {
+        let mut dataset = test_dataset(DatasetVisibility::Public, Vec::new());
+        dataset.key = "external-source-third-party-source-main-dataset-random".to_string();
+        dataset.metadata.insert(
+            "external_source".to_string(),
+            json!({
+                "source_id": "third-party-source-main",
+                "dataset_external_id": "random",
+                "created_by": "external_document_parse"
+            }),
+        );
+
+        assert!(dataset_is_hidden_from_standard_dataset_list(&dataset));
+    }
+
+    #[test]
+    fn standard_dataset_list_keeps_external_sync_datasets() {
+        let mut dataset = test_dataset(DatasetVisibility::Public, Vec::new());
+        dataset.key = "external-source-hy-sql-auto-dataset-hy-sql-main".to_string();
+        dataset.metadata.insert(
+            "external_source".to_string(),
+            json!({
+                "source_id": "hy-sql-auto",
+                "dataset_external_id": "hy-sql-main",
+                "created_by": "external_source_sync"
+            }),
+        );
+
+        assert!(!dataset_is_hidden_from_standard_dataset_list(&dataset));
+    }
+
+    #[test]
+    fn transient_external_dataset_ids_collapse_to_source_default_dataset() {
+        assert_eq!(
+            effective_external_document_parse_dataset_external_id(Some(
+                "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+            )),
+            None
+        );
+        assert_eq!(
+            effective_external_document_parse_dataset_external_id(Some("f_personal_workspace")),
+            Some("f_personal_workspace".to_string())
+        );
+        assert_eq!(
+            external_document_parse_dataset_key(
+                "third-party-source-main",
+                effective_external_document_parse_dataset_external_id(Some(
+                    "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+                ))
+                .as_deref()
+            ),
+            "external-source-third-party-source-main"
+        );
+    }
+
+    #[test]
+    fn external_system_user_email_is_scoped_per_third_party_source() {
+        let left = external_system_user_email("channel-source", "generic-chat-main:src-a");
+        let right = external_system_user_email("channel-source", "generic-chat-main:src-b");
+
+        assert_ne!(left, right);
+        assert!(left.ends_with("@aidp.local"));
+        assert_eq!(
+            left,
+            external_system_user_email("channel-source", "generic-chat-main:src-a")
+        );
     }
 
     #[test]

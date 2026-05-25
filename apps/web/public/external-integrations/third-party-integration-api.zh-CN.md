@@ -1,7 +1,7 @@
 # V3 第三方接入说明书
 
 **文档状态：** 对外草案 v0.1
-**最后更新：** 2026-05-20
+**最后更新：** 2026-05-25
 **适用对象：** 第三方系统负责人、客户 IT 团队、渠道/文档/权限/业务系统对接开发人员
 **默认对外域名：** `https://v3.elepcloud.com`
 **说明：** 本文可作为第三方联调前的接口说明材料，只说明 V3 对外开放的能力、接口、字段和使用方式，不展开具体实现细节。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
@@ -677,7 +677,7 @@ Authorization: Bearer <V3 inbound token>
 | --- | --- | --- |
 | `source_id` | 是 | V3 资料源 ID，通常由 V3 联调配置给出 |
 | `dataset_id` | 否 | V3 分配的数据集 UUID；传非 UUID 时会被视为无效或返回数据集不存在 |
-| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道 V3 数据集 UUID 时建议传这个字段 |
+| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道 V3 数据集 UUID 时建议传这个字段。必须是业务稳定分组，不要传临时 UUID、任务 ID 或文件 ID |
 | `dataset_title` | 否 | 数据集展示名 |
 | `document_external_id` | 是 | 第三方文档稳定 ID；后续对话用 `available_document_external_ids` 引用同一个值 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；内容更新时建议变化 |
@@ -687,6 +687,13 @@ Authorization: Bearer <V3 inbound token>
 | `metadata` | 否 | 非敏感业务元数据对象，用于后续查询、展示或双方对账 |
 | `idempotency_key` | 否 | 本次解析请求幂等键 |
 | `allow_http_loopback` | 否 | 仅本地联调使用，允许 HTTP loopback 下载；生产不要开启 |
+
+数据集归属说明：
+
+- `dataset_external_id` 是第三方业务侧稳定的资料库、空间或项目 ID；不要传每次请求生成的 UUID、临时会话 ID、文件 ID 或下载任务 ID。
+- V3 会把明显的临时 UUID 型 `dataset_external_id` 归并到该 `source_id` 的默认资料库，避免为每次解析创建新资料库；非 UUID 的稳定业务分组会保留为独立资料库。
+- 第三方解析自动创建的 V3 数据集和文档归属于 V3 内部第三方系统账户；系统账户按第三方连接和资料源区分，支持多个第三方隔离和审计。
+- 这些系统自动解析源默认不出现在普通资料库列表中；第三方问答仍按本轮 `available_document_external_ids` 或显式分组供料。
 
 解析响应字段说明：
 
@@ -768,10 +775,12 @@ Authorization: Bearer <V3 inbound token>
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `source_id` | 条件必填 | V3 资料源 ID；连接配置了默认资料源或 V3 可从文档记录推断时可省略 |
-| `dataset_external_id` | 条件必填 | 目标第三方数据集或资料库稳定 ID；和 `dataset_id` 二选一。目标不存在时 V3 自动创建 |
+| `dataset_external_id` | 条件必填 | 目标第三方数据集或资料库稳定 ID；和 `dataset_id` 二选一。目标不存在时 V3 自动创建。不要传临时 UUID、任务 ID 或文件 ID |
 | `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 二选一 |
 | `dataset_title` | 否 | 目标数据集展示名；自动创建目标数据集时使用 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；不传则移动同一 `document_external_id` 下的全部版本 |
+
+移动目标说明：`dataset_external_id` 仍应传业务稳定分组。若目标值被判定为临时 UUID，V3 会归并到该资料源默认资料库；响应中的 `dataset_external_id` 可能为空，但 `dataset_id` 会回显实际归属的数据集。
 
 响应字段说明：
 
@@ -782,7 +791,7 @@ Authorization: Bearer <V3 inbound token>
 | `document_external_id` | V3 回显的第三方文档 ID |
 | `revision_external_id` | 本次限定的第三方版本 ID；未限定时为空 |
 | `dataset_id` | 移动后的 V3 数据集 UUID |
-| `dataset_external_id` | 移动后的第三方数据集或资料库 ID |
+| `dataset_external_id` | 移动后的第三方数据集或资料库 ID；临时 UUID 被归并时可能为空 |
 | `moved_count` | 实际移动的 V3 文档记录数量 |
 | `previous_dataset_ids` | 移动前的 V3 数据集 UUID 列表 |
 | `documents` | 移动后的 V3 文档摘要列表 |
