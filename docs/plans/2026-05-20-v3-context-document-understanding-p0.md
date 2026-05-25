@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-> 2026-05-22 note: parsing quality, document understanding, retrieval quality, and answer reliability have been split into the active parallel plan `docs/plans/2026-05-22-v3-parsing-answer-quality-plan.md`. Keep this older P0 document as context for third-party scope/user-context behavior and historical gaps.
+> 2026-05-25 note: parsing quality, document understanding, retrieval quality, fact aggregation, answer reliability, and Codex executor boundaries are now consolidated in the active plan `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`. Keep this older P0 document as context for third-party scope/user-context behavior and historical gaps.
 
 **Goal:** Close the remaining V3 P0 gaps around third-party document scope, direct replies, async parsing, document understanding, and global intent-gated user context.
 

@@ -1,0 +1,158 @@
+# V3 Mainline Quality And Executor Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Keep one active V3 mainline plan for parsing/answer quality, queryable facts, third-party static-page generation, data-ingestion analysis, and Codex executor boundaries.
+
+**Architecture:** V3 remains the system of record for documents, datasets, permissions, task state, artifacts, and public integration contracts. Internal quality recovery, fact aggregation, Image2/static-page generation, and Codex executor work must feed back through V3-owned evidence, events, and artifact manifests. Customer-facing answer blocking stays conservative until smoke proves low false positives.
+
+**Tech Stack:** Rust `platform-api`, `contracts`, `storage`, `assistant-runtime`, `codex-host-agent`; PostgreSQL fact tables and AssistantRun events; Next.js external integration docs; Cloudflare/Image2 queue; 8-server private smoke.
+
+---
+
+## Current Baseline - 2026-05-25
+
+- Local and 8-server HEAD: `fd3b002` / `fd3b002b3`.
+- 8-server services: `aiv3-platform-api.service` and `aiv3-web.service` are active.
+- 8-server release builds must use `CC=clang CXX=clang++`; default `gcc 10.2.1` is rejected by `aws-lc-sys`.
+- Third-party document authorization supports:
+  - single `dataset_external_id`;
+  - multiple `dataset_external_ids`;
+  - explicit `available_document_external_ids`;
+  - group + document union with duplicate documents ignored.
+- Third-party static-page requests now support the simplified fields `artifact_type: "static_page"` and `template`, while old `render_mode` / `output_format` / `requested_skills` behavior remains compatible.
+- Static-page/Image2 flow can queue an effect image, stream the preview/status card, continue without customer confirmation, and publish a new generated artifact when the fixed Codex task succeeds.
+- Fixed Codex task directions exist for:
+  - `static_page_image2_data_publish`;
+  - `answer_quality_autofix`;
+  - `data_ingestion_analysis`.
+- Queryable fact tables and snapshots are populated on 8 server, but current private smoke must be rerun on the latest deployed HEAD.
+
+## Active Guardrails
+
+- Do not change third-party public URLs, auth, or request/response fields unless the operator explicitly approves.
+- Do not re-enable a hard customer-facing answer quality gate yet; previous gate behavior blocked too many normal answers.
+- Do not use VLM by default. VLM reparse is premium recovery only, budget-gated, and must become internal evidence before customer answers use it.
+- Do not let Codex executor mutate datasets, document ownership, credentials, deployment config, or public integrations directly.
+- Static-page no-confirm flow may create a new generated artifact only; it must not overwrite an existing customer artifact or stable URL without confirmation.
+- Keep raw credentials, database URLs, provider payloads, full stdout/stderr, and customer file dumps out of prompts, events, docs, and artifact manifests.
+
+## Immediate Execution Queue
+
+1. **Private 8-server quality smoke**
+   - Run the current private smoke config against HEAD `fd3b002b3`.
+   - Priority cases:
+     - one-character PDF;
+     - DOC/DOCX question "邓工是谁";
+     - resume company-name statistics;
+     - multi-dimension resume ranking table;
+     - attendance absence / work-hour length / date formatting;
+     - smart-home customer dissatisfaction questions;
+     - smart-elevator point-list questions.
+   - Record final answer text, `answer_supply_sources`, `aggregate_answer_source`, ReAct/quality-gate events, and whether deterministic rows/facts were used.
+
+2. **Fix quality regressions in source order**
+   - First fix missing or wrong deterministic supply.
+   - Then fix table/date/unit formatting.
+   - Then fix selected-document detail or document scope restoration.
+   - Then fix fact snapshot/scoped aggregate supply.
+   - Only after those, adjust ReAct or quality-gate retry behavior.
+
+3. **Queryable fact aggregation**
+   - Verify full dataset/group statistics prefer `dataset_fact_snapshot`.
+   - Verify selected-document, ACL-filtered, and temporary conversation scopes can use `document_facts_scoped_aggregate` for supported company/skill/project/keyword/year/section prompts.
+   - Keep attendance on `spreadsheet_row_analysis` and resume ranking on resume-profile deterministic rows until their facts are normalized.
+   - Add a visible debug reason for why `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `dataset_entity_scan`, or `spreadsheet_row_analysis` was selected.
+
+4. **Answer quality recovery**
+   - Keep customer-facing output permissive and avoid false-positive blocking.
+   - Collect suspicious low-quality replies into `answer_quality_autofix`.
+   - Classify issues as missing source data, poor parsing, weak retrieval/supply, or answer-generation logic.
+   - Restrict any automatic code modification to answer-quality/retrieval/supply optimization scope.
+
+5. **Codex executor boundary**
+   - Consolidate a shared executor input envelope across fixed templates.
+   - Consolidate a shared artifact manifest shape for static pages, Image2 previews, reports, and data-ingestion analysis.
+   - Make failed/retrying executor task statuses consistently model-visible.
+   - Add lazy observation surfaces that do not poll every conversation or task.
+
+6. **Static-page productization**
+   - Treat Image2 as a visual contract/reference, not final HTML source of truth.
+   - Generate final HTML from structured real-data snapshots and validated source summaries.
+   - Keep default page requirements:
+     - time selector;
+     - primary partition selector, such as store/region/project;
+     - refresh from updated documents/data;
+     - detail tables for business-critical rows.
+   - Add version, refresh, unit, snapshot-date, and detail-count smoke before making stable overwrite/publish automatic.
+
+7. **Data ingestion analysis**
+   - Customer data接入/入库/建表/字段映射/schema/ETL/清洗 requests may queue `data_ingestion_analysis` from existing chat/event fields when V3-selected source scope exists.
+   - Missing source scope returns `data_ingestion_analysis_source_required`.
+   - Real mutation smoke remains operator-approved and guarded.
+
+## Smoke Commands
+
+Local priority smoke:
+
+```powershell
+.\scripts\run-v3-quality-gate-smoke.ps1 -Local -Case @(
+  'one_character_pdf',
+  'deng_engineer',
+  'resume_company_stats',
+  'resume_ranking_table',
+  'attendance_final',
+  'attendance_frequent',
+  'smart_home',
+  'smart_elevator'
+)
+```
+
+Private 8-server smoke:
+
+```powershell
+.\scripts\run-v3-quality-gate-smoke.ps1 `
+  -ServerBaseUrl https://v3.elepcloud.com `
+  -ServerCaseConfigPath <private-case-config.json> `
+  -Case @(
+    'one_character_pdf',
+    'deng_engineer',
+    'resume_company_stats',
+    'resume_ranking_table',
+    'attendance_final',
+    'attendance_frequent',
+    'smart_home',
+    'smart_elevator'
+  )
+```
+
+Focused regression tests:
+
+```powershell
+cargo test -p platform-api external_channel --lib
+cargo test -p platform-api external_channel_static_page --lib
+cargo test -p platform-api external_channel_data_ingestion --lib
+cargo test -p platform-api codex_host_fixed_task --lib
+cargo test -p contracts external_bot_message --lib
+npm run build:pure-third-party-guide-html
+npm run test:pure-third-party-guide-html
+npm run check:pure-third-party-guide-html
+```
+
+8-server deploy build reminder:
+
+```bash
+cd /srv/aiv3/repo
+git pull --ff-only origin main
+CC=clang CXX=clang++ cargo build --release -p platform-api
+cd apps/web
+pnpm build
+systemctl restart aiv3-platform-api.service
+systemctl restart aiv3-web.service
+```
+
+## Consolidated Plans
+
+This plan supersedes the prior active parsing/answer-quality, quality-gate/ReAct/VLM, queryable-fact-index, fixed Codex escalation, and executor-boundary plans.
+
+Those old active plan files were removed from the active plan folder after backup. Git history remains the detailed archive.
