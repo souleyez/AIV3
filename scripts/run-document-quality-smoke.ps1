@@ -740,6 +740,39 @@ function ConvertFrom-Utf8JsonWebResponse {
     return $text | ConvertFrom-Json
 }
 
+function Read-Utf8WebResponseErrorBody {
+    param([object] $Response)
+
+    if ($null -eq $Response) {
+        return ""
+    }
+
+    $contentProperty = $Response.PSObject.Properties["Content"]
+    if ($null -ne $contentProperty -and $null -ne $contentProperty.Value) {
+        $content = $contentProperty.Value
+        $readAsString = $content.GetType().GetMethod("ReadAsStringAsync", [Type[]]@())
+        if ($null -ne $readAsString) {
+            return $content.ReadAsStringAsync().GetAwaiter().GetResult()
+        }
+        return "$content"
+    }
+
+    $getResponseStream = $Response.GetType().GetMethod("GetResponseStream", [Type[]]@())
+    if ($null -ne $getResponseStream) {
+        $stream = $Response.GetResponseStream()
+        if ($null -ne $stream) {
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+            try {
+                return $reader.ReadToEnd()
+            } finally {
+                $reader.Dispose()
+            }
+        }
+    }
+
+    return ""
+}
+
 function Invoke-Utf8JsonWebRequest {
     param(
         [ValidateSet("Get", "Post")]
@@ -768,13 +801,16 @@ function Invoke-Utf8JsonWebRequest {
         return ConvertFrom-Utf8JsonWebResponse -Response $webResponse
     } catch {
         $response = $_.Exception.Response
-        if ($null -ne $response -and $null -ne $response.GetResponseStream()) {
-            $stream = $response.GetResponseStream()
-            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
-            try {
-                $errorText = $reader.ReadToEnd()
-            } finally {
-                $reader.Dispose()
+        if ($null -ne $response) {
+            $errorText = ""
+            if ($null -ne $_.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($_.ErrorDetails.Message)) {
+                $errorText = $_.ErrorDetails.Message
+            } else {
+                try {
+                    $errorText = Read-Utf8WebResponseErrorBody -Response $response
+                } catch {
+                    $errorText = $_.Exception.Message
+                }
             }
             $statusCode = try { [int]$response.StatusCode } catch { 0 }
             throw "HTTP $statusCode from $Uri`: $errorText"

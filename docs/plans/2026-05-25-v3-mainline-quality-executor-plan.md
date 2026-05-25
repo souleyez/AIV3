@@ -12,7 +12,7 @@
 
 ## Current Baseline - 2026-05-25
 
-- Local and 8-server HEAD: `fd3b002` / `fd3b002b3`.
+- Local and 8-server HEAD: `014251d` / `014251dcb`.
 - 8-server services: `aiv3-platform-api.service` and `aiv3-web.service` are active.
 - 8-server release builds must use `CC=clang CXX=clang++`; default `gcc 10.2.1` is rejected by `aws-lc-sys`.
 - Third-party document authorization supports:
@@ -53,47 +53,46 @@
   - `supply_selection:dataset_entity_scan_kept_for_dimensions_not_covered_by_snapshot`;
   - `supply_selection:dataset_entity_scan_selected_when_snapshot_missing_or_runtime_scan_needed`;
   - `supply_selection:spreadsheet_row_analysis_selected_for_attendance_or_workhour_table_question`.
+- Deployed `b901be3` and `014251d` to 8 server. The second deploy preserved 8-server public-doc line-ending drift in stash `pre-deploy public docs line endings 2026-05-25` before fast-forwarding.
+- Full private 8-server smoke passed on deployed HEAD `014251d`:
+  - one-character PDF low-text handling;
+  - third-party DOC/DOCX "邓工是谁";
+  - resume company-name statistics;
+  - multi-dimension resume ranking table;
+  - attendance absence / work-hour length / date formatting;
+  - frequent attendance query;
+  - smart-home customer dissatisfaction query;
+  - smart-elevator point-list table query.
+- Smoke script now reads HTTP error bodies through PowerShell `ErrorDetails.Message` / `HttpResponseMessage.Content` compatibility paths, so real server errors are not hidden by local response-object differences.
 
 ## Immediate Execution Queue
 
-1. **Private 8-server quality smoke**
-   - Run the current private smoke config against the next deployed HEAD.
-   - Priority cases:
-     - one-character PDF;
-     - DOC/DOCX question "邓工是谁";
-     - resume company-name statistics;
-     - multi-dimension resume ranking table;
-     - attendance absence / work-hour length / date formatting;
-     - smart-home customer dissatisfaction questions;
-     - smart-elevator point-list questions.
-   - Record final answer text, `answer_supply_sources`, `aggregate_answer_source`, ReAct/quality-gate events, and whether deterministic rows/facts were used.
-
-2. **Fix quality regressions in source order**
+1. **Fix quality regressions in source order**
    - First fix missing or wrong deterministic supply.
    - Then fix table/date/unit formatting.
    - Then fix selected-document detail or document scope restoration.
    - Then fix fact snapshot/scoped aggregate supply.
    - Only after those, adjust ReAct or quality-gate retry behavior.
 
-3. **Queryable fact aggregation**
+2. **Queryable fact aggregation**
    - Verify full dataset/group statistics prefer `dataset_fact_snapshot`.
    - Verify selected-document, ACL-filtered, and temporary conversation scopes can use `document_facts_scoped_aggregate` for supported company/skill/project/keyword/year/section prompts.
    - Keep attendance on `spreadsheet_row_analysis` and resume ranking on resume-profile deterministic rows until their facts are normalized.
    - Add a visible debug reason for why `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `dataset_entity_scan`, or `spreadsheet_row_analysis` was selected.
 
-4. **Answer quality recovery**
+3. **Answer quality recovery**
    - Keep customer-facing output permissive and avoid false-positive blocking.
    - Collect suspicious low-quality replies into `answer_quality_autofix`.
    - Classify issues as missing source data, poor parsing, weak retrieval/supply, or answer-generation logic.
    - Restrict any automatic code modification to answer-quality/retrieval/supply optimization scope.
 
-5. **Codex executor boundary**
+4. **Codex executor boundary**
    - Consolidate a shared executor input envelope across fixed templates.
    - Consolidate a shared artifact manifest shape for static pages, Image2 previews, reports, and data-ingestion analysis.
    - Make failed/retrying executor task statuses consistently model-visible.
    - Add lazy observation surfaces that do not poll every conversation or task.
 
-6. **Static-page productization**
+5. **Static-page productization**
    - Treat Image2 as a visual contract/reference, not final HTML source of truth.
    - Generate final HTML from structured real-data snapshots and validated source summaries.
    - Keep default page requirements:
@@ -103,7 +102,7 @@
      - detail tables for business-critical rows.
    - Add version, refresh, unit, snapshot-date, and detail-count smoke before making stable overwrite/publish automatic.
 
-7. **Data ingestion analysis**
+6. **Data ingestion analysis**
    - Customer data接入/入库/建表/字段映射/schema/ETL/清洗 requests may queue `data_ingestion_analysis` from existing chat/event fields when V3-selected source scope exists.
    - Missing source scope returns `data_ingestion_analysis_source_required`.
    - Real mutation smoke remains operator-approved and guarded.
