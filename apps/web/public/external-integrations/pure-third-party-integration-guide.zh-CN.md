@@ -8,7 +8,7 @@
 最小顺序：
 
 1. 文档解析：把普通文档和模板文档解析入 V3。
-2. 聊天同步：每轮传用户 ID、会话 ID、本轮文档范围、默认提示词和输出格式。
+2. 聊天同步：传用户 ID、会话 ID、文档范围、默认提示词和输出格式；文档范围首次传入后同一会话持续有效。
 3. 生成产物：从模板列表选择模板，解析模板，按模板生成报表/HTML 产物。
 
 可选补充：数据库源由 V3 先配置和同步，第三方只查状态并在聊天时传对应数据集范围。
@@ -249,6 +249,7 @@ Content-Type: application/json
   "available_document_external_ids": [             // 本轮允许使用的文档 ID 列表
     "doc-20260520-0001"
   ],
+  "dataset_external_id": null,                     // 可选：授权整个稳定业务分组；传入后同一会话持续有效
   "documentExternalId": "doc-20260520-0001",        // 可选兼容写法：单文档 ID；有数组时不用传
   "requested_skills": [],                          // 本轮指定 skill；没有传空数组或省略
   "mention_external_user_ids": [],                 // 本条消息 @ 的用户 ID；没有传空数组或省略
@@ -265,7 +266,7 @@ Content-Type: application/json
 | `platform` | 是 | 纯第三方默认 `generic_chat` |
 | `tenant_external_id` | 是 | 第三方租户/客户 ID |
 | `bot_external_id` | 是 | 第三方机器人/应用 ID |
-| `conversation_external_id` | 是 | 会话 ID；同一聊天窗口保持不变 |
+| `conversation_external_id` | 是 | 会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权 |
 | `thread_external_id` | 否 | 子线程 ID |
 | `sender_external_id` | 是 | 用户 ID；同一用户保持稳定 |
 | `sender_display_name` | 否 | 用户展示名 |
@@ -275,8 +276,9 @@ Content-Type: application/json
 | `default_prompt` | 否 | 本轮默认提示词；会供给模型但不越过权限和证据规则 |
 | `output_format` | 否 | `rich_text` 富文本；`image_text` 图文排版；`markdown_table` MD 表格；`json` JSON |
 | `render_mode` | 否 | `normal` 普通回答；`artifact` 生成产物 |
-| `available_document_source_id` | 文档问答建议填 | 本轮文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答 |
-| `available_document_external_ids` | 文档问答建议填 | 本轮允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档；未传时 V3 不会基于第三方文档内容回答 |
+| `available_document_source_id` | 文档问答建议填 | 本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答 |
+| `available_document_external_ids` | 文档问答建议填 | 允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档；首次传入后同一 `conversation_external_id` 后续有效 |
+| `dataset_external_id` | 分组文档问答建议填 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；不要传临时 UUID |
 | `requested_skills` | 否 | 本轮 skill 列表 |
 | `mention_external_user_ids` | 否 | 被 @ 的第三方用户 ID |
 | `attachment_refs` | 否 | 附件引用列表 |

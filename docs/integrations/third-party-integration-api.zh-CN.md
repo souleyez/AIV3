@@ -143,7 +143,7 @@ V3 接收第三方消息后，会按请求内容返回以下几类结果：
 - `requires_confirmation`：需要用户确认的动作；
 - `task_status`：处理中、失败、等待外部条件或无法立即完成。
 
-文档问答场景下，第三方应在请求中传入本轮可用文档范围，建议包含当前问题允许使用的 `available_document_external_ids` 或单文档兼容字段 `documentExternalId`；`available_document_source_id` 只用于限定这些文档所属资料源。连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
+文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
 
 当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。
 
@@ -280,14 +280,15 @@ Authorization: Bearer <V3 inbound token>
 | `platform` | 是 | 通道来源，例如 `feishu`、`lark`、`we_com`、`generic_chat`、`third_party` |
 | `tenant_external_id` | 是 | 第三方侧租户或客户 ID |
 | `bot_external_id` | 是 | 第三方侧机器人或应用 ID |
-| `conversation_external_id` | 是 | 群聊、会话或页面会话 ID；同一轮、同一页面会话或同一聊天窗口保持不变，用于维持多轮对话 |
+| `conversation_external_id` | 是 | 群聊、会话或页面会话 ID；同一轮、同一页面会话或同一聊天窗口保持不变，用于维持多轮对话和文档范围授权 |
 | `thread_external_id` | 否 | 话题、帖子或子线程 ID |
 | `sender_external_id` | 是 | 第三方侧用户 ID，必须稳定 |
 | `message_external_id` | 是 | 第三方侧消息 ID，必须稳定 |
 | `message_type` | 是 | 消息类型 |
 | `text` | 否 | 文本内容 |
-| `available_document_source_id` | 文档问答建议传 | 本轮可用文档所属资料源 ID；连接配置了默认资料源时可省略，但单独传资料源不会授权整源文档回答 |
-| `available_document_external_ids` | 文档问答建议传 | 本轮允许 V3 使用的第三方文档 ID 列表；只传当前会话或当前问题选中的文档；单文档可用 `documentExternalId`；未传时 V3 不会基于第三方文档内容回答 |
+| `available_document_source_id` | 文档问答建议传 | 本次授权所属资料源 ID；连接配置了默认资料源时可省略，但单独传资料源不会授权整源文档回答 |
+| `available_document_external_ids` | 文档问答建议传 | 允许 V3 使用的第三方文档 ID 列表；首次传入后同一 `conversation_external_id` 后续有效；单文档可用 `documentExternalId` |
+| `dataset_external_id` | 文档分组问答建议传 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；不要传临时 UUID、任务 ID 或文件 ID |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | skill 稳定标识，建议使用英文或业务 slug |
 | `requested_skills[].version` | 否 | skill 版本或策略版本，用于版本选择和问题复现 |
@@ -693,7 +694,7 @@ Authorization: Bearer <V3 inbound token>
 - `dataset_external_id` 是第三方业务侧稳定的资料库、空间或项目 ID；不要传每次请求生成的 UUID、临时会话 ID、文件 ID 或下载任务 ID。
 - V3 会把明显的临时 UUID 型 `dataset_external_id` 归并到该 `source_id` 的默认资料库，避免为每次解析创建新资料库；非 UUID 的稳定业务分组会保留为独立资料库。
 - 第三方解析自动创建的 V3 数据集和文档归属于 V3 内部第三方系统账户；系统账户按第三方连接和资料源区分，支持多个第三方隔离和审计。
-- 这些系统自动解析源默认不出现在普通资料库列表中；第三方问答仍按本轮 `available_document_external_ids` 或显式分组供料。
+- 这些系统自动解析源默认不出现在普通资料库列表中；第三方问答按会话授权的 `available_document_external_ids` 或稳定 `dataset_external_id` 分组供料。
 
 解析响应字段说明：
 

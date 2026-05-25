@@ -13428,6 +13428,57 @@ async fn find_external_documents_by_external_id(
         .collect())
 }
 
+async fn find_external_documents_by_dataset_external_id(
+    state: &AppState,
+    source_id: &str,
+    dataset_external_id: &str,
+) -> std::result::Result<Vec<Document>, ApiError> {
+    let documents = state
+        .storage
+        .documents()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(documents
+        .into_iter()
+        .filter(|document| {
+            external_document_source_matches(&document.metadata, source_id, None)
+                && external_document_dataset_external_id_from_metadata(&document.metadata)
+                    .as_deref()
+                    == Some(dataset_external_id)
+        })
+        .collect())
+}
+
+async fn infer_external_document_scope_source_id_by_dataset_external_id(
+    state: &AppState,
+    dataset_external_id: &str,
+) -> std::result::Result<Option<String>, ApiError> {
+    let documents = state
+        .storage
+        .documents()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut source_ids = BTreeSet::new();
+    for document in documents {
+        if external_document_dataset_external_id_from_metadata(&document.metadata).as_deref()
+            != Some(dataset_external_id)
+        {
+            continue;
+        }
+        if let Some(source_id) = external_document_source_id_from_metadata(&document.metadata, None)
+        {
+            source_ids.insert(source_id);
+        }
+    }
+    if source_ids.len() == 1 {
+        Ok(source_ids.into_iter().next())
+    } else {
+        Ok(None)
+    }
+}
+
 async fn infer_external_document_source_id(
     state: &AppState,
     document_external_id: &str,
@@ -13519,6 +13570,22 @@ fn external_document_external_id_from_metadata(
             object
                 .get("document_external_id")
                 .or_else(|| object.get("documentExternalId"))
+                .and_then(Value::as_str)
+        })
+        .and_then(non_empty_trimmed_string)
+}
+
+fn external_document_dataset_external_id_from_metadata(
+    metadata: &BTreeMap<String, Value>,
+) -> Option<String> {
+    metadata
+        .get("external_source")
+        .or_else(|| metadata.get("externalSource"))
+        .and_then(Value::as_object)
+        .and_then(|object| {
+            object
+                .get("dataset_external_id")
+                .or_else(|| object.get("datasetExternalId"))
                 .and_then(Value::as_str)
         })
         .and_then(non_empty_trimmed_string)
@@ -13617,6 +13684,7 @@ fn parse_external_bot_message_payload(
                         "attachment_refs",
                         "available_document_source_id",
                         "available_document_external_ids",
+                        "dataset_external_id",
                         "requested_skills",
                         "idempotency_key",
                         "received_at"
@@ -13642,6 +13710,8 @@ fn parse_external_bot_message_payload(
                         "availableDocumentExternalId",
                         "documentExternalId",
                         "documentExternalIds",
+                        "datasetExternalId",
+                        "availableDatasetExternalId",
                         "requestedSkills",
                         "skillRefs",
                         "skill_refs",
@@ -13695,6 +13765,8 @@ fn normalize_external_bot_message_payload(
             ("documentExternalIds", "document_external_ids"),
             ("documentExternalId", "document_external_id"),
             ("availableDocumentSourceId", "available_document_source_id"),
+            ("datasetExternalId", "dataset_external_id"),
+            ("availableDatasetExternalId", "dataset_external_id"),
             ("requestedSkills", "requested_skills"),
             ("skillRefs", "requested_skills"),
             ("skill_refs", "requested_skills"),
@@ -18324,6 +18396,98 @@ async fn enrich_external_channel_document_scope(
         .and_then(non_empty_trimmed_string);
     let default_source_id =
         external_channel_default_source_id_from_config(&connection.config_redacted);
+    let requested_dataset_external_id = trim_optional(message.dataset_external_id.clone());
+    if let Some(requested_dataset_external_id) = requested_dataset_external_id.as_deref() {
+        let dataset_external_id = effective_external_document_parse_dataset_external_id(Some(
+            requested_dataset_external_id,
+        ));
+        if dataset_external_id.is_none() {
+            if !requested_external_ids.is_empty() {
+                // A transient dataset id should not broaden scope; fall back to explicit document ids.
+            } else {
+                let source_id = explicit_source_id.clone().or(default_source_id.clone());
+                if let Some(source_id) = source_id {
+                    set_payload_value(
+                        selected_scope,
+                        "available_document_source_id",
+                        json!(source_id),
+                    );
+                }
+                set_payload_value(
+                    selected_scope,
+                    "requested_dataset_external_id",
+                    json!(requested_dataset_external_id),
+                );
+                set_payload_value(selected_scope, "available_document_external_ids", json!([]));
+                set_payload_value(
+                    selected_scope,
+                    "unresolved_document_external_ids",
+                    json!([]),
+                );
+                set_payload_value(
+                    selected_scope,
+                    "external_document_scope_status",
+                    json!("dataset_external_id_transient"),
+                );
+                set_payload_value(
+                    selected_scope,
+                    "external_document_scope_summary",
+                    json!("dataset_external_id was supplied for chat scope, but it looks transient. Use a stable business group ID to authorize a conversation-level document group."),
+                );
+                return Ok(());
+            }
+        } else if let Some(dataset_external_id) = dataset_external_id {
+            let source_id = match explicit_source_id.clone().or(default_source_id.clone()) {
+                Some(source_id) => Some(source_id),
+                None => {
+                    infer_external_document_scope_source_id_by_dataset_external_id(
+                        state,
+                        &dataset_external_id,
+                    )
+                    .await?
+                }
+            };
+            let Some(source_id) = source_id else {
+                set_payload_value(
+                    selected_scope,
+                    "dataset_external_id",
+                    json!(dataset_external_id),
+                );
+                set_payload_value(
+                    selected_scope,
+                    "requested_dataset_external_id",
+                    json!(requested_dataset_external_id),
+                );
+                set_payload_value(
+                    selected_scope,
+                    "available_document_external_ids",
+                    json!(requested_external_ids),
+                );
+                set_payload_value(
+                    selected_scope,
+                    "external_document_scope_status",
+                    json!("dataset_source_missing"),
+                );
+                set_payload_value(
+                    selected_scope,
+                    "external_document_scope_summary",
+                    json!("dataset_external_id was supplied, but no source_id/default_source_id was provided and V3 could not infer a unique source for that document group."),
+                );
+                return Ok(());
+            };
+            enrich_external_channel_dataset_document_scope(
+                state,
+                connection_id,
+                message,
+                &source_id,
+                requested_dataset_external_id,
+                &dataset_external_id,
+                selected_scope,
+            )
+            .await?;
+            return Ok(());
+        }
+    }
     if requested_external_ids.is_empty() {
         let source_id = explicit_source_id.clone().or(default_source_id);
         if restore_external_channel_temporary_dataset_scope(
@@ -18429,6 +18593,9 @@ async fn enrich_external_channel_document_scope(
             message,
             Some(source_id.as_str()),
             &selected_document_ids,
+            "available_document_external_ids",
+            None,
+            None,
         )
         .await?;
         set_external_channel_temporary_dataset_scope(
@@ -18438,6 +18605,7 @@ async fn enrich_external_channel_document_scope(
             Some(source_id.as_str()),
             selected_documents.len(),
             temporary_dataset.as_ref(),
+            "available_document_external_ids",
         );
         set_payload_value(
             selected_scope,
@@ -18579,11 +18747,184 @@ async fn enrich_external_channel_source_document_scope(
     Ok(())
 }
 
+async fn enrich_external_channel_dataset_document_scope(
+    state: &AppState,
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    source_id: &str,
+    requested_dataset_external_id: &str,
+    dataset_external_id: &str,
+    selected_scope: &mut Value,
+) -> std::result::Result<(), ApiError> {
+    let mut documents =
+        find_external_documents_by_dataset_external_id(state, source_id, dataset_external_id)
+            .await?;
+    documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+    set_payload_value(
+        selected_scope,
+        "available_document_source_id",
+        json!(source_id),
+    );
+    set_payload_value(
+        selected_scope,
+        "dataset_external_id",
+        json!(dataset_external_id),
+    );
+    set_payload_value(
+        selected_scope,
+        "requested_dataset_external_id",
+        json!(requested_dataset_external_id),
+    );
+    set_payload_value(
+        selected_scope,
+        "unresolved_document_external_ids",
+        json!([]),
+    );
+
+    if documents.is_empty() {
+        set_payload_value(selected_scope, "available_document_external_ids", json!([]));
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_status",
+            json!("dataset_empty"),
+        );
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_summary",
+            json!("dataset_external_id was supplied for this conversation, but V3 has no parsed documents in that stable group yet."),
+        );
+        return Ok(());
+    }
+
+    let mut selected_documents = Vec::new();
+    let mut selected_document_ids = Vec::new();
+    let mut selected_external_ids = Vec::new();
+    let mut selected_datasets = Vec::new();
+    for document in documents {
+        let Some(document_external_id) =
+            external_document_external_id_from_metadata(&document.metadata)
+        else {
+            continue;
+        };
+        if !selected_external_ids.contains(&document_external_id) {
+            selected_external_ids.push(document_external_id.clone());
+        }
+        if !selected_document_ids.contains(&document.id) {
+            selected_document_ids.push(document.id);
+        }
+        if !selected_datasets
+            .iter()
+            .any(|dataset_id: &DatasetId| *dataset_id == document.dataset_id)
+        {
+            selected_datasets.push(document.dataset_id);
+        }
+        selected_documents.push(json!({
+            "type": "document",
+            "id": document.id,
+            "source_id": source_id,
+            "document_external_id": document_external_id,
+            "title": document.title,
+        }));
+    }
+
+    if selected_documents.is_empty() {
+        set_payload_value(selected_scope, "available_document_external_ids", json!([]));
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_status",
+            json!("dataset_empty"),
+        );
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_summary",
+            json!("dataset_external_id was supplied for this conversation, but V3 could not resolve document_external_id values in that group."),
+        );
+        return Ok(());
+    }
+
+    let temporary_dataset = create_or_refresh_external_channel_temporary_dataset_scope(
+        state,
+        connection_id,
+        message,
+        Some(source_id),
+        &selected_document_ids,
+        "dataset_external_id",
+        Some(requested_dataset_external_id),
+        Some(dataset_external_id),
+    )
+    .await?;
+    set_external_channel_temporary_dataset_scope(
+        selected_scope,
+        connection_id,
+        message,
+        Some(source_id),
+        selected_documents.len(),
+        temporary_dataset.as_ref(),
+        "dataset_external_id",
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_status",
+        json!("dataset_resolved"),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_summary",
+        json!("dataset_external_id was supplied for this conversation; V3 will reuse this document group for later turns with the same conversation_external_id."),
+    );
+    set_payload_value(
+        selected_scope,
+        "available_document_external_ids",
+        json!(selected_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "documents",
+        Value::Array(selected_documents),
+    );
+    set_payload_value(
+        selected_scope,
+        "canonical_datasets",
+        Value::Array(
+            selected_datasets
+                .iter()
+                .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+                .collect(),
+        ),
+    );
+    let active_datasets = temporary_dataset
+        .as_ref()
+        .map(|temporary_dataset| {
+            vec![json!({"type": "dataset", "id": temporary_dataset.dataset_id})]
+        })
+        .unwrap_or_else(|| {
+            selected_datasets
+                .iter()
+                .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+                .collect()
+        });
+    set_payload_value(selected_scope, "datasets", Value::Array(active_datasets));
+    set_payload_value(
+        selected_scope,
+        "dataset_document_scope",
+        json!({
+            "source": "dataset_external_id",
+            "source_id": source_id,
+            "dataset_external_id": dataset_external_id,
+            "requested_dataset_external_id": requested_dataset_external_id,
+            "document_count": selected_document_ids.len(),
+            "dataset_count": selected_datasets.len(),
+        }),
+    );
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 struct ExternalChannelTemporaryDatasetScope {
     dataset_id: DatasetId,
     key: String,
-    expires_at: DateTime<Utc>,
+    expires_at: Option<DateTime<Utc>>,
 }
 
 async fn restore_external_channel_temporary_dataset_scope(
@@ -18614,6 +18955,22 @@ async fn restore_external_channel_temporary_dataset_scope(
             .and_then(Value::as_str)
             .and_then(non_empty_trimmed_string)
     });
+    let restored_dataset_external_id = dataset
+        .metadata
+        .get("dataset_external_id")
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string);
+    let restored_requested_dataset_external_id = dataset
+        .metadata
+        .get("requested_dataset_external_id")
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string);
+    let restored_scope_source = dataset
+        .metadata
+        .get("scope_source")
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string)
+        .unwrap_or_else(|| "available_document_external_ids".to_string());
     let document_ids = state
         .storage
         .dataset_document_memberships()
@@ -18691,8 +19048,7 @@ async fn restore_external_channel_temporary_dataset_scope(
     let temporary_dataset = ExternalChannelTemporaryDatasetScope {
         dataset_id: dataset.id,
         key: dataset.key.clone(),
-        expires_at: dataset_external_temporary_scope_expires_at(&dataset)
-            .unwrap_or_else(|| Utc::now() + Duration::hours(24)),
+        expires_at: dataset_external_temporary_scope_expires_at(&dataset),
     };
     set_external_channel_temporary_dataset_scope(
         selected_scope,
@@ -18701,11 +19057,30 @@ async fn restore_external_channel_temporary_dataset_scope(
         restored_source_id.as_deref(),
         selected_documents.len(),
         Some(&temporary_dataset),
+        restored_scope_source.as_str(),
     );
+    if let Some(dataset_external_id) = restored_dataset_external_id.as_deref() {
+        set_payload_value(
+            selected_scope,
+            "dataset_external_id",
+            json!(dataset_external_id),
+        );
+    }
+    if let Some(requested_dataset_external_id) = restored_requested_dataset_external_id.as_deref() {
+        set_payload_value(
+            selected_scope,
+            "requested_dataset_external_id",
+            json!(requested_dataset_external_id),
+        );
+    }
     set_payload_value(
         selected_scope,
         "external_document_scope_status",
-        json!("resolved"),
+        json!(if restored_dataset_external_id.is_some() {
+            "dataset_resolved"
+        } else {
+            "resolved"
+        }),
     );
     set_payload_value(
         selected_scope,
@@ -18715,8 +19090,13 @@ async fn restore_external_channel_temporary_dataset_scope(
     set_payload_value(
         selected_scope,
         "external_document_scope_summary",
-        json!("Reused the previous available_document_external_ids range for this conversation_external_id."),
+        json!(if restored_dataset_external_id.is_some() {
+            "Reused the previous dataset_external_id document group for this conversation_external_id."
+        } else {
+            "Reused the previous available_document_external_ids range for this conversation_external_id."
+        }),
     );
+    let selected_document_count = selected_documents.len();
     set_payload_value(
         selected_scope,
         "documents",
@@ -18732,6 +19112,20 @@ async fn restore_external_channel_temporary_dataset_scope(
                 .collect(),
         ),
     );
+    if restored_dataset_external_id.is_some() {
+        set_payload_value(
+            selected_scope,
+            "dataset_document_scope",
+            json!({
+                "source": "dataset_external_id",
+                "source_id": restored_source_id,
+                "dataset_external_id": restored_dataset_external_id,
+                "requested_dataset_external_id": restored_requested_dataset_external_id,
+                "document_count": selected_document_count,
+                "dataset_count": selected_datasets.len(),
+            }),
+        );
+    }
     set_payload_value(
         selected_scope,
         "datasets",
@@ -18792,22 +19186,26 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
     message: &ExternalBotMessageView,
     source_id: Option<&str>,
     document_ids: &[DocumentId],
+    scope_source: &str,
+    requested_dataset_external_id: Option<&str>,
+    dataset_external_id: Option<&str>,
 ) -> std::result::Result<Option<ExternalChannelTemporaryDatasetScope>, ApiError> {
     if document_ids.is_empty() {
         return Ok(None);
     }
     let key = external_channel_temporary_dataset_key(connection_id, message, source_id);
-    let expires_at = Utc::now() + Duration::hours(24);
     let metadata = json!({
         "visibility": DatasetVisibility::Private.as_str(),
         "default_secret_binding_ids": [],
         "scope_kind": "external_temporary",
+        "scope_source": scope_source,
         "local_only": true,
         "local_thread_id": external_bot_message_local_thread_id(message),
         "external_channel_connection_id": connection_id,
         "conversation_external_id": message.conversation_external_id,
         "available_document_source_id": source_id,
-        "expires_at": expires_at,
+        "dataset_external_id": dataset_external_id,
+        "requested_dataset_external_id": requested_dataset_external_id,
     });
     let dataset = match state
         .storage
@@ -18850,6 +19248,24 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
     };
 
     cleanup_expired_external_temporary_dataset_scopes(state).await?;
+    let document_uuid_ids = document_ids
+        .iter()
+        .map(|document_id| document_id.0)
+        .collect::<Vec<_>>();
+    sqlx::query(
+        r#"
+        delete from dataset_document_memberships
+        where tenant_id = $1
+          and dataset_id = $2
+          and not (document_id = any($3))
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(dataset.id.0)
+    .bind(&document_uuid_ids)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
     for document_id in document_ids {
         state
             .storage
@@ -18860,8 +19276,8 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
                     dataset_id: dataset.id,
                     document_id: *document_id,
                     membership_kind: "temporary".to_string(),
-                    source: "external_channel.available_document_external_ids".to_string(),
-                    expires_at: Some(expires_at),
+                    source: format!("external_channel.{scope_source}"),
+                    expires_at: None,
                 },
             )
             .await
@@ -18871,7 +19287,7 @@ async fn create_or_refresh_external_channel_temporary_dataset_scope(
     Ok(Some(ExternalChannelTemporaryDatasetScope {
         dataset_id: dataset.id,
         key,
-        expires_at,
+        expires_at: None,
     }))
 }
 
@@ -18959,6 +19375,7 @@ fn set_external_channel_temporary_dataset_scope(
     source_id: Option<&str>,
     document_count: usize,
     temporary_dataset: Option<&ExternalChannelTemporaryDatasetScope>,
+    scope_source: &str,
 ) {
     set_payload_value(selected_scope, "mode", json!("external_document_scope"));
     let key = temporary_dataset
@@ -18968,17 +19385,15 @@ fn set_external_channel_temporary_dataset_scope(
         });
     let mut payload = json!({
         "key": key,
-        "source": "available_document_external_ids",
+        "source": scope_source,
         "document_count": document_count,
-        "restores_on": "conversation_turn_end",
+        "restores_on": "conversation_external_id",
     });
     if let Some(temporary_dataset) = temporary_dataset {
         set_payload_value(&mut payload, "id", json!(temporary_dataset.dataset_id));
-        set_payload_value(
-            &mut payload,
-            "expires_at",
-            json!(temporary_dataset.expires_at),
-        );
+        if let Some(expires_at) = temporary_dataset.expires_at {
+            set_payload_value(&mut payload, "expires_at", json!(expires_at));
+        }
     }
     set_payload_value(selected_scope, "temporary_dataset", payload);
 }
@@ -19747,6 +20162,7 @@ fn external_bot_message_to_assistant_run_request(
         "message_external_id": message.message_external_id,
         "available_document_source_id": message.available_document_source_id,
         "available_document_external_ids": message.available_document_external_ids,
+        "dataset_external_id": message.dataset_external_id,
     });
     let mut startup_briefing = json!({
         "surface": "external_channel",
@@ -19970,6 +20386,7 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
         "attachment_count": message.attachment_refs.len(),
         "available_document_count": message.available_document_external_ids.len(),
         "available_document_source_id": message.available_document_source_id,
+        "dataset_external_id": message.dataset_external_id,
         "requested_skill_count": message.requested_skills.len(),
         "requested_skills": external_requested_skills_summary(&message.requested_skills),
         "attachments": message.attachment_refs.iter().map(|attachment| json!({
@@ -22037,6 +22454,10 @@ fn external_channel_static_page_message_from_source_refs(
         available_document_source_id: external_channel_static_page_source_ref_string(
             source_refs,
             "available_document_source_id",
+        ),
+        dataset_external_id: external_channel_static_page_source_ref_string(
+            source_refs,
+            "dataset_external_id",
         ),
         requested_skills: Vec::new(),
         idempotency_key: format!("static-page-auto-publish:{}", run.id),
@@ -35021,7 +35442,7 @@ fn selected_scope_allows_external_document_range_without_acl_snapshot(
         selected_scope
             .get("external_document_scope_status")
             .and_then(Value::as_str),
-        Some("resolved" | "partial" | "source_resolved")
+        Some("resolved" | "partial" | "source_resolved" | "dataset_resolved")
     ) {
         return false;
     }
@@ -35034,8 +35455,14 @@ fn selected_scope_allows_external_document_range_without_acl_snapshot(
         .and_then(Value::as_object)
         .is_some()
         && !selected_dataset_ids_from_scope(selected_scope).is_empty();
+    let has_dataset_document_scope = selected_scope
+        .get("dataset_document_scope")
+        .and_then(Value::as_object)
+        .is_some()
+        && !selected_dataset_ids_from_scope(selected_scope).is_empty();
     (has_requested_external_ids && !selected_document_ids_from_scope(selected_scope).is_empty())
         || has_source_document_scope
+        || has_dataset_document_scope
 }
 
 async fn load_external_acl_snapshot_cached(
@@ -61221,7 +61648,8 @@ mod tests {
                 "messageExternalId": "msg-doc-001",
                 "text": "邓工是谁",
                 "availableDocumentSourceId": "third-party-source-main",
-                "documentExternalId": "doc-deng"
+                "documentExternalId": "doc-deng",
+                "availableDatasetExternalId": "workspace-main"
             }),
             &connection,
         )
@@ -61234,6 +61662,10 @@ mod tests {
         assert_eq!(
             message.available_document_external_ids,
             vec!["doc-deng".to_string()]
+        );
+        assert_eq!(
+            message.dataset_external_id.as_deref(),
+            Some("workspace-main")
         );
     }
 
@@ -63550,7 +63982,7 @@ mod tests {
         );
         assert_eq!(
             selected_scope["temporary_dataset"]["restores_on"],
-            json!("conversation_turn_end")
+            json!("conversation_external_id")
         );
         assert_eq!(
             selected_scope["external_document_scope_status"],
@@ -63559,7 +63991,7 @@ mod tests {
         assert_eq!(selected_scope["documents"][0]["id"], json!(document_ids[0]));
         assert_eq!(selected_scope["documents"][1]["id"], json!(document_ids[1]));
         assert!(selected_scope["temporary_dataset"]["id"].is_string());
-        assert!(selected_scope["temporary_dataset"]["expires_at"].is_string());
+        assert!(selected_scope["temporary_dataset"]["expires_at"].is_null());
         assert_eq!(
             selected_scope["datasets"][0]["id"],
             selected_scope["temporary_dataset"]["id"]
@@ -63716,6 +64148,215 @@ mod tests {
         )
         .await
         .expect("different conversation should not reuse another temporary range");
+
+        assert_eq!(
+            other_scope["external_document_scope_status"],
+            json!("document_ids_missing")
+        );
+        assert!(other_scope["documents"].is_null());
+        assert!(other_scope["datasets"].is_null());
+    }
+
+    #[tokio::test]
+    async fn external_channel_dataset_external_id_authorizes_and_restores_conversation_group() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external dataset scope restore test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-dataset-scope-test-{}", Uuid::new_v4()),
+                "External Dataset Scope Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-dataset-scope-{}", Uuid::new_v4()),
+                    title: "External Dataset Scope".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let mut group_document_ids = Vec::new();
+        for (external_id, title, dataset_external_id) in [
+            ("doc-alpha", "Alpha policy", "workspace-main"),
+            ("doc-beta", "Beta policy", "workspace-main"),
+            ("doc-outside", "Outside policy", "workspace-other"),
+        ] {
+            let document = state
+                .storage
+                .documents()
+                .create(
+                    state.tenant_id,
+                    NewDocument {
+                        dataset_id: dataset.id,
+                        title: title.to_string(),
+                        object_key: format!("external-dataset-scope/{external_id}.md"),
+                        content_type: "text/markdown".to_string(),
+                        secret_binding_ids: Vec::new(),
+                        owner_user_id: None,
+                        metadata: json!({
+                            "external_source": {
+                                "source_id": "src-docs",
+                                "document_external_id": external_id,
+                                "dataset_external_id": dataset_external_id
+                            }
+                        }),
+                    },
+                )
+                .await
+                .expect("document should be created");
+            if dataset_external_id == "workspace-main" {
+                group_document_ids.push(document.id);
+            }
+        }
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-dataset-scope-0001".to_string();
+        message.available_document_source_id = None;
+        message.available_document_external_ids.clear();
+        message.dataset_external_id = Some("workspace-main".to_string());
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("dataset_external_id should authorize the stable document group");
+
+        assert_eq!(selected_scope["mode"], json!("external_document_scope"));
+        assert_eq!(
+            selected_scope["external_document_scope_status"],
+            json!("dataset_resolved")
+        );
+        assert_eq!(
+            selected_scope["available_document_source_id"],
+            json!("src-docs")
+        );
+        assert_eq!(
+            selected_scope["dataset_external_id"],
+            json!("workspace-main")
+        );
+        assert_eq!(
+            selected_scope["temporary_dataset"]["source"],
+            json!("dataset_external_id")
+        );
+        assert_eq!(
+            selected_scope["temporary_dataset"]["restores_on"],
+            json!("conversation_external_id")
+        );
+        assert!(selected_scope["temporary_dataset"]["expires_at"].is_null());
+        assert_eq!(
+            selected_scope["dataset_document_scope"]["source"],
+            json!("dataset_external_id")
+        );
+        let selected_external_ids = selected_scope["available_document_external_ids"]
+            .as_array()
+            .expect("selected external ids should be an array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            selected_external_ids,
+            BTreeSet::from(["doc-alpha", "doc-beta"])
+        );
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
+        );
+
+        let temporary_dataset_id = selected_scope["temporary_dataset"]["id"]
+            .as_str()
+            .and_then(|raw| Uuid::parse_str(raw).ok())
+            .map(DatasetId)
+            .expect("temporary dataset id should be present");
+        let active_document_ids = state
+            .storage
+            .dataset_document_memberships()
+            .list_document_ids_by_dataset(state.tenant_id, temporary_dataset_id)
+            .await
+            .expect("active memberships should list");
+        assert_eq!(
+            active_document_ids.into_iter().collect::<BTreeSet<_>>(),
+            group_document_ids.into_iter().collect::<BTreeSet<_>>()
+        );
+
+        let mut followup_message = sample_external_bot_message();
+        followup_message.conversation_external_id = "conv-dataset-scope-0001".to_string();
+        followup_message.available_document_source_id = None;
+        followup_message.available_document_external_ids.clear();
+        followup_message.dataset_external_id = None;
+        let mut followup_scope = json!({"type": "external_channel"});
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &followup_message,
+            &mut followup_scope,
+        )
+        .await
+        .expect("same conversation should restore dataset_external_id scope");
+
+        assert_eq!(
+            followup_scope["external_document_scope_status"],
+            json!("dataset_resolved")
+        );
+        assert_eq!(
+            followup_scope["external_document_scope_restored"],
+            json!(true)
+        );
+        assert_eq!(
+            followup_scope["dataset_external_id"],
+            json!("workspace-main")
+        );
+        assert_eq!(
+            followup_scope["temporary_dataset"]["id"],
+            selected_scope["temporary_dataset"]["id"]
+        );
+
+        let mut other_conversation_message = sample_external_bot_message();
+        other_conversation_message.conversation_external_id =
+            "conv-dataset-scope-other".to_string();
+        other_conversation_message.available_document_source_id = Some("src-docs".to_string());
+        other_conversation_message
+            .available_document_external_ids
+            .clear();
+        other_conversation_message.dataset_external_id = None;
+        let mut other_scope = json!({"type": "external_channel"});
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &other_conversation_message,
+            &mut other_scope,
+        )
+        .await
+        .expect("different conversation should not reuse dataset_external_id scope");
 
         assert_eq!(
             other_scope["external_document_scope_status"],
@@ -64199,7 +64840,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_temporary_dataset_memberships_expire_without_moving_documents() {
+    async fn external_channel_temporary_dataset_memberships_persist_for_conversation_without_moving_documents(
+    ) {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
@@ -64296,16 +64938,16 @@ mod tests {
             Utc::now() + Duration::hours(25),
         )
         .await
-        .expect("expired memberships and temporary dataset should be cleaned");
-        assert_eq!(cleaned, 2);
+        .expect("conversation-scoped memberships should not be cleaned by clock time");
+        assert_eq!(cleaned, 0);
         let active_document_ids = state
             .storage
             .dataset_document_memberships()
             .list_document_ids_by_dataset(state.tenant_id, temporary_dataset_id)
             .await
-            .expect("active memberships should list after expiry");
-        assert!(active_document_ids.is_empty());
-        let archived_temporary_dataset = state
+            .expect("active memberships should list after cleanup");
+        assert_eq!(active_document_ids, vec![document.id]);
+        let persisted_temporary_dataset = state
             .storage
             .datasets()
             .get_by_id(state.tenant_id, temporary_dataset_id)
@@ -64313,8 +64955,8 @@ mod tests {
             .expect("temporary dataset lookup should succeed")
             .expect("temporary dataset should exist");
         assert_eq!(
-            archived_temporary_dataset.lifecycle,
-            DatasetLifecycle::Archived
+            persisted_temporary_dataset.lifecycle,
+            DatasetLifecycle::Draft
         );
         let persisted_document = state
             .storage
@@ -73343,7 +73985,7 @@ mod tests {
                         "key": "external-session-generic-chat-main-chat-risk-room-src-docs",
                         "source": "available_document_external_ids",
                         "document_count": 1,
-                        "restores_on": "conversation_turn_end"
+                        "restores_on": "conversation_external_id"
                     },
                     "datasets": [{"type": "dataset", "id": dataset_id}],
                     "documents": [{
@@ -82341,7 +82983,7 @@ mod tests {
                 "key": "external-session-generic-chat-main-conv-alpha-src-docs",
                 "source": "available_document_external_ids",
                 "document_count": 1,
-                "restores_on": "conversation_turn_end"
+                "restores_on": "conversation_external_id"
             },
             "datasets": [{"type": "dataset", "id": dataset.id}],
             "documents": [{"type": "document", "id": alpha_document.id, "document_external_id": "doc-alpha"}]
@@ -82590,7 +83232,7 @@ mod tests {
                 "key": "external-session-generic-chat-main-conv-deng-third-party-source-main",
                 "source": "available_document_external_ids",
                 "document_count": 1,
-                "restores_on": "conversation_turn_end"
+                "restores_on": "conversation_external_id"
             }
         });
         let evidence_state = build_assistant_run_evidence_state(
@@ -83596,7 +84238,7 @@ mod tests {
                 "key": "external-session-generic-chat-main-conv-selected-src-docs",
                 "source": "available_document_external_ids",
                 "document_count": 1,
-                "restores_on": "conversation_turn_end"
+                "restores_on": "conversation_external_id"
             },
             "datasets": [{"type": "dataset", "id": dataset.id}],
             "documents": [{

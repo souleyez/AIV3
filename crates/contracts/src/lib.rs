@@ -374,6 +374,13 @@ pub struct ExternalBotMessageView {
     pub available_document_source_id: Option<String>,
     #[serde(
         default,
+        alias = "datasetExternalId",
+        alias = "availableDatasetExternalId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_external_id: Option<String>,
+    #[serde(
+        default,
         alias = "requestedSkills",
         alias = "skillRefs",
         alias = "skill_refs",
