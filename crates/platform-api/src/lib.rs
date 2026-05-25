@@ -36054,6 +36054,7 @@ async fn build_assistant_run_evidence_state(
                 current_user_id,
                 external_acl_filter.as_ref(),
                 &evidence_document_ids,
+                allow_selected_documents_without_acl_snapshot,
             )
             .await?;
             let fact_snapshot_available = !fact_snapshot_items.is_empty();
@@ -36241,12 +36242,74 @@ async fn build_assistant_run_dataset_fact_snapshot_supply(
     current_user_id: Option<UserId>,
     external_acl_filter: Option<&ExternalAclFilterContext>,
     selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     if !assistant_run_fact_index_enabled() {
         return Ok(Vec::new());
     }
-    if external_acl_filter.is_some() || !selected_document_ids.is_empty() {
-        return Ok(Vec::new());
+
+    if external_acl_filter.is_some()
+        || !selected_document_ids.is_empty()
+        || dataset_is_external_temporary_scope(dataset)
+    {
+        let scoped_document_ids = assistant_run_dataset_fact_snapshot_scoped_document_ids(
+            state,
+            dataset,
+            current_user_id,
+            external_acl_filter,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?;
+        if scoped_document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (mut manifest, source_fact_count, source_document_count) =
+            fact_index::build_dataset_entity_rows_snapshot_manifest_for_documents(
+                &state.storage,
+                state.tenant_id,
+                dataset.id,
+                &scoped_document_ids,
+                ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT as i64,
+                Utc::now(),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        if source_fact_count <= 0 {
+            return Ok(Vec::new());
+        }
+
+        let scope_filter = json!({
+            "mode": "selected_or_authorized_documents",
+            "external_acl_filtered": external_acl_filter.is_some(),
+            "selected_document_count": selected_document_ids.len(),
+            "temporary_dataset": dataset_is_external_temporary_scope(dataset),
+            "scoped_document_count": scoped_document_ids.len(),
+        });
+        if let Some(object) = manifest.as_object_mut() {
+            object.insert("scope_filter".to_string(), scope_filter.clone());
+            object.insert(
+                "scanned_document_count".to_string(),
+                json!(scoped_document_ids.len()),
+            );
+            object.insert(
+                "scoped_document_count".to_string(),
+                json!(scoped_document_ids.len()),
+            );
+        }
+
+        return Ok(vec![
+            assistant_run_dataset_fact_snapshot_item_from_manifest(
+                dataset,
+                "document_facts_scoped_aggregate",
+                fact_index::ENTITY_ROWS_BY_TYPE_SNAPSHOT_KIND,
+                fact_index::ENTITY_ROWS_BY_TYPE_SNAPSHOT_KEY,
+                manifest,
+                source_fact_count,
+                source_document_count,
+                Some(scope_filter),
+            ),
+        ]);
     }
 
     let Some(snapshot) = state
@@ -36275,6 +36338,41 @@ async fn build_assistant_run_dataset_fact_snapshot_supply(
     )])
 }
 
+async fn assistant_run_dataset_fact_snapshot_scoped_document_ids(
+    state: &AppState,
+    dataset: &Dataset,
+    current_user_id: Option<UserId>,
+    external_acl_filter: Option<&ExternalAclFilterContext>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> std::result::Result<Vec<DocumentId>, ApiError> {
+    let documents = list_documents_for_dataset_scope(state, dataset.id).await?;
+    let mut document_ids = Vec::new();
+    for document in documents {
+        if !owner_user_id_is_visible(document.owner_user_id, current_user_id) {
+            continue;
+        }
+        if !selected_document_ids.is_empty() && !selected_document_ids.contains(&document.id) {
+            continue;
+        }
+        if !document_is_visible_for_external_acl(
+            state,
+            external_acl_filter,
+            &document,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+        .await?
+        {
+            continue;
+        }
+        if !document_ids.contains(&document.id) {
+            document_ids.push(document.id);
+        }
+    }
+    Ok(document_ids)
+}
+
 async fn assistant_run_dataset_fact_snapshot_scope_is_visible(
     state: &AppState,
     dataset: &Dataset,
@@ -36300,7 +36398,35 @@ fn assistant_run_dataset_fact_snapshot_item(
     dataset: &Dataset,
     snapshot: &storage::DatasetFactSnapshot,
 ) -> Value {
-    let manifest = snapshot.snapshot_manifest.clone();
+    assistant_run_dataset_fact_snapshot_item_from_manifest(
+        dataset,
+        "dataset_fact_snapshots",
+        &snapshot.snapshot_kind,
+        &snapshot.snapshot_key,
+        snapshot.snapshot_manifest.clone(),
+        snapshot.source_fact_count,
+        snapshot.source_document_count,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assistant_run_dataset_fact_snapshot_item_from_manifest(
+    dataset: &Dataset,
+    source: &str,
+    snapshot_kind: &str,
+    snapshot_key: &str,
+    manifest: Value,
+    source_fact_count: i64,
+    source_document_count: i64,
+    scope_filter: Option<Value>,
+) -> Value {
+    let mut manifest = manifest;
+    if let Some(scope_filter) = scope_filter.as_ref() {
+        if let Some(object) = manifest.as_object_mut() {
+            object.insert("scope_filter".to_string(), scope_filter.clone());
+        }
+    }
     let entity_rows_by_type = manifest
         .get("entity_rows_by_type")
         .cloned()
@@ -36312,36 +36438,41 @@ fn assistant_run_dataset_fact_snapshot_item(
     let scanned_document_count = manifest
         .get("scanned_document_count")
         .and_then(Value::as_i64)
-        .unwrap_or(snapshot.source_document_count);
+        .unwrap_or(source_document_count);
     let row_summary = assistant_run_dataset_fact_snapshot_row_summary(&row_count_by_type);
     let summary = if row_summary.is_empty() {
         format!(
             "dataset fact snapshot: {scanned_document_count} documents, {} facts",
-            snapshot.source_fact_count
+            source_fact_count
         )
     } else {
         format!(
             "dataset fact snapshot: {scanned_document_count} documents, {} facts, rows {row_summary}",
-            snapshot.source_fact_count
+            source_fact_count
         )
+    };
+    let model_note = if scope_filter.is_some() {
+        "Use this as the authoritative aggregate for the selected or authorized document scope. Use retrieval evidence only for examples, quotes, and validation."
+    } else {
+        "Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation."
     };
 
     json!({
         "type": "dataset_fact_snapshot",
-        "source": "dataset_fact_snapshots",
+        "source": source,
         "dataset_id": dataset.id,
         "dataset_key": dataset.key.clone(),
         "dataset_title": dataset.title.clone(),
-        "snapshot_kind": snapshot.snapshot_kind.clone(),
-        "snapshot_key": snapshot.snapshot_key.clone(),
+        "snapshot_kind": snapshot_kind,
+        "snapshot_key": snapshot_key,
         "scanned_document_count": scanned_document_count,
-        "source_document_count": snapshot.source_document_count,
-        "source_fact_count": snapshot.source_fact_count,
+        "source_document_count": source_document_count,
+        "source_fact_count": source_fact_count,
         "row_count_by_type": row_count_by_type,
         "entity_rows_by_type": entity_rows_by_type,
         "snapshot_manifest": manifest,
         "summary": summary,
-        "model_note": "Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation.",
+        "model_note": model_note,
     })
 }
 
@@ -76193,6 +76324,80 @@ mod tests {
             assistant_run_dataset_entity_scan_direct_answer(&skill_request, &evidence)
                 .expect("fact snapshot should be scan-compatible for skill answers");
         assert!(skill_answer.contains("| Rust | 1 |"));
+    }
+
+    #[test]
+    fn assistant_run_scoped_fact_snapshot_item_keeps_scope_filter() {
+        let now = Utc::now();
+        let dataset = Dataset {
+            id: DatasetId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            key: "external-session-scope".to_string(),
+            title: "External Session Scope".to_string(),
+            description: None,
+            lifecycle: DatasetLifecycle::Active,
+            visibility: DatasetVisibility::Private,
+            default_secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let manifest = json!({
+            "schema_version": "0.1.0",
+            "snapshot_kind": "entity_rows_by_type",
+            "snapshot_key": "default",
+            "scanned_document_count": 2,
+            "source_fact_count": 3,
+            "row_count_by_type": {"organization": 1},
+            "entity_rows_by_type": {
+                "organization": [{
+                    "name": "广州冠晚网络有限公司",
+                    "fact_count": 2,
+                    "document_count": 2
+                }]
+            }
+        });
+        let scope_filter = json!({
+            "mode": "selected_or_authorized_documents",
+            "external_acl_filtered": true,
+            "selected_document_count": 1,
+            "temporary_dataset": true,
+            "scoped_document_count": 2
+        });
+        let item = assistant_run_dataset_fact_snapshot_item_from_manifest(
+            &dataset,
+            "document_facts_scoped_aggregate",
+            "entity_rows_by_type",
+            "default",
+            manifest,
+            3,
+            2,
+            Some(scope_filter.clone()),
+        );
+
+        assert_eq!(item["source"], json!("document_facts_scoped_aggregate"));
+        assert!(item.get("scope_filter").is_none());
+        assert_eq!(item["snapshot_manifest"]["scope_filter"], scope_filter);
+        assert!(item["model_note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("selected or authorized document scope"));
+
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": [item]
+        });
+        let model_state = assistant_run_model_evidence_state(&evidence);
+        assert!(model_state["supplied_items"][0]
+            .get("scope_filter")
+            .is_none());
+        let compact = assistant_run_compact_dataset_fact_snapshot_payloads(&evidence);
+        assert!(compact[0].get("scope_filter").is_none());
+        assert_eq!(
+            compact[0]["source"],
+            json!("document_facts_scoped_aggregate")
+        );
     }
 
     #[test]

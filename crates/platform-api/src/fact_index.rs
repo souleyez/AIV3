@@ -149,6 +149,45 @@ pub async fn rebuild_dataset_entity_rows_snapshot(
         .await
 }
 
+pub async fn build_dataset_entity_rows_snapshot_manifest_for_documents(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    dataset_id: DatasetId,
+    document_ids: &[DocumentId],
+    limit_per_type: i64,
+    created_at: DateTime<Utc>,
+) -> Result<(Value, i64, i64)> {
+    if document_ids.is_empty() {
+        return Ok(build_dataset_entity_rows_snapshot_manifest(
+            dataset_id,
+            created_at,
+            &BTreeMap::new(),
+        ));
+    }
+
+    let mut aggregates_by_type = BTreeMap::<String, Vec<DocumentFactAggregate>>::new();
+    for fact_type in DATASET_ENTITY_FACT_TYPES {
+        let aggregates = storage
+            .document_facts()
+            .aggregate_document_facts_by_documents(
+                tenant_id,
+                document_ids,
+                fact_type,
+                limit_per_type.max(1),
+            )
+            .await?;
+        if !aggregates.is_empty() {
+            aggregates_by_type.insert((*fact_type).to_string(), aggregates);
+        }
+    }
+
+    Ok(build_dataset_entity_rows_snapshot_manifest(
+        dataset_id,
+        created_at,
+        &aggregates_by_type,
+    ))
+}
+
 pub fn build_dataset_entity_rows_snapshot_manifest(
     dataset_id: DatasetId,
     created_at: DateTime<Utc>,

@@ -2567,6 +2567,68 @@ impl PgDocumentFactRepository {
             })
             .collect())
     }
+
+    pub async fn aggregate_document_facts_by_documents(
+        &self,
+        tenant_id: TenantId,
+        document_ids: &[DocumentId],
+        fact_type: &str,
+        limit: i64,
+    ) -> Result<Vec<DocumentFactAggregate>> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let raw_document_ids = document_ids
+            .iter()
+            .map(|document_id| document_id.0)
+            .collect::<Vec<_>>();
+        let rows = sqlx::query(
+            r#"
+            select
+                fact_type,
+                normalized_name,
+                min(name) as name,
+                count(*)::bigint as fact_count,
+                count(distinct document_id)::bigint as document_count,
+                array_agg(distinct document_id) as source_document_ids,
+                coalesce(
+                    array_agg(distinct source_locator) filter (where source_locator is not null),
+                    '{}'::text[]
+                ) as source_locators
+            from document_facts
+            where tenant_id = $1
+              and document_id = any($2::uuid[])
+              and fact_type = $3
+            group by fact_type, normalized_name
+            order by document_count desc, fact_count desc, normalized_name asc
+            limit $4
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(raw_document_ids)
+        .bind(fact_type)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| DocumentFactAggregate {
+                fact_type: row.get("fact_type"),
+                normalized_name: row.get("normalized_name"),
+                name: row.get("name"),
+                fact_count: row.get("fact_count"),
+                document_count: row.get("document_count"),
+                source_document_ids: row
+                    .get::<Vec<Uuid>, _>("source_document_ids")
+                    .into_iter()
+                    .map(DocumentId)
+                    .collect(),
+                source_locators: row.get("source_locators"),
+            })
+            .collect())
+    }
 }
 
 #[derive(Clone)]
