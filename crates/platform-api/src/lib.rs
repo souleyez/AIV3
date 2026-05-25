@@ -18471,11 +18471,18 @@ async fn enrich_external_channel_document_scope(
             let source_id = match explicit_source_id.clone().or(default_source_id.clone()) {
                 Some(source_id) => Some(source_id),
                 None => {
-                    infer_external_document_scope_source_id_by_dataset_external_ids(
-                        state,
-                        &dataset_external_ids,
-                    )
-                    .await?
+                    let inferred_dataset_source =
+                        infer_external_document_scope_source_id_by_dataset_external_ids(
+                            state,
+                            &dataset_external_ids,
+                        )
+                        .await?;
+                    if inferred_dataset_source.is_some() || requested_external_ids.is_empty() {
+                        inferred_dataset_source
+                    } else {
+                        infer_external_document_scope_source_id(state, &requested_external_ids)
+                            .await?
+                    }
                 }
             };
             let Some(source_id) = source_id else {
@@ -18503,6 +18510,7 @@ async fn enrich_external_channel_document_scope(
                 message,
                 &source_id,
                 &dataset_external_id_pairs,
+                &requested_external_ids,
                 selected_scope,
             )
             .await?;
@@ -18853,6 +18861,7 @@ async fn enrich_external_channel_dataset_documents_scope(
     message: &ExternalBotMessageView,
     source_id: &str,
     dataset_external_id_pairs: &[(String, String)],
+    requested_document_external_ids: &[String],
     selected_scope: &mut Value,
 ) -> std::result::Result<(), ApiError> {
     let mut documents = Vec::new();
@@ -18876,25 +18885,11 @@ async fn enrich_external_channel_dataset_documents_scope(
         json!([]),
     );
 
-    if documents.is_empty() {
-        set_payload_value(selected_scope, "available_document_external_ids", json!([]));
-        set_payload_value(
-            selected_scope,
-            "external_document_scope_status",
-            json!("dataset_empty"),
-        );
-        set_payload_value(
-            selected_scope,
-            "external_document_scope_summary",
-            json!("dataset_external_id was supplied for this conversation, but V3 has no parsed documents in that stable group yet."),
-        );
-        return Ok(());
-    }
-
     let mut selected_documents = Vec::new();
     let mut selected_document_ids = Vec::new();
     let mut selected_external_ids = Vec::new();
     let mut selected_datasets = Vec::new();
+    let mut unresolved_external_ids = Vec::new();
     for document in documents {
         let Some(document_external_id) =
             external_document_external_id_from_metadata(&document.metadata)
@@ -18921,9 +18916,47 @@ async fn enrich_external_channel_dataset_documents_scope(
             "title": document.title,
         }));
     }
+    for external_id in requested_document_external_ids {
+        if selected_external_ids.contains(external_id) {
+            continue;
+        }
+        let mut candidates =
+            find_external_documents_by_external_id(state, source_id, external_id, None).await?;
+        candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let Some(document) = candidates.into_iter().next() else {
+            unresolved_external_ids.push(external_id.clone());
+            continue;
+        };
+        if !selected_document_ids.contains(&document.id) {
+            selected_document_ids.push(document.id);
+        }
+        if !selected_datasets
+            .iter()
+            .any(|dataset_id: &DatasetId| *dataset_id == document.dataset_id)
+        {
+            selected_datasets.push(document.dataset_id);
+        }
+        selected_external_ids.push(external_id.clone());
+        selected_documents.push(json!({
+            "type": "document",
+            "id": document.id,
+            "source_id": source_id,
+            "document_external_id": external_id,
+            "title": document.title,
+        }));
+    }
 
     if selected_documents.is_empty() {
-        set_payload_value(selected_scope, "available_document_external_ids", json!([]));
+        set_payload_value(
+            selected_scope,
+            "available_document_external_ids",
+            json!(requested_document_external_ids),
+        );
+        set_payload_value(
+            selected_scope,
+            "unresolved_document_external_ids",
+            json!(unresolved_external_ids),
+        );
         set_payload_value(
             selected_scope,
             "external_document_scope_status",
@@ -18945,17 +18978,24 @@ async fn enrich_external_channel_dataset_documents_scope(
         .iter()
         .map(|(_, effective)| effective.clone())
         .collect::<Vec<_>>();
+    let scope_source = if !requested_document_external_ids.is_empty() {
+        if dataset_external_id_pairs.len() > 1 {
+            "dataset_external_ids_and_available_document_external_ids"
+        } else {
+            "dataset_external_id_and_available_document_external_ids"
+        }
+    } else if dataset_external_id_pairs.len() > 1 {
+        "dataset_external_ids"
+    } else {
+        "dataset_external_id"
+    };
     let temporary_dataset = create_or_refresh_external_channel_temporary_dataset_scope(
         state,
         connection_id,
         message,
         Some(source_id),
         &selected_document_ids,
-        if dataset_external_id_pairs.len() > 1 {
-            "dataset_external_ids"
-        } else {
-            "dataset_external_id"
-        },
+        scope_source,
         dataset_external_id_pairs
             .first()
             .map(|(requested, _)| requested.as_str()),
@@ -18973,22 +19013,35 @@ async fn enrich_external_channel_dataset_documents_scope(
         Some(source_id),
         selected_documents.len(),
         temporary_dataset.as_ref(),
-        "dataset_external_id",
+        scope_source,
     );
     set_payload_value(
         selected_scope,
         "external_document_scope_status",
-        json!("dataset_resolved"),
+        json!(if unresolved_external_ids.is_empty() {
+            "dataset_resolved"
+        } else {
+            "partial"
+        }),
     );
     set_payload_value(
         selected_scope,
         "external_document_scope_summary",
-        json!("dataset_external_id was supplied for this conversation; V3 will reuse this document group for later turns with the same conversation_external_id."),
+        json!(if requested_document_external_ids.is_empty() {
+            "dataset_external_id was supplied for this conversation; V3 will reuse this document group for later turns with the same conversation_external_id."
+        } else {
+            "dataset_external_id and available_document_external_ids were supplied for this conversation; V3 authorized the union, deduplicated documents already covered by the group, and will reuse it for later turns with the same conversation_external_id."
+        }),
     );
     set_payload_value(
         selected_scope,
         "available_document_external_ids",
         json!(selected_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "unresolved_document_external_ids",
+        json!(unresolved_external_ids),
     );
     set_payload_value(
         selected_scope,
@@ -19021,7 +19074,7 @@ async fn enrich_external_channel_dataset_documents_scope(
         selected_scope,
         "dataset_document_scope",
         json!({
-            "source": if dataset_external_id_pairs.len() > 1 { "dataset_external_ids" } else { "dataset_external_id" },
+            "source": scope_source,
             "source_id": source_id,
             "dataset_external_id": dataset_external_id_pairs.first().map(|(_, effective)| effective),
             "requested_dataset_external_id": dataset_external_id_pairs.first().map(|(requested, _)| requested),
@@ -19261,11 +19314,19 @@ async fn restore_external_channel_temporary_dataset_scope(
         ),
     );
     if !restored_dataset_external_ids.is_empty() {
+        let dataset_document_scope_source = if restored_scope_source.contains("dataset_external_id")
+        {
+            restored_scope_source.as_str()
+        } else if restored_dataset_external_ids.len() > 1 {
+            "dataset_external_ids"
+        } else {
+            "dataset_external_id"
+        };
         set_payload_value(
             selected_scope,
             "dataset_document_scope",
             json!({
-                "source": if restored_dataset_external_ids.len() > 1 { "dataset_external_ids" } else { "dataset_external_id" },
+                "source": dataset_document_scope_source,
                 "source_id": restored_source_id,
                 "dataset_external_id": restored_dataset_external_ids.first(),
                 "requested_dataset_external_id": restored_requested_dataset_external_ids.first(),
@@ -64703,7 +64764,7 @@ mod tests {
                 )
                 .await
                 .expect("document should be created");
-            if dataset_external_id != "workspace-other" {
+            if dataset_external_id != "workspace-other" || external_id == "doc-outside" {
                 expected_document_ids.push(document.id);
             }
         }
@@ -64715,7 +64776,8 @@ mod tests {
         let mut message = sample_external_bot_message();
         message.conversation_external_id = "conv-multi-dataset-scope-0001".to_string();
         message.available_document_source_id = None;
-        message.available_document_external_ids.clear();
+        message.available_document_external_ids =
+            vec!["doc-alpha".to_string(), "doc-outside".to_string()];
         message.dataset_external_id = None;
         message.dataset_external_ids = vec![
             "workspace-main".to_string(),
@@ -64743,21 +64805,33 @@ mod tests {
         );
         assert_eq!(
             selected_scope["temporary_dataset"]["source"],
-            json!("dataset_external_ids")
+            json!("dataset_external_ids_and_available_document_external_ids")
         );
         assert_eq!(
             selected_scope["dataset_document_scope"]["source"],
-            json!("dataset_external_ids")
+            json!("dataset_external_ids_and_available_document_external_ids")
         );
-        let selected_external_ids = selected_scope["available_document_external_ids"]
+        let selected_external_id_values = selected_scope["available_document_external_ids"]
             .as_array()
             .expect("selected external ids should be an array")
             .iter()
             .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected_external_id_values.len(),
+            3,
+            "explicit doc-alpha should be ignored because the group already authorized it"
+        );
+        let selected_external_ids = selected_external_id_values
+            .into_iter()
             .collect::<BTreeSet<_>>();
         assert_eq!(
             selected_external_ids,
-            BTreeSet::from(["doc-alpha", "doc-beta"])
+            BTreeSet::from(["doc-alpha", "doc-beta", "doc-outside"])
+        );
+        assert_eq!(
+            selected_scope["unresolved_document_external_ids"],
+            json!([])
         );
 
         let temporary_dataset_id = selected_scope["temporary_dataset"]["id"]
@@ -64803,6 +64877,10 @@ mod tests {
         assert_eq!(
             followup_scope["temporary_dataset"]["id"],
             selected_scope["temporary_dataset"]["id"]
+        );
+        assert_eq!(
+            followup_scope["dataset_document_scope"]["source"],
+            json!("dataset_external_ids_and_available_document_external_ids")
         );
     }
 

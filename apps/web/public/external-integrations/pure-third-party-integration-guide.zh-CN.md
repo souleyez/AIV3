@@ -287,7 +287,7 @@ Content-Type: application/json
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | ISO 8601 时间 |
 
-如果传 `dataset_external_id` 或 `dataset_external_ids`，表示本会话可使用对应稳定业务分组下的全部已解析文档，通常不需要同时传 `available_document_external_ids`。如果只想授权具体少数文档，应改传 `available_document_external_ids` 或 `documentExternalId`，不传分组字段。
+`dataset_external_id` / `dataset_external_ids` 可以和 `available_document_external_ids` 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 `available_document_external_ids` 或 `documentExternalId`，不传分组字段。
 
 响应：
 

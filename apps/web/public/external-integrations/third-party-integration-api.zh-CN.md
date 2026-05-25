@@ -143,7 +143,7 @@ V3 接收第三方消息后，会按请求内容返回以下几类结果：
 - `requires_confirmation`：需要用户确认的动作；
 - `task_status`：处理中、失败、等待外部条件或无法立即完成。
 
-文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 `dataset_external_ids` 数组。传了稳定分组后，通常不需要再传 `available_document_external_ids`；如果只想授权少数具体文档，应改传文档 ID，不传分组字段。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
+文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 `dataset_external_ids` 数组。分组字段和文档 ID 可以同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档会自动去重。只有想把本次会话限制为少数具体文档时，才只传文档 ID、不传分组字段。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
 
 当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。
 
@@ -308,11 +308,12 @@ Authorization: Bearer <V3 inbound token>
   "message_external_id": "msg-20260513-0002",
   "text": "请汇总这几个工作区分组里的制度差异。",
   "available_document_source_id": "src-docs",
-  "dataset_external_ids": ["workspace-main", "workspace-archive"]
+  "dataset_external_ids": ["workspace-main", "workspace-archive"],
+  "available_document_external_ids": ["extra-policy-doc-001"]
 }
 ```
 
-上例表示本次会话可以使用 `workspace-main` 和 `workspace-archive` 两个稳定业务分组下的全部已解析文档。后续同一个 `conversation_external_id` 可以不重复传该数组，V3 会继续复用该授权范围。
+上例表示本次会话可以使用 `workspace-main` 和 `workspace-archive` 两个稳定业务分组下的全部已解析文档，也可以额外使用 `extra-policy-doc-001` 这份显式文档；如果该文档本来就在两个分组内，V3 会去重。后续同一个 `conversation_external_id` 可以不重复传这些范围，V3 会继续复用该授权范围。
 
 支持的消息类型：
 

@@ -520,7 +520,7 @@
 <li><code>requires_confirmation</code>：需要用户确认的动作；</li>
 <li><code>task_status</code>：处理中、失败、等待外部条件或无法立即完成。</li>
 </ul>
-<p>文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 <code>available_document_external_ids</code>/单文档兼容字段 <code>documentExternalId</code>，也可以传稳定业务分组 <code>dataset_external_id</code> 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 <code>dataset_external_ids</code> 数组。传了稳定分组后，通常不需要再传 <code>available_document_external_ids</code>；如果只想授权少数具体文档，应改传文档 ID，不传分组字段。该授权绑定 <code>conversation_external_id</code>，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。<code>available_document_source_id</code> 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。</p>
+<p>文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 <code>available_document_external_ids</code>/单文档兼容字段 <code>documentExternalId</code>，也可以传稳定业务分组 <code>dataset_external_id</code> 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 <code>dataset_external_ids</code> 数组。分组字段和文档 ID 可以同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档会自动去重。只有想把本次会话限制为少数具体文档时，才只传文档 ID、不传分组字段。该授权绑定 <code>conversation_external_id</code>，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。<code>available_document_source_id</code> 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。</p>
 <p>当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 <code>reply_type=task_status</code>、<code>task_status=v3_search_evidence_required</code>，并携带 <code>type=v3_search_evidence_required</code> 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。</p>
 <h2 id="section-12">7. 连接与凭证</h2>
 <p>V3 会为每个第三方通道或数据源创建连接记录。</p>
@@ -638,10 +638,11 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   &quot;message_external_id&quot;: &quot;msg-20260513-0002&quot;,
   &quot;text&quot;: &quot;请汇总这几个工作区分组里的制度差异。&quot;,
   &quot;available_document_source_id&quot;: &quot;src-docs&quot;,
-  &quot;dataset_external_ids&quot;: [&quot;workspace-main&quot;, &quot;workspace-archive&quot;]
+  &quot;dataset_external_ids&quot;: [&quot;workspace-main&quot;, &quot;workspace-archive&quot;],
+  &quot;available_document_external_ids&quot;: [&quot;extra-policy-doc-001&quot;]
 }</code></pre>
   </figure>
-<p>上例表示本次会话可以使用 <code>workspace-main</code> 和 <code>workspace-archive</code> 两个稳定业务分组下的全部已解析文档。后续同一个 <code>conversation_external_id</code> 可以不重复传该数组，V3 会继续复用该授权范围。</p>
+<p>上例表示本次会话可以使用 <code>workspace-main</code> 和 <code>workspace-archive</code> 两个稳定业务分组下的全部已解析文档，也可以额外使用 <code>extra-policy-doc-001</code> 这份显式文档；如果该文档本来就在两个分组内，V3 会去重。后续同一个 <code>conversation_external_id</code> 可以不重复传这些范围，V3 会继续复用该授权范围。</p>
 <p>支持的消息类型：</p>
 <ul>
 <li><code>text</code></li>
