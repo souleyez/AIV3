@@ -42,7 +42,11 @@
 - Consolidated old active quality/executor plans into this single plan and pushed commit `d6381ac`.
 - Local priority smoke passed on HEAD `d6381ac` for one-character PDF, DOC/DOCX "邓工是谁", resume company statistics, resume ranking table, attendance date/work-hour formatting, frequent attendance query, smart-home partial-parse answer quality, and smart-elevator point-list table output.
 - Available 8-server fact snapshot probe passed against `https://v3.elepcloud.com`: resume company statistics used `dataset_fact_snapshot` with retrieval evidence as secondary supply and answered from 25 visible documents / 100 company-or-organization rows.
-- Full private 8-server smoke is still blocked locally by missing `ServerCaseConfigPath` and bearer token; only the committed/target fact-snapshot probe is available on this machine.
+- Full private 8-server smoke now has a local ignored `ServerCaseConfigPath` generated from 8-server metadata. The first run exposed one real gap and two assertion issues:
+  - direct AssistantRun dataset-only selected scope was overwritten by ordinary-chat scope for "邓工是谁";
+  - real attendance rows use `2026-05-20`, `2026-02-07`, `2026-03-18`, `12.55小时`, and `4.05小时`, so private assertions must follow the real table;
+  - resume ranking and smart-elevator server answers supplied `dataset_fact_snapshot` plus `dataset_entity_scan`, so private aggregate-source assertions should allow both.
+- Third-party `dataset_external_ids` conversation scope on 8 server now resolves the e64 group to three authorized documents and the latest external-channel "邓工是谁" run supplied retrieval evidence from `资料1.docx`.
 - Added internal supply selection notes in existing `supply_quality.notes` and smoke summaries, without adding third-party public request/response fields:
   - `supply_selection:dataset_fact_snapshot_selected_for_dataset_aggregate_question`;
   - `supply_selection:document_facts_scoped_aggregate_selected_for_scoped_document_aggregate`;
@@ -53,7 +57,7 @@
 ## Immediate Execution Queue
 
 1. **Private 8-server quality smoke**
-   - Run the current private smoke config against HEAD `fd3b002b3`.
+   - Run the current private smoke config against the next deployed HEAD.
    - Priority cases:
      - one-character PDF;
      - DOC/DOCX question "邓工是谁";

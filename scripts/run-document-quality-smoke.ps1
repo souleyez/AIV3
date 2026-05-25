@@ -488,7 +488,9 @@ function Copy-CaseWithServerAssertionOverrides {
         @{ Out = "failure_markers"; Names = @("failure_markers", "failureMarkers") },
         @{ Out = "requires_normalized_dates"; Names = @("requires_normalized_dates", "requiresNormalizedDates") },
         @{ Out = "requires_table"; Names = @("requires_table", "requiresTable") },
-        @{ Out = "required_final_answer_terms"; Names = @("required_final_answer_terms", "requiredFinalAnswerTerms") }
+        @{ Out = "required_final_answer_terms"; Names = @("required_final_answer_terms", "requiredFinalAnswerTerms") },
+        @{ Out = "expected_answer_sources"; Names = @("expected_answer_sources", "expectedAnswerSources") },
+        @{ Out = "required_aggregate_sources"; Names = @("required_aggregate_sources", "requiredAggregateSources") }
     )) {
         $value = Get-PropertyByNames -Object $CaseConfig -Names $pair.Names -Default $null
         if ($null -ne $value) {
