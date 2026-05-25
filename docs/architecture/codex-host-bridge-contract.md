@@ -149,6 +149,30 @@ The queued workflow context carries:
 - top-level `task_memory_space_id`
 - safety flags forbidding user-controlled CLI flags and secrets in prompts
 
+Advanced static-page work can use this bridge with `capability=static_page_advanced_publish` after allowlisting. The task should receive only a bounded V3 static-page package: requirement summary, draft/render ids, safe data-source summaries, artifact paths or generated-artifact URLs, and the expected output schema. The host may propose口径 repairs, HTML artifact edits, or publish steps, but V3 remains responsible for applying writes, publishing to `/generated-artifacts/`, and recording audit.
+
+## Fixed Task Templates
+
+Some Cloudflare Codex work is narrow enough to run without per-task human confirmation after the operator approves the template policy once. These tasks must use server-owned fixed template packages, not arbitrary user prompts.
+
+Current fixed templates:
+
+- `static_page_image2_data_publish`
+- `answer_quality_autofix`
+
+Fixed-template rules:
+
+- `template_id` is mandatory in the workflow context.
+- `capability` must match the template id and be allowlisted by both V3 and the host profile.
+- Raw task text is optional and bounded; V3-owned structured fields are authoritative.
+- Host output is accepted only when it matches the template output schema.
+- Direct host permissions to V3 or the 8 server do not bypass V3 validation, artifact path checks, write-scope checks, or audit.
+- Human confirmation is still required when a template instance requests actions outside its no-confirm policy.
+
+`static_page_image2_data_publish` may create and publish a new generated artifact only when `publish_mode=new_generated_artifact_only`, the artifact path is under `/generated-artifacts/`, and the output contains snapshot/date/unit口径 validation. It must not overwrite stable URLs or alter source code without human confirmation.
+
+`answer_quality_autofix` may create diagnosis and low-risk answer-quality patch proposals only inside its allowlisted files/symbols. It must not deploy automatically or change public API, auth, schema, third-party integrations, static-page product code, or unrelated modules without human confirmation.
+
 ## ReAct Action
 
 ```json

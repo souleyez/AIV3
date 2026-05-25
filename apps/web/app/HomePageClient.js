@@ -34,6 +34,7 @@ import {
   buildInitialStaticPageDraft,
   buildMockStaticPagePreview,
   buildStaticPageImagePayload,
+  buildStaticPageImagePromptText,
   canRequestStaticPageDirectHtml,
   canRequestStaticPageFinalRender,
   interpretStaticPagePrompt,
@@ -1196,6 +1197,52 @@ export default function HomePageClient() {
     };
   }
 
+  function staticPageOperationIsPromptOnly(operation = {}) {
+    const payload = operation.imagePromptPayload || operation.image_prompt_payload || {};
+    return Boolean(
+      operation.promptOnly
+        || operation.prompt_only
+        || payload.promptOnly
+        || payload.prompt_only,
+    );
+  }
+
+  function buildPromptOnlyStaticPageQueueOperation(draft, operation = {}) {
+    const prompt = String(
+      operation.prompt
+        || operation.promptText
+        || operation.prompt_text
+        || buildStaticPageImagePromptText(draft),
+    ).trim();
+    const providedPayload = operation.imagePromptPayload || operation.image_prompt_payload;
+    const basePayload = providedPayload && typeof providedPayload === 'object' && !Array.isArray(providedPayload)
+      ? providedPayload
+      : buildStaticPageImagePayload(draft, {
+        oneClick: Boolean(operation.oneClick || draft?.source?.oneClick),
+        promptText: prompt,
+        promptOnly: true,
+      });
+    const imagePromptPayload = {
+      ...basePayload,
+      prompt,
+      promptText: prompt,
+      prompt_text: prompt,
+      promptOnly: true,
+      prompt_only: true,
+    };
+    return {
+      ...operation,
+      type: 'queue_image_job',
+      prompt,
+      promptText: prompt,
+      prompt_text: prompt,
+      promptOnly: true,
+      prompt_only: true,
+      queueMessage: operation.queueMessage || STATIC_PAGE_QUEUE_MESSAGE,
+      imagePromptPayload,
+    };
+  }
+
   function buildConfirmedStaticPagePreview(draft, imageJob, fallbackPreview = null) {
     return {
       ...(fallbackPreview || buildMockStaticPagePreview(draft)),
@@ -1412,6 +1459,8 @@ export default function HomePageClient() {
         prompt: operation.prompt || null,
         image_prompt_payload: operation.imagePromptPayload || buildStaticPageImagePayload(baseDraft, {
           oneClick: Boolean(operation.oneClick),
+          promptText: operation.prompt || operation.promptText || operation.prompt_text || '',
+          promptOnly: staticPageOperationIsPromptOnly(operation),
         }),
       },
     });
@@ -3056,7 +3105,12 @@ export default function HomePageClient() {
     }
 
     if (operation.type === 'queue_image_job') {
-      const blockReason = staticPagePreviewBlockReason(activeStaticPageDraft);
+      const queueOperation = staticPageOperationIsPromptOnly(operation)
+        ? buildPromptOnlyStaticPageQueueOperation(activeStaticPageDraft, operation)
+        : operation;
+      const blockReason = staticPageOperationIsPromptOnly(queueOperation)
+        ? ''
+        : staticPagePreviewBlockReason(activeStaticPageDraft);
       if (blockReason) {
         setBanner('');
         setError(blockReason);
@@ -3066,7 +3120,7 @@ export default function HomePageClient() {
       setError('');
       if (activeStaticPageDraft.backendDraftId) {
         setStaticPageActionBusy(true);
-        createBackendStaticPageImageJob(activeStaticPageDraft, operation)
+        createBackendStaticPageImageJob(activeStaticPageDraft, queueOperation)
           .then(() => {
             setStaticPageEditorOpen(false);
             setMobilePanel('chat');
@@ -3078,7 +3132,7 @@ export default function HomePageClient() {
           .finally(() => setStaticPageActionBusy(false));
         return activeStaticPageDraft;
       }
-      return replaceDraftWithOperation(activeStaticPageDraft, operation);
+      return replaceDraftWithOperation(activeStaticPageDraft, queueOperation);
     }
 
     const draft = replaceDraftWithOperation(activeStaticPageDraft, operation);
@@ -3096,7 +3150,7 @@ export default function HomePageClient() {
     return draft;
   }
 
-  async function handleStaticPagePrimaryAction() {
+  async function handleStaticPagePrimaryAction(operation = {}) {
     if (staticPageActionBusy) {
       return activeStaticPageDraft;
     }
@@ -3167,11 +3221,10 @@ export default function HomePageClient() {
         return renderedDraft;
       }
 
-      const queueOperation = {
-        type: 'queue_image_job',
-        queueMessage: STATIC_PAGE_QUEUE_MESSAGE,
-      };
-      const blockReason = staticPagePreviewBlockReason(draft);
+      const queueOperation = buildPromptOnlyStaticPageQueueOperation(draft, operation);
+      const blockReason = staticPageOperationIsPromptOnly(queueOperation)
+        ? ''
+        : staticPagePreviewBlockReason(draft);
       if (blockReason) {
         setBanner('');
         setError(blockReason);

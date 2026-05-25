@@ -24,6 +24,18 @@ target/assistant-chat-contract-smoke/
 
 Run a separate deployment-target/provider smoke when real external-model credentials are intentionally enabled.
 
+## Fixed Codex Task Audit Smoke
+
+The fixed Cloudflare Codex escalation path has a separate PowerShell smoke:
+
+```powershell
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly
+```
+
+It validates the server-owned fixed templates for static-page generation and answer-quality autofix. The local/default mode checks package shape, output validation, rejection behavior, exception notification intent, and runtime diagnostics without contacting the 8 server or sending customer-visible output.
+
+Remote mode is guarded. Use `-BaseUrl https://v3.elepcloud.com -PlanOnly` for a health/readiness check. Server mutation cases require deployment review plus `-AllowServerMutation`; they must still create only new generated artifacts and must not deploy answer-quality patches automatically.
+
 ## 2026-05-17 Deployment Target Evidence
 
 - Host: `8服务器`

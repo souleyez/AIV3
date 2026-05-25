@@ -7,7 +7,7 @@ export default function StaticPageAssistantNotice({
   actionLabel = '效果图——生成页面',
   actionHelper = '',
   actionDisabled = false,
-  secondaryLabel = '不满意，回到模块编辑',
+  secondaryLabel = '不满意，调整生图文案',
   simpleEntry = false,
 }) {
   if (!draft) {
@@ -19,7 +19,7 @@ export default function StaticPageAssistantNotice({
       <div className="static-page-assistant-notice static-page-simple-entry" role="note">
         <div className="static-page-simple-copy">
           <strong>已经了解您的意图，初步规划已经完成</strong>
-          <span>点此开始生成静态页 即可。</span>
+          <span>点此查看并确认提交给作图的文字。</span>
         </div>
         <button type="button" className="primary-btn compact-action-btn" onClick={onPrimaryAction} disabled={actionDisabled}>
           {actionLabel}
@@ -118,7 +118,7 @@ function StaticPageNoticePreview({
     return (
       <div className="static-page-notice-queue subtle">
         <strong>等待效果图</strong>
-        <span>当前只保留规划和模块编辑；效果图满意后再生成最终静态页。</span>
+        <span>当前只需要确认生图文案；效果图满意后再生成最终静态页。</span>
       </div>
     );
   }

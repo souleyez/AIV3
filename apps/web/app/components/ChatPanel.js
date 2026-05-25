@@ -324,7 +324,7 @@ function staticPageActionState(draft) {
     return {
       disabled: false,
       label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
-      helper: '先创建静态页规划，再进入效果图和页面生成。',
+      helper: '先创建静态页规划，再确认生图文案进入效果图和页面生成。',
       workspaceLabel: '效果图',
     };
   }
@@ -342,7 +342,7 @@ function staticPageActionState(draft) {
     return {
       disabled: false,
       label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
-      helper: '页面已生成；如需调整，回到模块编辑后重新生成效果图。',
+      helper: '页面已生成；如需调整，重新确认生图文案后再生成效果图。',
       workspaceLabel: '效果图',
     };
   }
@@ -363,7 +363,7 @@ function staticPageActionState(draft) {
     return {
       disabled: false,
       label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
-      helper: '效果图已回来。满意就继续生成页面；不满意回到模块编辑后再出图。',
+      helper: '效果图已回来。满意就继续生成页面；不满意可调整生图文案后再出图。',
       workspaceLabel: '生成页面',
     };
   }
@@ -390,7 +390,7 @@ function staticPageActionState(draft) {
     return {
       disabled: false,
       label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
-      helper: '模块已经改过，上一张效果图失效，需要重新发起效果图。',
+      helper: '规划已经改过，上一张效果图失效，需要重新确认文案并发起效果图。',
       workspaceLabel: '效果图',
     };
   }
@@ -398,7 +398,7 @@ function staticPageActionState(draft) {
   return {
     disabled: false,
     label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
-    helper: '模块编辑完成后，用这一个按钮先出效果图；效果图满意后同一个按钮继续生成页面。',
+    helper: '确认生图文案后先出效果图；效果图满意后继续生成页面。',
     workspaceLabel: '效果图',
   };
 }
@@ -432,10 +432,6 @@ export default function ChatPanel({
   onApplyStaticPageOperation,
   onStaticPagePrimaryAction,
   staticPageActionBusy = false,
-  onApplyStaticPagePrompt,
-  onRetryWorkflowExecution,
-  onCancelWorkflowExecution,
-  onRefreshStaticPageDraft,
   onOpenStaticPageBuilder,
   onCloseStaticPageDraft,
   showStaticPageWorkspace = true,
@@ -464,7 +460,7 @@ export default function ChatPanel({
       draft={staticPageDraft}
       onOpenBuilder={onOpenStaticPageBuilder}
       simpleEntry={staticPageEntryOnly}
-      actionLabel={staticPageEntryOnly ? '点此开始生成静态页' : staticPageAction.label}
+      actionLabel={staticPageEntryOnly ? '查看并确认生图文案' : staticPageAction.label}
       actionHelper={
         staticPageEntryOnly
           ? ''
@@ -478,7 +474,7 @@ export default function ChatPanel({
         }
         onStaticPagePrimaryAction?.();
       }}
-      secondaryLabel={staticPageEntryOnly ? '' : '不满意，回到模块编辑'}
+      secondaryLabel={staticPageEntryOnly ? '' : '不满意，调整生图文案'}
     />
   ) : null;
 
@@ -584,24 +580,13 @@ export default function ChatPanel({
               <button type="button" className="ghost-btn compact-action-btn" onClick={onCloseStaticPageDraft}>
                 返回聊天记录
               </button>
-              <button
-                type="button"
-                className="primary-btn compact-action-btn"
-                onClick={() => onStaticPagePrimaryAction?.()}
-                disabled={staticPageAction.disabled || staticPageActionBusy}
-              >
-                {staticPageAction.workspaceLabel}
-              </button>
             </div>
           </div>
           <StaticPagePlanningPanel
             draft={staticPageDraft}
             onStartDraft={onStartStaticPageDraft}
-            onApplyOperation={onApplyStaticPageOperation}
-            onApplyPrompt={onApplyStaticPagePrompt}
-            onRetryWorkflow={onRetryWorkflowExecution}
-            onCancelWorkflow={onCancelWorkflowExecution}
-            onRefreshDraft={onRefreshStaticPageDraft}
+            onRequestPreview={onApplyStaticPageOperation}
+            busy={staticPageActionBusy}
           />
         </div>
       ) : (

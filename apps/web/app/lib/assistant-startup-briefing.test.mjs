@@ -62,6 +62,8 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.match(briefing.productCapabilities.staticPage, /静态页规划/);
   assert.match(briefing.productCapabilities.staticPage, /index\.html/);
   assert.match(briefing.productCapabilities.staticPage, /ZIP 交付包/);
+  assert.match(briefing.productCapabilities.staticPage, /Image2 视觉稿/);
+  assert.match(briefing.productCapabilities.staticPage, /只取最新快照/);
   assert.match(briefing.productCapabilities.media, /partial/);
   assert.match(briefing.productCapabilities.media, /视频 URL/);
   assert.match(briefing.productCapabilities.media, /PPT\/原文提取/);

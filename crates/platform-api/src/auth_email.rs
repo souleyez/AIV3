@@ -22,6 +22,14 @@ pub struct VerificationEmailMessage {
     pub code: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperationalEmailMessage {
+    pub to: String,
+    pub subject: String,
+    pub text: String,
+    pub html: Option<String>,
+}
+
 pub trait EmailSender {
     fn send_verification_code(&self, message: &VerificationEmailMessage) -> Result<()>;
 }
@@ -35,6 +43,17 @@ impl EmailSender for LoggingEmailSender {
             email = %message.to,
             purpose = message.purpose.as_str(),
             "queued verification code email through logging sender"
+        );
+        Ok(())
+    }
+}
+
+impl LoggingEmailSender {
+    pub fn send_operational_message(&self, message: &OperationalEmailMessage) -> Result<()> {
+        tracing::info!(
+            email = %message.to,
+            subject = %message.subject,
+            "queued operational email through logging sender"
         );
         Ok(())
     }
@@ -105,6 +124,21 @@ impl CloudflareEmailSender {
 impl EmailSender for CloudflareEmailSender {
     fn send_verification_code(&self, message: &VerificationEmailMessage) -> Result<()> {
         let payload = build_cloudflare_email_payload(&self.config, message);
+        self.send_cloudflare_payload(payload, "verification")
+    }
+}
+
+impl CloudflareEmailSender {
+    pub fn send_operational_message(&self, message: &OperationalEmailMessage) -> Result<()> {
+        let payload = build_cloudflare_operational_email_payload(&self.config, message);
+        self.send_cloudflare_payload(payload, "operational")
+    }
+
+    fn send_cloudflare_payload(
+        &self,
+        payload: CloudflareEmailPayload,
+        message_kind: &str,
+    ) -> Result<()> {
         let response = self
             .client
             .post(self.config.send_endpoint())
@@ -122,7 +156,7 @@ impl EmailSender for CloudflareEmailSender {
             .map(|error| format!("{}: {}", error.code, error.message))
             .unwrap_or_else(|| format!("Cloudflare email API returned {status}"));
         Err(anyhow!(
-            "Cloudflare verification email send failed: {reason}"
+            "Cloudflare {message_kind} email send failed: {reason}"
         ))
     }
 }
@@ -132,6 +166,13 @@ pub fn send_verification_email(message: &VerificationEmailMessage) -> Result<()>
         return CloudflareEmailSender::new(config)?.send_verification_code(message);
     }
     LoggingEmailSender.send_verification_code(message)
+}
+
+pub fn send_operational_email(message: &OperationalEmailMessage) -> Result<()> {
+    if let Some(config) = CloudflareEmailConfig::from_env()? {
+        return CloudflareEmailSender::new(config)?.send_operational_message(message);
+    }
+    LoggingEmailSender.send_operational_message(message)
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -189,6 +230,31 @@ fn build_cloudflare_email_payload(
         subject,
         text,
         html,
+        reply_to: config.reply_to.clone(),
+    }
+}
+
+fn build_cloudflare_operational_email_payload(
+    config: &CloudflareEmailConfig,
+    message: &OperationalEmailMessage,
+) -> CloudflareEmailPayload {
+    CloudflareEmailPayload {
+        to: message.to.clone(),
+        from: CloudflareEmailFrom {
+            address: config.sender.clone(),
+            name: config.sender_name.clone(),
+        },
+        subject: message.subject.clone(),
+        text: message.text.clone(),
+        html: message.html.clone().unwrap_or_else(|| {
+            let escaped = message
+                .text
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('\n', "<br>");
+            format!("<p>{escaped}</p>")
+        }),
         reply_to: config.reply_to.clone(),
     }
 }

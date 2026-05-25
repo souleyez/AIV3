@@ -9,6 +9,7 @@ import {
   buildStaticPageFieldCandidates,
   buildStaticPageFinalRenderPayload,
   buildStaticPageImagePayload,
+  buildStaticPageImagePromptText,
   buildStaticPageModuleUpdateOperation,
   buildStaticPagePreviewContract,
   buildStaticPageRenderSpec,
@@ -208,6 +209,83 @@ test('template design references flow into preview image and final render payloa
   assert.equal(imagePayload.designContract.templateReferences[0].source, 'html-anything');
   assert.equal(finalPayload.designReferences[0].templateId, 'dashboard');
   assert.doesNotMatch(JSON.stringify(imagePayload.designReferences), /<html|<script|https?:\/\//i);
+});
+
+test('image prompt text can be confirmed and carried as prompt-only payload', () => {
+  const draft = buildInitialStaticPageDraft({
+    conversationSummary: '客户希望看到智能家居项目经营分析。',
+  });
+  const promptText = buildStaticPageImagePromptText(draft);
+  const imagePayload = buildStaticPageImagePayload(draft, {
+    promptText,
+    promptOnly: true,
+  });
+
+  assert.match(promptText, /GPT-Image2/);
+  assert.match(promptText, /生图需求，不是固定模块版位/);
+  assert.match(promptText, /快照表/);
+  assert.match(promptText, /Codex Host/);
+  assert.match(promptText, /真实数据摘要|业务要求/);
+  assert.doesNotMatch(promptText, /页面模块/);
+  assert.equal(imagePayload.promptOnly, true);
+  assert.equal(imagePayload.prompt_only, true);
+  assert.equal(imagePayload.promptText, promptText);
+  assert.equal(imagePayload.prompt_text, promptText);
+  assert.equal(imagePayload.imageFirstContract.realDataRequired, true);
+  assert.equal(imagePayload.imageFirstContract.fakeDataAllowed, false);
+  assert.equal(imagePayload.imageFirstContract.snapshotAggregationPolicy, 'latest_snapshot_for_state_modules');
+  assert.equal(imagePayload.productionRules.publishTarget, 'v3_generated_artifacts_on_8_server');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.defaultMode, 'fixed_template_exec_schema');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.templateId, 'static_page_image2_data_publish');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.confirmationPolicy, 'auto_for_new_generated_artifact');
+  assert.equal(Object.prototype.hasOwnProperty.call(imagePayload, 'modules'), false);
+});
+
+test('image prompt text carries actual static page data requirements without fake brand rows', () => {
+  const draft = buildInitialStaticPageDraft({
+    templateIntent: '新世界静态页，给店总看哪些品牌店快达到高分成线',
+    conversationSummary: '客户希望新世界项目按分店区展示高分成线助推机会。',
+  });
+  draft.dataSnapshot = {
+    source: 'hy-sql-xinbai-live-profile-aggregate',
+    module_bindings: [{
+      moduleId: 'sales-trend',
+      sampleData: [
+        { label: '2026-03-28', value: 3660640.4 },
+        { label: '2026-05-05', value: 4736204.1 },
+      ],
+    }, {
+      moduleId: 'store-high-warning',
+      sampleData: [
+        { label: '上成山店', value: 778 },
+        { label: '上淮海店', value: 390 },
+      ],
+    }, {
+      moduleId: 'store-gap-opportunity',
+      sampleData: [
+        { label: '上淮海店', value: 949936155.67 },
+        { label: '上浦建店', value: 939533456.12 },
+      ],
+    }],
+  };
+
+  const promptText = buildStaticPageImagePromptText(draft);
+  const imagePayload = buildStaticPageImagePayload(draft, { promptText, promptOnly: true });
+
+  assert.match(promptText, /2026-03-28 ~ 2026-05-05/);
+  assert.match(promptText, /上淮海店 9.5亿/);
+  assert.match(promptText, /禁止把多天快照重复累加成当前状态/);
+  assert.match(promptText, /低于1亿用“万”/);
+  assert.match(promptText, /shopdesc\/brandcode/);
+  assert.match(promptText, /不要编造品牌名单/);
+  assert.match(promptText, /主分区优先呈现不同门店/);
+  assert.equal(imagePayload.renderSpec.snapshotAggregationPolicy, 'latest_snapshot_for_state_modules');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.templateId, 'static_page_image2_data_publish');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.requiredCapability, 'static_page_image2_data_publish');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.confirmationPolicy, 'auto_for_new_generated_artifact');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.publishMode, 'new_generated_artifact_only');
+  assert.equal(imagePayload.renderSpec.fixedTaskTemplateId, 'static_page_image2_data_publish');
+  assert.deepEqual(imagePayload.dataRequirements.some((line) => /上浦建店 9.4亿/.test(line)), true);
 });
 
 test('preview queue gate allows planned chart modules without renderable sample rows', () => {

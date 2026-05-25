@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use contracts::{
-    CodexHostCommandPlanSummaryView, CodexHostProcessOutputSummaryView, CodexHostTaskOutputView,
+    CodexHostCommandPlanSummaryView, CodexHostFixedTaskTemplateContextView,
+    CodexHostFixedTaskTemplateIdView, CodexHostProcessOutputSummaryView, CodexHostTaskOutputView,
     CodexHostTaskProfileSummaryView, HtmlArtifactManifestView,
 };
 use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind};
@@ -15,6 +16,8 @@ const DEFAULT_HOST_KIND: &str = "developer_workstation";
 const DEFAULT_COMPAT_PROVIDER_ID: &str = "minimax";
 const DEFAULT_COMPAT_PROVIDER_ENV_KEY: &str = "MINIMAX_API_KEY";
 const DEFAULT_COMPAT_PROVIDER_WIRE_API: &str = "responses";
+const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
+const ANSWER_QUALITY_AUTOFIX: &str = "answer_quality_autofix";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexHostTaskContext {
@@ -24,6 +27,7 @@ pub struct CodexHostTaskContext {
     pub local_thread_id: Option<String>,
     pub task_memory_isolated: bool,
     pub task_memory_space_id: Option<String>,
+    pub fixed_task: Option<CodexHostFixedTaskTemplateContextView>,
 }
 
 impl CodexHostTaskContext {
@@ -65,6 +69,14 @@ impl CodexHostTaskContext {
                     .filter(|value| !value.is_empty())
                     .map(str::to_string)
             });
+        let fixed_task = execution
+            .context
+            .get("fixed_task")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| anyhow!("fixed_task context is invalid: {error}"))?;
 
         Ok(Self {
             assistant_run_id,
@@ -73,6 +85,7 @@ impl CodexHostTaskContext {
             local_thread_id,
             task_memory_isolated,
             task_memory_space_id,
+            fixed_task,
         })
     }
 
@@ -153,6 +166,7 @@ impl CodexHostTaskContext {
                 "status": status,
                 "hostKind": decision.map(|decision| decision.host_kind.clone()),
                 "capability": self.capability.clone(),
+                "fixedTask": self.fixed_task_report_payload(),
                 "summary": codex_host_report_summary(mode, status, &self.capability),
                 "workspaceLabel": command_plan
                     .as_ref()
@@ -181,6 +195,21 @@ impl CodexHostTaskContext {
                 "risks": codex_host_report_risks(mode),
             }),
         )
+    }
+
+    fn fixed_task_report_payload(&self) -> Option<Value> {
+        let fixed_task = self.fixed_task.as_ref()?;
+        Some(json!({
+            "templateId": fixed_task.template_id.as_str(),
+            "version": fixed_task.version,
+            "humanReviewPolicy": fixed_task.human_review_policy.clone(),
+            "publishMode": fixed_task.policies.get("publish_mode").cloned(),
+            "allowedWriteFileCount": fixed_task
+                .allowed_write_scope
+                .as_ref()
+                .map(|scope| scope.files.len())
+                .unwrap_or(0),
+        }))
     }
 }
 
@@ -404,6 +433,7 @@ impl CodexHostAgentPolicy {
                 self.profile.id
             ));
         }
+        self.validate_fixed_task_policy(context)?;
         let command_plan = match self.mode {
             CodexHostExecutionMode::DryRun => None,
             CodexHostExecutionMode::PlanOnly | CodexHostExecutionMode::CodexExec => {
@@ -426,25 +456,76 @@ impl CodexHostAgentPolicy {
         })
     }
 
+    fn validate_fixed_task_policy(&self, context: &CodexHostTaskContext) -> Result<()> {
+        let requires_fixed_template = fixed_template_capability(&context.capability).is_some();
+        if !requires_fixed_template && context.fixed_task.is_none() {
+            return Ok(());
+        }
+        let fixed_task = context.fixed_task.as_ref().ok_or_else(|| {
+            anyhow!(
+                "capability {} requires a fixed_task template package",
+                context.capability
+            )
+        })?;
+        if fixed_task.template_id.as_str() != context.capability {
+            return Err(anyhow!(
+                "fixed_task template_id {} must match capability {}",
+                fixed_task.template_id.as_str(),
+                context.capability
+            ));
+        }
+        if self.mode != CodexHostExecutionMode::DryRun
+            && !approved_remote_host_kind(&self.host_kind)
+        {
+            return Err(anyhow!(
+                "fixed template {} is blocked on host kind {}; use windows_jump, mac_host, or cloudflare_codex",
+                fixed_task.template_id.as_str(),
+                self.host_kind
+            ));
+        }
+        match &fixed_task.template_id {
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish => {
+                validate_static_page_fixed_task(fixed_task)?;
+                if self.mode != CodexHostExecutionMode::DryRun && self.task_workspace_root.is_none()
+                {
+                    return Err(anyhow!(
+                        "static_page_image2_data_publish requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for non-dry-run execution"
+                    ));
+                }
+            }
+            CodexHostFixedTaskTemplateIdView::AnswerQualityAutofix => {
+                validate_answer_quality_fixed_task(fixed_task)?;
+                if self.mode != CodexHostExecutionMode::DryRun && self.task_workspace_root.is_none()
+                {
+                    return Err(anyhow!(
+                        "answer_quality_autofix requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for non-dry-run execution"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_real_exec_guard(&self, command_plan: Option<&CodexCommandPlan>) -> Result<()> {
         if !self.allow_real_codex_exec {
             return Err(anyhow!(
                 "CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC must be true before codex_exec mode can launch Codex"
             ));
         }
-        match self.host_kind.as_str() {
-            "windows_jump" | "mac_host" => {}
-            other => {
-                return Err(anyhow!(
-                    "codex_exec mode is blocked on host kind {other}; use windows_jump or mac_host"
-                ));
-            }
+        if approved_remote_host_kind(&self.host_kind) {
+        } else {
+            let other = self.host_kind.as_str();
+            return Err(anyhow!(
+                "codex_exec mode is blocked on host kind {other}; use windows_jump, mac_host, or cloudflare_codex"
+            ));
         }
         match self.profile.kind.as_str() {
             "codex-native" | "codex-compatible-shim" => {}
-            other => Err(anyhow!(
-                "profile kind {other} cannot be used for real Codex execution"
-            ))?,
+            other => {
+                return Err(anyhow!(
+                    "profile kind {other} cannot be used for real Codex execution"
+                ));
+            }
         }
         let workspace_configured = command_plan
             .and_then(|plan| plan.workspace_path.as_ref())
@@ -456,6 +537,69 @@ impl CodexHostAgentPolicy {
         }
         Ok(())
     }
+}
+
+fn fixed_template_capability(capability: &str) -> Option<CodexHostFixedTaskTemplateIdView> {
+    match capability {
+        STATIC_PAGE_IMAGE2_DATA_PUBLISH => {
+            Some(CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish)
+        }
+        ANSWER_QUALITY_AUTOFIX => Some(CodexHostFixedTaskTemplateIdView::AnswerQualityAutofix),
+        _ => None,
+    }
+}
+
+fn approved_remote_host_kind(host_kind: &str) -> bool {
+    matches!(host_kind, "windows_jump" | "mac_host" | "cloudflare_codex")
+}
+
+fn validate_static_page_fixed_task(
+    fixed_task: &CodexHostFixedTaskTemplateContextView,
+) -> Result<()> {
+    let publish_mode = fixed_task
+        .policies
+        .get("publish_mode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if publish_mode != "new_generated_artifact_only" {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires publish_mode=new_generated_artifact_only"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_answer_quality_fixed_task(
+    fixed_task: &CodexHostFixedTaskTemplateContextView,
+) -> Result<()> {
+    let scope = fixed_task
+        .allowed_write_scope
+        .as_ref()
+        .ok_or_else(|| anyhow!("answer_quality_autofix requires an allowed_write_scope"))?;
+    for file in &scope.files {
+        if !answer_quality_file_scope_allowed(file) {
+            return Err(anyhow!(
+                "answer_quality_autofix file scope {file} is not allowlisted"
+            ));
+        }
+    }
+    if scope.files.is_empty() {
+        return Err(anyhow!(
+            "answer_quality_autofix requires at least one allowlisted file scope"
+        ));
+    }
+    Ok(())
+}
+
+fn answer_quality_file_scope_allowed(file: &str) -> bool {
+    matches!(
+        file,
+        "crates/platform-api/src/lib.rs"
+            | "fixtures/document-quality/**"
+            | "scripts/run-document-quality-smoke.ps1"
+            | "scripts/run-v3-quality-gate-smoke.ps1"
+            | "docs/validation/**"
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -486,9 +630,11 @@ fn build_codex_command_plan(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| fixed_task_prompt(context.fixed_task.as_ref()).ok())
         .ok_or_else(|| anyhow!("Codex Host task text is required for non-dry-run planning"))?
         .to_string();
-    let sandbox = if context.capability == "propose_patch" {
+    let sandbox = if context.capability == "propose_patch" || context.fixed_task.is_some() {
         "workspace-write"
     } else {
         "read-only"
@@ -523,6 +669,17 @@ fn build_codex_command_plan(
         workspace_path,
         workspace_label: Some(workspace_label),
     })
+}
+
+fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>) -> Result<String> {
+    let fixed_task = fixed_task.ok_or_else(|| anyhow!("fixed task package missing"))?;
+    let package = serde_json::to_string_pretty(fixed_task)
+        .map_err(|error| anyhow!("failed to serialize fixed task package: {error}"))?;
+    Ok(format!(
+        "Run the V3 fixed Cloudflare Codex task template `{}`. Use only this server-owned package and return the configured output schema.\n\n{}",
+        fixed_task.template_id.as_str(),
+        package
+    ))
 }
 
 fn task_workspace_label(context: &CodexHostTaskContext) -> String {
@@ -846,6 +1003,120 @@ mod tests {
     }
 
     #[test]
+    fn plan_only_allows_static_page_image2_data_publish_template() {
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task =
+            Some(CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example());
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+
+        let decision = policy.prepare(&context).expect("decision");
+        let output = context.planned_output(&decision);
+
+        assert_eq!(decision.mode, CodexHostExecutionMode::PlanOnly);
+        assert_eq!(decision.host_kind, "cloudflare_codex");
+        assert_eq!(
+            decision
+                .command_plan
+                .as_ref()
+                .expect("command plan")
+                .sandbox,
+            "workspace-write"
+        );
+        assert_eq!(
+            output["html_artifacts"][0]["payload"]["fixedTask"]["templateId"],
+            json!(STATIC_PAGE_IMAGE2_DATA_PUBLISH)
+        );
+    }
+
+    #[test]
+    fn plan_only_allows_answer_quality_autofix_template() {
+        let mut context = test_context(
+            ANSWER_QUALITY_AUTOFIX,
+            Some("Run the fixed answer-quality autofix template package."),
+        );
+        context.fixed_task =
+            Some(CodexHostFixedTaskTemplateContextView::answer_quality_autofix_example());
+        let policy = fixed_task_policy(CodexHostExecutionMode::PlanOnly, ANSWER_QUALITY_AUTOFIX);
+
+        let decision = policy.prepare(&context).expect("decision");
+
+        assert_eq!(decision.host_kind, "cloudflare_codex");
+        assert_eq!(
+            decision
+                .command_plan
+                .as_ref()
+                .expect("command plan")
+                .sandbox,
+            "workspace-write"
+        );
+    }
+
+    #[test]
+    fn codex_exec_rejects_untemplated_write_capability() {
+        let context = test_context(STATIC_PAGE_IMAGE2_DATA_PUBLISH, Some("Publish a page"));
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::CodexExec,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error.to_string().contains("requires a fixed_task"));
+    }
+
+    #[test]
+    fn static_page_template_requires_generated_artifact_publish_mode() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.policies = json!({
+            "publish_mode": "overwrite_existing_artifact"
+        });
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error
+            .to_string()
+            .contains("publish_mode=new_generated_artifact_only"));
+    }
+
+    #[test]
+    fn answer_quality_template_rejects_non_allowlisted_file_scope() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::answer_quality_autofix_example();
+        fixed_task
+            .allowed_write_scope
+            .as_mut()
+            .expect("scope")
+            .files
+            .push("apps/web/app/globals.css".to_string());
+        let mut context = test_context(
+            ANSWER_QUALITY_AUTOFIX,
+            Some("Run the fixed answer-quality autofix template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(CodexHostExecutionMode::PlanOnly, ANSWER_QUALITY_AUTOFIX);
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error.to_string().contains("not allowlisted"));
+    }
+
+    #[test]
     fn codex_exec_requires_real_host_guard() {
         let context = test_context("inspect_project", Some("Read the repo"));
         let policy = CodexHostAgentPolicy {
@@ -974,6 +1245,25 @@ mod tests {
         assert!(excerpt.chars().count() <= 40);
     }
 
+    fn fixed_task_policy(mode: CodexHostExecutionMode, capability: &str) -> CodexHostAgentPolicy {
+        CodexHostAgentPolicy {
+            mode,
+            profile: CodexHostProfile {
+                id: "cloudflare-fixed".to_string(),
+                kind: "codex-native".to_string(),
+                model: Some("gpt-5.3-codex".to_string()),
+                provider_id: None,
+                base_url: None,
+                env_key: None,
+                wire_api: None,
+                allowed_capabilities: vec![capability.to_string()],
+            },
+            host_kind: "cloudflare_codex".to_string(),
+            allow_real_codex_exec: true,
+            task_workspace_root: Some(PathBuf::from("D:/codex-host/tasks")),
+        }
+    }
+
     fn test_context(capability: &str, task: Option<&str>) -> CodexHostTaskContext {
         CodexHostTaskContext {
             assistant_run_id: AssistantRunId::new(),
@@ -982,6 +1272,7 @@ mod tests {
             local_thread_id: Some("thread-a".to_string()),
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
         }
     }
 }

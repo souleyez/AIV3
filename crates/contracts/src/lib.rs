@@ -1333,13 +1333,15 @@ pub struct CodexHostTaskRequestView {
     pub capability: String,
     pub task: Option<String>,
     pub local_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_task: Option<CodexHostFixedTaskTemplateContextView>,
     pub task_memory_policy: CodexHostTaskMemoryPolicyView,
     pub safety: CodexHostTaskSafetyPolicyView,
 }
 
 impl CodexHostTaskRequestView {
     pub fn to_workflow_context(&self) -> Value {
-        json!({
+        let mut context = json!({
             "assistant_run_id": self.assistant_run_id.to_string(),
             "capability": self.capability.clone(),
             "task": self.task.clone(),
@@ -1347,8 +1349,228 @@ impl CodexHostTaskRequestView {
             "task_memory_policy": self.task_memory_policy.clone(),
             "task_memory_space_id": self.task_memory_policy.memory_space_id.clone(),
             "safety": self.safety.clone(),
-        })
+        });
+        if let Some(fixed_task) = self.fixed_task.as_ref() {
+            if let Value::Object(map) = &mut context {
+                map.insert("fixed_task".to_string(), json!(fixed_task));
+                map.insert(
+                    "template_id".to_string(),
+                    json!(fixed_task.template_id.as_str()),
+                );
+            }
+        }
+        context
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexHostFixedTaskTemplateIdView {
+    StaticPageImage2DataPublish,
+    AnswerQualityAutofix,
+}
+
+impl CodexHostFixedTaskTemplateIdView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::StaticPageImage2DataPublish => "static_page_image2_data_publish",
+            Self::AnswerQualityAutofix => "answer_quality_autofix",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexHostFixedTaskHumanReviewPolicyView {
+    AutoForNewGeneratedArtifact,
+    AutoForDiagnosisAndPatchProposal,
+    RequiredForExceptions,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostFixedTaskWriteScopeView {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostFixedTaskTemplateContextView {
+    pub template_id: CodexHostFixedTaskTemplateIdView,
+    pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    #[serde(default)]
+    pub dataset_scope: Value,
+    #[serde(default)]
+    pub requirements: Value,
+    #[serde(default)]
+    pub image2: Value,
+    #[serde(default)]
+    pub policies: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub low_quality_signals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_question: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customer_answer: Option<String>,
+    #[serde(default)]
+    pub evidence_summary: Value,
+    #[serde(default)]
+    pub trace_summary: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_write_scope: Option<CodexHostFixedTaskWriteScopeView>,
+    pub human_review_policy: CodexHostFixedTaskHumanReviewPolicyView,
+}
+
+impl CodexHostFixedTaskTemplateContextView {
+    pub fn static_page_image2_data_publish_example() -> Self {
+        Self {
+            template_id: CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish,
+            version: 1,
+            assistant_run_id: Some(AssistantRunId::new().to_string()),
+            draft_id: Some(StaticPageDraftId::new().to_string()),
+            case_id: None,
+            dataset_scope: json!({
+                "tenant_id": "tenant-1",
+                "dataset_ids": ["dataset-1"],
+                "database_source_ids": ["source-1"],
+                "selected_document_ids": []
+            }),
+            requirements: json!({
+                "user_goal": "生成新世界经营分析静态页",
+                "project_name": "新世界",
+                "time_dimension_required": true,
+                "primary_partition_required": true,
+                "detail_table_required": true
+            }),
+            image2: json!({
+                "prompt_text": "Image2 visual brief",
+                "image_job_id": "image-job-1",
+                "visual_contract_url": "https://v3.elepcloud.com/generated-artifacts/example.png"
+            }),
+            policies: json!({
+                "snapshot_aggregation": "latest_snapshot_for_state_modules",
+                "trend_aggregation": "date_series_only_for_trends",
+                "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
+                "publish_mode": "new_generated_artifact_only"
+            }),
+            low_quality_signals: Vec::new(),
+            user_question: None,
+            customer_answer: None,
+            evidence_summary: Value::Null,
+            trace_summary: Value::Null,
+            allowed_write_scope: None,
+            human_review_policy:
+                CodexHostFixedTaskHumanReviewPolicyView::AutoForNewGeneratedArtifact,
+        }
+    }
+
+    pub fn answer_quality_autofix_example() -> Self {
+        Self {
+            template_id: CodexHostFixedTaskTemplateIdView::AnswerQualityAutofix,
+            version: 1,
+            assistant_run_id: Some(AssistantRunId::new().to_string()),
+            draft_id: None,
+            case_id: Some("case-1".to_string()),
+            dataset_scope: Value::Null,
+            requirements: Value::Null,
+            image2: Value::Null,
+            policies: Value::Null,
+            low_quality_signals: vec![
+                "user_complaint".to_string(),
+                "weak_insufficient_evidence_answer".to_string(),
+            ],
+            user_question: Some("缺勤和工时长短怎么查？".to_string()),
+            customer_answer: Some("资料不足，无法回答。".to_string()),
+            evidence_summary: json!({
+                "answer_supply_sources": ["spreadsheet_row_analysis"],
+                "retrieval_or_fact_snapshot_status": "available"
+            }),
+            trace_summary: json!({
+                "react_actions": ["retrieve_evidence"],
+                "quality_gate_events": [],
+                "parse_quality": []
+            }),
+            allowed_write_scope: Some(CodexHostFixedTaskWriteScopeView {
+                files: vec![
+                    "crates/platform-api/src/lib.rs".to_string(),
+                    "fixtures/document-quality/**".to_string(),
+                    "scripts/run-document-quality-smoke.ps1".to_string(),
+                    "scripts/run-v3-quality-gate-smoke.ps1".to_string(),
+                    "docs/validation/**".to_string(),
+                ],
+                symbols: vec![
+                    "assistant_run_answer_quality_*".to_string(),
+                    "assistant_run_react_*".to_string(),
+                    "assistant_run_supply_quality_*".to_string(),
+                ],
+            }),
+            human_review_policy:
+                CodexHostFixedTaskHumanReviewPolicyView::AutoForDiagnosisAndPatchProposal,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostFixedTaskArtifactView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostFixedTaskValidationReportView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_snapshot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_row_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_state_row_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_row_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexHostFixedTaskOutputView {
+    pub template_id: CodexHostFixedTaskTemplateIdView,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<CodexHostFixedTaskArtifactView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_report: Option<CodexHostFixedTaskValidationReportView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_summary: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests_added: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_commands: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_review_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5167,6 +5389,7 @@ mod tests {
             capability: "inspect_project".to_string(),
             task: Some("Summarize repository shape".to_string()),
             local_thread_id: Some("thread-a".to_string()),
+            fixed_task: None,
             task_memory_policy: memory_policy,
             safety: CodexHostTaskSafetyPolicyView::default(),
         };
@@ -5197,6 +5420,78 @@ mod tests {
         assert_eq!(
             context["safety"]["real_codex_exec_requires_host_allowlist"],
             json!(true)
+        );
+    }
+
+    #[test]
+    fn codex_host_static_page_template_context_round_trips() {
+        let context =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        let encoded = serde_json::to_value(&context).expect("encoded");
+
+        assert_eq!(
+            encoded["template_id"],
+            json!("static_page_image2_data_publish")
+        );
+        assert_eq!(
+            encoded["policies"]["publish_mode"],
+            json!("new_generated_artifact_only")
+        );
+        assert_eq!(
+            encoded["human_review_policy"],
+            json!("auto_for_new_generated_artifact")
+        );
+    }
+
+    #[test]
+    fn codex_host_answer_quality_template_context_round_trips() {
+        let context = CodexHostFixedTaskTemplateContextView::answer_quality_autofix_example();
+        let encoded = serde_json::to_value(&context).expect("encoded");
+
+        assert_eq!(encoded["template_id"], json!("answer_quality_autofix"));
+        assert!(encoded["allowed_write_scope"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "fixtures/document-quality/**"));
+        assert_eq!(
+            encoded["human_review_policy"],
+            json!("auto_for_diagnosis_and_patch_proposal")
+        );
+    }
+
+    #[test]
+    fn codex_host_task_request_embeds_fixed_template_context() {
+        let assistant_run_id = AssistantRunId::new();
+        let execution_id = WorkflowExecutionId::new();
+        let request = CodexHostTaskRequestView {
+            assistant_run_id,
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Use the fixed static-page template package.".to_string()),
+            local_thread_id: None,
+            fixed_task: Some(
+                CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+            task_memory_policy: CodexHostTaskMemoryPolicyView::task_scoped(
+                assistant_run_id,
+                execution_id,
+            ),
+            safety: CodexHostTaskSafetyPolicyView::default(),
+        };
+
+        let context = request.to_workflow_context();
+
+        assert_eq!(
+            context["template_id"],
+            json!("static_page_image2_data_publish")
+        );
+        assert_eq!(
+            context["fixed_task"]["template_id"],
+            json!("static_page_image2_data_publish")
+        );
+        assert_eq!(
+            context["fixed_task"]["policies"]["publish_mode"],
+            json!("new_generated_artifact_only")
         );
     }
 

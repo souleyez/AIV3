@@ -493,6 +493,7 @@ mod tests {
             local_thread_id: Some("thread-a".to_string()),
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
         };
         let command_plan = CodexCommandPlan {
             program: "codex".to_string(),

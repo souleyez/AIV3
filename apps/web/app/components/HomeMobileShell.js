@@ -187,8 +187,12 @@ export default function HomeMobileShell({
     setSurface('chat');
   }
 
-  function handleRequestPreviewFromBuilder() {
-    chatPanelProps.onStaticPagePrimaryAction?.();
+  function handleRequestPreviewFromBuilder(operation) {
+    if (operation) {
+      onApplyStaticPageOperation?.(operation);
+    } else {
+      chatPanelProps.onStaticPagePrimaryAction?.();
+    }
     onStaticPageEditorOpenChange?.(false);
     setSurface('chat');
   }
@@ -279,10 +283,10 @@ export default function HomeMobileShell({
         {surface === 'static-page' ? (
           <StaticPageMobileBuilder
             draft={staticPageDraft}
-            onApplyOperation={onApplyStaticPageOperation}
-            onReorderModules={(order) => onApplyStaticPageOperation?.({ type: 'reorder_modules', order })}
+            onStartDraft={handleStartStaticPageDraft}
             onRequestPreview={handleRequestPreviewFromBuilder}
             onBackToChat={handleBackToChat}
+            busy={chatPanelProps.staticPageActionBusy}
           />
         ) : (
           <ChatPanel

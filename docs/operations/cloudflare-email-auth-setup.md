@@ -1,6 +1,6 @@
 # Cloudflare Email Auth Setup
 
-This project uses Cloudflare Email Service only as the verification-code delivery channel. V3 still owns users, sessions, OTP challenges, ownership checks, and audit records.
+This project uses Cloudflare Email Service as the server-side email delivery channel for verification codes and bounded operational exception notices. V3 still owns users, sessions, OTP challenges, ownership checks, audit records, and operational routing policy.
 
 References checked on 2026-05-07:
 
@@ -54,6 +54,7 @@ Optional:
 CLOUDFLARE_EMAIL_SENDER_NAME=AI Data Platform
 CLOUDFLARE_EMAIL_REPLY_TO=support@yourdomain.com
 CLOUDFLARE_EMAIL_API_BASE_URL=https://api.cloudflare.com/client/v4
+CODEX_HOST_FIXED_TASK_EXCEPTION_EMAIL_TO=soulzyn@qq.com
 ```
 
 If the required variables are absent, V3 falls back to `LoggingEmailSender`. This keeps local development and tests usable without Cloudflare credentials.
@@ -63,6 +64,7 @@ If the required variables are absent, V3 falls back to `LoggingEmailSender`. Thi
 - V3 must never email the raw local key.
 - V3 must never store the raw local key.
 - OTP email may contain only the short verification code and purpose copy.
+- Codex Host fixed-task exception email may contain only bounded audit summaries, never raw prompts, diffs, provider logs, database URLs, credentials, or full customer documents.
 - Email OTP proves control of the mailbox; it does not recover the original local key.
 - Cloudflare API token stays server-side only.
 - Frontend talks only to V3 `/v1/auth/*`; it never calls Cloudflare directly.
@@ -73,6 +75,7 @@ If the required variables are absent, V3 falls back to `LoggingEmailSender`. Thi
 - V3 creates the OTP challenge only after email sending succeeds.
 - Repeated sends reuse a recent challenge and expose `resend_after_seconds`.
 - Cloudflare REST API failures are logged with machine-readable error code/message, but the UI receives only the safe generic error.
+- Codex Host fixed-task exception email failures are logged as operational warnings; they must not block normal workflow state persistence.
 
 ## Production Checklist
 

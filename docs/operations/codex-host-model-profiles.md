@@ -85,7 +85,14 @@ kind = "codex-native"
 enabled = false
 transport = "sdk_thread"
 model = "gpt-5.3-codex"
-allowed_capabilities = ["assistant_conversation", "static_page_plan", "static_page_edit"]
+allowed_capabilities = ["assistant_conversation", "static_page_plan", "static_page_edit", "static_page_advanced_publish"]
+
+[profiles.cloudflare-codex-fixed-tasks]
+kind = "codex-native"
+enabled = false
+transport = "exec_schema"
+model = "gpt-5.3-codex"
+allowed_capabilities = ["static_page_image2_data_publish", "answer_quality_autofix"]
 
 [profiles.deepseek-private-reference]
 kind = "codex-compatible-shim"
@@ -170,6 +177,30 @@ write_access=true
 commit_access=false by default
 human_review_required=true
 ```
+
+Advanced static-page publishing should start as a read-only/plan-only capability:
+
+```text
+capability=static_page_advanced_publish
+purpose=inspect static-page requirements, identify data口径 risks, propose real-data HTML/artifact edits, and summarize publish steps
+default_mode=plan_only
+write_access=false until isolated workspace and human confirmation are enabled
+publish_access=false until V3 validates artifact output and records audit
+```
+
+Cloudflare Codex fixed templates are a narrower execution profile, not a free-form prompt profile:
+
+```text
+profile=cloudflare-codex-fixed-tasks
+transport=exec_schema
+allowed_templates=static_page_image2_data_publish, answer_quality_autofix
+task_source=server_owned_template_package_only
+user_prompt_cli_flags_allowed=false
+```
+
+`static_page_image2_data_publish` may publish a new generated artifact without per-task human confirmation only when V3 validates `publish_mode=new_generated_artifact_only`, artifact path is under `/generated-artifacts/`, and the output contains a snapshot/date/unit validation report. Overwrite, stable URL replacement, source-code changes, credential/scope expansion, and uncertain口径 still require human confirmation.
+
+`answer_quality_autofix` may diagnose and propose low-risk answer-quality patches without per-task confirmation only inside the fixed answer-quality allowlist. It must not deploy automatically and must not touch public API, auth, schema, static-page product code, third-party contracts, or unrelated files.
 
 ## MiniMax Experiment Boundary
 

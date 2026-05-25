@@ -1429,6 +1429,81 @@ textarea {
   scrollbar-gutter: stable;
 }
 
+.static-page-prompt-confirm {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 251, 255, 0.92);
+}
+
+.static-page-prompt-confirm.empty {
+  align-content: start;
+}
+
+.static-page-prompt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.static-page-prompt-head div,
+.static-page-prompt-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.static-page-prompt-head span,
+.static-page-prompt-field span,
+.static-page-prompt-status {
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.static-page-prompt-head strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.static-page-prompt-note {
+  margin: 0;
+  color: var(--subtle);
+  line-height: 1.65;
+}
+
+.static-page-prompt-field textarea {
+  width: 100%;
+  min-height: 420px;
+  resize: vertical;
+  border: 0;
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--text);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.12);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.static-page-prompt-field textarea:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.32);
+}
+
+.static-page-prompt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .static-page-planning-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -3567,6 +3642,7 @@ body {
 .assistant-shell .static-page-planning-summary div,
 .assistant-shell .static-page-model-summary,
 .assistant-shell .static-page-intent-card,
+.assistant-shell .static-page-prompt-confirm,
 .assistant-shell .static-page-style-picker,
 .assistant-shell .static-page-effect-preview,
 .assistant-shell .static-page-final-render,
@@ -3586,6 +3662,7 @@ body {
 .assistant-shell .static-page-planning-summary strong,
 .assistant-shell .static-page-planning-hint strong,
 .assistant-shell .static-page-intent-card label,
+.assistant-shell .static-page-prompt-head strong,
 .assistant-shell .static-page-model-summary p,
 .assistant-shell .static-page-style-picker-head strong,
 .assistant-shell .static-page-style-option strong,
@@ -3609,6 +3686,9 @@ body {
 .assistant-shell .static-page-planning-hint span,
 .assistant-shell .static-page-template-reference span,
 .assistant-shell .static-page-intent-card span,
+.assistant-shell .static-page-prompt-head span,
+.assistant-shell .static-page-prompt-field span,
+.assistant-shell .static-page-prompt-status,
 .assistant-shell .static-page-style-picker-head span,
 .assistant-shell .static-page-style-option span,
 .assistant-shell .static-page-style-option em,
@@ -3626,7 +3706,8 @@ body {
 }
 
 .assistant-shell .static-page-template-intent,
-.assistant-shell .static-page-missing-item p {
+.assistant-shell .static-page-missing-item p,
+.assistant-shell .static-page-prompt-note {
   color: #cbd5e1;
 }
 
@@ -3663,6 +3744,12 @@ body {
 }
 
 .assistant-shell .static-page-intent-input textarea {
+  color: #f8fbff;
+  background: rgba(9, 13, 20, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.11);
+}
+
+.assistant-shell .static-page-prompt-field textarea {
   color: #f8fbff;
   background: rgba(9, 13, 20, 0.72);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.11);
@@ -5453,6 +5540,37 @@ body {
   gap: 12px;
   padding-bottom: 10px;
   color: #e6edf7;
+}
+
+.static-page-mobile-builder .static-page-prompt-confirm {
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.static-page-mobile-builder .static-page-prompt-head strong {
+  color: #f8fbff;
+}
+
+.static-page-mobile-builder .static-page-prompt-head span,
+.static-page-mobile-builder .static-page-prompt-field span,
+.static-page-mobile-builder .static-page-prompt-status {
+  color: #93c5fd;
+}
+
+.static-page-mobile-builder .static-page-prompt-note {
+  color: #9aa7b9;
+}
+
+.static-page-mobile-builder .static-page-prompt-field textarea {
+  min-height: calc(100vh - 270px);
+  color: #f8fbff;
+  background: rgba(7, 11, 17, 0.86);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.static-page-mobile-builder .static-page-prompt-actions {
+  display: grid;
+  grid-template-columns: 1fr;
 }
 
 .static-page-mobile-builder-head {

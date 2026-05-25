@@ -1,12 +1,12 @@
 use axum::Json;
 use chrono::Utc;
 use contracts::{
-    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
-    CreateStaticPageDraftRequest, CreateStaticPageImageJobRequest, CreateStaticPageRenderRequest,
-    HtmlArtifactDataRefView, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
-    HtmlArtifactOwnerScopeView, HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView,
-    HtmlArtifactTemplateIdView, VideoExtractionArtifactKindView, VideoExtractionRequestView,
-    VideoExtractionSourceKindView, VideoExtractionSourceRefView,
+    CodexHostFixedTaskTemplateContextView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
+    CodexHostTaskSafetyPolicyView, CreateStaticPageDraftRequest, CreateStaticPageImageJobRequest,
+    CreateStaticPageRenderRequest, HtmlArtifactDataRefView, HtmlArtifactInteractionModeView,
+    HtmlArtifactManifestView, HtmlArtifactOwnerScopeView, HtmlArtifactProvenanceView,
+    HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView, VideoExtractionArtifactKindView,
+    VideoExtractionRequestView, VideoExtractionSourceKindView, VideoExtractionSourceRefView,
 };
 use domain_model::{
     AssistantRunId, Document, DocumentChunk, DocumentId, SecretBindingId, StaticPageDraftId,
@@ -2646,6 +2646,26 @@ async fn codex_host_task_result(
     local_thread_id: Option<&str>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
     if let Some(rejection) = codex_host_task_preflight_rejection(action, active_assistant_run_id) {
+        if let Some(assistant_run_id) = active_assistant_run_id {
+            if let Some(fixed_task) = codex_host_fixed_task_from_arguments(&action.arguments)
+                .ok()
+                .flatten()
+            {
+                let reason = rejection
+                    .observation
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("codex_host_task_rejected");
+                crate::record_codex_host_fixed_task_preflight_rejected(
+                    state,
+                    assistant_run_id,
+                    codex_host_task_capability(action),
+                    &fixed_task,
+                    reason,
+                )
+                .await;
+            }
+        }
         return Ok(rejection);
     }
     let active_assistant_run_id =
@@ -2740,17 +2760,13 @@ fn build_initial_codex_host_task_execution(
     let runtime_state = definition.initial_state(execution_id, now);
     let task_memory_policy =
         CodexHostTaskMemoryPolicyView::task_scoped(assistant_run_id, execution_id);
-    let request = CodexHostTaskRequestView {
+    let request = build_codex_host_task_request(
         assistant_run_id,
-        capability: truncate_for_openclaw_stub(capability, 96),
-        task: codex_host_task_text_from_arguments(&action.arguments),
-        local_thread_id: local_thread_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
+        capability,
+        local_thread_id,
         task_memory_policy,
-        safety: CodexHostTaskSafetyPolicyView::default(),
-    };
+        &action.arguments,
+    )?;
     let mut context = match request.to_workflow_context() {
         Value::Object(map) => map,
         _ => runtime_state.context,
@@ -2776,6 +2792,27 @@ fn build_initial_codex_host_task_execution(
     })
 }
 
+fn build_codex_host_task_request(
+    assistant_run_id: AssistantRunId,
+    capability: &str,
+    local_thread_id: Option<&str>,
+    task_memory_policy: CodexHostTaskMemoryPolicyView,
+    arguments: &Value,
+) -> std::result::Result<CodexHostTaskRequestView, ApiError> {
+    Ok(CodexHostTaskRequestView {
+        assistant_run_id,
+        capability: truncate_for_openclaw_stub(capability, 96),
+        task: codex_host_task_text_from_arguments(arguments),
+        local_thread_id: local_thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        fixed_task: codex_host_fixed_task_from_arguments(arguments)?,
+        task_memory_policy,
+        safety: CodexHostTaskSafetyPolicyView::default(),
+    })
+}
+
 fn build_initial_codex_host_task_event(
     execution: &WorkflowExecution,
     assistant_run_id: AssistantRunId,
@@ -2792,6 +2829,7 @@ fn build_initial_codex_host_task_event(
             "stage": execution.stage,
             "assistant_run_id": assistant_run_id.to_string(),
             "capability": execution.context.get("capability").cloned().unwrap_or(Value::Null),
+            "template_id": execution.context.get("template_id").cloned().unwrap_or(Value::Null),
             "task_memory_policy": execution.context.get("task_memory_policy").cloned().unwrap_or(Value::Null),
             "task_memory_space_id": execution.context.get("task_memory_space_id").cloned().unwrap_or(Value::Null),
         }),
@@ -2808,6 +2846,30 @@ fn codex_host_task_text_from_arguments(arguments: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| truncate_for_openclaw_stub(value, 1_200))
+}
+
+fn codex_host_fixed_task_from_arguments(
+    arguments: &Value,
+) -> std::result::Result<Option<CodexHostFixedTaskTemplateContextView>, ApiError> {
+    let value = arguments
+        .get("fixed_task")
+        .or_else(|| arguments.get("fixedTask"))
+        .or_else(|| arguments.get("template_package"))
+        .or_else(|| arguments.get("templatePackage"));
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value::<CodexHostFixedTaskTemplateContextView>(value.clone())
+        .map(Some)
+        .map_err(|error| {
+            ApiError::bad_request(
+                "codex_host_fixed_task_invalid",
+                format!("Codex Host fixed task package is invalid: {error}"),
+            )
+        })
 }
 
 fn codex_host_task_preflight_rejection(
@@ -4659,6 +4721,60 @@ mod tests {
         clear_openclaw_tool_env();
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn codex_host_static_page_fixed_task_request_embeds_template_context() {
+        let assistant_run_id = AssistantRunId::new();
+        let execution_id = WorkflowExecutionId::new();
+        let fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        let request = build_codex_host_task_request(
+            assistant_run_id,
+            "static_page_image2_data_publish",
+            Some("thread-a"),
+            CodexHostTaskMemoryPolicyView::task_scoped(assistant_run_id, execution_id),
+            &json!({
+                "capability": "static_page_image2_data_publish",
+                "task": "Run fixed static-page publish template",
+                "fixed_task": fixed_task
+            }),
+        )
+        .expect("request");
+
+        let context = request.to_workflow_context();
+
+        assert_eq!(
+            context["capability"],
+            json!("static_page_image2_data_publish")
+        );
+        assert_eq!(
+            context["template_id"],
+            json!("static_page_image2_data_publish")
+        );
+        assert_eq!(
+            context["fixed_task"]["policies"]["publish_mode"],
+            json!("new_generated_artifact_only")
+        );
+    }
+
+    #[test]
+    fn codex_host_static_page_overwrite_template_is_visible_for_host_rejection() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.policies = json!({
+            "publish_mode": "overwrite_existing_artifact"
+        });
+        let parsed = codex_host_fixed_task_from_arguments(&json!({
+            "fixed_task": fixed_task
+        }))
+        .expect("parse")
+        .expect("fixed task");
+
+        assert_eq!(
+            parsed.policies["publish_mode"],
+            json!("overwrite_existing_artifact")
+        );
     }
 
     #[test]

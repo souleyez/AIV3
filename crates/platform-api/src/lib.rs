@@ -4,7 +4,10 @@ use assistant_runtime::{
     candidates_to_values, execute_codex_conversation_plan, plan_scope,
     CodexConversationExecutorOutput, ScopePlannerInput,
 };
-use auth_email::{send_verification_email, EmailOtpService, OtpVerificationStatus};
+use auth_email::{
+    send_operational_email, send_verification_email, EmailOtpService, OperationalEmailMessage,
+    OtpVerificationStatus,
+};
 use auth_scope::{
     ExternalDocumentAclSnapshot, ExternalPrincipalContext, ExternalPrincipalTrustLevel,
     ScopeResolver,
@@ -31,7 +34,10 @@ use contracts::{
     AssistantRunExecutorTransportView, AssistantRunMessageView, AssistantRunView,
     AuthAuditEventView, AuthSessionResponse, AuthSessionView, AuthUserView, BindEmailRequest,
     BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
-    ClaimLocalDataResponse, CompareDocumentsRequest, CompareDocumentsView,
+    ClaimLocalDataResponse, CodexHostFixedTaskHumanReviewPolicyView,
+    CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
+    CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
+    CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
     ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
     ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
     CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
@@ -339,6 +345,7 @@ const AUTH_AUDIT_LOGOUT: &str = "auth.logout";
 const AUTH_AUDIT_KEY_ROTATE: &str = "auth.key_rotate";
 const AUTH_AUDIT_EMAIL_BIND_START: &str = "auth.email_bind_start";
 const AUTH_AUDIT_LOCAL_DATA_CLAIM: &str = "auth.local_data_claim";
+const CODEX_HOST_FIXED_TASK_EXCEPTION_EMAIL_TO: &str = "soulzyn@qq.com";
 const PUBLIC_DATASET_WARNING: &str = "该数据集是公开数据集，所有用户可见";
 const MODEL_GATEWAY_DEFAULT_LANE: &str = MODEL_LANE_ASSISTANT_CHAT;
 
@@ -9632,6 +9639,10 @@ async fn create_assistant_run(
             .await
             .map_err(ApiError::from_storage)?;
     }
+    let react_event_names = react_events
+        .iter()
+        .map(|event| event.event_name.clone())
+        .collect::<Vec<_>>();
     for event in react_events {
         state
             .storage
@@ -9647,6 +9658,36 @@ async fn create_assistant_run(
             )
             .await
             .map_err(ApiError::from_storage)?;
+    }
+    if let Some(case_package) = assistant_run_answer_quality_low_quality_case_package(
+        run.id,
+        &request,
+        &selected_scope,
+        &evidence_state,
+        &output_artifacts,
+        &react_event_names,
+    ) {
+        let enqueue_case_package = case_package.clone();
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.answer_quality_autofix.case_collected".to_string(),
+                    payload: case_package,
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        assistant_run_answer_quality_autofix_enqueue_if_enabled(
+            &state,
+            run.id,
+            &enqueue_case_package,
+        )
+        .await?;
     }
     state
         .storage
@@ -22976,22 +23017,26 @@ async fn create_static_page_image_job_for_draft(
     mut draft: StaticPageDraft,
     request: CreateStaticPageImageJobRequest,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
-    if let Some((reason, details)) = static_page_preview_data_quality_gate_for_draft(&draft) {
-        return Err(ApiError::bad_request_with_details(
-            "static_page_preview_data_quality_gate",
-            reason,
-            details,
-        ));
-    }
-    if !request.image_prompt_payload.is_null() {
-        if let Some((reason, details)) =
-            static_page_preview_data_quality_gate_for_payload(&request.image_prompt_payload)
-        {
+    let prompt_only_preview =
+        static_page_image_prompt_payload_is_prompt_only(&request.image_prompt_payload);
+    if !prompt_only_preview {
+        if let Some((reason, details)) = static_page_preview_data_quality_gate_for_draft(&draft) {
             return Err(ApiError::bad_request_with_details(
                 "static_page_preview_data_quality_gate",
                 reason,
                 details,
             ));
+        }
+        if !request.image_prompt_payload.is_null() {
+            if let Some((reason, details)) =
+                static_page_preview_data_quality_gate_for_payload(&request.image_prompt_payload)
+            {
+                return Err(ApiError::bad_request_with_details(
+                    "static_page_preview_data_quality_gate",
+                    reason,
+                    details,
+                ));
+            }
         }
     }
 
@@ -27049,6 +27094,1045 @@ fn assistant_run_replace_assistant_message_content(
         "source": "answer_quality_gate_exhausted_controlled_fallback",
     }));
     output_artifacts
+}
+
+fn assistant_run_answer_quality_low_quality_case_package(
+    assistant_run_id: AssistantRunId,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    evidence_state: &Value,
+    output_artifacts: &[Value],
+    event_names: &[String],
+) -> Option<Value> {
+    let answer = assistant_run_assistant_message_content_from_artifacts(output_artifacts)
+        .unwrap_or_default();
+    let mut signals = Vec::<String>::new();
+    if assistant_run_request_expresses_strong_complaint(request) {
+        signals.push("strong_user_complaint".to_string());
+    } else if assistant_run_request_expresses_dissatisfaction(request) {
+        signals.push("user_complaint".to_string());
+    }
+    if let Some(reason) =
+        assistant_run_answer_quality_retry_reason(&answer, evidence_state, request)
+    {
+        signals.push(match reason {
+            "internal_marker_answer" => "unsafe_internal_marker_answer".to_string(),
+            "insufficient_or_uncertain_answer" => "weak_insufficient_evidence_answer".to_string(),
+            other => format!("answer_quality_{other}"),
+        });
+    }
+    if event_names
+        .iter()
+        .any(|event| event.contains("answer_quality_gate.retry_exhausted"))
+    {
+        signals.push("retry_exhausted".to_string());
+    }
+    if event_names
+        .iter()
+        .any(|event| event.contains("answer_quality_gate.exhausted_controlled_fallback"))
+    {
+        signals.push("controlled_fallback_used".to_string());
+    }
+    let upgrade_parse_attempted = event_names
+        .iter()
+        .any(|event| event.contains("upgrade_parse_vlm"));
+    if assistant_run_supply_quality_suggests_parse_recovery(evidence_state)
+        && !upgrade_parse_attempted
+    {
+        signals.push("parse_quality_degraded_without_upgrade".to_string());
+    }
+    signals.sort();
+    signals.dedup();
+    if signals.is_empty() {
+        return None;
+    }
+    let supply_quality = evidence_state
+        .get("supply_quality")
+        .cloned()
+        .unwrap_or(Value::Null);
+    Some(json!({
+        "template_id": "answer_quality_autofix",
+        "status": "collected",
+        "assistant_run_id": assistant_run_id.to_string(),
+        "low_quality_signals": signals,
+        "user_question": truncate_assistant_supply_text(&request.prompt, 800),
+        "customer_answer_excerpt": truncate_assistant_supply_text(&answer, 1000),
+        "selected_scope_summary": assistant_run_answer_quality_case_selected_scope_summary(selected_scope),
+        "evidence_summary": {
+            "supply_quality": supply_quality,
+            "answer_supply_sources": assistant_run_answer_quality_case_supply_sources(evidence_state),
+            "retrieval_or_fact_snapshot_status": assistant_run_answer_quality_case_supply_status(evidence_state),
+        },
+        "trace_summary": {
+            "events": event_names.iter().take(24).cloned().collect::<Vec<_>>(),
+            "quality_gate_events": event_names.iter().filter(|event| event.contains("answer_quality_gate")).take(12).cloned().collect::<Vec<_>>(),
+        },
+        "blocking_gate_enabled": false,
+    }))
+}
+
+fn assistant_run_answer_quality_autofix_fixed_task_from_case(
+    case_package: &Value,
+) -> Option<CodexHostFixedTaskTemplateContextView> {
+    if case_package.get("template_id").and_then(Value::as_str) != Some("answer_quality_autofix") {
+        return None;
+    }
+    let case_id = case_package
+        .get("case_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            case_package
+                .get("assistant_run_id")
+                .and_then(Value::as_str)
+                .map(|run_id| format!("assistant-run-{run_id}"))
+        });
+    Some(CodexHostFixedTaskTemplateContextView {
+        template_id: CodexHostFixedTaskTemplateIdView::AnswerQualityAutofix,
+        version: 1,
+        assistant_run_id: case_package
+            .get("assistant_run_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        draft_id: None,
+        case_id,
+        dataset_scope: Value::Null,
+        requirements: Value::Null,
+        image2: Value::Null,
+        policies: Value::Null,
+        low_quality_signals: value_array(
+            case_package
+                .get("low_quality_signals")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect(),
+        user_question: case_package
+            .get("user_question")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        customer_answer: case_package
+            .get("customer_answer_excerpt")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        evidence_summary: case_package
+            .get("evidence_summary")
+            .cloned()
+            .unwrap_or(Value::Null),
+        trace_summary: case_package
+            .get("trace_summary")
+            .cloned()
+            .unwrap_or(Value::Null),
+        allowed_write_scope: Some(assistant_run_answer_quality_autofix_allowed_write_scope()),
+        human_review_policy:
+            CodexHostFixedTaskHumanReviewPolicyView::AutoForDiagnosisAndPatchProposal,
+    })
+}
+
+fn assistant_run_answer_quality_autofix_allowed_write_scope() -> CodexHostFixedTaskWriteScopeView {
+    CodexHostFixedTaskWriteScopeView {
+        files: vec![
+            "crates/platform-api/src/lib.rs".to_string(),
+            "fixtures/document-quality/**".to_string(),
+            "scripts/run-document-quality-smoke.ps1".to_string(),
+            "scripts/run-v3-quality-gate-smoke.ps1".to_string(),
+            "docs/validation/**".to_string(),
+        ],
+        symbols: vec![
+            "assistant_run_answer_quality_*".to_string(),
+            "assistant_run_react_*".to_string(),
+            "assistant_run_supply_quality_*".to_string(),
+        ],
+    }
+}
+
+async fn assistant_run_answer_quality_autofix_enqueue_if_enabled(
+    state: &AppState,
+    assistant_run_id: AssistantRunId,
+    case_package: &Value,
+) -> std::result::Result<(), ApiError> {
+    let Some(fixed_task) = assistant_run_answer_quality_autofix_fixed_task_from_case(case_package)
+    else {
+        return Ok(());
+    };
+    let capability = fixed_task.template_id.as_str();
+    if !platform_env_flag("CODEX_HOST_TASK_ENABLED", false) {
+        return Ok(());
+    }
+    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
+        record_codex_host_fixed_task_preflight_rejected(
+            state,
+            assistant_run_id,
+            Some(capability),
+            &fixed_task,
+            "codex_host_task_not_allowlisted",
+        )
+        .await;
+        return Ok(());
+    }
+
+    let (execution, initial_event) = assistant_run_answer_quality_autofix_codex_execution(
+        state.tenant_id,
+        &state.workflow_catalog,
+        assistant_run_id,
+        fixed_task,
+    )?;
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+    Ok(())
+}
+
+fn assistant_run_answer_quality_autofix_codex_execution(
+    tenant_id: TenantId,
+    workflow_catalog: &WorkflowCatalog,
+    assistant_run_id: AssistantRunId,
+    fixed_task: CodexHostFixedTaskTemplateContextView,
+) -> std::result::Result<(WorkflowExecution, WorkflowEventRecord), ApiError> {
+    let definition = workflow_catalog
+        .find_definition(WorkflowKind::CodexHostTask)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "codex_host_task workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let capability = fixed_task.template_id.as_str().to_string();
+    let request = CodexHostTaskRequestView {
+        assistant_run_id,
+        capability: capability.clone(),
+        task: Some(
+            "Diagnose this V3 low-quality answer case and produce only the fixed template output."
+                .to_string(),
+        ),
+        local_thread_id: None,
+        fixed_task: Some(fixed_task),
+        task_memory_policy: CodexHostTaskMemoryPolicyView::task_scoped(
+            assistant_run_id,
+            execution_id,
+        ),
+        safety: CodexHostTaskSafetyPolicyView::default(),
+    };
+    let mut context = match request.to_workflow_context() {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    let execution = WorkflowExecution {
+        id: execution_id,
+        tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::CodexHostTask,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    };
+    let initial_event = codex_host_fixed_task_created_event(&execution, assistant_run_id);
+    Ok((execution, initial_event))
+}
+
+fn codex_host_fixed_task_created_event(
+    execution: &WorkflowExecution,
+    assistant_run_id: AssistantRunId,
+) -> WorkflowEventRecord {
+    WorkflowEventRecord {
+        id: domain_model::WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "codex_host_task.created".to_string(),
+        payload: json!({
+            "kind": execution.kind.as_str(),
+            "version": execution.version,
+            "status": execution.status.as_str(),
+            "stage": execution.stage,
+            "assistant_run_id": assistant_run_id.to_string(),
+            "capability": execution.context.get("capability").cloned().unwrap_or(Value::Null),
+            "template_id": execution.context.get("template_id").cloned().unwrap_or(Value::Null),
+            "task_memory_policy": execution.context.get("task_memory_policy").cloned().unwrap_or(Value::Null),
+            "task_memory_space_id": execution.context.get("task_memory_space_id").cloned().unwrap_or(Value::Null),
+        }),
+        created_at: execution.created_at,
+    }
+}
+
+fn platform_env_flag(key: &str, default_value: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(default_value)
+}
+
+fn assistant_run_answer_quality_autofix_output_validation(output: &Value) -> Value {
+    if output.get("template_id").and_then(Value::as_str) != Some("answer_quality_autofix") {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "template_id_mismatch"
+        });
+    }
+    let status = output
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("failed");
+    if !matches!(
+        status,
+        "patch_ready" | "needs_human" | "not_system_defect" | "failed"
+    ) {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "unknown_status"
+        });
+    }
+    if status == "not_system_defect" {
+        return json!({
+            "accepted": true,
+            "status": status,
+            "auto_apply_allowed": false,
+            "reason": output.get("failure_type").and_then(Value::as_str).unwrap_or("not_system_defect")
+        });
+    }
+    if status != "patch_ready" {
+        return json!({
+            "accepted": true,
+            "status": status,
+            "auto_apply_allowed": false,
+            "reason": output.get("human_review_reason").and_then(Value::as_str).unwrap_or(status)
+        });
+    }
+    let changed_files = value_array(output.get("changed_files").cloned().unwrap_or(Value::Null))
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    if changed_files.is_empty() {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "changed_files_required"
+        });
+    }
+    if changed_files
+        .iter()
+        .any(|file| !assistant_run_answer_quality_autofix_file_allowed(file))
+    {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "changed_file_outside_allowlist"
+        });
+    }
+    let tests_added = value_array(output.get("tests_added").cloned().unwrap_or(Value::Null));
+    let test_commands = value_array(output.get("test_commands").cloned().unwrap_or(Value::Null));
+    if tests_added.is_empty() || test_commands.is_empty() {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "tests_required"
+        });
+    }
+    let risk_level = output
+        .get("risk_level")
+        .and_then(Value::as_str)
+        .unwrap_or("medium");
+    if risk_level != "low" {
+        return json!({
+            "accepted": true,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "risk_requires_human_review"
+        });
+    }
+    json!({
+        "accepted": true,
+        "status": "patch_ready",
+        "auto_apply_allowed": true,
+        "reason": "low_risk_allowlisted_patch_with_tests"
+    })
+}
+
+fn assistant_run_answer_quality_autofix_file_allowed(file: &str) -> bool {
+    matches!(
+        file,
+        "crates/platform-api/src/lib.rs"
+            | "fixtures/document-quality/**"
+            | "scripts/run-document-quality-smoke.ps1"
+            | "scripts/run-v3-quality-gate-smoke.ps1"
+            | "docs/validation/**"
+    ) || file.starts_with("fixtures/document-quality/")
+        || file.starts_with("docs/validation/")
+}
+
+#[derive(Debug, Clone)]
+struct CodexHostFixedTaskAuditEvent {
+    event_name: String,
+    payload: Value,
+    notify_human: bool,
+}
+
+fn codex_host_fixed_task_transition_audit_event(
+    execution: &WorkflowExecution,
+    workflow_event: &WorkflowEventRecord,
+    enqueued_task_count: usize,
+) -> Option<CodexHostFixedTaskAuditEvent> {
+    if execution.kind != WorkflowKind::CodexHostTask {
+        return None;
+    }
+    let fixed_task = execution
+        .context
+        .get("fixed_task")
+        .filter(|value| value.is_object())?;
+    let template_id = codex_host_fixed_task_template_id_from_context(&execution.context)?;
+    let assistant_run_id = execution
+        .context
+        .get("assistant_run_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let capability = execution
+        .context
+        .get("capability")
+        .and_then(Value::as_str)
+        .unwrap_or(template_id.as_str());
+
+    if workflow_event.event_name == "workflow.started" {
+        let payload = codex_host_fixed_task_base_payload(
+            execution,
+            assistant_run_id.as_deref(),
+            capability,
+            fixed_task,
+            &template_id,
+            "queued",
+        )
+        .with_extra(json!({
+            "workflow_event_name": workflow_event.event_name,
+            "enqueued_task_count": enqueued_task_count,
+        }));
+        return Some(CodexHostFixedTaskAuditEvent {
+            event_name: "codex_host.fixed_task.queued".to_string(),
+            payload,
+            notify_human: false,
+        });
+    }
+
+    if workflow_event.event_name != "workflow.step_completed" {
+        return None;
+    }
+
+    let output = execution.context.get("last_output");
+    let extracted =
+        output.and_then(|value| codex_host_fixed_task_extract_output(&template_id, value));
+    let validation = codex_host_fixed_task_sanitize_validation(
+        codex_host_fixed_task_output_validation_summary(&template_id, extracted),
+    );
+    let output_summary = codex_host_fixed_task_output_summary(extracted);
+    let accepted = validation
+        .get("accepted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let output_status = output_summary
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("failed");
+    let event_name = if !accepted || output_status == "failed" {
+        "codex_host.fixed_task.rejected"
+    } else if output_status == "needs_human" {
+        "codex_host.fixed_task.needs_human"
+    } else {
+        "codex_host.fixed_task.completed"
+    };
+    let status = match event_name {
+        "codex_host.fixed_task.completed" => output_status,
+        "codex_host.fixed_task.needs_human" => "needs_human",
+        _ => "rejected",
+    };
+    let payload = codex_host_fixed_task_base_payload(
+        execution,
+        assistant_run_id.as_deref(),
+        capability,
+        fixed_task,
+        &template_id,
+        status,
+    )
+    .with_extra(json!({
+        "workflow_event_name": workflow_event.event_name,
+        "output": output_summary,
+        "validation": validation,
+    }));
+
+    Some(CodexHostFixedTaskAuditEvent {
+        event_name: event_name.to_string(),
+        payload,
+        notify_human: event_name != "codex_host.fixed_task.completed",
+    })
+}
+
+trait JsonObjectExtra {
+    fn with_extra(self, extra: Value) -> Value;
+}
+
+impl JsonObjectExtra for Value {
+    fn with_extra(mut self, extra: Value) -> Value {
+        if let (Some(target), Some(extra)) = (self.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        self
+    }
+}
+
+fn codex_host_fixed_task_template_id_from_context(context: &Value) -> Option<String> {
+    context
+        .get("template_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            context
+                .pointer("/fixed_task/template_id")
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+}
+
+fn codex_host_fixed_task_base_payload(
+    execution: &WorkflowExecution,
+    assistant_run_id: Option<&str>,
+    capability: &str,
+    fixed_task: &Value,
+    template_id: &str,
+    status: &str,
+) -> Value {
+    let allowed_write_file_count = fixed_task
+        .pointer("/allowed_write_scope/files")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    json!({
+        "template_id": template_id,
+        "assistant_run_id": assistant_run_id,
+        "workflow_execution_id": execution.id.to_string(),
+        "capability": capability,
+        "status": status,
+        "human_review_policy": fixed_task
+            .get("human_review_policy")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "publish_mode": fixed_task
+            .pointer("/policies/publish_mode")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "allowed_write_file_count": allowed_write_file_count,
+        "raw_prompt_exposed": false,
+        "raw_diff_exposed": false,
+        "provider_logs_exposed": false,
+        "secrets_exposed": false,
+    })
+}
+
+fn codex_host_fixed_task_extract_output<'a>(
+    template_id: &str,
+    output: &'a Value,
+) -> Option<&'a Value> {
+    if output.get("template_id").and_then(Value::as_str) == Some(template_id) {
+        return Some(output);
+    }
+    for field in [
+        "fixed_task_output",
+        "fixedTaskOutput",
+        "template_output",
+        "templateOutput",
+        "result",
+        "output",
+    ] {
+        if let Some(value) = output.get(field) {
+            if let Some(extracted) = codex_host_fixed_task_extract_output(template_id, value) {
+                return Some(extracted);
+            }
+        }
+    }
+    None
+}
+
+fn codex_host_fixed_task_output_validation_summary(
+    template_id: &str,
+    output: Option<&Value>,
+) -> Value {
+    let Some(output) = output else {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "fixed_task_output_missing"
+        });
+    };
+    if output.get("template_id").and_then(Value::as_str) != Some(template_id) {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "template_id_mismatch"
+        });
+    }
+    match template_id {
+        "answer_quality_autofix" => assistant_run_answer_quality_autofix_output_validation(output),
+        "static_page_image2_data_publish" => {
+            let status = output
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("failed");
+            if !matches!(status, "success" | "needs_human" | "failed") {
+                return json!({
+                    "accepted": false,
+                    "status": "needs_human",
+                    "auto_apply_allowed": false,
+                    "reason": "unknown_status"
+                });
+            }
+            if status == "needs_human" {
+                return json!({
+                    "accepted": true,
+                    "status": "needs_human",
+                    "auto_apply_allowed": false,
+                    "reason": output
+                        .get("human_review_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("human_review_requested")
+                });
+            }
+            if status == "failed" {
+                return json!({
+                    "accepted": true,
+                    "status": "failed",
+                    "auto_apply_allowed": false,
+                    "reason": output
+                        .get("human_review_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("host_failed")
+                });
+            }
+            let public_url = output
+                .pointer("/artifact/public_url")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !codex_host_fixed_task_public_artifact_url_allowed(public_url) {
+                return json!({
+                    "accepted": false,
+                    "status": "needs_human",
+                    "auto_apply_allowed": false,
+                    "reason": "artifact_public_url_not_generated_artifact"
+                });
+            }
+            if output.get("validation_report").is_none() {
+                return json!({
+                    "accepted": false,
+                    "status": "needs_human",
+                    "auto_apply_allowed": false,
+                    "reason": "validation_report_required"
+                });
+            }
+            json!({
+                "accepted": true,
+                "status": "success",
+                "auto_apply_allowed": true,
+                "reason": "new_generated_artifact_validated"
+            })
+        }
+        _ => json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "reason": "unknown_template_id"
+        }),
+    }
+}
+
+fn codex_host_fixed_task_sanitize_validation(mut validation: Value) -> Value {
+    if let Some(reason) = validation.get("reason").and_then(Value::as_str) {
+        validation["reason"] = Value::String(codex_host_fixed_task_safe_text(reason));
+    }
+    validation
+}
+
+fn codex_host_fixed_task_public_artifact_url_allowed(public_url: &str) -> bool {
+    public_url.starts_with("https://v3.elepcloud.com/generated-artifacts/")
+        || public_url.starts_with("/generated-artifacts/")
+}
+
+fn codex_host_fixed_task_output_summary(output: Option<&Value>) -> Value {
+    let Some(output) = output else {
+        return json!({
+            "status": "missing",
+            "artifact_public_url": Value::Null,
+            "changed_file_count": 0,
+            "test_commands": [],
+            "human_review_reason": "fixed_task_output_missing",
+        });
+    };
+    let changed_files = value_array(output.get("changed_files").cloned().unwrap_or(Value::Null));
+    let test_commands = value_array(output.get("test_commands").cloned().unwrap_or(Value::Null))
+        .into_iter()
+        .filter_map(|value| value.as_str().map(codex_host_fixed_task_safe_text))
+        .collect::<Vec<_>>();
+    let warnings = value_array(
+        output
+            .pointer("/validation_report/warnings")
+            .cloned()
+            .unwrap_or(Value::Null),
+    )
+    .into_iter()
+    .filter_map(|value| value.as_str().map(codex_host_fixed_task_safe_text))
+    .collect::<Vec<_>>();
+    json!({
+        "status": output.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+        "artifact_public_url": output
+            .pointer("/artifact/public_url")
+            .and_then(Value::as_str)
+            .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        "latest_snapshot": output
+            .pointer("/validation_report/latest_snapshot")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "source_row_count": output
+            .pointer("/validation_report/source_row_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "current_state_row_count": output
+            .pointer("/validation_report/current_state_row_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "detail_row_count": output
+            .pointer("/validation_report/detail_row_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "unit_policy": output
+            .pointer("/validation_report/unit_policy")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "changed_file_count": changed_files.len(),
+        "tests_added_count": value_array(output.get("tests_added").cloned().unwrap_or(Value::Null)).len(),
+        "test_commands": test_commands,
+        "risk_level": output.get("risk_level").cloned().unwrap_or(Value::Null),
+        "failure_type": output.get("failure_type").cloned().unwrap_or(Value::Null),
+        "human_review_reason": output
+            .get("human_review_reason")
+            .and_then(Value::as_str)
+            .map(codex_host_fixed_task_safe_text)
+            .unwrap_or_else(|| "".to_string()),
+        "warnings": warnings,
+    })
+}
+
+fn codex_host_fixed_task_safe_text(value: &str) -> String {
+    let compact = truncate_assistant_supply_text(value, 500);
+    let lowered = compact.to_ascii_lowercase();
+    if lowered.contains("database_url")
+        || lowered.contains("postgres://")
+        || lowered.contains("mysql://")
+        || lowered.contains("sk-")
+        || lowered.contains("api_token")
+        || lowered.contains("authorization:")
+        || lowered.contains("bearer ")
+    {
+        "[redacted]".to_string()
+    } else {
+        compact
+    }
+}
+
+async fn record_codex_host_fixed_task_audit_event(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    event: CodexHostFixedTaskAuditEvent,
+) -> std::result::Result<(), ApiError> {
+    let Some(assistant_run_id) = event
+        .payload
+        .get("assistant_run_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(AssistantRunId)
+    else {
+        return Ok(());
+    };
+    storage
+        .assistant_runs()
+        .append_event(
+            tenant_id,
+            assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: event.event_name.clone(),
+                payload: event.payload.clone(),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    if event.notify_human {
+        send_codex_host_fixed_task_exception_email(&event.event_name, &event.payload);
+    }
+    Ok(())
+}
+
+pub(crate) async fn record_codex_host_fixed_task_preflight_rejected(
+    state: &AppState,
+    assistant_run_id: AssistantRunId,
+    capability: Option<&str>,
+    fixed_task: &CodexHostFixedTaskTemplateContextView,
+    reason: &str,
+) {
+    let fixed_task_value = serde_json::to_value(fixed_task).unwrap_or(Value::Null);
+    let mut execution = WorkflowExecution {
+        id: WorkflowExecutionId::new(),
+        tenant_id: state.tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::CodexHostTask,
+        version: "0.1.0".to_string(),
+        stage: "preflight_rejected".to_string(),
+        status: WorkflowStatus::Failed,
+        attempt: 0,
+        context: json!({
+            "assistant_run_id": assistant_run_id.to_string(),
+            "capability": capability.unwrap_or_else(|| fixed_task.template_id.as_str()),
+            "template_id": fixed_task.template_id.as_str(),
+            "fixed_task": fixed_task_value,
+        }),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    execution.context["last_output"] = json!({
+        "template_id": fixed_task.template_id.as_str(),
+        "status": "failed",
+        "human_review_reason": codex_host_fixed_task_safe_text(reason),
+    });
+    let workflow_event = WorkflowEventRecord {
+        id: domain_model::WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "workflow.step_completed".to_string(),
+        payload: json!({"task_key": "preflight"}),
+        created_at: Utc::now(),
+    };
+    let Some(mut event) =
+        codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+    else {
+        return;
+    };
+    event.payload["preflight_rejection"] = Value::Bool(true);
+    event.payload["validation"] = json!({
+        "accepted": false,
+        "status": "needs_human",
+        "auto_apply_allowed": false,
+        "reason": codex_host_fixed_task_safe_text(reason),
+    });
+    if let Err(error) =
+        record_codex_host_fixed_task_audit_event(&state.storage, state.tenant_id, event).await
+    {
+        tracing::warn!(%error, "failed to record Codex Host fixed task preflight rejection");
+    }
+}
+
+fn send_codex_host_fixed_task_exception_email(event_name: &str, payload: &Value) {
+    let recipient = std::env::var("CODEX_HOST_FIXED_TASK_EXCEPTION_EMAIL_TO")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| CODEX_HOST_FIXED_TASK_EXCEPTION_EMAIL_TO.to_string());
+    let template_id = payload
+        .get("template_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let reason = payload
+        .pointer("/validation/reason")
+        .or_else(|| payload.pointer("/output/human_review_reason"))
+        .and_then(Value::as_str)
+        .map(codex_host_fixed_task_safe_text)
+        .unwrap_or_else(|| "需要人工确认".to_string());
+    let public_url = payload
+        .pointer("/output/artifact_public_url")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let changed_file_count = payload
+        .pointer("/output/changed_file_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let text = format!(
+        "V3 固定 Codex 任务需要人工处理。\n\n事件：{event_name}\n模板：{template_id}\n状态：{status}\n原因：{reason}\n运行：{}\n公开产物：{}\n变更文件数：{}\n\n该邮件只包含审计摘要，不包含原始 prompt、diff、provider 日志或密钥。",
+        payload
+            .get("workflow_execution_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        if public_url.is_empty() { "无" } else { public_url },
+        changed_file_count,
+    );
+    let message = OperationalEmailMessage {
+        to: recipient,
+        subject: format!("V3 Codex 固定任务需要处理：{template_id}"),
+        text,
+        html: None,
+    };
+    if let Err(error) = send_operational_email(&message) {
+        tracing::warn!(%error, event_name, template_id, "Codex Host fixed task exception email failed");
+    }
+}
+
+fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) -> Value {
+    let fixed_events = events
+        .iter()
+        .filter(|event| event.event_name.starts_with("codex_host.fixed_task."))
+        .collect::<Vec<_>>();
+    let latest = fixed_events.last().copied();
+    let recent = fixed_events
+        .iter()
+        .rev()
+        .take(8)
+        .map(|event| {
+            json!({
+                "event_id": event.id.to_string(),
+                "sequence_no": event.sequence_no,
+                "event_name": event.event_name.clone(),
+                "template_id": event.payload.get("template_id").cloned().unwrap_or(Value::Null),
+                "status": event.payload.get("status").cloned().unwrap_or(Value::Null),
+                "artifact_public_url": event
+                    .payload
+                    .pointer("/output/artifact_public_url")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "changed_file_count": event
+                    .payload
+                    .pointer("/output/changed_file_count")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "test_commands": event
+                    .payload
+                    .pointer("/output/test_commands")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+                "human_review_reason": event
+                    .payload
+                    .pointer("/output/human_review_reason")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "validation_reason": event
+                    .payload
+                    .pointer("/validation/reason")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "event_count": fixed_events.len(),
+        "queued_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.queued").count(),
+        "completed_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.completed").count(),
+        "needs_human_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.needs_human").count(),
+        "rejected_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.rejected").count(),
+        "latest": latest.map(|event| {
+            json!({
+                "event_name": event.event_name.clone(),
+                "template_id": event.payload.get("template_id").cloned().unwrap_or(Value::Null),
+                "status": event.payload.get("status").cloned().unwrap_or(Value::Null),
+                "validation_reason": event.payload.pointer("/validation/reason").cloned().unwrap_or(Value::Null),
+            })
+        }).unwrap_or(Value::Null),
+        "recent": recent,
+    })
+}
+
+fn assistant_run_answer_quality_case_selected_scope_summary(selected_scope: &Value) -> Value {
+    json!({
+        "mode": selected_scope.get("mode").cloned().unwrap_or(Value::Null),
+        "dataset_count": value_array(selected_scope.get("datasets").cloned().unwrap_or(Value::Null)).len(),
+        "document_count": value_array(selected_scope.get("documents").cloned().unwrap_or(Value::Null)).len(),
+        "database_source_count": value_array(selected_scope.get("database_sources").cloned().unwrap_or(Value::Null)).len(),
+    })
+}
+
+fn assistant_run_answer_quality_case_supply_sources(evidence_state: &Value) -> Vec<String> {
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return Vec::new();
+    };
+    let mut sources = Vec::new();
+    for (field, source) in [
+        ("indexedEvidenceCount", "retrieval_evidence"),
+        ("indexed_evidence_count", "retrieval_evidence"),
+        ("datasetEntityScanCount", "dataset_entity_scan"),
+        ("dataset_entity_scan_count", "dataset_entity_scan"),
+        ("datasetFactSnapshotCount", "dataset_fact_snapshot"),
+        ("dataset_fact_snapshot_count", "dataset_fact_snapshot"),
+        ("spreadsheetRowAnalysisCount", "spreadsheet_row_analysis"),
+        ("spreadsheet_row_analysis_count", "spreadsheet_row_analysis"),
+        ("mediaContextCount", "media_context"),
+        ("media_context_count", "media_context"),
+    ] {
+        if supply_quality
+            .get(field)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+            && !sources.iter().any(|existing| existing == source)
+        {
+            sources.push(source.to_string());
+        }
+    }
+    sources
+}
+
+fn assistant_run_answer_quality_case_supply_status(evidence_state: &Value) -> String {
+    let Some(supply_quality) = evidence_state.get("supply_quality") else {
+        return "unknown".to_string();
+    };
+    if supply_quality
+        .get("datasetFactSnapshotCount")
+        .or_else(|| supply_quality.get("dataset_fact_snapshot_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        > 0
+    {
+        return "fact_snapshot_available".to_string();
+    }
+    if supply_quality
+        .get("spreadsheetRowAnalysisCount")
+        .or_else(|| supply_quality.get("spreadsheet_row_analysis_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        > 0
+    {
+        return "spreadsheet_row_analysis_available".to_string();
+    }
+    supply_quality
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 fn assistant_run_answer_quality_exhausted_controlled_answer(
@@ -41362,6 +42446,13 @@ pub async fn apply_workflow_signal_with_dependencies(
         &persisted_tasks,
     )
     .await;
+    if let Some(event) = codex_host_fixed_task_transition_audit_event(
+        &next_execution,
+        &persisted_event,
+        persisted_tasks.len(),
+    ) {
+        record_codex_host_fixed_task_audit_event(storage, tenant_id, event).await?;
+    }
 
     Ok(AdvanceWorkflowExecutionResponse {
         execution: to_workflow_execution_view(next_execution),
@@ -48823,6 +49914,7 @@ fn assistant_run_codex_detail_diagnostics(events: &[AssistantRunEvent]) -> Value
         "model_gateway_gate": model_gateway_gate,
         "host_validation_summary": host_validation_summary,
         "host_validation_results": host_validation_results,
+        "fixed_tasks": assistant_run_codex_fixed_task_event_summary(events),
         "promotion_gate": promotion_gate,
         "mutation_allowed": false,
         "queue_allowed": false,
@@ -50173,7 +51265,10 @@ fn assistant_run_codex_host_validation_result_completed(result: &Value) -> bool 
 }
 
 fn assistant_run_codex_host_kind_is_allowed(host_kind: Option<&str>) -> bool {
-    matches!(host_kind, Some("windows_jump" | "mac_host"))
+    matches!(
+        host_kind,
+        Some("windows_jump" | "mac_host" | "cloudflare_codex")
+    )
 }
 
 fn assistant_run_codex_host_output_payload(payload: &Value) -> Option<&Value> {
@@ -51971,6 +53066,8 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         "assistant_run_id": draft.assistant_run_id,
         "title": draft.title,
         "prompt": prompt.map(str::trim).filter(|value| !value.is_empty()),
+        "promptText": prompt.map(str::trim).filter(|value| !value.is_empty()),
+        "prompt_text": prompt.map(str::trim).filter(|value| !value.is_empty()),
         "style_direction": style_direction,
         "visual_spec": visual_spec,
         "render_spec": render_spec,
@@ -51979,8 +53076,13 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         "design_contract": {
             "contract_source": "StaticPageDraft",
             "visual_source": "effect image is a preview contract, not final source code",
-            "final_source": "draft_payload visual_spec/render_spec/modules/data_snapshot",
+            "final_source": "confirmed effect image visual blueprint + real data_snapshot",
             "editable_core": "DOM text + SVG/chart components + safe ECharts JSON options",
+        },
+        "image_first_contract": {
+            "role": "requirements_to_image2_then_image_to_html",
+            "rule": "Generate the effect image from requirements first; after confirmation, infer the visual layout from the image and bind real data_snapshot into HTML.",
+            "fake_data_allowed": false
         },
         "selected_scope": draft.selected_scope,
         "visibility_snapshot": draft.visibility_snapshot,
@@ -51989,6 +53091,14 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         "data_bindings": payload.get("data_bindings").cloned().unwrap_or_else(|| json!([])),
         "queue_copy": "资源正在排队，可以联系商务开通高级用户跳过等待。",
     })
+}
+
+fn static_page_image_prompt_payload_is_prompt_only(payload: &Value) -> bool {
+    payload
+        .get("promptOnly")
+        .or_else(|| payload.get("prompt_only"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn static_page_preview_data_quality_gate_for_draft(
@@ -52194,7 +53304,7 @@ fn static_page_preview_data_quality_message(modules: &[Value]) -> String {
         .join("、");
     let suffix = format!(" {} 个模块", modules.len());
     format!(
-        "当前静态页还有{suffix}的数据绑定未达到效果图生成要求：{labels}。请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据。"
+        "当前静态页还有{suffix}的数据绑定未达到效果图生成要求：{labels}。请先让 V3 补充样本行、重新匹配字段，或检索/修复模块数据。"
     )
 }
 
@@ -61181,6 +62291,220 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_answer_quality_autofix_collects_user_complaint_case() {
+        let request = CreateAssistantRunRequest {
+            prompt: "你刚才答得客户不满意，重新说这份考勤表缺勤和工时长短。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["dataset-1"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_spreadsheet_row_analysis_evidence_state();
+        let output_artifacts = vec![json!({
+            "type": "assistant_message",
+            "content": "根据已解析的考勤明细，缺勤和工时情况如下。"
+        })];
+
+        let package = assistant_run_answer_quality_low_quality_case_package(
+            AssistantRunId::new(),
+            &request,
+            &json!({"mode": "user_selected", "datasets": ["dataset-1"]}),
+            &evidence_state,
+            &output_artifacts,
+            &[],
+        )
+        .expect("complaint should collect case");
+
+        assert_eq!(package["template_id"], json!("answer_quality_autofix"));
+        assert!(package["low_quality_signals"]
+            .as_array()
+            .expect("signals")
+            .iter()
+            .any(|signal| signal == "user_complaint"));
+        assert_eq!(package["blocking_gate_enabled"], json!(false));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_autofix_collects_weak_insufficient_case() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份考勤表里有哪些缺勤？工时最长和最短分别是谁？".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["dataset-1"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_spreadsheet_row_analysis_evidence_state();
+        let output_artifacts = vec![json!({
+            "type": "assistant_message",
+            "content": "当前资料不足，无法回答。"
+        })];
+
+        let package = assistant_run_answer_quality_low_quality_case_package(
+            AssistantRunId::new(),
+            &request,
+            &json!({"mode": "user_selected", "datasets": ["dataset-1"]}),
+            &evidence_state,
+            &output_artifacts,
+            &[],
+        )
+        .expect("weak answer should collect case");
+
+        assert!(package["low_quality_signals"]
+            .as_array()
+            .expect("signals")
+            .iter()
+            .any(|signal| signal == "weak_insufficient_evidence_answer"));
+        assert!(package["evidence_summary"]["answer_supply_sources"]
+            .as_array()
+            .expect("sources")
+            .iter()
+            .any(|source| source == "spreadsheet_row_analysis"));
+    }
+
+    #[test]
+    fn answer_quality_autofix_fixed_task_builds_allowlisted_package() {
+        let case_package = json!({
+            "template_id": "answer_quality_autofix",
+            "assistant_run_id": AssistantRunId::new().to_string(),
+            "low_quality_signals": ["weak_insufficient_evidence_answer"],
+            "user_question": "这份考勤表里有哪些缺勤？",
+            "customer_answer_excerpt": "当前资料不足，无法回答。",
+            "evidence_summary": {
+                "answer_supply_sources": ["spreadsheet_row_analysis"]
+            },
+            "trace_summary": {
+                "events": ["assistant_run.answer_quality_autofix.case_collected"]
+            }
+        });
+
+        let task =
+            assistant_run_answer_quality_autofix_fixed_task_from_case(&case_package).expect("task");
+        let encoded = serde_json::to_value(&task).expect("encoded");
+
+        assert_eq!(encoded["template_id"], json!("answer_quality_autofix"));
+        assert_eq!(
+            encoded["allowed_write_scope"]["files"][0],
+            json!("crates/platform-api/src/lib.rs")
+        );
+        assert_eq!(
+            encoded["human_review_policy"],
+            json!("auto_for_diagnosis_and_patch_proposal")
+        );
+    }
+
+    #[test]
+    fn answer_quality_autofix_codex_execution_embeds_fixed_template_context() {
+        let assistant_run_id = AssistantRunId::new();
+        let case_package = json!({
+            "template_id": "answer_quality_autofix",
+            "assistant_run_id": assistant_run_id.to_string(),
+            "low_quality_signals": ["user_complaint"],
+            "user_question": "客户说回答不对",
+            "customer_answer_excerpt": "资料不足。",
+            "evidence_summary": {"answer_supply_sources": ["dataset_fact_snapshot"]},
+            "trace_summary": {"events": ["assistant_run.answer_quality_autofix.case_collected"]}
+        });
+        let fixed_task = assistant_run_answer_quality_autofix_fixed_task_from_case(&case_package)
+            .expect("fixed task");
+
+        let (execution, initial_event) = assistant_run_answer_quality_autofix_codex_execution(
+            TenantId::new(),
+            &workflow_definitions::catalog(),
+            assistant_run_id,
+            fixed_task,
+        )
+        .expect("execution");
+
+        assert_eq!(execution.kind, WorkflowKind::CodexHostTask);
+        assert_eq!(
+            execution.context["capability"],
+            json!("answer_quality_autofix")
+        );
+        assert_eq!(
+            execution.context["template_id"],
+            json!("answer_quality_autofix")
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["allowed_write_scope"]["files"][0],
+            json!("crates/platform-api/src/lib.rs")
+        );
+        assert_eq!(
+            execution.context["task_memory_policy"]["kind"],
+            json!("task")
+        );
+        assert_eq!(
+            execution.context["task_memory_policy"]["isolated"],
+            json!(true)
+        );
+        assert_eq!(initial_event.event_name, "codex_host_task.created");
+        assert_eq!(
+            initial_event.payload["template_id"],
+            json!("answer_quality_autofix")
+        );
+    }
+
+    #[test]
+    fn answer_quality_autofix_output_marks_missing_source_as_not_system_defect() {
+        let decision = assistant_run_answer_quality_autofix_output_validation(&json!({
+            "template_id": "answer_quality_autofix",
+            "status": "not_system_defect",
+            "failure_type": "missing_source",
+            "root_cause": "source table was not selected"
+        }));
+
+        assert_eq!(decision["accepted"], json!(true));
+        assert_eq!(decision["status"], json!("not_system_defect"));
+        assert_eq!(decision["auto_apply_allowed"], json!(false));
+    }
+
+    #[test]
+    fn answer_quality_autofix_output_requires_allowlisted_files_and_tests() {
+        let outside = assistant_run_answer_quality_autofix_output_validation(&json!({
+            "template_id": "answer_quality_autofix",
+            "status": "patch_ready",
+            "changed_files": ["apps/web/app/globals.css"],
+            "tests_added": ["assistant_run_answer_quality_case"],
+            "test_commands": ["cargo test -p platform-api assistant_run_answer_quality --lib"],
+            "risk_level": "low"
+        }));
+        assert_eq!(outside["status"], json!("needs_human"));
+        assert_eq!(outside["reason"], json!("changed_file_outside_allowlist"));
+
+        let missing_tests = assistant_run_answer_quality_autofix_output_validation(&json!({
+            "template_id": "answer_quality_autofix",
+            "status": "patch_ready",
+            "changed_files": ["crates/platform-api/src/lib.rs"],
+            "tests_added": [],
+            "test_commands": ["cargo test -p platform-api assistant_run_answer_quality --lib"],
+            "risk_level": "low"
+        }));
+        assert_eq!(missing_tests["status"], json!("needs_human"));
+        assert_eq!(missing_tests["reason"], json!("tests_required"));
+    }
+
+    #[test]
+    fn answer_quality_autofix_output_allows_low_risk_patch_with_tests() {
+        let decision = assistant_run_answer_quality_autofix_output_validation(&json!({
+            "template_id": "answer_quality_autofix",
+            "status": "patch_ready",
+            "changed_files": ["crates/platform-api/src/lib.rs", "fixtures/document-quality/smoke-cases.json"],
+            "tests_added": ["assistant_run_answer_quality_autofix_collects_weak_insufficient_case"],
+            "test_commands": ["cargo test -p platform-api assistant_run_answer_quality --lib"],
+            "risk_level": "low"
+        }));
+
+        assert_eq!(decision["accepted"], json!(true));
+        assert_eq!(decision["status"], json!("patch_ready"));
+        assert_eq!(decision["auto_apply_allowed"], json!(true));
+    }
+
+    #[test]
     fn assistant_run_answer_quality_gate_allows_actual_parse_unavailable_answer() {
         let request = CreateAssistantRunRequest {
             prompt: "这份 PDF 写了什么".to_string(),
@@ -61404,6 +62728,19 @@ mod tests {
             &evidence_state,
             &request
         ));
+        let output_artifacts = vec![json!({
+            "type": "assistant_message",
+            "content": answer
+        })];
+        assert!(assistant_run_answer_quality_low_quality_case_package(
+            AssistantRunId::new(),
+            &request,
+            &json!({"mode": "user_selected", "datasets": ["dataset-1"]}),
+            &evidence_state,
+            &output_artifacts,
+            &[],
+        )
+        .is_none());
     }
 
     #[test]
@@ -66521,6 +67858,264 @@ mod tests {
         assert!(!serialized.contains("dataset://detail/raw-source-should-not-leak"));
         assert!(!serialized.contains("raw supply note should not leak"));
         assert!(!serialized.contains("raw supply guidance should not leak"));
+    }
+
+    fn codex_host_fixed_task_test_execution(
+        fixed_task: CodexHostFixedTaskTemplateContextView,
+        last_output: Option<Value>,
+    ) -> WorkflowExecution {
+        let assistant_run_id = fixed_task
+            .assistant_run_id
+            .clone()
+            .unwrap_or_else(|| AssistantRunId::new().to_string());
+        let mut context = json!({
+            "assistant_run_id": assistant_run_id,
+            "capability": fixed_task.template_id.as_str(),
+            "template_id": fixed_task.template_id.as_str(),
+            "fixed_task": serde_json::to_value(&fixed_task).expect("fixed task serializes"),
+        });
+        if let Some(last_output) = last_output {
+            context["last_output"] = last_output;
+        }
+        WorkflowExecution {
+            id: WorkflowExecutionId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: None,
+            report_plan_id: None,
+            kind: WorkflowKind::CodexHostTask,
+            version: "0.1.0".to_string(),
+            stage: "run_codex_host_task".to_string(),
+            status: WorkflowStatus::Running,
+            attempt: 1,
+            context,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn codex_host_fixed_task_test_workflow_event(
+        execution_id: WorkflowExecutionId,
+        event_name: &str,
+    ) -> WorkflowEventRecord {
+        WorkflowEventRecord {
+            id: domain_model::WorkflowEventId::new(),
+            execution_id,
+            sequence_no: 2,
+            event_name: event_name.to_string(),
+            payload: json!({"task_key": "run_codex_host_task"}),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn codex_host_fixed_task_queued_event_has_safe_template_summary() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.assistant_run_id = Some(AssistantRunId::new().to_string());
+        fixed_task.requirements = json!({"raw_prompt": "sk-should-not-leak"});
+        let execution = codex_host_fixed_task_test_execution(fixed_task, None);
+        let workflow_event =
+            codex_host_fixed_task_test_workflow_event(execution.id, "workflow.started");
+
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 1)
+            .expect("queued event");
+        let serialized = event.payload.to_string();
+
+        assert_eq!(event.event_name, "codex_host.fixed_task.queued");
+        assert_eq!(
+            event.payload["template_id"],
+            json!("static_page_image2_data_publish")
+        );
+        assert_eq!(event.payload["status"], json!("queued"));
+        assert_eq!(event.payload["enqueued_task_count"], json!(1));
+        assert_eq!(event.payload["raw_prompt_exposed"], json!(false));
+        assert!(!event.notify_human);
+        assert!(!serialized.contains("sk-should-not-leak"));
+    }
+
+    #[test]
+    fn codex_host_fixed_task_completed_event_summarizes_static_page_artifact() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.assistant_run_id = Some(AssistantRunId::new().to_string());
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "local_path": "target/database-static-pages/new/index.html",
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/new/index.html",
+                "manifest_path": "target/database-static-pages/new/manifest.json"
+            },
+            "validation_report": {
+                "snapshot_policy": "latest_snapshot_for_state_modules",
+                "latest_snapshot": "2026-05-10",
+                "source_row_count": 862,
+                "current_state_row_count": 851,
+                "detail_row_count": 40,
+                "unit_policy": "validate_raw_value_then_choose_wan_or_yi",
+                "warnings": []
+            }
+        });
+        let execution = codex_host_fixed_task_test_execution(fixed_task, Some(output));
+        let workflow_event =
+            codex_host_fixed_task_test_workflow_event(execution.id, "workflow.step_completed");
+
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+            .expect("completed event");
+
+        assert_eq!(event.event_name, "codex_host.fixed_task.completed");
+        assert_eq!(event.payload["status"], json!("success"));
+        assert_eq!(
+            event.payload["output"]["artifact_public_url"],
+            json!(
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/new/index.html"
+            )
+        );
+        assert_eq!(event.payload["output"]["source_row_count"], json!(862));
+        assert_eq!(
+            event.payload["validation"]["reason"],
+            json!("new_generated_artifact_validated")
+        );
+        assert!(!event.notify_human);
+    }
+
+    #[test]
+    fn codex_host_fixed_task_needs_human_event_redacts_reason_and_notifies() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.assistant_run_id = Some(AssistantRunId::new().to_string());
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "needs_human",
+            "human_review_reason": "DATABASE_URL=postgres://secret needs new credential"
+        });
+        let execution = codex_host_fixed_task_test_execution(fixed_task, Some(output));
+        let workflow_event =
+            codex_host_fixed_task_test_workflow_event(execution.id, "workflow.step_completed");
+
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+            .expect("needs human event");
+        let serialized = event.payload.to_string();
+
+        assert_eq!(event.event_name, "codex_host.fixed_task.needs_human");
+        assert_eq!(event.payload["status"], json!("needs_human"));
+        assert_eq!(
+            event.payload["output"]["human_review_reason"],
+            json!("[redacted]")
+        );
+        assert_eq!(event.payload["validation"]["reason"], json!("[redacted]"));
+        assert!(event.notify_human);
+        assert!(!serialized.contains("postgres://secret"));
+        assert!(!serialized.contains("DATABASE_URL"));
+    }
+
+    #[test]
+    fn codex_host_fixed_task_rejected_event_records_validation_failure() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.assistant_run_id = Some(AssistantRunId::new().to_string());
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "public_url": "https://example.com/overwrite/index.html"
+            },
+            "validation_report": {
+                "snapshot_policy": "latest_snapshot_for_state_modules"
+            }
+        });
+        let execution = codex_host_fixed_task_test_execution(fixed_task, Some(output));
+        let workflow_event =
+            codex_host_fixed_task_test_workflow_event(execution.id, "workflow.step_completed");
+
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+            .expect("rejected event");
+
+        assert_eq!(event.event_name, "codex_host.fixed_task.rejected");
+        assert_eq!(event.payload["status"], json!("rejected"));
+        assert_eq!(
+            event.payload["validation"]["reason"],
+            json!("artifact_public_url_not_generated_artifact")
+        );
+        assert_eq!(event.payload["output"]["artifact_public_url"], Value::Null);
+        assert!(event.notify_human);
+    }
+
+    #[test]
+    fn codex_host_fixed_task_completed_event_summarizes_answer_quality_patch() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::answer_quality_autofix_example();
+        fixed_task.assistant_run_id = Some(AssistantRunId::new().to_string());
+        let output = json!({
+            "template_id": "answer_quality_autofix",
+            "status": "patch_ready",
+            "failure_type": "answer_policy",
+            "changed_files": ["crates/platform-api/src/lib.rs", "fixtures/document-quality/regression.json"],
+            "tests_added": ["answer_quality_regression"],
+            "test_commands": ["cargo test -p platform-api answer_quality_autofix --lib"],
+            "risk_level": "low",
+            "rollback_notes": "revert answer quality prompt patch"
+        });
+        let execution = codex_host_fixed_task_test_execution(fixed_task, Some(output));
+        let workflow_event =
+            codex_host_fixed_task_test_workflow_event(execution.id, "workflow.step_completed");
+
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+            .expect("completed event");
+
+        assert_eq!(event.event_name, "codex_host.fixed_task.completed");
+        assert_eq!(event.payload["status"], json!("patch_ready"));
+        assert_eq!(event.payload["output"]["changed_file_count"], json!(2));
+        assert_eq!(
+            event.payload["output"]["test_commands"][0],
+            json!("cargo test -p platform-api answer_quality_autofix --lib")
+        );
+        assert_eq!(
+            event.payload["validation"]["reason"],
+            json!("low_risk_allowlisted_patch_with_tests")
+        );
+    }
+
+    #[test]
+    fn codex_host_fixed_task_runtime_summary_is_safe_for_diagnostics() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 1,
+            event_name: "codex_host.fixed_task.needs_human".to_string(),
+            payload: json!({
+                "template_id": "answer_quality_autofix",
+                "status": "needs_human",
+                "validation": {"reason": "risk_requires_human_review"},
+                "output": {
+                    "changed_file_count": 1,
+                    "test_commands": ["cargo test -p platform-api answer_quality_autofix --lib"],
+                    "human_review_reason": "medium risk"
+                },
+                "raw_prompt": "sk-should-not-leak"
+            }),
+            created_at: now,
+        }];
+
+        let summary = assistant_run_codex_fixed_task_event_summary(&events);
+        let serialized = summary.to_string();
+
+        assert_eq!(summary["event_count"], json!(1));
+        assert_eq!(summary["needs_human_count"], json!(1));
+        assert_eq!(
+            summary["latest"]["template_id"],
+            json!("answer_quality_autofix")
+        );
+        assert_eq!(
+            summary["recent"][0]["test_commands"][0],
+            json!("cargo test -p platform-api answer_quality_autofix --lib")
+        );
+        assert!(!serialized.contains("sk-should-not-leak"));
+        assert!(!serialized.contains("raw_prompt"));
     }
 
     #[test]
@@ -73100,6 +74695,33 @@ mod tests {
             details["gateReasonCounts"]["chart_sample_rows_missing"],
             json!(1)
         );
+    }
+
+    #[test]
+    fn static_page_prompt_only_payload_can_bypass_preview_repair_gate() {
+        let weak_payload = json!({
+            "promptOnly": true,
+            "promptText": "用户确认：直接按这段文字生成静态页视觉稿。",
+            "modules": [{
+                "id": "weak-chart",
+                "title": "待补图表",
+                "visualization": { "type": "line-chart" }
+            }],
+            "dataSnapshot": {
+                "moduleBindings": [{
+                    "moduleId": "weak-chart",
+                    "title": "待补图表",
+                    "visualizationType": "line-chart",
+                    "bindingQualityStatus": "missing_source",
+                    "chartDataFit": "missing_source"
+                }]
+            }
+        });
+
+        assert!(static_page_image_prompt_payload_is_prompt_only(
+            &weak_payload
+        ));
+        assert!(static_page_preview_data_quality_gate_for_payload(&weak_payload).is_some());
     }
 
     #[test]

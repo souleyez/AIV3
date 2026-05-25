@@ -9,6 +9,7 @@ pub const DEFAULT_ORCHESTRATOR_BASE_URL: &str = "http://127.0.0.1:3003";
 pub const DEFAULT_ORCHESTRATOR_RUNTIME_TARGET: &str = "cloudflare";
 pub const STATIC_PAGE_ORCHESTRATOR_KIND: &str = "static-page-visual";
 pub const STATIC_PAGE_ORCHESTRATOR_SOURCE: &str = "ai-data-platform-static-pages";
+pub const STATIC_PAGE_ORCHESTRATOR_USER_AGENT: &str = "AIDataPlatformV3StaticPageWorker/1.0";
 pub const DEFAULT_STATIC_PAGE_IMAGE_MODEL: &str = "gpt-image-2";
 pub const DEFAULT_STATIC_PAGE_IMAGE_SIZE: &str = "1536x1024";
 pub const DEFAULT_STATIC_PAGE_IMAGE_QUALITY: &str = "high";
@@ -37,8 +38,9 @@ impl CodexOrchestratorConfig {
             base_url: std::env::var("CODEX_ORCHESTRATOR_BASE_URL")
                 .unwrap_or_else(|_| DEFAULT_ORCHESTRATOR_BASE_URL.to_string()),
             access_key,
-            runtime_target_id: std::env::var("CODEX_ORCHESTRATOR_RUNTIME_TARGET")
-                .unwrap_or_else(|_| DEFAULT_ORCHESTRATOR_RUNTIME_TARGET.to_string()),
+            runtime_target_id: optional_env("CODEX_ORCHESTRATOR_RUNTIME_TARGET")
+                .or_else(|| optional_env("CODEX_ORCHESTRATOR_RUNTIME_TARGET_ID"))
+                .unwrap_or_else(|| DEFAULT_ORCHESTRATOR_RUNTIME_TARGET.to_string()),
             project_id: optional_env("CODEX_ORCHESTRATOR_PROJECT_ID"),
             image_model: std::env::var("CODEX_ORCHESTRATOR_IMAGE_MODEL")
                 .unwrap_or_else(|_| DEFAULT_STATIC_PAGE_IMAGE_MODEL.to_string()),
@@ -142,12 +144,31 @@ pub fn build_static_page_visual_task_request(
 pub fn build_static_page_visual_prompt(image_prompt_payload: &Value) -> String {
     let payload = serde_json::to_string_pretty(image_prompt_payload)
         .unwrap_or_else(|_| image_prompt_payload.to_string());
+    if let Some(prompt_text) = static_page_visual_prompt_text(image_prompt_payload) {
+        return format!(
+            "请用 GPT Image 2 生成一张 1536x1024 的中文企业静态页视觉草稿图。\n\
+             要求：画面像客户汇报页或经营分析页，不要浏览器边框，不要后台管理系统，不要出现可编辑控件。\n\
+             重点：以用户确认的生图文案为准；这一步只做视觉效果图，不要把结构化 JSON 当成固定模块规划。后续系统会读图并接入真实数据制作 HTML。完成后必须返回一张图片 artifact。\n\
+             用户确认的生图文案：\n{prompt_text}\n\n\
+             结构化上下文 JSON：\n```json\n{payload}\n```"
+        );
+    }
     format!(
         "请用 GPT Image 2 生成一张 1536x1024 的中文企业静态页视觉草稿图。\n\
          要求：画面像客户汇报页或经营分析页，不要浏览器边框，不要后台管理系统，不要出现可编辑控件。\n\
          重点：保留模块层级、中文标题、图表类型、数据关系和商务汇报质感。完成后必须返回一张图片 artifact。\n\
          静态页规划 JSON：\n```json\n{payload}\n```"
     )
+}
+
+fn static_page_visual_prompt_text(image_prompt_payload: &Value) -> Option<&str> {
+    image_prompt_payload
+        .get("promptText")
+        .or_else(|| image_prompt_payload.get("prompt_text"))
+        .or_else(|| image_prompt_payload.get("prompt"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 pub fn submit_static_page_visual_task(
@@ -162,6 +183,7 @@ pub fn submit_static_page_visual_task(
         .bearer_auth(&config.access_key)
         .header("Idempotency-Key", format!("static-page-image-{job_id}"))
         .header("X-Client-Name", STATIC_PAGE_ORCHESTRATOR_SOURCE)
+        .header("User-Agent", STATIC_PAGE_ORCHESTRATOR_USER_AGENT)
         .json(&body)
         .send()?;
     parse_orchestrator_response(response)
@@ -180,6 +202,8 @@ pub fn poll_static_page_visual_task(
     let response = client
         .get(config.endpoint(&format!("/tasks/{task_id}{query}")))
         .bearer_auth(&config.access_key)
+        .header("X-Client-Name", STATIC_PAGE_ORCHESTRATOR_SOURCE)
+        .header("User-Agent", STATIC_PAGE_ORCHESTRATOR_USER_AGENT)
         .send()?;
     parse_orchestrator_response(response)
 }
@@ -340,7 +364,7 @@ mod tests {
             base_url: "http://127.0.0.1:3003/".to_string(),
             access_key: "test-access-key".to_string(),
             runtime_target_id: "cloudflare".to_string(),
-            project_id: Some("codex-web".to_string()),
+            project_id: None,
             image_model: "gpt-image-2".to_string(),
             image_size: "1536x1024".to_string(),
             image_quality: "high".to_string(),
@@ -362,13 +386,56 @@ mod tests {
         );
 
         assert_eq!(request.runtime_target_id, "cloudflare");
-        assert_eq!(request.project_id.as_deref(), Some("codex-web"));
+        assert_eq!(request.project_id, None);
         assert_eq!(request.kind, "static-page-visual");
         assert_eq!(request.source, "ai-data-platform-static-pages");
         assert_eq!(request.metadata["output"], json!("image-artifact"));
         assert_eq!(request.metadata["model"], json!("gpt-image-2"));
         assert!(request.prompt.contains("经营分析静态页"));
         assert!(request.prompt.contains("必须返回一张图片 artifact"));
+    }
+
+    #[test]
+    fn omits_project_id_from_default_static_page_visual_request_body() {
+        let job_id =
+            StaticPageImageJobId(Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap());
+        let request = build_static_page_visual_task_request(
+            &config(),
+            job_id,
+            &json!({ "title": "经营分析静态页" }),
+        );
+
+        let body = serde_json::to_value(request).expect("serializes request");
+        assert_eq!(body.get("projectId"), None);
+        assert_eq!(body["runtimeTargetId"], json!("cloudflare"));
+    }
+
+    #[test]
+    fn keeps_project_id_when_explicitly_configured() {
+        let mut config = config();
+        config.project_id = Some("explicit-project".to_string());
+        let job_id =
+            StaticPageImageJobId(Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap());
+        let request = build_static_page_visual_task_request(
+            &config,
+            job_id,
+            &json!({ "title": "经营分析静态页" }),
+        );
+
+        let body = serde_json::to_value(request).expect("serializes request");
+        assert_eq!(body["projectId"], json!("explicit-project"));
+    }
+
+    #[test]
+    fn visual_prompt_prefers_confirmed_prompt_text() {
+        let prompt = build_static_page_visual_prompt(&json!({
+            "promptText": "用户确认：生成智能家居项目经营分析图，不要编辑框。",
+            "title": "旧标题"
+        }));
+
+        assert!(prompt.contains("用户确认的生图文案"));
+        assert!(prompt.contains("用户确认：生成智能家居项目经营分析图，不要编辑框。"));
+        assert!(prompt.contains("结构化上下文 JSON"));
     }
 
     #[test]

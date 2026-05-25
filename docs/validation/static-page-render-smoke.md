@@ -27,6 +27,16 @@ target/static-page-render-smoke/
 
 This smoke complements `run-static-page-quality-smoke.sh`: quality smoke checks whether a draft is allowed to proceed, while render smoke checks the generated HTML/manifest contract for a confirmed draft.
 
+## Fixed Codex Static-Page Escalation
+
+The Image2-first advanced static-page path has an additional local fixed-template smoke:
+
+```powershell
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static_page_plan_only,static_page_new_artifact,static_page_overwrite_rejected
+```
+
+This smoke is non-destructive. It validates that V3 records `codex_host.fixed_task.queued`, accepts only new `/generated-artifacts/` static-page outputs, and rejects overwrite/stable-URL style outputs for human review. It does not publish or overwrite customer artifacts.
+
 ## 2026-05-17 Deployment Target Evidence
 
 - Host: `8服务器`

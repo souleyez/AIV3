@@ -1664,7 +1664,7 @@ export function staticPagePreviewBlockReason(draft = {}) {
   return staticPageDataQualityBlockReason(
     draft,
     '效果图生成要求',
-    '请先回到模块编辑补充内容来源或重新绑定字段；只有缺少来源的模块会阻断效果图，缺少样本行的图表会先作为设计预览进入出图。',
+    '请先调整生图文案，或让 V3 检索/修复内容来源；只有缺少来源的模块会阻断效果图，缺少样本行的图表会先作为设计预览进入出图。',
     { mode: 'preview' },
   );
 }
@@ -1687,7 +1687,7 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
   return staticPageDataQualityBlockReason(
     draft,
     '最终页面生成要求',
-    '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据，然后重新生成并确认效果图。',
+    '请先让 V3 补充样本行、重新匹配字段或修复模块数据，然后重新生成并确认效果图。',
     { mode: 'final' },
   );
 }
@@ -1696,7 +1696,7 @@ export function staticPageDirectHtmlBlockReason(draft = {}) {
   return staticPageDataQualityBlockReason(
     draft,
     '快速 HTML 生成要求',
-    '请先回到模块编辑补充样本行、重新绑定字段，或让 V3 检索/修复模块数据，然后重新生成 HTML。',
+    '请先让 V3 补充样本行、重新匹配字段或修复模块数据，然后重新生成 HTML。',
     { mode: 'final' },
   );
 }
@@ -1825,17 +1825,337 @@ export function interpretStaticPagePrompt(draft, prompt = '') {
   };
 }
 
-export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {
+function compactStaticPageImagePromptText(value, maxLength = 600) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function normalizeStaticPageConfirmedPromptText(value, maxLength = 6000) {
+  const text = String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function staticPageStyleDirectionLabel(styleDirection) {
+  return STATIC_PAGE_STYLE_DIRECTIONS.find((item) => item.key === styleDirection)?.label
+    || styleDirection
+    || '客户交付报告';
+}
+
+function staticPageImagePromptModuleLine(module = {}, index = 0) {
+  const visualization = normalizeVisualization(module.visualization || {});
+  const layout = normalizeLayout(module.layout || {});
+  const title = module.title || module.id || `模块${index + 1}`;
+  const content = compactStaticPageImagePromptText(module.content, 180);
+  const dataLabel = module.dataBinding?.label || module.dataLabel || module.data_label || '';
+  const visualLabel = visualization.label || visualizationLabel(visualization.type);
+  const parts = [
+    `${index + 1}. ${title}`,
+    content ? `内容：${content}` : '',
+    visualLabel ? `图形：${visualLabel}` : '',
+    dataLabel ? `数据来源：${dataLabel}` : '',
+    `版位：${layout.w}x${layout.h}`,
+  ].filter(Boolean);
+  return `- ${parts.join('；')}`;
+}
+
+function staticPagePromptBindings(dataSnapshot = {}) {
+  return Array.isArray(dataSnapshot.moduleBindings)
+    ? dataSnapshot.moduleBindings
+    : Array.isArray(dataSnapshot.module_bindings)
+      ? dataSnapshot.module_bindings
+      : [];
+}
+
+function staticPagePromptRows(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value.sampleData)) return value.sampleData;
+  if (Array.isArray(value.sample_data)) return value.sample_data;
+  if (Array.isArray(value.rows)) return value.rows;
+  if (Array.isArray(value.data)) return value.data;
+  if (Array.isArray(value.values)) return value.values;
+  return [];
+}
+
+function staticPagePromptValue(row = {}) {
+  const raw = row.value ?? row.amount ?? row.count ?? row.total ?? row.y ?? row.xuzengxiaoshou ?? row.quekou;
+  const number = Number(String(raw ?? '').replace(/[,，%]/g, ''));
+  return Number.isFinite(number) ? number : null;
+}
+
+function staticPagePromptLabel(row = {}, index = 0) {
+  return String(
+    row.label
+      || row.name
+      || row.date
+      || row.month
+      || row.period
+      || row.category
+      || row.store_init
+      || row.shopdesc
+      || row.brandcode
+      || row.title
+      || `项${index + 1}`,
+  ).trim();
+}
+
+function formatStaticPagePromptNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  const abs = Math.abs(number);
+  if (abs >= 100000000) return `${(number / 100000000).toFixed(1)}亿`;
+  if (abs >= 10000) return `${(number / 10000).toFixed(1)}万`;
+  return Math.abs(number - Math.round(number)) < 0.000001 ? String(Math.round(number)) : number.toFixed(1);
+}
+
+function compactStaticPagePromptRows(rows = [], limit = 5) {
+  return rows
+    .slice(0, limit)
+    .map((row, index) => {
+      const label = staticPagePromptLabel(row, index);
+      const value = staticPagePromptValue(row);
+      return value === null ? label : `${label} ${formatStaticPagePromptNumber(value)}`;
+    })
+    .filter(Boolean)
+    .join('、');
+}
+
+function staticPagePromptBindingByNeedle(dataSnapshot, needles = []) {
+  const loweredNeedles = needles.map((item) => String(item || '').toLowerCase());
+  return staticPagePromptBindings(dataSnapshot).find((binding) => {
+    const text = [
+      binding.moduleId,
+      binding.module_id,
+      binding.id,
+      binding.title,
+      binding.label,
+      binding.binding?.label,
+      binding.binding?.fieldPath,
+      binding.binding?.field_path,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return loweredNeedles.some((needle) => text.includes(needle));
+  });
+}
+
+function collectStaticPagePromptDates(value, out = new Set(), depth = 0) {
+  if (!value || depth > 8) return out;
+  if (typeof value === 'string') {
+    const match = value.trim().match(/^\d{4}-\d{2}-\d{2}/);
+    if (match) out.add(match[0]);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectStaticPagePromptDates(item, out, depth + 1));
+    return out;
+  }
+  if (typeof value === 'object') {
+    Object.values(value).forEach((item) => collectStaticPagePromptDates(item, out, depth + 1));
+  }
+  return out;
+}
+
+function staticPagePromptCommissionRows(dataSnapshot = {}) {
+  const directRows = [
+    dataSnapshot.commissionTargets,
+    dataSnapshot.commission_targets,
+    dataSnapshot.highCommissionTargets,
+    dataSnapshot.high_commission_targets,
+    dataSnapshot.brandTargets,
+    dataSnapshot.brand_targets,
+  ].flatMap(staticPagePromptRows);
+  const bindingRows = staticPagePromptBindings(dataSnapshot)
+    .filter((binding) => {
+      const text = [
+        binding.moduleId,
+        binding.module_id,
+        binding.title,
+        binding.label,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return /commission|brand|target|分成|品牌|助推|高分成/.test(text);
+    })
+    .flatMap(staticPagePromptRows);
+  return [...directRows, ...bindingRows]
+    .filter((row) => row && typeof row === 'object')
+    .filter((row) => row.shopdesc || row.brandcode || row.brand || row.brandName || row['品牌']);
+}
+
+function buildStaticPageImageDataRequirementLines(draft = {}) {
+  const dataSnapshot = draft.dataSnapshot || buildStaticPageDataSnapshot(draft);
+  const lines = [];
+  const dates = Array.from(collectStaticPagePromptDates(dataSnapshot)).sort();
+  if (dates.length) {
+    lines.push(`实际时间范围：${dates[0]} ~ ${dates[dates.length - 1]}。`);
+  }
+  const overviewRows = staticPagePromptRows(staticPagePromptBindingByNeedle(dataSnapshot, ['overview', '总览']));
+  if (overviewRows.length) {
+    lines.push(`真实总览指标：${compactStaticPagePromptRows(overviewRows, 6)}。`);
+  }
+  const levelRows = staticPagePromptRows(staticPagePromptBindingByNeedle(dataSnapshot, ['warning-level', '预警等级']));
+  if (levelRows.length) {
+    lines.push(`预警等级分布：${compactStaticPagePromptRows(levelRows, 6)}。`);
+  }
+  const highStoreRows = staticPagePromptRows(staticPagePromptBindingByNeedle(dataSnapshot, ['store-high', '门店高预警', '高预警门店']));
+  if (highStoreRows.length) {
+    lines.push(`高预警门店排行：${compactStaticPagePromptRows(highStoreRows, 6)}。`);
+  }
+  const gapRows = staticPagePromptRows(staticPagePromptBindingByNeedle(dataSnapshot, ['store-gap', '缺口', '需增']));
+  if (gapRows.length) {
+    lines.push(`门店增收缺口机会：${compactStaticPagePromptRows(gapRows, 6)}。`);
+  }
+  const commissionRows = staticPagePromptCommissionRows(dataSnapshot);
+  if (commissionRows.length) {
+    lines.push(`品牌/店铺高分成线明细：${compactStaticPagePromptRows(commissionRows, 6)}。`);
+  } else if (highStoreRows.length || gapRows.length) {
+    lines.push('品牌/店铺明细：当前快照未提供 shopdesc/brandcode 行，不要编造品牌名单；视觉稿先展示门店级机会池，并保留“明细待同步/待钻取”的表达。');
+  }
+  return lines;
+}
+
+function buildStaticPageImageProductionRules(draft = {}) {
+  const subject = `${draft.objective || ''}\n${draft.title || ''}\n${draft.modelSummary || ''}`;
+  const storeOrBrandPage = /新世界|新百|门店|分店|高分成|品牌店|店总|经营分析/.test(subject);
+  return {
+    workflow: 'requirements_to_image2_then_image_to_html',
+    imageFirst: true,
+    realDataRequired: true,
+    fakeDataAllowed: false,
+    snapshotAggregationPolicy: 'latest_snapshot_for_state_modules',
+    trendAggregationPolicy: 'date_series_only_for_trends',
+    unitPolicy: 'format raw amounts as 万 below 1亿 and 亿 at or above 1亿; investigate aggregation before changing units',
+    detailPolicy: storeOrBrandPage
+      ? 'store/brand/customer detail lists are required for actionable store-manager pages'
+      : 'include drill-down details when the customer asks for action lists',
+    publishTarget: 'v3_generated_artifacts_on_8_server',
+    codexHostEscalation: {
+      eligible: true,
+      defaultMode: storeOrBrandPage ? 'fixed_template_exec_schema' : 'plan_only_or_dry_run',
+      templateId: storeOrBrandPage ? 'static_page_image2_data_publish' : '',
+      requiredCapability: storeOrBrandPage ? 'static_page_image2_data_publish' : 'static_page_edit',
+      legacyCapability: storeOrBrandPage ? 'static_page_advanced_publish' : '',
+      confirmationPolicy: storeOrBrandPage ? 'auto_for_new_generated_artifact' : 'human_review_for_writes',
+      publishMode: storeOrBrandPage ? 'new_generated_artifact_only' : 'manual_or_draft_only',
+      humanReviewRequiredForWrites: !storeOrBrandPage,
+      humanReviewRequiredForOverwrite: true,
+      humanReviewRequiredForUncertainDataPolicy: true,
+    },
+  };
+}
+
+function buildStaticPageImageBusinessRequirementLines(draft = {}) {
+  const subject = draft.objective || draft.title || '经营分析静态页';
+  const isStoreTopic = /新世界|新百|门店|分店|高分成|品牌店|店总/.test(`${subject}\n${draft.modelSummary || ''}`);
+  return [
+    '顶部默认要有时间选择区，视觉上可以像筛选条，但不要做成后台编辑框。',
+    '默认要有主要分区选择；如果是新世界/新百项目，主分区优先呈现不同门店/分店。',
+    '页面要体现数据可刷新：文档或数据库更新后，页面数据应能按最新快照更新。',
+    isStoreTopic
+      ? '新世界/新百这版要服务店总：让店总快速看到哪些品牌店或门店快达到高分成线，便于运营助推。'
+      : '',
+    '如果数据来自快照表，KPI、排行、机会池和明细默认只取最新快照；只有趋势图可以按日期序列展开，禁止把多天快照重复累加成当前状态。',
+    '金额单位必须先校验取数口径，再按数值展示：低于1亿用“万”，达到1亿才用“亿”，不要用改单位掩盖聚合错误。',
+    '这是生图需求，不是固定模块版位；请让 GPT-Image2 先发挥视觉设计能力，后续系统会读图并接入真实数据制作 HTML。',
+  ].filter(Boolean);
+}
+
+export function buildStaticPageImagePromptText(draft = {}) {
+  const designReferences = normalizeTemplateDesignReferences(
+    draft.designReferences || draft.source?.templateReferences || [],
+  );
+  const templateLine = designReferences.length
+    ? `参考版式：${designReferences.slice(0, 3).map((item) => item.title || item.templateId || item.source).filter(Boolean).join('、')}`
+    : '';
+  const businessRequirementLines = buildStaticPageImageBusinessRequirementLines(draft);
+  const dataRequirementLines = buildStaticPageImageDataRequirementLines(draft);
+  const productionRules = buildStaticPageImageProductionRules(draft);
+  const lines = [
+    '请用 GPT-Image2 先生成一张 1536x1024 的中文企业静态页视觉效果图。',
+    `主题：${draft.objective || draft.title || '经营分析静态页'}`,
+    `受众：${draft.audience || '客户决策层'}`,
+    `风格：${staticPageStyleDirectionLabel(draft.styleDirection)}`,
+    templateLine,
+    draft.modelSummary ? `资料与目标：${compactStaticPageImagePromptText(draft.modelSummary, 420)}` : '',
+    '业务要求：',
+    ...businessRequirementLines.map((line) => `- ${line}`),
+    dataRequirementLines.length ? '真实数据摘要：' : '',
+    ...dataRequirementLines.map((line) => `- ${line}`),
+    '后续制作与发布要求：',
+    `- 视觉稿确认后，系统应按 ${productionRules.workflow} 制作真实数据 HTML。`,
+    '- 高级取数、口径纠偏、明细补齐或发布类需求，可升级为 V3 受控 Codex Host 固定模板任务；新 generated-artifact 产物发布可自动执行，覆盖旧产物、稳定链接替换、口径不确定或扩大权限仍需人工确认。',
+    '视觉要求：画面像客户汇报页或经营分析页，不要浏览器边框，不要后台管理系统，不要出现可编辑文本框或拖拽编辑框。',
+    '重点：中文标题清晰，图表关系可信，适合客户直接看效果；不要生成假数字、假门店、假品牌。',
+    '完成后必须返回一张图片 artifact。',
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+export function buildStaticPageImagePayload(draft, { oneClick = false, promptText = '', promptOnly = false } = {}) {
   const visualSpec = draft.visualSpec || buildStaticPageVisualSpec(draft.styleDirection);
   const renderSpec = draft.renderSpec || buildStaticPageRenderSpec();
   const designReferences = normalizeTemplateDesignReferences(
     draft.designReferences || draft.source?.templateReferences || [],
   );
+  const dataSnapshot = draft.dataSnapshot || buildStaticPageDataSnapshot(draft);
+  const productionRules = buildStaticPageImageProductionRules(draft);
+  const normalizedPromptText = normalizeStaticPageConfirmedPromptText(promptText, 6000);
+  const promptMetadata = {};
+  if (normalizedPromptText) {
+    promptMetadata.prompt = normalizedPromptText;
+    promptMetadata.promptText = normalizedPromptText;
+    promptMetadata.prompt_text = normalizedPromptText;
+  }
+  if (promptOnly) {
+    promptMetadata.promptOnly = true;
+    promptMetadata.prompt_only = true;
+  }
+  if (promptOnly) {
+    return {
+      draftId: draft.id,
+      datasetId: draft.datasetId,
+      sessionId: draft.sessionId,
+      oneClick,
+      ...promptMetadata,
+      objective: draft.objective,
+      audience: draft.audience,
+      styleDirection: draft.styleDirection,
+      designReferences,
+      visualSpec,
+      renderSpec: {
+        ...renderSpec,
+        workflow: productionRules.workflow,
+        finalHtmlRule: 'After the effect image is confirmed, infer the visual layout from the image and connect real dataSnapshot values into HTML.',
+        snapshotAggregationPolicy: productionRules.snapshotAggregationPolicy,
+        trendAggregationPolicy: productionRules.trendAggregationPolicy,
+        publishTarget: productionRules.publishTarget,
+        fixedTaskTemplateId: productionRules.codexHostEscalation.templateId || '',
+        fixedTaskPublishMode: productionRules.codexHostEscalation.publishMode || '',
+      },
+      dataSnapshot,
+      previewContract: draft.previewContract || buildStaticPagePreviewContract(draft),
+      imageFirstContract: {
+        role: 'requirements_prompt_for_gpt_image_2',
+        rule: 'Do not treat draft modules or layout as a fixed page plan; use confirmed prompt text as the source of truth for image generation.',
+        finalRenderRule: 'Confirmed image is the visual blueprint; final HTML should be produced after reading the image and binding real data.',
+        realDataRequired: true,
+        fakeDataAllowed: false,
+        snapshotAggregationPolicy: productionRules.snapshotAggregationPolicy,
+        trendAggregationPolicy: productionRules.trendAggregationPolicy,
+        fixedTaskTemplateId: productionRules.codexHostEscalation.templateId || '',
+        confirmationPolicy: productionRules.codexHostEscalation.confirmationPolicy || '',
+      },
+      productionRules,
+      dataRequirements: buildStaticPageImageDataRequirementLines({ ...draft, dataSnapshot }),
+      businessRequirements: buildStaticPageImageBusinessRequirementLines(draft),
+      modelSummary: draft.modelSummary,
+    };
+  }
   return {
     draftId: draft.id,
     datasetId: draft.datasetId,
     sessionId: draft.sessionId,
     oneClick,
+    ...promptMetadata,
     objective: draft.objective,
     audience: draft.audience,
     styleDirection: draft.styleDirection,
@@ -1843,6 +2163,7 @@ export function buildStaticPageImagePayload(draft, { oneClick = false } = {}) {
     visualSpec,
     renderSpec,
     dataSnapshot: draft.dataSnapshot || buildStaticPageDataSnapshot(draft),
+    productionRules,
     previewContract: draft.previewContract || buildStaticPagePreviewContract(draft),
     designContract: {
       contractSource: 'StaticPageDraft',
@@ -1874,15 +2195,22 @@ export function buildStaticPageFinalRenderPayload(draft) {
   const designReferences = normalizeTemplateDesignReferences(
     draft.designReferences || draft.source?.templateReferences || [],
   );
+  const dataSnapshot = draft.dataSnapshot || buildStaticPageDataSnapshot(draft);
   return {
     draftId: draft.id,
     styleDirection: draft.styleDirection,
     designReferences,
     visualSpec: draft.visualSpec || buildStaticPageVisualSpec(draft.styleDirection),
     renderSpec: draft.renderSpec || buildStaticPageRenderSpec(),
-    dataSnapshot: draft.dataSnapshot || buildStaticPageDataSnapshot(draft),
+    dataSnapshot,
     previewContract: draft.previewContract || buildStaticPagePreviewContract(draft),
     previewImage: draft.previewImage,
+    imageFirstContract: {
+      role: 'confirmed_effect_image_to_html_blueprint',
+      rule: 'Use the confirmed effect image as the visual blueprint, then bind real dataSnapshot values into DOM/SVG/HTML.',
+      dataRequirements: buildStaticPageImageDataRequirementLines({ ...draft, dataSnapshot }),
+      fakeDataAllowed: false,
+    },
     mobileOrder: normalizeMobileOrder(draft.modules, draft.mobileOrder),
     modules: draft.modules.map((module) => ({
       ...clone(module),

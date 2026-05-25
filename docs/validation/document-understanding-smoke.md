@@ -26,6 +26,16 @@ target/document-understanding-smoke/
 - Parse status supply for failed, reparsing, degraded, and selected-range documents.
 - Resume/company and general typed entity scan behavior.
 
+## Answer-Quality Autofix Escalation
+
+Low-quality answer collection and fixed Codex patch proposal are covered by the local fixed-template smoke:
+
+```powershell
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case answer_quality_autofix,human_exception,runtime_summary
+```
+
+This smoke validates only the bounded task package, output validation, human-exception audit, and runtime summary. It does not re-enable a blocking answer gate, deploy changes, or broaden document/data permissions.
+
 ## 2026-05-20 Deployment Target Evidence
 
 - Host: `8服务器`
