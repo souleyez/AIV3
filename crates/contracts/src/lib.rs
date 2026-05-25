@@ -381,6 +381,13 @@ pub struct ExternalBotMessageView {
     pub dataset_external_id: Option<String>,
     #[serde(
         default,
+        alias = "datasetExternalIds",
+        alias = "availableDatasetExternalIds",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub dataset_external_ids: Vec<String>,
+    #[serde(
+        default,
         alias = "requestedSkills",
         alias = "skillRefs",
         alias = "skill_refs",
@@ -4732,6 +4739,40 @@ mod tests {
             Some("src-docs:doc-java-001:rev-1")
         );
         assert!(decoded.allow_http_loopback);
+    }
+
+    #[test]
+    fn external_bot_message_accepts_multiple_dataset_external_ids() {
+        let received_at = Utc::now();
+        let message: ExternalBotMessageView = serde_json::from_value(json!({
+            "platform": "generic_chat",
+            "tenant_external_id": "tenant-001",
+            "bot_external_id": "bot-v3",
+            "conversation_external_id": "conv-001",
+            "sender_external_id": "user-001",
+            "message_external_id": "msg-001",
+            "message_type": "text",
+            "text": "查这几个分组的资料",
+            "datasetExternalIds": ["workspace-main", "workspace-archive"],
+            "idempotency_key": "generic:tenant-001:msg-001",
+            "received_at": received_at
+        }))
+        .expect("plural dataset ids should deserialize");
+
+        assert_eq!(message.dataset_external_id, None);
+        assert_eq!(
+            message.dataset_external_ids,
+            vec![
+                "workspace-main".to_string(),
+                "workspace-archive".to_string()
+            ]
+        );
+
+        let encoded = serde_json::to_value(&message).expect("message should serialize");
+        assert_eq!(
+            encoded["dataset_external_ids"],
+            json!(["workspace-main", "workspace-archive"])
+        );
     }
 
     #[test]

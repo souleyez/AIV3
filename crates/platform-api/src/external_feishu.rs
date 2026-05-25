@@ -423,6 +423,7 @@ fn feishu_message_from_payload(
         available_document_external_ids: Vec::new(),
         available_document_source_id: None,
         dataset_external_id: None,
+        dataset_external_ids: Vec::new(),
         requested_skills: Vec::new(),
         idempotency_key: format!(
             "feishu:{tenant_external_id}:{bot_external_id}:{}",

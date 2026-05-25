@@ -249,7 +249,8 @@ Content-Type: application/json
   "available_document_external_ids": [             // 本轮允许使用的文档 ID 列表
     "doc-20260520-0001"
   ],
-  "dataset_external_id": null,                     // 可选：授权整个稳定业务分组；传入后同一会话持续有效
+  "dataset_external_id": null,                     // 可选：授权单个稳定业务分组；传入后同一会话持续有效
+  "dataset_external_ids": [],                      // 可选：授权多个稳定业务分组；有多个分组时用数组
   "documentExternalId": "doc-20260520-0001",        // 可选兼容写法：单文档 ID；有数组时不用传
   "requested_skills": [],                          // 本轮指定 skill；没有传空数组或省略
   "mention_external_user_ids": [],                 // 本条消息 @ 的用户 ID；没有传空数组或省略
@@ -279,11 +280,14 @@ Content-Type: application/json
 | `available_document_source_id` | 文档问答建议填 | 本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答 |
 | `available_document_external_ids` | 文档问答建议填 | 允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档；首次传入后同一 `conversation_external_id` 后续有效 |
 | `dataset_external_id` | 分组文档问答建议填 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；不要传临时 UUID |
+| `dataset_external_ids` | 多分组文档问答建议填 | 第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：`datasetExternalIds`、`availableDatasetExternalIds` |
 | `requested_skills` | 否 | 本轮 skill 列表 |
 | `mention_external_user_ids` | 否 | 被 @ 的第三方用户 ID |
 | `attachment_refs` | 否 | 附件引用列表 |
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | ISO 8601 时间 |
+
+如果传 `dataset_external_id` 或 `dataset_external_ids`，表示本会话可使用对应稳定业务分组下的全部已解析文档，通常不需要同时传 `available_document_external_ids`。如果只想授权具体少数文档，应改传 `available_document_external_ids` 或 `documentExternalId`，不传分组字段。
 
 响应：
 
