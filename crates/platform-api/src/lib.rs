@@ -12377,16 +12377,10 @@ async fn resolve_external_document_parse_dataset(
 }
 
 fn effective_external_document_parse_dataset_external_id(value: Option<&str>) -> Option<String> {
-    let value = value.map(str::trim).filter(|value| !value.is_empty())?;
-    if external_document_parse_dataset_external_id_looks_transient(value) {
-        None
-    } else {
-        Some(value.to_string())
-    }
-}
-
-fn external_document_parse_dataset_external_id_looks_transient(value: &str) -> bool {
-    Uuid::parse_str(value).is_ok()
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn external_document_parse_dataset_title(
@@ -13587,10 +13581,14 @@ fn external_document_dataset_external_id_from_metadata(
         .or_else(|| metadata.get("externalSource"))
         .and_then(Value::as_object)
         .and_then(|object| {
-            object
-                .get("dataset_external_id")
-                .or_else(|| object.get("datasetExternalId"))
-                .and_then(Value::as_str)
+            [
+                "dataset_external_id",
+                "datasetExternalId",
+                "requested_dataset_external_id",
+                "requestedDatasetExternalId",
+            ]
+            .iter()
+            .find_map(|key| object.get(*key).and_then(Value::as_str))
         })
         .and_then(non_empty_trimmed_string)
 }
@@ -86141,12 +86139,12 @@ mod tests {
     }
 
     #[test]
-    fn transient_external_dataset_ids_collapse_to_source_default_dataset() {
+    fn uuid_external_dataset_ids_are_valid_stable_group_ids() {
         assert_eq!(
             effective_external_document_parse_dataset_external_id(Some(
                 "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
             )),
-            None
+            Some("345214b9-13cb-4f1d-a3c1-cb000d1e4d81".to_string())
         );
         assert_eq!(
             effective_external_document_parse_dataset_external_id(Some("f_personal_workspace")),
@@ -86160,7 +86158,29 @@ mod tests {
                 ))
                 .as_deref()
             ),
-            "external-source-third-party-source-main"
+            "external-source-third-party-source-main-dataset-345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+        );
+    }
+
+    #[test]
+    fn external_document_dataset_lookup_accepts_historical_requested_dataset_external_id() {
+        let metadata = json!({
+            "external_source": {
+                "source_id": "third-party-source-main",
+                "dataset_external_id": null,
+                "requested_dataset_external_id": "e64cb5b5-e05a-40ce-a904-0c371da04048",
+                "document_external_id": "doc-68bc1e63-810b-496d-b332-18a6428f216c"
+            }
+        })
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            external_document_dataset_external_id_from_metadata(&metadata).as_deref(),
+            Some("e64cb5b5-e05a-40ce-a904-0c371da04048")
         );
     }
 

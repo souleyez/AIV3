@@ -26,7 +26,7 @@ Content-Type: application/json
 ```jsonc
 {
   "source_id": "third-party-source-main",          // 文档源 ID；连接未配置默认文档源时必填
-  "dataset_external_id": "workspace-docs-main",    // 第三方稳定数据集/资料库 ID；没有可省略，不要传临时 UUID
+  "dataset_external_id": "workspace-docs-main",    // 第三方稳定数据集/资料库 ID；没有可省略；UUID 也可以，只要是稳定业务分组
   "dataset_title": "默认资料库",                    // 数据集展示名；自动创建数据集时使用
   "document_external_id": "doc-20260520-0001",     // 第三方文档 ID；后续聊天用它指定文档范围
   "revision_external_id": "rev-20260520-01",       // 文档版本 ID；同一文档更新时传新版本
@@ -279,7 +279,7 @@ Content-Type: application/json
 | `render_mode` | 否 | `normal` 普通回答；`artifact` 生成产物 |
 | `available_document_source_id` | 文档问答建议填 | 本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答 |
 | `available_document_external_ids` | 文档问答建议填 | 允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档；首次传入后同一 `conversation_external_id` 后续有效 |
-| `dataset_external_id` | 分组文档问答建议填 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；不要传临时 UUID |
+| `dataset_external_id` | 分组文档问答建议填 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID |
 | `dataset_external_ids` | 多分组文档问答建议填 | 第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：`datasetExternalIds`、`availableDatasetExternalIds` |
 | `requested_skills` | 否 | 本轮 skill 列表 |
 | `mention_external_user_ids` | 否 | 被 @ 的第三方用户 ID |

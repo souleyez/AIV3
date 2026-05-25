@@ -288,7 +288,7 @@ Authorization: Bearer <V3 inbound token>
 | `text` | 否 | 文本内容 |
 | `available_document_source_id` | 文档问答建议传 | 本次授权所属资料源 ID；连接配置了默认资料源时可省略，但单独传资料源不会授权整源文档回答 |
 | `available_document_external_ids` | 文档问答建议传 | 允许 V3 使用的第三方文档 ID 列表；首次传入后同一 `conversation_external_id` 后续有效；单文档可用 `documentExternalId` |
-| `dataset_external_id` | 文档分组问答建议传 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；不要传临时 UUID、任务 ID 或文件 ID |
+| `dataset_external_id` | 文档分组问答建议传 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
 | `dataset_external_ids` | 多分组文档问答建议传 | 第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：`datasetExternalIds`、`availableDatasetExternalIds` |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | skill 稳定标识，建议使用英文或业务 slug |
@@ -694,7 +694,7 @@ Authorization: Bearer <V3 inbound token>
 | --- | --- | --- |
 | `source_id` | 是 | V3 资料源 ID，通常由 V3 联调配置给出 |
 | `dataset_id` | 否 | V3 分配的数据集 UUID；传非 UUID 时会被视为无效或返回数据集不存在 |
-| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道 V3 数据集 UUID 时建议传这个字段。必须是业务稳定分组，不要传临时 UUID、任务 ID 或文件 ID |
+| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道 V3 数据集 UUID 时建议传这个字段。UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
 | `dataset_title` | 否 | 数据集展示名 |
 | `document_external_id` | 是 | 第三方文档稳定 ID；后续对话用 `available_document_external_ids` 引用同一个值 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；内容更新时建议变化 |
@@ -707,8 +707,8 @@ Authorization: Bearer <V3 inbound token>
 
 数据集归属说明：
 
-- `dataset_external_id` 是第三方业务侧稳定的资料库、空间或项目 ID；不要传每次请求生成的 UUID、临时会话 ID、文件 ID 或下载任务 ID。
-- V3 会把明显的临时 UUID 型 `dataset_external_id` 归并到该 `source_id` 的默认资料库，避免为每次解析创建新资料库；非 UUID 的稳定业务分组会保留为独立资料库。
+- `dataset_external_id` 是第三方业务侧稳定的资料库、空间或项目 ID；可以是 UUID，只要同一个业务分组长期复用同一个值。不要传每次请求生成的临时会话 ID、文件 ID 或下载任务 ID。
+- V3 会按稳定 `dataset_external_id` 建立资料库分组；同一分组后续对话传 `dataset_external_id` 或 `dataset_external_ids` 即可授权整组文档。
 - 第三方解析自动创建的 V3 数据集和文档归属于 V3 内部第三方系统账户；系统账户按第三方连接和资料源区分，支持多个第三方隔离和审计。
 - 这些系统自动解析源默认不出现在普通资料库列表中；第三方问答按会话授权的 `available_document_external_ids`、稳定 `dataset_external_id` 单分组或 `dataset_external_ids` 多分组供料。
 
@@ -792,12 +792,12 @@ Authorization: Bearer <V3 inbound token>
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `source_id` | 条件必填 | V3 资料源 ID；连接配置了默认资料源或 V3 可从文档记录推断时可省略 |
-| `dataset_external_id` | 条件必填 | 目标第三方数据集或资料库稳定 ID；和 `dataset_id` 二选一。目标不存在时 V3 自动创建。不要传临时 UUID、任务 ID 或文件 ID |
+| `dataset_external_id` | 条件必填 | 目标第三方数据集或资料库稳定 ID；和 `dataset_id` 二选一。目标不存在时 V3 自动创建。UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
 | `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 二选一 |
 | `dataset_title` | 否 | 目标数据集展示名；自动创建目标数据集时使用 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；不传则移动同一 `document_external_id` 下的全部版本 |
 
-移动目标说明：`dataset_external_id` 仍应传业务稳定分组。若目标值被判定为临时 UUID，V3 会归并到该资料源默认资料库；响应中的 `dataset_external_id` 可能为空，但 `dataset_id` 会回显实际归属的数据集。
+移动目标说明：`dataset_external_id` 仍应传业务稳定分组。若第三方使用 UUID 作为稳定分组 ID，V3 会按该 UUID 建立或复用对应资料库；响应中的 `dataset_id` 会回显实际归属的数据集。
 
 响应字段说明：
 
