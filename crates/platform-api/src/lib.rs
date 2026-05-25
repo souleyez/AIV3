@@ -5389,6 +5389,13 @@ async fn ensure_external_system_user(
         .map_err(ApiError::from_storage)
 }
 
+async fn ensure_external_channel_system_user(
+    state: &AppState,
+    connection_id: &str,
+) -> std::result::Result<User, ApiError> {
+    ensure_external_system_user(state, "channel", connection_id, connection_id).await
+}
+
 fn external_system_user_email(scope_kind: &str, scope_id: &str) -> String {
     let scope_kind = external_document_parse_dataset_key_component(scope_kind);
     let scope_id = scope_id.trim();
@@ -7371,6 +7378,64 @@ async fn filter_retrieval_evidences_for_visible_documents(
 ) -> std::result::Result<Vec<RetrievalEvidence>, ApiError> {
     let visible_document_ids =
         visible_document_ids_for_dataset(state, dataset_id, current_user_id).await?;
+    Ok(evidences
+        .into_iter()
+        .filter(|evidence| visible_document_ids.contains(&evidence.document_id))
+        .collect())
+}
+
+fn document_is_visible_for_assistant_evidence_owner_scope(
+    document: &Document,
+    current_user_id: Option<UserId>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> bool {
+    owner_user_id_is_visible(document.owner_user_id, current_user_id)
+        || external_acl_allows_missing_snapshot_for_selected_document(
+            document.id,
+            selected_document_ids,
+            allow_selected_documents_without_acl_snapshot,
+        )
+}
+
+async fn visible_document_ids_for_assistant_evidence_scope(
+    state: &AppState,
+    dataset_id: DatasetId,
+    current_user_id: Option<UserId>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> std::result::Result<HashSet<DocumentId>, ApiError> {
+    Ok(list_documents_for_dataset_scope(state, dataset_id)
+        .await?
+        .into_iter()
+        .filter(|document| {
+            document_is_visible_for_assistant_evidence_owner_scope(
+                document,
+                current_user_id,
+                selected_document_ids,
+                allow_selected_documents_without_acl_snapshot,
+            )
+        })
+        .map(|document| document.id)
+        .collect())
+}
+
+async fn filter_retrieval_evidences_for_assistant_evidence_scope(
+    state: &AppState,
+    dataset_id: DatasetId,
+    evidences: Vec<RetrievalEvidence>,
+    current_user_id: Option<UserId>,
+    selected_document_ids: &[DocumentId],
+    allow_selected_documents_without_acl_snapshot: bool,
+) -> std::result::Result<Vec<RetrievalEvidence>, ApiError> {
+    let visible_document_ids = visible_document_ids_for_assistant_evidence_scope(
+        state,
+        dataset_id,
+        current_user_id,
+        selected_document_ids,
+        allow_selected_documents_without_acl_snapshot,
+    )
+    .await?;
     Ok(evidences
         .into_iter()
         .filter(|evidence| visible_document_ids.contains(&evidence.document_id))
@@ -12151,13 +12216,7 @@ async fn create_external_document_parse(
             format!("external source connection {} is disabled", source_id),
         ));
     }
-    let external_system_user = ensure_external_system_user(
-        &state,
-        "channel-source",
-        &format!("{connection_id}:{source_id}"),
-        &format!("{connection_id} / {}", source.display_name),
-    )
-    .await?;
+    let external_system_user = ensure_external_channel_system_user(&state, &connection_id).await?;
     let current_user_id = Some(external_system_user.id);
     let resolved_dataset = resolve_external_document_parse_dataset(
         &state,
@@ -12624,13 +12683,7 @@ async fn update_external_document_dataset(
     }
 
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let external_system_user = ensure_external_system_user(
-        &state,
-        "channel-source",
-        &format!("{connection_id}:{source_id}"),
-        &format!("{connection_id} / {}", source.display_name),
-    )
-    .await?;
+    let external_system_user = ensure_external_channel_system_user(&state, &connection_id).await?;
     let current_user_id = Some(external_system_user.id);
     let resolve_request = CreateExternalDocumentParseRequest {
         source_id: source_id.clone(),
@@ -14400,8 +14453,7 @@ async fn ingest_external_channel_message_with_connection(
         &mut assistant_request.scope_candidates,
     )
     .await?;
-    let external_system_user =
-        ensure_external_system_user(state, "channel", connection_id, connection_id).await?;
+    let external_system_user = ensure_external_channel_system_user(state, connection_id).await?;
     let external_system_user_id = Some(external_system_user.id);
     set_payload_value(
         &mut selected_scope,
@@ -36100,11 +36152,13 @@ async fn build_assistant_run_evidence_state(
             )
             .await
             .map_err(ApiError::from_storage)?;
-        let evidences = filter_retrieval_evidences_for_visible_documents(
+        let evidences = filter_retrieval_evidences_for_assistant_evidence_scope(
             state,
             dataset.id,
             evidences,
             current_user_id,
+            &evidence_document_ids,
+            allow_selected_documents_without_acl_snapshot,
         )
         .await?;
         let evidences = filter_retrieval_evidences_for_external_acl(
@@ -38506,7 +38560,14 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     let documents = list_documents_for_dataset_scope(state, dataset.id)
         .await?
         .into_iter()
-        .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .filter(|document| {
+            document_is_visible_for_assistant_evidence_owner_scope(
+                document,
+                current_user_id,
+                selected_document_ids,
+                allow_selected_documents_without_acl_snapshot,
+            )
+        })
         .filter(|document| {
             selected_document_ids.is_empty() || selected_document_ids.contains(&document.id)
         })
@@ -41746,7 +41807,14 @@ async fn build_assistant_run_chunk_fallback_supply(
     let documents = list_documents_for_dataset_scope(state, dataset.id)
         .await?
         .into_iter()
-        .filter(|document| owner_user_id_is_visible(document.owner_user_id, current_user_id))
+        .filter(|document| {
+            document_is_visible_for_assistant_evidence_owner_scope(
+                document,
+                current_user_id,
+                selected_document_ids,
+                allow_selected_documents_without_acl_snapshot,
+            )
+        })
         .filter(|document| {
             selected_document_ids.is_empty() || selected_document_ids.contains(&document.id)
         })
@@ -83793,6 +83861,26 @@ mod tests {
             tenant.id,
             EventBus::Disabled,
         );
+        let document_owner = state
+            .storage
+            .users()
+            .ensure_by_email(
+                state.tenant_id,
+                "external-source-owner@example.com",
+                Some("External Source Owner"),
+            )
+            .await
+            .expect("document owner should exist");
+        let chat_user = state
+            .storage
+            .users()
+            .ensure_by_email(
+                state.tenant_id,
+                "external-chat-user@example.com",
+                Some("External Chat User"),
+            )
+            .await
+            .expect("chat user should exist");
         let dataset = state
             .storage
             .datasets()
@@ -83820,7 +83908,7 @@ mod tests {
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                             .to_string(),
                     secret_binding_ids: Vec::new(),
-                    owner_user_id: None,
+                    owner_user_id: Some(document_owner.id),
                     metadata: json!({
                         "external_source": {
                             "source_id": "third-party-source-main",
@@ -83845,7 +83933,7 @@ mod tests {
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                             .to_string(),
                     secret_binding_ids: Vec::new(),
-                    owner_user_id: None,
+                    owner_user_id: Some(document_owner.id),
                     metadata: json!({
                         "external_source": {
                             "source_id": "third-party-source-main",
@@ -83991,7 +84079,7 @@ mod tests {
             "邓工是谁",
             None,
             &[],
-            None,
+            Some(chat_user.id),
         )
         .await
         .expect("evidence state should be built");
@@ -85586,7 +85674,7 @@ mod tests {
             .expect("system owner should exist");
         assert_eq!(
             owner_user.email,
-            external_system_user_email("channel-source", "generic-chat-main:src-auto-docs")
+            external_system_user_email("channel", "generic-chat-main")
         );
         assert_eq!(
             created_dataset
@@ -86185,15 +86273,15 @@ mod tests {
     }
 
     #[test]
-    fn external_system_user_email_is_scoped_per_third_party_source() {
-        let left = external_system_user_email("channel-source", "generic-chat-main:src-a");
-        let right = external_system_user_email("channel-source", "generic-chat-main:src-b");
+    fn external_channel_system_user_email_is_scoped_per_interface() {
+        let left = external_system_user_email("channel", "generic-chat-main");
+        let right = external_system_user_email("channel", "another-chat-main");
 
         assert_ne!(left, right);
         assert!(left.ends_with("@aidp.local"));
         assert_eq!(
             left,
-            external_system_user_email("channel-source", "generic-chat-main:src-a")
+            external_system_user_email("channel", "generic-chat-main")
         );
     }
 
