@@ -451,7 +451,7 @@ export function staticPageTemplateReferenceDraftSeed(id) {
     objective: reference.objective,
     audience: reference.audience,
     styleDirection: reference.styleDirection,
-    modelSummary: `${reference.label} 模板参考已应用。V3 仍需按可见数据集、检索证据和缺失项生成结构化草稿。`,
+    modelSummary: `已收到模板参考：将以「${reference.label}」作为页面结构、版式风格和字段组织参考；事实内容仍以可见数据集、检索证据和缺失项为准。`,
     modules: clone(reference.moduleBlueprints),
   };
 }

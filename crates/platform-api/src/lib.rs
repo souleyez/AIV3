@@ -19743,7 +19743,15 @@ fn normalize_external_template_reference_title(raw: &str) -> Option<String> {
 
 fn external_prompt_template_reference_titles(prompt: &str) -> Vec<String> {
     let mut titles = Vec::new();
-    let markers = ["已引用模板", "引用模板"];
+    let markers = [
+        "已引用模板",
+        "引用模板",
+        "已上传模板",
+        "上传模板",
+        "已选择模板",
+        "已选模板",
+        "模板参考",
+    ];
     for marker in markers {
         let mut search_start = 0;
         while search_start < prompt.len() {
@@ -21650,6 +21658,38 @@ fn collect_external_static_page_database_source_ids(
     ids.into_iter().collect()
 }
 
+fn external_static_page_template_reference_label(reference: &Value) -> Option<String> {
+    ["label", "name", "title", "templateId", "template_id", "id"]
+        .iter()
+        .find_map(|key| {
+            reference
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn external_channel_static_page_pipeline_reply_text(
+    codex_auto_publish_enabled: bool,
+    template_reference: Option<&Value>,
+) -> String {
+    let task_clause = if codex_auto_publish_enabled {
+        "已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会继续进入固定 Cloudflare Codex 发布链路。"
+    } else {
+        "已创建静态页草稿并提交 Image2 效果图队列；固定发布链路当前未启用或未加入 allowlist。"
+    };
+    if let Some(label) = template_reference.and_then(external_static_page_template_reference_label)
+    {
+        format!(
+            "已收到模板参考：将以「{label}」作为页面结构、版式风格和字段组织参考；事实内容仍以本会话已授权资料和检索证据为准。{task_clause}"
+        )
+    } else {
+        format!("已收到静态页制作需求。{task_clause}")
+    }
+}
+
 fn external_static_page_prompt_contains_any(prompt: &str, needles: &[&str]) -> bool {
     let normalized = prompt
         .chars()
@@ -22744,15 +22784,14 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     } else {
         "static_page_image_preview_queued"
     };
-    let text = if codex_auto_publish_enabled {
-        "V3 已识别为第三方复杂静态页任务，已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会继续进入固定 Cloudflare Codex 发布链路。"
-    } else {
-        "V3 已识别为第三方复杂静态页任务，已创建静态页草稿并提交 Image2 效果图队列；固定发布链路当前未启用或未 allowlist。"
-    };
+    let text = external_channel_static_page_pipeline_reply_text(
+        codex_auto_publish_enabled,
+        draft_outcome.template_reference.as_ref(),
+    );
     Ok(Some(ExternalBotReplyView {
         target_conversation_external_id: message.conversation_external_id.clone(),
         reply_type: ExternalBotReplyTypeView::TaskStatus,
-        text: Some(text.to_string()),
+        text: Some(text),
         card: Some(json!({
             "type": "v3_static_page_image2_pipeline",
             "status": task_status,
@@ -55288,7 +55327,7 @@ fn static_page_document_template_reference_from_snapshot(snapshot: &Value) -> Va
         "quickOutput": true,
         "aspectHint": "custom-document-template",
         "styleDirection": "follow-customer-template",
-        "designIntent": "按指定文档的章节结构、措辞风格和输出要求生成静态页草稿。",
+        "designIntent": "以用户上传或选择的模板文档作为章节结构、版式风格和字段组织参考，生成静态页草稿。",
         "promptHints": prompt_hints,
         "guardrails": [
             "template document controls format, style, section order, and required fields only",
@@ -55754,7 +55793,7 @@ fn apply_static_page_template_reference_to_payload(
             object.insert(
                 "modelSummary".to_string(),
                 json!(format!(
-                    "{} 模板参考已应用。V3 仍需按可见数据集、检索证据和缺失项生成结构化草稿。",
+                    "已收到模板参考：将以「{}」作为页面结构、版式风格和字段组织参考；事实内容仍以可见数据集、检索证据和缺失项为准。",
                     reference.label
                 )),
             );
@@ -61383,9 +61422,17 @@ mod tests {
             external_prompt_template_reference_titles("请生成页面 [已引用模板：资料2.docx]"),
             vec!["资料2.docx".to_string()]
         );
+        assert_eq!(
+            external_prompt_template_reference_titles("请生成页面 [已上传模板：资料2.docx]"),
+            vec!["资料2.docx".to_string()]
+        );
+        assert_eq!(
+            external_prompt_template_reference_titles("请生成页面 [模板参考：资料2.docx]"),
+            vec!["资料2.docx".to_string()]
+        );
         let skills = external_prompt_template_reference_skills(
             &selected_scope,
-            "请生成页面 [已引用模板：资料2.docx]",
+            "请生成页面 [已上传模板：资料2.docx]",
         );
 
         assert_eq!(skills.len(), 1);
@@ -61559,6 +61606,23 @@ mod tests {
             payload["templateReference"]["source"],
             json!("document_template_skill")
         );
+    }
+
+    #[test]
+    fn external_static_page_pipeline_reply_acknowledges_template_reference_formally() {
+        let text = external_channel_static_page_pipeline_reply_text(
+            true,
+            Some(&json!({
+                "label": "文档模板：客户周报模板",
+                "templateId": "document-template-weekly"
+            })),
+        );
+
+        assert!(text.contains("已收到模板参考"));
+        assert!(text.contains("页面结构、版式风格和字段组织参考"));
+        assert!(text.contains("事实内容仍以本会话已授权资料和检索证据为准"));
+        assert!(text.contains("效果图无需客户确认"));
+        assert!(!text.contains("第三方复杂静态页任务"));
     }
 
     #[test]

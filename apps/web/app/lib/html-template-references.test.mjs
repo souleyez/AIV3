@@ -42,6 +42,8 @@ test('builds a safe static page draft seed without raw html', () => {
   assert.equal(seed.templateId, 'data-report');
   assert.equal(seed.styleDirection, 'data-command');
   assert.equal(seed.designReference.importPolicy, 'metadata_and_constraints_only');
+  assert.match(seed.modelSummary, /已收到模板参考/);
+  assert.match(seed.modelSummary, /事实内容仍以可见数据集、检索证据和缺失项为准/);
   assert.equal(seed.modules.length, 5);
   assert.equal(seed.modules.some((module) => module.visualization.type === 'bar-chart'), true);
   assert.doesNotMatch(JSON.stringify(seed), /<html|<script|https?:\/\//i);
