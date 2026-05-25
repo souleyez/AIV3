@@ -42504,7 +42504,12 @@ fn assistant_run_scope_with_requested_document_scope(
     }
 
     ensure_json_object(&mut selected_scope);
-    if selected_dataset_ids_from_scope(&selected_scope).is_empty() {
+    let requested_dataset_ids = selected_dataset_ids_from_scope(requested_scope);
+    if !requested_dataset_ids.is_empty() {
+        if let Some(datasets) = requested_scope.get("datasets").cloned() {
+            set_payload_value(&mut selected_scope, "datasets", datasets);
+        }
+    } else if selected_dataset_ids_from_scope(&selected_scope).is_empty() {
         if let Some(datasets) = requested_scope.get("datasets").cloned() {
             set_payload_value(&mut selected_scope, "datasets", datasets);
         }
@@ -83077,6 +83082,33 @@ mod tests {
         assert_eq!(
             evidence_state["selected_scope"]["temporary_dataset"]["document_count"],
             json!(1)
+        );
+    }
+
+    #[test]
+    fn assistant_run_requested_document_scope_preserves_requested_dataset() {
+        let planned_dataset_id = Uuid::new_v4();
+        let requested_dataset_id = Uuid::new_v4();
+        let requested_document_id = Uuid::new_v4();
+        let planned_scope = json!({
+            "mode": "preselected",
+            "reason": "用户问题命中常用业务主题",
+            "datasets": [{"type": "dataset", "id": planned_dataset_id}],
+        });
+        let requested_scope = json!({
+            "mode": "document",
+            "datasets": [{"type": "dataset", "id": requested_dataset_id}],
+            "documents": [{"type": "document", "id": requested_document_id}],
+        });
+
+        let merged =
+            assistant_run_scope_with_requested_document_scope(planned_scope, Some(&requested_scope));
+
+        assert_eq!(merged["datasets"], requested_scope["datasets"]);
+        assert_eq!(merged["documents"], requested_scope["documents"]);
+        assert_eq!(
+            selected_dataset_id_from_scope(&merged),
+            Some(DatasetId(requested_dataset_id))
         );
     }
 
