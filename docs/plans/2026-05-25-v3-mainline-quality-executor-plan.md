@@ -10,9 +10,9 @@
 
 ---
 
-## Current Baseline - 2026-05-25
+## Current Baseline - 2026-05-26
 
-- Local and 8-server HEAD: `014251d` / `014251dcb`.
+- Local, GitHub, and 8-server HEAD before the current static-page readiness batch: `2091c03`.
 - 8-server services: `aiv3-platform-api.service` and `aiv3-web.service` are active.
 - 8-server release builds must use `CC=clang CXX=clang++`; default `gcc 10.2.1` is rejected by `aws-lc-sys`.
 - Third-party document authorization supports:
@@ -64,6 +64,11 @@
   - smart-home customer dissatisfaction query;
   - smart-elevator point-list table query.
 - Smoke script now reads HTTP error bodies through PowerShell `ErrorDetails.Message` / `HttpResponseMessage.Content` compatibility paths, so real server errors are not hidden by local response-object differences.
+- Continued on 2026-05-26 by tightening static-page `static_page_image2_data_publish` auto-publish readiness:
+  - V3 now treats Codex auto-publish as ready only when the platform task switch, platform allowlist, Codex Host agent capability allowlist, real execution mode, real Codex execution permission, trusted host kind, and task workspace root are all present.
+  - If readiness is incomplete, the static-page path keeps the existing built-in HTML direct-render fallback instead of leaving users waiting on an effect-image-only task.
+  - Static-page cards and SSE payloads expose additive diagnostics `codex_auto_publish_ready` and `codex_auto_publish_disabled_reason`; third parties can ignore these unless they are logging or debugging integration state.
+  - Local regression passed for `external_channel_static_page`, full `external_channel`, and third-party guide HTML check.
 
 ## Immediate Execution Queue
 
@@ -91,6 +96,7 @@
    - Consolidate a shared artifact manifest shape for static pages, Image2 previews, reports, and data-ingestion analysis.
    - Make failed/retrying executor task statuses consistently model-visible.
    - Add lazy observation surfaces that do not poll every conversation or task.
+   - Keep fixed-task auto-execution gated by explicit runtime readiness instead of platform allowlist alone.
 
 5. **Static-page productization**
    - Treat Image2 as a visual contract/reference, not final HTML source of truth.

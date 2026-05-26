@@ -22940,16 +22940,14 @@ async fn external_channel_static_page_image2_enqueue_if_enabled(
         missing_evidence,
     );
     let capability = fixed_task.template_id.as_str();
-    if !platform_env_flag("CODEX_HOST_TASK_ENABLED", false) {
-        return Ok(None);
-    }
-    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
+    let readiness = external_channel_static_page_codex_auto_publish_readiness();
+    if !readiness.ready {
         record_codex_host_fixed_task_preflight_rejected(
             state,
             run.id,
             Some(capability),
             &fixed_task,
-            "codex_host_task_not_allowlisted",
+            readiness.reason,
         )
         .await;
         return Ok(None);
@@ -23332,11 +23330,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         },
     )
     .await?;
-    let codex_auto_publish_enabled = platform_env_flag("CODEX_HOST_TASK_ENABLED", false)
-        && env_csv_contains(
-            "CODEX_HOST_TASK_ALLOWLIST",
-            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
-        );
+    let codex_auto_publish_readiness = external_channel_static_page_codex_auto_publish_readiness();
+    let codex_auto_publish_enabled = codex_auto_publish_readiness.ready;
     let direct_render_response = if codex_auto_publish_enabled {
         None
     } else {
@@ -23392,6 +23387,12 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         Value::Null
                     },
                     "auto_publish_after_preview": codex_auto_publish_enabled,
+                    "codex_auto_publish_ready": codex_auto_publish_enabled,
+                    "codex_auto_publish_disabled_reason": if codex_auto_publish_enabled {
+                        Value::Null
+                    } else {
+                        Value::String(codex_auto_publish_readiness.reason.to_string())
+                    },
                     "direct_html_fallback": direct_render_output.is_some(),
                     "effect_image_confirmation_required": false,
                 }),
@@ -23455,6 +23456,12 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 Value::Null
             },
             "auto_publish_after_preview": codex_auto_publish_enabled,
+            "codex_auto_publish_ready": codex_auto_publish_enabled,
+            "codex_auto_publish_disabled_reason": if codex_auto_publish_enabled {
+                Value::Null
+            } else {
+                Value::String(codex_auto_publish_readiness.reason.to_string())
+            },
             "direct_html_fallback": direct_render_output.is_some(),
             "effect_image_confirmation_required": false,
             "publish_mode": "new_generated_artifact_only",
@@ -23468,6 +23475,79 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         action_id: None,
         confirmation_id: None,
     }))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StaticPageCodexAutoPublishReadiness {
+    ready: bool,
+    reason: &'static str,
+}
+
+fn external_channel_static_page_codex_auto_publish_readiness() -> StaticPageCodexAutoPublishReadiness
+{
+    let capability = CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str();
+    if !platform_env_flag("CODEX_HOST_TASK_ENABLED", false) {
+        return StaticPageCodexAutoPublishReadiness {
+            ready: false,
+            reason: "codex_host_task_disabled",
+        };
+    }
+    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
+        return StaticPageCodexAutoPublishReadiness {
+            ready: false,
+            reason: "codex_host_task_not_allowlisted",
+        };
+    }
+    if !env_csv_contains("CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES", capability) {
+        return StaticPageCodexAutoPublishReadiness {
+            ready: false,
+            reason: "codex_host_agent_capability_not_allowlisted",
+        };
+    }
+    let execution_mode = std::env::var("CODEX_HOST_AGENT_EXECUTION_MODE")
+        .unwrap_or_else(|_| "dry_run".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(execution_mode.as_str(), "codex_exec" | "codex-exec") {
+        return StaticPageCodexAutoPublishReadiness {
+            ready: false,
+            reason: "codex_host_agent_not_real_execution_mode",
+        };
+    }
+    if !platform_env_flag("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", false) {
+        return StaticPageCodexAutoPublishReadiness {
+            ready: false,
+            reason: "codex_host_agent_real_exec_disabled",
+        };
+    }
+    let host_kind = std::env::var("CODEX_HOST_AGENT_HOST_KIND")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        host_kind.as_str(),
+        "windows_jump" | "mac_host" | "cloudflare_codex"
+    ) {
+        return StaticPageCodexAutoPublishReadiness {
+            ready: false,
+            reason: "codex_host_agent_host_kind_not_approved",
+        };
+    }
+    let workspace_root = std::env::var("CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if workspace_root.is_empty() {
+        return StaticPageCodexAutoPublishReadiness {
+            ready: false,
+            reason: "codex_host_agent_workspace_root_missing",
+        };
+    }
+
+    StaticPageCodexAutoPublishReadiness {
+        ready: true,
+        reason: "ready",
+    }
 }
 
 fn external_template_html_artifact_data_refs(
@@ -62993,7 +63073,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_static_page_pipeline_returns_render_output_when_codex_publish_disabled(
+    async fn external_channel_static_page_pipeline_returns_render_output_when_codex_publish_not_ready(
     ) {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
@@ -63004,8 +63084,22 @@ mod tests {
             }
         };
         reset_and_sync_test_storage(&storage).await;
-        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "false");
-        let _allowlist = TestEnvVarRestore::set("CODEX_HOST_TASK_ALLOWLIST", "");
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode = TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "plan_only");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "linux_server");
+        let _agent_real = TestEnvVarRestore::set("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", "false");
+        let _agent_workspace = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            "/srv/aiv3/codex-workspaces",
+        );
 
         let tenant = storage
             .ensure_tenant(
@@ -63086,6 +63180,11 @@ mod tests {
         let card = reply.card.expect("card should be returned");
         assert_eq!(card["status"], json!("static_page_rendered"));
         assert_eq!(card["direct_html_fallback"], json!(true));
+        assert_eq!(card["codex_auto_publish_ready"], json!(false));
+        assert_eq!(
+            card["codex_auto_publish_disabled_reason"],
+            json!("codex_host_agent_not_real_execution_mode")
+        );
         assert!(card["draft_id"]
             .as_str()
             .is_some_and(|value| !value.is_empty()));
@@ -63119,9 +63218,42 @@ mod tests {
             })
             .expect("pipeline event should be recorded");
         assert_eq!(queued.payload["direct_html_fallback"], json!(true));
+        assert_eq!(queued.payload["codex_auto_publish_ready"], json!(false));
+        assert_eq!(
+            queued.payload["codex_auto_publish_disabled_reason"],
+            json!("codex_host_agent_not_real_execution_mode")
+        );
         assert_eq!(
             queued.payload["render_output_id"].as_str(),
             Some(render_output_id)
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_codex_auto_publish_readiness_requires_real_exec() {
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode = TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "codex_exec");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _agent_real = TestEnvVarRestore::set("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", "true");
+        let _agent_workspace = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            "/srv/aiv3/codex-workspaces",
+        );
+
+        assert_eq!(
+            external_channel_static_page_codex_auto_publish_readiness(),
+            StaticPageCodexAutoPublishReadiness {
+                ready: true,
+                reason: "ready"
+            }
         );
     }
 
@@ -63717,6 +63849,17 @@ mod tests {
         let _allowlist = TestEnvVarRestore::set(
             "CODEX_HOST_TASK_ALLOWLIST",
             CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode = TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "codex_exec");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _agent_real = TestEnvVarRestore::set("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", "true");
+        let _agent_workspace = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            "/srv/aiv3/codex-workspaces",
         );
 
         let tenant = storage

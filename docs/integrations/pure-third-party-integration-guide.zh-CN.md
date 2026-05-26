@@ -465,7 +465,9 @@ Content-Type: application/json
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，V3 会去重，不重复加载同一模板文档。
 
-V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未启用，V3 会同步生成一份内置 HTML 静态页，并在本次回复里返回 `render_output_id` 和下载/预览地址。
+V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页，并在本次回复里返回 `render_output_id` 和下载/预览地址。
+
+`static_page_image2_data_publish` 只有在 V3 平台任务开关、平台 allowlist、Codex Host agent allowlist、真实执行模式、真实 Codex 执行许可、可信宿主类型和任务工作区都就绪时才算已启用。第三方不需要关心这些内部配置，只需按响应字段判断是否已拿到最终 HTML 或仍在自动发布队列。
 
 若进入静态页/Image2 流水线，响应通常为：
 
@@ -482,6 +484,8 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.html_download_url` | 已直接生成 HTML 时返回；HTML 附件下载地址 |
 | `reply.card.direct_html_fallback` | `true` 表示固定 Codex 发布能力未启用，本次已走 V3 内置 HTML 直出兜底 |
 | `reply.card.auto_publish_after_preview` | `true` 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路 |
+| `reply.card.codex_auto_publish_ready` | `true` 表示服务端当前已完整启用固定 Codex 自动发布；`false` 表示本次会走内置 HTML 直出兜底 |
+| `reply.card.codex_auto_publish_disabled_reason` | `codex_auto_publish_ready=false` 时返回内部诊断原因；第三方通常只用于日志，不需要展示给最终用户 |
 | `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
 | `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
 

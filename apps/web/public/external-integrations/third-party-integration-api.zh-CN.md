@@ -425,7 +425,7 @@ SSE data 字段说明：
 | `external_channel.started.data` | `idempotency_key` | 本轮消息幂等键 |
 | `external_channel.delta.data` | `index` | 增量片段序号，从 0 开始 |
 | `external_channel.delta.data` | `delta` | 本次追加的文本片段 |
-| `external_channel.static_page_effect_image_queued.data` | `card` | 静态页任务卡片，通常包含 `draft_id`、`image_job_id`、`auto_publish_after_preview`、`effect_image_confirmation_required=false`；若已走 V3 内置 HTML 直出兜底，还会包含 `render_output_id`、`html_preview_url`、`html_download_url` |
+| `external_channel.static_page_effect_image_queued.data` | `card` | 静态页任务卡片，通常包含 `draft_id`、`image_job_id`、`auto_publish_after_preview`、`codex_auto_publish_ready`、`effect_image_confirmation_required=false`；若已走 V3 内置 HTML 直出兜底，还会包含 `render_output_id`、`html_preview_url`、`html_download_url`、`direct_html_fallback=true` 和 `codex_auto_publish_disabled_reason` |
 | `external_channel.completed.data` | `assistant_run_id` | 本轮 V3 任务 ID |
 | `external_channel.completed.data` | `response` | 与 `/events` JSON 响应同结构的最终响应 |
 | `done.data` | `ok` | SSE 流是否正常结束 |
@@ -433,7 +433,7 @@ SSE data 字段说明：
 | `error.data` | `error.code` | 稳定错误码 |
 | `error.data` | `error.message` | 错误说明，不包含密钥和敏感正文 |
 
-说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回最终响应；第三方页面不要把 `started` 渲染为助手消息。静态页生成时，Image2 效果图会通过 SSE/卡片作为过程预览出现；如果 `completed.response.reply.card.render_output_id` 已存在，第三方可立即按静态页渲染产物接口查询、预览或下载 HTML；如果只返回效果图队列信息，则继续等待最终状态事件里的 `public_url`。第三方不需要为效果图单独做确认、下载或二次提交。
+说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回最终响应；第三方页面不要把 `started` 渲染为助手消息。静态页生成时，Image2 效果图会通过 SSE/卡片作为过程预览出现；如果 `completed.response.reply.card.render_output_id` 已存在，第三方可立即按静态页渲染产物接口查询、预览或下载 HTML；如果 `codex_auto_publish_ready=true` 且只返回效果图队列信息，则继续等待最终状态事件里的 `public_url`。第三方不需要为效果图单独做确认、下载或二次提交。
 
 任务状态响应示例：
 
@@ -1000,7 +1000,9 @@ V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，�
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可继续在 `requested_skills[].arguments.output_type` 中传 `static_page`。若同时传 `template` 和旧 skill，V3 会按模板文档去重。
 
-V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点。若服务端已启用 `static_page_image2_data_publish` 固定发布能力，V3 会在效果图完成后继续自动生成并发布最终 generated-artifact 静态页；若该能力未启用，V3 会同步生成一份内置 HTML 静态页，并在本次回复中返回 `reply.card.render_output_id`、`reply.card.html_preview_url`、`reply.card.html_download_url` 和 `reply.artifact_links[0]`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
+V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点。若服务端已完整启用 `static_page_image2_data_publish` 固定发布能力，V3 会在效果图完成后继续自动生成并发布最终 generated-artifact 静态页；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页，并在本次回复中返回 `reply.card.render_output_id`、`reply.card.html_preview_url`、`reply.card.html_download_url` 和 `reply.artifact_links[0]`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
+
+`static_page_image2_data_publish` 只有在 V3 平台任务开关、平台 allowlist、Codex Host agent allowlist、真实执行模式、真实 Codex 执行许可、可信宿主类型和任务工作区都就绪时才算已启用。响应卡片里的 `codex_auto_publish_ready=false` 表示本次已经走内置 HTML 兜底；`codex_auto_publish_disabled_reason` 仅用于服务端日志和联调排查。
 
 快速 HTML 生成可使用以下选项：
 
