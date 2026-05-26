@@ -30258,6 +30258,10 @@ fn assistant_run_react_json_payload_candidate(output_text: &str) -> Option<Strin
 fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> bool {
     let normalized = output_text.to_ascii_lowercase();
     [
+        "[tool_call]",
+        "[/tool_call]",
+        "<tool_call",
+        "</tool_call",
         "observation",
         "execution_trail",
         "react_trace",
@@ -30269,6 +30273,16 @@ fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> boo
         "parse_degraded",
         "low_text_coverage",
         "model_status",
+        "retrieve_evidence:",
+        "read_document_detail:",
+        "upgrade_parse_vlm:",
+        "recall_conversation_memory:",
+        "codex_host_task:",
+        "create_static_page_draft:",
+        "update_static_page_module:",
+        "submit_static_page_image_preview:",
+        "render_static_page:",
+        "create_report_draft:",
         "\"action_type\"",
         "\"actiontype\"",
     ]
@@ -30313,6 +30327,9 @@ fn assistant_run_sanitize_customer_facing_answer_text(output_text: &str) -> Stri
         ("model_status", "解析状态"),
     ] {
         sanitized = sanitized.replace(raw, replacement);
+    }
+    if assistant_run_react_output_contains_internal_marker(&sanitized) {
+        return "本轮回答包含内部检索指令，系统已拦截未直接展示。请稍后重试，我会基于当前可见资料直接给出结论。".to_string();
     }
     sanitized
 }
@@ -51671,8 +51688,11 @@ fn lexical_cjk_phrase_boost(term: &str) -> f64 {
             cjk_count += 1;
         }
     }
+    if char_count == 1 && cjk_count == 1 {
+        return 0.2;
+    }
     if char_count >= 2 && char_count == cjk_count {
-        1.0 + ((char_count - 1) as f64 * 0.15).min(0.75)
+        1.0 + ((char_count - 1) as f64 * 0.35).min(1.75)
     } else {
         1.0
     }
@@ -69007,6 +69027,55 @@ mod tests {
         assert!(!sanitized.contains("parse_degraded"));
         assert!(!sanitized.contains("low_text_coverage"));
         assert!(sanitized.contains("解析质量较低"));
+    }
+
+    #[test]
+    fn assistant_run_quality_gate_detects_raw_tool_call_protocol_leak() {
+        let request = CreateAssistantRunRequest {
+            prompt: "给老人发药时，需要执行哪些核对步骤？".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["dataset-1"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 4,
+                "indexedEvidenceCount": 4,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0
+            }
+        });
+        let output = r#"我来检索手册中关于药品发放和核对的相关规范。
+
+[TOOL_CALL]
+retrieve_evidence:
+  dataset_id: "dataset-1"
+  query: "老人自带药品管理 发药 核对 护理操作规范"
+  limit: 5
+  intent: "general_retrieval"
+  arguments: {}
+[/TOOL_CALL]"#;
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(output, &evidence_state, &request),
+            Some("internal_marker_answer")
+        );
+        let sanitized = assistant_run_sanitize_customer_facing_answer_text(output);
+        assert!(!sanitized.contains("[TOOL_CALL]"));
+        assert!(!sanitized.contains("retrieve_evidence:"));
+        assert!(sanitized.contains("内部检索指令"));
     }
 
     #[test]
@@ -94242,6 +94311,104 @@ mod tests {
         let selected = select_retrieval_evidence_ids_for_prompt(
             &evidences,
             "长期卧床老人多长时间翻身一次？",
+            1,
+        );
+
+        assert_eq!(selected, vec![relevant_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_prefers_medication_check_chunk_over_invoice_noise() {
+        let now = Utc::now();
+        let relevant_id = RetrievalEvidenceId::new();
+        let invoice_id = RetrievalEvidenceId::new();
+        let meeting_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: invoice_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 236,
+                source_locator: "document://manual/chunks/236".to_string(),
+                content_excerpt: "月末发票进帐、核对金额、部门负责人签字确认并归档。"
+                    .to_string(),
+                summary: "发票核对和签字确认".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "发票": 4.0,
+                            "核对": 2.0,
+                            "签字": 2.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: meeting_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 164,
+                source_locator: "document://manual/chunks/164".to_string(),
+                content_excerpt: "会议材料发放、签字及存档，参会人员逐项确认。".to_string(),
+                summary: "会议材料发放记录".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.98,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "发放": 3.0,
+                            "签字": 2.0,
+                            "确认": 2.0
+                        }
+                    },
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: relevant_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 92,
+                source_locator: "document://manual/chunks/92".to_string(),
+                content_excerpt: "给老人发药或协助服药前，应核对床号、姓名、药品名称、剂量、用法和服药时间，避免误服、漏服，并观察服药后的反应。".to_string(),
+                summary: "老年人用药和发药核对要求".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "发药": 5.0,
+                            "服药": 4.0,
+                            "核对": 3.0,
+                            "药品": 3.0
+                        }
+                    },
+                    "recall": { "rank_hint": 3 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "给老人发药时，需要执行哪些核对步骤？",
             1,
         );
 
