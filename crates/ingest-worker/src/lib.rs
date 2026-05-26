@@ -3343,18 +3343,10 @@ fn extract_legacy_doc_text(path: &Path) -> Option<ExtractedDocumentText> {
     let temp_dir = create_temp_dir("aidp-legacy-doc").ok()?;
     let extracted = convert_office_document_to_pdf(path, &temp_dir)
         .as_deref()
-        .and_then(extract_pdf_text)
-        .map(|mut extracted| {
-            extracted.method = format!("doc-libreoffice-pdf+{}", extracted.method);
-            extracted.metadata = json!({
-                "legacy_doc": {
-                    "converter": "libreoffice",
-                    "intermediate": "pdf"
-                },
-                "pdf": extracted.metadata,
-            });
-            extracted
-        });
+        .and_then(|pdf_path| {
+            extract_legacy_doc_pdf_native_text(pdf_path).or_else(|| extract_pdf_text(pdf_path))
+        })
+        .map(with_legacy_doc_pdf_metadata);
     let _ = fs::remove_dir_all(&temp_dir);
     if extracted.is_some() {
         return extracted;
@@ -3373,6 +3365,42 @@ fn extract_legacy_doc_text(path: &Path) -> Option<ExtractedDocumentText> {
     }
 
     None
+}
+
+fn extract_legacy_doc_pdf_native_text(path: &Path) -> Option<ExtractedDocumentText> {
+    for extracted in [
+        extract_pdf_with_pdftotext(path).map(|text| extracted_text(text, "pdf-pdftotext")),
+        extract_pdf_with_python(path).map(|text| extracted_text(text, "pdf-python")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let PdfParseQuality::Usable { text_chars } = pdf_candidate_parse_quality(&extracted) {
+            return Some(with_pdf_parse_quality_metadata(
+                extracted,
+                "usable_text",
+                text_chars,
+                None,
+            ));
+        }
+    }
+
+    None
+}
+
+fn with_legacy_doc_pdf_metadata(mut extracted: ExtractedDocumentText) -> ExtractedDocumentText {
+    let fast_path = extracted.method == "pdf-pdftotext" || extracted.method == "pdf-python";
+    extracted.method = format!("doc-libreoffice-pdf+{}", extracted.method);
+    extracted.metadata = json!({
+        "legacy_doc": {
+            "converter": "libreoffice",
+            "intermediate": "pdf",
+            "native_text_fast_path": fast_path,
+            "ocr_skipped": fast_path,
+        },
+        "pdf": extracted.metadata,
+    });
+    extracted
 }
 
 fn direct_command_candidates(env_name: &str, fallback: &str) -> Vec<String> {
@@ -3865,6 +3893,29 @@ trailer << /Root 1 0 R >>
                 PdfParseQuality::Usable { .. }
             ));
         });
+    }
+
+    #[test]
+    fn legacy_doc_pdf_metadata_marks_native_text_fast_path() {
+        let extracted = with_pdf_parse_quality_metadata(
+            extracted_text("养老机构精细化运营实操手册正文".repeat(8), "pdf-pdftotext"),
+            "usable_text",
+            128,
+            None,
+        );
+
+        let wrapped = with_legacy_doc_pdf_metadata(extracted);
+
+        assert_eq!(wrapped.method, "doc-libreoffice-pdf+pdf-pdftotext");
+        assert_eq!(
+            wrapped.metadata["legacy_doc"]["native_text_fast_path"],
+            json!(true)
+        );
+        assert_eq!(wrapped.metadata["legacy_doc"]["ocr_skipped"], json!(true));
+        assert_eq!(
+            wrapped.metadata["pdf"]["parse_quality"]["status"],
+            json!("usable_text")
+        );
     }
 
     #[test]
