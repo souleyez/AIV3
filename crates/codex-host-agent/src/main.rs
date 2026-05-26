@@ -1300,7 +1300,7 @@ fn generated_artifact_public_url(relative_dir: &str) -> String {
 
 fn generated_artifact_url_allowed(public_url: &str) -> bool {
     let normalized = public_url.trim();
-    if normalized.contains("/generated-artifacts/pending-host-agent-publication/") {
+    if normalized.contains("/generated-artifacts/pending-") {
         return false;
     }
     normalized.starts_with("https://v3.elepcloud.com/generated-artifacts/")
@@ -1933,7 +1933,7 @@ mod tests {
             "template_id": "static_page_image2_data_publish",
             "status": "success",
             "artifact": {
-                "public_url": "https://v3.elepcloud.com/generated-artifacts/pending-host-agent-publication/draft/index.html",
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/pending-host-publication",
                 "html": "<main><h1>经营分析</h1></main>"
             },
             "validation_report": {
