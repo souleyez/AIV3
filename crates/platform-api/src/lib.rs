@@ -22716,7 +22716,10 @@ fn external_channel_static_page_image2_fixed_task(
 ) -> CodexHostFixedTaskTemplateContextView {
     let image_prompt_payload = &image_job.image_prompt_payload;
     let prompt_text = serde_json::to_string_pretty(image_prompt_payload)
+        .map(|value| truncate_assistant_supply_text(&value, 2000))
         .unwrap_or_else(|_| truncate_assistant_supply_text(prompt, 2000));
+    let image_prompt_payload_summary =
+        external_static_page_image_prompt_payload_summary(image_prompt_payload);
     CodexHostFixedTaskTemplateContextView {
         template_id: CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish,
         version: 1,
@@ -22768,7 +22771,7 @@ fn external_channel_static_page_image2_fixed_task(
             "preview_asset_key": image_job.preview_asset_key.clone(),
             "customer_preview_delivery": "stream_event_or_status_card",
             "human_confirmation_required": false,
-            "image_prompt_payload": image_prompt_payload,
+            "image_prompt_payload": image_prompt_payload_summary,
         }),
         policies: json!({
             "snapshot_aggregation": "latest_snapshot_for_state_modules",
@@ -22785,7 +22788,7 @@ fn external_channel_static_page_image2_fixed_task(
         low_quality_signals: Vec::new(),
         user_question: None,
         customer_answer: None,
-        evidence_summary: run.evidence_state.clone(),
+        evidence_summary: evidence_summary.clone(),
         trace_summary: json!({
             "external_channel": {
                 "connection_id": connection_id,
@@ -22799,6 +22802,76 @@ fn external_channel_static_page_image2_fixed_task(
         allowed_write_scope: None,
         human_review_policy: CodexHostFixedTaskHumanReviewPolicyView::AutoForNewGeneratedArtifact,
     }
+}
+
+fn external_static_page_image_prompt_payload_summary(payload: &Value) -> Value {
+    let modules = payload
+        .get("modules")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(8)
+                .map(external_static_page_image_module_summary)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let prompt_text = [
+        payload.get("promptText"),
+        payload.get("prompt_text"),
+        payload.get("prompt"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_str)
+    .map(|value| truncate_assistant_supply_text(value, 1200));
+    json!({
+        "truncated": true,
+        "summary_for": "static_page_image2_data_publish",
+        "title": payload.get("title").cloned().unwrap_or(Value::Null),
+        "prompt_text": prompt_text,
+        "style_direction": payload.get("style_direction").or_else(|| payload.get("styleDirection")).cloned().unwrap_or(Value::Null),
+        "modules": modules,
+        "module_count": payload
+            .get("modules")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "preview_contract_excerpt": external_static_page_value_excerpt(
+            payload
+                .get("preview_contract")
+                .or_else(|| payload.get("previewContract")),
+            1000,
+        ),
+        "data_snapshot_excerpt": external_static_page_value_excerpt(
+            payload
+                .get("data_snapshot")
+                .or_else(|| payload.get("dataSnapshot")),
+            1000,
+        ),
+    })
+}
+
+fn external_static_page_image_module_summary(module: &Value) -> Value {
+    json!({
+        "id": module.get("id").cloned().unwrap_or(Value::Null),
+        "role": module.get("role").cloned().unwrap_or(Value::Null),
+        "title": module.get("title").cloned().unwrap_or(Value::Null),
+        "layout": module.get("layout").cloned().unwrap_or(Value::Null),
+        "content": module
+            .get("content")
+            .and_then(Value::as_str)
+            .map(|value| truncate_assistant_supply_text(value, 240)),
+        "visualization": module.get("visualization").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn external_static_page_value_excerpt(value: Option<&Value>, max_chars: usize) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    let text = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+    Value::String(truncate_assistant_supply_text(&text, max_chars))
 }
 
 fn external_channel_static_page_image2_codex_execution(
