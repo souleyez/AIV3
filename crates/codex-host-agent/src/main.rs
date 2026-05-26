@@ -31,6 +31,7 @@ const DEFAULT_ORCHESTRATOR_RUNTIME_TARGET: &str = "cloudflare";
 const DEFAULT_ORCHESTRATOR_SOURCE: &str = "v3-codex-host-agent";
 const DEFAULT_ORCHESTRATOR_KIND: &str = "code-task";
 const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
+const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 6_500;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -592,14 +593,156 @@ fn build_cloudflare_orchestrator_prompt(task_context: &CodexHostTaskContext) -> 
 fn fixed_task_json_for_orchestrator_prompt(
     fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
 ) -> Result<String> {
-    let full = serde_json::to_string_pretty(fixed_task)
+    let task_value = if fixed_task.template_id.as_str() == "static_page_image2_data_publish" {
+        compact_static_page_image2_fixed_task_for_orchestrator(fixed_task)
+    } else {
+        json!(fixed_task)
+    };
+    let full = serde_json::to_string_pretty(&task_value)
         .map_err(|error| anyhow!("failed to serialize fixed task package: {error}"))?;
-    if full.chars().count() <= 9_000 {
+    if full.chars().count() <= ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS {
         return Ok(full);
     }
-    let bounded = bounded_orchestrator_prompt_value(&json!(fixed_task), 0);
-    serde_json::to_string_pretty(&bounded)
-        .map_err(|error| anyhow!("failed to serialize bounded fixed task package: {error}"))
+    let bounded = bounded_orchestrator_prompt_value(&task_value, 0);
+    let bounded_text = serde_json::to_string_pretty(&bounded)
+        .map_err(|error| anyhow!("failed to serialize bounded fixed task package: {error}"))?;
+    if bounded_text.chars().count() <= ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS {
+        return Ok(bounded_text);
+    }
+    let tight = tightly_bounded_orchestrator_prompt_value(&task_value, 0);
+    let tight_text = serde_json::to_string_pretty(&tight).map_err(|error| {
+        anyhow!("failed to serialize tightly bounded fixed task package: {error}")
+    })?;
+    if tight_text.chars().count() <= ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS {
+        return Ok(tight_text);
+    }
+    let minimal = minimal_fixed_task_for_orchestrator(fixed_task);
+    serde_json::to_string_pretty(&minimal)
+        .map_err(|error| anyhow!("failed to serialize minimal fixed task package: {error}"))
+}
+
+fn compact_static_page_image2_fixed_task_for_orchestrator(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> Value {
+    json!({
+        "template_id": fixed_task.template_id.as_str(),
+        "version": fixed_task.version,
+        "assistant_run_id": fixed_task.assistant_run_id,
+        "draft_id": fixed_task.draft_id,
+        "dataset_scope": bounded_orchestrator_prompt_value(&fixed_task.dataset_scope, 2),
+        "requirements": {
+            "user_goal": compact_value_string_field(&fixed_task.requirements, "user_goal", 900),
+            "project_name": fixed_task.requirements.get("project_name").cloned().unwrap_or(Value::Null),
+            "workflow": fixed_task.requirements.get("workflow").cloned().unwrap_or(Value::Null),
+            "source": fixed_task.requirements.get("source").cloned().unwrap_or(Value::Null),
+            "platform": fixed_task.requirements.get("platform").cloned().unwrap_or(Value::Null),
+            "conversation_external_id": fixed_task.requirements.get("conversation_external_id").cloned().unwrap_or(Value::Null),
+            "message_external_id": fixed_task.requirements.get("message_external_id").cloned().unwrap_or(Value::Null),
+            "artifact_type": fixed_task.requirements.get("artifact_type").cloned().unwrap_or(Value::Null),
+            "artifact_template": bounded_orchestrator_prompt_value(
+                fixed_task.requirements.get("artifact_template").unwrap_or(&Value::Null),
+                2,
+            ),
+            "output_format": fixed_task.requirements.get("output_format").cloned().unwrap_or(Value::Null),
+            "render_mode": fixed_task.requirements.get("render_mode").cloned().unwrap_or(Value::Null),
+            "requested_skills": bounded_orchestrator_prompt_value(
+                fixed_task.requirements.get("requested_skills").unwrap_or(&Value::Null),
+                2,
+            ),
+            "time_dimension_required": fixed_task.requirements.get("time_dimension_required").cloned().unwrap_or(Value::Null),
+            "primary_partition_required": fixed_task.requirements.get("primary_partition_required").cloned().unwrap_or(Value::Null),
+            "detail_table_required": fixed_task.requirements.get("detail_table_required").cloned().unwrap_or(Value::Null),
+            "evidence_summary": value_excerpt_for_orchestrator(
+                fixed_task.requirements.get("evidence_summary"),
+                700,
+            ),
+            "missing_evidence": value_excerpt_for_orchestrator(
+                fixed_task.requirements.get("missing_evidence"),
+                500,
+            ),
+        },
+        "image2": {
+            "prompt_text": compact_value_string_field(&fixed_task.image2, "prompt_text", 1200),
+            "image_job_id": fixed_task.image2.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "image_job_status": fixed_task.image2.get("image_job_status").cloned().unwrap_or(Value::Null),
+            "visual_contract_status": fixed_task.image2.get("visual_contract_status").cloned().unwrap_or(Value::Null),
+            "visual_contract_url": fixed_task.image2.get("visual_contract_url").cloned().unwrap_or(Value::Null),
+            "preview_asset_key": fixed_task.image2.get("preview_asset_key").cloned().unwrap_or(Value::Null),
+            "human_confirmation_required": fixed_task.image2.get("human_confirmation_required").cloned().unwrap_or(Value::Null),
+            "image_prompt_payload": compact_image_prompt_payload_for_orchestrator(
+                fixed_task.image2.get("image_prompt_payload"),
+            ),
+        },
+        "policies": bounded_orchestrator_prompt_value(&fixed_task.policies, 2),
+        "evidence_summary": value_excerpt_for_orchestrator(Some(&fixed_task.evidence_summary), 700),
+        "trace_summary": {
+            "external_channel": fixed_task
+                .trace_summary
+                .get("external_channel")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "draft_id": fixed_task.trace_summary.get("draft_id").cloned().unwrap_or(Value::Null),
+            "image_job_id": fixed_task.trace_summary.get("image_job_id").cloned().unwrap_or(Value::Null),
+        },
+        "human_review_policy": fixed_task.human_review_policy,
+    })
+}
+
+fn compact_image_prompt_payload_for_orchestrator(value: Option<&Value>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    let modules = value
+        .get("modules")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(5)
+                .map(|module| {
+                    json!({
+                        "id": module.get("id").cloned().unwrap_or(Value::Null),
+                        "role": module.get("role").cloned().unwrap_or(Value::Null),
+                        "title": module.get("title").cloned().unwrap_or(Value::Null),
+                        "layout": module.get("layout").cloned().unwrap_or(Value::Null),
+                        "content": compact_value_string_field(module, "content", 180),
+                        "visualization": module.get("visualization").cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "title": value.get("title").cloned().unwrap_or(Value::Null),
+        "prompt_text": compact_value_string_field(value, "prompt_text", 500),
+        "style_direction": value.get("style_direction").cloned().or_else(|| value.get("styleDirection").cloned()).unwrap_or(Value::Null),
+        "module_count": value.get("module_count").cloned().or_else(|| value.get("moduleCount").cloned()).unwrap_or(Value::Null),
+        "modules": modules,
+        "preview_contract_excerpt": value_excerpt_for_orchestrator(
+            value.get("preview_contract_excerpt").or_else(|| value.get("preview_contract")).or_else(|| value.get("previewContract")),
+            600,
+        ),
+        "data_snapshot_excerpt": value_excerpt_for_orchestrator(
+            value.get("data_snapshot_excerpt").or_else(|| value.get("data_snapshot")).or_else(|| value.get("dataSnapshot")),
+            600,
+        ),
+    })
+}
+
+fn compact_value_string_field(value: &Value, field: &str, max_chars: usize) -> Value {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(|text| Value::String(truncate_chars(text, max_chars)))
+        .unwrap_or_else(|| value.get(field).cloned().unwrap_or(Value::Null))
+}
+
+fn value_excerpt_for_orchestrator(value: Option<&Value>, max_chars: usize) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    let text = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+    Value::String(truncate_chars(&text, max_chars))
 }
 
 fn bounded_orchestrator_prompt_value(value: &Value, depth: usize) -> Value {
@@ -651,6 +794,93 @@ fn bounded_orchestrator_prompt_value(value: &Value, depth: usize) -> Value {
         ),
         other => other.clone(),
     }
+}
+
+fn tightly_bounded_orchestrator_prompt_value(value: &Value, depth: usize) -> Value {
+    if depth >= 4 {
+        return match value {
+            Value::String(text) => Value::String(truncate_chars(text, 220)),
+            Value::Array(items) => json!({
+                "truncated": true,
+                "original_len": items.len(),
+                "items": items
+                    .iter()
+                    .take(2)
+                    .map(|item| tightly_bounded_orchestrator_prompt_value(item, depth + 1))
+                    .collect::<Vec<_>>()
+            }),
+            Value::Object(map) => json!({
+                "truncated": true,
+                "keys": map.keys().take(8).cloned().collect::<Vec<_>>()
+            }),
+            other => other.clone(),
+        };
+    }
+    match value {
+        Value::String(text) => Value::String(truncate_chars(text, 500)),
+        Value::Array(items) => {
+            let mut bounded = items
+                .iter()
+                .take(5)
+                .map(|item| tightly_bounded_orchestrator_prompt_value(item, depth + 1))
+                .collect::<Vec<_>>();
+            if items.len() > bounded.len() {
+                bounded.push(json!({
+                    "truncated": true,
+                    "remaining_items": items.len() - bounded.len()
+                }));
+            }
+            Value::Array(bounded)
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        tightly_bounded_orchestrator_prompt_value(value, depth + 1),
+                    )
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn minimal_fixed_task_for_orchestrator(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> Value {
+    json!({
+        "template_id": fixed_task.template_id.as_str(),
+        "version": fixed_task.version,
+        "assistant_run_id": fixed_task.assistant_run_id,
+        "draft_id": fixed_task.draft_id,
+        "requirements": {
+            "user_goal": compact_value_string_field(&fixed_task.requirements, "user_goal", 900),
+            "project_name": fixed_task.requirements.get("project_name").cloned().unwrap_or(Value::Null),
+            "output_format": fixed_task.requirements.get("output_format").cloned().unwrap_or(Value::Null),
+            "render_mode": fixed_task.requirements.get("render_mode").cloned().unwrap_or(Value::Null),
+            "evidence_summary_excerpt": value_excerpt_for_orchestrator(
+                fixed_task.requirements.get("evidence_summary"),
+                500,
+            ),
+        },
+        "image2": {
+            "prompt_text": compact_value_string_field(&fixed_task.image2, "prompt_text", 1000),
+            "image_job_id": fixed_task.image2.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "visual_contract_status": fixed_task.image2.get("visual_contract_status").cloned().unwrap_or(Value::Null),
+            "preview_asset_key": fixed_task.image2.get("preview_asset_key").cloned().unwrap_or(Value::Null),
+            "image_prompt_payload_excerpt": value_excerpt_for_orchestrator(
+                fixed_task.image2.get("image_prompt_payload"),
+                900,
+            ),
+        },
+        "policies": {
+            "publish_mode": fixed_task.policies.get("publish_mode").cloned().unwrap_or(Value::Null),
+            "effect_image_confirmation_required": fixed_task.policies.get("effect_image_confirmation_required").cloned().unwrap_or(Value::Null),
+            "continue_to_publish_after_effect_image": fixed_task.policies.get("continue_to_publish_after_effect_image").cloned().unwrap_or(Value::Null),
+        },
+        "human_review_policy": fixed_task.human_review_policy,
+    })
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -777,10 +1007,12 @@ async fn submit_cloudflare_orchestrator_task(
     .await
     .map_err(|error| anyhow!("failed to submit Cloudflare Codex task: {error}"))?;
     if !(200..300).contains(&status) {
+        let excerpt = safe_response_excerpt(&text, 300);
         return Err(anyhow!(
-            "Cloudflare Codex submit failed: status={} body_chars={}",
+            "Cloudflare Codex submit failed: status={} body_chars={} body_excerpt=\"{}\"",
             status,
-            text.chars().count()
+            text.chars().count(),
+            excerpt
         ));
     }
     let value: Value = serde_json::from_str(&text)
@@ -816,10 +1048,12 @@ async fn poll_cloudflare_orchestrator_task(
         .await
         .map_err(|error| anyhow!("failed to poll Cloudflare Codex task: {error}"))?;
         if !(200..300).contains(&status_code) {
+            let excerpt = safe_response_excerpt(&text, 300);
             return Err(anyhow!(
-                "Cloudflare Codex poll failed: status={} body_chars={}",
+                "Cloudflare Codex poll failed: status={} body_chars={} body_excerpt=\"{}\"",
                 status_code,
-                text.chars().count()
+                text.chars().count(),
+                excerpt
             ));
         }
         let value: Value = serde_json::from_str(&text)
@@ -839,13 +1073,24 @@ async fn poll_cloudflare_orchestrator_task(
                     .pointer("/error/code")
                     .and_then(Value::as_str)
                     .unwrap_or("cloudflare_codex_task_failed");
-                return Err(anyhow!("Cloudflare Codex task ended with status={code}"));
+                let excerpt = safe_response_excerpt(&task.to_string(), 500);
+                return Err(anyhow!(
+                    "Cloudflare Codex task ended with status={code}; task_excerpt=\"{}\"",
+                    excerpt
+                ));
             }
             _ => {
                 tokio::time::sleep(Duration::from_millis(config.poll_interval_ms.max(250))).await;
             }
         }
     }
+}
+
+fn safe_response_excerpt(text: &str, max_chars: usize) -> String {
+    safe_log_excerpt(text.as_bytes(), max_chars)
+        .trim()
+        .escape_debug()
+        .to_string()
 }
 
 fn cloudflare_orchestrator_result_text(task: &Value) -> String {
@@ -1714,6 +1959,64 @@ mod tests {
         let html = std::fs::read_to_string(local_path).expect("html should be readable");
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("经营分析"));
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_fixed_task_prompt_is_hard_bounded() {
+        let mut fixed_task =
+            contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.requirements["user_goal"] = json!("生成经营分析报表。".repeat(2_000));
+        fixed_task.requirements["evidence_summary"] = json!({
+            "rows": (0..80)
+                .map(|index| json!({
+                    "name": format!("门店-{index}"),
+                    "note": "长证据文本".repeat(200),
+                }))
+                .collect::<Vec<_>>()
+        });
+        fixed_task.image2["prompt_text"] = json!("视觉提示词".repeat(2_000));
+        fixed_task.image2["image_prompt_payload"] = json!({
+            "title": "新世界项目经营分析",
+            "modules": (0..30)
+                .map(|index| json!({
+                    "id": format!("module-{index}"),
+                    "role": "metric",
+                    "title": format!("指标模块 {index}"),
+                    "content": "模块内容".repeat(300),
+                    "visualization": {"kind": "bar", "notes": "图表说明".repeat(100)},
+                }))
+                .collect::<Vec<_>>(),
+            "data_snapshot": "数据快照".repeat(2_000),
+            "preview_contract": "预览契约".repeat(2_000),
+        });
+        fixed_task.trace_summary = json!({
+            "external_channel": {"conversation_external_id": "conv-1"},
+            "execution_trail": "执行轨迹".repeat(2_000),
+        });
+
+        let prompt_json =
+            fixed_task_json_for_orchestrator_prompt(&fixed_task).expect("prompt should serialize");
+        let parsed: Value =
+            serde_json::from_str(&prompt_json).expect("prompt json should be valid");
+
+        assert!(prompt_json.chars().count() <= ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS);
+        assert_eq!(
+            parsed["template_id"],
+            json!("static_page_image2_data_publish")
+        );
+        assert!(prompt_json.contains("preview_asset_key"));
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_error_excerpt_is_safe_and_bounded() {
+        let excerpt = safe_response_excerpt(
+            "Authorization: Bearer secret-token\n{\"error\":\"任务内容过长，请简化\"}",
+            80,
+        );
+
+        assert!(excerpt.contains("[redacted-log-line]"));
+        assert!(excerpt.contains("任务内容过长"));
+        assert!(!excerpt.contains("secret-token"));
     }
 
     #[test]
