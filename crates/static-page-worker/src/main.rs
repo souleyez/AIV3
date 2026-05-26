@@ -153,7 +153,7 @@ async fn process_task(
         WorkflowKind::StaticPageImageGeneration => {
             let orchestrator_config = orchestrator_config.ok_or_else(|| {
                 anyhow!(
-                    "CODEX_ORCHESTRATOR_ACCESS_KEY is required for static page image generation"
+                    "CODEX_ORCHESTRATOR_ACCESS_KEY or CODEX_ORCHESTRATOR_KEY_FILE is required for static page image generation"
                 )
             })?;
             process_static_page_image_task(

@@ -28,11 +28,7 @@ pub struct CodexOrchestratorConfig {
 
 impl CodexOrchestratorConfig {
     pub fn from_env() -> Result<Self> {
-        let access_key = std::env::var("CODEX_ORCHESTRATOR_ACCESS_KEY")
-            .map(|value| value.trim().to_string())
-            .ok()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("CODEX_ORCHESTRATOR_ACCESS_KEY is required"))?;
+        let access_key = orchestrator_access_key_from_env()?;
 
         Ok(Self {
             base_url: std::env::var("CODEX_ORCHESTRATOR_BASE_URL")
@@ -59,6 +55,29 @@ impl CodexOrchestratorConfig {
             path
         )
     }
+}
+
+fn orchestrator_access_key_from_env() -> Result<String> {
+    if let Some(value) = optional_env("CODEX_ORCHESTRATOR_ACCESS_KEY") {
+        return Ok(value);
+    }
+    read_orchestrator_key_file()?.ok_or_else(|| {
+        anyhow!("CODEX_ORCHESTRATOR_ACCESS_KEY or CODEX_ORCHESTRATOR_KEY_FILE is required")
+    })
+}
+
+fn read_orchestrator_key_file() -> Result<Option<String>> {
+    let Some(path) = optional_env("CODEX_ORCHESTRATOR_KEY_FILE") else {
+        return Ok(None);
+    };
+    let value = std::fs::read_to_string(&path)
+        .map_err(|error| anyhow!("failed to read CODEX_ORCHESTRATOR_KEY_FILE: {error}"))?
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(value))
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -359,6 +378,37 @@ fn bool_env(key: &str) -> bool {
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvRestore {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvRestore {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_ref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     fn config() -> CodexOrchestratorConfig {
         CodexOrchestratorConfig {
             base_url: "http://127.0.0.1:3003/".to_string(),
@@ -370,6 +420,24 @@ mod tests {
             image_quality: "high".to_string(),
             include_artifact_data: false,
         }
+    }
+
+    #[test]
+    fn from_env_reads_orchestrator_key_file_when_access_key_is_not_set() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let _access = EnvRestore::remove("CODEX_ORCHESTRATOR_ACCESS_KEY");
+        let path =
+            std::env::temp_dir().join(format!("static-page-worker-key-{}.txt", Uuid::new_v4()));
+        std::fs::write(&path, " file-secret \n").expect("write key file");
+        let _key_file = EnvRestore::set(
+            "CODEX_ORCHESTRATOR_KEY_FILE",
+            path.to_str().expect("utf-8 temp path"),
+        );
+
+        let config = CodexOrchestratorConfig::from_env().expect("config from key file");
+
+        assert_eq!(config.access_key, "file-secret");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
