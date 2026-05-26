@@ -23158,9 +23158,13 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         .map_err(ApiError::from_storage)?
         .iter()
         .any(|event| {
-            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+            (event.event_name == "assistant_run.external_channel_static_page_publish_queued"
                 && event.payload.get("image_job_id").and_then(Value::as_str)
-                    == Some(image_job_id.as_str())
+                    == Some(image_job_id.as_str()))
+                || (event.event_name
+                    == "assistant_run.external_channel_static_page_publish_completed"
+                    && event.payload.get("image_job_id").and_then(Value::as_str)
+                        == Some(image_job_id.as_str()))
         });
     if already_queued {
         return Ok(());
@@ -23196,6 +23200,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         &connection,
         &run,
     );
+    let image_job_for_render = job.clone();
     let image_job_view = to_static_page_image_job_view(job);
     let template_reference = draft
         .draft_payload
@@ -23254,6 +23259,40 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
             )
             .await
             .map_err(ApiError::from_storage)?;
+    } else if external_channel_static_page_demo_generated_artifact_enabled() {
+        let (_draft, render_output) = create_static_page_render_output_inline(
+            &state,
+            draft.clone(),
+            Some(image_job_for_render),
+            false,
+        )
+        .await?;
+        if let Some(payload) = maybe_publish_external_static_page_render_view_as_generated_artifact(
+            storage,
+            tenant_id,
+            &draft,
+            &render_output,
+            Some(image_job_view.id.to_string()),
+            "demo_after_image2_preview_ready",
+        )
+        .await?
+        {
+            storage
+                .assistant_runs()
+                .append_event(
+                    tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name:
+                            "assistant_run.external_channel_static_page_demo_publish_completed"
+                                .to_string(),
+                        payload,
+                        created_at: Utc::now(),
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+        }
     }
 
     Ok(())
@@ -23350,6 +23389,25 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     let direct_render_output = direct_render_response
         .as_ref()
         .map(|response| &response.render_output);
+    let generated_artifact_payload = match direct_render_output {
+        Some(output) if external_channel_static_page_demo_generated_artifact_enabled() => {
+            maybe_publish_external_static_page_render_view_as_generated_artifact(
+                &state.storage,
+                state.tenant_id,
+                &draft_outcome.draft,
+                output,
+                Some(image_response.image_job.id.to_string()),
+                "demo_initial_direct_html_publish",
+            )
+            .await?
+        }
+        _ => None,
+    };
+    let generated_artifact_url = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("public_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     state
         .storage
@@ -23380,6 +23438,10 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         .and_then(|output| output.html_download_url.clone())
                         .map(Value::String)
                         .unwrap_or(Value::Null),
+                    "public_url": generated_artifact_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
                     "codex_host_workflow_execution_id": Value::Null,
                     "template_id": if codex_auto_publish_enabled {
                         Value::String("static_page_image2_data_publish".to_string())
@@ -23394,6 +23456,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         Value::String(codex_auto_publish_readiness.reason.to_string())
                     },
                     "direct_html_fallback": direct_render_output.is_some(),
+                    "demo_generated_artifact_publish": generated_artifact_url.is_some(),
                     "effect_image_confirmation_required": false,
                 }),
                 created_at: now,
@@ -23402,14 +23465,18 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .await
         .map_err(ApiError::from_storage)?;
 
-    let task_status = if direct_render_output.is_some() {
+    let task_status = if generated_artifact_url.is_some() {
+        "static_page_published"
+    } else if direct_render_output.is_some() {
         "static_page_rendered"
     } else if codex_auto_publish_enabled {
         "static_page_image2_auto_publish_pending"
     } else {
         "static_page_image_preview_queued"
     };
-    let text = if direct_render_output.is_some() {
+    let text = if generated_artifact_url.is_some() {
+        "V3 静态页已生成并发布，可通过 artifact_links[0] 打开页面。".to_string()
+    } else if direct_render_output.is_some() {
         "V3 已生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物。".to_string()
     } else {
         external_channel_static_page_pipeline_reply_text(
@@ -23449,6 +23516,14 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 .and_then(|output| output.download_url.clone())
                 .map(Value::String)
                 .unwrap_or(Value::Null),
+            "public_url": generated_artifact_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
+            "generated_artifact_url": generated_artifact_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
             "codex_host_workflow_execution_id": Value::Null,
             "fixed_task_template_id": if codex_auto_publish_enabled {
                 Value::String("static_page_image2_data_publish".to_string())
@@ -23463,18 +23538,218 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 Value::String(codex_auto_publish_readiness.reason.to_string())
             },
             "direct_html_fallback": direct_render_output.is_some(),
+            "demo_generated_artifact_publish": generated_artifact_url.is_some(),
             "effect_image_confirmation_required": false,
             "publish_mode": "new_generated_artifact_only",
         })),
-        artifact_links: direct_render_output
-            .and_then(|output| output.html_download_url.clone())
+        artifact_links: generated_artifact_url
+            .clone()
             .into_iter()
+            .chain(
+                direct_render_output
+                    .and_then(|output| output.html_download_url.clone())
+                    .into_iter(),
+            )
             .collect(),
         task_status: Some(task_status.to_string()),
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
     }))
+}
+
+fn external_channel_static_page_demo_generated_artifact_enabled() -> bool {
+    platform_env_flag(
+        "EXTERNAL_CHANNEL_STATIC_PAGE_DEMO_GENERATED_ARTIFACT_ENABLED",
+        true,
+    )
+}
+
+fn external_channel_generated_artifact_root() -> std::result::Result<PathBuf, ApiError> {
+    let root = std::env::var("V3_GENERATED_ARTIFACT_ROOT")
+        .ok()
+        .map(|value| PathBuf::from(value.trim()))
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| {
+            external_document_object_root()
+                .unwrap_or_else(|_| std::env::temp_dir().join("ai-data-platform-v3-objects"))
+                .join("generated-artifacts")
+        });
+    fs::create_dir_all(&root).map_err(|error| {
+        ApiError::internal(
+            "static_page_generated_artifact_publish_failed",
+            format!("failed to create generated artifact root: {error}"),
+        )
+    })?;
+    Ok(root)
+}
+
+fn external_channel_generated_artifact_public_base_url() -> String {
+    std::env::var("V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://v3.elepcloud.com/generated-artifacts".to_string())
+}
+
+fn external_channel_generated_artifact_public_url(relative_dir: &str) -> String {
+    format!(
+        "{}/{}/index.html",
+        external_channel_generated_artifact_public_base_url(),
+        relative_dir.trim_matches('/')
+    )
+}
+
+async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutputView,
+    image_job_id: Option<String>,
+    reason: &str,
+) -> std::result::Result<Option<Value>, ApiError> {
+    if render_output.status != contracts::StaticPageRenderOutputStatusView::Rendered
+        || render_output.html.trim().is_empty()
+    {
+        return Ok(None);
+    }
+
+    let existing_events = storage
+        .assistant_runs()
+        .list_events(tenant_id, draft.assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let render_output_id = render_output.id.to_string();
+    if let Some(existing_payload) = existing_events.iter().find_map(|event| {
+        (event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+            && event
+                .payload
+                .get("render_output_id")
+                .and_then(Value::as_str)
+                == Some(render_output_id.as_str()))
+        .then(|| event.payload.clone())
+    }) {
+        return Ok(Some(existing_payload));
+    }
+
+    let run_segment = safe_external_path_segment(&draft.assistant_run_id.to_string());
+    let output_segment = safe_external_path_segment(&render_output_id);
+    let relative_dir =
+        format!("database-static-pages/external-channel/{run_segment}/{output_segment}");
+    let artifact_dir = external_channel_generated_artifact_root()?.join(&relative_dir);
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        ApiError::internal(
+            "static_page_generated_artifact_publish_failed",
+            format!("failed to create generated static-page dir: {error}"),
+        )
+    })?;
+    let index_path = artifact_dir.join("index.html");
+    fs::write(&index_path, render_output.html.as_bytes()).map_err(|error| {
+        ApiError::internal(
+            "static_page_generated_artifact_publish_failed",
+            format!("failed to write generated static-page HTML: {error}"),
+        )
+    })?;
+    let public_url = external_channel_generated_artifact_public_url(&relative_dir);
+    let source_refs = external_channel_static_page_status_source_refs(&draft.source_refs);
+    let channel_connection_id = source_refs
+        .get("channel_connection_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let platform = source_refs
+        .get("platform")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let conversation_external_id = source_refs
+        .get("conversation_external_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let message_external_id = source_refs
+        .get("message_external_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let manifest = json!({
+        "kind": "v3_generated_static_page",
+        "version": 1,
+        "draft_id": draft.id.to_string(),
+        "assistant_run_id": draft.assistant_run_id.to_string(),
+        "render_output_id": render_output_id,
+        "image_job_id": image_job_id.clone(),
+        "public_url": public_url.clone(),
+        "source_refs": source_refs.clone(),
+        "reason": codex_host_fixed_task_safe_text(reason),
+        "created_at": Utc::now(),
+    });
+    fs::write(
+        artifact_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).map_err(|error| {
+            ApiError::internal(
+                "static_page_generated_artifact_publish_failed",
+                format!("failed to serialize generated static-page manifest: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        ApiError::internal(
+            "static_page_generated_artifact_publish_failed",
+            format!("failed to write generated static-page manifest: {error}"),
+        )
+    })?;
+
+    let validation_summary = json!({
+        "status": "success",
+        "reason": codex_host_fixed_task_safe_text(reason),
+        "direct_html": true,
+        "render_output_id": render_output.id.to_string(),
+        "latest_snapshot": Value::Null,
+        "source_row_count": Value::Null,
+        "current_state_row_count": Value::Null,
+        "detail_row_count": Value::Null,
+        "unit_policy": "v3_static_page_renderer",
+        "warnings": ["demo_generated_artifact_from_v3_static_page_renderer"],
+    });
+    let completed_payload = json!({
+        "channel_connection_id": channel_connection_id,
+        "platform": platform,
+        "conversation_external_id": conversation_external_id,
+        "message_external_id": message_external_id,
+        "draft_id": draft.id.to_string(),
+        "image_job_id": image_job_id.clone(),
+        "render_output_id": render_output.id.to_string(),
+        "codex_host_workflow_execution_id": Value::Null,
+        "template_id": "static_page_image2_data_publish",
+        "publish_mode": "demo_direct_generated_artifact",
+        "public_url": public_url.clone(),
+        "artifact_links": [public_url],
+        "local_path": index_path.display().to_string(),
+        "manifest_path": artifact_dir.join("manifest.json").display().to_string(),
+        "validation_summary": validation_summary,
+        "source_refs": source_refs,
+    });
+
+    maybe_attach_external_static_page_artifact_to_run(
+        storage,
+        tenant_id,
+        draft.assistant_run_id,
+        &completed_payload,
+    )
+    .await?;
+    storage
+        .assistant_runs()
+        .append_event(
+            tenant_id,
+            draft.assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_static_page_publish_completed"
+                    .to_string(),
+                payload: completed_payload.clone(),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Some(completed_payload))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26514,6 +26789,92 @@ async fn create_static_page_render_for_draft(
             ),
             draft: to_static_page_draft_view(draft),
         }),
+    ))
+}
+
+async fn create_static_page_render_output_inline(
+    state: &AppState,
+    mut draft: StaticPageDraft,
+    image_job: Option<StaticPageImageJob>,
+    direct_html: bool,
+) -> std::result::Result<(StaticPageDraft, StaticPageRenderOutputView), ApiError> {
+    let rendered = render_static_page(&StaticPageRenderRequest {
+        draft_id: draft.id.to_string(),
+        assistant_run_id: draft.assistant_run_id.to_string(),
+        title: draft.title.clone(),
+        draft_payload: draft.draft_payload.clone(),
+        selected_scope: draft.selected_scope.clone(),
+        visibility_snapshot: draft.visibility_snapshot.clone(),
+        preview_asset_key: image_job
+            .as_ref()
+            .and_then(|job| job.preview_asset_key.clone()),
+        image_job_id: image_job.as_ref().map(|job| job.id.to_string()),
+    });
+    let render_output = state
+        .storage
+        .static_page_render_outputs()
+        .create(
+            state.tenant_id,
+            &NewStaticPageRenderOutput {
+                draft_id: draft.id,
+                assistant_run_id: draft.assistant_run_id,
+                owner_user_id: draft.owner_user_id,
+                image_job_id: image_job.as_ref().map(|job| job.id),
+                status: StaticPageRenderOutputStatus::Rendered,
+                html: rendered.html,
+                asset_manifest: rendered.asset_manifest,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let operations = vec![json!({
+        "type": "request_final_render",
+        "finalPage": {
+            "status": "rendered",
+            "renderOutputId": render_output.id,
+            "assetManifest": render_output.asset_manifest,
+            "directHtml": direct_html,
+        }
+    })];
+    let render_summary = if direct_html {
+        "最终静态页已按快速 HTML 交付模式生成，未经过效果图确认。"
+    } else {
+        "最终静态页已根据效果图和模块规划生成。"
+    };
+    draft.draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload,
+        &operations,
+        Some(render_summary),
+    );
+    append_static_page_operations_metadata(
+        &mut draft.draft_payload,
+        &operations,
+        None,
+        render_summary,
+    );
+    draft.status = StaticPageDraftStatus::Rendered;
+    let draft = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        state,
+        &draft,
+        "static_page_render.created",
+        json!({
+            "draft_id": draft.id,
+            "render_output_id": render_output.id,
+            "image_job_id": render_output.image_job_id,
+        }),
+    )
+    .await?;
+    let selected_scope = draft.selected_scope.clone();
+    Ok((
+        draft,
+        to_static_page_render_output_view(render_output, Some(&selected_scope)),
     ))
 }
 
