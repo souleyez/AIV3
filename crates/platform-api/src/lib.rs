@@ -23371,30 +23371,21 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     .await?;
     let codex_auto_publish_readiness = external_channel_static_page_codex_auto_publish_readiness();
     let codex_auto_publish_enabled = codex_auto_publish_readiness.ready;
-    let direct_render_response = if codex_auto_publish_enabled {
+    let direct_render_result = if codex_auto_publish_enabled {
         None
     } else {
-        let (_status, Json(response)) = create_static_page_render_for_draft(
-            state,
-            draft_outcome.draft.clone(),
-            CreateStaticPageRenderRequest {
-                image_job_id: None,
-                background: false,
-                direct_html: true,
-            },
-        )
-        .await?;
-        Some(response)
+        let result =
+            create_static_page_render_output_inline(state, draft_outcome.draft.clone(), None, true)
+                .await?;
+        Some(result)
     };
-    let direct_render_output = direct_render_response
-        .as_ref()
-        .map(|response| &response.render_output);
-    let generated_artifact_payload = match direct_render_output {
-        Some(output) if external_channel_static_page_demo_generated_artifact_enabled() => {
+    let direct_render_output = direct_render_result.as_ref().map(|(_draft, output)| output);
+    let generated_artifact_payload = match direct_render_result.as_ref() {
+        Some((draft, output)) if external_channel_static_page_demo_generated_artifact_enabled() => {
             maybe_publish_external_static_page_render_view_as_generated_artifact(
                 &state.storage,
                 state.tenant_id,
-                &draft_outcome.draft,
+                draft,
                 output,
                 Some(image_response.image_job.id.to_string()),
                 "demo_initial_direct_html_publish",
