@@ -600,6 +600,7 @@ fn orchestrator_task_status_is_pending(status: &str) -> bool {
             | "in_progress"
             | "retry_wait"
             | "retrying"
+            | "waking_runtime"
             | "waiting"
     )
 }
@@ -996,6 +997,7 @@ mod tests {
     #[test]
     fn orchestrator_retry_wait_is_treated_as_pending_status() {
         assert!(orchestrator_task_status_is_pending("retry_wait"));
+        assert!(orchestrator_task_status_is_pending("waking_runtime"));
         assert!(orchestrator_task_status_is_pending("processing"));
         assert!(!orchestrator_task_status_is_pending("failed"));
         assert!(!orchestrator_task_status_is_pending("completed"));
