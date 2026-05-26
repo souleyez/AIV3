@@ -232,6 +232,11 @@ fn codex_host_report_summary(mode: &str, status: &str, capability: &str) -> Stri
         "codex_exec" => {
             format!("Codex Host 已在允许的远端主机执行 Codex。能力：{capability}，状态：{status}。")
         }
+        "cloudflare_orchestrator" => {
+            format!(
+                "Codex Host 已投递到 Cloudflare Codex 编排器。能力：{capability}，状态：{status}。"
+            )
+        }
         _ => format!("Codex Host 任务已处理。能力：{capability}，状态：{status}。"),
     }
 }
@@ -250,13 +255,17 @@ fn codex_host_report_steps(mode: &str) -> Vec<Value> {
             json!({"title": "校验远端主机", "detail": "必须满足 host kind、profile kind、allow flag 和任务工作区要求。"}),
             json!({"title": "执行 Codex", "detail": "在任务隔离工作区启动 Codex，并仅保留脱敏日志摘要。"}),
         ],
+        "cloudflare_orchestrator" => vec![
+            json!({"title": "校验 Cloudflare Codex", "detail": "确认 host kind、profile allowlist 和编排器配置。"}),
+            json!({"title": "远端投递", "detail": "通过 Codex Web orchestrator 投递任务并轮询完成结果。"}),
+        ],
         _ => vec![json!({"title": "处理任务", "detail": "Codex Host 返回结构化任务结果。"})],
     }
 }
 
 fn codex_host_report_risks(mode: &str) -> Vec<Value> {
     match mode {
-        "codex_exec" => vec![json!({
+        "codex_exec" | "cloudflare_orchestrator" => vec![json!({
             "title": "执行输出需复核",
             "detail": "报告只展示脱敏摘要；代码变更和产物仍需由 V3 工作流或人工复核。"
         })],
@@ -272,6 +281,7 @@ pub enum CodexHostExecutionMode {
     DryRun,
     PlanOnly,
     CodexExec,
+    CloudflareOrchestrator,
 }
 
 impl CodexHostExecutionMode {
@@ -280,8 +290,12 @@ impl CodexHostExecutionMode {
             "" | "dry_run" | "dry-run" => Ok(Self::DryRun),
             "plan_only" | "plan-only" => Ok(Self::PlanOnly),
             "codex_exec" | "codex-exec" => Ok(Self::CodexExec),
+            "cloudflare_orchestrator"
+            | "cloudflare-orchestrator"
+            | "cloudflare_codex"
+            | "cloudflare-codex" => Ok(Self::CloudflareOrchestrator),
             other => Err(anyhow!(
-                "unsupported CODEX_HOST_AGENT_EXECUTION_MODE={other}; expected dry_run, plan_only, or codex_exec"
+                "unsupported CODEX_HOST_AGENT_EXECUTION_MODE={other}; expected dry_run, plan_only, codex_exec, or cloudflare_orchestrator"
             )),
         }
     }
@@ -291,6 +305,7 @@ impl CodexHostExecutionMode {
             Self::DryRun => "dry_run",
             Self::PlanOnly => "plan_only",
             Self::CodexExec => "codex_exec",
+            Self::CloudflareOrchestrator => "cloudflare_orchestrator",
         }
     }
 }
@@ -484,7 +499,7 @@ impl CodexHostAgentPolicy {
         }
         self.validate_fixed_task_policy(context)?;
         let command_plan = match self.mode {
-            CodexHostExecutionMode::DryRun => None,
+            CodexHostExecutionMode::DryRun | CodexHostExecutionMode::CloudflareOrchestrator => None,
             CodexHostExecutionMode::PlanOnly | CodexHostExecutionMode::CodexExec => {
                 Some(build_codex_command_plan(
                     context,
@@ -495,6 +510,9 @@ impl CodexHostAgentPolicy {
         };
         if self.mode == CodexHostExecutionMode::CodexExec {
             self.validate_real_exec_guard(command_plan.as_ref())?;
+        }
+        if self.mode == CodexHostExecutionMode::CloudflareOrchestrator {
+            self.validate_cloudflare_orchestrator_guard()?;
         }
 
         Ok(CodexHostExecutionDecision {
@@ -535,8 +553,7 @@ impl CodexHostAgentPolicy {
         match &fixed_task.template_id {
             CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish => {
                 validate_static_page_fixed_task(fixed_task)?;
-                if self.mode != CodexHostExecutionMode::DryRun && self.task_workspace_root.is_none()
-                {
+                if self.requires_task_workspace_root() && self.task_workspace_root.is_none() {
                     return Err(anyhow!(
                         "static_page_image2_data_publish requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for non-dry-run execution"
                     ));
@@ -544,8 +561,7 @@ impl CodexHostAgentPolicy {
             }
             CodexHostFixedTaskTemplateIdView::AnswerQualityAutofix => {
                 validate_answer_quality_fixed_task(fixed_task)?;
-                if self.mode != CodexHostExecutionMode::DryRun && self.task_workspace_root.is_none()
-                {
+                if self.requires_task_workspace_root() && self.task_workspace_root.is_none() {
                     return Err(anyhow!(
                         "answer_quality_autofix requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for non-dry-run execution"
                     ));
@@ -553,8 +569,7 @@ impl CodexHostAgentPolicy {
             }
             CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis => {
                 validate_data_ingestion_fixed_task(fixed_task)?;
-                if self.mode != CodexHostExecutionMode::DryRun && self.task_workspace_root.is_none()
-                {
+                if self.requires_task_workspace_root() && self.task_workspace_root.is_none() {
                     return Err(anyhow!(
                         "data_ingestion_analysis requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for non-dry-run execution"
                     ));
@@ -562,6 +577,13 @@ impl CodexHostAgentPolicy {
             }
         }
         Ok(())
+    }
+
+    fn requires_task_workspace_root(&self) -> bool {
+        matches!(
+            self.mode,
+            CodexHostExecutionMode::PlanOnly | CodexHostExecutionMode::CodexExec
+        )
     }
 
     fn validate_real_exec_guard(&self, command_plan: Option<&CodexCommandPlan>) -> Result<()> {
@@ -591,6 +613,15 @@ impl CodexHostAgentPolicy {
         if !workspace_configured {
             return Err(anyhow!(
                 "codex_exec mode requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for an isolated task workspace"
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_cloudflare_orchestrator_guard(&self) -> Result<()> {
+        if self.host_kind != "cloudflare_codex" {
+            return Err(anyhow!(
+                "cloudflare_orchestrator mode requires CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex"
             ));
         }
         Ok(())
@@ -939,7 +970,7 @@ fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>)
     ))
 }
 
-fn fixed_task_output_schema_hint(template_id: &str) -> &'static str {
+pub fn fixed_task_output_schema_hint(template_id: &str) -> &'static str {
     match template_id {
         STATIC_PAGE_IMAGE2_DATA_PUBLISH => {
             r#"{"template_id":"static_page_image2_data_publish","status":"success|needs_human|failed","artifact":{"local_path":"string","public_url":"https://v3.elepcloud.com/generated-artifacts/...","manifest_path":"string"},"validation_report":{"snapshot_policy":"string","latest_snapshot":"string|null","source_row_count":0,"current_state_row_count":0,"detail_row_count":0,"unit_policy":"string","warnings":["string"]},"source_summary":["string"],"human_review_reason":"string|null"}"#

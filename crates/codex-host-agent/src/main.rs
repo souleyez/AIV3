@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use codex_host_agent::{
-    extract_fixed_task_output_from_stdout, materialize_fixed_task_bundle, safe_log_excerpt,
-    CodexCommandPlan, CodexHostAgentPolicy, CodexHostExecutionDecision, CodexHostExecutionMode,
-    CodexHostRuntimeConfig, CodexHostTaskContext, CodexProcessOutput,
+    extract_fixed_task_output_from_stdout, fixed_task_output_schema_hint,
+    materialize_fixed_task_bundle, safe_log_excerpt, CodexCommandPlan, CodexHostAgentPolicy,
+    CodexHostExecutionDecision, CodexHostExecutionMode, CodexHostRuntimeConfig,
+    CodexHostTaskContext, CodexProcessOutput,
 };
 use contracts::CodexHostTaskOutputView;
 use domain_model::{AssistantRunId, WorkflowKind};
@@ -12,7 +13,11 @@ use event_bus::{
     EventSubscription,
 };
 use serde_json::{json, Map, Value};
+use std::fs;
+use std::path::PathBuf;
+use std::process::Stdio;
 use storage::{NewAssistantRunEvent, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{Duration, Instant};
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
@@ -20,6 +25,12 @@ use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 const DEFAULT_QUEUE: &str = "codex_host";
 const DEFAULT_TASK_KEY: &str = "run_codex_host_task";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
+const DEFAULT_ORCHESTRATOR_BASE_URL: &str = "https://souleye.cc";
+const DEFAULT_ORCHESTRATOR_API_PATH: &str = "/api/codex/orchestrator/v1";
+const DEFAULT_ORCHESTRATOR_RUNTIME_TARGET: &str = "cloudflare";
+const DEFAULT_ORCHESTRATOR_SOURCE: &str = "v3-codex-host-agent";
+const DEFAULT_ORCHESTRATOR_KIND: &str = "code-task";
+const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -140,6 +151,17 @@ async fn process_task(
                     task.tenant_id,
                     task.execution_id,
                     command_plan,
+                    &task_context,
+                    &decision,
+                    runtime_config,
+                )
+                .await?
+            }
+            CodexHostExecutionMode::CloudflareOrchestrator => {
+                run_cloudflare_orchestrator_with_heartbeat(
+                    storage,
+                    task.tenant_id,
+                    task.execution_id,
                     &task_context,
                     &decision,
                     runtime_config,
@@ -327,6 +349,772 @@ fn codex_exec_heartbeat_payload(
     })
 }
 
+async fn run_cloudflare_orchestrator_with_heartbeat(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    execution_id: domain_model::WorkflowExecutionId,
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    runtime_config: &CodexHostRuntimeConfig,
+) -> Result<serde_json::Value> {
+    let started_at = Instant::now();
+    let mut heartbeat_interval =
+        tokio::time::interval(Duration::from_millis(runtime_config.heartbeat_ms()));
+    let mut heartbeat_count = 0usize;
+    let exec = run_cloudflare_orchestrator(task_context, decision, execution_id, runtime_config);
+    tokio::pin!(exec);
+
+    loop {
+        tokio::select! {
+            result = &mut exec => return result,
+            _ = heartbeat_interval.tick() => {
+                heartbeat_count += 1;
+                if codex_host_execution_cancelled(storage, tenant_id, execution_id).await? {
+                    return Err(anyhow!("Cloudflare Codex task cancelled before completion"));
+                }
+                let payload = cloudflare_orchestrator_heartbeat_payload(
+                    task_context,
+                    decision,
+                    started_at.elapsed().as_millis() as u64,
+                    heartbeat_count,
+                );
+                if let Err(error) = append_assistant_event(
+                    storage,
+                    tenant_id,
+                    task_context.assistant_run_id,
+                    "codex_host_task.cloudflare_heartbeat",
+                    payload,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = ?error,
+                        execution_id = %execution_id,
+                        "failed to append Cloudflare Codex heartbeat event"
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn cloudflare_orchestrator_heartbeat_payload(
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    elapsed_ms: u64,
+    heartbeat_count: usize,
+) -> Value {
+    json!({
+        "mode": "cloudflare_orchestrator",
+        "status": "running",
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "host_kind": decision.host_kind.clone(),
+        "profile": decision.profile.safe_summary(),
+        "elapsed_ms": elapsed_ms,
+        "heartbeat_count": heartbeat_count,
+        "raw_prompt_exposed": false,
+        "remote_result_exposed": false,
+        "secrets_exposed": false,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct CloudflareOrchestratorConfig {
+    base_url: String,
+    api_path: String,
+    access_key: String,
+    runtime_target_id: String,
+    project_id: Option<String>,
+    source: String,
+    kind: String,
+    poll_interval_ms: u64,
+}
+
+impl CloudflareOrchestratorConfig {
+    fn from_env() -> Result<Self> {
+        let access_key = if let Some(value) = std::env::var("CODEX_ORCHESTRATOR_ACCESS_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            value
+        } else {
+            read_orchestrator_key_file()?.ok_or_else(|| {
+                anyhow!(
+                    "CODEX_ORCHESTRATOR_ACCESS_KEY or CODEX_ORCHESTRATOR_KEY_FILE is required for cloudflare_orchestrator mode"
+                )
+            })?
+        };
+        Ok(Self {
+            base_url: env_or_default("CODEX_ORCHESTRATOR_BASE_URL", DEFAULT_ORCHESTRATOR_BASE_URL)
+                .trim_end_matches('/')
+                .to_string(),
+            api_path: env_or_default("CODEX_ORCHESTRATOR_API_PATH", DEFAULT_ORCHESTRATOR_API_PATH),
+            access_key,
+            runtime_target_id: env_or_default(
+                "CODEX_ORCHESTRATOR_RUNTIME_TARGET",
+                DEFAULT_ORCHESTRATOR_RUNTIME_TARGET,
+            ),
+            project_id: std::env::var("CODEX_ORCHESTRATOR_PROJECT_ID")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            source: env_or_default("CODEX_ORCHESTRATOR_SOURCE", DEFAULT_ORCHESTRATOR_SOURCE),
+            kind: env_or_default("CODEX_ORCHESTRATOR_KIND", DEFAULT_ORCHESTRATOR_KIND),
+            poll_interval_ms: env_u64(
+                "CODEX_ORCHESTRATOR_POLL_INTERVAL_MS",
+                DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS,
+            ),
+        })
+    }
+
+    fn endpoint(&self, suffix: &str) -> String {
+        format!(
+            "{}/{}{}",
+            self.base_url.trim_end_matches('/'),
+            self.api_path.trim_matches('/'),
+            suffix
+        )
+    }
+}
+
+fn read_orchestrator_key_file() -> Result<Option<String>> {
+    let Some(path) = std::env::var("CODEX_ORCHESTRATOR_KEY_FILE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(None);
+    };
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| anyhow!("failed to read CODEX_ORCHESTRATOR_KEY_FILE: {error}"))?;
+    Ok(raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string))
+}
+
+async fn run_cloudflare_orchestrator(
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    execution_id: domain_model::WorkflowExecutionId,
+    runtime_config: &CodexHostRuntimeConfig,
+) -> Result<serde_json::Value> {
+    let config = CloudflareOrchestratorConfig::from_env()?;
+    let prompt = build_cloudflare_orchestrator_prompt(task_context)?;
+    let submitted =
+        submit_cloudflare_orchestrator_task(&config, task_context, execution_id, &prompt).await?;
+    let task_id = submitted
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Cloudflare Codex response missing task.id"))?
+        .to_string();
+    let completed =
+        poll_cloudflare_orchestrator_task(&config, &task_id, runtime_config.task_timeout_ms())
+            .await?;
+    let fixed_task_output = task_context
+        .fixed_task
+        .as_ref()
+        .map(|fixed_task| {
+            let text = cloudflare_orchestrator_result_text(&completed);
+            let output = extract_fixed_task_output_from_stdout(
+                text.as_bytes(),
+                fixed_task.template_id.as_str(),
+            )?;
+            normalize_cloudflare_fixed_task_output(output, task_context, execution_id, &task_id)
+        })
+        .transpose()?;
+    Ok(cloudflare_orchestrator_output(
+        task_context,
+        decision,
+        &task_id,
+        fixed_task_output,
+    ))
+}
+
+fn build_cloudflare_orchestrator_prompt(task_context: &CodexHostTaskContext) -> Result<String> {
+    if let Some(fixed_task) = task_context.fixed_task.as_ref() {
+        let task_json = fixed_task_json_for_orchestrator_prompt(fixed_task)?;
+        let schema_hint = fixed_task_output_schema_hint(fixed_task.template_id.as_str());
+        let mut prompt = format!(
+            "Run the V3 fixed Cloudflare Codex task template `{}`.\n\nRules:\n- Return exactly one final JSON object.\n- Do not wrap the final JSON in Markdown fences.\n- Do not expose credentials, provider logs, raw database URLs, or raw customer documents.\n- If the task cannot satisfy the no-confirm policy, return status `needs_human` with a bounded `human_review_reason`.\n\nExpected output schema:\n{}\n\nTask package JSON:\n{}",
+            fixed_task.template_id.as_str(),
+            schema_hint,
+            task_json
+        );
+        if fixed_task.template_id.as_str() == "static_page_image2_data_publish" {
+            prompt.push_str(
+                "\n\nCloudflare runtime cannot write V3 server files directly. For this template, if you cannot produce an approved V3 `artifact.public_url`, return `artifact.html` as a complete standalone HTML document. The V3 host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.",
+            );
+        }
+        return Ok(prompt);
+    }
+    task_context
+        .task
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("Cloudflare Codex task text is required"))
+}
+
+fn fixed_task_json_for_orchestrator_prompt(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> Result<String> {
+    let full = serde_json::to_string_pretty(fixed_task)
+        .map_err(|error| anyhow!("failed to serialize fixed task package: {error}"))?;
+    if full.chars().count() <= 9_000 {
+        return Ok(full);
+    }
+    let bounded = bounded_orchestrator_prompt_value(&json!(fixed_task), 0);
+    serde_json::to_string_pretty(&bounded)
+        .map_err(|error| anyhow!("failed to serialize bounded fixed task package: {error}"))
+}
+
+fn bounded_orchestrator_prompt_value(value: &Value, depth: usize) -> Value {
+    if depth >= 6 {
+        return match value {
+            Value::String(text) => Value::String(truncate_chars(text, 400)),
+            Value::Array(items) => json!({
+                "truncated": true,
+                "original_len": items.len(),
+                "items": items
+                    .iter()
+                    .take(3)
+                    .map(|item| bounded_orchestrator_prompt_value(item, depth + 1))
+                    .collect::<Vec<_>>()
+            }),
+            Value::Object(map) => json!({
+                "truncated": true,
+                "keys": map.keys().take(12).cloned().collect::<Vec<_>>()
+            }),
+            other => other.clone(),
+        };
+    }
+    match value {
+        Value::String(text) => Value::String(truncate_chars(text, 1_200)),
+        Value::Array(items) => {
+            let mut bounded = items
+                .iter()
+                .take(12)
+                .map(|item| bounded_orchestrator_prompt_value(item, depth + 1))
+                .collect::<Vec<_>>();
+            if items.len() > bounded.len() {
+                let remaining_items = items.len() - bounded.len();
+                bounded.push(json!({
+                    "truncated": true,
+                    "remaining_items": remaining_items
+                }));
+            }
+            Value::Array(bounded)
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        bounded_orchestrator_prompt_value(value, depth + 1),
+                    )
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut output = value.chars().take(max_chars).collect::<String>();
+    output.push_str("...[truncated]");
+    output
+}
+
+async fn curl_orchestrator_json(
+    method: &str,
+    url: &str,
+    body: Option<&Value>,
+    headers: &[(&str, String)],
+) -> Result<(u16, String)> {
+    let mut config = String::new();
+    config.push_str("silent\nshow-error\nfail-with-body\n");
+    config.push_str("location\n");
+    config.push_str("write-out = \"\\n%{http_code}\"\n");
+    config.push_str(&format!("request = \"{}\"\n", curl_config_escape(method)));
+    config.push_str(&format!("url = \"{}\"\n", curl_config_escape(url)));
+    for (name, value) in headers {
+        config.push_str(&format!(
+            "header = \"{}: {}\"\n",
+            curl_config_escape(name),
+            curl_config_escape(value)
+        ));
+    }
+    if let Some(body) = body {
+        let body_json = serde_json::to_string(body)
+            .map_err(|error| anyhow!("failed to serialize Cloudflare Codex request: {error}"))?;
+        config.push_str(&format!("data = \"{}\"\n", curl_config_escape(&body_json)));
+    }
+
+    let mut command = Command::new("curl");
+    command
+        .arg("--config")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|error| anyhow!("failed to launch curl for Cloudflare Codex request: {error}"))?;
+    let Some(mut stdin) = child.stdin.take() else {
+        return Err(anyhow!("failed to open curl stdin"));
+    };
+    stdin
+        .write_all(config.as_bytes())
+        .await
+        .map_err(|error| anyhow!("failed to write curl config: {error}"))?;
+    drop(stdin);
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|error| anyhow!("failed to wait for curl response: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr_len = safe_log_excerpt(&output.stderr, 400).chars().count();
+    let (body_text, status_text) = stdout
+        .rsplit_once('\n')
+        .ok_or_else(|| anyhow!("curl response missing status code; stderr_chars={stderr_len}"))?;
+    let status = status_text.trim().parse::<u16>().map_err(|error| {
+        anyhow!("curl response status code is invalid: {error}; stderr_chars={stderr_len}")
+    })?;
+    if !output.status.success() && !(200..300).contains(&status) {
+        return Ok((status, body_text.to_string()));
+    }
+    if !output.status.success() {
+        return Err(anyhow!(
+            "curl request failed despite HTTP status {}; stderr_chars={stderr_len}",
+            status
+        ));
+    }
+    Ok((status, body_text.to_string()))
+}
+
+fn curl_config_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
+}
+
+async fn submit_cloudflare_orchestrator_task(
+    config: &CloudflareOrchestratorConfig,
+    task_context: &CodexHostTaskContext,
+    execution_id: domain_model::WorkflowExecutionId,
+    prompt: &str,
+) -> Result<Value> {
+    let mut body = json!({
+        "runtimeTargetId": config.runtime_target_id,
+        "kind": config.kind,
+        "source": config.source,
+        "prompt": prompt,
+        "metadata": {
+            "title": format!("V3 {} {}", task_context.capability, task_context.assistant_run_id),
+            "assistant_run_id": task_context.assistant_run_id.to_string(),
+            "workflow_execution_id": execution_id.to_string(),
+            "capability": task_context.capability.clone(),
+            "output": "text",
+        }
+    });
+    if let Some(project_id) = config.project_id.as_ref() {
+        body["projectId"] = Value::String(project_id.clone());
+    }
+    let (status, text) = curl_orchestrator_json(
+        "POST",
+        &config.endpoint("/tasks"),
+        Some(&body),
+        &[
+            ("Authorization", format!("Bearer {}", config.access_key)),
+            ("Content-Type", "application/json".to_string()),
+            ("X-Client-Name", "v3-codex-host-agent".to_string()),
+            (
+                "Idempotency-Key",
+                format!("v3-codex-host:{execution_id}:{}", task_context.capability),
+            ),
+        ],
+    )
+    .await
+    .map_err(|error| anyhow!("failed to submit Cloudflare Codex task: {error}"))?;
+    if !(200..300).contains(&status) {
+        return Err(anyhow!(
+            "Cloudflare Codex submit failed: status={} body_chars={}",
+            status,
+            text.chars().count()
+        ));
+    }
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|error| anyhow!("Cloudflare Codex submit response is invalid JSON: {error}"))?;
+    value
+        .get("task")
+        .cloned()
+        .ok_or_else(|| anyhow!("Cloudflare Codex submit response missing task"))
+}
+
+async fn poll_cloudflare_orchestrator_task(
+    config: &CloudflareOrchestratorConfig,
+    task_id: &str,
+    timeout_ms: u64,
+) -> Result<Value> {
+    let started_at = Instant::now();
+    loop {
+        if started_at.elapsed() > Duration::from_millis(timeout_ms.max(1)) {
+            return Err(anyhow!(
+                "Cloudflare Codex task timed out after {}ms",
+                timeout_ms.max(1)
+            ));
+        }
+        let (status_code, text) = curl_orchestrator_json(
+            "GET",
+            &config.endpoint(&format!("/tasks/{task_id}")),
+            None,
+            &[
+                ("Authorization", format!("Bearer {}", config.access_key)),
+                ("X-Client-Name", "v3-codex-host-agent".to_string()),
+            ],
+        )
+        .await
+        .map_err(|error| anyhow!("failed to poll Cloudflare Codex task: {error}"))?;
+        if !(200..300).contains(&status_code) {
+            return Err(anyhow!(
+                "Cloudflare Codex poll failed: status={} body_chars={}",
+                status_code,
+                text.chars().count()
+            ));
+        }
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|error| anyhow!("Cloudflare Codex poll response is invalid JSON: {error}"))?;
+        let task = value
+            .get("task")
+            .cloned()
+            .ok_or_else(|| anyhow!("Cloudflare Codex poll response missing task"))?;
+        match task
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+        {
+            "completed" => return Ok(task),
+            "failed" | "cancelled" => {
+                let code = task
+                    .pointer("/error/code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("cloudflare_codex_task_failed");
+                return Err(anyhow!("Cloudflare Codex task ended with status={code}"));
+            }
+            _ => {
+                tokio::time::sleep(Duration::from_millis(config.poll_interval_ms.max(250))).await;
+            }
+        }
+    }
+}
+
+fn cloudflare_orchestrator_result_text(task: &Value) -> String {
+    for pointer in [
+        "/result/text",
+        "/result/finalMessage",
+        "/result/message",
+        "/output/text",
+        "/finalMessage",
+    ] {
+        if let Some(text) = task.pointer(pointer).and_then(Value::as_str) {
+            if !text.trim().is_empty() {
+                return text.to_string();
+            }
+        }
+    }
+    task.to_string()
+}
+
+fn normalize_cloudflare_fixed_task_output(
+    output: Value,
+    task_context: &CodexHostTaskContext,
+    execution_id: domain_model::WorkflowExecutionId,
+    orchestrator_task_id: &str,
+) -> Result<Value> {
+    if output.get("template_id").and_then(Value::as_str) != Some("static_page_image2_data_publish")
+        || output.get("status").and_then(Value::as_str) != Some("success")
+    {
+        return Ok(output);
+    }
+    let public_url = output
+        .pointer("/artifact/public_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if generated_artifact_url_allowed(public_url) {
+        return Ok(output);
+    }
+    let Some(html) = extract_static_page_html_from_fixed_output(&output) else {
+        return Ok(output);
+    };
+    publish_cloudflare_static_page_html(
+        output,
+        &html,
+        task_context,
+        execution_id,
+        orchestrator_task_id,
+    )
+}
+
+fn extract_static_page_html_from_fixed_output(output: &Value) -> Option<String> {
+    for pointer in [
+        "/artifact/html",
+        "/artifact/html_text",
+        "/artifact/index_html",
+        "/html",
+        "/html_text",
+    ] {
+        if let Some(html) = output
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(standalone_html_document(html));
+        }
+    }
+    None
+}
+
+fn standalone_html_document(html: &str) -> String {
+    let trimmed = html.trim();
+    let lower = trimmed
+        .chars()
+        .take(256)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if lower.contains("<!doctype html") || lower.contains("<html") {
+        trimmed.to_string()
+    } else {
+        format!(
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>V3 Generated Artifact</title></head><body>{}</body></html>",
+            trimmed
+        )
+    }
+}
+
+fn publish_cloudflare_static_page_html(
+    mut output: Value,
+    html: &str,
+    task_context: &CodexHostTaskContext,
+    execution_id: domain_model::WorkflowExecutionId,
+    orchestrator_task_id: &str,
+) -> Result<Value> {
+    let run_segment = safe_path_segment(&task_context.assistant_run_id.to_string());
+    let execution_segment = safe_path_segment(&execution_id.to_string());
+    let task_segment = safe_path_segment(orchestrator_task_id);
+    let relative_dir = format!(
+        "database-static-pages/codex-host/{run_segment}/{execution_segment}-{task_segment}"
+    );
+    let artifact_dir = generated_artifact_root()?.join(&relative_dir);
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        anyhow!(
+            "failed to create Cloudflare Codex generated artifact dir {}: {error}",
+            artifact_dir.display()
+        )
+    })?;
+    let index_path = artifact_dir.join("index.html");
+    fs::write(&index_path, html.as_bytes()).map_err(|error| {
+        anyhow!(
+            "failed to write Cloudflare Codex generated static-page HTML {}: {error}",
+            index_path.display()
+        )
+    })?;
+    let public_url = generated_artifact_public_url(&relative_dir);
+    let manifest = json!({
+        "kind": "v3_codex_host_generated_static_page",
+        "version": 1,
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "workflow_execution_id": execution_id.to_string(),
+        "orchestrator_task_id": orchestrator_task_id,
+        "capability": task_context.capability.clone(),
+        "public_url": public_url.clone(),
+        "created_at": Utc::now(),
+    });
+    let manifest_path = artifact_dir.join("manifest.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| anyhow!("failed to serialize generated artifact manifest: {error}"))?,
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write Cloudflare Codex generated artifact manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+
+    let object = output
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("fixed task output must be a JSON object"))?;
+    let artifact = object
+        .entry("artifact".to_string())
+        .or_insert_with(|| json!({}));
+    if !artifact.is_object() {
+        *artifact = json!({});
+    }
+    if let Some(artifact_object) = artifact.as_object_mut() {
+        artifact_object.remove("html");
+        artifact_object.remove("html_text");
+        artifact_object.remove("index_html");
+        artifact_object.insert(
+            "local_path".to_string(),
+            Value::String(index_path.display().to_string()),
+        );
+        artifact_object.insert("public_url".to_string(), Value::String(public_url));
+        artifact_object.insert(
+            "manifest_path".to_string(),
+            Value::String(manifest_path.display().to_string()),
+        );
+    }
+    object.remove("html");
+    object.remove("html_text");
+    Ok(output)
+}
+
+fn generated_artifact_root() -> Result<PathBuf> {
+    let root = std::env::var("V3_GENERATED_ARTIFACT_ROOT")
+        .ok()
+        .map(|value| PathBuf::from(value.trim()))
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var("PLATFORM_LOCAL_OBJECT_ROOT")
+                .ok()
+                .map(|value| PathBuf::from(value.trim()))
+                .filter(|path| path.is_absolute())
+                .map(|path| path.join("generated-artifacts"))
+        })
+        .unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join("ai-data-platform-v3-objects")
+                .join("generated-artifacts")
+        });
+    fs::create_dir_all(&root).map_err(|error| {
+        anyhow!(
+            "failed to create generated artifact root {}: {error}",
+            root.display()
+        )
+    })?;
+    Ok(root)
+}
+
+fn generated_artifact_public_base_url() -> String {
+    std::env::var("V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://v3.elepcloud.com/generated-artifacts".to_string())
+}
+
+fn generated_artifact_public_url(relative_dir: &str) -> String {
+    format!(
+        "{}/{}/index.html",
+        generated_artifact_public_base_url(),
+        relative_dir.trim_matches('/')
+    )
+}
+
+fn generated_artifact_url_allowed(public_url: &str) -> bool {
+    public_url.starts_with("https://v3.elepcloud.com/generated-artifacts/")
+        || public_url.starts_with("/generated-artifacts/")
+}
+
+fn safe_path_segment(value: &str) -> String {
+    let safe = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .chars()
+        .take(96)
+        .collect::<String>();
+    if safe.is_empty() {
+        "artifact".to_string()
+    } else {
+        safe
+    }
+}
+
+fn env_or_default(key: &str, default: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn cloudflare_orchestrator_output(
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    orchestrator_task_id: &str,
+    fixed_task_output: Option<Value>,
+) -> serde_json::Value {
+    let process_output = CodexProcessOutput {
+        exit_code: Some(0),
+        stdout_excerpt: String::new(),
+        stderr_excerpt: String::new(),
+    };
+    let html_artifacts = vec![task_context.html_report_artifact(
+        "cloudflare_orchestrator",
+        "completed",
+        Some(decision),
+        Some(&process_output),
+    )];
+    let mut output = json!(CodexHostTaskOutputView {
+        mode: "cloudflare_orchestrator".to_string(),
+        codex_invoked: true,
+        status: "completed".to_string(),
+        host_kind: Some(decision.host_kind.clone()),
+        assistant_run_id: task_context.assistant_run_id.to_string(),
+        capability: task_context.capability.clone(),
+        profile: Some(decision.profile.safe_summary()),
+        command_plan: None,
+        process: Some(process_output.safe_summary()),
+        task_chars: task_context
+            .task
+            .as_ref()
+            .map(|task| task.chars().count())
+            .unwrap_or(0),
+        local_thread_id: task_context.local_thread_id.clone(),
+        task_memory_isolated: task_context.task_memory_isolated,
+        task_memory_space_id: task_context.task_memory_space_id.clone(),
+        html_artifacts,
+        fixed_task_output,
+    });
+    if let Some(object) = output.as_object_mut() {
+        object.insert(
+            "orchestrator_task_id".to_string(),
+            Value::String(orchestrator_task_id.to_string()),
+        );
+    }
+    output
+}
+
 async fn run_codex_exec(
     command_plan: &CodexCommandPlan,
     task_context: &CodexHostTaskContext,
@@ -433,6 +1221,7 @@ fn codex_host_task_event_name(output: &serde_json::Value) -> &'static str {
         Some("dry_run") => "codex_host_task.dry_run_completed",
         Some("plan_only") => "codex_host_task.plan_only_completed",
         Some("codex_exec") => "codex_host_task.exec_completed",
+        Some("cloudflare_orchestrator") => "codex_host_task.exec_completed",
         _ => "codex_host_task.completed",
     }
 }
@@ -620,6 +1409,8 @@ async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_inte
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+    use uuid::Uuid;
 
     #[test]
     fn codex_exec_output_uses_shared_contract_shape() {
@@ -835,6 +1626,77 @@ mod tests {
     }
 
     #[test]
+    fn cloudflare_static_page_html_output_is_published_to_generated_artifacts() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let _root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.display().to_string(),
+        );
+        let _base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let assistant_run_id = AssistantRunId::new();
+        let task_context = CodexHostTaskContext {
+            assistant_run_id,
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:static-page".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+        };
+        let execution_id = domain_model::WorkflowExecutionId::new();
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "html": "<main><h1>经营分析</h1></main>"
+            },
+            "validation_report": {
+                "source_row_count": 1
+            }
+        });
+
+        let normalized = normalize_cloudflare_fixed_task_output(
+            output,
+            &task_context,
+            execution_id,
+            "task_test",
+        )
+        .expect("output should normalize");
+
+        let public_url = normalized
+            .pointer("/artifact/public_url")
+            .and_then(Value::as_str)
+            .expect("public url");
+        assert!(public_url.starts_with("https://v3.elepcloud.com/generated-artifacts/"));
+        assert!(public_url.contains(&assistant_run_id.to_string()));
+        assert!(normalized.pointer("/artifact/html").is_none());
+        let local_path = normalized
+            .pointer("/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        assert!(std::path::Path::new(local_path).exists());
+        let html = std::fs::read_to_string(local_path).expect("html should be readable");
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("经营分析"));
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_event_name_uses_exec_completed_bucket() {
+        assert_eq!(
+            codex_host_task_event_name(&json!({"mode": "cloudflare_orchestrator"})),
+            "codex_host_task.exec_completed"
+        );
+    }
+
+    #[test]
     fn codex_host_task_event_name_follows_output_mode() {
         assert_eq!(
             codex_host_task_event_name(&json!({"mode": "dry_run"})),
@@ -846,6 +1708,10 @@ mod tests {
         );
         assert_eq!(
             codex_host_task_event_name(&json!({"mode": "codex_exec"})),
+            "codex_host_task.exec_completed"
+        );
+        assert_eq!(
+            codex_host_task_event_name(&json!({"mode": "cloudflare_orchestrator"})),
             "codex_host_task.exec_completed"
         );
         assert_eq!(
@@ -924,6 +1790,34 @@ mod tests {
             sandbox: "read-only".to_string(),
             workspace_path: None,
             workspace_label: Some("test-workspace".to_string()),
+        }
+    }
+
+    fn test_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct TestEnvVarRestore {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl TestEnvVarRestore {
+        fn set(key: &'static str, value: impl Into<String>) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value.into());
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for TestEnvVarRestore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
         }
     }
 }

@@ -69,6 +69,7 @@
   - If readiness is incomplete, the static-page path keeps the existing built-in HTML direct-render fallback instead of leaving users waiting on an effect-image-only task.
   - Static-page cards and SSE payloads expose additive diagnostics `codex_auto_publish_ready` and `codex_auto_publish_disabled_reason`; third parties can ignore these unless they are logging or debugging integration state.
   - Local regression passed for `external_channel_static_page`, full `external_channel`, and third-party guide HTML check.
+- Follow-up on 2026-05-26: the preferred ready state is now `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator` with `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex` and a Codex Web orchestrator key. The old local-host `codex_exec` gate remains supported, but the fixed Cloudflare Codex executor no longer requires a local task workspace because V3 publishes returned HTML into its own generated-artifacts surface.
 - Continued queryable fact aggregation on 2026-05-26:
   - Added scoped fact aggregate regressions proving selected-document scopes and third-party external temporary dataset scopes supply `document_facts_scoped_aggregate`.
   - The regressions prove out-of-scope documents in the same source dataset are excluded from company/organization aggregates.

@@ -61,8 +61,8 @@ Recommended boundary:
 V3 Assistant/ReAct
   -> validates user intent, dataset scope, capability, and allowlist
   -> packages a bounded advanced static-page task
-  -> queues Codex Host / Cloudflare Codex
-  -> receives structured patch/artifact proposal
+  -> queues Codex Host / Cloudflare Codex orchestrator
+  -> receives structured artifact output or standalone HTML
   -> V3 validates, publishes, and audits
 ```
 
@@ -75,9 +75,10 @@ Safe first phase:
 Fixed-template phase:
 
 - Promote advanced static-page work to the fixed template `static_page_image2_data_publish`.
-- Allow Cloudflare Codex to create and publish a new generated artifact without per-task human confirmation when the package uses V3-selected scope, publish mode is `new_generated_artifact_only`, and the output includes a validated snapshot/date/unit口径 report.
+- Allow the fixed Cloudflare Codex executor to create a new generated artifact without per-task human confirmation when the package uses V3-selected scope, publish mode is `new_generated_artifact_only`, and the output includes a validated snapshot/date/unit口径 report.
+- Preferred production mode is `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator`, `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex`, and a Codex Web orchestrator access key. In this mode Cloudflare returns structured output or `artifact.html`; the V3 host-agent writes the final HTML into V3-owned `/generated-artifacts/` paths.
 - Continue requiring human confirmation for overwrite, stable customer URL replacement, source-code changes, scope/credential expansion, customer-channel sending, or uncertain口径.
-- Enable write-capable artifact edits only in isolated workspaces.
+- For the legacy `codex_exec` mode, enable write-capable artifact edits only in isolated workspaces.
 - Store output as V3 artifacts, not raw Codex HTML.
 
 ## Fixed-Task Preconditions

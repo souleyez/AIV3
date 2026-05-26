@@ -23774,6 +23774,35 @@ fn external_channel_static_page_codex_auto_publish_readiness() -> StaticPageCode
         .unwrap_or_else(|_| "dry_run".to_string())
         .trim()
         .to_ascii_lowercase();
+    let cloudflare_orchestrator_mode = matches!(
+        execution_mode.as_str(),
+        "cloudflare_orchestrator"
+            | "cloudflare-orchestrator"
+            | "cloudflare_codex"
+            | "cloudflare-codex"
+    );
+    if cloudflare_orchestrator_mode {
+        let host_kind = std::env::var("CODEX_HOST_AGENT_HOST_KIND")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if host_kind != "cloudflare_codex" {
+            return StaticPageCodexAutoPublishReadiness {
+                ready: false,
+                reason: "codex_host_agent_host_kind_not_cloudflare_codex",
+            };
+        }
+        if !orchestrator_access_configured() {
+            return StaticPageCodexAutoPublishReadiness {
+                ready: false,
+                reason: "codex_orchestrator_access_not_configured",
+            };
+        }
+        return StaticPageCodexAutoPublishReadiness {
+            ready: true,
+            reason: "ready",
+        };
+    }
     if !matches!(execution_mode.as_str(), "codex_exec" | "codex-exec") {
         return StaticPageCodexAutoPublishReadiness {
             ready: false,
@@ -23814,6 +23843,17 @@ fn external_channel_static_page_codex_auto_publish_readiness() -> StaticPageCode
         ready: true,
         reason: "ready",
     }
+}
+
+fn orchestrator_access_configured() -> bool {
+    std::env::var("CODEX_ORCHESTRATOR_ACCESS_KEY")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+        || std::env::var("CODEX_ORCHESTRATOR_KEY_FILE")
+            .ok()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
 }
 
 fn external_template_html_artifact_data_refs(
@@ -63583,6 +63623,7 @@ mod tests {
 
     #[test]
     fn external_channel_static_page_codex_auto_publish_readiness_requires_real_exec() {
+        let _lock = codex_model_gateway_env_lock().lock().expect("env lock");
         let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
         let _allowlist = TestEnvVarRestore::set(
             "CODEX_HOST_TASK_ALLOWLIST",
@@ -63599,6 +63640,34 @@ mod tests {
             "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
             "/srv/aiv3/codex-workspaces",
         );
+
+        assert_eq!(
+            external_channel_static_page_codex_auto_publish_readiness(),
+            StaticPageCodexAutoPublishReadiness {
+                ready: true,
+                reason: "ready"
+            }
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_codex_auto_publish_readiness_allows_cloudflare_orchestrator() {
+        let _lock = codex_model_gateway_env_lock().lock().expect("env lock");
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+        let _agent_real = TestEnvVarRestore::set("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", "false");
+        let _agent_workspace = TestEnvVarRestore::set("CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT", "");
 
         assert_eq!(
             external_channel_static_page_codex_auto_publish_readiness(),

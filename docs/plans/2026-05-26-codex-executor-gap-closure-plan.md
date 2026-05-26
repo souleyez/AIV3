@@ -13,9 +13,9 @@
 ## Current State
 
 - `CodexHostTask` workflow and `codex_host/run_codex_host_task` queue exist.
-- `crates/codex-host-agent` supports `dry_run`, `plan_only`, and gated `codex_exec`.
+- `crates/codex-host-agent` supports `dry_run`, `plan_only`, gated local-host `codex_exec`, and `cloudflare_orchestrator` for the fixed Cloudflare Codex executor.
 - Fixed templates exist for `static_page_image2_data_publish`, `answer_quality_autofix`, and `data_ingestion_analysis`.
-- Static-page auto publish now requires full runtime readiness; otherwise V3 returns direct HTML fallback with `render_output_id`.
+- Static-page auto publish now accepts either old `codex_exec` readiness or the fixed `cloudflare_orchestrator + cloudflare_codex` readiness; otherwise V3 returns direct HTML fallback with `render_output_id`.
 - Integrated observability page has a protected Codex executor task panel; it only loads the task list when opened and only calls runtime inspect after selecting a task.
 
 ## Remaining Gaps
