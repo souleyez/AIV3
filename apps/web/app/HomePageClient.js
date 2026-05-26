@@ -58,6 +58,9 @@ const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
 const STATIC_PAGE_SHELF_POLL_INTERVAL_MS = 12000;
 const STATIC_PAGE_ACTIVE_JOB_POLL_INTERVAL_MS = 4000;
 const STATIC_PAGE_ACTIVE_RENDER_POLL_INTERVAL_MS = 4000;
+const DEFAULT_FETCH_TIMEOUT_MS = 45000;
+const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
+const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
@@ -235,23 +238,56 @@ async function fingerprintLocalSecret(secretValue) {
 }
 
 async function fetchJson(url, options = {}) {
-  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const {
+    timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
+    signal,
+    ...fetchOptions
+  } = options;
+  const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
   const secretBindingIds = readLocalSecretBindingIdsHeader();
-  const response = await fetch(url, {
-    cache: 'no-store',
-    credentials: 'include',
-    ...options,
-    headers: {
-      Accept: 'application/json',
-      ...(options.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
-      ...(secretBindingIds ? { 'X-AI-Data-Platform-Secret-Binding-Ids': secretBindingIds } : {}),
-      'X-AI-Data-Platform-Local-Thread-Id': readLocalThreadId(),
-      ...(options.headers || {}),
-    },
-    body: options.body && !isFormData && typeof options.body !== 'string'
-      ? JSON.stringify(options.body)
-      : options.body,
-  });
+  const controller = !signal && timeoutMs > 0 && typeof AbortController !== 'undefined'
+    ? new AbortController()
+    : null;
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      cache: 'no-store',
+      credentials: 'include',
+      ...fetchOptions,
+      signal: signal || controller?.signal,
+      headers: {
+        Accept: 'application/json',
+        ...(fetchOptions.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
+        ...(secretBindingIds ? { 'X-AI-Data-Platform-Secret-Binding-Ids': secretBindingIds } : {}),
+        'X-AI-Data-Platform-Local-Thread-Id': readLocalThreadId(),
+        ...(fetchOptions.headers || {}),
+      },
+      body: fetchOptions.body && !isFormData && typeof fetchOptions.body !== 'string'
+        ? JSON.stringify(fetchOptions.body)
+        : fetchOptions.body,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+      throw buildApiError(
+        {
+          error: 'request_timeout',
+          message: `请求超时（${seconds} 秒）：${url}`,
+        },
+        `请求超时（${seconds} 秒）：${url}。请确认本地 API/数据库已启动，或稍后重试。`,
+        408,
+      );
+    }
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json')
@@ -2439,6 +2475,7 @@ export default function HomePageClient() {
     const response = await fetchJson('/api/v3/local-document-uploads', {
       method: 'POST',
       body: formData,
+      timeoutMs: LOCAL_UPLOAD_TIMEOUT_MS,
     });
     return Array.isArray(response?.files) ? response.files : [];
   }
@@ -2471,16 +2508,17 @@ export default function HomePageClient() {
           },
         },
       },
+      timeoutMs: UPLOAD_REGISTRATION_TIMEOUT_MS,
     });
     const ingestResponse = await fetchJson(`/api/v3/documents/${registered.document.id}/ingest`, {
       method: 'POST',
+      timeoutMs: UPLOAD_REGISTRATION_TIMEOUT_MS,
     });
-    const started = await startWorkflowExecution(ingestResponse.workflow_execution?.id);
     return {
       file,
       document: registered.document,
       workflowExecution: ingestResponse.workflow_execution,
-      started,
+      started: ingestResponse.workflow_execution || null,
       targetDataset,
       classification,
     };
@@ -2502,6 +2540,7 @@ export default function HomePageClient() {
 
     setUploadingFiles(true);
     setError('');
+    setBanner(`正在保存 ${files.length} 个文件到本地临时区...`);
 
     try {
       let availableDatasets = datasets;
@@ -2514,6 +2553,7 @@ export default function HomePageClient() {
       }
 
       for (const [index, file] of files.entries()) {
+        setBanner(`正在登记并提交解析：${file.name || `上传文件 ${index + 1}`}（${index + 1}/${files.length}）...`);
         const classification = classifyUploadTarget({
           file,
           datasets: availableDatasets,
@@ -2586,7 +2626,9 @@ export default function HomePageClient() {
         await refreshWorkspace(targetDataset?.id || selectedDatasetId, { silent: true, preserveNewSessionDraft: true });
       }
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : '上传登记失败');
+      const message = uploadError instanceof Error ? uploadError.message : '上传登记失败';
+      setError(message);
+      setBanner(`上传未完成：${message}`);
     } finally {
       setUploadingFiles(false);
     }

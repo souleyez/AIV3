@@ -207,6 +207,12 @@ pub fn extract_document_text(
         }
     }
 
+    if extension == ".doc" || content_type.eq_ignore_ascii_case("application/msword") {
+        if let Some(extracted) = extract_legacy_doc_text(&path) {
+            return Ok(extracted);
+        }
+    }
+
     if matches!(extension.as_str(), ".xlsx" | ".xlsm") {
         if let Some(text) = extract_xlsx_text(&path) {
             return Ok(extracted_text(text, "xlsx-ooxml"));
@@ -3333,6 +3339,42 @@ fn extract_with_markitdown(path: &Path) -> Option<String> {
     None
 }
 
+fn extract_legacy_doc_text(path: &Path) -> Option<ExtractedDocumentText> {
+    let temp_dir = create_temp_dir("aidp-legacy-doc").ok()?;
+    let extracted = convert_office_document_to_pdf(path, &temp_dir)
+        .as_deref()
+        .and_then(extract_pdf_text)
+        .map(|mut extracted| {
+            extracted.method = format!("doc-libreoffice-pdf+{}", extracted.method);
+            extracted.metadata = json!({
+                "legacy_doc": {
+                    "converter": "libreoffice",
+                    "intermediate": "pdf"
+                },
+                "pdf": extracted.metadata,
+            });
+            extracted
+        });
+    let _ = fs::remove_dir_all(&temp_dir);
+    if extracted.is_some() {
+        return extracted;
+    }
+
+    let path_arg = path.to_string_lossy().to_string();
+    for command in direct_command_candidates("ANTIWORD_BIN", "antiword") {
+        if let Some(text) = run_text_command(&command, &[path_arg.as_str()]) {
+            return Some(extracted_text(text, "doc-antiword"));
+        }
+    }
+    for command in direct_command_candidates("CATDOC_BIN", "catdoc") {
+        if let Some(text) = run_text_command(&command, &[path_arg.as_str()]) {
+            return Some(extracted_text(text, "doc-catdoc"));
+        }
+    }
+
+    None
+}
+
 fn direct_command_candidates(env_name: &str, fallback: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     if let Ok(configured) = std::env::var(env_name) {
@@ -3353,6 +3395,50 @@ fn presentation_converter_candidates() -> Vec<String> {
     candidates.push("libreoffice".to_string());
     candidates.dedup();
     candidates
+}
+
+fn convert_office_document_to_pdf(path: &Path, output_dir: &Path) -> Option<PathBuf> {
+    let path_arg = path.to_string_lossy().to_string();
+    let output_arg = output_dir.to_string_lossy().to_string();
+    let args = [
+        "--headless",
+        "--nologo",
+        "--nodefault",
+        "--nolockcheck",
+        "--nofirststartwizard",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        output_arg.as_str(),
+        path_arg.as_str(),
+    ];
+    for command in presentation_converter_candidates() {
+        if !run_status_command(&command, &args) {
+            continue;
+        }
+        let expected = output_dir.join(format!(
+            "{}.pdf",
+            path.file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("output")
+        ));
+        if expected.is_file() {
+            return Some(expected);
+        }
+        if let Some(found) = fs::read_dir(output_dir).ok().and_then(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| {
+                    path.extension()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                })
+        }) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn python_command_candidates() -> Vec<String> {
