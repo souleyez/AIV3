@@ -465,7 +465,7 @@ Content-Type: application/json
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，V3 会去重，不重复加载同一模板文档。
 
-V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页，并在本次回复里返回 `render_output_id` 和下载/预览地址。
+V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会在效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact，本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。
 
 `static_page_image2_data_publish` 只有在 V3 平台任务开关、平台 allowlist、Codex Host agent allowlist、真实执行模式、真实 Codex 执行许可、可信宿主类型和任务工作区都就绪时才算已启用。第三方不需要关心这些内部配置，只需按响应字段判断是否已拿到最终 HTML 或仍在自动发布队列。
 
@@ -474,7 +474,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `artifact_link` 或 `task_status` |
-| `reply.task_status` | `static_page_rendered`、`static_page_image2_auto_publish_pending` 或 `static_page_image_preview_queued` |
+| `reply.task_status` | `static_page_published`、`static_page_rendered`、`static_page_image2_auto_publish_pending` 或 `static_page_image_preview_queued` |
 | `reply.text` | 给用户展示的排队/处理说明；若已直接生成 HTML，会说明可通过 `card.render_output_id` 或下载链接获取产物 |
 | `reply.card.type` | `v3_static_page_image2_pipeline` |
 | `reply.card.draft_id` | V3 静态页草稿 ID |
@@ -482,6 +482,8 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.render_output_id` | 已直接生成 HTML 时返回；第三方用它查询、预览或下载静态页 |
 | `reply.card.html_preview_url` | 已直接生成 HTML 时返回；浏览器 inline 预览地址 |
 | `reply.card.html_download_url` | 已直接生成 HTML 时返回；HTML 附件下载地址 |
+| `reply.card.generated_artifact_url` / `reply.card.public_url` | 已发布 generated-artifact 时返回；第三方优先把这个链接展示或转存 |
+| `reply.card.demo_generated_artifact_publish` | `true` 表示固定 Codex 发布能力未启用时，V3 已用内置 HTML 生成并发布演示可访问页面 |
 | `reply.card.direct_html_fallback` | `true` 表示固定 Codex 发布能力未启用，本次已走 V3 内置 HTML 直出兜底 |
 | `reply.card.auto_publish_after_preview` | `true` 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路 |
 | `reply.card.codex_auto_publish_ready` | `true` 表示服务端当前已完整启用固定 Codex 自动发布；`false` 表示本次会走内置 HTML 直出兜底 |
@@ -510,7 +512,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | --- | --- |
 | `reply.reply_type` | `artifact_link`、`text` 或 `task_status` |
 | `reply.text` | 给用户展示的说明 |
-| `reply.artifact_links` | 产物预览/下载链接数组；静态页直出 HTML 通常返回 `html_download_url`，模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
+| `reply.artifact_links` | 产物链接数组；静态页优先返回 generated-artifact 页面 URL，兼容返回 HTML 下载地址；模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
 | `reply.card` | 可能包含 `render_output_id`、`html_preview_url`、`html_download_url`、`draft_id`、`image_job_id`、产物状态或结构化卡片 |
 | `assistant_run_id` | 本次生成运行 ID |
 
