@@ -49334,11 +49334,8 @@ fn normalize_retrieval_search_limit(limit: Option<usize>) -> usize {
 }
 
 fn retrieval_search_scan_limit(limit: usize) -> i64 {
-    let scan_limit = limit.saturating_mul(8);
-    let clamped = scan_limit
-        .max(RETRIEVAL_SEARCH_DEFAULT_LIMIT)
-        .min(DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT as usize);
-    i64::try_from(clamped).unwrap_or(DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT)
+    let _ = limit;
+    DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT
 }
 
 fn normalize_static_page_draft_list_limit(limit: Option<i64>) -> i64 {
@@ -94169,6 +94166,86 @@ mod tests {
         let selected = select_retrieval_evidence_ids_for_prompt(&evidences, "订单延期风险", 2);
 
         assert_eq!(selected, vec![order_id, support_id]);
+    }
+
+    #[test]
+    fn retrieval_search_scan_limit_covers_deep_chunks_in_large_documents() {
+        assert_eq!(
+            retrieval_search_scan_limit(ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT),
+            DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT
+        );
+        assert!(retrieval_search_scan_limit(4) >= 160);
+    }
+
+    #[test]
+    fn retrieval_ranking_prefers_deep_care_operation_chunk_when_available() {
+        let now = Utc::now();
+        let relevant_id = RetrievalEvidenceId::new();
+        let facility_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: facility_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 25,
+                source_locator: "document://manual/chunks/25".to_string(),
+                content_excerpt: "老年人卧床时间较长，房间采光通风和无障碍设计应满足要求。"
+                    .to_string(),
+                summary: "建筑设计与无障碍要求".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "老年人": 2.0,
+                            "卧床": 2.0,
+                            "无障碍": 3.0,
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: relevant_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 159,
+                source_locator: "document://manual/chunks/159".to_string(),
+                content_excerpt: "帮助无自主翻身能力的老年人翻身，应至少 2 小时翻身 1 次。"
+                    .to_string(),
+                summary: "协助卧床老人翻身侧卧护理操作要求".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "卧床老人": 4.0,
+                            "翻身": 5.0,
+                            "长期卧床": 4.0,
+                        }
+                    },
+                    "recall": { "rank_hint": 160 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "长期卧床老人多长时间翻身一次？",
+            1,
+        );
+
+        assert_eq!(selected, vec![relevant_id]);
     }
 
     #[test]
