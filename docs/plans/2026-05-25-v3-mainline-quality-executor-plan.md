@@ -69,6 +69,10 @@
   - If readiness is incomplete, the static-page path keeps the existing built-in HTML direct-render fallback instead of leaving users waiting on an effect-image-only task.
   - Static-page cards and SSE payloads expose additive diagnostics `codex_auto_publish_ready` and `codex_auto_publish_disabled_reason`; third parties can ignore these unless they are logging or debugging integration state.
   - Local regression passed for `external_channel_static_page`, full `external_channel`, and third-party guide HTML check.
+- Continued queryable fact aggregation on 2026-05-26:
+  - Added scoped fact aggregate regressions proving selected-document scopes and third-party external temporary dataset scopes supply `document_facts_scoped_aggregate`.
+  - The regressions prove out-of-scope documents in the same source dataset are excluded from company/organization aggregates.
+  - Local regression passed for `external_channel`, `dataset_fact_snapshot`, and `scoped_fact`.
 
 ## Immediate Execution Queue
 
@@ -81,7 +85,7 @@
 
 2. **Queryable fact aggregation**
    - Verify full dataset/group statistics prefer `dataset_fact_snapshot`.
-   - Verify selected-document, ACL-filtered, and temporary conversation scopes can use `document_facts_scoped_aggregate` for supported company/skill/project/keyword/year/section prompts.
+   - Verify selected-document, ACL-filtered, and temporary conversation scopes can use `document_facts_scoped_aggregate` for supported company/skill/project/keyword/year/section prompts. Selected-document and external temporary scope regressions are now covered locally; keep extending with real 8-server smoke cases as customer data appears.
    - Keep attendance on `spreadsheet_row_analysis` and resume ranking on resume-profile deterministic rows until their facts are normalized.
    - Add a visible debug reason for why `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `dataset_entity_scan`, or `spreadsheet_row_analysis` was selected.
 
@@ -178,3 +182,7 @@ systemctl restart aiv3-web.service
 This plan supersedes the prior active parsing/answer-quality, quality-gate/ReAct/VLM, queryable-fact-index, fixed Codex escalation, and executor-boundary plans.
 
 Those old active plan files were removed from the active plan folder after backup. Git history remains the detailed archive.
+
+## Active Subplans
+
+- `docs/plans/2026-05-26-codex-executor-gap-closure-plan.md`: closes the post-executor-integration gaps for fixed-task model-facing status, static-page publish callback, data-ingestion handoff, answer-quality autofix review gates, lazy observability, retry/timeout/cancellation policy, and staged smoke before real production enablement.

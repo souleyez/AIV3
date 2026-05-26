@@ -84476,6 +84476,571 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_run_selected_document_scope_supplies_scoped_fact_aggregate() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let _fact_index_enabled =
+            TestEnvVarRestore::set("ASSISTANT_RUN_FACT_INDEX_ENABLED", "true");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping selected-document scoped fact aggregate test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("selected-doc-fact-aggregate-test-{}", Uuid::new_v4()),
+                "Selected Document Fact Aggregate Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("selected-doc-fact-aggregate-{}", Uuid::new_v4()),
+                    title: "Scoped Resume Facts".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let selected_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "selected-resume.docx".to_string(),
+                    object_key: "facts/selected-resume.docx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("selected document should be created");
+        let other_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "other-resume.docx".to_string(),
+                    object_key: "facts/other-resume.docx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("other document should be created");
+        let now = Utc::now();
+        let selected_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                selected_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: selected_document.id,
+                    chunk_index: 0,
+                    content: "候选人在广州冠晚网络有限公司负责知识库项目。".to_string(),
+                    token_count: 12,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("selected chunk should be created")
+            .remove(0);
+        let other_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                other_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: other_document.id,
+                    chunk_index: 0,
+                    content: "候选人在深圳星拓智能科技有限公司负责硬件平台。".to_string(),
+                    token_count: 12,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("other chunk should be created")
+            .remove(0);
+        state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                selected_document.id,
+                DocumentLifecycle::Indexed,
+                None,
+                &json!({"parse_status": "parsed"}),
+                now,
+            )
+            .await
+            .expect("selected document should be indexed");
+        state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                other_document.id,
+                DocumentLifecycle::Indexed,
+                None,
+                &json!({"parse_status": "parsed"}),
+                now,
+            )
+            .await
+            .expect("other document should be indexed");
+        state
+            .storage
+            .document_facts()
+            .replace_document_facts(
+                state.tenant_id,
+                selected_document.id,
+                &[storage::NewDocumentFact {
+                    dataset_id: dataset.id,
+                    document_id: selected_document.id,
+                    fact_type: "organization".to_string(),
+                    name: "广州冠晚网络有限公司".to_string(),
+                    normalized_name: "广州冠晚网络有限公司".to_string(),
+                    value_text: None,
+                    value_number: None,
+                    value_date: None,
+                    attributes: json!({}),
+                    confidence: 0.98,
+                    source_kind: "document_chunk".to_string(),
+                    source_locator: Some("selected-resume.docx#chunk=0".to_string()),
+                    source_chunk_id: Some(selected_chunk.id),
+                    parse_version: Some("test-v1".to_string()),
+                    created_at: now,
+                    sources: vec![storage::NewDocumentFactSource {
+                        source_kind: "document_chunk".to_string(),
+                        source_locator: Some("selected-resume.docx#chunk=0".to_string()),
+                        source_chunk_id: Some(selected_chunk.id),
+                        attributes: json!({}),
+                        created_at: now,
+                    }],
+                }],
+            )
+            .await
+            .expect("selected document facts should be stored");
+        state
+            .storage
+            .document_facts()
+            .replace_document_facts(
+                state.tenant_id,
+                other_document.id,
+                &[storage::NewDocumentFact {
+                    dataset_id: dataset.id,
+                    document_id: other_document.id,
+                    fact_type: "organization".to_string(),
+                    name: "深圳星拓智能科技有限公司".to_string(),
+                    normalized_name: "深圳星拓智能科技有限公司".to_string(),
+                    value_text: None,
+                    value_number: None,
+                    value_date: None,
+                    attributes: json!({}),
+                    confidence: 0.98,
+                    source_kind: "document_chunk".to_string(),
+                    source_locator: Some("other-resume.docx#chunk=0".to_string()),
+                    source_chunk_id: Some(other_chunk.id),
+                    parse_version: Some("test-v1".to_string()),
+                    created_at: now,
+                    sources: vec![storage::NewDocumentFactSource {
+                        source_kind: "document_chunk".to_string(),
+                        source_locator: Some("other-resume.docx#chunk=0".to_string()),
+                        source_chunk_id: Some(other_chunk.id),
+                        attributes: json!({}),
+                        created_at: now,
+                    }],
+                }],
+            )
+            .await
+            .expect("other document facts should be stored");
+
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &json!({
+                "mode": "user_selected",
+                "datasets": [{"type": "dataset", "id": dataset.id}],
+                "documents": [{"type": "document", "id": selected_document.id}],
+            }),
+            "这份文档提到了多少个公司名？请列出公司名。",
+            None,
+            &[],
+            None,
+        )
+        .await
+        .expect("evidence state should be built");
+
+        let supplied_items = evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should exist");
+        let fact_item = supplied_items
+            .iter()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("dataset_fact_snapshot"))
+            .expect("scoped fact snapshot should be supplied");
+        assert_eq!(
+            fact_item["source"],
+            json!("document_facts_scoped_aggregate")
+        );
+        assert_eq!(
+            fact_item["snapshot_manifest"]["scope_filter"]["selected_document_count"],
+            json!(1)
+        );
+        let fact_json = serde_json::to_string(fact_item).expect("fact item should serialize");
+        assert!(fact_json.contains("广州冠晚网络有限公司"));
+        assert!(!fact_json.contains("深圳星拓智能科技有限公司"));
+        assert!(evidence_state["supply_quality"]["notes"]
+            .as_array()
+            .expect("notes should exist")
+            .iter()
+            .any(|note| note.as_str()
+                == Some(
+                    "supply_selection:document_facts_scoped_aggregate_selected_for_scoped_document_aggregate"
+                )));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_external_temporary_scope_supplies_scoped_fact_aggregate() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let _fact_index_enabled =
+            TestEnvVarRestore::set("ASSISTANT_RUN_FACT_INDEX_ENABLED", "true");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external temporary scoped fact aggregate test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-temp-fact-aggregate-test-{}", Uuid::new_v4()),
+                "External Temporary Fact Aggregate Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let chat_user = state
+            .storage
+            .users()
+            .ensure_by_email(
+                state.tenant_id,
+                "external-temp-facts@example.com",
+                Some("External Temp Facts"),
+            )
+            .await
+            .expect("chat user should exist");
+        let source_dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-temp-fact-source-{}", Uuid::new_v4()),
+                    title: "Third-party Source Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("source dataset should be created");
+        let temporary_dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-session-fact-scope-{}", Uuid::new_v4()),
+                    title: "External temporary fact scope".to_string(),
+                    description: Some("Conversation-scoped temporary document range.".to_string()),
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "scope_kind": "external_temporary",
+                    "scope_source": "dataset_external_id",
+                    "local_only": true,
+                    "local_thread_id": "external-temp-fact-thread",
+                    "conversation_external_id": "conv-fact-scope",
+                    "available_document_source_id": "third-party-source-main",
+                    "dataset_external_id": "dataset-ext-facts",
+                }),
+            )
+            .await
+            .expect("temporary dataset should be created");
+        let selected_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: source_dataset.id,
+                    title: "资料1.docx".to_string(),
+                    object_key: "external-facts/doc-selected.docx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "third-party-source-main",
+                            "document_external_id": "doc-selected",
+                            "revision_external_id": "v1"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("selected document should be created");
+        let out_of_scope_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: source_dataset.id,
+                    title: "资料2.docx".to_string(),
+                    object_key: "external-facts/doc-out-of-scope.docx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "third-party-source-main",
+                            "document_external_id": "doc-out-of-scope",
+                            "revision_external_id": "v1"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("out-of-scope document should be created");
+        state
+            .storage
+            .dataset_document_memberships()
+            .create_or_update(
+                state.tenant_id,
+                NewDatasetDocumentMembership {
+                    dataset_id: temporary_dataset.id,
+                    document_id: selected_document.id,
+                    membership_kind: "temporary".to_string(),
+                    source: "external_channel.dataset_external_id".to_string(),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("temporary membership should be created");
+        let now = Utc::now();
+        let selected_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                selected_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: source_dataset.id,
+                    document_id: selected_document.id,
+                    chunk_index: 0,
+                    content: "资料1 提到广州冠晚网络有限公司。".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("selected chunk should be created")
+            .remove(0);
+        let out_of_scope_chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                out_of_scope_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: source_dataset.id,
+                    document_id: out_of_scope_document.id,
+                    chunk_index: 0,
+                    content: "资料2 提到深圳星拓智能科技有限公司。".to_string(),
+                    token_count: 8,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("out-of-scope chunk should be created")
+            .remove(0);
+        state
+            .storage
+            .document_facts()
+            .replace_document_facts(
+                state.tenant_id,
+                selected_document.id,
+                &[storage::NewDocumentFact {
+                    dataset_id: source_dataset.id,
+                    document_id: selected_document.id,
+                    fact_type: "organization".to_string(),
+                    name: "广州冠晚网络有限公司".to_string(),
+                    normalized_name: "广州冠晚网络有限公司".to_string(),
+                    value_text: None,
+                    value_number: None,
+                    value_date: None,
+                    attributes: json!({}),
+                    confidence: 0.98,
+                    source_kind: "document_chunk".to_string(),
+                    source_locator: Some("资料1.docx#chunk=0".to_string()),
+                    source_chunk_id: Some(selected_chunk.id),
+                    parse_version: Some("test-v1".to_string()),
+                    created_at: now,
+                    sources: vec![storage::NewDocumentFactSource {
+                        source_kind: "document_chunk".to_string(),
+                        source_locator: Some("资料1.docx#chunk=0".to_string()),
+                        source_chunk_id: Some(selected_chunk.id),
+                        attributes: json!({}),
+                        created_at: now,
+                    }],
+                }],
+            )
+            .await
+            .expect("selected document facts should be stored");
+        state
+            .storage
+            .document_facts()
+            .replace_document_facts(
+                state.tenant_id,
+                out_of_scope_document.id,
+                &[storage::NewDocumentFact {
+                    dataset_id: source_dataset.id,
+                    document_id: out_of_scope_document.id,
+                    fact_type: "organization".to_string(),
+                    name: "深圳星拓智能科技有限公司".to_string(),
+                    normalized_name: "深圳星拓智能科技有限公司".to_string(),
+                    value_text: None,
+                    value_number: None,
+                    value_date: None,
+                    attributes: json!({}),
+                    confidence: 0.98,
+                    source_kind: "document_chunk".to_string(),
+                    source_locator: Some("资料2.docx#chunk=0".to_string()),
+                    source_chunk_id: Some(out_of_scope_chunk.id),
+                    parse_version: Some("test-v1".to_string()),
+                    created_at: now,
+                    sources: vec![storage::NewDocumentFactSource {
+                        source_kind: "document_chunk".to_string(),
+                        source_locator: Some("资料2.docx#chunk=0".to_string()),
+                        source_chunk_id: Some(out_of_scope_chunk.id),
+                        attributes: json!({}),
+                        created_at: now,
+                    }],
+                }],
+            )
+            .await
+            .expect("out-of-scope document facts should be stored");
+
+        let evidence_state = build_assistant_run_evidence_state(
+            &state,
+            &json!({
+                "type": "external_channel",
+                "mode": "external_document_scope",
+                "platform": "generic_chat",
+                "sender_external_id": "user-default",
+                "external_document_scope_status": "dataset_resolved",
+                "available_document_source_id": "third-party-source-main",
+                "dataset_document_scope": {
+                    "source": "dataset_external_id",
+                    "source_id": "third-party-source-main",
+                    "document_count": 1,
+                    "dataset_external_id": "dataset-ext-facts"
+                },
+                "temporary_dataset": {
+                    "id": temporary_dataset.id,
+                    "source": "dataset_external_id",
+                    "document_count": 1,
+                    "restores_on": "conversation_external_id"
+                },
+                "datasets": [{"type": "dataset", "id": temporary_dataset.id}],
+            }),
+            "这个资料分组里提到了多少个公司名？请列出公司名。",
+            None,
+            &[],
+            Some(chat_user.id),
+        )
+        .await
+        .expect("evidence state should be built");
+
+        let supplied_items = evidence_state["supplied_items"]
+            .as_array()
+            .expect("supplied items should exist");
+        let fact_item = supplied_items
+            .iter()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("dataset_fact_snapshot"))
+            .expect("temporary scoped fact snapshot should be supplied");
+        assert_eq!(
+            fact_item["source"],
+            json!("document_facts_scoped_aggregate")
+        );
+        assert_eq!(
+            fact_item["snapshot_manifest"]["scope_filter"]["temporary_dataset"],
+            json!(true)
+        );
+        assert_eq!(
+            fact_item["snapshot_manifest"]["scope_filter"]["scoped_document_count"],
+            json!(1)
+        );
+        let fact_json = serde_json::to_string(fact_item).expect("fact item should serialize");
+        assert!(fact_json.contains("广州冠晚网络有限公司"));
+        assert!(!fact_json.contains("深圳星拓智能科技有限公司"));
+        assert!(evidence_state["supply_quality"]["notes"]
+            .as_array()
+            .expect("notes should exist")
+            .iter()
+            .any(|note| note.as_str()
+                == Some(
+                    "supply_selection:document_facts_scoped_aggregate_selected_for_scoped_document_aggregate"
+                )));
+    }
+
+    #[tokio::test]
     async fn assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
