@@ -51601,7 +51601,64 @@ fn lexical_query_tokens(content: &str) -> Vec<String> {
     flush_lexical_ascii_token(&mut tokens, &mut ascii_token);
     flush_lexical_cjk_terms(&mut tokens, &mut cjk_chars);
     extend_lexical_ascii_connector_tokens(content, &mut tokens);
+    extend_lexical_domain_hint_tokens(content, &mut tokens);
     tokens
+}
+
+fn extend_lexical_domain_hint_tokens(content: &str, tokens: &mut Vec<String>) {
+    let medication_dispense_context = content.contains("发药")
+        || content.contains("服药")
+        || content.contains("用药")
+        || content.contains("代发药")
+        || content.contains("药品委托")
+        || content.contains("药品发放")
+        || (content.contains("委托发放") && content.contains("药"));
+    if !medication_dispense_context {
+        return;
+    }
+
+    for token in [
+        "发药",
+        "服药",
+        "用药",
+        "药品",
+        "药物",
+        "药品管理",
+        "药品委托发放",
+        "委托发放",
+        "代发",
+        "代管",
+        "医嘱",
+        "剂量",
+        "服药禁忌",
+        "有效期",
+        "标签",
+    ] {
+        tokens.push(token.to_string());
+    }
+
+    if content.contains("核对")
+        || content.contains("查对")
+        || content.contains("步骤")
+        || content.contains("哪些")
+    {
+        for token in [
+            "核对",
+            "查对",
+            "床号",
+            "姓名",
+            "名称",
+            "规格",
+            "厂家",
+            "数量",
+            "剂量",
+            "有效期",
+            "禁忌",
+            "标签",
+        ] {
+            tokens.push(token.to_string());
+        }
+    }
 }
 
 fn extend_lexical_ascii_connector_tokens(content: &str, tokens: &mut Vec<String>) {
@@ -94398,6 +94455,105 @@ retrieve_evidence:
                             "服药": 4.0,
                             "核对": 3.0,
                             "药品": 3.0
+                        }
+                    },
+                    "recall": { "rank_hint": 3 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "给老人发药时，需要执行哪些核对步骤？",
+            1,
+        );
+
+        assert_eq!(selected, vec![relevant_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_expands_medication_dispense_query_to_management_chunk() {
+        let now = Utc::now();
+        let relevant_id = RetrievalEvidenceId::new();
+        let invoice_id = RetrievalEvidenceId::new();
+        let emergency_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: invoice_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 236,
+                source_locator: "document://manual/chunks/236".to_string(),
+                content_excerpt: "月末发票进帐、核对金额、部门负责人签字确认并归档。"
+                    .to_string(),
+                summary: "发票核对和签字确认".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "发票": 4.0,
+                            "核对": 2.0,
+                            "签字": 2.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: emergency_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 212,
+                source_locator: "document://manual/chunks/212".to_string(),
+                content_excerpt: "老人发生噎食时，应通知医护人员救治，记录事件经过。"
+                    .to_string(),
+                summary: "老人急救处理".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.98,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "老人": 2.0,
+                            "医护人员": 3.0,
+                            "记录": 2.0
+                        }
+                    },
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: relevant_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 63,
+                source_locator: "document://manual/chunks/63".to_string(),
+                content_excerpt: "附件 11：药品统一管理风险告知书及药品委托发放约定。家属送来或长者自购的所有药品，必须交由医护部查看、验收、登记、保管，并同时向院长提交药品相应的医嘱。医护部对接收的所有代管、代发药品的信息要做好登记，包括名称、规格、厂家、数量、剂量、服药禁忌、有效期等，贴好标签，方可按药品委托发放约定或医嘱代发。".to_string(),
+                summary: "药品统一管理风险告知书及药品委托发放约定".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "药品委托发放": 5.0,
+                            "医嘱": 4.0,
+                            "服药禁忌": 4.0,
+                            "有效期": 4.0
                         }
                     },
                     "recall": { "rank_hint": 3 }
