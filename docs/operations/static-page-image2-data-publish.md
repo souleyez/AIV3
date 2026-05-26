@@ -50,6 +50,7 @@ The current frontend prompt payload now carries production rules:
 - `trendAggregationPolicy=date_series_only_for_trends`
 - `publishTarget=v3_generated_artifacts_on_8_server`
 - `codexHostEscalation.defaultMode=plan_only_or_dry_run`
+- `STATIC_PAGE_VISUAL_CONTEXT_LIMIT_CHARS=5000` default for Image2 visual-contract prompts; keep the user visual brief, but do not send full selected data/context into the image task.
 
 ## Cloudflare Codex Feasibility
 

@@ -13,6 +13,7 @@ pub const STATIC_PAGE_ORCHESTRATOR_USER_AGENT: &str = "AIDataPlatformV3StaticPag
 pub const DEFAULT_STATIC_PAGE_IMAGE_MODEL: &str = "gpt-image-2";
 pub const DEFAULT_STATIC_PAGE_IMAGE_SIZE: &str = "1536x1024";
 pub const DEFAULT_STATIC_PAGE_IMAGE_QUALITY: &str = "high";
+pub const DEFAULT_STATIC_PAGE_VISUAL_CONTEXT_LIMIT_CHARS: usize = 5_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexOrchestratorConfig {
@@ -188,8 +189,7 @@ pub fn build_static_page_visual_task_request(
 }
 
 pub fn build_static_page_visual_prompt(image_prompt_payload: &Value) -> String {
-    let payload = serde_json::to_string_pretty(image_prompt_payload)
-        .unwrap_or_else(|_| image_prompt_payload.to_string());
+    let payload = bounded_static_page_visual_context(image_prompt_payload);
     if let Some(prompt_text) = static_page_visual_prompt_text(image_prompt_payload) {
         return format!(
             "请用 GPT Image 2 生成一张 1536x1024 的中文企业静态页视觉草稿图。\n\
@@ -205,6 +205,22 @@ pub fn build_static_page_visual_prompt(image_prompt_payload: &Value) -> String {
          重点：保留模块层级、中文标题、图表类型、数据关系和商务汇报质感。完成后必须返回一张图片 artifact。\n\
          静态页规划 JSON：\n```json\n{payload}\n```"
     )
+}
+
+fn bounded_static_page_visual_context(image_prompt_payload: &Value) -> String {
+    let payload = serde_json::to_string_pretty(image_prompt_payload)
+        .unwrap_or_else(|_| image_prompt_payload.to_string());
+    let limit = env_usize(
+        "STATIC_PAGE_VISUAL_CONTEXT_LIMIT_CHARS",
+        DEFAULT_STATIC_PAGE_VISUAL_CONTEXT_LIMIT_CHARS,
+    )
+    .clamp(1_000, 20_000);
+    if payload.chars().count() <= limit {
+        return payload;
+    }
+    let mut bounded = payload.chars().take(limit).collect::<String>();
+    bounded.push_str("\n...TRUNCATED_FOR_IMAGE2_VISUAL_CONTRACT...");
+    bounded
 }
 
 fn static_page_visual_prompt_text(image_prompt_payload: &Value) -> Option<&str> {
@@ -401,6 +417,13 @@ fn bool_env(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +566,24 @@ mod tests {
         assert!(prompt.contains("用户确认的生图文案"));
         assert!(prompt.contains("用户确认：生成智能家居项目经营分析图，不要编辑框。"));
         assert!(prompt.contains("结构化上下文 JSON"));
+    }
+
+    #[test]
+    fn visual_prompt_bounds_large_structured_context() {
+        let prompt = build_static_page_visual_prompt(&json!({
+            "promptText": "用户确认：生成V3演示页。",
+            "modules": (0..300)
+                .map(|index| json!({
+                    "id": format!("module-{index}"),
+                    "title": format!("模块 {index}"),
+                    "content": "这是一段用于撑大视觉上下文的说明文字。".repeat(20),
+                }))
+                .collect::<Vec<_>>()
+        }));
+
+        assert!(prompt.contains("用户确认：生成V3演示页。"));
+        assert!(prompt.contains("TRUNCATED_FOR_IMAGE2_VISUAL_CONTRACT"));
+        assert!(prompt.chars().count() < 8_000);
     }
 
     #[test]
