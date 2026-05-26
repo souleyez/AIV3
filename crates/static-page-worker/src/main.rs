@@ -563,7 +563,7 @@ async fn poll_until_finished(
         match task.status.as_str() {
             "completed" => return Ok(task),
             "failed" | "cancelled" => return Err(anyhow!(task_failure_message(&task))),
-            "queued" | "submitted" | "running" => {
+            status if orchestrator_task_status_is_pending(status) => {
                 job.status = StaticPageImageJobStatus::Running;
                 job.queue_position = task.queue_position;
                 job.image_prompt_payload = merge_orchestrator_state(
@@ -587,6 +587,21 @@ async fn poll_until_finished(
     Err(anyhow!(
         "orchestrator task {task_id} did not finish after {max_polls} polls"
     ))
+}
+
+fn orchestrator_task_status_is_pending(status: &str) -> bool {
+    matches!(
+        status,
+        "queued"
+            | "submitted"
+            | "running"
+            | "pending"
+            | "processing"
+            | "in_progress"
+            | "retry_wait"
+            | "retrying"
+            | "waiting"
+    )
 }
 
 async fn mark_job_running(storage: &PgStorage, job: &mut StaticPageImageJob) -> Result<()> {
@@ -977,6 +992,14 @@ mod tests {
     use test_fixtures::{
         local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
     };
+
+    #[test]
+    fn orchestrator_retry_wait_is_treated_as_pending_status() {
+        assert!(orchestrator_task_status_is_pending("retry_wait"));
+        assert!(orchestrator_task_status_is_pending("processing"));
+        assert!(!orchestrator_task_status_is_pending("failed"));
+        assert!(!orchestrator_task_status_is_pending("completed"));
+    }
 
     #[test]
     fn merge_render_state_preserves_existing_workflow_fields() {
