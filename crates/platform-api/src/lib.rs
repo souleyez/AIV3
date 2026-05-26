@@ -21004,8 +21004,10 @@ fn external_channel_chat_runtime_attempts(
         lane_limits: None,
     }];
 
+    let mut has_distinct_fallback = false;
     if let Some(fallback) = external_channel_fallback_runtime_selection_from_env() {
         if !external_channel_same_runtime_selection(&primary, &fallback) {
+            has_distinct_fallback = true;
             attempts.push(ExternalChannelChatRuntimeAttempt {
                 env_prefix: "ASSISTANT_RUN_FALLBACK".to_string(),
                 label: "fallback".to_string(),
@@ -21016,7 +21018,21 @@ fn external_channel_chat_runtime_attempts(
         }
     }
 
+    if !has_distinct_fallback && external_channel_same_runtime_retry_enabled() {
+        attempts.push(ExternalChannelChatRuntimeAttempt {
+            env_prefix: "ASSISTANT_RUN".to_string(),
+            label: "primary_retry".to_string(),
+            runtime: primary,
+            profile: None,
+            lane_limits: None,
+        });
+    }
+
     attempts
+}
+
+fn external_channel_same_runtime_retry_enabled() -> bool {
+    env_flag("EXTERNAL_CHANNEL_DIRECT_REPLY_SAME_RUNTIME_RETRY", true)
 }
 
 async fn external_channel_chat_model_pool_attempts(
@@ -68438,6 +68454,107 @@ mod tests {
         assert!(events.iter().any(|event| {
             event.event_name == "assistant_run.external_channel_model_reply_completed"
                 && event.payload["attempt"] == json!("fallback")
+        }));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_retries_same_runtime_after_primary_timeout_without_fallback() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat same-runtime retry endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut slow_stream, _) = listener.accept().expect("accept slow request");
+            let slow = thread::spawn(move || {
+                let _request = read_http_request(&mut slow_stream);
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            });
+
+            let (mut retry_stream, _) = listener.accept().expect("accept retry request");
+            let _request = read_http_request(&mut retry_stream);
+            write_http_json_response(
+                &mut retry_stream,
+                200,
+                r#"{"id":"chatcmpl-retry-ok","choices":[{"message":{"content":"这是同运行时重试后的直答。"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+            );
+            slow.join().expect("slow request join");
+        });
+
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openai");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "slow-primary-v1");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_BASE_URL", format!("http://{addr}"));
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_API_PATH", "/v1/chat/completions");
+        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS", "75");
+        std::env::set_var("EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS", "1000");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-same-runtime-retry-test-{}", Uuid::new_v4()),
+                "Generic Chat Same Runtime Retry Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("普通问题需要直答".to_string());
+        message.message_external_id = "msg-same-runtime-retry-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-same-runtime-retry-001".to_string();
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert_eq!(body.reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(body.reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(
+            body.reply.text.as_deref(),
+            Some("这是同运行时重试后的直答。")
+        );
+
+        server.join().expect("server join");
+        let run_id = body.assistant_run_id.expect("assistant run id");
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_failed"
+                && event.payload["attempt"] == json!("primary")
+                && event.payload["reason"] == json!("direct_reply_attempt_timeout")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_reply_completed"
+                && event.payload["attempt"] == json!("primary_retry")
         }));
         clear_assistant_openclaw_env();
     }
