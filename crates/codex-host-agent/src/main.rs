@@ -490,11 +490,39 @@ fn read_orchestrator_key_file() -> Result<Option<String>> {
     };
     let raw = fs::read_to_string(&path)
         .map_err(|error| anyhow!("failed to read CODEX_ORCHESTRATOR_KEY_FILE: {error}"))?;
-    Ok(raw
+    Ok(orchestrator_access_key_from_file_text(&raw))
+}
+
+fn orchestrator_access_key_from_file_text(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        for pointer in [
+            "/keys/rawKey",
+            "/keys/accessKey",
+            "/rawKey",
+            "/accessKey",
+            "/access_key",
+            "/key",
+            "/token",
+        ] {
+            if let Some(value) = value
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Some(value.to_string());
+            }
+        }
+    }
+    trimmed
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_string))
+        .map(str::to_string)
 }
 
 async fn run_cloudflare_orchestrator(
@@ -1693,6 +1721,20 @@ mod tests {
         assert_eq!(
             codex_host_task_event_name(&json!({"mode": "cloudflare_orchestrator"})),
             "codex_host_task.exec_completed"
+        );
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_key_file_text_accepts_json_or_plain_secret() {
+        assert_eq!(
+            orchestrator_access_key_from_file_text(
+                &json!({"keys": {"rawKey": "json-secret"}}).to_string()
+            ),
+            Some("json-secret".to_string())
+        );
+        assert_eq!(
+            orchestrator_access_key_from_file_text("# comment\n plain-secret \n"),
+            Some("plain-secret".to_string())
         );
     }
 

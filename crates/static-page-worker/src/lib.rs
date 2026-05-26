@@ -70,14 +70,41 @@ fn read_orchestrator_key_file() -> Result<Option<String>> {
     let Some(path) = optional_env("CODEX_ORCHESTRATOR_KEY_FILE") else {
         return Ok(None);
     };
-    let value = std::fs::read_to_string(&path)
-        .map_err(|error| anyhow!("failed to read CODEX_ORCHESTRATOR_KEY_FILE: {error}"))?
-        .trim()
-        .to_string();
-    if value.is_empty() {
-        return Ok(None);
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| anyhow!("failed to read CODEX_ORCHESTRATOR_KEY_FILE: {error}"))?;
+    Ok(orchestrator_access_key_from_file_text(&raw))
+}
+
+fn orchestrator_access_key_from_file_text(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
     }
-    Ok(Some(value))
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        for pointer in [
+            "/keys/rawKey",
+            "/keys/accessKey",
+            "/rawKey",
+            "/accessKey",
+            "/access_key",
+            "/key",
+            "/token",
+        ] {
+            if let Some(value) = value
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Some(value.to_string());
+            }
+        }
+    }
+    trimmed
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -428,7 +455,11 @@ mod tests {
         let _access = EnvRestore::remove("CODEX_ORCHESTRATOR_ACCESS_KEY");
         let path =
             std::env::temp_dir().join(format!("static-page-worker-key-{}.txt", Uuid::new_v4()));
-        std::fs::write(&path, " file-secret \n").expect("write key file");
+        std::fs::write(
+            &path,
+            json!({"keys": {"rawKey": "file-secret"}}).to_string(),
+        )
+        .expect("write key file");
         let _key_file = EnvRestore::set(
             "CODEX_ORCHESTRATOR_KEY_FILE",
             path.to_str().expect("utf-8 temp path"),
@@ -438,6 +469,14 @@ mod tests {
 
         assert_eq!(config.access_key, "file-secret");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reads_plain_orchestrator_key_file_text() {
+        assert_eq!(
+            orchestrator_access_key_from_file_text("# comment\n plain-secret \n"),
+            Some("plain-secret".to_string())
+        );
     }
 
     #[test]
