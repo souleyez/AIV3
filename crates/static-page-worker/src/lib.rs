@@ -274,7 +274,16 @@ pub fn parse_orchestrator_response(
     response: reqwest::blocking::Response,
 ) -> Result<OrchestratorTaskView> {
     let status = response.status();
-    let envelope = response.json::<OrchestratorTaskEnvelope>()?;
+    let body = response.text()?;
+    let envelope = serde_json::from_str::<OrchestratorTaskEnvelope>(&body).map_err(|error| {
+        anyhow!(
+            "orchestrator response JSON decode failed: status={} body_chars={} body_excerpt=\"{}\": {}",
+            status,
+            body.chars().count(),
+            orchestrator_response_excerpt(&body, 300),
+            error
+        )
+    })?;
     if !status.is_success() || !envelope.ok {
         return Err(anyhow!(orchestrator_error_message(&envelope)
             .unwrap_or_else(|| format!(
@@ -284,6 +293,15 @@ pub fn parse_orchestrator_response(
     envelope
         .task
         .ok_or_else(|| anyhow!("orchestrator response did not include task"))
+}
+
+fn orchestrator_response_excerpt(body: &str, max_chars: usize) -> String {
+    body.trim()
+        .chars()
+        .take(max_chars)
+        .collect::<String>()
+        .escape_debug()
+        .to_string()
 }
 
 pub fn extract_first_image_artifact(

@@ -559,7 +559,29 @@ async fn poll_until_finished(
     storage: &PgStorage,
 ) -> Result<static_page_worker::OrchestratorTaskView> {
     for _ in 0..max_polls {
-        let task = poll_static_page_visual_task(http_client, orchestrator_config, task_id)?;
+        let task = match poll_static_page_visual_task(http_client, orchestrator_config, task_id) {
+            Ok(task) => task,
+            Err(error) if orchestrator_poll_error_is_transient(&error) => {
+                job.status = StaticPageImageJobStatus::Running;
+                job.queue_position = None;
+                job.image_prompt_payload = merge_orchestrator_state(
+                    &job.image_prompt_payload,
+                    json!({
+                        "status": "poll_retry",
+                        "taskId": task_id,
+                        "transientError": bounded_error_message(&error, 240),
+                        "updatedAt": Utc::now(),
+                    }),
+                );
+                *job = storage
+                    .static_page_image_jobs()
+                    .update(job.tenant_id, job)
+                    .await?;
+                tokio::time::sleep(Duration::from_millis(poll_interval_ms)).await;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         match task.status.as_str() {
             "completed" => return Ok(task),
             "failed" | "cancelled" => return Err(anyhow!(task_failure_message(&task))),
@@ -587,6 +609,28 @@ async fn poll_until_finished(
     Err(anyhow!(
         "orchestrator task {task_id} did not finish after {max_polls} polls"
     ))
+}
+
+fn orchestrator_poll_error_is_transient(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("error decoding response body")
+        || message.contains("eof while parsing")
+        || message.contains("json decode failed")
+        || message.contains("connection")
+        || message.contains("timed out")
+        || message.contains("status=502")
+        || message.contains("status=503")
+        || message.contains("status=504")
+}
+
+fn bounded_error_message(error: &anyhow::Error, max_chars: usize) -> String {
+    let text = error.to_string();
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    let mut output = text.chars().take(max_chars).collect::<String>();
+    output.push_str("...[truncated]");
+    output
 }
 
 fn orchestrator_task_status_is_pending(status: &str) -> bool {
@@ -1001,6 +1045,19 @@ mod tests {
         assert!(orchestrator_task_status_is_pending("processing"));
         assert!(!orchestrator_task_status_is_pending("failed"));
         assert!(!orchestrator_task_status_is_pending("completed"));
+    }
+
+    #[test]
+    fn orchestrator_poll_decode_errors_are_transient() {
+        assert!(orchestrator_poll_error_is_transient(&anyhow!(
+            "error decoding response body"
+        )));
+        assert!(orchestrator_poll_error_is_transient(&anyhow!(
+            "orchestrator response JSON decode failed: status=200 body_chars=0 body_excerpt=\"\": EOF while parsing a value at line 1 column 0"
+        )));
+        assert!(!orchestrator_poll_error_is_transient(&anyhow!(
+            "orchestrator task ended with status failed"
+        )));
     }
 
     #[test]
