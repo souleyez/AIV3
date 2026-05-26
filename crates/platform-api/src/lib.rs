@@ -49208,12 +49208,10 @@ fn rank_retrieval_evidences_for_prompt<'a>(
     let mut ranked = evidences
         .iter()
         .map(|evidence| {
-            let lexical_score =
-                lexical_query_score(evidence, &query_weights, query_norm).max(lexical_text_score(
-                    &retrieval_evidence_search_text(evidence),
-                    &query_weights,
-                    query_norm,
-                ));
+            let search_text = retrieval_evidence_search_text(evidence);
+            let lexical_score = lexical_query_score(evidence, &query_weights, query_norm)
+                .max(lexical_text_score(&search_text, &query_weights, query_norm))
+                + lexical_domain_hint_score(&search_text, prompt);
             let score = if lexical_score > 0.0 {
                 lexical_score
             } else {
@@ -49267,7 +49265,8 @@ fn rank_document_chunks_for_prompt(
         .into_iter()
         .map(|(document, chunk)| {
             let search_text = document_chunk_search_text(&document, &chunk);
-            let lexical_score = lexical_text_score(&search_text, &query_weights, query_norm);
+            let lexical_score = lexical_text_score(&search_text, &query_weights, query_norm)
+                + lexical_domain_hint_score(&search_text, prompt);
             RankedDocumentChunk {
                 document,
                 chunk,
@@ -51519,6 +51518,43 @@ fn lexical_text_score(
     (dot_product / (query_norm * content_norm) * 10_000.0).round() / 10_000.0
 }
 
+fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
+    let medication_dispense_query = query.contains("发药")
+        || query.contains("服药")
+        || query.contains("用药")
+        || query.contains("药品")
+        || (query.contains("药") && (query.contains("核对") || query.contains("发放")));
+    if !medication_dispense_query {
+        return 0.0;
+    }
+
+    let mut score = 0.0;
+    if content.contains("老人自带药品管理规范")
+        || content.contains("老年人自带药品")
+        || content.contains("药品发放人员")
+        || content.contains("2.4 发药")
+        || (content.contains("备药") && content.contains("发药"))
+    {
+        score += 0.5;
+    } else if content.contains("药品委托发放") || content.contains("药品统一管理风险告知")
+    {
+        score += 0.25;
+    } else if content.contains("协助老年人用药") || content.contains("用药安全") {
+        score += 0.12;
+    }
+
+    if (query.contains("核对") || query.contains("查对"))
+        && (content.contains("核对信息")
+            || content.contains("核对确认")
+            || content.contains("药品名称")
+            || content.contains("药品使用剂量"))
+    {
+        score += 0.2;
+    }
+
+    score
+}
+
 fn limited_lexical_term_weights(content: &str, limit: usize) -> BTreeMap<String, f64> {
     let mut weights = lexical_query_term_weights(content)
         .into_iter()
@@ -51645,15 +51681,19 @@ fn extend_lexical_domain_hint_tokens(content: &str, tokens: &mut Vec<String>) {
         for token in [
             "核对",
             "查对",
-            "床号",
-            "姓名",
-            "名称",
-            "规格",
+            "老年人床号",
+            "老年人姓名",
+            "药品名称",
+            "药品浓度",
             "厂家",
             "数量",
             "剂量",
+            "药品使用剂量",
+            "药品使用时间",
+            "药品使用方法",
             "有效期",
             "禁忌",
+            "药品保质期",
             "标签",
         ] {
             tokens.push(token.to_string());
@@ -94554,6 +94594,104 @@ retrieve_evidence:
                             "医嘱": 4.0,
                             "服药禁忌": 4.0,
                             "有效期": 4.0
+                        }
+                    },
+                    "recall": { "rank_hint": 3 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "给老人发药时，需要执行哪些核对步骤？",
+            1,
+        );
+
+        assert_eq!(selected, vec![relevant_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_prefers_self_carried_medication_rule_over_health_forms() {
+        let now = Utc::now();
+        let relevant_id = RetrievalEvidenceId::new();
+        let health_form_id = RetrievalEvidenceId::new();
+        let lifestyle_form_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: health_form_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 110,
+                source_locator: "document://manual/chunks/110".to_string(),
+                content_excerpt: "护理评估表：床号、姓名、性别、年龄、主要药名，排尿、排便、心理状态，评估护士签字。".to_string(),
+                summary: "健康评估表字段".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "床号": 4.0,
+                            "姓名": 4.0,
+                            "服药": 3.0,
+                            "主要药名": 3.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: lifestyle_form_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 124,
+                source_locator: "document://manual/chunks/124".to_string(),
+                content_excerpt: "生活方式和用药情况表：姓名、饮食习惯、吸烟史、饮酒史、遵医行为、医生签字。".to_string(),
+                summary: "生活方式和用药情况表".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.98,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "用药": 4.0,
+                            "姓名": 3.0,
+                            "遵医行为": 3.0
+                        }
+                    },
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: relevant_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 214,
+                source_locator: "document://manual/chunks/214".to_string(),
+                content_excerpt: "（十四）老人自带药品管理规范。老年人自带药品是指由老年人或代理人带入，并委托养老机构按照处方或医嘱要求提供存放、备药、发药、协助服用等管理服务的药品。2.1 药品收取：药品管理人员应现场核对确认药品名称、剂量、剂型、数量、有效期、用法、医嘱或处方。2.3 备药：核查老年人姓名、老年人床号、药品名称、药品浓度、药品使用剂量、药品使用时间、药品使用方法、药品保质期。2.4 发药：发药前按照备药环节有关要求核对信息，准确发放。".to_string(),
+                summary: "老人自带药品管理规范".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "老人自带药品管理规范": 5.0,
+                            "发药": 4.0,
+                            "核对信息": 4.0,
+                            "药品名称": 4.0
                         }
                     },
                     "recall": { "rank_hint": 3 }
