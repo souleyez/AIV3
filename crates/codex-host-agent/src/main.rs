@@ -1299,8 +1299,12 @@ fn generated_artifact_public_url(relative_dir: &str) -> String {
 }
 
 fn generated_artifact_url_allowed(public_url: &str) -> bool {
-    public_url.starts_with("https://v3.elepcloud.com/generated-artifacts/")
-        || public_url.starts_with("/generated-artifacts/")
+    let normalized = public_url.trim();
+    if normalized.contains("/generated-artifacts/pending-host-agent-publication/") {
+        return false;
+    }
+    normalized.starts_with("https://v3.elepcloud.com/generated-artifacts/")
+        || normalized.starts_with("/generated-artifacts/")
 }
 
 fn safe_path_segment(value: &str) -> String {
@@ -1929,6 +1933,7 @@ mod tests {
             "template_id": "static_page_image2_data_publish",
             "status": "success",
             "artifact": {
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/pending-host-agent-publication/draft/index.html",
                 "html": "<main><h1>经营分析</h1></main>"
             },
             "validation_report": {
@@ -1950,6 +1955,7 @@ mod tests {
             .expect("public url");
         assert!(public_url.starts_with("https://v3.elepcloud.com/generated-artifacts/"));
         assert!(public_url.contains(&assistant_run_id.to_string()));
+        assert!(!public_url.contains("pending-host-agent-publication"));
         assert!(normalized.pointer("/artifact/html").is_none());
         let local_path = normalized
             .pointer("/artifact/local_path")
