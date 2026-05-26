@@ -51527,6 +51527,9 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
     if !medication_dispense_query {
         return 0.0;
     }
+    if content.contains("................................................................") {
+        return 0.0;
+    }
 
     let mut score = 0.0;
     if content.contains("老人自带药品管理规范")
@@ -94615,9 +94618,35 @@ retrieve_evidence:
     fn retrieval_ranking_prefers_self_carried_medication_rule_over_health_forms() {
         let now = Utc::now();
         let relevant_id = RetrievalEvidenceId::new();
+        let toc_id = RetrievalEvidenceId::new();
         let health_form_id = RetrievalEvidenceId::new();
         let lifestyle_form_id = RetrievalEvidenceId::new();
         let evidences = vec![
+            RetrievalEvidence {
+                id: toc_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 7,
+                source_locator: "document://manual/chunks/7".to_string(),
+                content_excerpt: "（十四） 老人自带药品管理规范.................................................................................................. 729".to_string(),
+                summary: "目录页".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 1.0,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "老人自带药品管理规范": 5.0,
+                            "药品管理": 4.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
             RetrievalEvidence {
                 id: health_form_id,
                 tenant_id: TenantId::new(),
