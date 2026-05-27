@@ -32217,11 +32217,11 @@ fn assistant_run_answer_quality_exhausted_controlled_answer(
     let is_dissatisfied = assistant_run_request_expresses_dissatisfaction(request);
     if supplied_count > 0 {
         if is_dissatisfied {
-            return "我已重新核对可见材料并扩大读取范围，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；可以指定材料、页码或表格范围继续核对。".to_string();
+            return "我已重新核对可见材料并扩大读取范围，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；请补充具体文档 ID、页码/章节、对象或统计口径。收到补充后，我会沿用本会话已授权的资料范围继续检索并完成回答。".to_string();
         }
-        return "我已重新核对当前可见材料，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；可以指定材料、页码或表格范围继续核对。".to_string();
+        return "我已重新核对当前可见材料，但这轮仍未形成可核验结论。为避免误判，我先不编造结论；请补充具体文档 ID、页码/章节、对象或统计口径。收到补充后，我会沿用本会话已授权的资料范围继续检索并完成回答。".to_string();
     }
-    "我已尝试重新获取可见材料，但这轮没有形成可核验结论。为避免误判，我先不编造结论；可以指定材料范围或稍后再试。".to_string()
+    "我已尝试重新获取可见材料，但这轮没有形成可核验结论。为避免误判，我先不编造结论；请补充可用文档 ID、数据集分组或更明确的问题对象。收到补充后，我会沿用本会话继续执行。".to_string()
 }
 
 fn assistant_run_answer_quality_spreadsheet_controlled_answer(
@@ -33235,11 +33235,18 @@ fn assistant_run_answer_contains_insufficient_evidence_marker(output_text: &str)
             "暂时无法",
             "未找到相关",
             "没有找到相关",
+            "未直接检索到",
+            "没有直接检索到",
+            "未检索到",
+            "文档未提及",
+            "文档中未提及",
             "当前可见信息不足",
             "当前资料不足",
             "当前资料无法",
             "当前信息无法",
             "基于当前可见",
+            "基于通用知识",
+            "通用知识的建议",
             "当前可见",
             "部分解析状态",
             "部分解析",
@@ -37135,6 +37142,7 @@ async fn build_assistant_run_evidence_state(
                 &evidence_document_ids,
                 allow_selected_documents_without_acl_snapshot,
                 &mut media_context_by_document,
+                "retrieval_evidence_unavailable",
             )
             .await?;
             supplied_items.extend(fallback_items);
@@ -37177,6 +37185,24 @@ async fn build_assistant_run_evidence_state(
                 }
             }
             supplied_items.push(supplied_item);
+        }
+
+        if assistant_run_prompt_requests_expanded_supply(prompt) {
+            let expanded_prompt = assistant_run_expanded_supply_prompt(prompt);
+            let expanded_fallback_items = build_assistant_run_chunk_fallback_supply(
+                state,
+                &dataset,
+                &expanded_prompt,
+                ASSISTANT_RUN_EVIDENCE_MAX_LIMIT,
+                current_user_id,
+                external_acl_filter.as_ref(),
+                &evidence_document_ids,
+                allow_selected_documents_without_acl_snapshot,
+                &mut media_context_by_document,
+                "weak_indexed_evidence_expansion",
+            )
+            .await?;
+            append_deduped_assistant_supply_items(&mut supplied_items, expanded_fallback_items);
         }
     }
 
@@ -42750,6 +42776,7 @@ async fn build_assistant_run_chunk_fallback_supply(
     selected_document_ids: &[DocumentId],
     allow_selected_documents_without_acl_snapshot: bool,
     media_context_by_document: &mut HashMap<DocumentId, Option<Value>>,
+    fallback_reason: &str,
 ) -> std::result::Result<Vec<Value>, ApiError> {
     if limit == 0 {
         return Ok(Vec::new());
@@ -42811,7 +42838,7 @@ async fn build_assistant_run_chunk_fallback_supply(
         let mut supplied_item = json!({
             "type": "retrieval_evidence",
             "source": "document_chunk_fallback",
-            "fallback_reason": "retrieval_evidence_unavailable",
+            "fallback_reason": fallback_reason,
             "dataset_id": ranked.chunk.dataset_id,
             "document_id": ranked.chunk.document_id,
             "document_chunk_id": ranked.chunk.id,
@@ -42826,7 +42853,7 @@ async fn build_assistant_run_chunk_fallback_supply(
             "evidence_manifest": {
                 "fallback": {
                     "source": "document_chunk",
-                    "reason": "retrieval_evidence_unavailable"
+                    "reason": fallback_reason
                 },
                 "evidence": {
                     "section_title_hints": &section_title_hints,
@@ -42845,6 +42872,107 @@ async fn build_assistant_run_chunk_fallback_supply(
         items.push(supplied_item);
     }
     Ok(items)
+}
+
+fn append_deduped_assistant_supply_items(target: &mut Vec<Value>, candidates: Vec<Value>) -> usize {
+    let mut seen = target
+        .iter()
+        .filter_map(assistant_run_supply_item_identity)
+        .collect::<BTreeSet<_>>();
+    let before = target.len();
+    for item in candidates {
+        let Some(identity) = assistant_run_supply_item_identity(&item) else {
+            target.push(item);
+            continue;
+        };
+        if seen.insert(identity) {
+            target.push(item);
+        }
+    }
+    target.len().saturating_sub(before)
+}
+
+fn assistant_run_supply_item_identity(item: &Value) -> Option<String> {
+    item.get("document_chunk_id")
+        .or_else(|| item.get("documentChunkId"))
+        .and_then(Value::as_str)
+        .map(|value| format!("chunk:{value}"))
+        .or_else(|| {
+            item.get("retrieval_evidence_id")
+                .or_else(|| item.get("retrievalEvidenceId"))
+                .and_then(Value::as_str)
+                .map(|value| format!("evidence:{value}"))
+        })
+        .or_else(|| {
+            item.get("source_locator")
+                .or_else(|| item.get("sourceLocator"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("locator:{value}"))
+        })
+}
+
+fn assistant_run_prompt_requests_expanded_supply(prompt: &str) -> bool {
+    prompt_requests_procedure_or_action(prompt) || prompt_contains_elder_fall_signal(prompt)
+}
+
+fn prompt_requests_procedure_or_action(prompt: &str) -> bool {
+    prompt_contains_any(
+        prompt,
+        &[
+            "怎么办",
+            "怎么处理",
+            "如何处理",
+            "第一时间",
+            "流程",
+            "步骤",
+            "应急",
+            "处置",
+            "处理规范",
+            "操作规范",
+            "风险",
+            "注意事项",
+        ],
+    )
+}
+
+fn prompt_contains_elder_fall_signal(prompt: &str) -> bool {
+    prompt_contains_any(
+        prompt,
+        &[
+            "摔倒",
+            "跌倒",
+            "摔伤",
+            "跌伤",
+            "坠床",
+            "骨折",
+            "意外伤害",
+            "突发事件",
+            "人身意外",
+        ],
+    )
+}
+
+fn assistant_run_expanded_supply_prompt(prompt: &str) -> String {
+    let mut parts = vec![prompt.trim().to_string()];
+    if prompt_requests_procedure_or_action(prompt) {
+        parts.push(
+            "流程 步骤 处理 处置 应急 措施 要求 报告 记录 通知 医护 家属 现场评估".to_string(),
+        );
+    }
+    if prompt_contains_elder_fall_signal(prompt) {
+        parts.push(
+            "摔倒 跌倒 防跌倒 坠床 防坠床 摔伤 跌伤 骨折 老年人人身意外伤害 突发事件 应急处置 事故处理 120 通知家属 通知主管领导 医护人员 转院 记录 报告 不要急于扶起"
+                .to_string(),
+        );
+    }
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn filter_retrieval_evidences_for_selected_documents(
@@ -43033,6 +43161,7 @@ fn assistant_run_supply_quality_report(
             "when spreadsheet_row_analysis is present, use its rows as the deterministic computed table for attendance, work-hour, absence, and date/time row questions",
             "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
             "fallback_visible_document_chunks_used means indexed retrieval was expanded with visible document chunks; do not describe that as parser-not-ready unless document_parse_status or low_text_document_evidence says so",
+            "when fallback_reason is weak_indexed_evidence_expansion, use those expanded chunks before saying the document did not directly mention the requested flow",
             "when low_text_document_evidence is present, treat the document extraction as too sparse or low quality, avoid inferring contents from the title, and recommend OCR/reparse/manual review if needed",
             "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
         ],
@@ -43045,6 +43174,7 @@ fn assistant_run_supply_selection_notes(supplied_items: &[Value]) -> Vec<&'stati
     let mut has_scoped_fact_snapshot = false;
     let mut has_dataset_entity_scan = false;
     let mut has_spreadsheet_row_analysis = false;
+    let mut has_weak_evidence_expansion = false;
 
     for item in supplied_items {
         match item.get("type").and_then(Value::as_str) {
@@ -43063,6 +43193,12 @@ fn assistant_run_supply_selection_notes(supplied_items: &[Value]) -> Vec<&'stati
                 has_spreadsheet_row_analysis = true;
             }
             _ => {}
+        }
+        if item.get("source").and_then(Value::as_str) == Some("document_chunk_fallback")
+            && item.get("fallback_reason").and_then(Value::as_str)
+                == Some("weak_indexed_evidence_expansion")
+        {
+            has_weak_evidence_expansion = true;
         }
     }
 
@@ -43091,6 +43227,10 @@ fn assistant_run_supply_selection_notes(supplied_items: &[Value]) -> Vec<&'stati
         notes.push(
             "supply_selection:spreadsheet_row_analysis_selected_for_attendance_or_workhour_table_question",
         );
+    }
+
+    if has_weak_evidence_expansion {
+        notes.push("supply_selection:weak_indexed_evidence_expanded_with_visible_chunks");
     }
 
     notes
@@ -49210,6 +49350,165 @@ struct RankedDocumentChunk {
     lexical_score: f64,
 }
 
+struct AssistantRunRankQuery {
+    text: String,
+    weights: BTreeMap<String, f64>,
+    norm: f64,
+}
+
+fn assistant_run_rank_query_variants(prompt: &str) -> Vec<AssistantRunRankQuery> {
+    let mut texts = Vec::new();
+    let mut seen = BTreeSet::new();
+    for text in
+        std::iter::once(prompt.trim().to_string()).chain(assistant_run_reduced_query_texts(prompt))
+    {
+        let text = normalize_assistant_reduced_query_text(&text);
+        if text.is_empty() || !seen.insert(text.clone()) {
+            continue;
+        }
+        let weights = lexical_query_term_weights(&text);
+        let norm = vector_norm(&weights);
+        if norm > 0.0 {
+            texts.push(AssistantRunRankQuery {
+                text,
+                weights,
+                norm,
+            });
+        }
+    }
+    texts
+}
+
+fn assistant_run_reduced_query_texts(prompt: &str) -> Vec<String> {
+    let mut variants = Vec::new();
+    let stripped = assistant_run_strip_question_noise(prompt);
+    if !stripped.is_empty() && stripped != prompt.trim() {
+        variants.push(stripped.clone());
+    }
+
+    let key_terms = assistant_run_key_terms_query(prompt, 10);
+    if !key_terms.is_empty() {
+        variants.push(key_terms);
+    }
+
+    if prompt_requests_procedure_or_action(prompt) && !stripped.is_empty() {
+        variants.push(format!("{stripped} 处理 处置 应急 流程"));
+    }
+    if prompt_contains_elder_fall_signal(prompt) {
+        variants.push("摔倒 跌倒 意外伤害 突发事件 事故处理 应急处置 120 通知家属".to_string());
+    }
+
+    let mut seen = BTreeSet::new();
+    variants
+        .into_iter()
+        .map(|text| normalize_assistant_reduced_query_text(&text))
+        .filter(|text| !text.is_empty() && seen.insert(text.clone()))
+        .collect()
+}
+
+fn assistant_run_strip_question_noise(prompt: &str) -> String {
+    let mut text = prompt.trim().to_string();
+    for noise in [
+        "请问",
+        "帮我",
+        "帮忙",
+        "回答",
+        "总结",
+        "一下",
+        "这个",
+        "那个",
+        "这份",
+        "文档里",
+        "文档里面",
+        "资料里",
+        "资料里面",
+        "问题",
+        "是什么",
+        "是谁",
+        "怎么办",
+        "怎么处理",
+        "如何处理",
+        "如何",
+        "哪些",
+        "需要",
+        "可以",
+        "能不能",
+        "应该",
+        "到底",
+        "吗",
+        "呢",
+    ] {
+        text = text.replace(noise, " ");
+    }
+    normalize_assistant_reduced_query_text(&text)
+}
+
+fn assistant_run_key_terms_query(prompt: &str, limit: usize) -> String {
+    let mut terms = lexical_query_term_weights(prompt)
+        .into_iter()
+        .filter(|(term, _)| assistant_run_reduced_query_term_is_signal(term))
+        .collect::<Vec<_>>();
+    terms.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.0.chars().count().cmp(&left.0.chars().count()))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    terms
+        .into_iter()
+        .map(|(term, _)| term)
+        .take(limit)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn assistant_run_reduced_query_term_is_signal(term: &str) -> bool {
+    let char_count = term.chars().count();
+    if char_count < 2 || assistant_run_reduced_query_term_is_noise(term) {
+        return false;
+    }
+    if term.chars().all(|value| is_cjk_query_token_char(value)) {
+        return char_count >= 2;
+    }
+    term.chars().any(|value| value.is_ascii_alphanumeric())
+}
+
+fn assistant_run_reduced_query_term_is_noise(term: &str) -> bool {
+    matches!(
+        term,
+        "请问"
+            | "帮我"
+            | "帮忙"
+            | "回答"
+            | "总结"
+            | "一下"
+            | "这个"
+            | "那个"
+            | "这份"
+            | "文档"
+            | "资料"
+            | "里面"
+            | "问题"
+            | "是什么"
+            | "是谁"
+            | "怎么办"
+            | "怎么处理"
+            | "如何"
+            | "哪些"
+            | "需要"
+            | "可以"
+            | "能不能"
+            | "应该"
+            | "到底"
+    )
+}
+
+fn normalize_assistant_reduced_query_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn rank_retrieval_evidences_for_prompt<'a>(
     evidences: &'a [RetrievalEvidence],
     prompt: &str,
@@ -49219,15 +49518,19 @@ fn rank_retrieval_evidences_for_prompt<'a>(
         return Vec::new();
     }
 
-    let query_weights = lexical_query_term_weights(prompt);
-    let query_norm = vector_norm(&query_weights);
+    let query_variants = assistant_run_rank_query_variants(prompt);
     let mut ranked = evidences
         .iter()
         .map(|evidence| {
             let search_text = retrieval_evidence_search_text(evidence);
-            let lexical_score = lexical_query_score(evidence, &query_weights, query_norm)
-                .max(lexical_text_score(&search_text, &query_weights, query_norm))
-                + lexical_domain_hint_score(&search_text, prompt);
+            let lexical_score = query_variants
+                .iter()
+                .map(|query| {
+                    lexical_query_score(evidence, &query.weights, query.norm)
+                        .max(lexical_text_score(&search_text, &query.weights, query.norm))
+                        + lexical_domain_hint_score(&search_text, &query.text)
+                })
+                .fold(0.0, f64::max);
             let score = if lexical_score > 0.0 {
                 lexical_score
             } else {
@@ -49275,14 +49578,18 @@ fn rank_document_chunks_for_prompt(
         return Vec::new();
     }
 
-    let query_weights = lexical_query_term_weights(prompt);
-    let query_norm = vector_norm(&query_weights);
+    let query_variants = assistant_run_rank_query_variants(prompt);
     let mut ranked = sources
         .into_iter()
         .map(|(document, chunk)| {
             let search_text = document_chunk_search_text(&document, &chunk);
-            let lexical_score = lexical_text_score(&search_text, &query_weights, query_norm)
-                + lexical_domain_hint_score(&search_text, prompt);
+            let lexical_score = query_variants
+                .iter()
+                .map(|query| {
+                    lexical_text_score(&search_text, &query.weights, query.norm)
+                        + lexical_domain_hint_score(&search_text, &query.text)
+                })
+                .fold(0.0, f64::max);
             RankedDocumentChunk {
                 document,
                 chunk,
@@ -51540,7 +51847,8 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
         || query.contains("用药")
         || query.contains("药品")
         || (query.contains("药") && (query.contains("核对") || query.contains("发放")));
-    if !medication_dispense_query {
+    let elder_fall_query = prompt_contains_elder_fall_signal(query);
+    if !medication_dispense_query && !elder_fall_query {
         return 0.0;
     }
     if content.contains("................................................................") {
@@ -51548,27 +51856,60 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
     }
 
     let mut score = 0.0;
-    if content.contains("老人自带药品管理规范")
-        || content.contains("老年人自带药品")
-        || content.contains("药品发放人员")
-        || content.contains("2.4 发药")
-        || (content.contains("备药") && content.contains("发药"))
+    if medication_dispense_query
+        && (content.contains("老人自带药品管理规范")
+            || content.contains("老年人自带药品")
+            || content.contains("药品发放人员")
+            || content.contains("2.4 发药")
+            || (content.contains("备药") && content.contains("发药")))
     {
         score += 0.5;
-    } else if content.contains("药品委托发放") || content.contains("药品统一管理风险告知")
+    } else if medication_dispense_query
+        && (content.contains("药品委托发放") || content.contains("药品统一管理风险告知"))
     {
         score += 0.25;
-    } else if content.contains("协助老年人用药") || content.contains("用药安全") {
+    } else if medication_dispense_query
+        && (content.contains("协助老年人用药") || content.contains("用药安全"))
+    {
         score += 0.12;
     }
 
-    if (query.contains("核对") || query.contains("查对"))
+    if medication_dispense_query
+        && (query.contains("核对") || query.contains("查对"))
         && (content.contains("核对信息")
             || content.contains("核对确认")
             || content.contains("药品名称")
             || content.contains("药品使用剂量"))
     {
         score += 0.2;
+    }
+
+    if elder_fall_query {
+        if content.contains("老年人人身意外伤害")
+            || content.contains("突发事件应急预防与处置")
+            || content.contains("典型突发事件应急处置")
+            || content.contains("事故处理与报告")
+            || content.contains("事故处理")
+        {
+            score += 0.65;
+        } else if content.contains("防跌倒")
+            || content.contains("跌倒")
+            || content.contains("坠床")
+            || content.contains("骨折")
+            || content.contains("摔伤")
+        {
+            score += 0.25;
+        }
+        if prompt_requests_procedure_or_action(query)
+            && (content.contains("120")
+                || content.contains("通知")
+                || content.contains("报告")
+                || content.contains("记录")
+                || content.contains("转院")
+                || content.contains("医护人员"))
+        {
+            score += 0.3;
+        }
     }
 
     score
@@ -51668,52 +52009,97 @@ fn extend_lexical_domain_hint_tokens(content: &str, tokens: &mut Vec<String>) {
         || content.contains("药品委托")
         || content.contains("药品发放")
         || (content.contains("委托发放") && content.contains("药"));
-    if !medication_dispense_context {
-        return;
-    }
-
-    for token in [
-        "发药",
-        "服药",
-        "用药",
-        "药品",
-        "药物",
-        "药品管理",
-        "药品委托发放",
-        "委托发放",
-        "代发",
-        "代管",
-        "医嘱",
-        "剂量",
-        "服药禁忌",
-        "有效期",
-        "标签",
-    ] {
-        tokens.push(token.to_string());
-    }
-
-    if content.contains("核对")
-        || content.contains("查对")
-        || content.contains("步骤")
-        || content.contains("哪些")
-    {
+    if medication_dispense_context {
         for token in [
-            "核对",
-            "查对",
-            "老年人床号",
-            "老年人姓名",
-            "药品名称",
-            "药品浓度",
-            "厂家",
-            "数量",
+            "发药",
+            "服药",
+            "用药",
+            "药品",
+            "药物",
+            "药品管理",
+            "药品委托发放",
+            "委托发放",
+            "代发",
+            "代管",
+            "医嘱",
             "剂量",
-            "药品使用剂量",
-            "药品使用时间",
-            "药品使用方法",
+            "服药禁忌",
             "有效期",
-            "禁忌",
-            "药品保质期",
             "标签",
+        ] {
+            tokens.push(token.to_string());
+        }
+
+        if content.contains("核对")
+            || content.contains("查对")
+            || content.contains("步骤")
+            || content.contains("哪些")
+        {
+            for token in [
+                "核对",
+                "查对",
+                "老年人床号",
+                "老年人姓名",
+                "药品名称",
+                "药品浓度",
+                "厂家",
+                "数量",
+                "剂量",
+                "药品使用剂量",
+                "药品使用时间",
+                "药品使用方法",
+                "有效期",
+                "禁忌",
+                "药品保质期",
+                "标签",
+            ] {
+                tokens.push(token.to_string());
+            }
+        }
+    }
+
+    let elder_fall_context = prompt_contains_elder_fall_signal(content)
+        || content.contains("应急处置")
+        || content.contains("事故处理")
+        || content.contains("通知家属")
+        || content.contains("通知主管领导")
+        || content.contains("转院")
+        || content.contains("医护人员")
+        || content.contains("拨打 120")
+        || content.contains("拨打120");
+    if elder_fall_context {
+        for token in [
+            "摔倒",
+            "跌倒",
+            "防跌倒",
+            "坠床",
+            "防坠床",
+            "摔伤",
+            "跌伤",
+            "骨折",
+            "意外伤害",
+            "人身意外",
+            "老年人人身意外伤害",
+            "突发事件",
+            "应急处置",
+            "事故处理",
+            "事故报告",
+            "120",
+            "通知家属",
+            "通知主管领导",
+            "医护人员",
+            "转院",
+            "记录",
+            "报告",
+            "现场评估",
+        ] {
+            tokens.push(token.to_string());
+        }
+    }
+
+    if prompt_requests_procedure_or_action(content) {
+        for token in [
+            "流程", "步骤", "处理", "处置", "应急", "措施", "要求", "报告", "记录", "通知",
         ] {
             tokens.push(token.to_string());
         }
@@ -68698,6 +69084,45 @@ mod tests {
         assert_eq!(
             assistant_run_answer_quality_retry_reason(
                 "当前资料不足，无法确认是否有人缺勤。",
+                &evidence_state,
+                &request,
+            ),
+            Some("insufficient_or_uncertain_answer")
+        );
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_retries_deferred_direct_retrieval_language() {
+        let request = CreateAssistantRunRequest {
+            prompt: "老年人摔倒后怎么办".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 4,
+                "indexedEvidenceCount": 4,
+                "fallbackChunkCount": 0,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0
+            }
+        });
+
+        assert_eq!(
+            assistant_run_answer_quality_retry_reason(
+                "供料中未直接检索到老年人摔倒后的处理流程，以下基于通用知识给出建议。",
                 &evidence_state,
                 &request,
             ),
@@ -94535,6 +94960,100 @@ retrieve_evidence:
     }
 
     #[test]
+    fn retrieval_ranking_prefers_elder_fall_emergency_chunk_over_signage() {
+        let now = Utc::now();
+        let emergency_id = RetrievalEvidenceId::new();
+        let signage_id = RetrievalEvidenceId::new();
+        let broad_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: signage_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 44,
+                source_locator: "document://manual/chunks/44".to_string(),
+                content_excerpt:
+                    "防跌倒标识表示该老年人易发生跌倒，应有防护措施。防坠床标识表示该老年人易发生坠床。"
+                        .to_string(),
+                summary: "安全标识：防跌倒、防坠床".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "老年人": 2.0,
+                            "跌倒": 3.0,
+                            "防跌倒": 3.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: broad_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 11,
+                source_locator: "document://manual/chunks/11".to_string(),
+                content_excerpt: "老年人照料设施建筑设计应符合安全、健康、卫生、适用等基本要求。"
+                    .to_string(),
+                summary: "建筑设计总则".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.98,
+                evidence_manifest: json!({
+                    "embedding": {"term_weights": {"老年人": 2.0, "安全": 2.0}},
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: emergency_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 212,
+                source_locator: "document://manual/chunks/212".to_string(),
+                content_excerpt:
+                    "养老机构老人突发事件应急预防与处置规程要求，重伤事故直接拨打120，通知院领导及家人，事故现场有关人员应积极配合，安抚其余老人防止事故扩大，并记录事件经过。"
+                        .to_string(),
+                summary: "突发事件应急处置与事故处理报告制度".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "突发事件": 4.0,
+                            "应急处置": 4.0,
+                            "事故处理": 4.0,
+                            "120": 3.0,
+                            "通知家属": 3.0
+                        }
+                    },
+                    "recall": { "rank_hint": 160 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected =
+            select_retrieval_evidence_ids_for_prompt(&evidences, "老年人摔倒后怎么办", 1);
+
+        assert_eq!(selected, vec![emergency_id]);
+    }
+
+    #[test]
     fn retrieval_ranking_prefers_medication_check_chunk_over_invoice_noise() {
         let now = Utc::now();
         let relevant_id = RetrievalEvidenceId::new();
@@ -95192,6 +95711,163 @@ retrieve_evidence:
             document_chunk_fallback_summary(&ranked[0].document, &ranked[0].chunk)
                 .contains("固定资产申请")
         );
+    }
+
+    #[test]
+    fn rank_document_chunks_for_prompt_expands_elder_fall_procedure_terms() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "养老机构精细化运营实操手册".to_string(),
+            object_key: "documents/care-manual.docx".to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let signage_chunk_id = DocumentChunkId::new();
+        let emergency_chunk_id = DocumentChunkId::new();
+        let signage_chunk = DocumentChunk {
+            id: signage_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 44,
+            content: "防跌倒标识表示该老年人易发生跌倒，应有防护措施。".to_string(),
+            token_count: 12,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let emergency_chunk = DocumentChunk {
+            id: emergency_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 212,
+            content:
+                "老人突发事件应急预防与处置规程：发生重伤事故直接拨打120，通知院领导及家人，事故现场有关人员应积极配合，安抚其余老人防止事故扩大，记录事件发生经过并上报。"
+                    .to_string(),
+            token_count: 32,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let ranked = rank_document_chunks_for_prompt(
+            vec![
+                (document.clone(), signage_chunk),
+                (document, emergency_chunk),
+            ],
+            "老年人摔倒后怎么办",
+            2,
+        );
+
+        assert_eq!(ranked[0].chunk.id, emergency_chunk_id);
+        assert_eq!(ranked[1].chunk.id, signage_chunk_id);
+        assert!(ranked[0].lexical_score > ranked[1].lexical_score);
+    }
+
+    #[test]
+    fn lexical_query_term_weights_extend_elder_fall_terms_without_medication_context() {
+        let weights =
+            lexical_query_term_weights("老人突发事件应急处置：重伤事故直接拨打120并通知家属");
+
+        for expected in ["摔倒", "跌倒", "事故处理", "应急处置", "通知家属"] {
+            assert!(
+                weights.contains_key(expected),
+                "missing elder-fall expansion term {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn rank_document_chunks_for_prompt_uses_reduced_query_for_noisy_question() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let relevant_document_id = DocumentId::new();
+        let noise_document_id = DocumentId::new();
+        let relevant_chunk_id = DocumentChunkId::new();
+        let noise_chunk_id = DocumentChunkId::new();
+        let relevant_document = Document {
+            id: relevant_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "停车合同管理制度".to_string(),
+            object_key: "documents/parking-contract.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let noise_document = Document {
+            id: noise_document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "通用问答说明".to_string(),
+            object_key: "documents/generic-qa.md".to_string(),
+            content_type: "text/markdown".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let relevant_chunk = DocumentChunk {
+            id: relevant_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: relevant_document_id,
+            chunk_index: 12,
+            content: "停车合同续签应先核对车位编号、承租人信息、合同期限和费用标准，再提交物业负责人复核。".to_string(),
+            token_count: 24,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let noise_chunk = DocumentChunk {
+            id: noise_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id: noise_document_id,
+            chunk_index: 1,
+            content: "请问这个文档里面的问题应该如何回答，可以先总结一下再说明。".to_string(),
+            token_count: 18,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let ranked = rank_document_chunks_for_prompt(
+            vec![
+                (noise_document, noise_chunk),
+                (relevant_document, relevant_chunk),
+            ],
+            "请问这个文档里面停车合同续签到底应该怎么处理？",
+            2,
+        );
+
+        assert_eq!(ranked[0].chunk.id, relevant_chunk_id);
+        assert_eq!(ranked[1].chunk.id, noise_chunk_id);
+        assert!(ranked[0].lexical_score > ranked[1].lexical_score);
     }
 
     #[test]

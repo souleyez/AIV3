@@ -25,6 +25,7 @@ create table if not exists external_source_connections (
     display_name text not null,
     base_url_redacted text not null,
     config_redacted jsonb not null default '{}'::jsonb,
+    status text not null default 'enabled',
     sync_mode text not null,
     permission_mode text not null,
     health_status text not null default 'unknown',
@@ -37,6 +38,9 @@ create table if not exists external_source_connections (
     primary key (tenant_id, id),
     unique (tenant_id, source_key)
 );
+
+alter table external_source_connections
+    add column if not exists status text not null default 'enabled';
 
 create table if not exists external_principals (
     tenant_id uuid not null references tenants (id) on delete cascade,

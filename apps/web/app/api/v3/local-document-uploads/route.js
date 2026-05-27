@@ -6,6 +6,25 @@ export const runtime = 'nodejs';
 
 const REPO_ROOT = path.resolve(process.cwd(), '..', '..');
 const DEFAULT_UPLOAD_DIR = path.join(REPO_ROOT, 'storage', 'uploads');
+const DEFAULT_UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
+
+function readUploadMaxBytes() {
+  const raw = Number.parseInt(process.env.AIDP_V3_UPLOAD_MAX_BYTES || '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_UPLOAD_MAX_BYTES;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes} B`;
+}
 
 function sanitizeFileName(fileName) {
   return String(fileName || 'upload.bin')
@@ -52,11 +71,31 @@ export async function POST(request) {
     await mkdir(uploadDir, { recursive: true });
 
     const savedFiles = [];
+    const maxBytes = readUploadMaxBytes();
     for (const [index, file] of files.entries()) {
       const originalName = sanitizeFileName(file.name);
+      const declaredSize = Number(file.size || 0);
+      if (declaredSize > maxBytes) {
+        return Response.json(
+          {
+            error: 'upload_file_too_large',
+            message: `文件 ${originalName} 大小 ${formatBytes(declaredSize)}，超过本地上传上限 ${formatBytes(maxBytes)}。`,
+          },
+          { status: 413 },
+        );
+      }
       const storedName = `${Date.now()}-${index + 1}-${crypto.randomUUID().slice(0, 8)}-${originalName}`;
       const targetPath = path.join(uploadDir, storedName);
       const bytes = Buffer.from(await file.arrayBuffer());
+      if (bytes.byteLength > maxBytes) {
+        return Response.json(
+          {
+            error: 'upload_file_too_large',
+            message: `文件 ${originalName} 大小 ${formatBytes(bytes.byteLength)}，超过本地上传上限 ${formatBytes(maxBytes)}。`,
+          },
+          { status: 413 },
+        );
+      }
       await writeFile(targetPath, bytes);
       savedFiles.push({
         name: originalName,
