@@ -60,23 +60,24 @@ use contracts::{
     ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
     ExternalIntegrationControlResponse, ExternalIntegrationSummaryView, ExternalMessageTypeView,
     ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
-    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactInteractionModeView,
-    HtmlArtifactManifestView, InspectDatabaseSourceSchemaRequest,
-    InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
-    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
-    LlmInvocationView, LogoutResponse, MemoryDirectoryView, ModelGatewayLaneStatusView,
-    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
-    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
-    ModelGatewayProviderStatusView, ModelGatewayStatusView, PlanReportRequest,
-    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
-    ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
-    PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
-    PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
-    ReportPlanAstVersionView, ReportPlanSummary, ReportRenderOutputView,
-    ResolveDatasetSecretBindingsRequest, ResolveDatasetSecretBindingsResponse,
-    RetrievalEvidenceView, RetrievalSearchHitView, RetrievalSearchResponse,
-    RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse, StartEmailAuthRequest,
-    StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactDataRefView,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
+    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
+    InspectDatabaseSourceSchemaRequest, InspectDatabaseSourceSchemaResponse, KeyLoginRequest,
+    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
+    ListExternalIntegrationsResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
+    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
+    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
+    ModelGatewayStatusView, PlanReportRequest, PreviewDatabaseSourceTableRequest,
+    PreviewDatabaseSourceTableResponse, ProfileDatabaseSourceRequest,
+    ProfileDatabaseSourceResponse, PublishReportRequest, PublishReportResponse,
+    PublishedReportDetailView, PublishedReportVersionView, PublishedReportView,
+    RegisterDocumentRequest, RegisterDocumentResponse, ReportPlanAstVersionView, ReportPlanSummary,
+    ReportRenderOutputView, ResolveDatasetSecretBindingsRequest,
+    ResolveDatasetSecretBindingsResponse, RetrievalEvidenceView, RetrievalSearchHitView,
+    RetrievalSearchResponse, RetryWorkflowExecutionRequest, RetryWorkflowExecutionResponse,
+    StartEmailAuthRequest, StartEmailAuthResponse, StaticPageDraftView, StaticPageImageJobView,
     StaticPageRenderOutputView, SubmitHtmlArtifactEventRequest, SubmitHtmlArtifactEventResponse,
     TestDatabaseSourceConnectionRequest, TestDatabaseSourceConnectionResponse, ToolDefinitionView,
     ToolExecutionView, UpdateChatSessionReportEntryRequest, UpdateChatSessionReportEntryResponse,
@@ -205,6 +206,12 @@ const ASSISTANT_RUN_DATASET_ENTITY_SCAN_CHUNK_LIMIT: usize = 4;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ENTITY_LIMIT: usize = 80;
 const ASSISTANT_RUN_DATASET_ENTITY_SCAN_ROW_LIMIT: usize = 160;
 const ASSISTANT_RUN_RESUME_PROFILE_ROW_LIMIT: usize = 160;
+const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ROW_LIMIT: usize = 320;
+const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_CHUNK_LIMIT: usize = 24;
+const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_BLOCK_LINE_LIMIT: usize = 8;
+const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_DOCUMENTS: u64 = 6;
+const ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_ROWS: usize = 8;
+const ASSISTANT_RUN_HTML_GENERATION_ROUTE_RAPID_ARTIFACT: &str = "rapid_html_artifact";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_DOCUMENT_LIMIT: usize = 48;
 const ASSISTANT_RUN_INFERRED_LOW_TEXT_PARSE_MIN_CHARS: usize = 20;
 const EXTERNAL_CHANNEL_DIRECT_REPLY_DEFAULT_TOTAL_BUDGET_MS: u64 = 90_000;
@@ -9433,6 +9440,24 @@ async fn create_assistant_run(
                         }),
                     });
                 }
+                if let Some(direct_answer) = assistant_run_resume_project_delivery_controlled_answer(
+                    &outcome.evidence_state,
+                    &request,
+                ) {
+                    outcome.output_artifacts = assistant_run_replace_assistant_message_content(
+                        outcome.output_artifacts,
+                        &direct_answer,
+                    );
+                    outcome.events.push(AssistantRunReactEvent {
+                        event_name: "assistant_run.resume_project_delivery_direct_answered"
+                            .to_string(),
+                        payload: json!({
+                            "source": "resume_project_delivery_rows",
+                            "reason": "multi_resume_project_delivery_prompt",
+                            "assistant_message_chars": direct_answer.chars().count(),
+                        }),
+                    });
+                }
                 (
                     outcome.runtime_manifest,
                     outcome.execution_trail_steps,
@@ -9727,6 +9752,38 @@ async fn create_assistant_run(
             }));
             execution_trail.append(&mut react_trail_steps);
         }
+    }
+    if let Some(artifact) =
+        assistant_run_resume_project_delivery_html_artifact(run.id, &request, &evidence_state, now)
+    {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.resume_project_delivery_html_artifact_created"
+                        .to_string(),
+                    payload: json!({
+                        "source": "resume_project_delivery_rows",
+                        "reason": "high_information_resume_project_delivery_answer",
+                        "generation_route": ASSISTANT_RUN_HTML_GENERATION_ROUTE_RAPID_ARTIFACT,
+                        "image2_required": false,
+                        "static_page_pipeline": false,
+                        "html_artifacts": [artifact.clone()],
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        output_artifacts.push(json!({
+            "type": "html_artifact",
+            "id": artifact.id,
+            "title": artifact.title,
+            "template_id": "resume_project_delivery_matrix",
+        }));
     }
     state
         .storage
@@ -28881,11 +28938,12 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
         "table_rows": item.get("table_rows").cloned().unwrap_or(Value::Null),
         "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
         "resume_profile_rows": item.get("resume_profile_rows").cloned().unwrap_or(Value::Null),
+        "resume_project_delivery_rows": item.get("resume_project_delivery_rows").cloned().unwrap_or(Value::Null),
         "company_names": item.get("company_names").cloned().unwrap_or(Value::Null),
         "entities": item.get("entities").cloned().unwrap_or(Value::Null),
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
         "limits": item.get("limits").cloned().unwrap_or(Value::Null),
-        "model_note": "Use *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, and resume_profile_rows as authoritative structured scan tables when answering entity/document dimension questions. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
+        "model_note": "Use *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows as authoritative structured scan tables when answering entity/document dimension questions. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows over top-k retrieval chunks. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
     })
 }
 
@@ -29170,6 +29228,16 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
     let section_rows = assistant_run_compact_entity_scan_rows(item, "section_rows");
     let paragraph_rows = assistant_run_compact_entity_scan_rows(item, "paragraph_rows");
     let table_rows = assistant_run_compact_entity_scan_rows(item, "table_rows");
+    let resume_project_delivery_rows = item
+        .get("resume_project_delivery_rows")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .take(ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ROW_LIMIT)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let resume_profile_rows = item
         .get("resume_profile_rows")
         .and_then(Value::as_array)
@@ -29194,6 +29262,7 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         && section_rows.is_empty()
         && paragraph_rows.is_empty()
         && table_rows.is_empty()
+        && resume_project_delivery_rows.is_empty()
         && resume_profile_rows.is_empty()
     {
         return None;
@@ -29238,8 +29307,9 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "table_rows": table_rows,
         "entity_rows_by_type": entity_rows_by_type,
         "resume_profile_rows": resume_profile_rows,
+        "resume_project_delivery_rows": resume_project_delivery_rows,
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
-        "model_note": "Answer entity/document dimension questions from *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, and resume_profile_rows only. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
+        "model_note": "Answer entity/document dimension questions from *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows only. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
     }))
 }
 
@@ -29302,6 +29372,7 @@ fn assistant_run_dataset_entity_scan_direct_answer_for_dimension(
         AssistantRunEntityScanAnswerDimension::Age
             | AssistantRunEntityScanAnswerDimension::Gender
             | AssistantRunEntityScanAnswerDimension::Time
+            | AssistantRunEntityScanAnswerDimension::ResumeProjectDelivery
             | AssistantRunEntityScanAnswerDimension::ResumeSkill
             | AssistantRunEntityScanAnswerDimension::ResumeProject
             | AssistantRunEntityScanAnswerDimension::ResumePosition
@@ -29398,6 +29469,7 @@ enum AssistantRunEntityScanAnswerDimension {
     Time,
     ResumeSkill,
     ResumeProject,
+    ResumeProjectDelivery,
     ResumePosition,
     ResumeLocation,
     ResumeCompany,
@@ -29445,6 +29517,9 @@ fn assistant_run_entity_scan_answer_dimension(
     }
     if prompt_requests_resume_skill_ranking(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeSkill);
+    }
+    if prompt_requests_resume_project_delivery_listing(prompt) {
+        return Some(AssistantRunEntityScanAnswerDimension::ResumeProjectDelivery);
     }
     if prompt_requests_resume_project_ranking(prompt) {
         return Some(AssistantRunEntityScanAnswerDimension::ResumeProject);
@@ -29738,6 +29813,9 @@ fn assistant_run_resume_profile_direct_answer(
                     ]
                 },
             ))
+        }
+        AssistantRunEntityScanAnswerDimension::ResumeProjectDelivery => {
+            assistant_run_resume_project_delivery_direct_answer(scans, &rows)
         }
         AssistantRunEntityScanAnswerDimension::ResumeProject => {
             let ascending = prompt_requests_ascending_sort(prompt);
@@ -30253,6 +30331,342 @@ where
     lines.join("\n")
 }
 
+fn assistant_run_resume_project_delivery_direct_answer(
+    scans: &[Value],
+    profile_rows: &[Value],
+) -> Option<String> {
+    let delivery_rows = scans
+        .iter()
+        .flat_map(|scan| {
+            scan.get("resume_project_delivery_rows")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    if delivery_rows.is_empty() && profile_rows.is_empty() {
+        return None;
+    }
+
+    let scanned_document_count = scans
+        .iter()
+        .filter_map(|scan| scan.get("scanned_document_count").and_then(Value::as_u64))
+        .max()
+        .unwrap_or(profile_rows.len() as u64);
+    let mut rows_by_document: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for row in delivery_rows {
+        let document_id = value_string(&row, "document_id");
+        rows_by_document.entry(document_id).or_default().push(row);
+    }
+
+    let mut lines = vec![
+        format!(
+            "已按可见简历逐份扫描项目交付经历：覆盖 {scanned_document_count} 份文档，识别到 {} 条项目交付记录。",
+            rows_by_document.values().map(Vec::len).sum::<usize>()
+        ),
+        "未识别到项目交付段的候选人会单独标记，避免只展示检索命中的个别人。".to_string(),
+        String::new(),
+        "| 候选人 | 项目/状态 | 交付职责或成果 | 技术栈 | 来源文档 |".to_string(),
+        "| --- | --- | --- | --- | --- |".to_string(),
+    ];
+
+    let mut emitted_documents = BTreeSet::new();
+    for profile in profile_rows {
+        let document_id = value_string(profile, "document_id");
+        if !document_id.is_empty() && document_id != "-" {
+            emitted_documents.insert(document_id.clone());
+        }
+        let candidate_name = resume_profile_candidate_name(profile);
+        let document_title = value_string(profile, "document_title");
+        if let Some(rows) = rows_by_document.get(&document_id) {
+            for row in rows {
+                lines.push(format!(
+                    "| {} | {} | {} | {} | {} |",
+                    escape_markdown_table_cell(&candidate_name),
+                    escape_markdown_table_cell(&value_string(row, "project_name")),
+                    escape_markdown_table_cell(&value_string(row, "delivery_summary")),
+                    escape_markdown_table_cell(&resume_profile_array_string(row, "tech_stack", 6)),
+                    escape_markdown_table_cell(&document_title),
+                ));
+            }
+        } else {
+            lines.push(format!(
+                "| {} | 未识别到项目交付段 | 当前轻量扫描未抽到明确项目名称或职责句 | - | {} |",
+                escape_markdown_table_cell(&candidate_name),
+                escape_markdown_table_cell(&document_title),
+            ));
+        }
+    }
+
+    for (document_id, rows) in rows_by_document {
+        if emitted_documents.contains(&document_id) {
+            continue;
+        }
+        for row in rows {
+            lines.push(format!(
+                "| {} | {} | {} | {} | {} |",
+                escape_markdown_table_cell(&value_string(&row, "candidate_name")),
+                escape_markdown_table_cell(&value_string(&row, "project_name")),
+                escape_markdown_table_cell(&value_string(&row, "delivery_summary")),
+                escape_markdown_table_cell(&resume_profile_array_string(&row, "tech_stack", 6)),
+                escape_markdown_table_cell(&value_string(&row, "document_title")),
+            ));
+        }
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn assistant_run_resume_project_delivery_controlled_answer(
+    evidence_state: &Value,
+    request: &CreateAssistantRunRequest,
+) -> Option<String> {
+    if !prompt_requests_resume_project_delivery_listing(&request.prompt) {
+        return None;
+    }
+    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
+        evidence_state,
+        &request.prompt,
+    );
+    if scans.is_empty() {
+        return None;
+    }
+    let profile_rows = scans
+        .iter()
+        .flat_map(|scan| {
+            scan.get("resume_profile_rows")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    assistant_run_resume_project_delivery_direct_answer(&scans, &profile_rows)
+}
+
+fn assistant_run_resume_project_delivery_html_artifact(
+    run_id: AssistantRunId,
+    request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+    created_at: DateTime<Utc>,
+) -> Option<HtmlArtifactManifestView> {
+    if !prompt_requests_resume_project_delivery_listing(&request.prompt) {
+        return None;
+    }
+    let scans = assistant_run_compact_dataset_entity_scan_payloads_for_prompt(
+        evidence_state,
+        &request.prompt,
+    );
+    if scans.is_empty() {
+        return None;
+    }
+    let payload = assistant_run_resume_project_delivery_artifact_payload(&scans)?;
+    let scanned_document_count = payload
+        .get("summary")
+        .and_then(|summary| summary.get("scannedDocumentCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let rendered_row_count = payload
+        .get("summary")
+        .and_then(|summary| summary.get("renderedRowCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as usize;
+    if scanned_document_count < ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_DOCUMENTS
+        && rendered_row_count < ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ARTIFACT_MIN_ROWS
+    {
+        return None;
+    }
+
+    Some(HtmlArtifactManifestView {
+        kind: "html_artifact".to_string(),
+        version: 1,
+        id: format!("html-artifact-resume-project-delivery-{run_id}"),
+        title: "简历项目交付明细表".to_string(),
+        source_type: HtmlArtifactSourceTypeView::Report,
+        template_id: HtmlArtifactTemplateIdView::ResumeProjectDeliveryMatrix,
+        owner_scope: HtmlArtifactOwnerScopeView {
+            scope_type: "assistant_run".to_string(),
+            id: run_id.to_string(),
+        },
+        data_refs: assistant_run_resume_project_delivery_data_refs(&scans),
+        provenance: HtmlArtifactProvenanceView {
+            producer: "v3-assistant-run".to_string(),
+            reason: "multi_resume_project_delivery_answer".to_string(),
+            source_run_id: Some(run_id.to_string()),
+        },
+        interaction_mode: HtmlArtifactInteractionModeView::ReadOnly,
+        created_at,
+        payload,
+    })
+}
+
+fn assistant_run_resume_project_delivery_artifact_payload(scans: &[Value]) -> Option<Value> {
+    let profile_rows = scans
+        .iter()
+        .flat_map(|scan| {
+            scan.get("resume_profile_rows")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    let delivery_rows = scans
+        .iter()
+        .flat_map(|scan| {
+            scan.get("resume_project_delivery_rows")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    if profile_rows.is_empty() && delivery_rows.is_empty() {
+        return None;
+    }
+    let scanned_document_count = scans
+        .iter()
+        .filter_map(|scan| scan.get("scanned_document_count").and_then(Value::as_u64))
+        .max()
+        .unwrap_or(profile_rows.len() as u64);
+    let mut rows_by_document: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for row in &delivery_rows {
+        let document_id = value_string(row, "document_id");
+        rows_by_document
+            .entry(document_id)
+            .or_default()
+            .push(row.clone());
+    }
+
+    let mut rendered_rows = Vec::new();
+    let mut emitted_documents = BTreeSet::new();
+    let mut missing_project_delivery_count = 0usize;
+    for profile in &profile_rows {
+        let document_id = value_string(profile, "document_id");
+        if !document_id.is_empty() && document_id != "-" {
+            emitted_documents.insert(document_id.clone());
+        }
+        let candidate_name = resume_profile_candidate_name(profile);
+        let document_title = value_string(profile, "document_title");
+        if let Some(rows) = rows_by_document.get(&document_id) {
+            for row in rows {
+                rendered_rows.push(assistant_run_resume_project_delivery_artifact_row(
+                    &candidate_name,
+                    &document_title,
+                    row,
+                    "recognized",
+                ));
+            }
+        } else {
+            missing_project_delivery_count += 1;
+            rendered_rows.push(json!({
+                "candidateName": html_artifact_safe_summary_text(&candidate_name, 80),
+                "projectName": "未识别到项目交付段",
+                "status": "missing_project_delivery_section",
+                "deliverySummary": "当前轻量扫描未抽到明确项目名称或职责句",
+                "techStack": [],
+                "documentTitle": html_artifact_safe_summary_text(&document_title, 160),
+                "confidence": null,
+            }));
+        }
+    }
+
+    for (document_id, rows) in rows_by_document {
+        if emitted_documents.contains(&document_id) {
+            continue;
+        }
+        for row in rows {
+            rendered_rows.push(assistant_run_resume_project_delivery_artifact_row(
+                &value_string(&row, "candidate_name"),
+                &value_string(&row, "document_title"),
+                &row,
+                "recognized",
+            ));
+        }
+    }
+    if rendered_rows.is_empty() {
+        return None;
+    }
+    rendered_rows.truncate(ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ROW_LIMIT);
+
+    Some(json!({
+        "generationPolicy": assistant_run_rapid_html_artifact_generation_policy(),
+        "summary": {
+            "scannedDocumentCount": scanned_document_count,
+            "resumeProfileCount": profile_rows.len(),
+            "projectDeliveryRowCount": delivery_rows.len(),
+            "renderedRowCount": rendered_rows.len(),
+            "missingProjectDeliveryCount": missing_project_delivery_count,
+        },
+        "rows": rendered_rows,
+        "notes": [
+            "本页来自 V3 结构化简历扫描结果，用于承载高信息量回答的完整明细。",
+            "未识别到项目交付段的候选人会保留占位行，避免只展示检索命中的少数简历。"
+        ],
+    }))
+}
+
+fn assistant_run_rapid_html_artifact_generation_policy() -> Value {
+    json!({
+        "route": ASSISTANT_RUN_HTML_GENERATION_ROUTE_RAPID_ARTIFACT,
+        "intendedUse": "chat_high_information_detail",
+        "templateAuthority": "v3_safe_html_artifact_manifest",
+        "htmlAnythingRole": "rapid_template_reference_only",
+        "image2Required": false,
+        "staticPagePipeline": false,
+        "publishAsGeneratedArtifact": false,
+    })
+}
+
+fn assistant_run_resume_project_delivery_artifact_row(
+    fallback_candidate_name: &str,
+    fallback_document_title: &str,
+    row: &Value,
+    status: &str,
+) -> Value {
+    let candidate_name = value_string(row, "candidate_name");
+    let document_title = value_string(row, "document_title");
+    let effective_candidate_name = if candidate_name.is_empty() {
+        fallback_candidate_name
+    } else {
+        &candidate_name
+    };
+    let effective_document_title = if document_title.is_empty() {
+        fallback_document_title
+    } else {
+        &document_title
+    };
+    json!({
+        "candidateName": html_artifact_safe_summary_text(effective_candidate_name, 80),
+        "projectName": html_artifact_safe_summary_text(&value_string(row, "project_name"), 120),
+        "status": status,
+        "deliverySummary": html_artifact_safe_summary_text(&value_string(row, "delivery_summary"), 320),
+        "techStack": resume_profile_array_values(row, "tech_stack")
+            .into_iter()
+            .map(|value| html_artifact_safe_summary_text(&value, 80))
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>(),
+        "documentTitle": html_artifact_safe_summary_text(effective_document_title, 160),
+        "confidence": row.get("confidence").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn assistant_run_resume_project_delivery_data_refs(
+    scans: &[Value],
+) -> Vec<HtmlArtifactDataRefView> {
+    let mut seen = BTreeSet::new();
+    scans
+        .iter()
+        .filter_map(|scan| scan.get("dataset_id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|dataset_id| !dataset_id.is_empty())
+        .filter(|dataset_id| seen.insert((*dataset_id).to_string()))
+        .take(8)
+        .map(|dataset_id| HtmlArtifactDataRefView {
+            kind: "dataset".to_string(),
+            id: dataset_id.to_string(),
+            label: format!("数据集 {dataset_id}"),
+        })
+        .collect()
+}
+
 fn resume_profile_candidate_name(row: &Value) -> String {
     value_string(row, "candidate_name")
 }
@@ -30597,6 +31011,60 @@ fn prompt_requests_resume_skill_ranking(prompt: &str) -> bool {
 
 fn prompt_requests_resume_project_ranking(prompt: &str) -> bool {
     prompt_requests_resume_profile_sort(prompt) && prompt_requests_project_statistics(prompt)
+}
+
+fn prompt_requests_resume_project_delivery_listing(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_project_signal = prompt_contains_any(
+        prompt,
+        &[
+            "项目交付",
+            "交付经历",
+            "项目经历",
+            "项目经验",
+            "项目职责",
+            "项目成果",
+        ],
+    ) || (prompt.contains("项目")
+        && prompt_contains_any(prompt, &["交付", "经历", "职责", "成果", "明细", "罗列"]))
+        || lower_prompt.contains("project delivery");
+    if !has_project_signal {
+        return false;
+    }
+    let has_people_or_resume_signal = prompt_has_resume_signal(prompt)
+        || prompt_contains_any(
+            prompt,
+            &[
+                "个人",
+                "这些人",
+                "这些候选",
+                "这几个人",
+                "这批人",
+                "候选",
+                "人才",
+                "求职者",
+            ],
+        )
+        || lower_prompt.contains("people")
+        || lower_prompt.contains("candidate");
+    let has_listing_signal =
+        prompt_contains_any(
+            prompt,
+            &[
+                "罗列",
+                "列出",
+                "列一下",
+                "整理",
+                "汇总",
+                "明细",
+                "清单",
+                "出表",
+                "表格",
+                "全部",
+                "所有",
+            ],
+        ) || ascii_prompt_contains_any(&lower_prompt, &["list", "table", "summary", "all"]);
+    has_people_or_resume_signal && has_listing_signal
 }
 
 fn prompt_requests_resume_position_ranking(prompt: &str) -> bool {
@@ -42704,6 +43172,7 @@ async fn build_assistant_run_dataset_entity_scan_supply(
     let mut tables_by_signal: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut document_hits = Vec::new();
     let mut resume_profile_rows = Vec::new();
+    let mut resume_project_delivery_rows = Vec::new();
 
     for document in documents {
         if scanned_document_count >= ASSISTANT_RUN_DATASET_ENTITY_SCAN_DOCUMENT_LIMIT {
@@ -42758,12 +43227,21 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         let table_signals = extract_document_table_signals_for_scan(&chunks, &scan_text, 16);
         let resume_profile =
             extract_resume_document_profile(&document, &text_scan, &entity_candidates);
+        let document_project_delivery_rows = extract_resume_project_delivery_rows(
+            &document,
+            &chunks,
+            &resume_profile,
+            &entity_candidates,
+            ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ROW_LIMIT
+                .saturating_sub(resume_project_delivery_rows.len()),
+        );
         if entity_candidates.is_empty()
             && candidate_terms.is_empty()
             && document_years.is_empty()
             && section_titles.is_empty()
             && paragraph_samples.is_empty()
             && table_signals.is_empty()
+            && document_project_delivery_rows.is_empty()
             && resume_profile.is_empty()
         {
             continue;
@@ -42805,10 +43283,31 @@ async fn build_assistant_run_dataset_entity_scan_supply(
                 .or_default()
                 .insert(document.id.to_string());
         }
+        for delivery_row in &document_project_delivery_rows {
+            if !delivery_row.project_name_is_placeholder() {
+                entities_by_key
+                    .entry(("project".to_string(), delivery_row.project_name.clone()))
+                    .or_default()
+                    .insert(document.id.to_string());
+            }
+        }
         if !resume_profile.is_empty()
             && resume_profile_rows.len() < ASSISTANT_RUN_RESUME_PROFILE_ROW_LIMIT
         {
             resume_profile_rows.push(resume_profile.to_value());
+        }
+        if !document_project_delivery_rows.is_empty()
+            && resume_project_delivery_rows.len() < ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ROW_LIMIT
+        {
+            resume_project_delivery_rows.extend(
+                document_project_delivery_rows
+                    .into_iter()
+                    .take(
+                        ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_ROW_LIMIT
+                            .saturating_sub(resume_project_delivery_rows.len()),
+                    )
+                    .map(|row| row.to_value()),
+            );
         }
         document_hits.push(json!({
             "document_id": document.id,
@@ -43015,6 +43514,10 @@ async fn build_assistant_run_dataset_entity_scan_supply(
         Value::Array(resume_profile_rows),
     );
     item.insert(
+        "resume_project_delivery_rows".to_string(),
+        Value::Array(resume_project_delivery_rows),
+    );
+    item.insert(
         "candidate_term_count".to_string(),
         json!(candidate_term_count),
     );
@@ -43050,6 +43553,7 @@ async fn build_assistant_run_dataset_entity_scan_supply(
             "paragraph_rows_authoritative": true,
             "table_rows_authoritative": true,
             "resume_profile_rows_authoritative": true,
+            "resume_project_delivery_rows_authoritative": true,
             "ignore_candidate_terms_for_company_count": true,
             "do_not_sum_company_row_document_counts_as_total_documents": true,
             "candidate_terms_are_only_noun_hints": true,
@@ -43145,6 +43649,39 @@ impl ResumeDocumentProfile {
             "school_names": &self.school_names,
             "degree_names": &self.degree_names,
             "certificate_names": &self.certificate_names,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResumeProjectDeliveryRow {
+    document_id: String,
+    document_title: String,
+    candidate_name: String,
+    project_name: String,
+    delivery_summary: String,
+    tech_stack: Vec<String>,
+    source_locator: String,
+    chunk_index: i32,
+    confidence: String,
+}
+
+impl ResumeProjectDeliveryRow {
+    fn project_name_is_placeholder(&self) -> bool {
+        self.project_name == "未识别项目名称"
+    }
+
+    fn to_value(self) -> Value {
+        json!({
+            "document_id": self.document_id,
+            "document_title": self.document_title,
+            "candidate_name": self.candidate_name,
+            "project_name": self.project_name,
+            "delivery_summary": self.delivery_summary,
+            "tech_stack": self.tech_stack,
+            "source_locator": self.source_locator,
+            "chunk_index": self.chunk_index,
+            "confidence": self.confidence,
         })
     }
 }
@@ -43530,7 +44067,10 @@ fn extract_resume_document_profile(
     let years = extract_resume_timeline_years(scan_text, 32);
     let company_names = resume_profile_entity_names(entity_candidates, "organization", 16);
     let skill_names = resume_profile_entity_names(entity_candidates, "skill", 24);
-    let project_names = resume_profile_entity_names(entity_candidates, "project", 16);
+    let mut project_names = resume_profile_entity_names(entity_candidates, "project", 16);
+    for name in extract_project_like_terms(scan_text, 16) {
+        push_document_candidate_term(&mut project_names, name, 16);
+    }
     let position_names = resume_profile_entity_names(entity_candidates, "position", 12);
     let location_names = resume_profile_entity_names(entity_candidates, "location", 12);
     let school_names = resume_profile_entity_names(entity_candidates, "school", 12);
@@ -43587,6 +44127,261 @@ fn extract_resume_document_profile(
     profile
 }
 
+fn extract_resume_project_delivery_rows(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    profile: &ResumeDocumentProfile,
+    entity_candidates: &[DocumentEntityCandidate],
+    limit: usize,
+) -> Vec<ResumeProjectDeliveryRow> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let candidate_name = profile
+        .candidate_name
+        .clone()
+        .or_else(|| extract_resume_candidate_name_from_title(&document.title))
+        .or_else(|| extract_resume_candidate_name_from_object_key(&document.object_key))
+        .or_else(|| {
+            entity_candidates
+                .iter()
+                .find(|candidate| candidate.entity_type == "person")
+                .map(|candidate| candidate.name.clone())
+        })
+        .unwrap_or_else(|| "未知候选人".to_string());
+    let document_title = resume_profile_display_title(document);
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for chunk in chunks
+        .iter()
+        .take(ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_CHUNK_LIMIT)
+    {
+        let lines = resume_project_delivery_lines(&chunk.content);
+        if lines.is_empty() || !resume_project_delivery_chunk_has_signal(&lines) {
+            continue;
+        }
+        for (line_index, line) in lines.iter().enumerate() {
+            let Some(project_name) = resume_project_delivery_project_name_from_line(line) else {
+                continue;
+            };
+            if project_heading_is_noise(&project_name) {
+                continue;
+            }
+            let block_lines = resume_project_delivery_block_lines(&lines, line_index);
+            let delivery_summary =
+                resume_project_delivery_summary_from_block(&block_lines, &project_name);
+            if delivery_summary.is_empty() {
+                continue;
+            }
+            let key = format!(
+                "{}:{}:{}",
+                document.id,
+                normalize_document_entity_value(&candidate_name),
+                normalize_document_entity_value(&project_name)
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            let block_text = block_lines.join("\n");
+            rows.push(ResumeProjectDeliveryRow {
+                document_id: document.id.to_string(),
+                document_title: document_title.clone(),
+                candidate_name: candidate_name.clone(),
+                project_name,
+                delivery_summary,
+                tech_stack: resume_project_delivery_tech_stack(&block_text, 8),
+                source_locator: format!("document://{}/chunks/{}", document.id, chunk.chunk_index),
+                chunk_index: chunk.chunk_index,
+                confidence: "medium".to_string(),
+            });
+            if rows.len() >= limit {
+                return rows;
+            }
+        }
+    }
+
+    if rows.is_empty() && resume_project_delivery_profile_has_project_names(profile) {
+        for project_name in profile.project_names.iter().take(limit) {
+            rows.push(ResumeProjectDeliveryRow {
+                document_id: document.id.to_string(),
+                document_title: document_title.clone(),
+                candidate_name: candidate_name.clone(),
+                project_name: project_name.clone(),
+                delivery_summary: "识别到项目名称，但当前轻量扫描未抽到明确交付职责句。"
+                    .to_string(),
+                tech_stack: profile.skill_names.iter().take(8).cloned().collect(),
+                source_locator: format!("document://{}/profile", document.id),
+                chunk_index: -1,
+                confidence: "low".to_string(),
+            });
+        }
+    }
+
+    rows
+}
+
+fn resume_project_delivery_profile_has_project_names(profile: &ResumeDocumentProfile) -> bool {
+    !profile.project_names.is_empty()
+}
+
+fn resume_project_delivery_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(normalize_document_entity_value)
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn resume_project_delivery_chunk_has_signal(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        prompt_contains_any(
+            line,
+            &[
+                "项目经验",
+                "项目经历",
+                "项目名称",
+                "项目职责",
+                "项目描述",
+                "项目成果",
+                "交付",
+                "上线",
+                "落地",
+            ],
+        ) || resume_project_delivery_project_name_from_line(line).is_some()
+    })
+}
+
+fn resume_project_delivery_block_lines(lines: &[String], start_index: usize) -> Vec<String> {
+    let mut block_lines = Vec::new();
+    for line in lines.iter().skip(start_index) {
+        if block_lines.len() >= ASSISTANT_RUN_RESUME_PROJECT_DELIVERY_BLOCK_LINE_LIMIT {
+            break;
+        }
+        if !block_lines.is_empty() && resume_project_delivery_project_name_from_line(line).is_some()
+        {
+            break;
+        }
+        if !block_lines.is_empty()
+            && normalize_section_title_hint(line).is_some()
+            && !prompt_contains_any(line, &["职责", "成果", "描述", "技术", "交付"])
+        {
+            break;
+        }
+        block_lines.push(line.clone());
+    }
+    block_lines
+}
+
+fn resume_project_delivery_summary_from_block(lines: &[String], project_name: &str) -> String {
+    let mut summaries = Vec::new();
+    for line in lines {
+        if resume_project_delivery_line_is_project_heading(line, project_name) {
+            continue;
+        }
+        if !resume_project_delivery_line_has_summary_signal(line) {
+            continue;
+        }
+        let summary = resume_project_delivery_clean_summary_line(line);
+        if summary.is_empty() || summaries.iter().any(|existing| existing == &summary) {
+            continue;
+        }
+        summaries.push(summary);
+        if summaries.len() >= 3 {
+            break;
+        }
+    }
+    if summaries.is_empty() {
+        for line in lines.iter().skip(1) {
+            let summary = resume_project_delivery_clean_summary_line(line);
+            if summary.chars().count() >= 8 {
+                summaries.push(summary);
+                break;
+            }
+        }
+    }
+    summaries.join("；")
+}
+
+fn resume_project_delivery_line_is_project_heading(line: &str, project_name: &str) -> bool {
+    resume_project_delivery_project_name_from_line(line)
+        .as_deref()
+        .is_some_and(|name| name == project_name)
+}
+
+fn resume_project_delivery_line_has_summary_signal(line: &str) -> bool {
+    prompt_contains_any(
+        line,
+        &[
+            "负责", "职责", "参与", "主导", "带领", "设计", "开发", "实现", "完成", "交付", "上线",
+            "落地", "搭建", "架构", "优化", "对接", "部署", "维护", "推进", "成果", "模块", "需求",
+        ],
+    )
+}
+
+fn resume_project_delivery_clean_summary_line(line: &str) -> String {
+    let mut summary = normalize_document_entity_value(line);
+    for label in [
+        "项目职责",
+        "项目描述",
+        "项目成果",
+        "职责描述",
+        "责任描述",
+        "主要职责",
+        "工作职责",
+        "工作内容",
+        "项目内容",
+        "项目介绍",
+        "技术栈",
+    ] {
+        if let Some(value) = labeled_entity_value(&summary, label) {
+            summary = normalize_document_entity_value(&value);
+            break;
+        }
+    }
+    summary.chars().take(140).collect()
+}
+
+fn resume_project_delivery_tech_stack(text: &str, limit: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    for skill in [
+        "Java",
+        "Spring Boot",
+        "SpringCloud",
+        "Spring Cloud",
+        "Python",
+        "Go",
+        "Rust",
+        "JavaScript",
+        "TypeScript",
+        "React",
+        "Vue",
+        "Node.js",
+        "MySQL",
+        "PostgreSQL",
+        "Redis",
+        "MongoDB",
+        "Kafka",
+        "RabbitMQ",
+        "Docker",
+        "Kubernetes",
+        "微服务",
+        "物联网",
+        "IoT",
+        "AI",
+        "大数据",
+        "数据治理",
+        "系统架构",
+    ] {
+        if text.contains(skill) {
+            push_document_candidate_term(&mut values, skill, limit);
+        }
+        if values.len() >= limit {
+            break;
+        }
+    }
+    values
+}
+
 fn resume_profile_entity_names(
     entity_candidates: &[DocumentEntityCandidate],
     entity_type: &str,
@@ -43615,6 +44410,8 @@ fn resume_profile_has_document_signal(
         || resume_profile_text_has_signal(&document.title)
         || resume_profile_text_has_signal(&document.object_key)
         || resume_profile_text_has_signal(scan_text)
+        || (profile.candidate_name.is_some()
+            && resume_profile_title_has_candidate_file_shape(&document.title))
 }
 
 fn resume_profile_text_has_signal(text: &str) -> bool {
@@ -43640,6 +44437,14 @@ fn resume_profile_text_has_signal(text: &str) -> bool {
         || ["resume", "cv", "candidate", "recruit"]
             .iter()
             .any(|hint| lower_text.contains(hint))
+}
+
+fn resume_profile_title_has_candidate_file_shape(title: &str) -> bool {
+    let lower_title = title.to_ascii_lowercase();
+    let has_document_extension = [".pdf", ".doc", ".docx", ".wps", ".rtf"]
+        .iter()
+        .any(|suffix| lower_title.ends_with(suffix));
+    has_document_extension && extract_resume_candidate_name_from_title(title).is_some()
 }
 
 fn extract_resume_candidate_name(text: &str) -> Option<String> {
@@ -45287,6 +46092,108 @@ fn project_name_from_heading_line(line: &str) -> Option<String> {
         return None;
     }
     looks_like_project_name(&heading).then_some(heading)
+}
+
+fn resume_project_delivery_project_name_from_line(line: &str) -> Option<String> {
+    let normalized = normalize_document_entity_value(line);
+    if normalized.is_empty() {
+        return None;
+    }
+    if let Some(name) = project_name_from_heading_line(&normalized) {
+        return Some(name);
+    }
+    if let Some(name) = resume_project_name_from_numbered_label(&normalized) {
+        return Some(name);
+    }
+    let stripped = strip_resume_project_bullet_prefix(&normalized);
+    if stripped != normalized {
+        if let Some(name) = normalize_project_entity_name(&stripped) {
+            return Some(name);
+        }
+        if looks_like_project_heading_candidate(&stripped)
+            && looks_like_project_name(&stripped)
+            && !project_heading_is_noise(&stripped)
+        {
+            return Some(stripped);
+        }
+    }
+    normalize_project_entity_name(&normalized)
+}
+
+fn resume_project_name_from_numbered_label(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    for prefix in [
+        "项目一",
+        "项目二",
+        "项目三",
+        "项目四",
+        "项目五",
+        "项目六",
+        "项目七",
+        "项目八",
+        "项目九",
+        "项目十",
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return resume_project_name_from_label_rest(rest);
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("项目") {
+        let rest_chars = rest.chars().collect::<Vec<_>>();
+        let digit_len = rest_chars
+            .iter()
+            .take_while(|ch| ch.is_ascii_digit())
+            .count();
+        if digit_len > 0 {
+            let rest_after_digit = rest_chars[digit_len..].iter().collect::<String>();
+            return resume_project_name_from_label_rest(&rest_after_digit);
+        }
+    }
+    None
+}
+
+fn resume_project_name_from_label_rest(rest: &str) -> Option<String> {
+    let value = rest
+        .trim_start_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—' | '–' | '=' | '.' | '．')
+        })
+        .trim();
+    if value.is_empty() {
+        return None;
+    }
+    normalize_project_entity_name(value).or_else(|| {
+        let candidate = normalize_document_entity_value(
+            value
+                .split(|ch: char| matches!(ch, '，' | ',' | '。' | '；' | ';'))
+                .next()
+                .unwrap_or(value),
+        );
+        (looks_like_project_heading_candidate(&candidate)
+            && looks_like_project_name(&candidate)
+            && !project_heading_is_noise(&candidate))
+        .then_some(candidate)
+    })
+}
+
+fn strip_resume_project_bullet_prefix(value: &str) -> String {
+    let trimmed = value.trim().trim_start_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, '#' | '*' | '•' | '·' | '●' | '➢')
+    });
+    let ascii_stripped = strip_project_numeric_prefix(trimmed);
+    if ascii_stripped != trimmed {
+        return ascii_stripped;
+    }
+    let chars = trimmed.chars().collect::<Vec<_>>();
+    if chars.len() >= 3
+        && matches!(
+            chars[0],
+            '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十'
+        )
+        && matches!(chars[1], '、' | '.' | '．' | ')' | '）' | ':' | '：')
+    {
+        return chars[2..].iter().collect::<String>().trim().to_string();
+    }
+    trimmed.to_string()
 }
 
 fn labeled_project_name_from_line(line: &str, label: &str) -> Option<String> {
@@ -84805,6 +85712,14 @@ retrieve_evidence:
             Some("自助彩票销售系统")
         );
         assert_eq!(
+            resume_project_delivery_project_name_from_line("项目一：智慧社区物联网平台").as_deref(),
+            Some("智慧社区物联网平台")
+        );
+        assert_eq!(
+            resume_project_delivery_project_name_from_line("二、门店运营中台").as_deref(),
+            Some("门店运营中台")
+        );
+        assert_eq!(
             normalize_project_entity_name("广东电信大数据实时计算平台Java工程师").as_deref(),
             Some("广东电信大数据实时计算平台")
         );
@@ -84900,6 +85815,167 @@ retrieve_evidence:
         let external_profile = extract_resume_document_profile(&external_version_document, "", &[]);
         assert_eq!(external_profile.candidate_name.as_deref(), Some("郑宇宁"));
         assert_eq!(external_profile.document_title, "郑宇宁简历.pdf");
+
+        let terse_title_document = Document {
+            title: "王贤.pdf".to_string(),
+            object_key: "/srv/aiv3/shared/objects/external-documents/source/doc-id/v1.pdf"
+                .to_string(),
+            ..document
+        };
+        let terse_profile = extract_resume_document_profile(&terse_title_document, "", &[]);
+        assert_eq!(terse_profile.candidate_name.as_deref(), Some("王贤"));
+    }
+
+    #[test]
+    fn assistant_run_answers_multi_resume_project_delivery_from_structured_scan() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document = |title: &str| Document {
+            id: DocumentId::new(),
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: title.to_string(),
+            object_key: format!("documents/{title}"),
+            content_type: "application/pdf".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Indexed,
+            secret_binding_ids: vec![],
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let chunk = |document: &Document, content: &str, index: i32| DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: document.tenant_id,
+            dataset_id: document.dataset_id,
+            document_id: document.id,
+            chunk_index: index,
+            content: content.to_string(),
+            token_count: 160,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let zhang = document("张三简历.pdf");
+        let li = document("李四简历.pdf");
+        let wang = document("王五简历.pdf");
+        let zhang_text = "姓名：张三\n项目经验\n项目一：智慧社区物联网平台\n负责设备接入、规则引擎和上线交付，完成多门店试点。\n技术栈：Java、Spring Boot、Redis";
+        let li_text = "姓名：李四\n项目经历\n1.3 自助彩票销售系统\n主导支付对接、订单模块开发和生产部署，保障系统落地。\n技术栈：Vue、MySQL";
+        let wang_text = "姓名：王五\n工作经历\n负责内部系统维护。";
+        let zhang_profile = extract_resume_document_profile(
+            &zhang,
+            zhang_text,
+            &extract_document_entity_candidates_from_text(zhang_text, 32),
+        );
+        let li_profile = extract_resume_document_profile(
+            &li,
+            li_text,
+            &extract_document_entity_candidates_from_text(li_text, 32),
+        );
+        let wang_profile = extract_resume_document_profile(
+            &wang,
+            wang_text,
+            &extract_document_entity_candidates_from_text(wang_text, 32),
+        );
+        let zhang_rows = extract_resume_project_delivery_rows(
+            &zhang,
+            &[chunk(&zhang, zhang_text, 0)],
+            &zhang_profile,
+            &[],
+            16,
+        );
+        let li_rows = extract_resume_project_delivery_rows(
+            &li,
+            &[chunk(&li, li_text, 0)],
+            &li_profile,
+            &[],
+            16,
+        );
+
+        assert_eq!(zhang_rows[0].project_name, "智慧社区物联网平台");
+        assert!(zhang_rows[0].delivery_summary.contains("上线交付"));
+        assert_eq!(li_rows[0].project_name, "自助彩票销售系统");
+
+        let request = CreateAssistantRunRequest {
+            prompt: "把这14个人的项目交付经历，罗列出来".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "dataset_entity_scan",
+                "source": "visible_document_scan",
+                "scanned_document_count": 14,
+                "resume_profile_rows": [
+                    zhang_profile.to_value(),
+                    li_profile.to_value(),
+                    wang_profile.to_value()
+                ],
+                "resume_project_delivery_rows": zhang_rows
+                    .into_iter()
+                    .chain(li_rows)
+                    .map(ResumeProjectDeliveryRow::to_value)
+                    .collect::<Vec<_>>()
+            }]
+        });
+
+        let answer = assistant_run_dataset_entity_scan_direct_answer(&request, &evidence)
+            .expect("project delivery prompts should use structured scan rows");
+        assert!(answer.contains("覆盖 14 份文档"));
+        assert!(answer.contains("智慧社区物联网平台"));
+        assert!(answer.contains("自助彩票销售系统"));
+        assert!(answer.contains("| 王五 | 未识别到项目交付段 |"));
+
+        let artifact = assistant_run_resume_project_delivery_html_artifact(
+            AssistantRunId::new(),
+            &request,
+            &evidence,
+            now,
+        )
+        .expect("high-information project delivery answers should expose a HTML artifact");
+        assert_eq!(
+            artifact.template_id,
+            HtmlArtifactTemplateIdView::ResumeProjectDeliveryMatrix
+        );
+        assert_eq!(
+            artifact.interaction_mode,
+            HtmlArtifactInteractionModeView::ReadOnly
+        );
+        assert_eq!(
+            artifact.payload["summary"]["scannedDocumentCount"].as_u64(),
+            Some(14)
+        );
+        assert_eq!(
+            artifact.payload["generationPolicy"]["route"],
+            ASSISTANT_RUN_HTML_GENERATION_ROUTE_RAPID_ARTIFACT
+        );
+        assert_eq!(
+            artifact.payload["generationPolicy"]["image2Required"],
+            false
+        );
+        assert_eq!(
+            artifact.payload["generationPolicy"]["staticPagePipeline"],
+            false
+        );
+        let artifact_rows = artifact.payload["rows"]
+            .as_array()
+            .expect("artifact rows should be structured");
+        assert_eq!(artifact_rows.len(), 3);
+        assert!(artifact_rows
+            .iter()
+            .any(|row| row["projectName"] == "智慧社区物联网平台"));
+        assert!(artifact_rows
+            .iter()
+            .any(|row| row["status"] == "missing_project_delivery_section"));
     }
 
     #[test]

@@ -36,6 +36,7 @@
 - Do not let Codex executor mutate datasets, document ownership, credentials, deployment config, or public integrations directly.
 - Static-page no-confirm flow may create a new generated artifact only; it must not overwrite an existing customer artifact or stable URL without confirmation.
 - Keep raw credentials, database URLs, provider payloads, full stdout/stderr, and customer file dumps out of prompts, events, docs, and artifact manifests.
+- Keep HTML route selection explicit: chat answers that only need large tables/detail pages use V3 safe rapid HTML artifacts; only explicit static-page/product-page requests enter the Image2/Codex publish pipeline.
 
 ## Execution Notes - 2026-05-25
 
@@ -109,6 +110,7 @@
 
 5. **Static-page productization**
    - Treat Image2 as a visual contract/reference, not final HTML source of truth.
+   - Do not send ordinary chat detail pages, resume matrices, evidence tables, or answer appendices through Image2. Those stay on the rapid HTML artifact path unless the user explicitly asks for a designed/published static page.
    - Generate final HTML from structured real-data snapshots and validated source summaries.
    - Keep default page requirements:
      - time selector;

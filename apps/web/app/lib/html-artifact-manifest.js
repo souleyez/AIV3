@@ -9,6 +9,7 @@ export const HTML_ARTIFACT_TEMPLATE_IDS = Object.freeze([
   'code_review_summary',
   'video_extraction_summary',
   'wechat_video_login_handoff',
+  'resume_project_delivery_matrix',
 ]);
 
 export const HTML_ARTIFACT_SOURCE_TYPES = Object.freeze([
@@ -35,6 +36,7 @@ const TEMPLATE_LABELS = {
   code_review_summary: '代码审查摘要',
   video_extraction_summary: '视频提取摘要',
   wechat_video_login_handoff: '视频来源受限',
+  resume_project_delivery_matrix: '简历项目交付明细',
 };
 
 const SOURCE_LABELS = {
@@ -265,6 +267,28 @@ function renderList(items = [], emptyText = '暂无记录') {
           ${item.meta ? `<small>${escapeHtml(item.meta)}</small>` : ''}
         </article>
       `).join('')}
+    </div>
+  `;
+}
+
+function renderTable(headers = [], rows = [], emptyText = '暂无记录') {
+  if (!rows.length) {
+    return `<p class="empty">${escapeHtml(emptyText)}</p>`;
+  }
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>${headers.map((header) => `<th>${escapeHtml(header.label)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr>
+              ${headers.map((header) => `<td>${escapeHtml(row[header.key] || '')}</td>`).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
     </div>
   `;
 }
@@ -962,6 +986,68 @@ function renderWechatVideoLoginHandoff(manifest) {
   `;
 }
 
+function renderResumeProjectDeliveryMatrix(manifest) {
+  const payload = manifest.payload || {};
+  const summary = isPlainObject(payload.summary) ? payload.summary : {};
+  const rows = arrayOrEmpty(payload.rows).map((row) => {
+    const item = isPlainObject(row) ? row : {};
+    const techStack = arrayOrEmpty(item.techStack || item.tech_stack)
+      .map((value) => clampText(value, 80))
+      .filter(Boolean)
+      .join('；');
+    const confidence = Number.isFinite(item.confidence)
+      ? `${Math.round(item.confidence * 100)}%`
+      : '';
+    const status = stringOrFallback(item.status) === 'missing_project_delivery_section'
+      ? '未识别'
+      : '已识别';
+    return {
+      candidateName: clampText(item.candidateName || item.candidate_name || '未识别候选人', 80),
+      projectName: clampText(item.projectName || item.project_name || '-', 120),
+      status,
+      deliverySummary: clampText(item.deliverySummary || item.delivery_summary || '-', 260),
+      techStack: techStack || '-',
+      documentTitle: clampText(item.documentTitle || item.document_title || '-', 160),
+      confidence: confidence || '-',
+    };
+  });
+  const missingRows = rows.filter((row) => row.status === '未识别');
+  const recognizedRows = rows.filter((row) => row.status !== '未识别');
+  const notes = arrayOrEmpty(payload.notes).map((note, index) => ({
+    title: `说明 ${index + 1}`,
+    detail: note,
+  }));
+  const tableHeaders = [
+    { key: 'candidateName', label: '候选人' },
+    { key: 'projectName', label: '项目/状态' },
+    { key: 'deliverySummary', label: '交付职责或成果' },
+    { key: 'techStack', label: '技术栈' },
+    { key: 'documentTitle', label: '来源文档' },
+    { key: 'confidence', label: '置信度' },
+  ];
+  return `
+    ${renderKeyValueGrid([
+      { label: '扫描文档', value: summary.scannedDocumentCount || summary.scanned_document_count || '0' },
+      { label: '简历档案', value: summary.resumeProfileCount || summary.resume_profile_count || '0' },
+      { label: '项目记录', value: summary.projectDeliveryRowCount || summary.project_delivery_row_count || '0' },
+      { label: '展示行数', value: summary.renderedRowCount || summary.rendered_row_count || rows.length },
+      { label: '未识别交付段', value: summary.missingProjectDeliveryCount || summary.missing_project_delivery_count || missingRows.length },
+    ])}
+    <section>
+      <h2>项目交付明细</h2>
+      ${renderTable(tableHeaders, recognizedRows, '暂无已识别项目交付记录。')}
+    </section>
+    <section>
+      <h2>需补充确认</h2>
+      ${renderTable(tableHeaders, missingRows, '暂无未识别项目交付段的候选人。')}
+    </section>
+    <section>
+      <h2>生成说明</h2>
+      ${renderList(notes, '暂无生成说明。')}
+    </section>
+  `;
+}
+
 function jsonPatchPayloadFromManifest(manifest) {
   const payload = manifest.payload || {};
   const operations = arrayOrEmpty(payload.operations || payload.patch || payload.pendingPatch || payload.pending_patch);
@@ -1041,7 +1127,9 @@ export function renderHtmlArtifactDocument(input = {}) {
           ? renderCodeReviewSummary(manifest)
           : manifest.templateId === 'video_extraction_summary'
             ? renderVideoExtractionSummary(manifest)
-            : renderWechatVideoLoginHandoff(manifest);
+            : manifest.templateId === 'resume_project_delivery_matrix'
+              ? renderResumeProjectDeliveryMatrix(manifest)
+              : renderWechatVideoLoginHandoff(manifest);
   const allowScripts = manifest.interactionMode !== 'read_only';
   const script = renderInteractionScript(manifest);
   const canSubmit = hasSubmittableArtifactAction(manifest);
@@ -1071,6 +1159,12 @@ export function renderHtmlArtifactDocument(input = {}) {
     .list { display: grid; gap: 10px; }
     .list article { padding: 14px; margin-top: 0; display: grid; gap: 6px; }
     .list strong { font-size: 14px; }
+    .table-wrap { overflow-x: auto; border-radius: 16px; border: 1px solid #e2e8f0; background: #fff; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; font-size: 13px; line-height: 1.55; }
+    th { color: #334155; background: #f8fafc; font-weight: 700; }
+    td { color: #475569; overflow-wrap: anywhere; }
+    tbody tr:last-child td { border-bottom: 0; }
     .qr-box { margin-top: 14px; display: inline-grid; padding: 12px; border-radius: 18px; background: #fff; }
     .qr-box img { width: min(220px, 56vw); height: auto; display: block; }
     textarea { width: 100%; box-sizing: border-box; resize: vertical; margin-top: 12px; border: 0; border-radius: 16px; padding: 12px; background: #f1f5f9; color: #0f172a; font: inherit; line-height: 1.5; outline: 2px solid transparent; }

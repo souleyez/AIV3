@@ -604,3 +604,49 @@ test('renders legacy video login handoff as unsupported source guidance', () => 
   assert.doesNotMatch(video.html, /扫码登录交接/);
   assert.doesNotMatch(video.html, /录屏保存视频/);
 });
+
+test('renders resume project delivery matrix as read-only tables', () => {
+  const matrix = renderHtmlArtifactDocument(baseManifest({
+    id: 'resume-project-delivery',
+    sourceType: 'report',
+    templateId: 'resume_project_delivery_matrix',
+    title: '简历项目交付明细表',
+    payload: {
+      summary: {
+        scannedDocumentCount: 14,
+        resumeProfileCount: 14,
+        projectDeliveryRowCount: 2,
+        renderedRowCount: 14,
+        missingProjectDeliveryCount: 12,
+      },
+      rows: [
+        {
+          candidateName: '张三',
+          projectName: '智慧社区物联网平台',
+          status: 'recognized',
+          deliverySummary: '负责设备接入、规则引擎和上线交付。',
+          techStack: ['Java', 'Redis'],
+          documentTitle: '张三简历.pdf',
+          confidence: 0.9,
+        },
+        {
+          candidateName: '王五',
+          projectName: '未识别到项目交付段',
+          status: 'missing_project_delivery_section',
+          deliverySummary: '当前轻量扫描未抽到明确项目名称或职责句',
+          techStack: [],
+          documentTitle: '王五简历.pdf',
+        },
+      ],
+      notes: ['未识别候选人保留占位行。'],
+    },
+  }));
+
+  assert.equal(matrix.rejected, false);
+  assert.equal(matrix.sandbox, '');
+  assert.match(matrix.html, /简历项目交付明细/);
+  assert.match(matrix.html, /智慧社区物联网平台/);
+  assert.match(matrix.html, /王五简历\.pdf/);
+  assert.match(matrix.html, /90%/);
+  assert.match(matrix.html, /script-src 'none'/);
+});

@@ -1792,6 +1792,7 @@ pub enum HtmlArtifactTemplateIdView {
     CodeReviewSummary,
     VideoExtractionSummary,
     WechatVideoLoginHandoff,
+    ResumeProjectDeliveryMatrix,
     ThirdPartyHandoffDocument,
 }
 
