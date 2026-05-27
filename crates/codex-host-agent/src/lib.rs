@@ -20,7 +20,7 @@ const DEFAULT_COMPAT_PROVIDER_WIRE_API: &str = "responses";
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 const ANSWER_QUALITY_AUTOFIX: &str = "answer_quality_autofix";
 const DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
-const DEFAULT_TASK_TIMEOUT_MS: u64 = 900_000;
+const DEFAULT_TASK_TIMEOUT_MS: u64 = 1_800_000;
 const DEFAULT_HEARTBEAT_MS: u64 = 15_000;
 const DEFAULT_STDOUT_LIMIT_BYTES: usize = 200_000;
 const DEFAULT_STDERR_LIMIT_BYTES: usize = 100_000;
@@ -1922,6 +1922,15 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_default_task_timeout_allows_slow_cloudflare_tasks() {
+        let _timeout = TestEnvVarRestore::unset("CODEX_HOST_AGENT_TASK_TIMEOUT_MS");
+
+        let config = CodexHostRuntimeConfig::from_env();
+
+        assert_eq!(config.task_timeout_ms(), 1_800_000);
+    }
+
+    #[test]
     fn codex_exec_extracts_static_page_fixed_task_output_from_stdout() {
         let stdout = br#"
 thinking...
@@ -2082,6 +2091,12 @@ summary text before final output
         fn set(key: &'static str, value: &str) -> Self {
             let previous = std::env::var(key).ok();
             std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::remove_var(key);
             Self { key, previous }
         }
     }

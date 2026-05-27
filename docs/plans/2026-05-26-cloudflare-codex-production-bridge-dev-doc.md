@@ -56,6 +56,7 @@ CODEX_HOST_TASK_ALLOWLIST=static_page_image2_data_publish
 CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator
 CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex
 CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES=static_page_image2_data_publish
+CODEX_HOST_AGENT_TASK_TIMEOUT_MS=1800000
 ```
 
 可选配置：
@@ -160,6 +161,7 @@ metadata.output=image-artifact
 建议：
 
 - 演示期将 `STATIC_PAGE_ORCHESTRATOR_MAX_POLLS` 调到至少 240，按 5 秒轮询约 20 分钟。
+- 演示期将 `CODEX_HOST_AGENT_TASK_TIMEOUT_MS` 调到至少 1800000，避免 Cloudflare Codex 生成静态页超过 15 分钟时被 V3 侧提前判失败。
 - 后续把长任务改为“提交后异步跟踪”，接口先返回任务卡，完成后通过状态查询或事件流补链接。
 
 ### P4：文档问答演示升级
@@ -245,4 +247,3 @@ DOC_QA_AUTO_CODEX_BIAS=1
 3. `platform-api` 对第三方响应补齐最终 artifact link 和 processing 状态。
 4. 集中观测页继续保持“打开才加载、选中才详情”的懒加载策略。
 5. 文档问答的 Cloudflare Codex 模式必须做环境开关和模型池回退。
-

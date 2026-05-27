@@ -366,11 +366,13 @@ Expected: pass.
 
 Recommended defaults:
 - short planning tasks: 2-5 minutes;
-- static-page publish: 10-20 minutes;
+- static-page publish: 20-30 minutes;
 - data-ingestion analysis: 10-30 minutes depending on sample size;
 - max attempts: 3;
 - no automatic retry for `needs_human`;
 - retry only transient execution failures.
+
+2026-05-27 progress: Cloudflare Codex static-page publish has been verified end-to-end on 8 server, and the Codex Host default task timeout has been raised to 30 minutes for demo safety. The remaining policy work is to convert long-running poll exhaustion into resumable processing status instead of a terminal failure.
 
 **Step 2: Add timeout/retry status summaries**
 
