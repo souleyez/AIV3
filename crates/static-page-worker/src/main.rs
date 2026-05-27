@@ -14,10 +14,7 @@ use static_page_worker::{
     normalize_artifact_asset_key, poll_static_page_visual_task, submit_static_page_visual_task,
     task_failure_message, CodexOrchestratorConfig,
 };
-use storage::{
-    NewAssistantRun, NewAssistantRunEvent, NewStaticPageDraft, NewStaticPageRenderOutput,
-    NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL,
-};
+use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
@@ -25,7 +22,7 @@ const DEFAULT_QUEUE: &str = "static_page";
 const DEFAULT_IMAGE_TASK_KEY: &str = "generate_static_page_image";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
-const DEFAULT_ORCHESTRATOR_MAX_POLLS: u32 = 120;
+const DEFAULT_ORCHESTRATOR_MAX_POLLS: u32 = 360;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StaticPageRenderTaskOutcome {
@@ -282,25 +279,45 @@ async fn process_static_page_image_task(
 
     if let Err(error) = process_result {
         let error_message = error.to_string();
+        let retryable = static_page_image_error_should_auto_retry(&error_message);
         if let Ok(mut job) = storage
             .static_page_image_jobs()
             .get_by_id(task.tenant_id, job_id)
             .await
         {
             if let Some(mut job) = job.take() {
-                let _ = mark_job_failed(storage, &mut job, &error_message).await;
-                let _ = append_assistant_event(
-                    storage,
-                    job.tenant_id,
-                    job.assistant_run_id,
-                    "static_page_image_job.failed",
-                    json!({
-                        "draft_id": job.draft_id,
-                        "image_job_id": job.id,
-                        "error": error_message,
-                    }),
-                )
-                .await;
+                if retryable {
+                    let _ = mark_job_retrying(storage, &mut job, &error_message).await;
+                    let _ = append_assistant_event(
+                        storage,
+                        job.tenant_id,
+                        job.assistant_run_id,
+                        "static_page_image_job.retry_queued",
+                        json!({
+                            "draft_id": job.draft_id,
+                            "image_job_id": job.id,
+                            "error": error_message,
+                            "retryable": true,
+                            "status": "retry_queued",
+                        }),
+                    )
+                    .await;
+                } else {
+                    let _ = mark_job_failed(storage, &mut job, &error_message).await;
+                    let _ = append_assistant_event(
+                        storage,
+                        job.tenant_id,
+                        job.assistant_run_id,
+                        "static_page_image_job.failed",
+                        json!({
+                            "draft_id": job.draft_id,
+                            "image_job_id": job.id,
+                            "error": error_message,
+                            "retryable": false,
+                        }),
+                    )
+                    .await;
+                }
             }
         }
         if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
@@ -322,6 +339,23 @@ async fn process_static_page_image_task(
                 "static page image failed to send workflow step_failed signal"
             );
         }
+        if retryable {
+            if let Err(retry_error) = auto_retry_static_page_image_workflow(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task,
+                &error_message,
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = ?retry_error,
+                    task_id = %task.id,
+                    "static page image auto retry enqueue failed"
+                );
+            }
+        }
         storage
             .workflow_tasks()
             .mark_failed(task.id, &error_message, Utc::now())
@@ -341,6 +375,47 @@ async fn process_static_page_image_task(
         "static page image task completed"
     );
 
+    Ok(())
+}
+
+async fn auto_retry_static_page_image_workflow(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    task: &domain_model::WorkflowTask,
+    error_message: &str,
+) -> Result<()> {
+    let reason = format!(
+        "auto retry after transient static-page image error: {}",
+        bounded_text(error_message, 180)
+    );
+    let retry = platform_api::apply_workflow_signal_with_dependencies(
+        storage,
+        workflow_catalog,
+        event_bus,
+        task.tenant_id,
+        task.execution_id,
+        WorkflowSignal::RetryRequested { reason },
+    )
+    .await?;
+    if retry.execution.status != WorkflowStatus::Pending {
+        tracing::warn!(
+            execution_id = %task.execution_id,
+            status = ?retry.execution.status,
+            stage = %retry.execution.stage,
+            "static page image auto retry did not return to pending"
+        );
+        return Ok(());
+    }
+    platform_api::apply_workflow_signal_with_dependencies(
+        storage,
+        workflow_catalog,
+        event_bus,
+        task.tenant_id,
+        task.execution_id,
+        WorkflowSignal::Start,
+    )
+    .await?;
     Ok(())
 }
 
@@ -623,10 +698,28 @@ fn orchestrator_poll_error_is_transient(error: &anyhow::Error) -> bool {
         || message.contains("status=504")
 }
 
+fn static_page_image_error_should_auto_retry(error_message: &str) -> bool {
+    let message = error_message.to_ascii_lowercase();
+    message.contains("did not finish after")
+        || message.contains("error decoding response body")
+        || message.contains("eof while parsing")
+        || message.contains("json decode failed")
+        || message.contains("connection")
+        || message.contains("timed out")
+        || message.contains("timeout")
+        || message.contains("status=502")
+        || message.contains("status=503")
+        || message.contains("status=504")
+}
+
 fn bounded_error_message(error: &anyhow::Error, max_chars: usize) -> String {
     let text = error.to_string();
+    bounded_text(&text, max_chars)
+}
+
+fn bounded_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
-        return text;
+        return text.to_string();
     }
     let mut output = text.chars().take(max_chars).collect::<String>();
     output.push_str("...[truncated]");
@@ -733,6 +826,45 @@ async fn mark_job_failed(
     {
         draft.status = StaticPageDraftStatus::Planned;
         draft.draft_payload = mark_draft_image_job_failed(&draft.draft_payload, job, error_message);
+        storage
+            .static_page_drafts()
+            .update(draft.tenant_id, &draft)
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn mark_job_retrying(
+    storage: &PgStorage,
+    job: &mut StaticPageImageJob,
+    error_message: &str,
+) -> Result<()> {
+    job.status = StaticPageImageJobStatus::Running;
+    job.queue_position = None;
+    job.failure_reason = Some(error_message.to_string());
+    job.image_prompt_payload = merge_orchestrator_state(
+        &job.image_prompt_payload,
+        json!({
+            "status": "retry_queued",
+            "retryable": true,
+            "lastError": bounded_text(error_message, 240),
+            "updatedAt": Utc::now(),
+        }),
+    );
+    *job = storage
+        .static_page_image_jobs()
+        .update(job.tenant_id, job)
+        .await?;
+
+    if let Some(mut draft) = storage
+        .static_page_drafts()
+        .get_by_id(job.tenant_id, job.draft_id)
+        .await?
+    {
+        draft.status = StaticPageDraftStatus::Queued;
+        draft.draft_payload =
+            mark_draft_image_job_retrying(&draft.draft_payload, job, error_message);
         storage
             .static_page_drafts()
             .update(draft.tenant_id, &draft)
@@ -978,6 +1110,41 @@ fn mark_draft_image_job_failed(
     Value::Object(object)
 }
 
+fn mark_draft_image_job_retrying(
+    payload: &Value,
+    job: &StaticPageImageJob,
+    error_message: &str,
+) -> Value {
+    let mut object = payload.as_object().cloned().unwrap_or_default();
+    let last_error = bounded_text(error_message, 240);
+    object.insert("status".to_string(), Value::String("queued".to_string()));
+    object.insert(
+        "imageJob".to_string(),
+        json!({
+            "id": job.id,
+            "status": "retry_queued",
+            "queuePosition": null,
+            "queueMessage": "效果图生成遇到临时问题，已进入重试队列。",
+            "retryable": true,
+            "lastError": last_error,
+        }),
+    );
+    let preview_contract = json!({
+        "version": 1,
+        "kind": "static-page-preview-contract",
+        "status": "retry_queued",
+        "imageJobId": job.id,
+        "assetKey": null,
+        "queuePosition": null,
+        "retryable": true,
+        "lastError": last_error,
+        "renderExpectation": "final HTML/CSS/SVG should reproduce the generated preview without baking editable text or charts into the image",
+    });
+    object.insert("previewContract".to_string(), preview_contract.clone());
+    object.insert("preview_contract".to_string(), preview_contract);
+    Value::Object(object)
+}
+
 async fn append_assistant_event(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -1034,6 +1201,9 @@ fn optional_env(key: &str) -> Option<String> {
 mod tests {
     use super::*;
     use domain_model::{WorkflowExecution, WorkflowExecutionId, WorkflowTask, WorkflowTaskStatus};
+    use storage::{
+        NewAssistantRun, NewStaticPageDraft, NewStaticPageRenderOutput, NewWorkflowTask,
+    };
     use test_fixtures::{
         local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
     };
@@ -1058,6 +1228,65 @@ mod tests {
         assert!(!orchestrator_poll_error_is_transient(&anyhow!(
             "orchestrator task ended with status failed"
         )));
+    }
+
+    #[test]
+    fn default_orchestrator_poll_window_allows_slow_cloudflare_tasks() {
+        assert!(
+            u64::from(DEFAULT_ORCHESTRATOR_MAX_POLLS) * DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS
+                >= 30 * 60 * 1_000
+        );
+    }
+
+    #[test]
+    fn static_page_image_auto_retry_classifies_transient_errors() {
+        assert!(static_page_image_error_should_auto_retry(
+            "orchestrator task task_1 did not finish after 120 polls"
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "error decoding response body"
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "orchestrator poll failed: status=503"
+        ));
+        assert!(!static_page_image_error_should_auto_retry(
+            "orchestrator task ended with status failed"
+        ));
+    }
+
+    #[test]
+    fn mark_draft_image_job_retrying_preserves_retry_status() {
+        let now = Utc::now();
+        let job = StaticPageImageJob {
+            id: domain_model::StaticPageImageJobId::new(),
+            tenant_id: TenantId::new(),
+            draft_id: domain_model::StaticPageDraftId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            status: StaticPageImageJobStatus::Running,
+            queue_position: None,
+            image_prompt_payload: json!({}),
+            preview_asset_key: None,
+            failure_reason: Some("previous transient failure".to_string()),
+            confirmed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let payload = mark_draft_image_job_retrying(
+            &json!({
+                "version": 1,
+                "modules": []
+            }),
+            &job,
+            "orchestrator task task_1 did not finish after 120 polls",
+        );
+
+        assert_eq!(payload["status"], json!("queued"));
+        assert_eq!(payload["imageJob"]["status"], json!("retry_queued"));
+        assert_eq!(payload["imageJob"]["retryable"], json!(true));
+        assert_eq!(payload["previewContract"]["status"], json!("retry_queued"));
+        assert_eq!(payload["preview_contract"]["status"], json!("retry_queued"));
+        assert_eq!(payload["previewContract"]["retryable"], json!(true));
     }
 
     #[test]

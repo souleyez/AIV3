@@ -21263,6 +21263,31 @@ fn external_channel_static_page_reply_from_events(
                     Vec::new(),
                 ));
             }
+            if let Some(retry_queued) = external_channel_static_page_latest_named_event(
+                events,
+                "static_page_image_job.retry_queued",
+            ) {
+                return Some(external_channel_task_status_reply_for_conversation(
+                    conversation_external_id,
+                    "static_page_image_preview_retrying",
+                    Some("V3 效果图生成较慢或遇到临时问题，已自动进入重试队列。".to_string()),
+                    Some(json!({
+                        "type": "v3_static_page_image2_preview_retrying",
+                        "status": "static_page_image_preview_retrying",
+                        "stage": "image2_preview_retry",
+                        "draft_id": retry_queued.payload.get("draft_id").cloned().unwrap_or_else(|| event.payload.get("draft_id").cloned().unwrap_or(Value::Null)),
+                        "image_job_id": retry_queued.payload.get("image_job_id").cloned().unwrap_or_else(|| event.payload.get("image_job_id").cloned().unwrap_or(Value::Null)),
+                        "retryable": retry_queued
+                            .payload
+                            .get("retryable")
+                            .cloned()
+                            .unwrap_or_else(|| json!(true)),
+                        "error": retry_queued.payload.get("error").cloned().unwrap_or(Value::Null),
+                        "poll_after_seconds": 30,
+                    })),
+                    Vec::new(),
+                ));
+            }
             if let Some(failed) = external_channel_static_page_latest_named_event(
                 events,
                 "static_page_image_job.failed",
@@ -65047,6 +65072,56 @@ mod tests {
         assert_eq!(card["type"], json!("v3_static_page_image2_preview_queued"));
         assert_eq!(card["stage"], json!("image2_preview_generation"));
         assert_eq!(card["poll_after_seconds"], json!(15));
+    }
+
+    #[test]
+    fn external_channel_static_page_reply_reports_image_preview_retry_queue() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_pipeline_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "status": "static_page_image2_auto_publish_pending",
+                    "auto_publish_after_preview": true,
+                    "template_id": "static_page_image2_data_publish",
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "static_page_image_job.retry_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "status": "retry_queued",
+                    "retryable": true,
+                    "error": "orchestrator task task_1 did not finish after 120 polls",
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("retry progress reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_image_preview_retrying")
+        );
+        let card = reply.card.expect("status card");
+        assert_eq!(
+            card["type"],
+            json!("v3_static_page_image2_preview_retrying")
+        );
+        assert_eq!(card["stage"], json!("image2_preview_retry"));
+        assert_eq!(card["retryable"], json!(true));
+        assert_eq!(card["poll_after_seconds"], json!(30));
     }
 
     #[test]
