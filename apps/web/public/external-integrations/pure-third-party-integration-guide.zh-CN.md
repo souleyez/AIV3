@@ -366,6 +366,8 @@ V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、�
 | `reply.card.workflow_stage` | 同步阶段返回当前阶段，例如 `sync_users`、`fetch_content`、`ingest`、`index`、`completed` |
 | `reply.card.imported_row_count` | 当前确认步骤不自动导入原始行，固定为 `0`；后续导入/数据库同步需走人工确认执行 |
 
+当 `reply.task_status=data_ingestion_staging_sync_completed` 后，同一个 `conversation_external_id` 的后续问题会自动复用该 staging 数据集作为可见数据范围；第三方不必每轮重复传内部 `dataset_id`。如果第三方更换会话 ID，或希望切换数据范围，应重新传稳定 `dataset_external_id`、具体文档范围，或由 V3 侧重新确认新的 staging 数据集。
+
 若没有选中或上传可分析的数据源/表格/文档，V3 会返回 `data_ingestion_analysis_source_required`，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。
 
 ## 3. 生成产物（报表）
@@ -484,7 +486,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `artifact_link` 或 `task_status` |
-| `reply.task_status` | `static_page_published`、`static_page_rendered`、`static_page_image2_auto_publish_pending` 或 `static_page_image_preview_queued` |
+| `reply.task_status` | 成功为 `static_page_published` 或 `static_page_rendered`；生成中常见为 `static_page_image_preview_queued`、`static_page_effect_image_ready`、`static_page_publish_queued`、`static_page_publish_running`、`static_page_publish_retrying`；异常为 `static_page_publish_needs_human`、`static_page_publish_failed` 或 `static_page_publish_cancelled` |
 | `reply.text` | 给用户展示的排队/处理说明；若已直接生成 HTML，会说明可通过 `card.render_output_id` 或下载链接获取产物 |
 | `reply.card.type` | `v3_static_page_image2_pipeline` |
 | `reply.card.draft_id` | V3 静态页草稿 ID |
@@ -501,7 +503,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
 | `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
 
-若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.render_output_id` 已存在，可直接按 3.4 查询/预览/下载；若只有 `draft_id` 和 `image_job_id`，表示当前仍在效果图或自动发布阶段，第三方继续等待 `completed` 响应或后续状态事件即可。效果图是过程预览，不是最终交付物。
+若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.render_output_id` 已存在，可直接按 3.4 查询/预览/下载；若只有 `draft_id` 和 `image_job_id`，表示当前仍在效果图或自动发布阶段，第三方继续等待 `completed` 响应或后续状态事件即可。若状态进入 `static_page_publish_retrying`，第三方继续轮询；若进入 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要展示旧的效果图为最终产物，应提示稍后重试或由 V3 侧人工处理。效果图是过程预览，不是最终交付物。
 
 固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
 

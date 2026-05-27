@@ -498,15 +498,24 @@ Update the main plan with:
 - `scripts/run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static-page-no-confirm -Json` passed: static-page no-confirm, fixed-task, and codex-host-agent static-page tests all passed; JSON report written under `target/cloudflare-codex-fixed-task-smoke/`.
 - Fixed a Windows PowerShell smoke false failure where successful Cargo stderr lines were treated as terminating errors; the script now captures native command output with local `ErrorActionPreference=Continue` and still uses the real exit code.
 
+2026-05-27 static-page status follow-up:
+- Fixed a third-party polling edge where an older `assistant_run.external_channel_static_page_publish_queued` event could mask later `codex_host.fixed_task.*`, `codex_host_task.poll_retry`, or `codex_host_task.cancelled` events. Static-page replies now surface `static_page_publish_retrying`, `static_page_publish_failed`, `static_page_publish_needs_human`, and `static_page_publish_cancelled` instead of continuing to report publish queued/running.
+- Static-page fixed-task success now uses the public contract status `static_page_published` even when the reply is built directly from fixed-task completion before the richer publish-completed event is appended.
+- Focused checks passed: `cargo test -p platform-api external_channel_static_page_reply --lib`, `cargo test -p platform-api external_channel_fixed_task_reply_surfaces_completed_artifact_link --lib`, `cargo test -p platform-api external_channel_static_page --lib`, `npm run build:pure-third-party-guide-html`, `npm run test:pure-third-party-guide-html`, and `npm run check:pure-third-party-guide-html`.
+
+2026-05-27 data-ingestion follow-up:
+- External-channel follow-up turns now restore the latest `data_ingestion_staging` dataset for the same `conversation_external_id` when the third party does not resend a document/dataset range, but only if the latest sync update is `workflow_status=succeeded`; a later failed sync will not silently reuse stale staging data. This keeps the post-sync path natural: sync once, then continue Q&A/report/static-page requests over the staging dataset in the same conversation.
+- The restored scope is explicit in `selected_scope.data_ingestion_staging_scope`, sets `datasets` and `canonical_datasets`, and does not cross conversation IDs.
+- Focused checks passed: `cargo test -p platform-api external_channel_restores_completed_data_ingestion_staging_dataset_for_same_conversation --lib`, `cargo test -p platform-api external_channel --lib`, and `cargo test -p platform-api data_ingestion_staging --lib`.
+
 ---
 
 ## Recommended Development Order
 
-1. Task 4 follow-up: real 8-server ExternalSourceSync worker smoke from confirmed staging datasets, including row materialization, indexing, and failure recovery evidence.
-2. Task 7: cancellation and workspace retention hardening.
-3. Task 8: staged smoke and production readiness record.
-4. Task 5: answer-quality autofix review-gated loop.
-5. Artifact manifest unification across static pages, Image2 previews, reports, and ingestion plans.
+1. Task 5: answer-quality autofix review-gated loop.
+2. Artifact manifest unification across static pages, Image2 previews, reports, and ingestion plans.
+3. Real customer-style database dataset question/report smoke from a confirmed staging dataset, including row materialization, indexing, and generated report evidence.
+4. Keep collecting 8-server smoke evidence for static-page publish failure/retry/cancelled cases.
 
 ## Stop Conditions
 

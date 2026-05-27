@@ -18959,6 +18959,15 @@ async fn enrich_external_channel_document_scope(
         {
             return Ok(());
         }
+        if restore_external_channel_data_ingestion_staging_dataset_scope(
+            state,
+            message,
+            selected_scope,
+        )
+        .await?
+        {
+            return Ok(());
+        }
         if let Some(source_id) = source_id {
             set_external_channel_document_scope_missing_documents(selected_scope, &source_id);
             if explicit_source_id.is_some()
@@ -19772,6 +19781,116 @@ async fn restore_external_channel_temporary_dataset_scope(
         Value::Array(vec![json!({"type": "dataset", "id": dataset.id})]),
     );
 
+    Ok(true)
+}
+
+async fn restore_external_channel_data_ingestion_staging_dataset_scope(
+    state: &AppState,
+    message: &ExternalBotMessageView,
+    selected_scope: &mut Value,
+) -> std::result::Result<bool, ApiError> {
+    let local_thread_id = external_bot_message_local_thread_id(message);
+    let runs = state
+        .storage
+        .assistant_runs()
+        .list_by_local_thread(state.tenant_id, &local_thread_id, 20)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let mut latest_payload: Option<(DateTime<Utc>, Value)> = None;
+    for run in runs {
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        for event in events
+            .iter()
+            .filter(|event| event.event_name == "assistant_run.data_ingestion_staging_sync_updated")
+        {
+            if latest_payload
+                .as_ref()
+                .map(|(created_at, _)| event.created_at > *created_at)
+                .unwrap_or(true)
+            {
+                latest_payload = Some((event.created_at, event.payload.clone()));
+            }
+        }
+    }
+
+    let Some((_, payload)) = latest_payload else {
+        return Ok(false);
+    };
+    if payload.get("workflow_status").and_then(Value::as_str) != Some("succeeded") {
+        return Ok(false);
+    }
+    let Some(dataset_id) = payload
+        .get("dataset_id")
+        .or_else(|| payload.get("datasetId"))
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+        .map(DatasetId)
+    else {
+        return Ok(false);
+    };
+    let Some(dataset) = state
+        .storage
+        .datasets()
+        .get_by_id(state.tenant_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(false);
+    };
+    if dataset.lifecycle == DatasetLifecycle::Archived {
+        return Ok(false);
+    }
+
+    let dataset_scope = vec![json!({"type": "dataset", "id": dataset.id})];
+    set_payload_value(
+        selected_scope,
+        "mode",
+        json!("external_data_ingestion_staging_scope"),
+    );
+    set_payload_value(selected_scope, "datasets", json!(dataset_scope));
+    set_payload_value(
+        selected_scope,
+        "canonical_datasets",
+        Value::Array(vec![json!({"type": "dataset", "id": dataset.id})]),
+    );
+    set_payload_value(
+        selected_scope,
+        "data_ingestion_staging_scope",
+        json!({
+            "status": "restored",
+            "restores_on": "conversation_external_id",
+            "dataset_id": dataset.id,
+            "dataset_key": dataset.key,
+            "dataset_title": dataset.title,
+            "plan_id": payload.get("plan_id").cloned().unwrap_or(Value::Null),
+            "source_id": payload.get("source_id").cloned().unwrap_or(Value::Null),
+            "sync_run_id": payload.get("sync_run_id").cloned().unwrap_or(Value::Null),
+            "workflow_execution_id": payload.get("workflow_execution_id").cloned().unwrap_or(Value::Null),
+            "workflow_stage": payload.get("workflow_stage").cloned().unwrap_or(Value::Null),
+            "workflow_status": payload.get("workflow_status").cloned().unwrap_or(Value::Null),
+        }),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_status",
+        json!("data_ingestion_staging_dataset_restored"),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_restored",
+        json!(true),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_summary",
+        json!("Reused the completed data-ingestion staging dataset for this conversation_external_id."),
+    );
     Ok(true)
 }
 
@@ -21158,6 +21277,11 @@ fn external_channel_static_page_reply_from_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,
 ) -> Option<ExternalBotReplyView> {
+    if let Some(reply) =
+        external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
+    {
+        return Some(reply);
+    }
     for event in events.iter().rev() {
         if event.event_name == "assistant_run.external_channel_static_page_publish_completed" {
             if let Some(reply) =
@@ -21395,6 +21519,80 @@ fn external_channel_static_page_reply_from_events(
         }
     }
     None
+}
+
+fn external_channel_static_page_fixed_task_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let latest_fixed = events.iter().rev().find(|event| {
+        event.event_name.starts_with("codex_host.fixed_task.")
+            && external_channel_fixed_task_template_id(event).as_deref()
+                == Some("static_page_image2_data_publish")
+    })?;
+    let latest_publish_completed = events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+        })
+        .map(|event| event.sequence_no)
+        .unwrap_or(i32::MIN);
+    if latest_publish_completed > latest_fixed.sequence_no {
+        return None;
+    }
+    let latest_cancelled = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "codex_host_task.cancelled");
+    if let Some(cancelled) =
+        latest_cancelled.filter(|cancelled| cancelled.sequence_no > latest_fixed.sequence_no)
+    {
+        return Some(external_channel_fixed_task_processing_reply(
+            conversation_external_id,
+            "static_page_image2_data_publish",
+            "cancelled",
+            latest_fixed,
+            Some(cancelled),
+        ));
+    }
+    let latest_poll_retry = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "codex_host_task.poll_retry");
+    if let Some(retry) =
+        latest_poll_retry.filter(|retry| retry.sequence_no > latest_fixed.sequence_no)
+    {
+        return Some(external_channel_fixed_task_processing_reply(
+            conversation_external_id,
+            "static_page_image2_data_publish",
+            "retrying",
+            latest_fixed,
+            Some(retry),
+        ));
+    }
+    let latest_heartbeat = events.iter().rev().find(|event| {
+        matches!(
+            event.event_name.as_str(),
+            "codex_host_task.cloudflare_heartbeat" | "codex_host_task.exec_heartbeat"
+        )
+    });
+    if let Some(heartbeat) =
+        latest_heartbeat.filter(|heartbeat| heartbeat.sequence_no > latest_fixed.sequence_no)
+    {
+        return Some(external_channel_fixed_task_processing_reply(
+            conversation_external_id,
+            "static_page_image2_data_publish",
+            "running",
+            latest_fixed,
+            Some(heartbeat),
+        ));
+    }
+    Some(external_channel_fixed_task_terminal_or_queued_reply(
+        conversation_external_id,
+        latest_fixed,
+        "static_page_image2_data_publish",
+    ))
 }
 
 fn external_channel_data_ingestion_analysis_reply_from_events(
@@ -21797,7 +21995,10 @@ fn external_channel_fixed_task_terminal_or_queued_reply(
         "codex_host.fixed_task.rejected" => "failed",
         _ => "queued",
     };
-    let task_status = format!("{prefix}_{terminal_state}");
+    let task_status = match (template_id, terminal_state) {
+        ("static_page_image2_data_publish", "completed") => "static_page_published".to_string(),
+        _ => format!("{prefix}_{terminal_state}"),
+    };
     let artifact_url = event
         .payload
         .pointer("/output/artifact_public_url")
@@ -67353,6 +67554,119 @@ mod tests {
         assert_eq!(card["elapsed_ms"], json!(45000));
     }
 
+    #[test]
+    fn external_channel_static_page_reply_reports_codex_publish_retry_after_fixed_task() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let codex_execution_id = WorkflowExecutionId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_publish_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "codex_host_workflow_execution_id": codex_execution_id.to_string(),
+                    "template_id": "static_page_image2_data_publish",
+                    "publish_mode": "new_generated_artifact_only",
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "codex_host.fixed_task.queued",
+                json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "queued",
+                    "workflow_execution_id": codex_execution_id.to_string(),
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                3,
+                "codex_host_task.poll_retry",
+                json!({
+                    "status": "processing",
+                    "reason": "cloudflare_orchestrator_poll_timeout",
+                    "attempt": 1,
+                    "max_attempts": 3,
+                    "available_at": "2026-05-27T08:00:30Z",
+                    "secrets_exposed": false,
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("retrying publish reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_publish_retrying")
+        );
+        let card = reply.card.expect("status card");
+        assert_eq!(card["type"], json!("v3_static_page_image2_publish_status"));
+        assert_eq!(card["runtime_event"]["attempt"], json!(1));
+        assert_eq!(card["poll_after_seconds"], json!(30));
+    }
+
+    #[test]
+    fn external_channel_static_page_reply_reports_codex_publish_failure_after_publish_queued() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let codex_execution_id = WorkflowExecutionId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_publish_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "codex_host_workflow_execution_id": codex_execution_id.to_string(),
+                    "template_id": "static_page_image2_data_publish",
+                    "publish_mode": "new_generated_artifact_only",
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "codex_host.fixed_task.rejected",
+                json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "rejected",
+                    "workflow_execution_id": codex_execution_id.to_string(),
+                    "output": {
+                        "status": "success",
+                        "artifact_public_url": null,
+                    },
+                    "validation": {
+                        "accepted": false,
+                        "reason": "validation_report_required",
+                    },
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("failed publish reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_publish_failed")
+        );
+        assert!(reply.artifact_links.is_empty());
+        let card = reply.card.expect("status card");
+        assert_eq!(card["type"], json!("v3_static_page_image2_publish_status"));
+        assert_eq!(
+            card["validation"]["reason"],
+            json!("validation_report_required")
+        );
+    }
+
     #[tokio::test]
     async fn external_channel_static_page_pipeline_returns_render_output_when_codex_publish_not_ready(
     ) {
@@ -69817,6 +70131,220 @@ mod tests {
             json!("document_ids_missing")
         );
         assert!(other_scope["documents"].is_null());
+        assert!(other_scope["datasets"].is_null());
+    }
+
+    #[tokio::test]
+    async fn external_channel_restores_completed_data_ingestion_staging_dataset_for_same_conversation(
+    ) {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external data-ingestion staging restore test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-staging-restore-test-{}", Uuid::new_v4()),
+                "External Staging Restore Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-staging-{}", Uuid::new_v4()),
+                    title: "External Staging Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut first_message = sample_external_bot_message();
+        first_message.conversation_external_id = "conv-staging-restore-0001".to_string();
+        let local_thread_id = external_bot_message_local_thread_id(&first_message);
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some(local_thread_id.clone()),
+                    user_prompt: "同步数据库到 staging 数据集".to_string(),
+                    startup_briefing: json!({}),
+                    selected_scope: json!({
+                        "type": "external_channel",
+                        "conversation_external_id": first_message.conversation_external_id
+                    }),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.data_ingestion_staging_sync_updated".to_string(),
+                    payload: json!({
+                        "plan_id": "plan-staging-001",
+                        "dataset_id": dataset.id.to_string(),
+                        "dataset_key": dataset.key.clone(),
+                        "dataset_title": dataset.title.clone(),
+                        "source_id": "db-source-xinbai",
+                        "sync_run_id": Uuid::new_v4().to_string(),
+                        "workflow_execution_id": WorkflowExecutionId::new().to_string(),
+                        "workflow_stage": "completed",
+                        "workflow_status": "succeeded",
+                    }),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("staging sync event should be appended");
+
+        let mut followup_message = sample_external_bot_message();
+        followup_message.conversation_external_id = "conv-staging-restore-0001".to_string();
+        followup_message.available_document_source_id = None;
+        followup_message.available_document_external_ids.clear();
+        let mut followup_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &followup_message,
+            &mut followup_scope,
+        )
+        .await
+        .expect("same conversation should restore completed staging dataset");
+
+        assert_eq!(
+            followup_scope["mode"],
+            json!("external_data_ingestion_staging_scope")
+        );
+        assert_eq!(
+            followup_scope["external_document_scope_status"],
+            json!("data_ingestion_staging_dataset_restored")
+        );
+        assert_eq!(
+            followup_scope["data_ingestion_staging_scope"]["dataset_id"],
+            json!(dataset.id)
+        );
+        assert_eq!(followup_scope["datasets"][0]["id"], json!(dataset.id));
+        assert_eq!(
+            followup_scope["canonical_datasets"][0]["id"],
+            json!(dataset.id)
+        );
+
+        let failed_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some(local_thread_id),
+                    user_prompt: "重新同步 staging 数据集但失败".to_string(),
+                    startup_briefing: json!({}),
+                    selected_scope: json!({
+                        "type": "external_channel",
+                        "conversation_external_id": first_message.conversation_external_id
+                    }),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("failed assistant run should be created");
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                failed_run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.data_ingestion_staging_sync_updated".to_string(),
+                    payload: json!({
+                        "plan_id": "plan-staging-002",
+                        "source_id": "db-source-xinbai",
+                        "sync_run_id": Uuid::new_v4().to_string(),
+                        "workflow_execution_id": WorkflowExecutionId::new().to_string(),
+                        "workflow_stage": "failed",
+                        "workflow_status": "failed",
+                    }),
+                    created_at: Utc::now() + Duration::seconds(1),
+                },
+            )
+            .await
+            .expect("failed staging sync event should be appended");
+        let mut after_failed_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &followup_message,
+            &mut after_failed_scope,
+        )
+        .await
+        .expect("latest failed sync should not restore stale staging dataset");
+
+        assert!(after_failed_scope["data_ingestion_staging_scope"].is_null());
+        assert!(after_failed_scope["datasets"].is_null());
+
+        let mut other_message = sample_external_bot_message();
+        other_message.conversation_external_id = "conv-staging-restore-other".to_string();
+        other_message.available_document_source_id = None;
+        other_message.available_document_external_ids.clear();
+        let mut other_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &other_message,
+            &mut other_scope,
+        )
+        .await
+        .expect("other conversation should not restore staging dataset");
+
+        assert!(other_scope["data_ingestion_staging_scope"].is_null());
         assert!(other_scope["datasets"].is_null());
     }
 
@@ -79874,10 +80402,7 @@ retrieve_evidence:
             .expect("completed fixed task reply");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_publish_completed")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
     }
 
