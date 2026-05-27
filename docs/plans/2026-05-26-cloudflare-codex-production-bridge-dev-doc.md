@@ -65,6 +65,7 @@ CODEX_HOST_AGENT_TASK_TIMEOUT_MS=1800000
 CODEX_ORCHESTRATOR_API_PATH=/api/codex/orchestrator/v1
 CODEX_ORCHESTRATOR_PROJECT_ID=<optional-project-id>
 CODEX_ORCHESTRATOR_POLL_INTERVAL_MS=5000
+CODEX_ORCHESTRATOR_RETRY_DELAY_MS=15000
 STATIC_PAGE_ORCHESTRATOR_POLL_INTERVAL_MS=5000
 STATIC_PAGE_ORCHESTRATOR_MAX_POLLS=240
 ```
@@ -162,6 +163,7 @@ metadata.output=image-artifact
 
 - 演示期将 `STATIC_PAGE_ORCHESTRATOR_MAX_POLLS` 调到至少 240，按 5 秒轮询约 20 分钟。
 - 演示期将 `CODEX_HOST_AGENT_TASK_TIMEOUT_MS` 调到至少 1800000，避免 Cloudflare Codex 生成静态页超过 15 分钟时被 V3 侧提前判失败。
+- Codex Host 会在首次投递后把 Cloudflare `task_id` 写入 workflow task payload；轮询超时且 attempt 未耗尽时，写入 `codex_host_task.poll_retry` 事件并重新排队，下一轮继续轮询同一个远端任务。
 - 后续把长任务改为“提交后异步跟踪”，接口先返回任务卡，完成后通过状态查询或事件流补链接。
 
 ### P4：文档问答演示升级

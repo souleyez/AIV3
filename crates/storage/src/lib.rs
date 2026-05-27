@@ -6035,6 +6035,37 @@ impl PgWorkflowTaskRepository {
 
         map_workflow_task_row(&row)
     }
+
+    pub async fn requeue_after_transient_error(
+        &self,
+        task_id: WorkflowTaskId,
+        error: &str,
+        available_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<WorkflowTask> {
+        let row = sqlx::query(
+            r#"
+            update workflow_tasks
+            set status = 'queued',
+                available_at = $3,
+                claimed_at = null,
+                finished_at = null,
+                updated_at = $4,
+                error = $2
+            where id = $1
+            returning id, tenant_id, execution_id, queue, task_key, payload, status, attempt, max_attempts,
+                      available_at, claimed_at, finished_at, error, created_at, updated_at
+            "#,
+        )
+        .bind(task_id.0)
+        .bind(error)
+        .bind(available_at)
+        .bind(updated_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_workflow_task_row(&row)
+    }
 }
 
 impl PgAuthAuditEventRepository {

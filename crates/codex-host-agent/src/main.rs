@@ -32,6 +32,7 @@ const DEFAULT_ORCHESTRATOR_RUNTIME_TARGET: &str = "cloudflare";
 const DEFAULT_ORCHESTRATOR_SOURCE: &str = "v3-codex-host-agent";
 const DEFAULT_ORCHESTRATOR_KIND: &str = "code-task";
 const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
+const DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS: u64 = 15_000;
 const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 6_500;
 
 #[tokio::main]
@@ -164,6 +165,8 @@ async fn process_task(
                     storage,
                     task.tenant_id,
                     task.execution_id,
+                    task.id,
+                    &task.payload,
                     &task_context,
                     &decision,
                     runtime_config,
@@ -211,6 +214,48 @@ async fn process_task(
 
     if let Err(error) = process_result {
         let error_message = error.to_string();
+        if should_requeue_cloudflare_orchestrator_poll(
+            &execution_policy.mode,
+            &error_message,
+            &task,
+        ) {
+            let now = Utc::now();
+            let retry_delay_ms = cloudflare_orchestrator_retry_delay_ms();
+            let available_at =
+                now + chrono::Duration::milliseconds(retry_delay_ms.min(i64::MAX as u64) as i64);
+            append_assistant_event(
+                storage,
+                task.tenant_id,
+                task_context.assistant_run_id,
+                "codex_host_task.poll_retry",
+                json!({
+                    "mode": "cloudflare_orchestrator",
+                    "status": "processing",
+                    "reason": "cloudflare_orchestrator_poll_timeout",
+                    "retryable": true,
+                    "attempt": task.attempt,
+                    "max_attempts": task.max_attempts,
+                    "retry_delay_ms": retry_delay_ms,
+                    "available_at": available_at.to_rfc3339(),
+                    "error": error_message,
+                    "secrets_exposed": false,
+                }),
+            )
+            .await?;
+            storage
+                .workflow_tasks()
+                .requeue_after_transient_error(task.id, &error_message, available_at, now)
+                .await?;
+            tracing::warn!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                attempt = task.attempt,
+                max_attempts = task.max_attempts,
+                retry_delay_ms,
+                "Cloudflare Codex poll timed out; task requeued for continued polling"
+            );
+            return Ok(());
+        }
         if let Err(signal_error) = apply_workflow_signal_with_dependencies(
             storage,
             workflow_catalog,
@@ -679,6 +724,8 @@ async fn run_cloudflare_orchestrator_with_heartbeat(
     storage: &PgStorage,
     tenant_id: domain_model::TenantId,
     execution_id: domain_model::WorkflowExecutionId,
+    workflow_task_id: domain_model::WorkflowTaskId,
+    workflow_task_payload: &Value,
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
     runtime_config: &CodexHostRuntimeConfig,
@@ -687,7 +734,15 @@ async fn run_cloudflare_orchestrator_with_heartbeat(
     let mut heartbeat_interval =
         tokio::time::interval(Duration::from_millis(runtime_config.heartbeat_ms()));
     let mut heartbeat_count = 0usize;
-    let exec = run_cloudflare_orchestrator(task_context, decision, execution_id, runtime_config);
+    let exec = run_cloudflare_orchestrator(
+        storage,
+        workflow_task_id,
+        workflow_task_payload,
+        task_context,
+        decision,
+        execution_id,
+        runtime_config,
+    );
     tokio::pin!(exec);
 
     loop {
@@ -743,6 +798,27 @@ fn cloudflare_orchestrator_heartbeat_payload(
         "remote_result_exposed": false,
         "secrets_exposed": false,
     })
+}
+
+fn should_requeue_cloudflare_orchestrator_poll(
+    mode: &CodexHostExecutionMode,
+    error_message: &str,
+    task: &domain_model::WorkflowTask,
+) -> bool {
+    matches!(mode, CodexHostExecutionMode::CloudflareOrchestrator)
+        && task.attempt < task.max_attempts
+        && cloudflare_orchestrator_poll_timeout_error(error_message)
+}
+
+fn cloudflare_orchestrator_poll_timeout_error(error_message: &str) -> bool {
+    error_message.contains("Cloudflare Codex task timed out after")
+}
+
+fn cloudflare_orchestrator_retry_delay_ms() -> u64 {
+    env_u64(
+        "CODEX_ORCHESTRATOR_RETRY_DELAY_MS",
+        DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS,
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -851,21 +927,88 @@ fn orchestrator_access_key_from_file_text(raw: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn cloudflare_orchestrator_task_id_from_payload(payload: &Value) -> Option<String> {
+    payload
+        .pointer("/cloudflare_orchestrator/task_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn workflow_task_payload_with_cloudflare_orchestrator_task(
+    payload: &Value,
+    orchestrator_task_id: &str,
+    submitted_task: &Value,
+    submitted_at: chrono::DateTime<Utc>,
+) -> Value {
+    let mut root = payload.as_object().cloned().unwrap_or_default();
+    let mut orchestrator = root
+        .get("cloudflare_orchestrator")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    orchestrator.insert(
+        "task_id".to_string(),
+        Value::String(orchestrator_task_id.to_string()),
+    );
+    orchestrator.insert(
+        "submitted_at".to_string(),
+        Value::String(submitted_at.to_rfc3339()),
+    );
+    for (key, pointer) in [
+        ("status", "/status"),
+        ("kind", "/kind"),
+        ("source", "/source"),
+        ("runtime_target_id", "/runtimeTargetId"),
+    ] {
+        if let Some(value) = submitted_task.pointer(pointer) {
+            orchestrator.insert(key.to_string(), value.clone());
+        }
+    }
+    root.insert(
+        "cloudflare_orchestrator".to_string(),
+        Value::Object(orchestrator),
+    );
+    Value::Object(root)
+}
+
 async fn run_cloudflare_orchestrator(
+    storage: &PgStorage,
+    workflow_task_id: domain_model::WorkflowTaskId,
+    workflow_task_payload: &Value,
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
     execution_id: domain_model::WorkflowExecutionId,
     runtime_config: &CodexHostRuntimeConfig,
 ) -> Result<serde_json::Value> {
     let config = CloudflareOrchestratorConfig::from_env()?;
-    let prompt = build_cloudflare_orchestrator_prompt(task_context)?;
-    let submitted =
-        submit_cloudflare_orchestrator_task(&config, task_context, execution_id, &prompt).await?;
-    let task_id = submitted
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("Cloudflare Codex response missing task.id"))?
-        .to_string();
+    let task_id = if let Some(task_id) =
+        cloudflare_orchestrator_task_id_from_payload(workflow_task_payload)
+    {
+        task_id
+    } else {
+        let prompt = build_cloudflare_orchestrator_prompt(task_context)?;
+        let submitted =
+            submit_cloudflare_orchestrator_task(&config, task_context, execution_id, &prompt)
+                .await?;
+        let task_id = submitted
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Cloudflare Codex response missing task.id"))?
+            .to_string();
+        let updated_payload = workflow_task_payload_with_cloudflare_orchestrator_task(
+            workflow_task_payload,
+            &task_id,
+            &submitted,
+            Utc::now(),
+        );
+        storage
+            .workflow_tasks()
+            .update_payload(workflow_task_id, &updated_payload, Utc::now())
+            .await?;
+        task_id
+    };
     let completed =
         poll_cloudflare_orchestrator_task(&config, &task_id, runtime_config.task_timeout_ms())
             .await?;
@@ -1357,8 +1500,9 @@ async fn poll_cloudflare_orchestrator_task(
     loop {
         if started_at.elapsed() > Duration::from_millis(timeout_ms.max(1)) {
             return Err(anyhow!(
-                "Cloudflare Codex task timed out after {}ms",
-                timeout_ms.max(1)
+                "Cloudflare Codex task timed out after {}ms; task_id={}",
+                timeout_ms.max(1),
+                task_id
             ));
         }
         let (status_code, text) = curl_orchestrator_json(
@@ -2447,6 +2591,57 @@ mod tests {
     }
 
     #[test]
+    fn cloudflare_orchestrator_task_payload_persists_resume_id_safely() {
+        let payload = json!({"execution_id": "exec-1", "kind": "codex_host_task_workflow"});
+        let updated = workflow_task_payload_with_cloudflare_orchestrator_task(
+            &payload,
+            "task-cloudflare-1",
+            &json!({
+                "status": "running",
+                "kind": "static-page-visual",
+                "source": "ai-data-platform-static-pages",
+                "runtimeTargetId": "cloudflare",
+                "prompt": "should-not-be-persisted"
+            }),
+            Utc::now(),
+        );
+
+        assert_eq!(
+            cloudflare_orchestrator_task_id_from_payload(&updated).as_deref(),
+            Some("task-cloudflare-1")
+        );
+        assert_eq!(
+            updated["cloudflare_orchestrator"]["runtime_target_id"],
+            json!("cloudflare")
+        );
+        assert!(updated["cloudflare_orchestrator"].get("prompt").is_none());
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_timeout_requeue_requires_attempt_budget() {
+        let mut task = test_workflow_task(1, 3);
+
+        assert!(should_requeue_cloudflare_orchestrator_poll(
+            &CodexHostExecutionMode::CloudflareOrchestrator,
+            "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
+            &task
+        ));
+
+        task.attempt = 3;
+        assert!(!should_requeue_cloudflare_orchestrator_poll(
+            &CodexHostExecutionMode::CloudflareOrchestrator,
+            "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
+            &task
+        ));
+        task.attempt = 1;
+        assert!(!should_requeue_cloudflare_orchestrator_poll(
+            &CodexHostExecutionMode::CodexExec,
+            "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
+            &task
+        ));
+    }
+
+    #[test]
     fn codex_host_task_event_name_follows_output_mode() {
         assert_eq!(
             codex_host_task_event_name(&json!({"mode": "dry_run"})),
@@ -2546,6 +2741,27 @@ mod tests {
     fn test_env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn test_workflow_task(attempt: u32, max_attempts: u32) -> domain_model::WorkflowTask {
+        let now = Utc::now();
+        domain_model::WorkflowTask {
+            id: domain_model::WorkflowTaskId::new(),
+            tenant_id: domain_model::TenantId::new(),
+            execution_id: domain_model::WorkflowExecutionId::new(),
+            queue: "codex_host".to_string(),
+            task_key: "run_codex_host_task".to_string(),
+            payload: json!({}),
+            status: domain_model::WorkflowTaskStatus::Claimed,
+            attempt,
+            max_attempts,
+            available_at: now,
+            claimed_at: Some(now),
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        }
     }
 
     struct TestEnvVarRestore {

@@ -372,7 +372,7 @@ Recommended defaults:
 - no automatic retry for `needs_human`;
 - retry only transient execution failures.
 
-2026-05-27 progress: Cloudflare Codex static-page publish has been verified end-to-end on 8 server, and the Codex Host default task timeout has been raised to 30 minutes for demo safety. The remaining policy work is to convert long-running poll exhaustion into resumable processing status instead of a terminal failure.
+2026-05-27 progress: Cloudflare Codex static-page publish has been verified end-to-end on 8 server, and the Codex Host default task timeout has been raised to 30 minutes for demo safety. Poll exhaustion now records the remote Cloudflare task id, emits a processing retry event, and requeues the local task while attempt budget remains. Remaining policy work: cancellation and retention hardening.
 
 **Step 2: Add timeout/retry status summaries**
 
