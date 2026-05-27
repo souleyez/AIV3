@@ -56422,7 +56422,8 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
         || query.contains("药品")
         || (query.contains("药") && (query.contains("核对") || query.contains("发放")));
     let elder_fall_query = prompt_contains_elder_fall_signal(query);
-    if !medication_dispense_query && !elder_fall_query {
+    let nursing_handover_query = prompt_contains_nursing_handover_signal(query);
+    if !medication_dispense_query && !elder_fall_query && !nursing_handover_query {
         return 0.0;
     }
     if content.contains("................................................................") {
@@ -56483,6 +56484,31 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
                 || content.contains("医护人员"))
         {
             score += 0.3;
+        }
+    }
+
+    if nursing_handover_query {
+        if content.contains("四、交接内容")
+            || content.contains("护理记录单")
+            || content.contains("晨会交接记录本")
+            || content.contains("交班护理员")
+            || content.contains("接班护理员")
+        {
+            score += 0.75;
+        } else if content.contains("交接班制度")
+            || content.contains("交接及处置记录")
+            || content.contains("床旁交接班")
+        {
+            score += 0.2;
+        }
+
+        if content.contains("药物服用情况")
+            || content.contains("身体异常状况")
+            || content.contains("情绪异常状况")
+            || content.contains("皮肤受压情况")
+            || content.contains("管路通畅")
+        {
+            score += 0.35;
         }
     }
 
@@ -56671,6 +56697,42 @@ fn extend_lexical_domain_hint_tokens(content: &str, tokens: &mut Vec<String>) {
         }
     }
 
+    let nursing_handover_context = prompt_contains_nursing_handover_signal(content)
+        || content.contains("晨会交接记录本")
+        || content.contains("护理记录单")
+        || content.contains("交班护理员")
+        || content.contains("接班护理员");
+    if nursing_handover_context {
+        for token in [
+            "护理交接班",
+            "交接班",
+            "交班",
+            "接班",
+            "交接内容",
+            "晨会交接",
+            "护理记录单",
+            "药物服用情况",
+            "身体异常状况",
+            "情绪异常状况",
+            "床铺清洁",
+            "大小便",
+            "皮肤受压",
+            "液体速度",
+            "吸氧情况",
+            "胃管",
+            "尿管",
+            "引流管",
+            "管路通畅",
+            "易丢失物品",
+            "易损坏物品",
+            "送洗衣物",
+            "家属探望物品",
+            "签字确认",
+        ] {
+            tokens.push(token.to_string());
+        }
+    }
+
     if prompt_requests_procedure_or_action(content) {
         for token in [
             "流程", "步骤", "处理", "处置", "应急", "措施", "要求", "报告", "记录", "通知",
@@ -56678,6 +56740,18 @@ fn extend_lexical_domain_hint_tokens(content: &str, tokens: &mut Vec<String>) {
             tokens.push(token.to_string());
         }
     }
+}
+
+fn prompt_contains_nursing_handover_signal(content: &str) -> bool {
+    (content.contains("交接班") || content.contains("护理交接") || content.contains("交班"))
+        && (content.contains("护理")
+            || content.contains("照护")
+            || content.contains("长者")
+            || content.contains("老人")
+            || content.contains("老年人")
+            || content.contains("必须")
+            || content.contains("内容")
+            || content.contains("哪些"))
 }
 
 fn extend_lexical_ascii_connector_tokens(content: &str, tokens: &mut Vec<String>) {
@@ -102361,6 +102435,103 @@ retrieve_evidence:
         let selected = select_retrieval_evidence_ids_for_prompt(
             &evidences,
             "给老人发药时，需要执行哪些核对步骤？",
+            1,
+        );
+
+        assert_eq!(selected, vec![relevant_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_prefers_nursing_handover_contents_over_general_rules() {
+        let now = Utc::now();
+        let relevant_id = RetrievalEvidenceId::new();
+        let general_id = RetrievalEvidenceId::new();
+        let pressure_sore_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            RetrievalEvidence {
+                id: general_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 156,
+                source_locator: "document://manual/chunks/156".to_string(),
+                content_excerpt: "养老机构应制定昼夜巡查、交接班制度。老年人身体及精神状况发生明显变化、出现异常情况，应及时报告和处置，做好巡查、交接及处置记录。".to_string(),
+                summary: "昼夜巡查和交接班制度".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.99,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "交接班": 4.0,
+                            "护理": 1.0,
+                            "记录": 2.0
+                        }
+                    },
+                    "recall": { "rank_hint": 1 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: pressure_sore_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 159,
+                source_locator: "document://manual/chunks/159".to_string(),
+                content_excerpt: "交接班时，重点检查确认老年人有无压疮发生。每 2 小时检查 1 次老年人的皮肤，重点观察骨隆突出部位和受压部位。".to_string(),
+                summary: "压疮风险交接检查".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.98,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "交接班": 4.0,
+                            "皮肤受压": 3.0,
+                            "压疮": 3.0
+                        }
+                    },
+                    "recall": { "rank_hint": 2 }
+                }),
+                created_at: now,
+            },
+            RetrievalEvidence {
+                id: relevant_id,
+                tenant_id: TenantId::new(),
+                dataset_id: DatasetId::new(),
+                execution_id: WorkflowExecutionId::new(),
+                document_id: DocumentId::new(),
+                document_chunk_id: DocumentChunkId::new(),
+                chunk_index: 201,
+                source_locator: "document://manual/chunks/201".to_string(),
+                content_excerpt: "四、交接内容：（一）长者药物服用情况，包括服药时间、剂量、次数、有无异常反应、药物存量及家属自带药物保管和服用方法；（二）长者身体异常状况；（三）长者情绪异常状况；（四）床铺清洁、大小便处理、皮肤受压情况，治疗中的液体速度、吸氧情况，胃管、尿管、引流管通畅情况；（五）房间内易丢失、易损坏物品，送洗衣物和家属探望物品及相应记录。".to_string(),
+                summary: "护理交接班交接内容".to_string(),
+                payload_filter_key: "dataset/manual".to_string(),
+                embedding_model: "local-lexical-v1".to_string(),
+                recall_score: 0.40,
+                evidence_manifest: json!({
+                    "embedding": {
+                        "term_weights": {
+                            "交接内容": 5.0,
+                            "药物服用情况": 4.0,
+                            "身体异常状况": 4.0,
+                            "皮肤受压": 4.0
+                        }
+                    },
+                    "recall": { "rank_hint": 3 }
+                }),
+                created_at: now,
+            },
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "护理交接班时，必须交接的内容有哪些？",
             1,
         );
 

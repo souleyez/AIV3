@@ -45,9 +45,6 @@ pub fn build_document_fact_candidates(
                 parse_version.clone(),
                 created_at,
             );
-            if facts.len() >= FACT_INDEX_FACT_LIMIT {
-                return facts;
-            }
         }
 
         for company_name in crate::extract_company_names_from_text(&chunk.content, 12) {
@@ -62,9 +59,6 @@ pub fn build_document_fact_candidates(
                 parse_version.clone(),
                 created_at,
             );
-            if facts.len() >= FACT_INDEX_FACT_LIMIT {
-                return facts;
-            }
         }
 
         for term in document_chunk_noun_terms(chunk) {
@@ -83,9 +77,6 @@ pub fn build_document_fact_candidates(
                 parse_version.clone(),
                 created_at,
             );
-            if facts.len() >= FACT_INDEX_FACT_LIMIT {
-                return facts;
-            }
         }
 
         for year in extract_year_fact_terms(&chunk.content, 8) {
@@ -100,13 +91,10 @@ pub fn build_document_fact_candidates(
                 parse_version.clone(),
                 created_at,
             );
-            if facts.len() >= FACT_INDEX_FACT_LIMIT {
-                return facts;
-            }
         }
     }
 
-    facts
+    rank_document_fact_candidates(facts, FACT_INDEX_FACT_LIMIT)
 }
 
 pub async fn rebuild_dataset_entity_rows_snapshot(
@@ -265,7 +253,10 @@ fn push_document_fact_candidate(
     parse_version: Option<String>,
     created_at: DateTime<Utc>,
 ) {
-    let normalized_name = normalize_fact_name(name);
+    let Some(cleaned_name) = clean_document_fact_term(name) else {
+        return;
+    };
+    let normalized_name = normalize_fact_name(&cleaned_name);
     if normalized_name.is_empty() {
         return;
     }
@@ -289,9 +280,9 @@ fn push_document_fact_candidate(
         dataset_id: document.dataset_id,
         document_id: document.id,
         fact_type: fact_type.to_string(),
-        name: name.trim().to_string(),
+        name: cleaned_name.clone(),
         normalized_name,
-        value_text: Some(name.trim().to_string()),
+        value_text: Some(cleaned_name),
         value_number: None,
         value_date: None,
         attributes: attributes.clone(),
@@ -309,6 +300,75 @@ fn push_document_fact_candidate(
             created_at,
         }],
     });
+}
+
+fn rank_document_fact_candidates(
+    mut facts: Vec<NewDocumentFact>,
+    limit: usize,
+) -> Vec<NewDocumentFact> {
+    if facts.len() <= limit {
+        return facts;
+    }
+    facts.sort_by(|left, right| {
+        document_fact_candidate_rank_score(right)
+            .partial_cmp(&document_fact_candidate_rank_score(left))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.source_locator.cmp(&right.source_locator))
+            .then_with(|| left.fact_type.cmp(&right.fact_type))
+            .then_with(|| left.normalized_name.cmp(&right.normalized_name))
+    });
+    facts.truncate(limit);
+    facts
+}
+
+fn document_fact_candidate_rank_score(fact: &NewDocumentFact) -> f64 {
+    let mut score = match fact.source_kind.as_str() {
+        "section_title_hint" => 8.0,
+        "text_company_name" => 7.0,
+        "text_year" => 5.0,
+        _ => 4.0,
+    };
+    let name = fact.name.as_str();
+    if fact_term_is_care_domain_signal(name) {
+        score += 5.0;
+    }
+    if matches!(
+        fact.fact_type.as_str(),
+        "organization" | "role_position" | "project_product_system" | "section"
+    ) {
+        score += 1.0;
+    }
+    let char_count = name.chars().count();
+    if (4..=28).contains(&char_count) {
+        score += 1.0;
+    }
+    if fact_term_looks_like_toc_noise(name) {
+        score -= 10.0;
+    }
+    score
+}
+
+fn clean_document_fact_term(name: &str) -> Option<String> {
+    let mut cleaned = name.trim().replace('…', ".");
+    if cleaned.contains("..") {
+        cleaned = cleaned
+            .split("..")
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+    }
+    cleaned = cleaned
+        .trim_matches(|value: char| {
+            value.is_ascii_punctuation()
+                || matches!(value, '。' | '，' | '、' | '：' | ':' | '；' | ';')
+        })
+        .trim()
+        .to_string();
+    if cleaned.is_empty() || fact_term_looks_like_toc_noise(&cleaned) {
+        return None;
+    }
+    Some(cleaned.chars().take(80).collect())
 }
 
 fn classify_fact_type(term: &str, context: &str) -> &'static str {
@@ -375,9 +435,54 @@ fn fact_term_is_useful(term: &str) -> bool {
     let char_count = trimmed.chars().count();
     char_count >= 2
         && char_count <= 80
+        && !fact_term_looks_like_toc_noise(trimmed)
         && trimmed
             .chars()
             .any(|value| value.is_alphabetic() || is_fact_cjk_char(value))
+}
+
+fn fact_term_looks_like_toc_noise(term: &str) -> bool {
+    let trimmed = term.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed.contains("................................................................")
+        || trimmed.contains("........")
+    {
+        return true;
+    }
+    let dot_count = trimmed
+        .chars()
+        .filter(|value| matches!(value, '.' | '·'))
+        .count();
+    dot_count >= 6 || trimmed.contains("第 ") && trimmed.contains("页 共")
+}
+
+fn fact_term_is_care_domain_signal(term: &str) -> bool {
+    contains_any(
+        term,
+        &[
+            "护理",
+            "照护",
+            "交接班",
+            "晨会交接",
+            "护理记录",
+            "发药",
+            "药品",
+            "医嘱",
+            "服药",
+            "翻身",
+            "压疮",
+            "跌倒",
+            "坠床",
+            "噎食",
+            "误食",
+            "风险评估",
+            "异常反应",
+            "皮肤受压",
+            "生命体征",
+        ],
+    )
 }
 
 fn is_fact_cjk_char(value: char) -> bool {
@@ -665,6 +770,70 @@ mod tests {
                 ("广州云岚数码有限公司", "text_company_name")
             ]
         );
+    }
+
+    #[test]
+    fn document_fact_candidates_skip_toc_noise_and_keep_late_care_sections() {
+        let document = document_with_metadata(json!({}));
+        let now = Utc::now();
+        let mut chunks = Vec::new();
+        for index in 0..280 {
+            chunks.push(DocumentChunk {
+                id: DocumentChunkId::new(),
+                tenant_id: document.tenant_id,
+                dataset_id: document.dataset_id,
+                document_id: document.id,
+                chunk_index: index,
+                content: format!("目录项 {index} 服务规范........................................ {index}"),
+                token_count: 12,
+                state: DocumentChunkState::Extracted,
+                metadata: json!({
+                    "section_title_hints": [format!("服务规范........................................ {index}")],
+                    "understanding": { "noun_terms": ["养老机", "服务规"] }
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+                created_at: now,
+                updated_at: now,
+            });
+        }
+        chunks.push(DocumentChunk {
+            id: DocumentChunkId::new(),
+            tenant_id: document.tenant_id,
+            dataset_id: document.dataset_id,
+            document_id: document.id,
+            chunk_index: 281,
+            content: "护理交接班制度：交接内容包括药物服用情况、身体异常、情绪异常、床铺清洁、大小便、皮肤受压、管路通畅和物品记录。"
+                .to_string(),
+            token_count: 48,
+            state: DocumentChunkState::Extracted,
+            metadata: json!({
+                "section_title_hints": ["护理交接班制度"],
+                "understanding": {
+                    "noun_terms": ["护理交接班制度", "药物服用情况", "身体异常状况", "皮肤受压情况"]
+                }
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+            created_at: now,
+            updated_at: now,
+        });
+
+        let facts = build_document_fact_candidates(&document, &chunks, Utc::now());
+
+        assert_eq!(facts.len(), FACT_INDEX_FACT_LIMIT);
+        assert!(facts
+            .iter()
+            .any(|fact| fact.normalized_name == "护理交接班制度"));
+        assert!(facts
+            .iter()
+            .all(|fact| !fact.name.contains("................................")));
     }
 
     #[test]

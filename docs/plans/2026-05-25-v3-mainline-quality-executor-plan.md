@@ -79,6 +79,12 @@
   - Codex executor tasks remain default-collapsed; opening the panel only loads the lightweight task list, and selecting one task loads runtime inspect.
   - The protected access form now preserves whether the operator was unlocking conversation tests or Codex executor observation, so the page returns to the intended lazy-loaded panel instead of always opening conversation tests.
   - Local web production build passed after the change.
+- Continued on 2026-05-28 for the elderly-care manual demo path:
+  - 8-server read-only probe found two `养老机构精细化运营实操手册（2026版V2）(1).doc` records; both are `parsed`, have 290 chunks, and have `fact_index.status=indexed` with 256 document facts.
+  - The same probe showed the first fact-index pass was too directory-heavy: the 256 fact cap was mostly consumed by TOC dot-leader terms and generic service/organization ngrams before later nursing sections.
+  - Tightened local fact extraction so post-ingest cleanup now collects candidates across the full document, filters TOC dot-leader noise, then ranks higher-value care-domain facts before applying the cap.
+  - Added a nursing-handover retrieval ranking guard so `护理交接班时，必须交接的内容有哪些？` prefers the concrete `四、交接内容` chunk over generic `交接班制度` / `床旁交接班` references.
+  - Focused local regressions passed for fact-index TOC noise, nursing handover, and the neighboring elderly-care retrieval ranking cases for 翻身、发药、跌倒.
 
 ## Immediate Execution Queue
 
