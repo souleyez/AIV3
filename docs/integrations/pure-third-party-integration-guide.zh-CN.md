@@ -352,11 +352,19 @@ V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、�
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `task_status` |
-| `reply.task_status` | `data_ingestion_analysis_queued`、`data_ingestion_analysis_retrying`、`data_ingestion_analysis_completed`、`data_ingestion_analysis_needs_human` 或 `data_ingestion_analysis_failed` |
-| `reply.card.type` | 排队时为 `v3_data_ingestion_analysis`；完成后为 `v3_data_ingestion_analysis_result` |
+| `reply.task_status` | `data_ingestion_analysis_queued`、`data_ingestion_analysis_retrying`、`data_ingestion_analysis_completed`、`data_ingestion_analysis_needs_human`、`data_ingestion_analysis_failed`、`data_ingestion_analysis_cancelled`、人工确认后的 `data_ingestion_staging_dataset_ready`，以及同步阶段的 `data_ingestion_staging_sync_started`、`data_ingestion_staging_sync_running`、`data_ingestion_staging_sync_completed`、`data_ingestion_staging_sync_failed` |
+| `reply.card.type` | 排队时为 `v3_data_ingestion_analysis`；完成后为 `v3_data_ingestion_analysis_result`；确认创建/复用 staging 数据集后为 `v3_data_ingestion_staging_plan_execution`；同步启动后为 `v3_data_ingestion_staging_sync` |
 | `reply.card.codex_host_workflow_execution_id` | 固定分析任务 ID |
 | `reply.card.result_summary` | 完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作 |
 | `reply.card.staging_plan` | 完成后可返回 `v3_data_ingestion_staging_plan`，用于人工确认后的数据集/数据源导入草稿；固定 `production_write_allowed=false` |
+| `reply.card.dataset_id` | `data_ingestion_staging_dataset_ready` 时返回 V3 创建或复用的 staging 数据集 ID |
+| `reply.card.dataset_key` | `data_ingestion_staging_dataset_ready` 时返回 staging 数据集 key |
+| `reply.card.source_id` | `data_ingestion_staging_sync_started` 时返回本次使用的数据库源 ID |
+| `reply.card.sync_run_id` | `data_ingestion_staging_sync_started` 时返回 V3 内部同步任务 ID |
+| `reply.card.runtime_event.retryable` | 固定任务取消时为 `false`；第三方不需要自动重试取消态 |
+| `reply.card.workflow_status` | 同步阶段返回 V3 内部工作流状态，例如 `running`、`succeeded`、`failed` |
+| `reply.card.workflow_stage` | 同步阶段返回当前阶段，例如 `sync_users`、`fetch_content`、`ingest`、`index`、`completed` |
+| `reply.card.imported_row_count` | 当前确认步骤不自动导入原始行，固定为 `0`；后续导入/数据库同步需走人工确认执行 |
 
 若没有选中或上传可分析的数据源/表格/文档，V3 会返回 `data_ingestion_analysis_source_required`，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。
 

@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
         heartbeat_ms = runtime_config.heartbeat_ms(),
         stdout_limit_bytes = runtime_config.stdout_limit_bytes(),
         stderr_limit_bytes = runtime_config.stderr_limit_bytes(),
+        task_workspace_retention_hours = runtime_config.task_workspace_retention_hours(),
         "codex-host-agent polling started"
     );
 
@@ -123,13 +124,6 @@ async fn process_task(
         .get_by_id(task.tenant_id, task.execution_id)
         .await?
         .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
-    if execution.status == domain_model::WorkflowStatus::Cancelled {
-        storage
-            .workflow_tasks()
-            .mark_failed(task.id, "workflow_cancelled_before_start", Utc::now())
-            .await?;
-        return Ok(());
-    }
     if execution.kind != WorkflowKind::CodexHostTask {
         return Err(anyhow!(
             "workflow execution {} has unexpected kind {}",
@@ -138,6 +132,27 @@ async fn process_task(
         ));
     }
     let task_context = CodexHostTaskContext::from_execution(&execution)?;
+    if execution.status == domain_model::WorkflowStatus::Cancelled {
+        append_assistant_event(
+            storage,
+            task.tenant_id,
+            task_context.assistant_run_id,
+            "codex_host_task.cancelled",
+            codex_host_task_cancelled_payload(
+                execution_policy.mode.as_str(),
+                &task_context,
+                &task,
+                "workflow_cancelled_before_start",
+                None,
+            ),
+        )
+        .await?;
+        storage
+            .workflow_tasks()
+            .mark_failed(task.id, "workflow_cancelled_before_start", Utc::now())
+            .await?;
+        return Ok(());
+    }
 
     let process_result: Result<()> = async {
         let decision = execution_policy.prepare(&task_context)?;
@@ -214,6 +229,33 @@ async fn process_task(
 
     if let Err(error) = process_result {
         let error_message = error.to_string();
+        if let Some(cancel_reason) = codex_host_cancelled_error_reason(&error_message) {
+            append_assistant_event(
+                storage,
+                task.tenant_id,
+                task_context.assistant_run_id,
+                "codex_host_task.cancelled",
+                codex_host_task_cancelled_payload(
+                    execution_policy.mode.as_str(),
+                    &task_context,
+                    &task,
+                    cancel_reason,
+                    Some(&error_message),
+                ),
+            )
+            .await?;
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, cancel_reason, Utc::now())
+                .await?;
+            tracing::info!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                reason = cancel_reason,
+                "codex host task cancelled"
+            );
+            return Ok(());
+        }
         if should_requeue_cloudflare_orchestrator_poll(
             &execution_policy.mode,
             &error_message,
@@ -291,6 +333,49 @@ async fn process_task(
     );
 
     Ok(())
+}
+
+fn codex_host_cancelled_error_reason(error_message: &str) -> Option<&'static str> {
+    if error_message.contains("Codex Host command cancelled before completion")
+        || error_message.contains("Cloudflare Codex task cancelled before completion")
+    {
+        Some("workflow_cancelled_during_execution")
+    } else {
+        None
+    }
+}
+
+fn codex_host_task_cancelled_payload(
+    mode: &str,
+    task_context: &CodexHostTaskContext,
+    task: &domain_model::WorkflowTask,
+    reason: &str,
+    error_message: Option<&str>,
+) -> Value {
+    json!({
+        "mode": mode,
+        "status": "cancelled",
+        "reason": reason,
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "template_id": task_context
+            .fixed_task
+            .as_ref()
+            .map(|fixed_task| fixed_task.template_id.as_str())
+            .unwrap_or(task_context.capability.as_str()),
+        "workflow_execution_id": task.execution_id.to_string(),
+        "workflow_task_id": task.id.to_string(),
+        "attempt": task.attempt,
+        "max_attempts": task.max_attempts,
+        "retryable": false,
+        "error": error_message
+            .map(|message| safe_response_excerpt(message, 240))
+            .unwrap_or_default(),
+        "raw_prompt_exposed": false,
+        "stdout_exposed": false,
+        "stderr_exposed": false,
+        "secrets_exposed": false,
+    })
 }
 
 async fn append_assistant_event(
@@ -1877,7 +1962,12 @@ async fn run_codex_exec(
                 workspace_path.display()
             )
         })?;
-        materialize_fixed_task_bundle(workspace_path, task_context, decision)?;
+        materialize_fixed_task_bundle(
+            workspace_path,
+            task_context,
+            decision,
+            &runtime_config.workspace_retention_policy(),
+        )?;
     }
     let mut command = Command::new(&command_plan.program);
     command.args(command_plan.process_args());
@@ -2324,6 +2414,7 @@ mod tests {
             heartbeat_ms: 1_000,
             stdout_limit_bytes: 80,
             stderr_limit_bytes: 80,
+            task_workspace_retention_hours: 168,
         };
 
         let error = run_codex_exec(&command_plan, &task_context, &decision, &runtime_config)
@@ -2346,6 +2437,7 @@ mod tests {
             heartbeat_ms: 1_000,
             stdout_limit_bytes: 80,
             stderr_limit_bytes: 80,
+            task_workspace_retention_hours: 168,
         };
 
         let error = run_codex_exec(&command_plan, &task_context, &decision, &runtime_config)
@@ -2639,6 +2731,56 @@ mod tests {
             "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
             &task
         ));
+    }
+
+    #[test]
+    fn codex_host_cancelled_error_reason_detects_long_running_cancellation() {
+        assert_eq!(
+            codex_host_cancelled_error_reason("Cloudflare Codex task cancelled before completion"),
+            Some("workflow_cancelled_during_execution")
+        );
+        assert_eq!(
+            codex_host_cancelled_error_reason("Cloudflare Codex task timed out after 1800000ms"),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_host_cancelled_payload_is_safe_and_non_retryable() {
+        let mut task = test_workflow_task(2, 3);
+        task.payload = json!({"raw": "should-not-leak"});
+        let mut task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "data_ingestion_analysis".to_string(),
+            task: Some("contains secret prompt".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example(),
+            ),
+        };
+        task_context.fixed_task.as_mut().unwrap().requirements =
+            json!({"database_url": "mysql://secret"});
+
+        let payload = codex_host_task_cancelled_payload(
+            "cloudflare_orchestrator",
+            &task_context,
+            &task,
+            "workflow_cancelled_during_execution",
+            Some("Authorization: Bearer secret-token\nCloudflare Codex task cancelled before completion"),
+        );
+        let serialized = payload.to_string();
+
+        assert_eq!(payload["status"], json!("cancelled"));
+        assert_eq!(payload["retryable"], json!(false));
+        assert_eq!(payload["attempt"], json!(2));
+        assert_eq!(payload["template_id"], json!("data_ingestion_analysis"));
+        assert!(serialized.contains("[redacted-log-line]"));
+        assert!(!serialized.contains("secret-token"));
+        assert!(!serialized.contains("database_url"));
+        assert!(!serialized.contains("contains secret prompt"));
+        assert!(!serialized.contains("should-not-leak"));
     }
 
     #[test]

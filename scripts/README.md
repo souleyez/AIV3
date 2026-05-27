@@ -11,6 +11,8 @@ Current smoke entrypoints:
 - `run-static-page-browser-smoke.sh`: non-destructive local/deployment-target smoke that opens the generated static-page `index.html` in Chrome desktop/mobile viewports, captures screenshots, and checks visible modules, SVG/ECharts presentation, horizontal overflow, module overlap, text overflow, mobile module order, and delivery-ready manifest state.
 - `run-ingest-runtime-gate.sh`: non-destructive Linux/deployment-target gate for ingest fallback dependencies; it checks the service `PYTHON_BIN -m markitdown --version` path and fails when the pinned MarkItDown fallback version is missing.
 - `run-document-understanding-smoke.sh`: non-destructive local/deployment-target smoke for PaddleOCR parser contracts, low-quality PDF gating, third-party parse compatibility, and resume company/entity scan rules. Set `DOCUMENT_UNDERSTANDING_SMOKE_RUNTIME_GATE=true` to also run the deployment ingest runtime gate.
+- `run-data-ingestion-staging-sync-smoke.sh`: non-destructive local/deployment-target smoke for data-ingestion staging plan confirmation, ExternalSourceSync startup/dedup/status feedback, worker materialization, retrieval indexing, and generated third-party guide checks.
+- `run-codex-host-workspace-retention-smoke.sh`: non-destructive local/deployment-target smoke for Codex Host task workspace retention manifests and cleanup-candidate reporting; it never deletes workspaces.
 - `run-jump-host-codex-shim-smoke.ps1`: jump-host smoke for the Codex host shim.
 - `run-jump-host-video-deliverable-smoke.ps1`: jump-host smoke for video/PPT deliverable validation.
 

@@ -24,6 +24,7 @@ const DEFAULT_TASK_TIMEOUT_MS: u64 = 1_800_000;
 const DEFAULT_HEARTBEAT_MS: u64 = 15_000;
 const DEFAULT_STDOUT_LIMIT_BYTES: usize = 200_000;
 const DEFAULT_STDERR_LIMIT_BYTES: usize = 100_000;
+const DEFAULT_TASK_WORKSPACE_RETENTION_HOURS: u64 = 168;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexHostTaskContext {
@@ -401,6 +402,7 @@ pub struct CodexHostRuntimeConfig {
     pub heartbeat_ms: u64,
     pub stdout_limit_bytes: usize,
     pub stderr_limit_bytes: usize,
+    pub task_workspace_retention_hours: u64,
 }
 
 impl CodexHostRuntimeConfig {
@@ -415,6 +417,10 @@ impl CodexHostRuntimeConfig {
             stderr_limit_bytes: env_usize(
                 "CODEX_HOST_AGENT_STDERR_LIMIT_BYTES",
                 DEFAULT_STDERR_LIMIT_BYTES,
+            ),
+            task_workspace_retention_hours: env_u64(
+                "CODEX_HOST_AGENT_TASK_WORKSPACE_RETENTION_HOURS",
+                DEFAULT_TASK_WORKSPACE_RETENTION_HOURS,
             ),
         }
     }
@@ -433,6 +439,39 @@ impl CodexHostRuntimeConfig {
 
     pub fn stderr_limit_bytes(&self) -> usize {
         self.stderr_limit_bytes.max(1)
+    }
+
+    pub fn task_workspace_retention_hours(&self) -> u64 {
+        self.task_workspace_retention_hours.max(1)
+    }
+
+    pub fn workspace_retention_policy(&self) -> CodexHostWorkspaceRetentionPolicy {
+        CodexHostWorkspaceRetentionPolicy::new(self.task_workspace_retention_hours())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexHostWorkspaceRetentionPolicy {
+    pub retention_hours: u64,
+    pub cleanup_requires_operator: bool,
+    pub backup_before_delete: bool,
+    pub normal_cleanup_mode: String,
+    pub local_cleanup_helper: String,
+    pub server_cleanup_note: String,
+}
+
+impl CodexHostWorkspaceRetentionPolicy {
+    pub fn new(retention_hours: u64) -> Self {
+        Self {
+            retention_hours: retention_hours.max(1),
+            cleanup_requires_operator: true,
+            backup_before_delete: true,
+            normal_cleanup_mode: "operator_explicit".to_string(),
+            local_cleanup_helper: "Safe-RemoveToBackup.ps1".to_string(),
+            server_cleanup_note:
+                "Archive workspace contents before deletion; never run cleanup from normal polling."
+                    .to_string(),
+        }
     }
 }
 
@@ -1035,6 +1074,7 @@ pub fn materialize_fixed_task_bundle(
     workspace_path: &Path,
     context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
+    retention_policy: &CodexHostWorkspaceRetentionPolicy,
 ) -> Result<()> {
     let Some(fixed_task) = context.fixed_task.as_ref() else {
         return Ok(());
@@ -1087,6 +1127,7 @@ pub fn materialize_fixed_task_bundle(
                 .command_plan
                 .as_ref()
                 .and_then(|plan| plan.workspace_label.clone()),
+            "retention_policy": retention_policy,
             "raw_prompt_exposed": false,
             "secrets_exposed": false,
         }),
@@ -1112,7 +1153,7 @@ fn write_json_file(path: &Path, value: &Value) -> Result<()> {
 
 fn fixed_task_bundle_readme(template_id: &str) -> String {
     format!(
-        "# V3 Fixed Codex Task\n\nTemplate: `{template_id}`\n\nRead `task.json` for the V3-owned fixed task package and `schemas/output.schema.json` for the required final JSON shape.\n\nRules:\n\n- Return exactly one final JSON object.\n- Do not wrap the final JSON in Markdown fences.\n- Do not emit credentials, database URLs, provider logs, raw customer documents, or raw stdout/stderr.\n- Do not change public API, auth, request/response fields, database schema, deployment config, or stable customer URLs unless the fixed task output returns `needs_human`.\n"
+        "# V3 Fixed Codex Task\n\nTemplate: `{template_id}`\n\nRead `task.json` for the V3-owned fixed task package and `schemas/output.schema.json` for the required final JSON shape.\n\nRules:\n\n- Return exactly one final JSON object.\n- Do not wrap the final JSON in Markdown fences.\n- Do not emit credentials, database URLs, provider logs, raw customer documents, or raw stdout/stderr.\n- Do not change public API, auth, request/response fields, database schema, deployment config, or stable customer URLs unless the fixed task output returns `needs_human`.\n- `runtime.json` contains the workspace retention policy. Cleanup is operator-explicit and backup-first; normal polling must not delete this workspace.\n"
     )
 }
 
@@ -1284,6 +1325,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use domain_model::{TenantId, WorkflowExecutionId, WorkflowStatus};
+    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn task_context_parses_safe_execution_fields() {
@@ -1908,10 +1950,13 @@ mod tests {
 
     #[test]
     fn runtime_config_reads_bounded_env_values() {
+        let _lock = test_env_lock().lock().expect("env lock");
         let _timeout = TestEnvVarRestore::set("CODEX_HOST_AGENT_TASK_TIMEOUT_MS", "42");
         let _heartbeat = TestEnvVarRestore::set("CODEX_HOST_AGENT_HEARTBEAT_MS", "invalid");
         let _stdout = TestEnvVarRestore::set("CODEX_HOST_AGENT_STDOUT_LIMIT_BYTES", "12");
         let _stderr = TestEnvVarRestore::set("CODEX_HOST_AGENT_STDERR_LIMIT_BYTES", "0");
+        let _retention =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_TASK_WORKSPACE_RETENTION_HOURS", "336");
 
         let config = CodexHostRuntimeConfig::from_env();
 
@@ -1919,15 +1964,23 @@ mod tests {
         assert_eq!(config.heartbeat_ms(), DEFAULT_HEARTBEAT_MS);
         assert_eq!(config.stdout_limit_bytes(), 12);
         assert_eq!(config.stderr_limit_bytes(), DEFAULT_STDERR_LIMIT_BYTES);
+        assert_eq!(config.task_workspace_retention_hours(), 336);
     }
 
     #[test]
     fn runtime_config_default_task_timeout_allows_slow_cloudflare_tasks() {
+        let _lock = test_env_lock().lock().expect("env lock");
         let _timeout = TestEnvVarRestore::unset("CODEX_HOST_AGENT_TASK_TIMEOUT_MS");
+        let _retention =
+            TestEnvVarRestore::unset("CODEX_HOST_AGENT_TASK_WORKSPACE_RETENTION_HOURS");
 
         let config = CodexHostRuntimeConfig::from_env();
 
         assert_eq!(config.task_timeout_ms(), 1_800_000);
+        assert_eq!(
+            config.task_workspace_retention_hours(),
+            DEFAULT_TASK_WORKSPACE_RETENTION_HOURS
+        );
     }
 
     #[test]
@@ -2012,8 +2065,13 @@ summary text before final output
         let workspace =
             std::env::temp_dir().join(format!("v3-codex-host-bundle-test-{}", Uuid::new_v4()));
 
-        materialize_fixed_task_bundle(&workspace, &context, &decision)
-            .expect("bundle should materialize");
+        materialize_fixed_task_bundle(
+            &workspace,
+            &context,
+            &decision,
+            &CodexHostWorkspaceRetentionPolicy::new(336),
+        )
+        .expect("bundle should materialize");
 
         let task = fs::read_to_string(workspace.join("task.json")).expect("task.json");
         let readme = fs::read_to_string(workspace.join("README.md")).expect("README.md");
@@ -2028,6 +2086,10 @@ summary text before final output
         assert!(schema.contains("\"template_id\""));
         assert!(evidence.contains("\"dataset_scope\""));
         assert!(runtime.contains("\"raw_prompt_exposed\": false"));
+        assert!(runtime.contains("\"retention_hours\": 336"));
+        assert!(runtime.contains("\"cleanup_requires_operator\": true"));
+        assert!(runtime.contains("\"backup_before_delete\": true"));
+        assert!(runtime.contains("Safe-RemoveToBackup.ps1"));
         assert!(!runtime.contains("api_key"));
         assert!(!readme.contains("DATABASE_URL"));
     }
@@ -2080,6 +2142,11 @@ summary text before final output
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
         }
+    }
+
+    fn test_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     struct TestEnvVarRestore {

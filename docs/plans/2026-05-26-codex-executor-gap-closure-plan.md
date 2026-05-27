@@ -22,7 +22,7 @@
 ## Remaining Gaps
 
 1. Static-page Codex publish has passed the core 8-server path, but still needs a named real smoke record for demo cases and rollback notes.
-2. `data_ingestion_analysis` validates output, exposes safe task status, records completion/needs-human/failure events, and attaches a safe staging plan artifact; the later operator-approved import execution path is still pending.
+2. `data_ingestion_analysis` validates output, exposes safe task status, records completion/needs-human/failure events, attaches a safe staging plan artifact, can create/reuse a private staging dataset after operator confirmation, can start the existing ExternalSourceSync workflow for confirmed database-source plans, and records sync running/completed/failed status back to the AssistantRun; real environment smoke still needs coverage.
 3. `answer_quality_autofix` can be represented and observed as a fixed task, but the auto-fix loop still needs strict failure classification, patch review, and test-result feedback.
 4. Operator-facing summaries are now usable, but model-side follow-up still needs broader wiring into ordinary assistant context for non-third-party surfaces.
 5. Artifact manifests are not yet fully shared across static pages, Image2 previews, reports, data-ingestion plans, and generated artifacts.
@@ -259,9 +259,19 @@ Expected: pass.
 - Third-party polling now returns `reply.card.type=v3_data_ingestion_analysis_result` with a safe `result_summary` for completed/needs-human/failed data-ingestion analysis.
 - AssistantRun output artifacts now carry `external_channel_data_ingestion_analysis` metadata for staging review, with explicit `production_write_allowed=false`, no credential exposure, and no raw table dump exposure.
 - Completed data-ingestion outputs with mapping/staging content now also carry a reviewable `v3_data_ingestion_staging_plan` draft with stable `plan_id`, source-scope summary, target summary, mapping entries, staging steps, and fixed human-confirmation policy.
+- Confirmed staging plans now create or reuse a private V3 dataset and append `assistant_run.data_ingestion_staging_plan_confirmed`; third-party polling can surface `data_ingestion_staging_dataset_ready` without adding public request fields or importing raw rows automatically.
+- V3 internal operator route `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/confirm` now exposes that confirmation path behind the existing assistant-run visibility check.
+- V3 internal operator route `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/sync` now requires the confirmed plan, selects an in-plan database source, starts ExternalSourceSync into the confirmed staging dataset, records `assistant_run.data_ingestion_staging_sync_started`, and deduplicates repeat clicks by default.
+- ExternalSourceSync workflow transitions that carry `connector_context.data_ingestion_staging` now append `assistant_run.data_ingestion_staging_sync_updated`, allowing third-party/model-visible status cards to move through running, completed, and failed states with stage/error context.
+- Added `scripts/run-data-ingestion-staging-sync-smoke.sh` and `docs/validation/data-ingestion-staging-sync-smoke.md` as the safe local and 8-server checklist for the confirm/sync/worker materialization path.
 - Verified:
   - `cargo test -p platform-api data_ingestion_analysis --lib`
   - `cargo test -p platform-api external_channel_data_ingestion --lib`
+  - `cargo test -p platform-api data_ingestion --lib`
+  - `cargo test -p platform-api external_source_sync --lib`
+  - `cargo test -p external-source-worker`
+  - `cargo test -p ingest-worker`
+  - `cargo test -p retrieval-worker`
 
 ---
 
@@ -391,7 +401,7 @@ Recommended defaults:
 - no automatic retry for `needs_human`;
 - retry only transient execution failures.
 
-2026-05-27 progress: Cloudflare Codex static-page publish has been verified end-to-end on 8 server, and the Codex Host default task timeout has been raised to 30 minutes for demo safety. Poll exhaustion now records the remote Cloudflare task id, emits a processing retry event, and requeues the local task while attempt budget remains. The protected integrated observability page now loads workflow task attempts on demand and surfaces poll-retry/next-poll state. Remaining policy work: cancellation and retention hardening.
+2026-05-27 progress: Cloudflare Codex static-page publish has been verified end-to-end on 8 server, and the Codex Host default task timeout has been raised to 30 minutes for demo safety. Poll exhaustion now records the remote Cloudflare task id, emits a processing retry event, and requeues the local task while attempt budget remains. The protected integrated observability page now loads workflow task attempts on demand and surfaces poll-retry/next-poll state. Cancellation now emits `codex_host_task.cancelled` with `retryable=false` and no raw prompt/stdout/stderr, and third-party polling can surface `*_cancelled` statuses. Fixed-task workspaces now write `runtime.json.retention_policy` with `CODEX_HOST_AGENT_TASK_WORKSPACE_RETENTION_HOURS` defaulting to 168 hours, `cleanup_requires_operator=true`, and `backup_before_delete=true`. Added `scripts/run-codex-host-workspace-retention-smoke.sh` for read-only cleanup-candidate reporting. Remaining policy work: real-environment retention scan evidence and data-ingestion staging smoke evidence.
 
 **Step 2: Add timeout/retry status summaries**
 
@@ -492,7 +502,7 @@ Update the main plan with:
 
 ## Recommended Development Order
 
-1. Task 4 follow-up: operator-approved execution for reviewed data-ingestion staging plans.
+1. Task 4 follow-up: real 8-server ExternalSourceSync worker smoke from confirmed staging datasets, including row materialization, indexing, and failure recovery evidence.
 2. Task 7: cancellation and workspace retention hardening.
 3. Task 8: staged smoke and production readiness record.
 4. Task 5: answer-quality autofix review-gated loop.

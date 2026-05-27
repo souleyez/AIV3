@@ -168,6 +168,23 @@ Codex runs from a task-scoped workspace label derived from task_memory_space_id
 non-zero Codex exit marks the workflow step failed
 ```
 
+Retry, timeout, cancellation, and workspace-retention defaults:
+
+```text
+short planning tasks: 2-5 minutes
+static-page publish: 20-30 minutes
+data-ingestion analysis: 10-30 minutes depending on sample size
+default CODEX_HOST_AGENT_TASK_TIMEOUT_MS=1800000
+default CODEX_HOST_AGENT_TASK_WORKSPACE_RETENTION_HOURS=168
+max attempts: 3
+retry: transient execution or Cloudflare poll timeout only
+needs_human: never auto-retry
+cancelled: emit codex_host_task.cancelled with retryable=false and no stdout/stderr/prompt
+task workspace retention: write retention_policy into runtime.json; cleanup is an explicit operator job
+```
+
+Each fixed-task workspace includes `runtime.json.retention_policy` with the configured retention window, `cleanup_requires_operator=true`, and `backup_before_delete=true`. Locally initiated cleanup must use the workspace backup-first deletion helper. Server cleanup should be a separate deployment operation with an operator-visible retention window and audit note; it must not run as part of normal third-party polling.
+
 Write-capable Codex Host tasks need a separate capability and a stronger approval policy:
 
 ```text

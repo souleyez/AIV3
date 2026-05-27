@@ -1402,6 +1402,14 @@ pub fn router(
             axum::routing::post(append_assistant_run_event),
         )
         .route(
+            "/v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/confirm",
+            axum::routing::post(confirm_data_ingestion_staging_plan),
+        )
+        .route(
+            "/v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/sync",
+            axum::routing::post(sync_data_ingestion_staging_plan),
+        )
+        .route(
             "/v1/assistant-runs/{run_id}/continue",
             axum::routing::post(continue_assistant_run),
         )
@@ -21393,6 +21401,118 @@ fn external_channel_data_ingestion_analysis_reply_from_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,
 ) -> Option<ExternalBotReplyView> {
+    if let Some(event) = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "assistant_run.data_ingestion_staging_sync_updated")
+    {
+        let workflow_status = event
+            .payload
+            .get("workflow_status")
+            .and_then(Value::as_str)
+            .unwrap_or("running");
+        let task_status = match workflow_status {
+            "succeeded" => "data_ingestion_staging_sync_completed",
+            "failed" | "dead_lettered" | "cancelled" => "data_ingestion_staging_sync_failed",
+            _ => "data_ingestion_staging_sync_running",
+        };
+        let text = match task_status {
+            "data_ingestion_staging_sync_completed" => {
+                "V3 已完成 staging 数据集同步，后续可在该数据集上继续问答和生成报表。"
+            }
+            "data_ingestion_staging_sync_failed" => {
+                "V3 staging 数据集同步未完成，已记录失败阶段和原因，需重试或人工处理。"
+            }
+            _ => "V3 staging 数据集同步正在执行，当前阶段已更新。",
+        };
+        return Some(external_channel_task_status_reply_for_conversation(
+            conversation_external_id,
+            task_status,
+            Some(text.to_string()),
+            Some(json!({
+                "type": "v3_data_ingestion_staging_sync",
+                "status": task_status,
+                "template_id": "data_ingestion_analysis",
+                "plan_id": event.payload.get("plan_id").cloned().unwrap_or(Value::Null),
+                "dataset_id": event.payload.get("dataset_id").cloned().unwrap_or(Value::Null),
+                "dataset_key": event.payload.get("dataset_key").cloned().unwrap_or(Value::Null),
+                "dataset_title": event.payload.get("dataset_title").cloned().unwrap_or(Value::Null),
+                "source_id": event.payload.get("source_id").cloned().unwrap_or(Value::Null),
+                "sync_run_id": event.payload.get("sync_run_id").cloned().unwrap_or(Value::Null),
+                "sync_kind": event.payload.get("sync_kind").cloned().unwrap_or(Value::Null),
+                "workflow_execution_id": event.payload.get("workflow_execution_id").cloned().unwrap_or(Value::Null),
+                "workflow_status": event.payload.get("workflow_status").cloned().unwrap_or(Value::Null),
+                "workflow_stage": event.payload.get("workflow_stage").cloned().unwrap_or(Value::Null),
+                "failure_kind": event.payload.get("failure_kind").cloned().unwrap_or(Value::Null),
+                "last_error": event.payload.get("last_error").cloned().unwrap_or(Value::Null),
+                "production_write_allowed": false,
+                "raw_table_dump_imported": false,
+                "next_step": event.payload.get("next_step").cloned().unwrap_or(Value::Null),
+            })),
+            Vec::new(),
+        ));
+    }
+    if let Some(event) = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "assistant_run.data_ingestion_staging_sync_started")
+    {
+        return Some(external_channel_task_status_reply_for_conversation(
+            conversation_external_id,
+            "data_ingestion_staging_sync_started",
+            Some(
+                "V3 已启动 staging 数据集同步任务，后续会继续进入数据集入库和索引流程。"
+                    .to_string(),
+            ),
+            Some(json!({
+                "type": "v3_data_ingestion_staging_sync",
+                "status": "data_ingestion_staging_sync_started",
+                "template_id": "data_ingestion_analysis",
+                "plan_id": event.payload.get("plan_id").cloned().unwrap_or(Value::Null),
+                "dataset_id": event.payload.get("dataset_id").cloned().unwrap_or(Value::Null),
+                "dataset_key": event.payload.get("dataset_key").cloned().unwrap_or(Value::Null),
+                "dataset_title": event.payload.get("dataset_title").cloned().unwrap_or(Value::Null),
+                "source_id": event.payload.get("source_id").cloned().unwrap_or(Value::Null),
+                "sync_run_id": event.payload.get("sync_run_id").cloned().unwrap_or(Value::Null),
+                "sync_kind": event.payload.get("sync_kind").cloned().unwrap_or(Value::Null),
+                "workflow_execution_id": event.payload.get("workflow_execution_id").cloned().unwrap_or(Value::Null),
+                "enqueued_task_count": event.payload.get("enqueued_task_count").cloned().unwrap_or(Value::from(0)),
+                "production_write_allowed": false,
+                "raw_table_dump_imported": false,
+                "next_step": event.payload.get("next_step").cloned().unwrap_or(Value::Null),
+            })),
+            Vec::new(),
+        ));
+    }
+    if let Some(event) = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "assistant_run.data_ingestion_staging_plan_confirmed")
+    {
+        return Some(external_channel_task_status_reply_for_conversation(
+            conversation_external_id,
+            "data_ingestion_staging_dataset_ready",
+            Some(
+                "V3 已按人工确认创建或复用 staging 数据集，后续可继续导入数据或生成报表。"
+                    .to_string(),
+            ),
+            Some(json!({
+                "type": "v3_data_ingestion_staging_plan_execution",
+                "status": "data_ingestion_staging_dataset_ready",
+                "template_id": "data_ingestion_analysis",
+                "plan_id": event.payload.get("plan_id").cloned().unwrap_or(Value::Null),
+                "dataset_id": event.payload.get("dataset_id").cloned().unwrap_or(Value::Null),
+                "dataset_key": event.payload.get("dataset_key").cloned().unwrap_or(Value::Null),
+                "dataset_title": event.payload.get("dataset_title").cloned().unwrap_or(Value::Null),
+                "created_dataset": event.payload.get("created_dataset").cloned().unwrap_or(Value::Bool(false)),
+                "imported_row_count": event.payload.get("imported_row_count").cloned().unwrap_or(Value::from(0)),
+                "production_write_allowed": false,
+                "raw_table_dump_imported": false,
+                "next_step": event.payload.get("next_step").cloned().unwrap_or(Value::Null),
+            })),
+            Vec::new(),
+        ));
+    }
     let event = events.iter().rev().find(|event| {
         matches!(
             event.event_name.as_str(),
@@ -21483,9 +21603,24 @@ fn external_channel_fixed_task_reply_from_events(
             "codex_host_task.cloudflare_heartbeat" | "codex_host_task.exec_heartbeat"
         )
     });
+    let latest_cancelled = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "codex_host_task.cancelled");
 
     if let Some(fixed) = latest_fixed {
         let template_id = external_channel_fixed_task_template_id(fixed)?;
+        if let Some(cancelled) =
+            latest_cancelled.filter(|cancelled| cancelled.sequence_no > fixed.sequence_no)
+        {
+            return Some(external_channel_fixed_task_processing_reply(
+                conversation_external_id,
+                &template_id,
+                "cancelled",
+                fixed,
+                Some(cancelled),
+            ));
+        }
         if let Some(retry) = latest_poll_retry.filter(|retry| retry.sequence_no > fixed.sequence_no)
         {
             return Some(external_channel_fixed_task_processing_reply(
@@ -21590,13 +21725,23 @@ fn external_channel_fixed_task_processing_reply(
         ("data_ingestion_analysis", "retrying") => {
             "V3 数据接入分析仍在执行，Cloudflare Codex 超时后已自动续轮询。"
         }
+        ("data_ingestion_analysis", "cancelled") => {
+            "V3 数据接入分析任务已取消，未写入生产库，也未继续修改数据集。"
+        }
         ("data_ingestion_analysis", _) => "V3 数据接入分析正在执行，请稍后查询结果。",
         ("static_page_image2_data_publish", "retrying") => {
             "V3 静态页发布仍在执行，Cloudflare Codex 超时后已自动续轮询。"
         }
+        ("static_page_image2_data_publish", "cancelled") => {
+            "V3 静态页发布任务已取消，未生成新的最终发布链接。"
+        }
         ("static_page_image2_data_publish", _) => "V3 已生成效果图，Codex 正在生成最终静态页。",
+        ("answer_quality_autofix", "cancelled") => {
+            "V3 回答质量修复诊断任务已取消，未应用任何代码或配置变更。"
+        }
         ("answer_quality_autofix", "retrying") => "V3 回答质量修复诊断仍在执行，已自动续轮询。",
         ("answer_quality_autofix", _) => "V3 回答质量修复诊断正在执行。",
+        (_, "cancelled") => "V3 Codex 固定任务已取消。",
         (_, "retrying") => "V3 Codex 固定任务仍在执行，已自动续轮询。",
         _ => "V3 Codex 固定任务正在执行。",
     };
@@ -21618,13 +21763,18 @@ fn external_channel_fixed_task_processing_reply(
                     .and_then(Value::as_str)
                     .map(codex_host_fixed_task_safe_text)
                     .unwrap_or_default(),
+                "retryable": event.payload.get("retryable").cloned().unwrap_or(Value::Null),
                 "attempt": event.payload.get("attempt").cloned().unwrap_or(Value::Null),
                 "max_attempts": event.payload.get("max_attempts").cloned().unwrap_or(Value::Null),
                 "available_at": event.payload.get("available_at").cloned().unwrap_or(Value::Null),
                 "elapsed_ms": event.payload.get("elapsed_ms").cloned().unwrap_or(Value::Null),
                 "heartbeat_count": event.payload.get("heartbeat_count").cloned().unwrap_or(Value::Null),
             })).unwrap_or(Value::Null),
-            "poll_after_seconds": if state == "retrying" { 30 } else { 15 },
+            "poll_after_seconds": match state {
+                "retrying" => Value::from(30),
+                "cancelled" => Value::Null,
+                _ => Value::from(15),
+            },
         })),
         Vec::new(),
     )
@@ -25947,6 +26097,115 @@ async fn append_assistant_run_event(
         Json(AppendAssistantRunEventResponse {
             run: to_assistant_run_view(run),
             event: to_assistant_run_event_view(event),
+        }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfirmDataIngestionStagingPlanRequest {
+    #[serde(default)]
+    confirmed_by: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfirmDataIngestionStagingPlanResponse {
+    accepted: bool,
+    assistant_run_id: String,
+    plan_id: String,
+    confirmation: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncDataIngestionStagingPlanRequest {
+    #[serde(default, alias = "sourceId")]
+    source_id: Option<String>,
+    #[serde(default, alias = "syncKind")]
+    sync_kind: Option<String>,
+    #[serde(default)]
+    checkpoint: Value,
+    #[serde(default, alias = "connectorContext")]
+    connector_context: Value,
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SyncDataIngestionStagingPlanResponse {
+    accepted: bool,
+    assistant_run_id: String,
+    plan_id: String,
+    sync: Value,
+}
+
+async fn confirm_data_ingestion_staging_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((run_id, plan_id)): Path<(String, String)>,
+    Json(request): Json<ConfirmDataIngestionStagingPlanRequest>,
+) -> std::result::Result<(StatusCode, Json<ConfirmDataIngestionStagingPlanResponse>), ApiError> {
+    let run_id = parse_assistant_run_id(&run_id)?;
+    validate_required("plan_id", &plan_id)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
+    let confirmed_by = request
+        .confirmed_by
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| current_user_id.map(|user_id| user_id.to_string()))
+        .unwrap_or_else(|| "local_operator".to_string());
+    let confirmation = confirm_data_ingestion_staging_plan_for_run(
+        &state.storage,
+        state.tenant_id,
+        run_id,
+        &plan_id,
+        &confirmed_by,
+        Utc::now(),
+    )
+    .await?;
+    Ok((
+        StatusCode::OK,
+        Json(ConfirmDataIngestionStagingPlanResponse {
+            accepted: true,
+            assistant_run_id: run_id.to_string(),
+            plan_id,
+            confirmation,
+        }),
+    ))
+}
+
+async fn sync_data_ingestion_staging_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((run_id, plan_id)): Path<(String, String)>,
+    Json(request): Json<SyncDataIngestionStagingPlanRequest>,
+) -> std::result::Result<(StatusCode, Json<SyncDataIngestionStagingPlanResponse>), ApiError> {
+    let run_id = parse_assistant_run_id(&run_id)?;
+    validate_required("plan_id", &plan_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
+    let sync = sync_data_ingestion_staging_plan_for_run(
+        &state,
+        &run,
+        &plan_id,
+        trim_optional(request.source_id),
+        request.sync_kind,
+        request.checkpoint,
+        request.connector_context,
+        request.force,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SyncDataIngestionStagingPlanResponse {
+            accepted: true,
+            assistant_run_id: run_id.to_string(),
+            plan_id,
+            sync,
         }),
     ))
 }
@@ -33289,6 +33548,420 @@ fn data_ingestion_staging_import_plan_from_output(
     })
 }
 
+fn data_ingestion_staging_plan_from_output_artifacts(
+    output_artifacts: &Value,
+    plan_id: &str,
+) -> Option<Value> {
+    value_array(output_artifacts.clone())
+        .into_iter()
+        .filter(|artifact| {
+            artifact.get("type").and_then(Value::as_str)
+                == Some("external_channel_data_ingestion_analysis")
+        })
+        .filter_map(|artifact| artifact.get("staging_plan").cloned())
+        .find(|plan| plan.get("plan_id").and_then(Value::as_str) == Some(plan_id))
+}
+
+fn data_ingestion_staging_plan_database_source_ids(plan: &Value) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut source_ids = Vec::new();
+    for source_id in data_ingestion_safe_string_array(
+        plan.pointer("/source_scope/database_source_ids").cloned(),
+        24,
+    ) {
+        let normalized = source_id.trim().to_string();
+        if !normalized.is_empty() && seen.insert(normalized.clone()) {
+            source_ids.push(normalized);
+        }
+    }
+    source_ids
+}
+
+fn data_ingestion_staging_plan_confirmed_payload_from_events(
+    events: &[AssistantRunEvent],
+    plan_id: &str,
+) -> Option<Value> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_name == "assistant_run.data_ingestion_staging_plan_confirmed"
+                && event.payload.get("plan_id").and_then(Value::as_str) == Some(plan_id)
+        })
+        .map(|event| event.payload.clone())
+}
+
+fn data_ingestion_staging_sync_started_payload_from_events(
+    events: &[AssistantRunEvent],
+    plan_id: &str,
+    source_id: &str,
+) -> Option<Value> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_name == "assistant_run.data_ingestion_staging_sync_started"
+                && event.payload.get("plan_id").and_then(Value::as_str) == Some(plan_id)
+                && event.payload.get("source_id").and_then(Value::as_str) == Some(source_id)
+        })
+        .map(|event| event.payload.clone())
+}
+
+fn data_ingestion_staging_sync_connector_context(
+    connector_context: Value,
+    run: &AssistantRun,
+    plan_id: &str,
+    dataset: &Dataset,
+    source_id: &str,
+) -> std::result::Result<Value, ApiError> {
+    let mut connector_context =
+        normalize_external_source_sync_object(connector_context, "connector_context")?;
+    let object = connector_context.as_object_mut().ok_or_else(|| {
+        ApiError::bad_request(
+            "validation_error",
+            "connector_context must be a JSON object".to_string(),
+        )
+    })?;
+    object.insert(
+        "data_ingestion_staging".to_string(),
+        json!({
+            "assistant_run_id": run.id.to_string(),
+            "plan_id": plan_id,
+            "dataset_id": dataset.id.to_string(),
+            "dataset_key": dataset.key,
+            "dataset_title": dataset.title,
+            "source_id": source_id,
+            "production_write_allowed": false,
+            "schema_mutation_allowed": false,
+            "raw_table_dump_imported": false,
+        }),
+    );
+    Ok(connector_context)
+}
+
+fn data_ingestion_staging_select_database_source_id(
+    plan: &Value,
+    requested_source_id: Option<String>,
+) -> std::result::Result<String, ApiError> {
+    let source_ids = data_ingestion_staging_plan_database_source_ids(plan);
+    if let Some(source_id) = requested_source_id {
+        if source_ids.iter().any(|candidate| candidate == &source_id) {
+            return Ok(source_id);
+        }
+        return Err(ApiError::bad_request_with_details(
+            "data_ingestion_staging_database_source_not_in_plan",
+            "requested source_id is not included in the confirmed staging plan".to_string(),
+            json!({
+                "requested_source_id": source_id,
+                "available_source_ids": source_ids,
+            }),
+        ));
+    }
+    match source_ids.as_slice() {
+        [source_id] => Ok(source_id.clone()),
+        [] => Err(ApiError::bad_request(
+            "data_ingestion_staging_database_source_required",
+            "staging plan does not include a database source to sync".to_string(),
+        )),
+        _ => Err(ApiError::bad_request_with_details(
+            "data_ingestion_staging_database_source_ambiguous",
+            "staging plan includes multiple database sources; provide source_id".to_string(),
+            json!({ "available_source_ids": source_ids }),
+        )),
+    }
+}
+
+fn data_ingestion_staging_plan_dataset_key(plan: &Value) -> String {
+    let plan_id = plan
+        .get("plan_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-plan");
+    let digest = sha256_hex([plan_id.as_bytes()]);
+    let target = plan
+        .pointer("/target/dataset")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("data-ingestion-staging");
+    compact_external_document_parse_dataset_key(format!(
+        "data-ingestion-staging-{}-{}",
+        external_document_parse_dataset_key_component(target),
+        &digest[..12]
+    ))
+}
+
+fn data_ingestion_staging_plan_dataset_title(plan: &Value) -> String {
+    plan.pointer("/target/dataset")
+        .and_then(Value::as_str)
+        .map(codex_host_fixed_task_safe_text)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Data ingestion staging dataset".to_string())
+}
+
+fn data_ingestion_staging_plan_is_confirmable(plan: &Value) -> bool {
+    plan.get("type").and_then(Value::as_str) == Some("v3_data_ingestion_staging_plan")
+        && plan
+            .pointer("/execution_policy/requires_human_confirmation")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && plan
+            .pointer("/execution_policy/production_write_allowed")
+            .and_then(Value::as_bool)
+            == Some(false)
+        && plan
+            .pointer("/execution_policy/schema_mutation_allowed")
+            .and_then(Value::as_bool)
+            == Some(false)
+}
+
+async fn confirm_data_ingestion_staging_plan_for_run(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    assistant_run_id: AssistantRunId,
+    plan_id: &str,
+    confirmed_by: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<Value, ApiError> {
+    validate_required("plan_id", plan_id)?;
+    validate_required("confirmed_by", confirmed_by)?;
+    let Some(run) = storage
+        .assistant_runs()
+        .get_by_id(tenant_id, assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Err(ApiError::not_found(
+            "assistant_run_not_found",
+            format!("assistant run {assistant_run_id} was not found"),
+        ));
+    };
+    let plan = data_ingestion_staging_plan_from_output_artifacts(&run.output_artifacts, plan_id)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "data_ingestion_staging_plan_not_found",
+                format!("data-ingestion staging plan {plan_id} was not found on this run"),
+            )
+        })?;
+    if !data_ingestion_staging_plan_is_confirmable(&plan) {
+        return Err(ApiError::bad_request(
+            "data_ingestion_staging_plan_not_confirmable",
+            "staging plan is missing required human-confirmation safety policy".to_string(),
+        ));
+    }
+    let dataset_key = data_ingestion_staging_plan_dataset_key(&plan);
+    let dataset_title = data_ingestion_staging_plan_dataset_title(&plan);
+    let existing_dataset = storage
+        .datasets()
+        .list_by_tenant(tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .find(|dataset| dataset.key == dataset_key);
+    let (dataset, created_dataset) = if let Some(dataset) = existing_dataset {
+        (dataset, false)
+    } else {
+        let dataset = storage
+            .datasets()
+            .create_with_metadata(
+                tenant_id,
+                NewDataset {
+                    key: dataset_key.clone(),
+                    title: dataset_title.clone(),
+                    description: Some(format!(
+                        "Created from confirmed data-ingestion staging plan {plan_id}."
+                    )),
+                    owner_user_id: run.user_id,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "default_secret_binding_ids": [],
+                    "data_ingestion_staging": {
+                        "plan_id": plan_id,
+                        "plan_version": plan.get("plan_version").cloned().unwrap_or(Value::Null),
+                        "confirmed_by": codex_host_fixed_task_safe_text(confirmed_by),
+                        "confirmed_at": now,
+                        "source_scope": plan.get("source_scope").cloned().unwrap_or(Value::Null),
+                        "target": plan.get("target").cloned().unwrap_or(Value::Null),
+                        "quality_gate": plan.get("quality_gate").cloned().unwrap_or(Value::Null),
+                        "mapping_entry_count": plan.get("mapping_entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+                        "staging_step_count": plan.get("staging_steps").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+                    }
+                }),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        (dataset, true)
+    };
+    let events = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let already_recorded = events.iter().any(|event| {
+        event.event_name == "assistant_run.data_ingestion_staging_plan_confirmed"
+            && event.payload.get("plan_id").and_then(Value::as_str) == Some(plan_id)
+    });
+    let payload = json!({
+        "plan_id": plan_id,
+        "assistant_run_id": assistant_run_id.to_string(),
+        "dataset_id": dataset.id.to_string(),
+        "dataset_key": dataset.key,
+        "dataset_title": dataset.title,
+        "created_dataset": created_dataset,
+        "confirmation_status": "confirmed",
+        "confirmed_by": codex_host_fixed_task_safe_text(confirmed_by),
+        "confirmed_at": now,
+        "imported_row_count": 0,
+        "production_write_allowed": false,
+        "schema_mutation_allowed": false,
+        "raw_table_dump_imported": false,
+        "next_step": "operator_import_rows_or_run_database_sync",
+    });
+    if !already_recorded {
+        storage
+            .assistant_runs()
+            .append_event(
+                tenant_id,
+                assistant_run_id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.data_ingestion_staging_plan_confirmed".to_string(),
+                    payload: payload.clone(),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+    Ok(payload)
+}
+
+async fn sync_data_ingestion_staging_plan_for_run(
+    state: &AppState,
+    run: &AssistantRun,
+    plan_id: &str,
+    requested_source_id: Option<String>,
+    sync_kind: Option<String>,
+    checkpoint: Value,
+    connector_context: Value,
+    force: bool,
+    active_secret_binding_ids: &[SecretBindingId],
+    current_user_id: Option<UserId>,
+) -> std::result::Result<Value, ApiError> {
+    validate_required("plan_id", plan_id)?;
+    let plan = data_ingestion_staging_plan_from_output_artifacts(&run.output_artifacts, plan_id)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "data_ingestion_staging_plan_not_found",
+                format!("data-ingestion staging plan {plan_id} was not found on this run"),
+            )
+        })?;
+    if !data_ingestion_staging_plan_is_confirmable(&plan) {
+        return Err(ApiError::bad_request(
+            "data_ingestion_staging_plan_not_confirmable",
+            "staging plan is missing required human-confirmation safety policy".to_string(),
+        ));
+    }
+    let source_id = data_ingestion_staging_select_database_source_id(&plan, requested_source_id)?;
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let confirmed_payload = data_ingestion_staging_plan_confirmed_payload_from_events(
+        &events, plan_id,
+    )
+    .ok_or_else(|| {
+        ApiError::bad_request(
+            "data_ingestion_staging_plan_not_confirmed",
+            "staging plan must be confirmed before database sync can start".to_string(),
+        )
+    })?;
+    if !force {
+        if let Some(existing_payload) =
+            data_ingestion_staging_sync_started_payload_from_events(&events, plan_id, &source_id)
+        {
+            let mut payload = existing_payload;
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("deduplicated".to_string(), Value::Bool(true));
+            }
+            return Ok(payload);
+        }
+    }
+
+    let dataset_id = confirmed_payload
+        .get("dataset_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "data_ingestion_staging_dataset_missing",
+                "confirmed staging plan is missing dataset_id".to_string(),
+            )
+        })
+        .and_then(parse_dataset_id)?;
+    let dataset = load_visible_dataset_for_user(
+        state,
+        dataset_id,
+        active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    let source = load_enabled_database_source_connection(state, &source_id).await?;
+    let connector_context = data_ingestion_staging_sync_connector_context(
+        connector_context,
+        run,
+        plan_id,
+        &dataset,
+        &source_id,
+    )?;
+    let sync_response = enqueue_external_source_sync_for_source(
+        state,
+        source,
+        CreateExternalSourceSyncRequest {
+            sync_kind,
+            dataset_id: Some(dataset.id),
+            dataset_external_id: None,
+            dataset_title: None,
+            checkpoint,
+            connector_context,
+        },
+    )
+    .await?;
+    let payload = json!({
+        "plan_id": plan_id,
+        "assistant_run_id": run.id.to_string(),
+        "dataset_id": dataset.id.to_string(),
+        "dataset_key": dataset.key,
+        "dataset_title": dataset.title,
+        "source_id": sync_response.source_id,
+        "sync_run_id": sync_response.sync_run_id,
+        "sync_kind": sync_response.sync_kind,
+        "sync_status": sync_response.status,
+        "workflow_execution_id": sync_response.workflow_execution.id.to_string(),
+        "workflow_stage": sync_response.workflow_execution.stage,
+        "enqueued_task_count": sync_response.enqueued_tasks.len(),
+        "production_write_allowed": false,
+        "schema_mutation_allowed": false,
+        "raw_table_dump_imported": false,
+        "deduplicated": false,
+        "next_step": "wait_for_external_source_sync_worker",
+    });
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.data_ingestion_staging_sync_started".to_string(),
+                payload: payload.clone(),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(payload)
+}
+
 fn data_ingestion_quality_report_summary(report: &Value) -> Value {
     if !report.is_object() {
         return Value::Null;
@@ -34008,6 +34681,7 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
                 "codex_host_task.poll_retry"
                     | "codex_host_task.exec_heartbeat"
                     | "codex_host_task.cloudflare_heartbeat"
+                    | "codex_host_task.cancelled"
                     | "codex_host_task.exec_completed"
                     | "codex_host_task.completed"
             )
@@ -34070,6 +34744,7 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
                     .and_then(Value::as_str)
                     .map(codex_host_fixed_task_safe_text)
                     .unwrap_or_default(),
+                "retryable": event.payload.get("retryable").cloned().unwrap_or(Value::Null),
                 "attempt": event.payload.get("attempt").cloned().unwrap_or(Value::Null),
                 "max_attempts": event.payload.get("max_attempts").cloned().unwrap_or(Value::Null),
                 "available_at": event.payload.get("available_at").cloned().unwrap_or(Value::Null),
@@ -34090,6 +34765,7 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
         "needs_human_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.needs_human").count(),
         "rejected_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.rejected").count(),
         "poll_retry_count": runtime_events.iter().filter(|event| event.event_name == "codex_host_task.poll_retry").count(),
+        "cancelled_count": runtime_events.iter().filter(|event| event.event_name == "codex_host_task.cancelled").count(),
         "heartbeat_count": runtime_events
             .iter()
             .filter(|event| matches!(
@@ -34116,6 +34792,7 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
                     .and_then(Value::as_str)
                     .map(codex_host_fixed_task_safe_text)
                     .unwrap_or_default(),
+                "retryable": event.payload.get("retryable").cloned().unwrap_or(Value::Null),
                 "attempt": event.payload.get("attempt").cloned().unwrap_or(Value::Null),
                 "max_attempts": event.payload.get("max_attempts").cloned().unwrap_or(Value::Null),
                 "available_at": event.payload.get("available_at").cloned().unwrap_or(Value::Null),
@@ -49406,12 +50083,126 @@ async fn update_external_sync_run_workflow_status(
         "workflow_stage": execution.stage,
         "workflow_status": execution.status.as_str(),
     }))
-    .bind(failure_kind)
+    .bind(&failure_kind)
     .bind(occurred_at)
     .execute(storage.pool())
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
 
+    maybe_record_data_ingestion_staging_sync_workflow_event(
+        storage,
+        tenant_id,
+        execution,
+        sync_run_id,
+        failure_kind.as_deref(),
+        occurred_at,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn maybe_record_data_ingestion_staging_sync_workflow_event(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    execution: &WorkflowExecution,
+    sync_run_id: Uuid,
+    failure_kind: Option<&str>,
+    occurred_at: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    let staging = execution
+        .context
+        .pointer("/connector_context/data_ingestion_staging")
+        .or_else(|| {
+            execution
+                .context
+                .pointer("/connectorContext/dataIngestionStaging")
+        })
+        .unwrap_or(&Value::Null);
+    let Some(assistant_run_id) = staging
+        .get("assistant_run_id")
+        .or_else(|| staging.get("assistantRunId"))
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+        .map(AssistantRunId)
+    else {
+        return Ok(());
+    };
+    let Some(plan_id) = staging
+        .get("plan_id")
+        .or_else(|| staging.get("planId"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(());
+    };
+    let workflow_execution_id = execution.id.to_string();
+    let already_recorded = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .any(|event| {
+            event.event_name == "assistant_run.data_ingestion_staging_sync_updated"
+                && event.payload.get("plan_id").and_then(Value::as_str) == Some(plan_id.as_str())
+                && event
+                    .payload
+                    .get("workflow_execution_id")
+                    .and_then(Value::as_str)
+                    == Some(workflow_execution_id.as_str())
+                && event.payload.get("workflow_stage").and_then(Value::as_str)
+                    == Some(execution.stage.as_str())
+                && event.payload.get("workflow_status").and_then(Value::as_str)
+                    == Some(execution.status.as_str())
+        });
+    if already_recorded {
+        return Ok(());
+    }
+    let last_error = execution
+        .context
+        .get("last_error")
+        .and_then(Value::as_str)
+        .map(codex_host_fixed_task_safe_text);
+    let next_step = match execution.status {
+        WorkflowStatus::Succeeded => "query_or_report_from_staging_dataset",
+        WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::DeadLettered => {
+            "retry_or_operator_review"
+        }
+        WorkflowStatus::Pending | WorkflowStatus::Running => "wait_for_external_source_sync_worker",
+    };
+    storage
+        .assistant_runs()
+        .append_event(
+            tenant_id,
+            assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.data_ingestion_staging_sync_updated".to_string(),
+                payload: json!({
+                    "plan_id": plan_id,
+                    "assistant_run_id": assistant_run_id.to_string(),
+                    "dataset_id": staging.get("dataset_id").or_else(|| staging.get("datasetId")).cloned().unwrap_or(Value::Null),
+                    "dataset_key": staging.get("dataset_key").or_else(|| staging.get("datasetKey")).cloned().unwrap_or(Value::Null),
+                    "dataset_title": staging.get("dataset_title").or_else(|| staging.get("datasetTitle")).cloned().unwrap_or(Value::Null),
+                    "source_id": staging.get("source_id").or_else(|| staging.get("sourceId")).cloned().unwrap_or(Value::Null),
+                    "sync_run_id": sync_run_id.to_string(),
+                    "sync_kind": execution.context.get("sync_kind").cloned().unwrap_or(Value::Null),
+                    "workflow_execution_id": workflow_execution_id,
+                    "workflow_stage": execution.stage.as_str(),
+                    "workflow_status": execution.status.as_str(),
+                    "failure_kind": failure_kind,
+                    "last_error": last_error,
+                    "production_write_allowed": false,
+                    "schema_mutation_allowed": false,
+                    "raw_table_dump_imported": false,
+                    "next_step": next_step,
+                }),
+                created_at: occurred_at,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
     Ok(())
 }
 
@@ -78263,7 +79054,7 @@ retrieve_evidence:
             .await
             .expect("run loads")
             .expect("run exists");
-        assert!(value_array(updated_run.output_artifacts)
+        assert!(value_array(updated_run.output_artifacts.clone())
             .iter()
             .any(|artifact| {
                 artifact.get("type").and_then(Value::as_str)
@@ -78273,6 +79064,292 @@ retrieve_evidence:
                         .and_then(Value::as_bool)
                         == Some(true)
             }));
+        let plan_id = payload["staging_plan"]["plan_id"]
+            .as_str()
+            .expect("plan id")
+            .to_string();
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'Operating DB', 'mysql://example/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind("source-operating-db-1")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "DATA_INGESTION_TEST_MYSQL_URL",
+                "database": "hy_sql",
+                "tables": [
+                    {
+                        "table": "member_flow",
+                        "id_column": "id",
+                        "content_columns": ["customer_name"]
+                    }
+                ]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+        let unconfirmed_sync = sync_data_ingestion_staging_plan_for_run(
+            &state,
+            &updated_run,
+            &plan_id,
+            None,
+            Some("full".to_string()),
+            json!({}),
+            json!({}),
+            false,
+            &[],
+            None,
+        )
+        .await
+        .expect_err("staging sync should require confirmation first");
+        assert_eq!(
+            unconfirmed_sync.payload.code,
+            "data_ingestion_staging_plan_not_confirmed"
+        );
+        let confirmation = confirm_data_ingestion_staging_plan_for_run(
+            &state.storage,
+            state.tenant_id,
+            run.id,
+            &plan_id,
+            "operator-smoke",
+            Utc::now(),
+        )
+        .await
+        .expect("staging plan confirmation should create a dataset");
+        assert_eq!(confirmation["plan_id"], json!(plan_id));
+        assert_eq!(confirmation["created_dataset"], json!(true));
+        assert_eq!(confirmation["imported_row_count"], json!(0));
+        assert_eq!(confirmation["production_write_allowed"], json!(false));
+
+        let datasets = state
+            .storage
+            .datasets()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("datasets should list");
+        let created_dataset = datasets
+            .iter()
+            .find(|dataset| {
+                dataset.id.to_string() == confirmation["dataset_id"].as_str().unwrap_or_default()
+            })
+            .expect("confirmed staging dataset should exist");
+        assert_eq!(created_dataset.title, "新百项目资料数据集");
+        assert_eq!(
+            created_dataset.metadata["visibility"],
+            json!(DatasetVisibility::Private.as_str())
+        );
+        assert_eq!(
+            created_dataset.metadata["data_ingestion_staging"]["plan_id"],
+            confirmation["plan_id"]
+        );
+
+        let repeated_confirmation = confirm_data_ingestion_staging_plan_for_run(
+            &state.storage,
+            state.tenant_id,
+            run.id,
+            confirmation["plan_id"].as_str().expect("plan id"),
+            "operator-smoke",
+            Utc::now(),
+        )
+        .await
+        .expect("staging plan confirmation should be idempotent");
+        assert_eq!(repeated_confirmation["created_dataset"], json!(false));
+
+        let events_after_confirmation = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list after confirmation");
+        let confirmation_events = events_after_confirmation
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.data_ingestion_staging_plan_confirmed"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(confirmation_events.len(), 1);
+        let confirmed_reply = external_channel_data_ingestion_analysis_reply_from_events(
+            &events_after_confirmation,
+            "conv-data-ingestion",
+        )
+        .expect("confirmed plan reply");
+        assert_eq!(
+            confirmed_reply.task_status.as_deref(),
+            Some("data_ingestion_staging_dataset_ready")
+        );
+        assert_eq!(
+            confirmed_reply.card.as_ref().unwrap()["type"],
+            json!("v3_data_ingestion_staging_plan_execution")
+        );
+
+        let run_with_artifacts = state
+            .storage
+            .assistant_runs()
+            .get_by_id(state.tenant_id, run.id)
+            .await
+            .expect("run should load before staging sync")
+            .expect("run should exist before staging sync");
+        let sync_payload = sync_data_ingestion_staging_plan_for_run(
+            &state,
+            &run_with_artifacts,
+            &plan_id,
+            None,
+            Some("full".to_string()),
+            json!({"operator": "smoke"}),
+            json!({}),
+            false,
+            &[],
+            None,
+        )
+        .await
+        .expect("confirmed staging plan should start database sync");
+        assert_eq!(sync_payload["plan_id"], json!(plan_id));
+        assert_eq!(sync_payload["source_id"], json!("source-operating-db-1"));
+        assert_eq!(
+            sync_payload["dataset_id"],
+            confirmation["dataset_id"].clone()
+        );
+        assert_eq!(sync_payload["sync_kind"], json!("full"));
+        assert_eq!(sync_payload["deduplicated"], json!(false));
+        assert_eq!(sync_payload["production_write_allowed"], json!(false));
+
+        let sync_run_id =
+            Uuid::parse_str(sync_payload["sync_run_id"].as_str().expect("sync run id"))
+                .expect("sync run id should be uuid");
+        let sync_row = sqlx::query(
+            r#"
+            select status, checkpoint
+            from external_sync_runs
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(sync_run_id)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("external sync run should be persisted");
+        assert_eq!(sync_row.get::<String, _>("status"), "running");
+        let sync_checkpoint: Value = sync_row.get("checkpoint");
+        assert_eq!(sync_checkpoint["operator"], json!("smoke"));
+
+        let repeated_sync = sync_data_ingestion_staging_plan_for_run(
+            &state,
+            &run_with_artifacts,
+            &plan_id,
+            None,
+            Some("full".to_string()),
+            json!({}),
+            json!({}),
+            false,
+            &[],
+            None,
+        )
+        .await
+        .expect("staging sync should be idempotent by default");
+        assert_eq!(repeated_sync["sync_run_id"], sync_payload["sync_run_id"]);
+        assert_eq!(repeated_sync["deduplicated"], json!(true));
+
+        let events_after_sync = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list after sync");
+        let sync_events = events_after_sync
+            .iter()
+            .filter(|event| event.event_name == "assistant_run.data_ingestion_staging_sync_started")
+            .collect::<Vec<_>>();
+        assert_eq!(sync_events.len(), 1);
+        let sync_reply = external_channel_data_ingestion_analysis_reply_from_events(
+            &events_after_sync,
+            "conv-data-ingestion",
+        )
+        .expect("sync reply");
+        assert_eq!(
+            sync_reply.task_status.as_deref(),
+            Some("data_ingestion_staging_sync_started")
+        );
+        assert_eq!(
+            sync_reply.card.as_ref().unwrap()["type"],
+            json!("v3_data_ingestion_staging_sync")
+        );
+
+        let sync_execution_id = Uuid::parse_str(
+            sync_payload["workflow_execution_id"]
+                .as_str()
+                .expect("workflow execution id"),
+        )
+        .map(WorkflowExecutionId)
+        .expect("workflow execution id should be uuid");
+        for task_key in [
+            "sync_external_users",
+            "sync_external_acl",
+            "sync_external_metadata",
+            "fetch_external_content",
+            "ingest_external_content",
+            "index_external_retrieval",
+        ] {
+            apply_workflow_signal_with_dependencies(
+                &state.storage,
+                &state.workflow_catalog,
+                &state.event_bus,
+                state.tenant_id,
+                sync_execution_id,
+                WorkflowSignal::StepCompleted {
+                    task_key: task_key.to_string(),
+                    output: Some(json!({
+                        "document_count": 1,
+                        "chunk_count": 1,
+                        "retrieval_evidence_count": 1
+                    })),
+                },
+            )
+            .await
+            .expect("staging sync workflow step should advance");
+        }
+        let events_after_sync_completion = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list after sync completion");
+        let sync_update_events = events_after_sync_completion
+            .iter()
+            .filter(|event| event.event_name == "assistant_run.data_ingestion_staging_sync_updated")
+            .collect::<Vec<_>>();
+        assert!(sync_update_events.len() >= 6);
+        assert!(sync_update_events.iter().any(|event| {
+            event.payload.get("workflow_status").and_then(Value::as_str) == Some("succeeded")
+                && event.payload.get("workflow_stage").and_then(Value::as_str) == Some("completed")
+        }));
+        let completed_sync_reply = external_channel_data_ingestion_analysis_reply_from_events(
+            &events_after_sync_completion,
+            "conv-data-ingestion",
+        )
+        .expect("completed sync reply");
+        assert_eq!(
+            completed_sync_reply.task_status.as_deref(),
+            Some("data_ingestion_staging_sync_completed")
+        );
+        assert_eq!(
+            completed_sync_reply.card.as_ref().unwrap()["workflow_status"],
+            json!("succeeded")
+        );
     }
 
     #[tokio::test]
@@ -78671,6 +79748,96 @@ retrieve_evidence:
         let card = reply.card.as_ref().expect("status card");
         assert_eq!(card["runtime_event"]["attempt"], json!(1));
         assert_eq!(card["poll_after_seconds"], json!(30));
+    }
+
+    #[test]
+    fn external_channel_fixed_task_reply_surfaces_cancelled_status() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new().to_string();
+        let now = Utc::now();
+        let events = vec![
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 1,
+                event_name: "codex_host.fixed_task.queued".to_string(),
+                payload: json!({
+                    "template_id": "data_ingestion_analysis",
+                    "status": "queued",
+                    "workflow_execution_id": workflow_execution_id,
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 2,
+                event_name: "codex_host_task.cancelled".to_string(),
+                payload: json!({
+                    "status": "cancelled",
+                    "reason": "workflow_cancelled_during_execution",
+                    "retryable": false,
+                    "attempt": 2,
+                    "max_attempts": 3,
+                    "error": "Cloudflare Codex task cancelled before completion",
+                    "secrets_exposed": false,
+                }),
+                created_at: now,
+            },
+        ];
+
+        let reply = external_channel_fixed_task_reply_from_events(&events, "conv-1")
+            .expect("cancelled reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("data_ingestion_analysis_cancelled")
+        );
+        let card = reply.card.as_ref().expect("status card");
+        assert_eq!(card["runtime_event"]["retryable"], json!(false));
+        assert!(card["poll_after_seconds"].is_null());
+    }
+
+    #[test]
+    fn codex_host_fixed_task_runtime_summary_surfaces_cancelled_safely() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 2,
+            event_name: "codex_host_task.cancelled".to_string(),
+            payload: json!({
+                "mode": "cloudflare_orchestrator",
+                "status": "cancelled",
+                "reason": "workflow_cancelled_during_execution",
+                "retryable": false,
+                "attempt": 1,
+                "max_attempts": 3,
+                "error": "Authorization: Bearer secret",
+                "secrets_exposed": false,
+            }),
+            created_at: now,
+        }];
+
+        let summary = assistant_run_codex_fixed_task_event_summary(&events);
+
+        assert_eq!(summary["cancelled_count"], json!(1));
+        assert_eq!(
+            summary["latest_runtime"]["event_name"],
+            json!("codex_host_task.cancelled")
+        );
+        assert_eq!(
+            summary["latest_runtime"]["reason"],
+            json!("workflow_cancelled_during_execution")
+        );
+        assert_eq!(summary["latest_runtime"]["retryable"], json!(false));
+        assert!(!summary.to_string().contains("Bearer secret"));
     }
 
     #[test]
