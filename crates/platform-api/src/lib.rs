@@ -30908,6 +30908,90 @@ fn build_assistant_run_react_natural_fallback_input(
     sections.join("\n\n")
 }
 
+fn build_assistant_run_react_compact_natural_fallback_input(
+    user_prompt: &str,
+    evidence_state: &Value,
+    observations: &[Value],
+    reason: &str,
+) -> String {
+    let evidence_items =
+        assistant_run_compact_evidence_items_for_natural_fallback(evidence_state, 8);
+    let observation_summaries = observations
+        .iter()
+        .map(assistant_run_react_observation_summary)
+        .collect::<Vec<_>>();
+    let supply_quality = evidence_state
+        .get("supply_quality")
+        .cloned()
+        .unwrap_or(Value::Null);
+    [
+        "你是 V3 智能助手。上一轮工具规划没有产出可直接展示给用户的最终回答，现在必须直接自然语言作答或提出一个明确追问。".to_string(),
+        "优先使用 V3 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注“资料中未定位到专门条款/需要补充制度文件”。不要输出 JSON、observation、execution_trail、react_trace、runtime_manifest 或内部路径。".to_string(),
+        format!("用户问题：{}", user_prompt.trim()),
+        format!("兜底原因：{reason}"),
+        format!(
+            "供料质量摘要：{}",
+            serde_json::to_string(&supply_quality).unwrap_or_else(|_| "null".to_string())
+        ),
+        format!(
+            "证据摘要：{}",
+            serde_json::to_string(&evidence_items).unwrap_or_else(|_| "[]".to_string())
+        ),
+        format!(
+            "已执行动作摘要：{}",
+            serde_json::to_string(&observation_summaries).unwrap_or_else(|_| "[]".to_string())
+        ),
+        "输出要求：用中文，给出简明流程；如果是养老/护理应急类问题，按“现场处置、上报记录、家属沟通、后续复盘/材料”组织。".to_string(),
+    ]
+    .join("\n\n")
+}
+
+fn assistant_run_compact_evidence_items_for_natural_fallback(
+    evidence_state: &Value,
+    limit: usize,
+) -> Vec<Value> {
+    value_array(
+        evidence_state
+            .get("supplied_items")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    )
+    .into_iter()
+    .take(limit)
+    .map(|item| {
+        json!({
+            "type": item.get("type").and_then(Value::as_str).unwrap_or("evidence"),
+            "summary": item
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(|value| truncate_assistant_supply_text(value, 260))
+                .unwrap_or_default(),
+            "source_locator": item.get("source_locator").cloned().unwrap_or(Value::Null),
+            "document_id": item.get("document_id").cloned().unwrap_or(Value::Null),
+            "chunk_index": item.get("chunk_index").cloned().unwrap_or(Value::Null),
+            "content_excerpt": item
+                .get("content_excerpt")
+                .or_else(|| item.get("content"))
+                .and_then(Value::as_str)
+                .map(|value| truncate_assistant_supply_text(value, 700))
+                .unwrap_or_default(),
+            "fallback_reason": item.get("fallback_reason").cloned().unwrap_or(Value::Null),
+        })
+    })
+    .collect()
+}
+
+fn assistant_run_react_step_limit_followup_message(evidence_state: &Value) -> String {
+    let supplied_count = assistant_run_evidence_supplied_count(evidence_state);
+    if supplied_count > 0 {
+        return format!(
+            "我已检索到 {supplied_count} 条相关资料，但还没有定位到足够明确的专门流程条款。可以继续：请补充制度名称、页码或关键词；如果没有专门制度，我也可以先按已检索到的突发事件处置线索和通用养老机构应急规范，整理一版“现场处置、家属沟通、上报记录、后续复盘”的流程。"
+        );
+    }
+    "当前没有检索到可见资料。请补充相关制度文件、文档范围或关键词，我会继续检索并整理可执行流程。"
+        .to_string()
+}
+
 async fn complete_assistant_run_react_natural_answer_fallback(
     chat_runtime: &LlmRuntimeSelection,
     provider_input: String,
@@ -34635,9 +34719,25 @@ async fn run_assistant_run_react_for_create(
             &observations,
             fallback_reason,
         );
-        if let Some((answer, fallback_runtime_manifest)) =
-            complete_assistant_run_react_natural_answer_fallback(chat_runtime, provider_input).await
-        {
+        let mut fallback = "external_model_natural_answer";
+        let mut fallback_result =
+            complete_assistant_run_react_natural_answer_fallback(chat_runtime, provider_input)
+                .await;
+        if fallback_result.is_none() {
+            fallback = "external_model_compact_natural_answer";
+            let compact_provider_input = build_assistant_run_react_compact_natural_fallback_input(
+                request.prompt.trim(),
+                &evidence_state,
+                &observations,
+                fallback_reason,
+            );
+            fallback_result = complete_assistant_run_react_natural_answer_fallback(
+                chat_runtime,
+                compact_provider_input,
+            )
+            .await;
+        }
+        if let Some((answer, fallback_runtime_manifest)) = fallback_result {
             assistant_message = answer;
             assistant_run_react_attach_natural_fallback_runtime(
                 &mut runtime_manifest,
@@ -34648,22 +34748,19 @@ async fn run_assistant_run_react_for_create(
                 event_name: "assistant_run.react.natural_answer_fallback".to_string(),
                 payload: json!({
                     "reason": fallback_reason,
-                    "fallback": "external_model_natural_answer",
+                    "fallback": fallback,
                     "max_steps": max_steps,
                 }),
             });
             execution_trail_steps.push(json!({
                 "status": "completed",
                 "label": "外部模型自然回答兜底",
-                "fallback": "external_model_natural_answer",
+                "fallback": fallback,
                 "reason": fallback_reason,
                 "at": Utc::now(),
             }));
         } else {
-            assistant_message = format!(
-                "已达到连续执行步数上限（{} 步）。请补充下一步要求，我会继续处理。",
-                max_steps
-            );
+            assistant_message = assistant_run_react_step_limit_followup_message(&evidence_state);
         }
     }
     assistant_run_react_attach_trace(
@@ -34954,9 +35051,25 @@ async fn run_assistant_run_react_for_continue(
             &observations,
             fallback_reason,
         );
-        if let Some((answer, fallback_runtime_manifest)) =
-            complete_assistant_run_react_natural_answer_fallback(chat_runtime, provider_input).await
-        {
+        let mut fallback = "external_model_natural_answer";
+        let mut fallback_result =
+            complete_assistant_run_react_natural_answer_fallback(chat_runtime, provider_input)
+                .await;
+        if fallback_result.is_none() {
+            fallback = "external_model_compact_natural_answer";
+            let compact_provider_input = build_assistant_run_react_compact_natural_fallback_input(
+                continue_prompt.trim(),
+                &evidence_state,
+                &observations,
+                fallback_reason,
+            );
+            fallback_result = complete_assistant_run_react_natural_answer_fallback(
+                chat_runtime,
+                compact_provider_input,
+            )
+            .await;
+        }
+        if let Some((answer, fallback_runtime_manifest)) = fallback_result {
             assistant_message = answer;
             assistant_run_react_attach_natural_fallback_runtime(
                 &mut runtime_manifest,
@@ -34967,7 +35080,7 @@ async fn run_assistant_run_react_for_continue(
                 event_name: "assistant_run.react.natural_answer_fallback".to_string(),
                 payload: json!({
                     "reason": fallback_reason,
-                    "fallback": "external_model_natural_answer",
+                    "fallback": fallback,
                     "max_steps": max_steps,
                     "entrypoint": "continue_assistant_run",
                 }),
@@ -34975,15 +35088,12 @@ async fn run_assistant_run_react_for_continue(
             execution_trail_steps.push(json!({
                 "status": "completed",
                 "label": "外部模型自然回答兜底",
-                "fallback": "external_model_natural_answer",
+                "fallback": fallback,
                 "reason": fallback_reason,
                 "at": Utc::now(),
             }));
         } else {
-            assistant_message = format!(
-                "已达到连续执行步数上限（{} 步）。请补充下一步要求，我会继续处理。",
-                max_steps
-            );
+            assistant_message = assistant_run_react_step_limit_followup_message(&evidence_state);
         }
     }
 
@@ -35544,22 +35654,26 @@ fn assistant_run_react_observation_summary(observation: &Value) -> Value {
 }
 
 fn assistant_run_react_returned_count(observation: &Value) -> usize {
-    observation
+    if let Some(count) = observation
         .get("items")
         .and_then(Value::as_array)
         .map(Vec::len)
-        .or_else(|| {
-            observation
-                .get("supplied_items")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-        })
-        .or_else(|| {
-            observation
-                .get("supplied_count")
-                .and_then(Value::as_u64)
-                .map(|value| value as usize)
-        })
+        .filter(|count| *count > 0)
+    {
+        return count;
+    }
+    if let Some(count) = observation
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .filter(|count| *count > 0)
+    {
+        return count;
+    }
+    observation
+        .get("supplied_count")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
         .unwrap_or_default()
 }
 
@@ -81073,6 +81187,66 @@ retrieve_evidence:
     }
 
     #[test]
+    fn assistant_run_react_returned_count_uses_supplied_count_when_items_empty() {
+        let observation = json!({
+            "status": "completed",
+            "action_type": "retrieve_evidence",
+            "items": [],
+            "supplied_count": 9
+        });
+
+        assert_eq!(assistant_run_react_returned_count(&observation), 9);
+        assert_eq!(
+            assistant_run_react_observation_summary(&observation)["returned_count"],
+            json!(9)
+        );
+    }
+
+    #[test]
+    fn assistant_run_compact_natural_fallback_includes_evidence_without_internal_state() {
+        let input = build_assistant_run_react_compact_natural_fallback_input(
+            "长者在院离世，现场处置、家属对接流程",
+            &json!({
+                "status": "supplied",
+                "supplied_items": [{
+                    "type": "retrieval_evidence",
+                    "summary": "养老机构突发事件应急处置",
+                    "source_locator": "document://doc-1/chunks/211",
+                    "content_excerpt": "突发事件得到有效处置后，应配合相关部门做好原因调查、责任处理等工作。"
+                }],
+                "supply_quality": {
+                    "status": "grounded"
+                }
+            }),
+            &[json!({
+                "status": "completed",
+                "action_type": "retrieve_evidence",
+                "items": [],
+                "supplied_count": 1
+            })],
+            "react_step_limit",
+        );
+
+        assert!(input.contains("必须直接自然语言作答"));
+        assert!(input.contains("长者在院离世"));
+        assert!(input.contains("养老机构突发事件应急处置"));
+        assert!(input.contains("突发事件得到有效处置后"));
+        assert!(input.contains("不要输出 JSON"));
+    }
+
+    #[test]
+    fn assistant_run_step_limit_followup_is_user_facing() {
+        let message = assistant_run_react_step_limit_followup_message(&json!({
+            "status": "supplied",
+            "supplied_items": [{"type": "retrieval_evidence"}]
+        }));
+
+        assert!(message.contains("已检索到 1 条相关资料"));
+        assert!(message.contains("现场处置"));
+        assert!(!message.contains("连续执行步数上限"));
+    }
+
+    #[test]
     fn assistant_run_react_action_parser_rejects_unknown_and_unsafe_actions() {
         let action = parse_assistant_run_next_action(
             r#"{"action_type":"final_answer","reason_summary":"完成","arguments":{"content":"可以回答"},"requires_confirmation":false}"#,
@@ -82032,6 +82206,10 @@ retrieve_evidence:
         clear_assistant_openclaw_env();
         assert_eq!(status, StatusCode::CREATED);
         assert!(response
+            .assistant_message
+            .content
+            .contains("当前没有检索到可见资料"));
+        assert!(!response
             .assistant_message
             .content
             .contains("已达到连续执行步数上限"));

@@ -98,6 +98,7 @@ pub(crate) async fn execute_assistant_run_react_action(
             .await?;
             let supplied_count = crate::assistant_run_evidence_supplied_count(&refreshed);
             let detail_target_count = crate::assistant_run_detail_target_count(&refreshed);
+            let items = evidence_state_retrieval_observation_items(&refreshed);
             *evidence_state = refreshed.clone();
             Ok(AssistantRunReactToolResult {
                 observation: json!({
@@ -105,7 +106,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                     "action_type": action.action_type.as_str(),
                     "actionType": action.action_type.as_str(),
                     "message": "retrieval evidence supplied",
-                    "items": [],
+                    "items": items,
                     "limits": {},
                     "supplied_count": supplied_count,
                     "detail_target_count": detail_target_count,
@@ -253,6 +254,36 @@ pub(crate) async fn execute_assistant_run_react_action(
             "action_not_implemented_in_first_slice",
         )),
     }
+}
+
+fn evidence_state_retrieval_observation_items(evidence_state: &Value) -> Vec<Value> {
+    evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(8)
+        .map(|item| {
+            json!({
+                "type": item.get("type").and_then(Value::as_str).unwrap_or("evidence"),
+                "summary": item
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .map(|value| truncate_chars(value, 220))
+                    .unwrap_or_default(),
+                "source_locator": item.get("source_locator").cloned().unwrap_or(Value::Null),
+                "document_id": item.get("document_id").cloned().unwrap_or(Value::Null),
+                "chunk_index": item.get("chunk_index").cloned().unwrap_or(Value::Null),
+                "content_excerpt": item
+                    .get("content_excerpt")
+                    .or_else(|| item.get("content"))
+                    .and_then(Value::as_str)
+                    .map(|value| truncate_chars(value, 520))
+                    .unwrap_or_default(),
+                "fallback_reason": item.get("fallback_reason").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn assistant_run_react_action_label(
@@ -4110,6 +4141,32 @@ mod tests {
             result.final_answer.as_deref(),
             Some(r#"{"example":"这是给用户看的 JSON 示例","status":"draft"}"#)
         );
+    }
+
+    #[test]
+    fn retrieve_evidence_observation_items_compact_supplied_evidence() {
+        let items = evidence_state_retrieval_observation_items(&json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "summary": "养老机构突发事件应急处置章节",
+                "source_locator": "document://doc-1/chunks/211",
+                "document_id": "doc-1",
+                "chunk_index": 211,
+                "content_excerpt": "9 典型突发事件应急处置。及时拨打120急救电话，联系医务人员赶赴现场进行救护。",
+                "internal_secret": "should not be copied"
+            }]
+        }));
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["type"], json!("retrieval_evidence"));
+        assert_eq!(items[0]["summary"], json!("养老机构突发事件应急处置章节"));
+        assert_eq!(items[0]["chunk_index"], json!(211));
+        assert!(items[0]["content_excerpt"]
+            .as_str()
+            .unwrap()
+            .contains("典型突发事件应急处置"));
+        assert!(items[0].get("internal_secret").is_none());
     }
 
     #[test]
