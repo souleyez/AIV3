@@ -7120,13 +7120,15 @@ async fn load_visible_dataset_for_assistant_scope(
     dataset_id: DatasetId,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
     selected_scope: &Value,
 ) -> std::result::Result<Dataset, ApiError> {
-    match load_visible_dataset_for_user(
+    match load_visible_dataset_for_user_with_local_scope(
         state,
         dataset_id,
         active_secret_binding_ids,
         current_user_id,
+        local_thread_id,
     )
     .await
     {
@@ -7170,13 +7172,15 @@ async fn load_visible_document_for_assistant_scope(
     document_id: DocumentId,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+    local_thread_id: Option<&str>,
     selected_scope: &Value,
 ) -> std::result::Result<Document, ApiError> {
-    match load_visible_document_for_user(
+    match load_visible_document_for_user_with_local_scope(
         state,
         document_id,
         active_secret_binding_ids,
         current_user_id,
+        local_thread_id,
     )
     .await
     {
@@ -9098,6 +9102,12 @@ async fn create_assistant_run(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let header_local_thread_id = local_thread_id_from_headers(&headers);
+    let local_thread_id = request
+        .local_thread_id
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| header_local_thread_id.clone());
     ensure_default_public_datasets(&state).await?;
     let visible_datasets = filter_visible_datasets(
         state
@@ -9108,7 +9118,7 @@ async fn create_assistant_run(
             .map_err(ApiError::from_storage)?,
         &active_secret_binding_ids,
         current_user_id,
-        header_local_thread_id.as_deref(),
+        local_thread_id.as_deref(),
     )
     .into_iter()
     .filter(|dataset| !dataset_is_hidden_from_standard_dataset_list(dataset))
@@ -9120,11 +9130,6 @@ async fn create_assistant_run(
     let selected_dataset_id = requested_selected_scope
         .as_ref()
         .and_then(selected_dataset_id_from_scope);
-    let local_thread_id = request
-        .local_thread_id
-        .as_ref()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
     let current_thread_memory_available = if let Some(local_thread_id) = local_thread_id.as_ref() {
         conversation_memory_source_has_visible_items(&state, local_thread_id, current_user_id)
             .await?
@@ -9185,6 +9190,8 @@ async fn create_assistant_run(
         }
         set_selected_scope_conversation_memory(&mut selected_scope, memory_scope_ids);
     }
+    selected_scope =
+        assistant_run_scope_with_visible_dataset_range(selected_scope, &visible_datasets);
     scope_candidates.extend(assistant_run_artifact_scope_candidates(
         &client_scope_candidates,
         request.current_artifact.as_ref(),
@@ -38093,19 +38100,32 @@ async fn build_assistant_run_evidence_state(
     let mut supplied_memory_items = Vec::new();
     let mut media_context_by_document: HashMap<DocumentId, Option<Value>> = HashMap::new();
     let mut retrieval_chunks_by_document: HashMap<DocumentId, Vec<DocumentChunk>> = HashMap::new();
+    let mut unavailable_dataset_ids = Vec::new();
 
     for dataset_id in dataset_ids
         .into_iter()
         .take(ASSISTANT_RUN_EVIDENCE_DATASET_LIMIT)
     {
-        let dataset = load_visible_dataset_for_assistant_scope(
+        let dataset = match load_visible_dataset_for_assistant_scope(
             state,
             dataset_id,
             active_secret_binding_ids,
             current_user_id,
+            local_thread_id,
             selected_scope,
         )
-        .await?;
+        .await
+        {
+            Ok(dataset) => dataset,
+            Err(error)
+                if !assistant_run_scope_is_external_channel(Some(selected_scope))
+                    && error.payload.code == "dataset_not_found" =>
+            {
+                unavailable_dataset_ids.push(dataset_id.to_string());
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         supplied_datasets.push(json!({
             "id": dataset.id,
             "key": dataset.key.clone(),
@@ -38325,6 +38345,7 @@ async fn build_assistant_run_evidence_state(
         "detail_targets": detail_targets,
         "selected_scope": selected_scope,
         "datasets": supplied_datasets,
+        "unavailable_dataset_ids": unavailable_dataset_ids,
         "conversation_memory_items": supplied_memory_items,
         "supplied_items": supplied_items,
         "external_acl_filter": external_acl_supply_filter_summary(external_acl_filter.as_ref()),
@@ -45217,6 +45238,156 @@ fn assistant_run_scope_with_requested_document_scope(
         }
     }
     selected_scope
+}
+
+fn assistant_run_scope_with_visible_dataset_range(
+    mut selected_scope: Value,
+    visible_datasets: &[Dataset],
+) -> Value {
+    if assistant_run_scope_is_external_channel(Some(&selected_scope))
+        || selected_scope_has_document_selection(&selected_scope)
+        || assistant_run_scope_intent(&selected_scope) == "ordinary_chat"
+    {
+        return selected_scope;
+    }
+
+    let visible_by_id = visible_datasets
+        .iter()
+        .map(|dataset| (dataset.id, dataset))
+        .collect::<HashMap<_, _>>();
+    if visible_by_id.is_empty() {
+        return selected_scope;
+    }
+
+    let requested_dataset_ids = selected_dataset_ids_from_scope(&selected_scope);
+    let mut seen = HashSet::new();
+    let mut ordered_dataset_ids = Vec::new();
+    let mut visible_requested_dataset_ids = Vec::new();
+    let mut unavailable_requested_dataset_ids = Vec::new();
+
+    for dataset_id in &requested_dataset_ids {
+        if visible_by_id.contains_key(dataset_id) {
+            visible_requested_dataset_ids.push(*dataset_id);
+        } else {
+            unavailable_requested_dataset_ids.push(dataset_id.to_string());
+        }
+    }
+
+    for dataset_id in &visible_requested_dataset_ids {
+        if visible_by_id
+            .get(dataset_id)
+            .is_some_and(|dataset| dataset_has_assistant_supply_hint(dataset))
+            && seen.insert(*dataset_id)
+        {
+            ordered_dataset_ids.push(*dataset_id);
+        }
+    }
+    for dataset in visible_datasets {
+        if dataset_has_assistant_supply_hint(dataset) && seen.insert(dataset.id) {
+            ordered_dataset_ids.push(dataset.id);
+        }
+    }
+    for dataset_id in &visible_requested_dataset_ids {
+        if seen.insert(*dataset_id) {
+            ordered_dataset_ids.push(*dataset_id);
+        }
+    }
+    for dataset in visible_datasets {
+        if seen.insert(dataset.id) {
+            ordered_dataset_ids.push(dataset.id);
+        }
+    }
+
+    if ordered_dataset_ids.is_empty() {
+        return selected_scope;
+    }
+
+    let dataset_scope = ordered_dataset_ids
+        .iter()
+        .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+        .collect::<Vec<_>>();
+    set_payload_value(&mut selected_scope, "datasets", json!(dataset_scope));
+    set_payload_value(&mut selected_scope, "selected", json!(dataset_scope));
+    set_payload_value(
+        &mut selected_scope,
+        "preferred_dataset_ids",
+        json!(visible_requested_dataset_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()),
+    );
+    set_payload_value(
+        &mut selected_scope,
+        "dataset_scope_policy",
+        json!("all_visible_datasets_with_preselection_priority"),
+    );
+    if !unavailable_requested_dataset_ids.is_empty() {
+        set_payload_value(
+            &mut selected_scope,
+            "ignored_dataset_ids",
+            json!(unavailable_requested_dataset_ids),
+        );
+    }
+
+    let mut supply_policy = assistant_run_scope_supply_policy(&selected_scope);
+    ensure_json_object(&mut supply_policy);
+    if let Some(policy) = supply_policy.as_object_mut() {
+        policy.insert(
+            "candidatePolicy".to_string(),
+            json!("all_visible_datasets_with_preselection_priority"),
+        );
+        policy.insert("retrievalPolicy".to_string(), json!("standard"));
+        policy.insert("noFakeData".to_string(), json!(true));
+        if policy
+            .get("recommendedActions")
+            .and_then(Value::as_array)
+            .map(|actions| actions.is_empty())
+            .unwrap_or(true)
+        {
+            policy.insert(
+                "recommendedActions".to_string(),
+                json!(["retrieval.search"]),
+            );
+        }
+    }
+    set_payload_value(&mut selected_scope, "supply_policy", supply_policy);
+    selected_scope
+}
+
+fn dataset_has_assistant_supply_hint(dataset: &Dataset) -> bool {
+    dataset_metadata_usize_optional(
+        dataset,
+        &[
+            "document_count",
+            "documentCount",
+            "documents_count",
+            "documentsCount",
+            "estimated_word_count",
+            "estimatedWordCount",
+            "database_source_count",
+            "databaseSourceCount",
+        ],
+    )
+    .is_some_and(|value| value > 0)
+        || [
+            "database_sources",
+            "databaseSources",
+            "database_source_ids",
+            "databaseSourceIds",
+            "database_schema",
+            "databaseSchema",
+            "database_profile",
+            "databaseProfile",
+        ]
+        .iter()
+        .any(|key| {
+            dataset.metadata.get(*key).is_some_and(|value| match value {
+                Value::Array(items) => !items.is_empty(),
+                Value::Object(object) => !object.is_empty(),
+                Value::String(text) => !text.trim().is_empty(),
+                _ => false,
+            })
+        })
 }
 
 fn assistant_run_requested_dataset_supply_policy(intent: &str) -> Value {
@@ -86874,6 +87045,248 @@ retrieve_evidence:
                 .unwrap_or_default()
                 >= 1
         );
+    }
+
+    #[tokio::test]
+    async fn assistant_run_local_only_selected_dataset_uses_request_local_thread_scope() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant local-only scope test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-local-only-scope-test-{}", Uuid::new_v4()),
+                "Assistant Local Only Scope Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let local_thread_id = format!("local-only-thread-{}", Uuid::new_v4());
+        let dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("local-eldercare-{}", Uuid::new_v4()),
+                    title: "养老服务问答".to_string(),
+                    description: Some("当前本地线程上传的养老资料。".to_string()),
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                    "local_only": true,
+                    "local_thread_id": local_thread_id,
+                }),
+            )
+            .await
+            .expect("local dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "养老机构现场处置手册.md".to_string(),
+                    object_key: "documents/eldercare-response.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "长者在院离世时，应保护现场，通知医护和负责人，联系家属并做好记录。"
+                        .to_string(),
+                    token_count: 32,
+                    metadata: json!({"section": "离世处置"}),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("document chunks should be created");
+
+        let (_, Json(response)) = create_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "长者在院离世，现场处置、家属对接流程".to_string(),
+                local_thread_id: Some(local_thread_id),
+                startup_briefing: Some(json!({})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset.id],
+                    "intent": "data_question",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should see local-only selected dataset");
+
+        assert_eq!(response.evidence_state["status"], json!("supplied"));
+        assert!(response.evidence_state["supplied_items"]
+            .as_array()
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.get("document_id") == Some(&json!(document.id)))));
+    }
+
+    #[tokio::test]
+    async fn assistant_run_native_empty_preselection_broadens_to_visible_supply() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant empty preselection broadening test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-empty-preselection-test-{}", Uuid::new_v4()),
+                "Assistant Empty Preselection Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let local_thread_id = format!("empty-preselected-thread-{}", Uuid::new_v4());
+        let empty_dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("empty-local-{}", Uuid::new_v4()),
+                    title: "空的养老问答".to_string(),
+                    description: Some("前端预选但尚未入库内容。".to_string()),
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                    "local_only": true,
+                    "local_thread_id": local_thread_id,
+                }),
+            )
+            .await
+            .expect("empty local dataset should be created");
+        let visible_dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("visible-eldercare-{}", Uuid::new_v4()),
+                    title: "养老机构资料库".to_string(),
+                    description: Some("养老机构运营和应急处置资料。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("visible dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: visible_dataset.id,
+                    title: "离世及应急处置规范.md".to_string(),
+                    object_key: "documents/eldercare-visible.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: visible_dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "长者在院离世流程包括现场隔离与保护、负责人报告、医护确认、家属通知、遗物交接和记录归档。"
+                        .to_string(),
+                    token_count: 42,
+                    metadata: json!({"section": "长者离世流程"}),
+                    created_at: Utc::now(),
+                }],
+            )
+            .await
+            .expect("visible document chunks should be created");
+
+        let (_, Json(response)) = create_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "长者在院离世，现场处置、家属对接流程".to_string(),
+                local_thread_id: Some(local_thread_id),
+                startup_briefing: Some(json!({})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [empty_dataset.id],
+                    "intent": "data_question",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should broaden native empty preselection");
+
+        assert_eq!(
+            response.selected_scope["dataset_scope_policy"],
+            json!("all_visible_datasets_with_preselection_priority")
+        );
+        assert_eq!(response.evidence_state["status"], json!("supplied"));
+        assert!(response.evidence_state["supplied_items"]
+            .as_array()
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.get("document_id") == Some(&json!(document.id)))));
     }
 
     #[tokio::test]

@@ -62,6 +62,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                 state,
                 action,
                 selected_scope,
+                local_thread_id,
                 active_secret_binding_ids,
                 current_user_id,
             )
@@ -73,6 +74,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                 action,
                 selected_scope,
                 evidence_state,
+                local_thread_id,
                 active_secret_binding_ids,
                 current_user_id,
             )
@@ -1936,6 +1938,7 @@ async fn video_ppt_extraction_result(
             document_id,
             active_secret_binding_ids,
             current_user_id,
+            local_thread_id,
             selected_scope,
         )
         .await
@@ -3026,6 +3029,7 @@ async fn upgrade_parse_vlm_result(
     action: &AssistantRunNextAction,
     selected_scope: &Value,
     evidence_state: &mut Value,
+    local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
@@ -3072,6 +3076,7 @@ async fn upgrade_parse_vlm_result(
         document_id,
         active_secret_binding_ids,
         current_user_id,
+        local_thread_id,
         selected_scope,
     )
     .await
@@ -3646,6 +3651,7 @@ async fn read_document_detail_result(
     state: &AppState,
     action: &AssistantRunNextAction,
     selected_scope: &Value,
+    local_thread_id: Option<&str>,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
@@ -3669,6 +3675,7 @@ async fn read_document_detail_result(
             document_id,
             active_secret_binding_ids,
             current_user_id,
+            local_thread_id,
             selected_scope,
         )
         .await
