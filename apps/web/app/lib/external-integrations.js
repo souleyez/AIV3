@@ -934,6 +934,128 @@ export function formatExternalConversationDuration(value) {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
+export function normalizeWorkflowStatusKey(status) {
+  return String(status || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s-]+/g, '_')
+    .toLowerCase();
+}
+
+export function workflowStatusLabel(status) {
+  const normalized = normalizeWorkflowStatusKey(status);
+  const labels = {
+    pending: '等待',
+    running: '运行中',
+    queued: '队列中',
+    claimed: '执行中',
+    succeeded: '成功',
+    failed: '失败',
+    cancelled: '取消',
+    dead_lettered: '死信',
+  };
+  return labels[normalized] || status || '未知';
+}
+
+export function workflowStatusClass(status) {
+  const normalized = normalizeWorkflowStatusKey(status);
+  return `external-conversation-status external-executor-status-${normalized || 'unknown'}`;
+}
+
+export function normalizeWorkflowTask(item = {}) {
+  const payload = item.payload && typeof item.payload === 'object' ? item.payload : {};
+  const cloudflare = payload.cloudflare_orchestrator && typeof payload.cloudflare_orchestrator === 'object'
+    ? payload.cloudflare_orchestrator
+    : {};
+  return {
+    id: item.id || '',
+    status: item.status || '',
+    queue: item.queue || '',
+    taskKey: item.task_key || item.taskKey || '',
+    attempt: Number(item.attempt || 0),
+    maxAttempts: Number(item.max_attempts || item.maxAttempts || 0),
+    availableAt: item.available_at || item.availableAt || null,
+    claimedAt: item.claimed_at || item.claimedAt || null,
+    finishedAt: item.finished_at || item.finishedAt || null,
+    updatedAt: item.updated_at || item.updatedAt || item.available_at || null,
+    error: item.error || '',
+    cloudflareTaskId: item.cloudflareTaskId || cloudflare.task_id || cloudflare.taskId || '',
+    cloudflareStatus: item.cloudflareStatus || cloudflare.status || '',
+    cloudflareRuntimeTargetId: item.cloudflareRuntimeTargetId || cloudflare.runtime_target_id || cloudflare.runtimeTargetId || '',
+  };
+}
+
+export function normalizeCodexExecutorTask(item = {}) {
+  return {
+    id: item.id || '',
+    kind: item.kind || '',
+    status: item.status || '',
+    stage: item.stage || '',
+    updatedAt: item.updated_at || item.updatedAt || null,
+  };
+}
+
+function latestWorkflowTask(tasks) {
+  return [...tasks].sort((left, right) => {
+    const leftTime = Date.parse(left.updatedAt || left.availableAt || 0) || 0;
+    const rightTime = Date.parse(right.updatedAt || right.availableAt || 0) || 0;
+    return rightTime - leftTime;
+  })[0] || null;
+}
+
+function taskLooksLikePollRetry(task) {
+  const error = String(task?.error || '');
+  return normalizeWorkflowStatusKey(task?.status) === 'queued'
+    && error.includes('Cloudflare Codex task timed out after');
+}
+
+export function codexExecutorInspectSummary(detail = {}) {
+  const execution = detail.execution || {};
+  const runtime = detail.execution_scope_runtime || detail.executionScopeRuntime || {};
+  const prettySummaries = Array.isArray(detail.pretty_summaries)
+    ? detail.pretty_summaries
+    : Array.isArray(detail.prettySummaries)
+      ? detail.prettySummaries
+      : [];
+  const workflowTasks = (Array.isArray(detail.workflow_tasks)
+    ? detail.workflow_tasks
+    : Array.isArray(detail.workflowTasks)
+      ? detail.workflowTasks
+      : []
+  ).map(normalizeWorkflowTask);
+  const latestTask = latestWorkflowTask(workflowTasks);
+  const pollRetryTask = workflowTasks.find(taskLooksLikePollRetry) || null;
+  return {
+    execution: {
+      id: execution.id || '',
+      kind: execution.kind || '',
+      status: execution.status || '',
+      stage: execution.stage || '',
+      updated_at: execution.updated_at || execution.updatedAt || null,
+    },
+    runtime: {
+      status: runtime.status || '',
+      latest_finish_reason: runtime.latest_finish_reason || runtime.latestFinishReason || '',
+      invocation_count: runtime.invocation_count || runtime.invocationCount || 0,
+      tool_execution_count: runtime.tool_execution_count || runtime.toolExecutionCount || 0,
+    },
+    workflow_tasks: workflowTasks,
+    latest_task: latestTask,
+    poll_retry: pollRetryTask
+      ? {
+        active: true,
+        task_id: pollRetryTask.id,
+        cloudflare_task_id: pollRetryTask.cloudflareTaskId,
+        attempt: pollRetryTask.attempt,
+        max_attempts: pollRetryTask.maxAttempts,
+        next_available_at: pollRetryTask.availableAt,
+        error: pollRetryTask.error,
+      }
+      : { active: false },
+    pretty_summaries: prettySummaries,
+    model_facing: detail.model_facing || detail.modelFacing || null,
+  };
+}
+
 export function auditItemTypeLabel(itemType) {
   switch (String(itemType || '').toLowerCase()) {
     case 'message':

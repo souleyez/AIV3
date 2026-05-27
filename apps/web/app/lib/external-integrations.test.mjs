@@ -20,6 +20,7 @@ import {
   databaseSourceTablePreview,
   driftSignalLabel,
   EXTERNAL_INTEGRATION_MODES,
+  codexExecutorInspectSummary,
   externalConversationStatusLabel,
   externalActionTraceFilename,
   databaseSourceStatusExportFilename,
@@ -28,11 +29,14 @@ import {
   latestIntegrationActivity,
   normalizeControlResult,
   normalizeAuditItem,
+  normalizeCodexExecutorTask,
   normalizeDatabaseSourceStatus,
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
+  normalizeWorkflowTask,
   searchEvidenceSignalLabel,
   signalLabel,
+  workflowStatusLabel,
 } from './external-integrations.js';
 
 test('buildThirdPartyApiUrl uses v3.elepcloud.com by default', () => {
@@ -821,6 +825,48 @@ test('normalizeControlResult summarizes management control responses', () => {
     })),
     '已入队 2 个动作重试',
   );
+});
+
+test('codex executor helpers expose poll retry and remote task id', () => {
+  const listItem = normalizeCodexExecutorTask({
+    id: 'exec-001',
+    kind: 'codex_host_task_workflow',
+    status: 'running',
+    stage: 'run_codex_host_task',
+    updated_at: '2026-05-27T09:40:00Z',
+  });
+  assert.equal(listItem.updatedAt, '2026-05-27T09:40:00Z');
+  assert.equal(workflowStatusLabel('claimed'), '执行中');
+
+  const task = normalizeWorkflowTask({
+    id: 'task-001',
+    status: 'queued',
+    task_key: 'run_codex_host_task',
+    attempt: 2,
+    max_attempts: 3,
+    available_at: '2026-05-27T09:41:00Z',
+    error: 'Cloudflare Codex task timed out after 1800000ms; task_id=cf-001',
+    payload: {
+      cloudflare_orchestrator: {
+        task_id: 'cf-001',
+        runtime_target_id: 'cloudflare',
+      },
+    },
+  });
+  assert.equal(task.cloudflareTaskId, 'cf-001');
+  assert.equal(task.maxAttempts, 3);
+
+  const summary = codexExecutorInspectSummary({
+    execution: {
+      id: 'exec-001',
+      status: 'running',
+      stage: 'run_codex_host_task',
+    },
+    workflow_tasks: [task],
+  });
+  assert.equal(summary.poll_retry.active, true);
+  assert.equal(summary.poll_retry.cloudflare_task_id, 'cf-001');
+  assert.equal(summary.latest_task.attempt, 2);
 });
 
 test('external integrations page does not include direct home navigation links', () => {

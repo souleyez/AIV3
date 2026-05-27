@@ -6729,6 +6729,13 @@ body {
   color: #8a5a00;
 }
 
+.external-executor-status-queued,
+.external-executor-status-claimed {
+  border-color: #93b4d9;
+  background: #eef6ff;
+  color: #1d4f8f;
+}
+
 .external-executor-status-succeeded {
   border-color: #86c49a;
   background: #edf8ef;
@@ -6827,6 +6834,32 @@ body {
   margin-top: 4px;
   color: #1f2937;
   font-size: 13px;
+}
+
+.external-executor-retry-banner {
+  display: grid;
+  gap: 4px;
+  margin: 0 12px 10px;
+  padding: 10px;
+  border: 1px solid #d9ba67;
+  border-radius: 8px;
+  background: #fff8df;
+  color: #704300;
+}
+
+.external-executor-retry-banner strong,
+.external-executor-retry-banner span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.external-executor-retry-banner strong {
+  font-size: 12px;
+}
+
+.external-executor-retry-banner span {
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .external-executor-pretty {

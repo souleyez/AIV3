@@ -29,6 +29,16 @@ function proxyHeaders(request) {
   return headers;
 }
 
+async function fetchPlatformJson(url, request) {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: proxyHeaders(request),
+    cache: 'no-store',
+  });
+  const payload = await response.json().catch(() => ({}));
+  return { response, payload };
+}
+
 export async function GET(request, context) {
   if (!hasExternalObservabilityAccessCookie(request.headers.get('cookie'))) {
     return accessDenied();
@@ -46,14 +56,22 @@ export async function GET(request, context) {
     );
   }
 
-  const targetUrl = buildPlatformApiUrl(
+  const inspectUrl = buildPlatformApiUrl(
     `/v1/workflow-executions/${encodeURIComponent(executionId)}/runtime-inspect`,
   );
-  const response = await fetch(targetUrl, {
-    method: 'GET',
-    headers: proxyHeaders(request),
-    cache: 'no-store',
-  });
-  const payload = await response.json().catch(() => ({}));
+  const tasksUrl = buildPlatformApiUrl(
+    `/v1/workflow-executions/${encodeURIComponent(executionId)}/tasks`,
+  );
+  const [{ response, payload }, tasksResult] = await Promise.all([
+    fetchPlatformJson(inspectUrl, request),
+    fetchPlatformJson(tasksUrl, request),
+  ]);
+  if (response.ok) {
+    payload.workflow_tasks = Array.isArray(tasksResult.payload) ? tasksResult.payload : [];
+    payload.workflow_tasks_loaded = tasksResult.response.ok;
+    if (!tasksResult.response.ok) {
+      payload.workflow_tasks_error = tasksResult.payload?.message || tasksResult.payload?.error || 'workflow tasks unavailable';
+    }
+  }
   return Response.json(payload, { status: response.status });
 }

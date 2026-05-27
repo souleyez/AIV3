@@ -20,6 +20,7 @@ import {
   driftSignalLabel,
   EXTERNAL_AUDIT_FILTERS,
   EXTERNAL_INTEGRATION_MODES,
+  codexExecutorInspectSummary,
   externalActionTraceFilename,
   databaseSourceStatusExportFilename,
   formatExternalConversationDuration,
@@ -27,6 +28,7 @@ import {
   latestIntegrationActivity,
   normalizeControlResult,
   normalizeDatabaseSourceStatus,
+  normalizeCodexExecutorTask,
   normalizeAuditItem,
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
@@ -34,6 +36,8 @@ import {
   searchEvidenceSignalLabel,
   signalLabel,
   thirdPartyApiBaseUrl,
+  workflowStatusClass,
+  workflowStatusLabel,
 } from '../lib/external-integrations';
 import { applyDatabaseSourceProfile } from '../lib/database-source';
 
@@ -167,68 +171,6 @@ function searchEvidenceMetrics(integration) {
 function JsonPreview({ value }) {
   const text = useMemo(() => JSON.stringify(value || {}, null, 2), [value]);
   return <pre className="external-json-preview">{text}</pre>;
-}
-
-function normalizeWorkflowStatusKey(status) {
-  return String(status || '')
-    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .replace(/[\s-]+/g, '_')
-    .toLowerCase();
-}
-
-function workflowStatusLabel(status) {
-  const normalized = normalizeWorkflowStatusKey(status);
-  const labels = {
-    pending: '等待',
-    running: '运行中',
-    succeeded: '成功',
-    failed: '失败',
-    cancelled: '取消',
-    dead_lettered: '死信',
-  };
-  return labels[normalized] || status || '未知';
-}
-
-function workflowStatusClass(status) {
-  const normalized = normalizeWorkflowStatusKey(status);
-  return `external-conversation-status external-executor-status-${normalized || 'unknown'}`;
-}
-
-function normalizeCodexExecutorTask(item = {}) {
-  return {
-    id: item.id || '',
-    kind: item.kind || '',
-    status: item.status || '',
-    stage: item.stage || '',
-    updatedAt: item.updated_at || item.updatedAt || null,
-  };
-}
-
-function codexExecutorInspectSummary(detail = {}) {
-  const execution = detail.execution || {};
-  const runtime = detail.execution_scope_runtime || detail.executionScopeRuntime || {};
-  const prettySummaries = Array.isArray(detail.pretty_summaries)
-    ? detail.pretty_summaries
-    : Array.isArray(detail.prettySummaries)
-      ? detail.prettySummaries
-      : [];
-  return {
-    execution: {
-      id: execution.id || '',
-      kind: execution.kind || '',
-      status: execution.status || '',
-      stage: execution.stage || '',
-      updated_at: execution.updated_at || execution.updatedAt || null,
-    },
-    runtime: {
-      status: runtime.status || '',
-      latest_finish_reason: runtime.latest_finish_reason || runtime.latestFinishReason || '',
-      invocation_count: runtime.invocation_count || runtime.invocationCount || 0,
-      tool_execution_count: runtime.tool_execution_count || runtime.toolExecutionCount || 0,
-    },
-    pretty_summaries: prettySummaries,
-    model_facing: detail.model_facing || detail.modelFacing || null,
-  };
 }
 
 function readInitialUrlState() {
@@ -1059,7 +1001,37 @@ export default function ExternalIntegrationsPageClient() {
                       <span>工具执行</span>
                       <strong>{codexExecutorInspect.runtime.tool_execution_count}</strong>
                     </div>
+                    <div>
+                      <span>任务尝试</span>
+                      <strong>
+                        {codexExecutorInspect.latest_task
+                          ? `${codexExecutorInspect.latest_task.attempt}/${codexExecutorInspect.latest_task.maxAttempts || '-'}`
+                          : '-'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>下次轮询</span>
+                      <strong>
+                        {codexExecutorInspect.latest_task
+                          ? formatObservationTime(codexExecutorInspect.latest_task.availableAt)
+                          : '-'}
+                      </strong>
+                    </div>
                   </div>
+                  {codexExecutorInspect.poll_retry.active ? (
+                    <div className="external-executor-retry-banner">
+                      <strong>Cloudflare Codex 仍在运行，V3 已重新排队继续轮询</strong>
+                      <span>
+                        attempt {codexExecutorInspect.poll_retry.attempt}/{codexExecutorInspect.poll_retry.max_attempts || '-'}
+                        {codexExecutorInspect.poll_retry.cloudflare_task_id
+                          ? ` · task ${codexExecutorInspect.poll_retry.cloudflare_task_id}`
+                          : ''}
+                        {codexExecutorInspect.poll_retry.next_available_at
+                          ? ` · 下次 ${formatObservationTime(codexExecutorInspect.poll_retry.next_available_at)}`
+                          : ''}
+                      </span>
+                    </div>
+                  ) : null}
                   {codexExecutorInspect.pretty_summaries.length ? (
                     <div className="external-executor-pretty">
                       {codexExecutorInspect.pretty_summaries.map((summary, index) => (

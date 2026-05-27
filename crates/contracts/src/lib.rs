@@ -1360,7 +1360,12 @@ pub struct WorkflowTaskView {
     pub queue: String,
     pub task_key: String,
     pub attempt: u32,
+    pub max_attempts: u32,
     pub available_at: DateTime<Utc>,
+    pub claimed_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+    pub updated_at: DateTime<Utc>,
     pub payload: Value,
 }
 

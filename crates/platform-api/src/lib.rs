@@ -57925,7 +57925,12 @@ fn to_workflow_task_view(task: WorkflowTask) -> WorkflowTaskView {
         queue: task.queue,
         task_key: task.task_key,
         attempt: task.attempt,
+        max_attempts: task.max_attempts,
         available_at: task.available_at,
+        claimed_at: task.claimed_at,
+        finished_at: task.finished_at,
+        error: task.error,
+        updated_at: task.updated_at,
         payload: task.payload,
     }
 }
@@ -76730,7 +76735,10 @@ retrieve_evidence:
         );
         let card = reply.card.as_ref().expect("completed reply has card");
         assert_eq!(card["public_url"], json!(reply.artifact_links[0]));
-        assert_eq!(card["generated_artifact_url"], json!(reply.artifact_links[0]));
+        assert_eq!(
+            card["generated_artifact_url"],
+            json!(reply.artifact_links[0])
+        );
     }
 
     #[tokio::test]
