@@ -7676,7 +7676,8 @@ body {
 }
 
 .external-database-dataset-list strong,
-.external-database-dataset-list span {
+.external-database-dataset-list span,
+.external-database-dataset-list small {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -7690,6 +7691,12 @@ body {
   color: #667085;
   font-size: 11px;
   font-weight: 800;
+}
+
+.external-database-dataset-list small {
+  color: #7a6f64;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .external-database-profile {

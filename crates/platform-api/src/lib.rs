@@ -17681,6 +17681,16 @@ async fn load_database_source_target_dataset_summaries(
             where doc.tenant_id = $1
               and doc.lifecycle <> 'archived'
               and doc.metadata #>> '{external_source,source_id}' = $2
+        ),
+        source_docs as (
+            select doc.id,
+                   doc.dataset_id,
+                   doc.lifecycle,
+                   doc.updated_at
+            from documents doc
+            where doc.tenant_id = $1
+              and doc.lifecycle <> 'archived'
+              and doc.metadata #>> '{external_source,source_id}' = $2
         )
         select d.id,
                d.key,
@@ -17688,13 +17698,31 @@ async fn load_database_source_target_dataset_summaries(
                d.lifecycle,
                d.updated_at,
                bool_or(coalesce(s.is_default, false)) as is_default,
-               nullif(d.metadata #>> '{external_source,dataset_external_id}', '') as dataset_external_id
+               nullif(d.metadata #>> '{external_source,dataset_external_id}', '') as dataset_external_id,
+               count(distinct sd.id)::bigint as document_count,
+               count(distinct sd.id) filter (where sd.lifecycle = 'indexed')::bigint as indexed_document_count,
+               count(distinct sd.id) filter (where sd.lifecycle = 'failed')::bigint as failed_document_count,
+               count(distinct sd.id) filter (where sd.lifecycle in ('received', 'extracted'))::bigint as processing_document_count,
+               count(distinct c.id)::bigint as chunk_count,
+               count(distinct c.id) filter (where c.state = 'indexed')::bigint as indexed_chunk_count,
+               count(distinct ev.id)::bigint as retrieval_evidence_count,
+               max(sd.updated_at) as latest_document_updated_at
         from datasets d
         join source_dataset_ids s on s.dataset_id = d.id
+        left join source_docs sd on sd.dataset_id = d.id
+        left join document_chunks c
+          on c.tenant_id = $1
+         and c.document_id = sd.id
+        left join retrieval_evidences ev
+          on ev.tenant_id = $1
+         and ev.document_id = sd.id
         where d.tenant_id = $1
           and d.lifecycle <> 'archived'
         group by d.id, d.key, d.title, d.lifecycle, d.updated_at, d.metadata
-        order by bool_or(coalesce(s.is_default, false)) desc, d.updated_at desc, d.title asc
+        order by bool_or(coalesce(s.is_default, false)) desc,
+                 count(distinct sd.id) filter (where sd.lifecycle = 'indexed') desc,
+                 d.updated_at desc,
+                 d.title asc
         limit 10
         "#,
     )
@@ -17708,6 +17736,16 @@ async fn load_database_source_target_dataset_summaries(
     Ok(Value::Array(
         rows.into_iter()
             .map(|row| {
+                let readiness = external_database_dataset_readiness_summary(
+                    None,
+                    row.get("document_count"),
+                    row.get("indexed_document_count"),
+                    row.get("failed_document_count"),
+                    row.get("processing_document_count"),
+                    row.get("chunk_count"),
+                    row.get("indexed_chunk_count"),
+                    row.get("latest_document_updated_at"),
+                );
                 json!({
                     "dataset_id": row.get::<Uuid, _>("id"),
                     "key": row.get::<String, _>("key"),
@@ -17716,6 +17754,15 @@ async fn load_database_source_target_dataset_summaries(
                     "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
                     "is_default": row.get::<bool, _>("is_default"),
                     "dataset_external_id": row.get::<Option<String>, _>("dataset_external_id"),
+                    "document_count": row.get::<i64, _>("document_count"),
+                    "indexed_document_count": row.get::<i64, _>("indexed_document_count"),
+                    "failed_document_count": row.get::<i64, _>("failed_document_count"),
+                    "processing_document_count": row.get::<i64, _>("processing_document_count"),
+                    "chunk_count": row.get::<i64, _>("chunk_count"),
+                    "indexed_chunk_count": row.get::<i64, _>("indexed_chunk_count"),
+                    "retrieval_evidence_count": row.get::<i64, _>("retrieval_evidence_count"),
+                    "latest_document_updated_at": row.get::<Option<DateTime<Utc>>, _>("latest_document_updated_at"),
+                    "readiness": readiness,
                 })
             })
             .collect(),
@@ -76984,6 +77031,18 @@ retrieve_evidence:
             json!("ready")
         );
         assert_eq!(
+            response.status["datasets"][0]["readiness"]["signal"],
+            json!("ready")
+        );
+        assert_eq!(
+            response.status["datasets"][0]["indexed_document_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.status["datasets"][0]["indexed_chunk_count"],
+            json!(1)
+        );
+        assert_eq!(
             response.status["recent_sync_runs"][0]["sync_run_id"],
             json!(sync_run_id.to_string())
         );
@@ -77348,6 +77407,11 @@ retrieve_evidence:
             response.status["dataset_readiness"]["signal"],
             json!("ready")
         );
+        assert_eq!(
+            response.status["datasets"][0]["readiness"]["signal"],
+            json!("ready")
+        );
+        assert_eq!(response.status["datasets"][0]["document_count"], json!(1));
 
         let findings = response.status["health_findings"]["items"]
             .as_array()

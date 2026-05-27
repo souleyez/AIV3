@@ -459,15 +459,27 @@ export function normalizeDatabaseSourceStatus(raw = {}) {
   const status = raw?.status && typeof raw.status === 'object' ? raw.status : raw;
   const dataset = status?.dataset && typeof status.dataset === 'object' ? status.dataset : {};
   const datasets = Array.isArray(status?.datasets)
-    ? status.datasets.map((item) => ({
-      datasetId: String(item?.dataset_id || item?.datasetId || ''),
-      key: String(item?.key || ''),
-      title: String(item?.title || ''),
-      lifecycle: String(item?.lifecycle || ''),
-      datasetExternalId: String(item?.dataset_external_id || item?.datasetExternalId || ''),
-      isDefault: item?.is_default === true || item?.isDefault === true,
-      updatedAt: item?.updated_at || item?.updatedAt || null,
-    })).filter((item) => item.datasetId)
+    ? status.datasets.map((item) => {
+      const readiness = normalizeDatabaseReadiness(item?.readiness || item || {});
+      return {
+        datasetId: String(item?.dataset_id || item?.datasetId || ''),
+        key: String(item?.key || ''),
+        title: String(item?.title || ''),
+        lifecycle: String(item?.lifecycle || ''),
+        datasetExternalId: String(item?.dataset_external_id || item?.datasetExternalId || ''),
+        isDefault: item?.is_default === true || item?.isDefault === true,
+        updatedAt: item?.updated_at || item?.updatedAt || null,
+        readiness,
+        documentCount: readiness.documentCount,
+        indexedDocumentCount: readiness.indexedDocumentCount,
+        failedDocumentCount: readiness.failedDocumentCount,
+        processingDocumentCount: readiness.processingDocumentCount,
+        chunkCount: readiness.chunkCount,
+        indexedChunkCount: readiness.indexedChunkCount,
+        latestDocumentUpdatedAt: readiness.latestDocumentUpdatedAt,
+        retrievalEvidenceCount: numberOrZero(item?.retrieval_evidence_count ?? item?.retrievalEvidenceCount),
+      };
+    }).filter((item) => item.datasetId)
     : [];
   const tableReadiness = Array.isArray(status?.table_readiness)
     ? status.table_readiness.map((table) => ({

@@ -1337,7 +1337,18 @@ export default function ExternalIntegrationsPageClient() {
                       {selectedDatabaseDatasets.slice(0, 4).map((dataset) => (
                         <article key={dataset.datasetId}>
                           <strong>{dataset.title || dataset.key}</strong>
-                          <span>{dataset.isDefault ? '默认' : dataset.datasetExternalId || '显式目标'}</span>
+                          <span>
+                            {dataset.isDefault ? '默认' : dataset.datasetExternalId || '显式目标'}
+                            {' · '}
+                            {dataset.readiness?.label || '未知'}
+                          </span>
+                          <small>
+                            文档 {dataset.documentCount}
+                            {' · '}
+                            索引 {dataset.indexedDocumentCount}/{dataset.indexedChunkCount}
+                            {' · '}
+                            证据 {dataset.retrievalEvidenceCount}
+                          </small>
                         </article>
                       ))}
                     </div>

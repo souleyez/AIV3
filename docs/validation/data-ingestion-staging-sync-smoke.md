@@ -46,9 +46,34 @@ After deployment:
 6. Confirm the reply moves through `data_ingestion_staging_sync_started` and then worker-driven running/completed or failed states.
 7. Confirm the target staging dataset contains database-derived documents, chunks, and retrieval evidence before asking/reporting from it.
 
-## 2026-05-27 8-Server Pre-Deploy Probe
+## 8-Server Live Source Readiness Smoke
 
-Read-only probe against `8服务器` showed `/srv/aiv3/repo` at `50fd00d18` with the core V3 services active. The local staging confirm/sync route and workflow status changes in this branch had not yet been deployed, so the real database-source staging sync smoke remains pending until release.
+Run on the deployment target after release:
+
+```bash
+bash scripts/run-data-ingestion-staging-live-smoke.sh
+```
+
+Useful options:
+
+- `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area` selects the stored database source.
+- `DATA_INGESTION_LIVE_SMOKE_REQUIRE_DEFAULT_READY=true` makes the smoke fail unless the source default dataset is already indexed.
+- `DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000` selects the local platform API used only for the selected-source status snapshot.
+- `DATA_INGESTION_LIVE_SMOKE_REPO_ROOT=/srv/aiv3/repo` can be used when piping the script through SSH before it is deployed.
+
+The live smoke is non-destructive. It reads only V3 PostgreSQL and the internal selected-source status route. It does not connect to the source/customer database, does not start a sync, does not print raw credentials, and does not dump source rows.
+
+Expected report signals:
+
+- Source exists, is enabled, and has a server-side connection env reference.
+- At least one succeeded sync run exists.
+- At least one source-derived dataset has indexed documents and indexed chunks.
+- The default dataset readiness is reported separately from alternate ready datasets, so an empty newly-bound default dataset is visible without hiding older ready data.
+- Latest failed sync is a warning/attention signal, not proof that historical indexed data disappeared.
+
+## 2026-05-27 8-Server Post-Deploy Probe
+
+Read-only probe against `8服务器` after release showed `/srv/aiv3/repo` at `5b5df7e` with the core V3 services active. The stored MySQL source `hy-sql-traffic-area` exists, has two earlier succeeded content sync runs, and has an older source-derived smoke dataset with 50 indexed database documents, 50 indexed chunks, and 50 retrieval evidence rows. The current default dataset `新百经营分析` is present but has no indexed database-source documents yet, and the latest full sync run is marked failed because a slow metadata query was operator-cancelled. This is exactly why the live smoke separates default dataset readiness, alternate ready datasets, and latest sync failure.
 
 ## Safety Notes
 

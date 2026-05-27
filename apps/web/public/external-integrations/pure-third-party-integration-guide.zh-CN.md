@@ -195,7 +195,7 @@ Authorization: Bearer <V3 inbound token>
   "status": {
     "config_valid": true,                         // 配置是否可用
     "dataset": {},                                // 当前默认或显式目标数据集摘要
-    "datasets": [],                               // 该数据库源已同步过的目标数据集列表
+    "datasets": [],                               // 该数据库源已同步过的目标数据集列表；每项可带 readiness/文档数/证据数
     "dataset_readiness": {},                      // 数据集问答可用状态
     "table_readiness": [],                        // 各表文档/索引/分块状态
     "recent_sync_runs": [],                       // 最近同步任务；可含 row_failure_groups
@@ -218,6 +218,9 @@ Authorization: Bearer <V3 inbound token>
 | `status.sync_readiness.row_failure_groups` | 否 | 数据库行转换失败分组；包含 `table`、`reason`、`reported_failed_row_count`、`sample_count`、`sample_source_primary_keys` |
 | `status.recent_sync_runs[].row_failure_groups` | 否 | 最近同步任务中的失败行分组，便于判断本次同步哪个表/原因失败较多 |
 | `status.dataset_readiness.signal` | 否 | `ready` 表示目标数据集已具备可检索证据 |
+| `status.datasets[].readiness.signal` | 否 | 单个目标数据集的可问状态；用于区分默认数据集为空、但历史显式目标数据集已可问的情况 |
+| `status.datasets[].indexed_document_count` | 否 | 该目标数据集中来自此数据库源的已索引文档数 |
+| `status.datasets[].retrieval_evidence_count` | 否 | 该目标数据集中来自此数据库源的检索证据数 |
 | `status.health_findings.items` | 否 | 配置、同步、索引、行转换失败等问题列表 |
 
 ## 2. 聊天同步

@@ -966,7 +966,20 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
       &quot;is_default&quot;: false,
       &quot;dataset_external_id&quot;: &quot;workspace-main&quot;
     },
-    &quot;datasets&quot;: [],
+    &quot;datasets&quot;: [{
+      &quot;dataset_id&quot;: &quot;5af2f8a6-0d3c-4a12-a77a-333333333333&quot;,
+      &quot;key&quot;: &quot;external-source-hy-sql-main-dataset-workspace-main&quot;,
+      &quot;title&quot;: &quot;HY SQL 主数据集&quot;,
+      &quot;is_default&quot;: false,
+      &quot;dataset_external_id&quot;: &quot;workspace-main&quot;,
+      &quot;document_count&quot;: 20,
+      &quot;indexed_document_count&quot;: 20,
+      &quot;indexed_chunk_count&quot;: 20,
+      &quot;retrieval_evidence_count&quot;: 20,
+      &quot;readiness&quot;: {
+        &quot;signal&quot;: &quot;ready&quot;
+      }
+    }],
     &quot;dataset_readiness&quot;: {
       &quot;signal&quot;: &quot;ready&quot;,
       &quot;document_count&quot;: 20,
@@ -991,7 +1004,7 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>响应字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>V3 数据库源 ID</td></tr><tr><td><code>connector_kind</code></td><td>数据源类型；当前主要为 <code>mysql</code></td></tr><tr><td><code>redacted_summary</code></td><td>脱敏连接摘要，只包含数据库名、服务端密钥引用、映射表数量和表名</td></tr><tr><td><code>status.config_valid</code></td><td>数据库源脱敏配置是否可解析</td></tr><tr><td><code>status.dataset</code></td><td>当前默认或显式目标数据集摘要</td></tr><tr><td><code>status.datasets</code></td><td>该数据库源已发现的目标数据集列表</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>数据集问答可用状态；<code>ready</code> 表示可用于问答/报表</td></tr><tr><td><code>status.table_readiness</code></td><td>各映射表的文档、索引、分块状态</td></tr><tr><td><code>status.recent_sync_runs</code></td><td>最近同步任务摘要；checkpoint 只返回安全摘要，不返回原始游标</td></tr><tr><td><code>status.recent_sync_runs[].row_failure_groups</code></td><td>最近同步任务中的行转换失败分组，按表和原因聚合</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>综合同步状态；常见值：<code>ready</code>、<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code>、<code>indexing</code></td></tr><tr><td><code>status.sync_readiness.row_failure_groups</code></td><td>当前同步可用状态中的行转换失败分组；包含表、原因、失败行数和少量主键样例</td></tr><tr><td><code>status.semantic_profile</code></td><td>表字段、指标、维度、时间字段、实体字段等语义摘要</td></tr><tr><td><code>status.health_findings</code></td><td>配置、同步、索引、行转换失败等问题摘要</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>V3 数据库源 ID</td></tr><tr><td><code>connector_kind</code></td><td>数据源类型；当前主要为 <code>mysql</code></td></tr><tr><td><code>redacted_summary</code></td><td>脱敏连接摘要，只包含数据库名、服务端密钥引用、映射表数量和表名</td></tr><tr><td><code>status.config_valid</code></td><td>数据库源脱敏配置是否可解析</td></tr><tr><td><code>status.dataset</code></td><td>当前默认或显式目标数据集摘要</td></tr><tr><td><code>status.datasets</code></td><td>该数据库源已发现的目标数据集列表；每项包含该源在该目标数据集下的安全计数和 readiness</td></tr><tr><td><code>status.datasets[].readiness.signal</code></td><td>单个目标数据集的可问状态；用于区分默认数据集为空、但历史显式目标数据集已可问的情况</td></tr><tr><td><code>status.datasets[].retrieval_evidence_count</code></td><td>该目标数据集中来自此数据库源的检索证据数</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>数据集问答可用状态；<code>ready</code> 表示可用于问答/报表</td></tr><tr><td><code>status.table_readiness</code></td><td>各映射表的文档、索引、分块状态</td></tr><tr><td><code>status.recent_sync_runs</code></td><td>最近同步任务摘要；checkpoint 只返回安全摘要，不返回原始游标</td></tr><tr><td><code>status.recent_sync_runs[].row_failure_groups</code></td><td>最近同步任务中的行转换失败分组，按表和原因聚合</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>综合同步状态；常见值：<code>ready</code>、<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code>、<code>indexing</code></td></tr><tr><td><code>status.sync_readiness.row_failure_groups</code></td><td>当前同步可用状态中的行转换失败分组；包含表、原因、失败行数和少量主键样例</td></tr><tr><td><code>status.semantic_profile</code></td><td>表字段、指标、维度、时间字段、实体字段等语义摘要</td></tr><tr><td><code>status.health_findings</code></td><td>配置、同步、索引、行转换失败等问题摘要</td></tr></tbody></table></div>
 <h2 id="section-27">12. 用户与组织接口</h2>
 <p>第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些组织和角色。</p>
 <p>建议提供以下接口：</p>

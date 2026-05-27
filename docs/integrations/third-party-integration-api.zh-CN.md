@@ -866,7 +866,20 @@ Authorization: Bearer <V3 inbound token>
       "is_default": false,
       "dataset_external_id": "workspace-main"
     },
-    "datasets": [],
+    "datasets": [{
+      "dataset_id": "5af2f8a6-0d3c-4a12-a77a-333333333333",
+      "key": "external-source-hy-sql-main-dataset-workspace-main",
+      "title": "HY SQL 主数据集",
+      "is_default": false,
+      "dataset_external_id": "workspace-main",
+      "document_count": 20,
+      "indexed_document_count": 20,
+      "indexed_chunk_count": 20,
+      "retrieval_evidence_count": 20,
+      "readiness": {
+        "signal": "ready"
+      }
+    }],
     "dataset_readiness": {
       "signal": "ready",
       "document_count": 20,
@@ -900,7 +913,9 @@ Authorization: Bearer <V3 inbound token>
 | `redacted_summary` | 脱敏连接摘要，只包含数据库名、服务端密钥引用、映射表数量和表名 |
 | `status.config_valid` | 数据库源脱敏配置是否可解析 |
 | `status.dataset` | 当前默认或显式目标数据集摘要 |
-| `status.datasets` | 该数据库源已发现的目标数据集列表 |
+| `status.datasets` | 该数据库源已发现的目标数据集列表；每项包含该源在该目标数据集下的安全计数和 readiness |
+| `status.datasets[].readiness.signal` | 单个目标数据集的可问状态；用于区分默认数据集为空、但历史显式目标数据集已可问的情况 |
+| `status.datasets[].retrieval_evidence_count` | 该目标数据集中来自此数据库源的检索证据数 |
 | `status.dataset_readiness.signal` | 数据集问答可用状态；`ready` 表示可用于问答/报表 |
 | `status.table_readiness` | 各映射表的文档、索引、分块状态 |
 | `status.recent_sync_runs` | 最近同步任务摘要；checkpoint 只返回安全摘要，不返回原始游标 |
