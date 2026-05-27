@@ -362,7 +362,7 @@ Authorization: Bearer <V3 inbound token>
 | `reply.target_conversation_external_id` | 应展示回复的第三方会话 ID |
 | `reply.reply_type` | 回复类型，例如 `text`、`task_status`、`card`、`artifact_link` 或 `requires_confirmation` |
 | `reply.text` | 文本回复内容 |
-| `reply.task_status` | 任务状态，例如 `answered`、`processing`、`failed` 或 `v3_search_evidence_required` |
+| `reply.task_status` | 任务状态，例如 `answered`、`processing`、`failed`、`v3_search_evidence_required`、`data_ingestion_analysis_queued`、`data_ingestion_analysis_completed` |
 | `reply.requires_confirmation` | 是否需要第三方继续展示用户确认 |
 | `reply.action_id` | 待确认或待追踪的外部动作 ID |
 | `reply.confirmation_id` | 确认请求 ID |
@@ -377,6 +377,8 @@ Authorization: Bearer <V3 inbound token>
 - 如果 V3 已接收但暂时无法立即给出最终文本，会返回 `reply_type=task_status`；
 - 如果需要用户确认动作，会返回 `reply_type=requires_confirmation`；
 - 第一阶段不要求第三方再调用单独的“取回复”接口。
+
+数据接入/入库分析不新增请求字段。第三方在普通消息里提出接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求即可。若服务端启用 `data_ingestion_analysis` 固定能力，V3 会返回 `task_status`：排队/重试中为 `data_ingestion_analysis_queued` 或 `data_ingestion_analysis_retrying`；完成后为 `data_ingestion_analysis_completed`，卡片 `reply.card.type=v3_data_ingestion_analysis_result`，`reply.card.result_summary` 只包含安全摘要（来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作）。如果可形成导入草稿，卡片还会返回 `reply.card.staging_plan.type=v3_data_ingestion_staging_plan`，该计划只用于人工确认后的数据集/数据源导入，固定 `production_write_allowed=false`。如需要人工确认，状态为 `data_ingestion_analysis_needs_human`；失败为 `data_ingestion_analysis_failed`。V3 不会在该流程里暴露数据库 URL、凭据、完整表 dump，也不会自动写生产库或修改 schema。
 
 ### 10.2 流式提交用户消息（SSE）
 

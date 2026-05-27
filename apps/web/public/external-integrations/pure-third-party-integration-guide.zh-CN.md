@@ -352,9 +352,11 @@ V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、�
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `task_status` |
-| `reply.task_status` | `data_ingestion_analysis_queued` |
-| `reply.card.type` | `v3_data_ingestion_analysis` |
+| `reply.task_status` | `data_ingestion_analysis_queued`、`data_ingestion_analysis_retrying`、`data_ingestion_analysis_completed`、`data_ingestion_analysis_needs_human` 或 `data_ingestion_analysis_failed` |
+| `reply.card.type` | 排队时为 `v3_data_ingestion_analysis`；完成后为 `v3_data_ingestion_analysis_result` |
 | `reply.card.codex_host_workflow_execution_id` | 固定分析任务 ID |
+| `reply.card.result_summary` | 完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作 |
+| `reply.card.staging_plan` | 完成后可返回 `v3_data_ingestion_staging_plan`，用于人工确认后的数据集/数据源导入草稿；固定 `production_write_allowed=false` |
 
 若没有选中或上传可分析的数据源/表格/文档，V3 会返回 `data_ingestion_analysis_source_required`，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。
 

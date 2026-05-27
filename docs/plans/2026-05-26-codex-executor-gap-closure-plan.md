@@ -17,16 +17,17 @@
 - Fixed templates exist for `static_page_image2_data_publish`, `answer_quality_autofix`, and `data_ingestion_analysis`.
 - Static-page auto publish now accepts either old `codex_exec` readiness or the fixed `cloudflare_orchestrator + cloudflare_codex` readiness; otherwise V3 returns direct HTML fallback with `render_output_id`.
 - Integrated observability page has a protected Codex executor task panel; it only loads the task list when opened and only calls runtime inspect after selecting a task.
+- Third-party AssistantRun reply polling now surfaces fixed-task states for queued/running/retrying/completed/needs-human/failed paths across static-page publish, data-ingestion analysis, and answer-quality diagnostics. Poll retry events are also included in safe Codex diagnostics summaries.
 
 ## Remaining Gaps
 
-1. Static-page Codex publish still needs a real end-to-end smoke from effect image to generated artifact on an approved host.
-2. `data_ingestion_analysis` validates output, but its successful result is not yet fully converted into a user-visible dataset/data-source staging workflow.
-3. `answer_quality_autofix` can be represented as a fixed task, but the auto-fix loop still needs strict failure classification, patch review, and test-result feedback.
-4. Failed/retrying executor statuses are recorded internally, but model-facing supply and third-party/operator-facing summaries are not yet uniform across all fixed templates.
+1. Static-page Codex publish has passed the core 8-server path, but still needs a named real smoke record for demo cases and rollback notes.
+2. `data_ingestion_analysis` validates output, exposes safe task status, records completion/needs-human/failure events, and attaches a safe staging plan artifact; the later operator-approved import execution path is still pending.
+3. `answer_quality_autofix` can be represented and observed as a fixed task, but the auto-fix loop still needs strict failure classification, patch review, and test-result feedback.
+4. Operator-facing summaries are now usable, but model-side follow-up still needs broader wiring into ordinary assistant context for non-third-party surfaces.
 5. Artifact manifests are not yet fully shared across static pages, Image2 previews, reports, data-ingestion plans, and generated artifacts.
 6. Timeouts, retries, cancellation, concurrency budget, workspace retention, and cleanup policy need explicit operator rules and smoke coverage.
-7. Real execution deployment is still blocked until host validation, credentials isolation, and task workspace behavior are proven on the approved executor host.
+7. Real execution deployment is still guarded by host validation, credentials isolation, and task workspace behavior checks on the approved executor host.
 
 ---
 
@@ -131,6 +132,15 @@ cargo test -p platform-api workflow_runtime_pretty_summaries --lib
 ```
 
 Expected: pass.
+
+2026-05-27 progress:
+- Third-party status polling now translates fixed-task events into safe response cards for `data_ingestion_analysis`, `static_page_image2_data_publish`, and `answer_quality_autofix`.
+- `codex_host_task.poll_retry` and heartbeat events are surfaced as retrying/running states with poll hints, without exposing raw logs or credentials.
+- `workflow.step_failed` for a fixed Codex Host task now records a safe `codex_host.fixed_task.rejected` AssistantRun event.
+- Safe diagnostics now count poll retries, heartbeats, and exec completions.
+- Verified:
+  - `cargo test -p platform-api fixed_task --lib`
+  - `cargo test -p platform-api external_channel --lib`
 
 ---
 
@@ -243,6 +253,15 @@ cargo test -p platform-api data_ingestion_analysis_output --lib
 ```
 
 Expected: pass.
+
+2026-05-27 progress:
+- Accepted fixed-task outputs now append `assistant_run.data_ingestion_analysis_completed`, `assistant_run.data_ingestion_analysis_needs_human`, or `assistant_run.data_ingestion_analysis_failed`.
+- Third-party polling now returns `reply.card.type=v3_data_ingestion_analysis_result` with a safe `result_summary` for completed/needs-human/failed data-ingestion analysis.
+- AssistantRun output artifacts now carry `external_channel_data_ingestion_analysis` metadata for staging review, with explicit `production_write_allowed=false`, no credential exposure, and no raw table dump exposure.
+- Completed data-ingestion outputs with mapping/staging content now also carry a reviewable `v3_data_ingestion_staging_plan` draft with stable `plan_id`, source-scope summary, target summary, mapping entries, staging steps, and fixed human-confirmation policy.
+- Verified:
+  - `cargo test -p platform-api data_ingestion_analysis --lib`
+  - `cargo test -p platform-api external_channel_data_ingestion --lib`
 
 ---
 
@@ -410,6 +429,7 @@ Expected: pass.
 
 **Files:**
 - Modify: `docs/validation/static-page-render-smoke.md`
+- Modify: `scripts/run-cloudflare-codex-fixed-task-smoke.ps1`
 - Modify: `scripts/run-v3-quality-gate-smoke.ps1`
 - Modify: `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`
 
@@ -462,17 +482,21 @@ Update the main plan with:
 - pass/fail summary;
 - rollback steps.
 
+2026-05-27 local pre-release smoke:
+- `scripts/run-external-direct-reply-smoke.ps1` passed: ordinary external chat returns provider-authored content, fallback/rejection paths stay model-authored, and temporary document scopes keep the direct-reply contract.
+- `scripts/run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case data-ingestion-analysis -Json` passed: contracts, codex-host-agent, platform-api data-ingestion, and fixed-task tests all passed; JSON report written under `target/cloudflare-codex-fixed-task-smoke/`.
+- `scripts/run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static-page-no-confirm -Json` passed: static-page no-confirm, fixed-task, and codex-host-agent static-page tests all passed; JSON report written under `target/cloudflare-codex-fixed-task-smoke/`.
+- Fixed a Windows PowerShell smoke false failure where successful Cargo stderr lines were treated as terminating errors; the script now captures native command output with local `ErrorActionPreference=Continue` and still uses the real exit code.
+
 ---
 
 ## Recommended Development Order
 
-1. Task 2: model-facing fixed-task status feed.
-2. Task 3: static-page publish callback smoke and status mapping.
-3. Task 6: observability filters and lazy-load assertions.
-4. Task 4: data-ingestion result handoff.
-5. Task 7: timeout/retry/cancellation/retention.
-6. Task 5: answer-quality autofix review-gated loop.
-7. Task 8: staged smoke and production readiness record.
+1. Task 4 follow-up: operator-approved execution for reviewed data-ingestion staging plans.
+2. Task 7: cancellation and workspace retention hardening.
+3. Task 8: staged smoke and production readiness record.
+4. Task 5: answer-quality autofix review-gated loop.
+5. Artifact manifest unification across static pages, Image2 previews, reports, and ingestion plans.
 
 ## Stop Conditions
 

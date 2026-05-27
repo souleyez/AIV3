@@ -68,8 +68,14 @@ function Invoke-CheckedCommand {
         [string] $FilePath,
         [string[]] $Arguments
     )
-    $output = & $FilePath @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     [ordered]@{
         exit_code = $exitCode
         output = ($output -join "`n")

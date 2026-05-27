@@ -21071,6 +21071,10 @@ fn external_channel_reply_from_run_and_events(
     )
     .or_else(|| external_channel_static_page_reply_from_events(events, conversation_external_id))
     .or_else(|| {
+        external_channel_data_ingestion_analysis_reply_from_events(events, conversation_external_id)
+    })
+    .or_else(|| external_channel_fixed_task_reply_from_events(events, conversation_external_id))
+    .or_else(|| {
         external_channel_assistant_reply_from_run(run).map(|reply| {
             external_channel_text_reply_for_conversation(
                 conversation_external_id,
@@ -21383,6 +21387,315 @@ fn external_channel_static_page_reply_from_events(
         }
     }
     None
+}
+
+fn external_channel_data_ingestion_analysis_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let event = events.iter().rev().find(|event| {
+        matches!(
+            event.event_name.as_str(),
+            "assistant_run.data_ingestion_analysis_completed"
+                | "assistant_run.data_ingestion_analysis_needs_human"
+                | "assistant_run.data_ingestion_analysis_failed"
+        )
+    })?;
+    let task_status = match event.event_name.as_str() {
+        "assistant_run.data_ingestion_analysis_completed" => "data_ingestion_analysis_completed",
+        "assistant_run.data_ingestion_analysis_needs_human" => {
+            "data_ingestion_analysis_needs_human"
+        }
+        _ => "data_ingestion_analysis_failed",
+    };
+    let text = match event.event_name.as_str() {
+        "assistant_run.data_ingestion_analysis_completed" => {
+            "V3 已完成数据接入分析，已生成只读质量报告、字段映射和 staging 建议。"
+        }
+        "assistant_run.data_ingestion_analysis_needs_human" => {
+            "V3 已完成数据接入分析，但继续入库或改 schema 前需要人工确认。"
+        }
+        _ => "V3 数据接入分析未完成，已记录失败原因，需重试或人工处理。",
+    };
+    let result_summary = event
+        .payload
+        .get("result_summary")
+        .cloned()
+        .unwrap_or(Value::Null);
+    Some(external_channel_task_status_reply_for_conversation(
+        conversation_external_id,
+        task_status,
+        Some(text.to_string()),
+        Some(json!({
+            "type": "v3_data_ingestion_analysis_result",
+            "status": task_status,
+            "template_id": "data_ingestion_analysis",
+            "codex_host_workflow_execution_id": event
+                .payload
+                .get("codex_host_workflow_execution_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "result_summary": result_summary,
+            "staging_plan": event
+                .payload
+                .get("staging_plan")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "staging_plan_available": event
+                .payload
+                .get("staging_plan_available")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+            "human_review_required": event
+                .payload
+                .get("human_review_required")
+                .cloned()
+                .unwrap_or(Value::Bool(task_status != "data_ingestion_analysis_completed")),
+            "staging_spec_available": event
+                .payload
+                .get("staging_spec_available")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+        })),
+        Vec::new(),
+    ))
+}
+
+fn external_channel_fixed_task_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let latest_fixed = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name.starts_with("codex_host.fixed_task."));
+    let latest_data_ingestion_queued = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "assistant_run.data_ingestion_analysis_queued");
+    let latest_poll_retry = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "codex_host_task.poll_retry");
+    let latest_heartbeat = events.iter().rev().find(|event| {
+        matches!(
+            event.event_name.as_str(),
+            "codex_host_task.cloudflare_heartbeat" | "codex_host_task.exec_heartbeat"
+        )
+    });
+
+    if let Some(fixed) = latest_fixed {
+        let template_id = external_channel_fixed_task_template_id(fixed)?;
+        if let Some(retry) = latest_poll_retry.filter(|retry| retry.sequence_no > fixed.sequence_no)
+        {
+            return Some(external_channel_fixed_task_processing_reply(
+                conversation_external_id,
+                &template_id,
+                "retrying",
+                fixed,
+                Some(retry),
+            ));
+        }
+        if let Some(heartbeat) =
+            latest_heartbeat.filter(|heartbeat| heartbeat.sequence_no > fixed.sequence_no)
+        {
+            return Some(external_channel_fixed_task_processing_reply(
+                conversation_external_id,
+                &template_id,
+                "running",
+                fixed,
+                Some(heartbeat),
+            ));
+        }
+        return Some(external_channel_fixed_task_terminal_or_queued_reply(
+            conversation_external_id,
+            fixed,
+            &template_id,
+        ));
+    }
+
+    latest_data_ingestion_queued.map(|event| {
+        external_channel_task_status_reply_for_conversation(
+            conversation_external_id,
+            "data_ingestion_analysis_queued",
+            Some("V3 已提交数据接入分析任务，正在生成只读分析和入库建议。".to_string()),
+            Some(json!({
+                "type": "v3_data_ingestion_analysis",
+                "status": "data_ingestion_analysis_queued",
+                "template_id": event
+                    .payload
+                    .get("template_id")
+                    .cloned()
+                    .unwrap_or_else(|| json!("data_ingestion_analysis")),
+                "codex_host_workflow_execution_id": event
+                    .payload
+                    .get("codex_host_workflow_execution_id")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "poll_after_seconds": 15,
+            })),
+            Vec::new(),
+        )
+    })
+}
+
+fn external_channel_fixed_task_template_id(event: &AssistantRunEvent) -> Option<String> {
+    event
+        .payload
+        .get("template_id")
+        .and_then(Value::as_str)
+        .or_else(|| event.payload.get("capability").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn external_channel_fixed_task_workflow_execution_id(event: &AssistantRunEvent) -> Value {
+    event
+        .payload
+        .get("workflow_execution_id")
+        .or_else(|| event.payload.get("codex_host_workflow_execution_id"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn external_channel_fixed_task_card_type(template_id: &str) -> &'static str {
+    match template_id {
+        "data_ingestion_analysis" => "v3_data_ingestion_analysis",
+        "static_page_image2_data_publish" => "v3_static_page_image2_publish_status",
+        "answer_quality_autofix" => "v3_answer_quality_autofix",
+        _ => "v3_codex_fixed_task",
+    }
+}
+
+fn external_channel_fixed_task_status_prefix(template_id: &str) -> &'static str {
+    match template_id {
+        "data_ingestion_analysis" => "data_ingestion_analysis",
+        "static_page_image2_data_publish" => "static_page_publish",
+        "answer_quality_autofix" => "answer_quality_autofix",
+        _ => "codex_fixed_task",
+    }
+}
+
+fn external_channel_fixed_task_processing_reply(
+    conversation_external_id: &str,
+    template_id: &str,
+    state: &str,
+    fixed_event: &AssistantRunEvent,
+    runtime_event: Option<&AssistantRunEvent>,
+) -> ExternalBotReplyView {
+    let prefix = external_channel_fixed_task_status_prefix(template_id);
+    let task_status = format!("{prefix}_{state}");
+    let text = match (template_id, state) {
+        ("data_ingestion_analysis", "retrying") => {
+            "V3 数据接入分析仍在执行，Cloudflare Codex 超时后已自动续轮询。"
+        }
+        ("data_ingestion_analysis", _) => "V3 数据接入分析正在执行，请稍后查询结果。",
+        ("static_page_image2_data_publish", "retrying") => {
+            "V3 静态页发布仍在执行，Cloudflare Codex 超时后已自动续轮询。"
+        }
+        ("static_page_image2_data_publish", _) => "V3 已生成效果图，Codex 正在生成最终静态页。",
+        ("answer_quality_autofix", "retrying") => "V3 回答质量修复诊断仍在执行，已自动续轮询。",
+        ("answer_quality_autofix", _) => "V3 回答质量修复诊断正在执行。",
+        (_, "retrying") => "V3 Codex 固定任务仍在执行，已自动续轮询。",
+        _ => "V3 Codex 固定任务正在执行。",
+    };
+    external_channel_task_status_reply_for_conversation(
+        conversation_external_id,
+        &task_status,
+        Some(text.to_string()),
+        Some(json!({
+            "type": external_channel_fixed_task_card_type(template_id),
+            "status": task_status,
+            "template_id": template_id,
+            "codex_host_workflow_execution_id": external_channel_fixed_task_workflow_execution_id(fixed_event),
+            "runtime_event": runtime_event.map(|event| json!({
+                "event_name": event.event_name.clone(),
+                "status": event.payload.get("status").cloned().unwrap_or(Value::Null),
+                "reason": event
+                    .payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(codex_host_fixed_task_safe_text)
+                    .unwrap_or_default(),
+                "attempt": event.payload.get("attempt").cloned().unwrap_or(Value::Null),
+                "max_attempts": event.payload.get("max_attempts").cloned().unwrap_or(Value::Null),
+                "available_at": event.payload.get("available_at").cloned().unwrap_or(Value::Null),
+                "elapsed_ms": event.payload.get("elapsed_ms").cloned().unwrap_or(Value::Null),
+                "heartbeat_count": event.payload.get("heartbeat_count").cloned().unwrap_or(Value::Null),
+            })).unwrap_or(Value::Null),
+            "poll_after_seconds": if state == "retrying" { 30 } else { 15 },
+        })),
+        Vec::new(),
+    )
+}
+
+fn external_channel_fixed_task_terminal_or_queued_reply(
+    conversation_external_id: &str,
+    event: &AssistantRunEvent,
+    template_id: &str,
+) -> ExternalBotReplyView {
+    let event_status = event
+        .payload
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("queued");
+    let prefix = external_channel_fixed_task_status_prefix(template_id);
+    let terminal_state = match event.event_name.as_str() {
+        "codex_host.fixed_task.completed" => "completed",
+        "codex_host.fixed_task.needs_human" => "needs_human",
+        "codex_host.fixed_task.rejected" => "failed",
+        _ => "queued",
+    };
+    let task_status = format!("{prefix}_{terminal_state}");
+    let artifact_url = event
+        .payload
+        .pointer("/output/artifact_public_url")
+        .and_then(Value::as_str)
+        .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
+        .map(str::to_string);
+    let text = match (template_id, terminal_state) {
+        ("data_ingestion_analysis", "completed") => {
+            "V3 已完成数据接入分析，已生成只读质量报告、字段映射和后续动作建议。"
+        }
+        ("data_ingestion_analysis", "needs_human") => {
+            "V3 数据接入分析需要人工确认后继续，当前不会自动写库或修改 schema。"
+        }
+        ("data_ingestion_analysis", "failed") => {
+            "V3 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
+        }
+        ("data_ingestion_analysis", _) => "V3 已提交数据接入分析任务。",
+        ("static_page_image2_data_publish", "completed") => "V3 静态页已生成并发布。",
+        ("static_page_image2_data_publish", "needs_human") => "V3 静态页发布需要人工确认或处理。",
+        ("static_page_image2_data_publish", "failed") => "V3 静态页发布未完成，需重试或人工处理。",
+        ("static_page_image2_data_publish", _) => "V3 已提交静态页发布任务。",
+        ("answer_quality_autofix", "completed") => "V3 已完成回答质量修复诊断。",
+        ("answer_quality_autofix", "needs_human") => "V3 回答质量修复诊断需要人工审查后继续。",
+        ("answer_quality_autofix", "failed") => "V3 回答质量修复诊断未完成。",
+        ("answer_quality_autofix", _) => "V3 已提交回答质量修复诊断任务。",
+        (_, "completed") => "V3 Codex 固定任务已完成。",
+        (_, "needs_human") => "V3 Codex 固定任务需要人工处理。",
+        (_, "failed") => "V3 Codex 固定任务未完成，需重试或人工处理。",
+        _ => "V3 Codex 固定任务已提交。",
+    };
+    let card = json!({
+        "type": external_channel_fixed_task_card_type(template_id),
+        "status": task_status,
+        "template_id": template_id,
+        "output_status": event_status,
+        "codex_host_workflow_execution_id": external_channel_fixed_task_workflow_execution_id(event),
+        "artifact_public_url": artifact_url.clone().map(Value::String).unwrap_or(Value::Null),
+        "output": event.payload.get("output").cloned().unwrap_or(Value::Null),
+        "validation": event.payload.get("validation").cloned().unwrap_or(Value::Null),
+        "poll_after_seconds": if terminal_state == "queued" { Value::from(15) } else { Value::Null },
+    });
+    external_channel_task_status_reply_for_conversation(
+        conversation_external_id,
+        &task_status,
+        Some(text.to_string()),
+        Some(card),
+        artifact_url.into_iter().collect(),
+    )
 }
 
 fn external_channel_static_page_latest_codex_heartbeat_after(
@@ -31874,6 +32187,38 @@ fn codex_host_fixed_task_transition_audit_event(
     }
 
     if workflow_event.event_name != "workflow.step_completed" {
+        if workflow_event.event_name == "workflow.step_failed" {
+            let error = workflow_event
+                .payload
+                .get("error")
+                .and_then(Value::as_str)
+                .map(codex_host_fixed_task_safe_text)
+                .unwrap_or_else(|| "workflow_step_failed".to_string());
+            let payload = codex_host_fixed_task_base_payload(
+                execution,
+                assistant_run_id.as_deref(),
+                capability,
+                fixed_task,
+                &template_id,
+                "failed",
+            )
+            .with_extra(json!({
+                "workflow_event_name": workflow_event.event_name,
+                "output": codex_host_fixed_task_output_summary(None),
+                "validation": {
+                    "accepted": false,
+                    "status": "failed",
+                    "auto_apply_allowed": false,
+                    "reason": "workflow_step_failed",
+                    "error": error,
+                },
+            }));
+            return Some(CodexHostFixedTaskAuditEvent {
+                event_name: "codex_host.fixed_task.rejected".to_string(),
+                payload,
+                notify_human: true,
+            });
+        }
         return None;
     }
 
@@ -32689,6 +33034,540 @@ fn external_channel_static_page_publish_validation_summary_from_fixed_task_outpu
     })
 }
 
+fn data_ingestion_safe_string_array(value: Option<Value>, limit: usize) -> Vec<String> {
+    value_array(value.unwrap_or(Value::Null))
+        .into_iter()
+        .filter_map(|value| value.as_str().map(codex_host_fixed_task_safe_text))
+        .filter(|value| !value.trim().is_empty())
+        .take(limit)
+        .collect()
+}
+
+fn data_ingestion_first_count(value: &Value, keys: &[&str]) -> Value {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_u64))
+        .map(Value::from)
+        .unwrap_or(Value::Null)
+}
+
+fn data_ingestion_first_text(value: &Value, keys: &[&str]) -> Value {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(codex_host_fixed_task_safe_text)
+        .filter(|value| !value.trim().is_empty())
+        .map(Value::String)
+        .unwrap_or(Value::Null)
+}
+
+fn data_ingestion_object_keys(value: &Value, limit: usize) -> Vec<String> {
+    value
+        .as_object()
+        .map(|object| object.keys().take(limit).cloned().collect())
+        .unwrap_or_default()
+}
+
+fn data_ingestion_array_len(value: &Value, keys: &[&str]) -> usize {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0)
+}
+
+fn data_ingestion_safe_value(value: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(codex_host_fixed_task_safe_text(text)),
+        Value::Number(_) | Value::Bool(_) | Value::Null => value.clone(),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .take(12)
+                .map(data_ingestion_safe_value)
+                .collect::<Vec<_>>(),
+        ),
+        Value::Object(_) => Value::Null,
+    }
+}
+
+fn data_ingestion_first_array<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Vec<Value>> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array))
+}
+
+fn data_ingestion_safe_object_projection(value: &Value, allowed_keys: &[&str]) -> Value {
+    let Some(object) = value.as_object() else {
+        return data_ingestion_safe_value(value);
+    };
+    let mut projected = Map::new();
+    for key in allowed_keys {
+        if let Some(value) = object.get(*key) {
+            let safe_value = data_ingestion_safe_value(value);
+            if !safe_value.is_null() {
+                projected.insert((*key).to_string(), safe_value);
+            }
+        }
+    }
+    Value::Object(projected)
+}
+
+fn data_ingestion_safe_mapping_entries(mapping_plan: &Value) -> Vec<Value> {
+    let Some(entries) =
+        data_ingestion_first_array(mapping_plan, &["fields", "mappings", "columns"])
+    else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .take(80)
+        .filter_map(|entry| {
+            let projected = data_ingestion_safe_object_projection(
+                entry,
+                &[
+                    "source",
+                    "source_field",
+                    "source_column",
+                    "target",
+                    "target_field",
+                    "target_column",
+                    "target_type",
+                    "type",
+                    "nullable",
+                    "required",
+                    "transform",
+                    "description",
+                    "notes",
+                    "confidence",
+                ],
+            );
+            projected
+                .as_object()
+                .is_some_and(|object| !object.is_empty())
+                .then_some(projected)
+        })
+        .collect()
+}
+
+fn data_ingestion_safe_staging_steps(staging_spec: &Value) -> Vec<Value> {
+    let Some(steps) = data_ingestion_first_array(staging_spec, &["steps", "tasks", "operations"])
+    else {
+        return Vec::new();
+    };
+    steps
+        .iter()
+        .take(40)
+        .filter_map(|step| {
+            let projected = data_ingestion_safe_object_projection(
+                step,
+                &[
+                    "name",
+                    "action",
+                    "kind",
+                    "mode",
+                    "description",
+                    "target",
+                    "depends_on",
+                    "validation",
+                ],
+            );
+            if projected.is_string()
+                || projected
+                    .as_object()
+                    .is_some_and(|object| !object.is_empty())
+            {
+                Some(projected)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn data_ingestion_safe_source_scope_summary(execution: &WorkflowExecution) -> Value {
+    let scope = execution
+        .context
+        .pointer("/fixed_task/dataset_scope")
+        .unwrap_or(&Value::Null);
+    json!({
+        "tenant_id_present": scope.get("tenant_id").is_some(),
+        "dataset_ids": data_ingestion_safe_string_array(scope.get("dataset_ids").cloned(), 24),
+        "database_source_ids": data_ingestion_safe_string_array(scope.get("database_source_ids").cloned(), 24),
+        "selected_document_ids": data_ingestion_safe_string_array(scope.get("selected_document_ids").cloned(), 48),
+        "uploaded_file_ids": data_ingestion_safe_string_array(scope.get("uploaded_file_ids").cloned(), 48),
+    })
+}
+
+fn data_ingestion_staging_import_plan_from_output(
+    output: Option<&Value>,
+    execution: &WorkflowExecution,
+    assistant_run_id: AssistantRunId,
+    result_summary: &Value,
+) -> Value {
+    let Some(output) = output else {
+        return Value::Null;
+    };
+    let mapping_plan = output.get("mapping_plan").unwrap_or(&Value::Null);
+    let staging_spec = output.get("staging_spec").unwrap_or(&Value::Null);
+    let mapping_entries = data_ingestion_safe_mapping_entries(mapping_plan);
+    let staging_steps = data_ingestion_safe_staging_steps(staging_spec);
+    if mapping_entries.is_empty() && staging_steps.is_empty() && staging_spec.is_null() {
+        return Value::Null;
+    }
+    let mut target_dataset = data_ingestion_first_text(
+        staging_spec,
+        &["target_dataset", "target_dataset_id", "dataset"],
+    );
+    if target_dataset.is_null() {
+        target_dataset = data_ingestion_first_text(
+            mapping_plan,
+            &["target_dataset", "target_dataset_id", "dataset"],
+        );
+    }
+    let mut target_table =
+        data_ingestion_first_text(staging_spec, &["target_table", "table", "target"]);
+    if target_table.is_null() {
+        target_table =
+            data_ingestion_first_text(mapping_plan, &["target_table", "table", "target"]);
+    }
+    let operation_mode =
+        data_ingestion_first_text(staging_spec, &["operation_mode", "mode", "import_mode"]);
+    json!({
+        "type": "v3_data_ingestion_staging_plan",
+        "plan_id": format!(
+            "data-ingestion:{}:{}",
+            assistant_run_id.0,
+            execution.id
+        ),
+        "plan_version": 1,
+        "workflow_execution_id": execution.id.to_string(),
+        "assistant_run_id": assistant_run_id.to_string(),
+        "approval_status": "pending_human_review",
+        "execution_policy": {
+            "dry_run_only": true,
+            "requires_human_confirmation": true,
+            "production_write_allowed": false,
+            "schema_mutation_allowed": false,
+            "credential_request_allowed": false,
+            "raw_table_dump_allowed": false
+        },
+        "source_scope": data_ingestion_safe_source_scope_summary(execution),
+        "target": {
+            "dataset": target_dataset,
+            "table": target_table,
+            "operation_mode": operation_mode
+        },
+        "mapping_entries": mapping_entries,
+        "staging_steps": staging_steps,
+        "validation_checks": data_ingestion_safe_string_array(
+            output.get("validation_checks").cloned(),
+            40
+        ),
+        "recommended_next_actions": data_ingestion_safe_string_array(
+            output.get("recommended_next_actions").cloned(),
+            20
+        ),
+        "quality_gate": {
+            "row_count": result_summary
+                .pointer("/data_quality_report/row_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "warning_count": result_summary
+                .pointer("/data_quality_report/warning_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "issue_count": result_summary
+                .pointer("/data_quality_report/issue_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "staging_spec_available": result_summary
+                .get("staging_spec_available")
+                .cloned()
+                .unwrap_or(Value::Bool(false))
+        },
+        "safety": {
+            "raw_credentials_exposed": false,
+            "raw_table_dump_exposed": false,
+            "production_write_allowed": false
+        }
+    })
+}
+
+fn data_ingestion_quality_report_summary(report: &Value) -> Value {
+    if !report.is_object() {
+        return Value::Null;
+    }
+    let warnings = data_ingestion_safe_string_array(report.get("warnings").cloned(), 8);
+    json!({
+        "present": true,
+        "row_count": data_ingestion_first_count(report, &["row_count", "rows", "total_rows", "record_count"]),
+        "field_count": data_ingestion_array_len(report, &["fields", "columns"]),
+        "issue_count": data_ingestion_array_len(report, &["issues", "problems", "errors"]),
+        "warning_count": warnings.len(),
+        "warnings": warnings,
+        "keys": data_ingestion_object_keys(report, 12),
+    })
+}
+
+fn data_ingestion_mapping_plan_summary(mapping_plan: &Value) -> Value {
+    if !mapping_plan.is_object() {
+        return Value::Null;
+    }
+    json!({
+        "present": true,
+        "mapping_count": data_ingestion_array_len(mapping_plan, &["fields", "mappings", "columns"]),
+        "target_dataset": data_ingestion_first_text(mapping_plan, &["target_dataset", "target_dataset_id", "dataset"]),
+        "target_table": data_ingestion_first_text(mapping_plan, &["target_table", "table", "target"]),
+        "keys": data_ingestion_object_keys(mapping_plan, 12),
+    })
+}
+
+fn data_ingestion_staging_spec_summary(staging_spec: &Value) -> Value {
+    if staging_spec.is_null() {
+        return json!({
+            "available": false,
+            "write_policy": "requires_human_confirmation",
+        });
+    }
+    json!({
+        "available": true,
+        "operation_mode": data_ingestion_first_text(staging_spec, &["operation_mode", "mode", "import_mode"]),
+        "target_dataset": data_ingestion_first_text(staging_spec, &["target_dataset", "target_dataset_id", "dataset"]),
+        "target_table": data_ingestion_first_text(staging_spec, &["target_table", "table", "target"]),
+        "step_count": data_ingestion_array_len(staging_spec, &["steps", "tasks", "operations"]),
+        "key_count": staging_spec.as_object().map(Map::len).unwrap_or(0),
+        "write_policy": "requires_human_confirmation",
+    })
+}
+
+fn data_ingestion_analysis_result_summary_from_output(
+    output: Option<&Value>,
+    audit_payload: &Value,
+) -> Value {
+    let status = output
+        .and_then(|output| output.get("status").and_then(Value::as_str))
+        .or_else(|| audit_payload.get("status").and_then(Value::as_str))
+        .unwrap_or("failed");
+    let data_quality_report = output
+        .and_then(|output| output.get("data_quality_report"))
+        .unwrap_or(&Value::Null);
+    let mapping_plan = output
+        .and_then(|output| output.get("mapping_plan"))
+        .unwrap_or(&Value::Null);
+    let staging_spec = output
+        .and_then(|output| output.get("staging_spec"))
+        .unwrap_or(&Value::Null);
+    let source_summary = data_ingestion_safe_string_array(
+        output
+            .and_then(|value| value.get("source_summary"))
+            .cloned(),
+        6,
+    );
+    let validation_checks = data_ingestion_safe_string_array(
+        output
+            .and_then(|value| value.get("validation_checks"))
+            .cloned(),
+        12,
+    );
+    let recommended_next_actions = data_ingestion_safe_string_array(
+        output
+            .and_then(|value| value.get("recommended_next_actions"))
+            .cloned(),
+        8,
+    );
+    let human_review_reason = output
+        .and_then(|output| output.get("human_review_reason").and_then(Value::as_str))
+        .or_else(|| {
+            audit_payload
+                .pointer("/validation/reason")
+                .and_then(Value::as_str)
+        })
+        .map(codex_host_fixed_task_safe_text)
+        .filter(|value| !value.trim().is_empty());
+    json!({
+        "status": status,
+        "source_summary": source_summary,
+        "data_quality_report": data_ingestion_quality_report_summary(data_quality_report),
+        "mapping_plan_summary": data_ingestion_mapping_plan_summary(mapping_plan),
+        "staging_spec_summary": data_ingestion_staging_spec_summary(staging_spec),
+        "staging_spec_available": !staging_spec.is_null(),
+        "validation_checks": validation_checks,
+        "recommended_next_actions": recommended_next_actions,
+        "human_review_reason": human_review_reason,
+        "production_write_allowed": false,
+        "raw_credentials_exposed": false,
+        "raw_table_dump_exposed": false,
+    })
+}
+
+async fn maybe_attach_external_data_ingestion_analysis_artifact_to_run(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    assistant_run_id: AssistantRunId,
+    completed_payload: &Value,
+) -> std::result::Result<(), ApiError> {
+    let Some(run) = storage
+        .assistant_runs()
+        .get_by_id(tenant_id, assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(());
+    };
+    let workflow_execution_id = completed_payload
+        .get("codex_host_workflow_execution_id")
+        .and_then(Value::as_str);
+    let mut output_artifacts = value_array(run.output_artifacts);
+    if output_artifacts.iter().any(|artifact| {
+        artifact.get("type").and_then(Value::as_str)
+            == Some("external_channel_data_ingestion_analysis")
+            && artifact
+                .get("codex_host_workflow_execution_id")
+                .and_then(Value::as_str)
+                == workflow_execution_id
+    }) {
+        return Ok(());
+    }
+    output_artifacts.push(json!({
+        "type": "external_channel_data_ingestion_analysis",
+        "artifact_type": "data_ingestion_analysis",
+        "title": "data_ingestion_analysis",
+        "codex_host_workflow_execution_id": completed_payload
+            .get("codex_host_workflow_execution_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "status": completed_payload.get("status").cloned().unwrap_or(Value::Null),
+        "result_summary": completed_payload
+            .get("result_summary")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "human_review_required": completed_payload
+            .get("human_review_required")
+            .cloned()
+            .unwrap_or(Value::Bool(true)),
+        "staging_spec_available": completed_payload
+            .get("staging_spec_available")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+        "staging_plan": completed_payload
+            .get("staging_plan")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "staging_plan_available": completed_payload
+            .get("staging_plan_available")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
+    }));
+    storage
+        .assistant_runs()
+        .attach_output_artifacts(tenant_id, assistant_run_id, &Value::Array(output_artifacts))
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
+async fn maybe_record_external_data_ingestion_analysis_result(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    execution: &WorkflowExecution,
+    event: &CodexHostFixedTaskAuditEvent,
+) -> std::result::Result<(), ApiError> {
+    if event.payload.get("template_id").and_then(Value::as_str) != Some("data_ingestion_analysis")
+        || !matches!(
+            event.event_name.as_str(),
+            "codex_host.fixed_task.completed"
+                | "codex_host.fixed_task.needs_human"
+                | "codex_host.fixed_task.rejected"
+        )
+    {
+        return Ok(());
+    }
+    let Some(assistant_run_id) = event
+        .payload
+        .get("assistant_run_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(AssistantRunId)
+    else {
+        return Ok(());
+    };
+    let existing_events = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if existing_events.iter().any(|existing| {
+        matches!(
+            existing.event_name.as_str(),
+            "assistant_run.data_ingestion_analysis_completed"
+                | "assistant_run.data_ingestion_analysis_needs_human"
+                | "assistant_run.data_ingestion_analysis_failed"
+        ) && existing
+            .payload
+            .get("codex_host_workflow_execution_id")
+            .and_then(Value::as_str)
+            == Some(execution.id.to_string().as_str())
+    }) {
+        return Ok(());
+    }
+    let output = execution
+        .context
+        .get("last_output")
+        .and_then(|value| codex_host_fixed_task_extract_output("data_ingestion_analysis", value));
+    let result_summary = data_ingestion_analysis_result_summary_from_output(output, &event.payload);
+    let staging_plan = data_ingestion_staging_import_plan_from_output(
+        output,
+        execution,
+        assistant_run_id,
+        &result_summary,
+    );
+    let staging_plan_available = !staging_plan.is_null();
+    let event_name = match event.event_name.as_str() {
+        "codex_host.fixed_task.completed" => "assistant_run.data_ingestion_analysis_completed",
+        "codex_host.fixed_task.needs_human" => "assistant_run.data_ingestion_analysis_needs_human",
+        _ => "assistant_run.data_ingestion_analysis_failed",
+    };
+    let human_review_required = event.event_name != "codex_host.fixed_task.completed"
+        || event
+            .payload
+            .pointer("/validation/auto_apply_allowed")
+            .and_then(Value::as_bool)
+            != Some(true);
+    let completed_payload = json!({
+        "template_id": "data_ingestion_analysis",
+        "status": result_summary.get("status").cloned().unwrap_or(Value::Null),
+        "codex_host_workflow_execution_id": execution.id.to_string(),
+        "result_summary": result_summary,
+        "staging_plan": staging_plan,
+        "staging_plan_available": staging_plan_available,
+        "human_review_required": human_review_required,
+        "staging_spec_available": output
+            .and_then(|output| output.get("staging_spec"))
+            .is_some_and(|value| !value.is_null()),
+        "production_write_allowed": false,
+        "raw_credentials_exposed": false,
+        "raw_table_dump_exposed": false,
+        "validation": event.payload.get("validation").cloned().unwrap_or(Value::Null),
+    });
+    maybe_attach_external_data_ingestion_analysis_artifact_to_run(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        &completed_payload,
+    )
+    .await?;
+    storage
+        .assistant_runs()
+        .append_event(
+            tenant_id,
+            assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: event_name.to_string(),
+                payload: completed_payload,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
 async fn maybe_record_external_static_page_publish_completed(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -33121,7 +34000,21 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
         .iter()
         .filter(|event| event.event_name.starts_with("codex_host.fixed_task."))
         .collect::<Vec<_>>();
+    let runtime_events = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_name.as_str(),
+                "codex_host_task.poll_retry"
+                    | "codex_host_task.exec_heartbeat"
+                    | "codex_host_task.cloudflare_heartbeat"
+                    | "codex_host_task.exec_completed"
+                    | "codex_host_task.completed"
+            )
+        })
+        .collect::<Vec<_>>();
     let latest = fixed_events.last().copied();
+    let latest_runtime = runtime_events.last().copied();
     let recent = fixed_events
         .iter()
         .rev()
@@ -33161,12 +34054,50 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
             })
         })
         .collect::<Vec<_>>();
+    let recent_runtime = runtime_events
+        .iter()
+        .rev()
+        .take(8)
+        .map(|event| {
+            json!({
+                "event_id": event.id.to_string(),
+                "sequence_no": event.sequence_no,
+                "event_name": event.event_name.clone(),
+                "status": event.payload.get("status").cloned().unwrap_or(Value::Null),
+                "reason": event
+                    .payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(codex_host_fixed_task_safe_text)
+                    .unwrap_or_default(),
+                "attempt": event.payload.get("attempt").cloned().unwrap_or(Value::Null),
+                "max_attempts": event.payload.get("max_attempts").cloned().unwrap_or(Value::Null),
+                "available_at": event.payload.get("available_at").cloned().unwrap_or(Value::Null),
+                "elapsed_ms": event.payload.get("elapsed_ms").cloned().unwrap_or(Value::Null),
+                "heartbeat_count": event.payload.get("heartbeat_count").cloned().unwrap_or(Value::Null),
+                "secrets_exposed": event
+                    .payload
+                    .get("secrets_exposed")
+                    .cloned()
+                    .unwrap_or(Value::Bool(false)),
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "event_count": fixed_events.len(),
         "queued_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.queued").count(),
         "completed_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.completed").count(),
         "needs_human_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.needs_human").count(),
         "rejected_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.rejected").count(),
+        "poll_retry_count": runtime_events.iter().filter(|event| event.event_name == "codex_host_task.poll_retry").count(),
+        "heartbeat_count": runtime_events
+            .iter()
+            .filter(|event| matches!(
+                event.event_name.as_str(),
+                "codex_host_task.exec_heartbeat" | "codex_host_task.cloudflare_heartbeat"
+            ))
+            .count(),
+        "exec_completed_count": runtime_events.iter().filter(|event| event.event_name == "codex_host_task.exec_completed").count(),
         "latest": latest.map(|event| {
             json!({
                 "event_name": event.event_name.clone(),
@@ -33175,7 +34106,23 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
                 "validation_reason": event.payload.pointer("/validation/reason").cloned().unwrap_or(Value::Null),
             })
         }).unwrap_or(Value::Null),
+        "latest_runtime": latest_runtime.map(|event| {
+            json!({
+                "event_name": event.event_name.clone(),
+                "status": event.payload.get("status").cloned().unwrap_or(Value::Null),
+                "reason": event
+                    .payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(codex_host_fixed_task_safe_text)
+                    .unwrap_or_default(),
+                "attempt": event.payload.get("attempt").cloned().unwrap_or(Value::Null),
+                "max_attempts": event.payload.get("max_attempts").cloned().unwrap_or(Value::Null),
+                "available_at": event.payload.get("available_at").cloned().unwrap_or(Value::Null),
+            })
+        }).unwrap_or(Value::Null),
         "recent": recent,
+        "recent_runtime": recent_runtime,
     })
 }
 
@@ -48370,6 +49317,13 @@ pub async fn apply_workflow_signal_with_dependencies(
         let followup_event = event.clone();
         record_codex_host_fixed_task_audit_event(storage, tenant_id, event).await?;
         maybe_record_external_static_page_publish_completed(
+            storage,
+            tenant_id,
+            &next_execution,
+            &followup_event,
+        )
+        .await?;
+        maybe_record_external_data_ingestion_analysis_result(
             storage,
             tenant_id,
             &next_execution,
@@ -70974,6 +71928,128 @@ mod tests {
     }
 
     #[test]
+    fn data_ingestion_analysis_result_summary_exposes_only_safe_staging_metadata() {
+        let output = json!({
+            "template_id": "data_ingestion_analysis",
+            "status": "staging_spec_ready",
+            "source_summary": ["新百项目会员流水 sample rows available"],
+            "data_quality_report": {
+                "row_count": 128,
+                "warnings": ["日期列需规范化"],
+                "rows": [{"customer_name": "不应外泄"}]
+            },
+            "mapping_plan": {
+                "target_dataset": "新百项目资料数据集",
+                "fields": [
+                    {"source": "客户", "target": "customer_name"}
+                ]
+            },
+            "staging_spec": {
+                "operation_mode": "review_before_import",
+                "target_table": "member_flow",
+                "steps": ["normalize_date", "dedupe"]
+            },
+            "validation_checks": ["date_parse_check"],
+            "recommended_next_actions": ["由 V3 审核 staging spec 后再入库"]
+        });
+
+        let summary = data_ingestion_analysis_result_summary_from_output(
+            Some(&output),
+            &json!({"status": "staging_spec_ready"}),
+        );
+        let serialized = summary.to_string();
+
+        assert_eq!(summary["status"], json!("staging_spec_ready"));
+        assert_eq!(summary["data_quality_report"]["row_count"], json!(128));
+        assert_eq!(summary["mapping_plan_summary"]["mapping_count"], json!(1));
+        assert_eq!(summary["staging_spec_summary"]["available"], json!(true));
+        assert_eq!(
+            summary["staging_spec_summary"]["write_policy"],
+            json!("requires_human_confirmation")
+        );
+        assert!(!serialized.contains("不应外泄"));
+        assert_eq!(summary["raw_credentials_exposed"], json!(false));
+        assert_eq!(summary["raw_table_dump_exposed"], json!(false));
+    }
+
+    #[test]
+    fn data_ingestion_staging_import_plan_keeps_reviewable_safe_payload() {
+        let assistant_run_id = AssistantRunId::new();
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example();
+        fixed_task.assistant_run_id = Some(assistant_run_id.to_string());
+        fixed_task.dataset_scope = json!({
+            "tenant_id": "tenant-1",
+            "dataset_ids": ["dataset-xinbai"],
+            "database_source_ids": ["source-xinbai"],
+            "selected_document_ids": ["doc-xinbai"],
+            "uploaded_file_ids": ["file-xinbai"]
+        });
+        let output = json!({
+            "template_id": "data_ingestion_analysis",
+            "status": "staging_spec_ready",
+            "source_summary": ["新百项目会员流水 sample rows available"],
+            "data_quality_report": {
+                "row_count": 128,
+                "warnings": ["日期列需规范化"],
+                "rows": [{"customer_name": "不应外泄"}]
+            },
+            "mapping_plan": {
+                "target_dataset": "新百项目资料数据集",
+                "fields": [
+                    {
+                        "source": "客户",
+                        "target": "customer_name",
+                        "target_type": "text",
+                        "sample_values": ["不应外泄"]
+                    }
+                ]
+            },
+            "staging_spec": {
+                "operation_mode": "review_before_import",
+                "target_table": "member_flow",
+                "steps": [
+                    {"action": "normalize_date", "description": "规范日期"},
+                    {"sql": "select * from raw_customer_rows"}
+                ]
+            },
+            "validation_checks": ["date_parse_check"],
+            "recommended_next_actions": ["由 V3 审核 staging spec 后再入库"]
+        });
+        let execution = codex_host_fixed_task_test_execution(fixed_task, Some(output.clone()));
+        let summary = data_ingestion_analysis_result_summary_from_output(
+            Some(&output),
+            &json!({"status": "staging_spec_ready"}),
+        );
+        let plan = data_ingestion_staging_import_plan_from_output(
+            Some(&output),
+            &execution,
+            assistant_run_id,
+            &summary,
+        );
+        let serialized = plan.to_string();
+
+        assert_eq!(plan["type"], json!("v3_data_ingestion_staging_plan"));
+        assert_eq!(plan["approval_status"], json!("pending_human_review"));
+        assert_eq!(
+            plan["execution_policy"]["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            plan["source_scope"]["dataset_ids"][0],
+            json!("dataset-xinbai")
+        );
+        assert_eq!(plan["target"]["dataset"], json!("新百项目资料数据集"));
+        assert_eq!(plan["target"]["table"], json!("member_flow"));
+        assert_eq!(plan["mapping_entries"][0]["source"], json!("客户"));
+        assert_eq!(plan["mapping_entries"][0]["target"], json!("customer_name"));
+        assert_eq!(plan["staging_steps"].as_array().expect("steps").len(), 1);
+        assert!(!serialized.contains("不应外泄"));
+        assert!(!serialized.contains("select *"));
+        assert_eq!(plan["safety"]["raw_table_dump_exposed"], json!(false));
+    }
+
+    #[test]
     fn assistant_run_answer_quality_gate_allows_actual_parse_unavailable_answer() {
         let request = CreateAssistantRunRequest {
             prompt: "这份 PDF 写了什么".to_string(),
@@ -77019,6 +78095,187 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn external_channel_data_ingestion_fixed_task_completion_appends_result_event() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping data-ingestion fixed task result test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-data-ingestion-result-{}", Uuid::new_v4()),
+                "External Data Ingestion Result Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let now = Utc::now();
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some("external:generic:conv-data-ingestion".to_string()),
+                    user_prompt: "分析这个数据库并生成入库建议".to_string(),
+                    startup_briefing: json!({}),
+                    selected_scope: json!({
+                        "conversation_external_id": "conv-data-ingestion",
+                        "database_sources": ["source-xinbai"]
+                    }),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example();
+        fixed_task.assistant_run_id = Some(run.id.to_string());
+        let output = json!({
+            "template_id": "data_ingestion_analysis",
+            "status": "staging_spec_ready",
+            "source_summary": ["新百项目会员流水 sample rows available"],
+            "data_quality_report": {
+                "row_count": 128,
+                "warnings": ["日期列需规范化"]
+            },
+            "mapping_plan": {
+                "target_dataset": "新百项目资料数据集",
+                "fields": [
+                    {"source": "客户", "target": "customer_name"}
+                ]
+            },
+            "staging_spec": {
+                "operation_mode": "review_before_import",
+                "target_table": "member_flow",
+                "steps": ["normalize_date", "dedupe"]
+            },
+            "validation_checks": ["date_parse_check"],
+            "recommended_next_actions": ["由 V3 审核 staging spec 后再入库"]
+        });
+        let mut execution = codex_host_fixed_task_test_execution(fixed_task, Some(output));
+        execution.tenant_id = state.tenant_id;
+        let workflow_event =
+            codex_host_fixed_task_test_workflow_event(execution.id, "workflow.step_completed");
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+            .expect("completed event");
+
+        maybe_record_external_data_ingestion_analysis_result(
+            &state.storage,
+            state.tenant_id,
+            &execution,
+            &event,
+        )
+        .await
+        .expect("data-ingestion result should append");
+        maybe_record_external_data_ingestion_analysis_result(
+            &state.storage,
+            state.tenant_id,
+            &execution,
+            &event,
+        )
+        .await
+        .expect("data-ingestion result should dedupe");
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let result_events = events
+            .iter()
+            .filter(|event| event.event_name == "assistant_run.data_ingestion_analysis_completed")
+            .collect::<Vec<_>>();
+        assert_eq!(result_events.len(), 1);
+        let payload = &result_events[0].payload;
+        assert_eq!(
+            payload["codex_host_workflow_execution_id"],
+            json!(execution.id.to_string())
+        );
+        assert_eq!(payload["human_review_required"], json!(false));
+        assert_eq!(payload["staging_spec_available"], json!(true));
+        assert_eq!(payload["staging_plan_available"], json!(true));
+        assert_eq!(
+            payload["staging_plan"]["type"],
+            json!("v3_data_ingestion_staging_plan")
+        );
+        assert_eq!(
+            payload["staging_plan"]["approval_status"],
+            json!("pending_human_review")
+        );
+        assert_eq!(
+            payload["staging_plan"]["execution_policy"]["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            payload["staging_plan"]["target"]["dataset"],
+            json!("新百项目资料数据集")
+        );
+        assert_eq!(
+            payload["result_summary"]["data_quality_report"]["row_count"],
+            json!(128)
+        );
+        assert_eq!(
+            payload["result_summary"]["staging_spec_summary"]["write_policy"],
+            json!("requires_human_confirmation")
+        );
+        let reply = external_channel_data_ingestion_analysis_reply_from_events(
+            &events,
+            "conv-data-ingestion",
+        )
+        .expect("result reply");
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("data_ingestion_analysis_completed")
+        );
+        assert_eq!(
+            reply.card.as_ref().unwrap()["result_summary"]["staging_spec_available"],
+            json!(true)
+        );
+        assert_eq!(
+            reply.card.as_ref().unwrap()["staging_plan"]["approval_status"],
+            json!("pending_human_review")
+        );
+
+        let updated_run = state
+            .storage
+            .assistant_runs()
+            .get_by_id(state.tenant_id, run.id)
+            .await
+            .expect("run loads")
+            .expect("run exists");
+        assert!(value_array(updated_run.output_artifacts)
+            .iter()
+            .any(|artifact| {
+                artifact.get("type").and_then(Value::as_str)
+                    == Some("external_channel_data_ingestion_analysis")
+                    && artifact
+                        .get("staging_plan_available")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            }));
+    }
+
+    #[tokio::test]
     async fn external_channel_static_page_reply_recovers_exec_completed_inline_html() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
@@ -77223,6 +78480,37 @@ retrieve_evidence:
     }
 
     #[test]
+    fn codex_host_fixed_task_failed_workflow_event_becomes_rejected_audit_event() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example();
+        fixed_task.assistant_run_id = Some(AssistantRunId::new().to_string());
+        let execution = codex_host_fixed_task_test_execution(fixed_task, None);
+        let workflow_event = WorkflowEventRecord {
+            id: domain_model::WorkflowEventId::new(),
+            execution_id: execution.id,
+            sequence_no: 2,
+            event_name: "workflow.step_failed".to_string(),
+            payload: json!({
+                "task_key": "run_codex_host_task",
+                "error": "database_url=mysql://secret"
+            }),
+            created_at: Utc::now(),
+        };
+
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+            .expect("failed fixed task event");
+
+        assert_eq!(event.event_name, "codex_host.fixed_task.rejected");
+        assert!(event.notify_human);
+        assert_eq!(event.payload["status"], json!("failed"));
+        assert_eq!(
+            event.payload["validation"]["reason"],
+            json!("workflow_step_failed")
+        );
+        assert_eq!(event.payload["validation"]["error"], json!("[redacted]"));
+    }
+
+    #[test]
     fn codex_host_fixed_task_runtime_summary_is_safe_for_diagnostics() {
         let tenant_id = TenantId::new();
         let run_id = AssistantRunId::new();
@@ -77262,6 +78550,168 @@ retrieve_evidence:
         );
         assert!(!serialized.contains("sk-should-not-leak"));
         assert!(!serialized.contains("raw_prompt"));
+    }
+
+    #[test]
+    fn codex_host_fixed_task_runtime_summary_surfaces_poll_retry_safely() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 2,
+            event_name: "codex_host_task.poll_retry".to_string(),
+            payload: json!({
+                "mode": "cloudflare_orchestrator",
+                "status": "processing",
+                "reason": "cloudflare_orchestrator_poll_timeout",
+                "attempt": 1,
+                "max_attempts": 3,
+                "available_at": "2026-05-27T08:00:30Z",
+                "error": "Cloudflare Codex task timed out after 1800000ms; task_id=task-secret",
+                "secrets_exposed": false,
+            }),
+            created_at: now,
+        }];
+
+        let summary = assistant_run_codex_fixed_task_event_summary(&events);
+
+        assert_eq!(summary["poll_retry_count"], json!(1));
+        assert_eq!(
+            summary["latest_runtime"]["event_name"],
+            json!("codex_host_task.poll_retry")
+        );
+        assert_eq!(
+            summary["latest_runtime"]["reason"],
+            json!("cloudflare_orchestrator_poll_timeout")
+        );
+        assert_eq!(summary["latest_runtime"]["attempt"], json!(1));
+    }
+
+    #[test]
+    fn external_channel_fixed_task_reply_surfaces_data_ingestion_progress() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new().to_string();
+        let now = Utc::now();
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 1,
+            event_name: "assistant_run.data_ingestion_analysis_queued".to_string(),
+            payload: json!({
+                "template_id": "data_ingestion_analysis",
+                "codex_host_workflow_execution_id": workflow_execution_id,
+            }),
+            created_at: now,
+        }];
+
+        let reply = external_channel_fixed_task_reply_from_events(&events, "conv-1")
+            .expect("queued data ingestion reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("data_ingestion_analysis_queued")
+        );
+        assert_eq!(
+            reply.card.as_ref().unwrap()["type"],
+            json!("v3_data_ingestion_analysis")
+        );
+    }
+
+    #[test]
+    fn external_channel_fixed_task_reply_surfaces_poll_retry() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new().to_string();
+        let now = Utc::now();
+        let events = vec![
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 1,
+                event_name: "codex_host.fixed_task.queued".to_string(),
+                payload: json!({
+                    "template_id": "data_ingestion_analysis",
+                    "status": "queued",
+                    "workflow_execution_id": workflow_execution_id,
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 2,
+                event_name: "codex_host_task.poll_retry".to_string(),
+                payload: json!({
+                    "status": "processing",
+                    "reason": "cloudflare_orchestrator_poll_timeout",
+                    "attempt": 1,
+                    "max_attempts": 3,
+                    "available_at": "2026-05-27T08:00:30Z",
+                    "secrets_exposed": false,
+                }),
+                created_at: now,
+            },
+        ];
+
+        let reply = external_channel_fixed_task_reply_from_events(&events, "conv-1")
+            .expect("poll retry reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("data_ingestion_analysis_retrying")
+        );
+        let card = reply.card.as_ref().expect("status card");
+        assert_eq!(card["runtime_event"]["attempt"], json!(1));
+        assert_eq!(card["poll_after_seconds"], json!(30));
+    }
+
+    #[test]
+    fn external_channel_fixed_task_reply_surfaces_completed_artifact_link() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new().to_string();
+        let now = Utc::now();
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/test/index.html";
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 3,
+            event_name: "codex_host.fixed_task.completed".to_string(),
+            payload: json!({
+                "template_id": "static_page_image2_data_publish",
+                "status": "success",
+                "workflow_execution_id": workflow_execution_id,
+                "output": {
+                    "status": "success",
+                    "artifact_public_url": public_url,
+                },
+                "validation": {
+                    "accepted": true,
+                    "reason": "new_generated_artifact_validated",
+                },
+            }),
+            created_at: now,
+        }];
+
+        let reply = external_channel_fixed_task_reply_from_events(&events, "conv-1")
+            .expect("completed fixed task reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_publish_completed")
+        );
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
     }
 
     #[test]
