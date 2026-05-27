@@ -32957,6 +32957,11 @@ fn external_channel_static_page_published_reply(
         card: Some(json!({
             "type": "v3_static_page_image2_publish_completed",
             "status": "static_page_published",
+            "public_url": public_url,
+            "generated_artifact_url": public_url,
+            "download_url": public_url,
+            "html_download_url": public_url,
+            "artifact_links": [public_url],
             "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
             "image_job_id": payload.get("image_job_id").cloned().unwrap_or(Value::Null),
             "render_output_id": payload.get("render_output_id").cloned().unwrap_or(Value::Null),
@@ -76682,6 +76687,12 @@ retrieve_evidence:
                     .to_string()
             ]
         );
+        let card = reply.card.as_ref().expect("completed reply has card");
+        assert_eq!(card["public_url"], json!(payload["public_url"]));
+        assert_eq!(card["generated_artifact_url"], json!(payload["public_url"]));
+        assert_eq!(card["download_url"], json!(payload["public_url"]));
+        assert_eq!(card["html_download_url"], json!(payload["public_url"]));
+        assert_eq!(card["artifact_links"], json!([payload["public_url"]]));
         let serialized = serde_json::to_string(&reply).expect("reply serializes");
         assert!(!serialized.contains("selected_scope"));
     }
@@ -76717,6 +76728,9 @@ retrieve_evidence:
                     .to_string()
             ]
         );
+        let card = reply.card.as_ref().expect("completed reply has card");
+        assert_eq!(card["public_url"], json!(reply.artifact_links[0]));
+        assert_eq!(card["generated_artifact_url"], json!(reply.artifact_links[0]));
     }
 
     #[tokio::test]
@@ -76851,6 +76865,9 @@ retrieve_evidence:
             "chat-static-page"
         );
         assert_eq!(body.reply.artifact_links, vec![public_url.to_string()]);
+        let card = body.reply.card.as_ref().expect("completed reply has card");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
     }
 
     #[tokio::test]
