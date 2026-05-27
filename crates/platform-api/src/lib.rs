@@ -21147,6 +21147,51 @@ fn external_channel_static_page_reply_from_events(
             }
         }
         if event.event_name == "assistant_run.external_channel_static_page_publish_queued" {
+            if let Some(heartbeat) =
+                external_channel_static_page_latest_codex_heartbeat_after(events, event.sequence_no)
+            {
+                let elapsed_ms = heartbeat
+                    .payload
+                    .get("elapsed_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let heartbeat_count = heartbeat
+                    .payload
+                    .get("heartbeat_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                return Some(external_channel_task_status_reply_for_conversation(
+                    conversation_external_id,
+                    "static_page_publish_running",
+                    Some("V3 已生成效果图，Codex 正在生成最终静态页。".to_string()),
+                    Some(json!({
+                        "type": "v3_static_page_image2_publish_running",
+                        "status": "static_page_publish_running",
+                        "stage": "codex_static_page_publish",
+                        "draft_id": event.payload.get("draft_id").cloned().unwrap_or(Value::Null),
+                        "image_job_id": event.payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+                        "codex_host_workflow_execution_id": event
+                            .payload
+                            .get("codex_host_workflow_execution_id")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "fixed_task_template_id": event
+                            .payload
+                            .get("template_id")
+                            .cloned()
+                            .unwrap_or_else(|| json!("static_page_image2_data_publish")),
+                        "publish_mode": event
+                            .payload
+                            .get("publish_mode")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "heartbeat_count": heartbeat_count,
+                        "elapsed_ms": elapsed_ms,
+                        "poll_after_seconds": 15,
+                    })),
+                    Vec::new(),
+                ));
+            }
             return Some(external_channel_task_status_reply_for_conversation(
                 conversation_external_id,
                 "static_page_publish_queued",
@@ -21188,6 +21233,87 @@ fn external_channel_static_page_reply_from_events(
                     &event.payload,
                 ));
             }
+            if let Some(preview_ready) = external_channel_static_page_latest_named_event(
+                events,
+                "static_page_image_job.preview_ready",
+            ) {
+                return Some(external_channel_task_status_reply_for_conversation(
+                    conversation_external_id,
+                    "static_page_effect_image_ready",
+                    Some("V3 效果图已生成，正在准备发布最终静态页。".to_string()),
+                    Some(json!({
+                        "type": "v3_static_page_image2_effect_image_ready",
+                        "status": "static_page_effect_image_ready",
+                        "stage": "image2_preview_ready",
+                        "draft_id": preview_ready.payload.get("draft_id").cloned().unwrap_or_else(|| event.payload.get("draft_id").cloned().unwrap_or(Value::Null)),
+                        "image_job_id": preview_ready.payload.get("image_job_id").cloned().unwrap_or_else(|| event.payload.get("image_job_id").cloned().unwrap_or(Value::Null)),
+                        "preview_asset_key": preview_ready.payload.get("preview_asset_key").cloned().unwrap_or(Value::Null),
+                        "auto_publish_after_preview": event
+                            .payload
+                            .get("auto_publish_after_preview")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "fixed_task_template_id": event
+                            .payload
+                            .get("template_id")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "poll_after_seconds": 15,
+                    })),
+                    Vec::new(),
+                ));
+            }
+            if let Some(failed) = external_channel_static_page_latest_named_event(
+                events,
+                "static_page_image_job.failed",
+            ) {
+                return Some(external_channel_task_status_reply_for_conversation(
+                    conversation_external_id,
+                    "static_page_image_preview_retrying",
+                    Some("V3 效果图生成遇到临时问题，正在等待重试或人工接管。".to_string()),
+                    Some(json!({
+                        "type": "v3_static_page_image2_preview_retrying",
+                        "status": "static_page_image_preview_retrying",
+                        "stage": "image2_preview_retry",
+                        "draft_id": failed.payload.get("draft_id").cloned().unwrap_or_else(|| event.payload.get("draft_id").cloned().unwrap_or(Value::Null)),
+                        "image_job_id": failed.payload.get("image_job_id").cloned().unwrap_or_else(|| event.payload.get("image_job_id").cloned().unwrap_or(Value::Null)),
+                        "retryable": true,
+                        "poll_after_seconds": 30,
+                    })),
+                    Vec::new(),
+                ));
+            }
+            if let Some(created) = external_channel_static_page_latest_named_event(
+                events,
+                "static_page_image_job.created",
+            ) {
+                return Some(external_channel_task_status_reply_for_conversation(
+                    conversation_external_id,
+                    "static_page_image_preview_queued",
+                    Some("V3 已提交效果图队列，生成后会自动继续发布。".to_string()),
+                    Some(json!({
+                        "type": "v3_static_page_image2_preview_queued",
+                        "status": "static_page_image_preview_queued",
+                        "stage": "image2_preview_generation",
+                        "draft_id": created.payload.get("draft_id").cloned().unwrap_or_else(|| event.payload.get("draft_id").cloned().unwrap_or(Value::Null)),
+                        "image_job_id": created.payload.get("image_job_id").cloned().unwrap_or_else(|| event.payload.get("image_job_id").cloned().unwrap_or(Value::Null)),
+                        "queue_position": created.payload.get("queue_position").cloned().unwrap_or(Value::Null),
+                        "image_workflow_execution_id": created.payload.get("workflow_execution_id").cloned().unwrap_or(Value::Null),
+                        "auto_publish_after_preview": event
+                            .payload
+                            .get("auto_publish_after_preview")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "fixed_task_template_id": event
+                            .payload
+                            .get("template_id")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "poll_after_seconds": 15,
+                    })),
+                    Vec::new(),
+                ));
+            }
             let task_status = event
                 .payload
                 .get("render_output_status")
@@ -21222,6 +21348,29 @@ fn external_channel_static_page_reply_from_events(
         }
     }
     None
+}
+
+fn external_channel_static_page_latest_codex_heartbeat_after(
+    events: &[AssistantRunEvent],
+    sequence_no: i32,
+) -> Option<&AssistantRunEvent> {
+    events.iter().rev().find(|event| {
+        event.sequence_no > sequence_no
+            && matches!(
+                event.event_name.as_str(),
+                "codex_host_task.cloudflare_heartbeat" | "codex_host_task.exec_heartbeat"
+            )
+    })
+}
+
+fn external_channel_static_page_latest_named_event<'a>(
+    events: &'a [AssistantRunEvent],
+    event_name: &str,
+) -> Option<&'a AssistantRunEvent> {
+    events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == event_name)
 }
 
 fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Value {
@@ -64835,6 +64984,118 @@ mod tests {
         assert!(body.contains("\"effect_image_confirmation_required\":false"));
         assert!(body.contains("event: external_channel.completed"));
         assert!(body.contains("event: done"));
+    }
+
+    fn static_page_reply_test_event(
+        run_id: AssistantRunId,
+        sequence_no: i32,
+        event_name: &str,
+        payload: Value,
+    ) -> AssistantRunEvent {
+        AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id: TenantId::new(),
+            run_id,
+            sequence_no,
+            event_name: event_name.to_string(),
+            payload,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn external_channel_static_page_reply_reports_image_preview_queue_progress() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "static_page_image_job.created",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "status": "queued",
+                    "queue_position": 1,
+                    "workflow_execution_id": WorkflowExecutionId::new().to_string(),
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "assistant_run.external_channel_static_page_pipeline_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "status": "static_page_image2_auto_publish_pending",
+                    "auto_publish_after_preview": true,
+                    "template_id": "static_page_image2_data_publish",
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("progress reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_image_preview_queued")
+        );
+        let card = reply.card.expect("status card");
+        assert_eq!(card["type"], json!("v3_static_page_image2_preview_queued"));
+        assert_eq!(card["stage"], json!("image2_preview_generation"));
+        assert_eq!(card["poll_after_seconds"], json!(15));
+    }
+
+    #[test]
+    fn external_channel_static_page_reply_reports_codex_publish_running() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let codex_execution_id = WorkflowExecutionId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_publish_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "codex_host_workflow_execution_id": codex_execution_id.to_string(),
+                    "template_id": "static_page_image2_data_publish",
+                    "publish_mode": "new_generated_artifact_only",
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "codex_host_task.cloudflare_heartbeat",
+                json!({
+                    "mode": "cloudflare_orchestrator",
+                    "status": "running",
+                    "capability": "static_page_image2_data_publish",
+                    "elapsed_ms": 45000,
+                    "heartbeat_count": 3,
+                    "secrets_exposed": false,
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("progress reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_publish_running")
+        );
+        let card = reply.card.expect("status card");
+        assert_eq!(card["type"], json!("v3_static_page_image2_publish_running"));
+        assert_eq!(card["stage"], json!("codex_static_page_publish"));
+        assert_eq!(card["heartbeat_count"], json!(3));
+        assert_eq!(card["elapsed_ms"], json!(45000));
     }
 
     #[tokio::test]
