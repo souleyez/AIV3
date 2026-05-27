@@ -9190,8 +9190,11 @@ async fn create_assistant_run(
         }
         set_selected_scope_conversation_memory(&mut selected_scope, memory_scope_ids);
     }
-    selected_scope =
-        assistant_run_scope_with_visible_dataset_range(selected_scope, &visible_datasets);
+    selected_scope = assistant_run_scope_with_visible_dataset_range(
+        selected_scope,
+        &visible_datasets,
+        &request.prompt,
+    );
     scope_candidates.extend(assistant_run_artifact_scope_candidates(
         &client_scope_candidates,
         request.current_artifact.as_ref(),
@@ -45243,6 +45246,7 @@ fn assistant_run_scope_with_requested_document_scope(
 fn assistant_run_scope_with_visible_dataset_range(
     mut selected_scope: Value,
     visible_datasets: &[Dataset],
+    prompt: &str,
 ) -> Value {
     if assistant_run_scope_is_external_channel(Some(&selected_scope))
         || selected_scope_has_document_selection(&selected_scope)
@@ -45264,6 +45268,21 @@ fn assistant_run_scope_with_visible_dataset_range(
     let mut ordered_dataset_ids = Vec::new();
     let mut visible_requested_dataset_ids = Vec::new();
     let mut unavailable_requested_dataset_ids = Vec::new();
+    let mut prompt_matched_datasets = visible_datasets
+        .iter()
+        .map(|dataset| {
+            (
+                dataset,
+                assistant_dataset_prompt_match_score(dataset, prompt),
+            )
+        })
+        .filter(|(dataset, score)| *score > 0 && dataset_has_assistant_supply_hint(dataset))
+        .collect::<Vec<_>>();
+    prompt_matched_datasets.sort_by(|(left_dataset, left_score), (right_dataset, right_score)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| right_dataset.updated_at.cmp(&left_dataset.updated_at))
+    });
 
     for dataset_id in &requested_dataset_ids {
         if visible_by_id.contains_key(dataset_id) {
@@ -45274,12 +45293,17 @@ fn assistant_run_scope_with_visible_dataset_range(
     }
 
     for dataset_id in &visible_requested_dataset_ids {
-        if visible_by_id
-            .get(dataset_id)
-            .is_some_and(|dataset| dataset_has_assistant_supply_hint(dataset))
-            && seen.insert(*dataset_id)
+        if visible_by_id.get(dataset_id).is_some_and(|dataset| {
+            dataset_has_assistant_supply_hint(dataset)
+                && assistant_dataset_prompt_match_score(dataset, prompt) > 0
+        }) && seen.insert(*dataset_id)
         {
             ordered_dataset_ids.push(*dataset_id);
+        }
+    }
+    for (dataset, _) in &prompt_matched_datasets {
+        if seen.insert(dataset.id) {
+            ordered_dataset_ids.push(dataset.id);
         }
     }
     for dataset in visible_datasets {
@@ -45388,6 +45412,122 @@ fn dataset_has_assistant_supply_hint(dataset: &Dataset) -> bool {
                 _ => false,
             })
         })
+}
+
+fn assistant_dataset_prompt_match_score(dataset: &Dataset, prompt: &str) -> usize {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return 0;
+    }
+    let normalized_prompt = prompt.to_ascii_lowercase();
+    let haystack = assistant_dataset_prompt_haystack(dataset).to_ascii_lowercase();
+    if haystack.trim().is_empty() {
+        return 0;
+    }
+
+    let mut score = 0usize;
+    for term in assistant_prompt_match_terms(prompt) {
+        if haystack.contains(&term.to_ascii_lowercase()) {
+            score += term.chars().count().max(1);
+        }
+    }
+    for (prompt_terms, dataset_terms, bonus) in [
+        (
+            &["长者", "老人", "老年", "养老", "在院"][..],
+            &["养老", "老年", "老人", "长者", "护理", "机构"][..],
+            24usize,
+        ),
+        (
+            &["离世", "去世", "死亡", "身故", "过世"][..],
+            &["离世", "去世", "死亡", "身故", "善后", "殡葬"][..],
+            18usize,
+        ),
+        (
+            &["摔倒", "跌倒", "坠床"][..],
+            &["摔倒", "跌倒", "坠床", "防跌倒", "意外伤害"][..],
+            18usize,
+        ),
+        (
+            &["烫伤", "烧伤"][..],
+            &["烫伤", "烧伤", "热源", "创面"][..],
+            18usize,
+        ),
+        (
+            &["合同", "租赁", "停车"][..],
+            &["合同", "租赁", "停车", "协议"][..],
+            18usize,
+        ),
+    ] {
+        if prompt_terms
+            .iter()
+            .any(|term| normalized_prompt.contains(term))
+            && dataset_terms.iter().any(|term| haystack.contains(term))
+        {
+            score += bonus;
+        }
+    }
+    score
+}
+
+fn assistant_dataset_prompt_haystack(dataset: &Dataset) -> String {
+    let mut values = vec![
+        dataset.title.clone(),
+        dataset.key.clone(),
+        dataset.description.clone().unwrap_or_default(),
+    ];
+    for key in [
+        "document_title_hints",
+        "documentTitleHints",
+        "material_hints",
+        "materialHints",
+        "noun_term_hints",
+        "nounTermHints",
+        "section_title_hints",
+        "sectionTitleHints",
+        "document_section_hints",
+        "documentSectionHints",
+    ] {
+        if let Some(value) = dataset.metadata.get(key) {
+            collect_string_list(value, &mut values);
+        }
+    }
+    values.join(" ")
+}
+
+fn assistant_prompt_match_terms(prompt: &str) -> Vec<String> {
+    let chars = prompt
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || is_cjk_char(*ch))
+        .collect::<Vec<_>>();
+    let mut terms = Vec::new();
+    for window_size in [4usize, 3, 2] {
+        if chars.len() < window_size {
+            continue;
+        }
+        for window in chars.windows(window_size) {
+            let term = window.iter().collect::<String>();
+            if term.trim().is_empty() || terms.contains(&term) {
+                continue;
+            }
+            terms.push(term);
+        }
+    }
+    for token in prompt
+        .split(|ch: char| !(ch.is_alphanumeric() || is_cjk_char(ch)))
+        .map(str::trim)
+        .filter(|token| token.chars().count() >= 2)
+    {
+        if !terms.iter().any(|term| term == token) {
+            terms.push(token.to_string());
+        }
+    }
+    terms
+}
+
+fn is_cjk_char(ch: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&ch)
+        || ('\u{3400}'..='\u{4dbf}').contains(&ch)
+        || ('\u{f900}'..='\u{faff}').contains(&ch)
 }
 
 fn assistant_run_requested_dataset_supply_policy(intent: &str) -> Value {
@@ -87280,6 +87420,10 @@ retrieve_evidence:
         assert_eq!(
             response.selected_scope["dataset_scope_policy"],
             json!("all_visible_datasets_with_preselection_priority")
+        );
+        assert_eq!(
+            response.selected_scope["datasets"][0]["id"],
+            json!(visible_dataset.id)
         );
         assert_eq!(response.evidence_state["status"], json!("supplied"));
         assert!(response.evidence_state["supplied_items"]
