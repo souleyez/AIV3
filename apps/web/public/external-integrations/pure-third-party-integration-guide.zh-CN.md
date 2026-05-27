@@ -504,7 +504,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.codex_host_workflow_execution_id` | 固定发布任务 ID；初始响应为空时，会在最终事件中补齐 |
 | `reply.card.validation_summary` | 口径摘要，如最新快照日期、源行数、明细行数、单位策略和告警；不会包含原始明细行或内部检索日志 |
 
-如果第三方使用 `assistant_run_id` 做轮询/观测，应读取该运行下的最终状态事件 `assistant_run.external_channel_static_page_publish_completed`；事件中的 `public_url` 与 `artifact_links[0]` 是同一个最终页面链接。第三方不需要再针对 Image2 效果图做确认、下载或二次提交。
+如果第三方使用 `assistant_run_id` 做轮询，推荐直接调用 3.4 的运行结果查询接口；返回仍是 2.1 的 `reply` 对象。固定发布完成后，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 就是最终页面链接。第三方不需要再针对 Image2 效果图做确认、下载或二次提交。
 
 若已生成静态页/报表/HTML 产物，重点读取：
 
@@ -517,6 +517,15 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `assistant_run_id` | 本次生成运行 ID |
 
 ### 3.4 查询、预览、下载产物
+
+查询本次运行的最新第三方回复：
+
+```http
+GET /v1/external/channels/{connection_id}/assistant-runs/{assistant_run_id}/reply
+Authorization: Bearer <V3 inbound token>
+```
+
+返回字段同 2.1。若页面仍在生成，`reply.reply_type=task_status`；若已经发布，`reply.reply_type=artifact_link` 且 `reply.artifact_links[0]` 为最终页面链接。也可以用原 `POST /events` 的同一 `idempotency_key` 重试查询，V3 会在最终产物发布后返回相同的 artifact link。
 
 模板 HTML 产物直接下载：
 
@@ -547,6 +556,7 @@ Authorization: Bearer <V3 inbound token>
 | 字段 | 必填 | 注释 |
 | --- | --- | --- |
 | `connection_id` | 是 | V3 分配的第三方通道 ID |
+| `assistant_run_id` | 运行结果查询必填 | 2.1 响应返回的 V3 本次运行 ID |
 | `artifact_id` | HTML 产物下载必填 | `reply.artifact_links` 中的 HTML artifact ID |
 | `file_index` | HTML 产物下载必填 | 文件序号；当前模板 HTML 产物固定传 `0` |
 | `render_output_id` | 静态页/报表必填 | V3 生成的静态页/报表渲染 ID |

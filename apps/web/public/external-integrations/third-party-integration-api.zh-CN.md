@@ -1002,6 +1002,16 @@ V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，�
 
 V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点。若服务端已完整启用 `static_page_image2_data_publish` 固定发布能力，V3 会把固定任务投递到配置好的 Cloudflare Codex 执行器，在效果图完成后继续自动生成并发布最终 generated-artifact 静态页；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact，本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
 
+第三方拿到 `assistant_run_id` 后，可以查询该运行的最新第三方回复：
+
+```http
+GET /v1/external/channels/{connection_id}/assistant-runs/{assistant_run_id}/reply
+Host: v3.elepcloud.com
+Authorization: Bearer <V3 inbound token>
+```
+
+该接口返回与 `/events` 相同的 `ExternalChannelEventResponse`。如果仍在生成，`reply.reply_type=task_status`；如果已发布，`reply.reply_type=artifact_link`，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 为最终页面链接。第三方也可以用原 `/events` 请求体和同一 `idempotency_key` 重试，V3 会在最终产物发布后返回同一个 artifact link。
+
 `static_page_image2_data_publish` 只有在 V3 平台任务开关、平台 allowlist、Codex Host agent allowlist、执行模式和可信宿主就绪时才算已启用。当前推荐固定执行器为 `cloudflare_orchestrator + cloudflare_codex`，需要配置 Codex Web orchestrator 访问密钥；旧的本机 `codex_exec` 模式仍要求真实执行许可和任务工作区。响应卡片里的 `codex_auto_publish_ready=false` 表示本次已经走内置 HTML 兜底；`codex_auto_publish_disabled_reason` 仅用于服务端日志和联调排查。
 
 快速 HTML 生成可使用以下选项：

@@ -1295,6 +1295,10 @@ pub fn router(
             axum::routing::post(ingest_external_channel_event_stream),
         )
         .route(
+            "/v1/external/channels/{connection_id}/assistant-runs/{run_id}/reply",
+            get(get_external_channel_assistant_run_reply),
+        )
+        .route(
             "/v1/external/channels/{connection_id}/documents/parse",
             axum::routing::post(create_external_document_parse),
         )
@@ -10190,7 +10194,7 @@ async fn list_external_conversation_tests(
                 .filter(|text| !text.is_empty());
             let output_artifacts = row.get::<Value, _>("output_artifacts");
             let answer_text =
-                external_channel_assistant_reply_from_output_artifacts(&output_artifacts)
+                external_channel_observation_answer_text_from_output_artifacts(&output_artifacts)
                     .map(|text| truncate_assistant_supply_text(&text, 1200))
                     .filter(|text| !text.is_empty());
             ExternalConversationTestView {
@@ -14604,6 +14608,60 @@ async fn ingest_external_channel_event_stream(
     Ok(sse_stream_response(stream))
 }
 
+async fn get_external_channel_assistant_run_reply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((connection_id, run_id)): Path<(String, String)>,
+) -> std::result::Result<Json<ExternalChannelEventResponse>, ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let run_id = parse_assistant_run_id(&run_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "assistant_run_not_found",
+                format!("assistant run {run_id} was not found"),
+            )
+        })?;
+    ensure_assistant_run_belongs_to_external_channel(&connection_id, &run)?;
+    let lookup = load_external_message_event_lookup_for_run(&state, &connection_id, run.id).await?;
+    let conversation_external_id = lookup
+        .conversation_external_id
+        .or_else(|| external_channel_conversation_external_id_from_run(&run))
+        .unwrap_or_default();
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let reply =
+        external_channel_reply_from_run_and_events(&run, &events, &conversation_external_id)
+            .unwrap_or_else(|| {
+                external_channel_task_status_reply_for_conversation(
+                    &conversation_external_id,
+                    "processing",
+                    Some("V3 正在处理该请求，请稍后再次查询。".to_string()),
+                    None,
+                    Vec::new(),
+                )
+            });
+
+    Ok(Json(ExternalChannelEventResponse {
+        accepted: true,
+        assistant_run_id: Some(run.id),
+        idempotency_key: lookup.idempotency_key.unwrap_or_else(|| run.id.to_string()),
+        reply,
+    }))
+}
+
 async fn ingest_external_channel_message(
     state: &AppState,
     connection_id: &str,
@@ -18651,6 +18709,43 @@ async fn load_external_message_event_run_id(
         .map(AssistantRunId))
 }
 
+#[derive(Clone, Debug, Default)]
+struct ExternalMessageEventLookup {
+    idempotency_key: Option<String>,
+    conversation_external_id: Option<String>,
+}
+
+async fn load_external_message_event_lookup_for_run(
+    state: &AppState,
+    connection_id: &str,
+    assistant_run_id: AssistantRunId,
+) -> std::result::Result<ExternalMessageEventLookup, ApiError> {
+    let row = sqlx::query(
+        r#"
+        select idempotency_key, conversation_external_id
+        from external_message_events
+        where tenant_id = $1
+          and channel_connection_id = $2
+          and assistant_run_id = $3
+        order by created_at asc
+        limit 1
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(connection_id)
+    .bind(assistant_run_id.0)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(row
+        .map(|row| ExternalMessageEventLookup {
+            idempotency_key: Some(row.get("idempotency_key")),
+            conversation_external_id: Some(row.get("conversation_external_id")),
+        })
+        .unwrap_or_default())
+}
+
 async fn record_external_message_event(
     state: &AppState,
     connection_id: &str,
@@ -20837,8 +20932,18 @@ async fn external_channel_duplicate_reply(
         .await
         .map_err(ApiError::from_storage)?
     {
-        if let Some(reply) = external_channel_assistant_reply_from_run(&run) {
-            return Ok(external_channel_text_reply(message, reply, "answered"));
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, existing_run_id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        if let Some(reply) = external_channel_reply_from_run_and_events(
+            &run,
+            &events,
+            &message.conversation_external_id,
+        ) {
+            return Ok(reply);
         }
     }
 
@@ -20879,6 +20984,36 @@ fn external_channel_assistant_reply_from_run(run: &AssistantRun) -> Option<Strin
     external_channel_assistant_reply_from_output_artifacts(&run.output_artifacts)
 }
 
+fn external_channel_conversation_external_id_from_run(run: &AssistantRun) -> Option<String> {
+    run.selected_scope
+        .get("conversation_external_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn external_channel_reply_from_run_and_events(
+    run: &AssistantRun,
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    external_channel_static_page_artifact_reply_from_output_artifacts(
+        &run.output_artifacts,
+        conversation_external_id,
+    )
+    .or_else(|| external_channel_static_page_reply_from_events(events, conversation_external_id))
+    .or_else(|| {
+        external_channel_assistant_reply_from_run(run).map(|reply| {
+            external_channel_text_reply_for_conversation(
+                conversation_external_id,
+                reply,
+                "answered",
+            )
+        })
+    })
+}
+
 fn external_channel_assistant_reply_from_output_artifacts(
     output_artifacts: &Value,
 ) -> Option<String> {
@@ -20898,6 +21033,138 @@ fn external_channel_assistant_reply_from_output_artifacts(
                 })
                 .filter(|content| !content.is_empty())
         })
+}
+
+fn external_channel_observation_answer_text_from_output_artifacts(
+    output_artifacts: &Value,
+) -> Option<String> {
+    external_channel_assistant_reply_from_output_artifacts(output_artifacts).or_else(|| {
+        output_artifacts
+            .as_array()?
+            .iter()
+            .rev()
+            .find_map(|artifact| {
+                (artifact.get("type").and_then(Value::as_str)
+                    == Some("external_channel_static_page_artifact"))
+                .then(|| artifact.get("public_url").and_then(Value::as_str))
+                .flatten()
+                .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+                .map(|value| format!("V3 静态页已生成：{value}"))
+            })
+    })
+}
+
+fn external_channel_static_page_artifact_reply_from_output_artifacts(
+    output_artifacts: &Value,
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let artifact = output_artifacts.as_array()?.iter().rev().find(|artifact| {
+        artifact.get("type").and_then(Value::as_str)
+            == Some("external_channel_static_page_artifact")
+            && artifact
+                .get("public_url")
+                .and_then(Value::as_str)
+                .map(codex_host_fixed_task_public_artifact_url_allowed)
+                .unwrap_or(false)
+    })?;
+    let public_url = artifact.get("public_url").and_then(Value::as_str)?;
+    Some(external_channel_static_page_published_reply(
+        conversation_external_id,
+        public_url,
+        artifact,
+    ))
+}
+
+fn external_channel_static_page_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    for event in events.iter().rev() {
+        if event.event_name == "assistant_run.external_channel_static_page_publish_completed" {
+            if let Some(reply) =
+                external_channel_static_page_publish_completed_reply_from_event_payload(
+                    &event.payload,
+                )
+            {
+                return Some(reply);
+            }
+        }
+        if event.event_name == "assistant_run.external_channel_static_page_publish_queued" {
+            return Some(external_channel_task_status_reply_for_conversation(
+                conversation_external_id,
+                "static_page_publish_queued",
+                Some("V3 已生成效果图，正在通过 Codex 发布静态页。".to_string()),
+                Some(json!({
+                    "type": "v3_static_page_image2_publish_queued",
+                    "status": "static_page_publish_queued",
+                    "draft_id": event.payload.get("draft_id").cloned().unwrap_or(Value::Null),
+                    "image_job_id": event.payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+                    "codex_host_workflow_execution_id": event
+                        .payload
+                        .get("codex_host_workflow_execution_id")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "fixed_task_template_id": event
+                        .payload
+                        .get("template_id")
+                        .cloned()
+                        .unwrap_or_else(|| json!("static_page_image2_data_publish")),
+                    "publish_mode": event
+                        .payload
+                        .get("publish_mode")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                })),
+                Vec::new(),
+            ));
+        }
+        if event.event_name == "assistant_run.external_channel_static_page_pipeline_queued" {
+            if let Some(public_url) = event
+                .payload
+                .get("public_url")
+                .and_then(Value::as_str)
+                .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+            {
+                return Some(external_channel_static_page_published_reply(
+                    conversation_external_id,
+                    public_url,
+                    &event.payload,
+                ));
+            }
+            let task_status = event
+                .payload
+                .get("render_output_status")
+                .and_then(Value::as_str)
+                .or_else(|| event.payload.get("status").and_then(Value::as_str))
+                .unwrap_or("static_page_image2_auto_publish_pending");
+            return Some(external_channel_task_status_reply_for_conversation(
+                conversation_external_id,
+                task_status,
+                Some("V3 已接收静态页生成请求，正在生成效果图或发布页面。".to_string()),
+                Some(json!({
+                    "type": "v3_static_page_image2_pipeline",
+                    "status": task_status,
+                    "draft_id": event.payload.get("draft_id").cloned().unwrap_or(Value::Null),
+                    "image_job_id": event.payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+                    "render_output_id": event.payload.get("render_output_id").cloned().unwrap_or(Value::Null),
+                    "html_preview_url": event.payload.get("html_preview_url").cloned().unwrap_or(Value::Null),
+                    "html_download_url": event.payload.get("html_download_url").cloned().unwrap_or(Value::Null),
+                    "auto_publish_after_preview": event
+                        .payload
+                        .get("auto_publish_after_preview")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "fixed_task_template_id": event
+                        .payload
+                        .get("template_id")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                })),
+                Vec::new(),
+            ));
+        }
+    }
+    None
 }
 
 fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Value {
@@ -20971,12 +21238,48 @@ fn external_channel_text_reply(
     text: impl Into<String>,
     task_status: &str,
 ) -> ExternalBotReplyView {
+    external_channel_text_reply_for_conversation(
+        &message.conversation_external_id,
+        text,
+        task_status,
+    )
+}
+
+fn external_channel_text_reply_for_conversation(
+    conversation_external_id: &str,
+    text: impl Into<String>,
+    task_status: &str,
+) -> ExternalBotReplyView {
     ExternalBotReplyView {
-        target_conversation_external_id: message.conversation_external_id.clone(),
+        target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::Text,
         text: Some(text.into()),
         card: None,
         artifact_links: Vec::new(),
+        task_status: Some(task_status.to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+fn external_channel_task_status_reply_for_conversation(
+    conversation_external_id: &str,
+    task_status: &str,
+    text: Option<String>,
+    card: Option<Value>,
+    artifact_links: Vec<String>,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: if artifact_links.is_empty() {
+            ExternalBotReplyTypeView::TaskStatus
+        } else {
+            ExternalBotReplyTypeView::ArtifactLink
+        },
+        text,
+        card,
+        artifact_links,
         task_status: Some(task_status.to_string()),
         requires_confirmation: false,
         action_id: None,
@@ -31909,6 +32212,38 @@ fn external_channel_static_page_publish_validation_summary(payload: &Value) -> V
     })
 }
 
+fn external_channel_static_page_published_reply(
+    conversation_external_id: &str,
+    public_url: &str,
+    payload: &Value,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: ExternalBotReplyTypeView::ArtifactLink,
+        text: Some("V3 静态页已生成并发布。".to_string()),
+        card: Some(json!({
+            "type": "v3_static_page_image2_publish_completed",
+            "status": "static_page_published",
+            "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
+            "image_job_id": payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "render_output_id": payload.get("render_output_id").cloned().unwrap_or(Value::Null),
+            "codex_host_workflow_execution_id": payload
+                .get("codex_host_workflow_execution_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "validation_summary": payload
+                .get("validation_summary")
+                .cloned()
+                .unwrap_or(Value::Null),
+        })),
+        artifact_links: vec![public_url.to_string()],
+        task_status: Some("static_page_published".to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
 fn external_channel_static_page_publish_completed_reply_from_event_payload(
     payload: &Value,
 ) -> Option<ExternalBotReplyView> {
@@ -31929,30 +32264,11 @@ fn external_channel_static_page_publish_completed_reply_from_event_payload(
     if conversation_external_id.is_empty() {
         return None;
     }
-    Some(ExternalBotReplyView {
-        target_conversation_external_id: conversation_external_id.to_string(),
-        reply_type: ExternalBotReplyTypeView::ArtifactLink,
-        text: Some("V3 静态页已生成并发布。".to_string()),
-        card: Some(json!({
-            "type": "v3_static_page_image2_publish_completed",
-            "status": "static_page_published",
-            "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
-            "image_job_id": payload.get("image_job_id").cloned().unwrap_or(Value::Null),
-            "codex_host_workflow_execution_id": payload
-                .get("codex_host_workflow_execution_id")
-                .cloned()
-                .unwrap_or(Value::Null),
-            "validation_summary": payload
-                .get("validation_summary")
-                .cloned()
-                .unwrap_or(Value::Null),
-        })),
-        artifact_links: vec![public_url.to_string()],
-        task_status: Some("static_page_published".to_string()),
-        requires_confirmation: false,
-        action_id: None,
-        confirmation_id: None,
-    })
+    Some(external_channel_static_page_published_reply(
+        conversation_external_id,
+        public_url,
+        payload,
+    ))
 }
 
 pub(crate) async fn record_codex_host_fixed_task_preflight_rejected(
@@ -75129,6 +75445,173 @@ retrieve_evidence:
         );
         let serialized = serde_json::to_string(&reply).expect("reply serializes");
         assert!(!serialized.contains("selected_scope"));
+    }
+
+    #[test]
+    fn external_channel_static_page_output_artifact_becomes_artifact_link_reply() {
+        let output_artifacts = json!([{
+            "type": "external_channel_static_page_artifact",
+            "artifact_type": "static_page",
+            "draft_id": StaticPageDraftId::new().to_string(),
+            "image_job_id": StaticPageImageJobId::new().to_string(),
+            "codex_host_workflow_execution_id": WorkflowExecutionId::new().to_string(),
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+            "validation_summary": {
+                "latest_snapshot": "2026-05-10",
+                "source_row_count": 862
+            }
+        }]);
+
+        let reply = external_channel_static_page_artifact_reply_from_output_artifacts(
+            &output_artifacts,
+            "chat-static-page",
+        )
+        .expect("reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.target_conversation_external_id, "chat-static-page");
+        assert_eq!(
+            reply.artifact_links,
+            vec![
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_assistant_run_reply_endpoint_returns_static_page_artifact() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external run reply endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-run-reply-{}", Uuid::new_v4()),
+                "External Run Reply Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "inbound_bearer_token": "inbound-secret"
+            }),
+        )
+        .await;
+
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html";
+        let now = Utc::now();
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some(
+                        "external:generic_chat:tenant-ext-001:bot-v3:chat-static-page".to_string(),
+                    ),
+                    user_prompt: "生成经营分析静态页".to_string(),
+                    startup_briefing: json!({"surface": "external_channel"}),
+                    selected_scope: json!({
+                        "type": "external_channel",
+                        "channel_connection_id": "generic-chat-main",
+                        "platform": "generic_chat",
+                        "conversation_external_id": "chat-static-page",
+                        "sender_external_id": "user-ext-001",
+                        "message_external_id": "msg-static-page-001"
+                    }),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([{
+                        "type": "external_channel_static_page_artifact",
+                        "artifact_type": "static_page",
+                        "draft_id": StaticPageDraftId::new().to_string(),
+                        "image_job_id": StaticPageImageJobId::new().to_string(),
+                        "codex_host_workflow_execution_id": WorkflowExecutionId::new().to_string(),
+                        "public_url": public_url,
+                        "validation_summary": {
+                            "latest_snapshot": "2026-05-10",
+                            "source_row_count": 862
+                        }
+                    }]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "chat-static-page".to_string();
+        message.message_external_id = "msg-static-page-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-static-page-001".to_string();
+        record_external_message_event(
+            &state,
+            "generic-chat-main",
+            run.id,
+            &message,
+            &external_bot_message_payload_summary(&message),
+        )
+        .await
+        .expect("external message event should be recorded");
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let path = format!(
+            "/v1/external/channels/generic-chat-main/assistant-runs/{}/reply",
+            run.id
+        );
+
+        let missing = get_request_with_authorization(app.clone(), &path, None).await;
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let response =
+            get_request_with_authorization(app, &path, Some("Bearer inbound-secret")).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: ExternalChannelEventResponse = read_json_response(response).await;
+        assert!(body.accepted);
+        assert_eq!(body.assistant_run_id, Some(run.id));
+        assert_eq!(
+            body.idempotency_key,
+            "generic:tenant-ext-001:msg-static-page-001"
+        );
+        assert_eq!(
+            body.reply.reply_type,
+            ExternalBotReplyTypeView::ArtifactLink
+        );
+        assert_eq!(
+            body.reply.task_status.as_deref(),
+            Some("static_page_published")
+        );
+        assert_eq!(
+            body.reply.target_conversation_external_id,
+            "chat-static-page"
+        );
+        assert_eq!(body.reply.artifact_links, vec![public_url.to_string()]);
     }
 
     #[tokio::test]
