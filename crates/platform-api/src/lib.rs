@@ -14618,7 +14618,7 @@ async fn get_external_channel_assistant_run_reply(
     let connection = load_external_channel_connection(&state, &connection_id).await?;
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     ensure_external_channel_enabled(&connection_id, &connection)?;
-    let run = state
+    let mut run = state
         .storage
         .assistant_runs()
         .get_by_id(state.tenant_id, run_id)
@@ -14636,12 +14636,39 @@ async fn get_external_channel_assistant_run_reply(
         .conversation_external_id
         .or_else(|| external_channel_conversation_external_id_from_run(&run))
         .unwrap_or_default();
-    let events = state
+    let mut events = state
         .storage
         .assistant_runs()
         .list_events(state.tenant_id, run.id)
         .await
         .map_err(ApiError::from_storage)?;
+    if maybe_recover_external_static_page_publish_completed_from_exec_event(
+        &state.storage,
+        state.tenant_id,
+        &run,
+        &events,
+    )
+    .await?
+    {
+        run = state
+            .storage
+            .assistant_runs()
+            .get_by_id(state.tenant_id, run_id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    "assistant_run_not_found",
+                    format!("assistant run {run_id} was not found"),
+                )
+            })?;
+        events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
     let reply =
         external_channel_reply_from_run_and_events(&run, &events, &conversation_external_id)
             .unwrap_or_else(|| {
@@ -20938,6 +20965,36 @@ async fn external_channel_duplicate_reply(
             .list_events(state.tenant_id, existing_run_id)
             .await
             .map_err(ApiError::from_storage)?;
+        if maybe_recover_external_static_page_publish_completed_from_exec_event(
+            &state.storage,
+            state.tenant_id,
+            &run,
+            &events,
+        )
+        .await?
+        {
+            if let Some(refreshed_run) = state
+                .storage
+                .assistant_runs()
+                .get_by_id(state.tenant_id, existing_run_id)
+                .await
+                .map_err(ApiError::from_storage)?
+            {
+                let refreshed_events = state
+                    .storage
+                    .assistant_runs()
+                    .list_events(state.tenant_id, existing_run_id)
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                if let Some(reply) = external_channel_reply_from_run_and_events(
+                    &refreshed_run,
+                    &refreshed_events,
+                    &message.conversation_external_id,
+                ) {
+                    return Ok(reply);
+                }
+            }
+        }
         if let Some(reply) = external_channel_reply_from_run_and_events(
             &run,
             &events,
@@ -31961,6 +32018,407 @@ async fn record_codex_host_fixed_task_audit_event(
         send_codex_host_fixed_task_exception_email(&event.event_name, &event.payload);
     }
     Ok(())
+}
+
+async fn maybe_recover_external_static_page_publish_completed_from_exec_event(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    run: &AssistantRun,
+    events: &[AssistantRunEvent],
+) -> std::result::Result<bool, ApiError> {
+    if external_channel_static_page_run_has_published_artifact(run)
+        || events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+        })
+    {
+        return Ok(false);
+    }
+
+    let mut candidate = None;
+    for event in events.iter().rev() {
+        if event.event_name != "codex_host_task.exec_completed" {
+            continue;
+        }
+        let Some(output) = event
+            .payload
+            .get("fixed_task_output")
+            .filter(|value| value.is_object())
+        else {
+            continue;
+        };
+        if output.get("template_id").and_then(Value::as_str)
+            == Some("static_page_image2_data_publish")
+            && output.get("status").and_then(Value::as_str) == Some("success")
+        {
+            candidate = Some((event, output));
+            break;
+        }
+    }
+    let Some((exec_event, fixed_task_output)) = candidate else {
+        return Ok(false);
+    };
+
+    let workflow_execution_id_text =
+        external_channel_static_page_recovery_workflow_execution_id(events, exec_event)
+            .unwrap_or_else(|| exec_event.id.to_string());
+    let queued_payload =
+        external_channel_static_page_recovery_publish_queued_payload(events, exec_event)
+            .cloned()
+            .unwrap_or(Value::Null);
+    let draft_id_text = queued_payload
+        .get("draft_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let image_job_id = queued_payload
+        .get("image_job_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let source_refs = external_channel_static_page_recovery_source_refs(
+        storage,
+        tenant_id,
+        run,
+        draft_id_text.as_deref(),
+    )
+    .await?;
+
+    let existing_public_url = fixed_task_output
+        .pointer("/artifact/public_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+        .map(str::to_string);
+    let (public_url, local_path, manifest_path, publish_mode) =
+        if let Some(public_url) = existing_public_url {
+            (
+                public_url,
+                fixed_task_output
+                    .pointer("/artifact/local_path")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                fixed_task_output
+                    .pointer("/artifact/manifest_path")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                "recovered_existing_generated_artifact".to_string(),
+            )
+        } else if let Some(html) =
+            external_channel_static_page_html_from_fixed_task_output(fixed_task_output)
+        {
+            let published = publish_external_static_page_exec_completed_html_as_generated_artifact(
+                run,
+                exec_event,
+                &workflow_execution_id_text,
+                &html,
+                &source_refs,
+            )?;
+            (
+                published.public_url,
+                Some(published.local_path),
+                Some(published.manifest_path),
+                "recovered_inline_html_generated_artifact".to_string(),
+            )
+        } else {
+            return Ok(false);
+        };
+
+    if events.iter().any(|existing| {
+        existing.event_name == "assistant_run.external_channel_static_page_publish_completed"
+            && (existing
+                .payload
+                .get("codex_host_workflow_execution_id")
+                .and_then(Value::as_str)
+                == Some(workflow_execution_id_text.as_str())
+                || existing.payload.get("public_url").and_then(Value::as_str)
+                    == Some(public_url.as_str()))
+    }) {
+        return Ok(false);
+    }
+
+    let conversation_external_id = source_refs
+        .get("conversation_external_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| external_channel_conversation_external_id_from_run(run));
+    let completed_payload = json!({
+        "channel_connection_id": source_refs
+            .get("channel_connection_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "platform": source_refs.get("platform").cloned().unwrap_or(Value::Null),
+        "conversation_external_id": conversation_external_id,
+        "message_external_id": source_refs
+            .get("message_external_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "draft_id": draft_id_text,
+        "image_job_id": image_job_id,
+        "codex_host_workflow_execution_id": workflow_execution_id_text,
+        "codex_host_exec_event_id": exec_event.id.to_string(),
+        "template_id": "static_page_image2_data_publish",
+        "publish_mode": publish_mode,
+        "public_url": public_url,
+        "artifact_links": [public_url],
+        "local_path": local_path,
+        "manifest_path": manifest_path,
+        "validation_summary": external_channel_static_page_publish_validation_summary_from_fixed_task_output(fixed_task_output),
+        "source_refs": source_refs,
+    });
+
+    maybe_attach_external_static_page_artifact_to_run(
+        storage,
+        tenant_id,
+        run.id,
+        &completed_payload,
+    )
+    .await?;
+    storage
+        .assistant_runs()
+        .append_event(
+            tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_static_page_publish_completed"
+                    .to_string(),
+                payload: completed_payload,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(true)
+}
+
+fn external_channel_static_page_run_has_published_artifact(run: &AssistantRun) -> bool {
+    run.output_artifacts
+        .as_array()
+        .map(|artifacts| {
+            artifacts.iter().any(|artifact| {
+                artifact.get("type").and_then(Value::as_str)
+                    == Some("external_channel_static_page_artifact")
+                    && artifact
+                        .get("public_url")
+                        .and_then(Value::as_str)
+                        .map(codex_host_fixed_task_public_artifact_url_allowed)
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn external_channel_static_page_recovery_workflow_execution_id(
+    events: &[AssistantRunEvent],
+    exec_event: &AssistantRunEvent,
+) -> Option<String> {
+    for pointer in [
+        "/codex_host_workflow_execution_id",
+        "/workflow_execution_id",
+        "/execution_id",
+    ] {
+        if let Some(value) = exec_event
+            .payload
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
+        }
+    }
+    external_channel_static_page_recovery_publish_queued_payload(events, exec_event)
+        .and_then(|payload| {
+            payload
+                .get("codex_host_workflow_execution_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .map(str::to_string)
+}
+
+fn external_channel_static_page_recovery_publish_queued_payload<'a>(
+    events: &'a [AssistantRunEvent],
+    exec_event: &AssistantRunEvent,
+) -> Option<&'a Value> {
+    let exec_workflow_id = exec_event
+        .payload
+        .get("codex_host_workflow_execution_id")
+        .or_else(|| exec_event.payload.get("workflow_execution_id"))
+        .or_else(|| exec_event.payload.get("execution_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    events
+        .iter()
+        .rev()
+        .filter(|event| event.sequence_no <= exec_event.sequence_no)
+        .find(|event| {
+            if event.event_name != "assistant_run.external_channel_static_page_publish_queued" {
+                return false;
+            }
+            if let Some(exec_workflow_id) = exec_workflow_id {
+                return event
+                    .payload
+                    .get("codex_host_workflow_execution_id")
+                    .and_then(Value::as_str)
+                    == Some(exec_workflow_id);
+            }
+            true
+        })
+        .map(|event| &event.payload)
+}
+
+async fn external_channel_static_page_recovery_source_refs(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    run: &AssistantRun,
+    draft_id_text: Option<&str>,
+) -> std::result::Result<Value, ApiError> {
+    if let Some(draft_id) = draft_id_text
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(StaticPageDraftId)
+    {
+        if let Some(draft) = storage
+            .static_page_drafts()
+            .get_by_id(tenant_id, draft_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        {
+            return Ok(external_channel_static_page_status_source_refs(
+                &draft.source_refs,
+            ));
+        }
+    }
+    Ok(external_channel_static_page_status_source_refs(
+        &run.selected_scope,
+    ))
+}
+
+fn external_channel_static_page_html_from_fixed_task_output(output: &Value) -> Option<String> {
+    for pointer in [
+        "/artifact/html",
+        "/artifact/html_text",
+        "/artifact/index_html",
+        "/html",
+        "/html_text",
+    ] {
+        if let Some(html) = output
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(external_channel_standalone_html_document(html));
+        }
+    }
+    None
+}
+
+fn external_channel_standalone_html_document(html: &str) -> String {
+    let trimmed = html.trim();
+    let lower = trimmed
+        .chars()
+        .take(256)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if lower.contains("<!doctype html") || lower.contains("<html") {
+        trimmed.to_string()
+    } else {
+        format!(
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>V3 Generated Artifact</title></head><body>{}</body></html>",
+            trimmed
+        )
+    }
+}
+
+struct ExternalStaticPageRecoveredArtifact {
+    public_url: String,
+    local_path: String,
+    manifest_path: String,
+}
+
+fn publish_external_static_page_exec_completed_html_as_generated_artifact(
+    run: &AssistantRun,
+    exec_event: &AssistantRunEvent,
+    workflow_execution_id_text: &str,
+    html: &str,
+    source_refs: &Value,
+) -> std::result::Result<ExternalStaticPageRecoveredArtifact, ApiError> {
+    let run_segment = safe_external_path_segment(&run.id.to_string());
+    let workflow_segment = safe_external_path_segment(workflow_execution_id_text);
+    let event_segment = safe_external_path_segment(&exec_event.id.to_string());
+    let relative_dir = format!(
+        "database-static-pages/external-channel/{run_segment}/{workflow_segment}-{event_segment}"
+    );
+    let artifact_dir = external_channel_generated_artifact_root()?.join(&relative_dir);
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        ApiError::internal(
+            "static_page_generated_artifact_recovery_failed",
+            format!("failed to create recovered static-page dir: {error}"),
+        )
+    })?;
+    let index_path = artifact_dir.join("index.html");
+    fs::write(&index_path, html.as_bytes()).map_err(|error| {
+        ApiError::internal(
+            "static_page_generated_artifact_recovery_failed",
+            format!("failed to write recovered static-page HTML: {error}"),
+        )
+    })?;
+    let public_url = external_channel_generated_artifact_public_url(&relative_dir);
+    let manifest_path = artifact_dir.join("manifest.json");
+    let manifest = json!({
+        "kind": "v3_external_channel_static_page_recovered_from_codex_exec",
+        "version": 1,
+        "assistant_run_id": run.id.to_string(),
+        "assistant_run_event_id": exec_event.id.to_string(),
+        "codex_host_workflow_execution_id": workflow_execution_id_text,
+        "public_url": public_url.clone(),
+        "source_refs": source_refs.clone(),
+        "created_at": Utc::now(),
+    });
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).map_err(|error| {
+            ApiError::internal(
+                "static_page_generated_artifact_recovery_failed",
+                format!("failed to serialize recovered static-page manifest: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        ApiError::internal(
+            "static_page_generated_artifact_recovery_failed",
+            format!("failed to write recovered static-page manifest: {error}"),
+        )
+    })?;
+    Ok(ExternalStaticPageRecoveredArtifact {
+        public_url,
+        local_path: index_path.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+    })
+}
+
+fn external_channel_static_page_publish_validation_summary_from_fixed_task_output(
+    fixed_task_output: &Value,
+) -> Value {
+    let report = fixed_task_output
+        .get("validation_report")
+        .unwrap_or(&Value::Null);
+    json!({
+        "status": fixed_task_output.get("status").cloned().unwrap_or(Value::Null),
+        "reason": "new_generated_artifact_validated",
+        "latest_snapshot": report.get("latest_snapshot").cloned().unwrap_or(Value::Null),
+        "source_row_count": report.get("source_row_count").cloned().unwrap_or(Value::Null),
+        "current_state_row_count": report
+            .get("current_state_row_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "detail_row_count": report.get("detail_row_count").cloned().unwrap_or(Value::Null),
+        "unit_policy": report.get("unit_policy").cloned().unwrap_or(Value::Null),
+        "warnings": report
+            .get("warnings")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    })
 }
 
 async fn maybe_record_external_static_page_publish_completed(
@@ -75759,6 +76217,175 @@ retrieve_evidence:
                 .artifact_links
                 .contains(&public_url.to_string())
         );
+
+        let updated_run = state
+            .storage
+            .assistant_runs()
+            .get_by_id(state.tenant_id, run.id)
+            .await
+            .expect("run loads")
+            .expect("run exists");
+        assert!(value_array(updated_run.output_artifacts)
+            .iter()
+            .any(
+                |artifact| artifact.get("public_url").and_then(Value::as_str) == Some(public_url)
+            ));
+    }
+
+    #[tokio::test]
+    async fn external_channel_static_page_reply_recovers_exec_completed_inline_html() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external static-page exec recovery test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let artifact_root = std::env::temp_dir()
+            .join("v3-platform-static-page-recovery")
+            .join(Uuid::new_v4().to_string());
+        let _root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.to_string_lossy().as_ref(),
+        );
+        let _base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-static-page-recover-{}", Uuid::new_v4()),
+                "External Static Page Recovery Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let (run, draft, job, _) = create_external_static_page_auto_publish_fixture(
+            &state,
+            Some("static-page-previews/recovery.png"),
+        )
+        .await;
+        let workflow_execution_id = WorkflowExecutionId::new();
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_channel_static_page_publish_queued"
+                        .to_string(),
+                    payload: json!({
+                        "draft_id": draft.id.to_string(),
+                        "image_job_id": job.id.to_string(),
+                        "codex_host_workflow_execution_id": workflow_execution_id.to_string(),
+                        "template_id": "static_page_image2_data_publish",
+                    }),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("queued event should append");
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "codex_host_task.exec_completed".to_string(),
+                    payload: json!({
+                        "mode": "cloudflare_orchestrator",
+                        "status": "completed",
+                        "fixed_task_output": {
+                            "template_id": "static_page_image2_data_publish",
+                            "status": "success",
+                            "artifact": {
+                                "public_url": "https://v3.elepcloud.com/generated-artifacts/pending/recovery/",
+                                "html": "<main><h1>恢复发布</h1></main>"
+                            },
+                            "validation_report": {
+                                "latest_snapshot": "2026-05-10",
+                                "source_row_count": 88,
+                                "current_state_row_count": 80,
+                                "detail_row_count": 12,
+                                "unit_policy": "validate_raw_value_then_choose_wan_or_yi",
+                                "warnings": []
+                            }
+                        }
+                    }),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("exec completed event should append");
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+
+        let recovered = maybe_recover_external_static_page_publish_completed_from_exec_event(
+            &state.storage,
+            state.tenant_id,
+            &run,
+            &events,
+        )
+        .await
+        .expect("recovery should succeed");
+        assert!(recovered);
+        let recovered_again = maybe_recover_external_static_page_publish_completed_from_exec_event(
+            &state.storage,
+            state.tenant_id,
+            &run,
+            &state
+                .storage
+                .assistant_runs()
+                .list_events(state.tenant_id, run.id)
+                .await
+                .expect("events should relist"),
+        )
+        .await
+        .expect("recovery should dedupe");
+        assert!(!recovered_again);
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should relist");
+        let final_events = events
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(final_events.len(), 1);
+        let payload = &final_events[0].payload;
+        let public_url = payload
+            .get("public_url")
+            .and_then(Value::as_str)
+            .expect("public url");
+        assert!(public_url.contains("/database-static-pages/external-channel/"));
+        assert!(!public_url.contains("/pending/"));
+        assert_eq!(payload["validation_summary"]["source_row_count"], json!(88));
+        let local_path = payload
+            .get("local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        let html = fs::read_to_string(local_path).expect("html should exist");
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("恢复发布"));
 
         let updated_run = state
             .storage
