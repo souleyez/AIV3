@@ -6896,6 +6896,61 @@ body {
   white-space: pre-wrap;
 }
 
+.external-executor-artifacts {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
+.external-executor-artifacts article {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #b6d6c9;
+  border-radius: 8px;
+  background: #f3fbf7;
+}
+
+.external-executor-artifacts article > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.external-executor-artifacts strong,
+.external-executor-artifacts span,
+.external-executor-artifacts small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.external-executor-artifacts strong {
+  color: #123c33;
+  font-size: 12px;
+}
+
+.external-executor-artifacts a {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.external-executor-artifacts span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.external-executor-artifacts small {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 11px;
+}
+
 .external-executor-detail .external-json-preview {
   max-height: 420px;
   margin: 0;

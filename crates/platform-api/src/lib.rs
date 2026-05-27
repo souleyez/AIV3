@@ -32412,12 +32412,27 @@ fn assistant_run_answer_quality_autofix_output_validation(output: &Value) -> Val
             "reason": "unknown_status"
         });
     }
+    let failure_type = output
+        .get("failure_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !assistant_run_answer_quality_autofix_failure_type_allowed(failure_type) {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "patch_review_required": true,
+            "reason": "invalid_failure_type"
+        });
+    }
     if status == "not_system_defect" {
         return json!({
             "accepted": true,
             "status": status,
             "auto_apply_allowed": false,
-            "reason": output.get("failure_type").and_then(Value::as_str).unwrap_or("not_system_defect")
+            "patch_review_required": false,
+            "failure_type": failure_type,
+            "reason": failure_type
         });
     }
     if status != "patch_ready" {
@@ -32425,7 +32440,9 @@ fn assistant_run_answer_quality_autofix_output_validation(output: &Value) -> Val
             "accepted": true,
             "status": status,
             "auto_apply_allowed": false,
-            "reason": output.get("human_review_reason").and_then(Value::as_str).unwrap_or(status)
+            "patch_review_required": true,
+            "failure_type": failure_type,
+            "reason": output.get("human_review_reason").and_then(Value::as_str).unwrap_or(failure_type)
         });
     }
     let changed_files = value_array(output.get("changed_files").cloned().unwrap_or(Value::Null))
@@ -32437,6 +32454,8 @@ fn assistant_run_answer_quality_autofix_output_validation(output: &Value) -> Val
             "accepted": false,
             "status": "needs_human",
             "auto_apply_allowed": false,
+            "patch_review_required": true,
+            "failure_type": failure_type,
             "reason": "changed_files_required"
         });
     }
@@ -32448,6 +32467,8 @@ fn assistant_run_answer_quality_autofix_output_validation(output: &Value) -> Val
             "accepted": false,
             "status": "needs_human",
             "auto_apply_allowed": false,
+            "patch_review_required": true,
+            "failure_type": failure_type,
             "reason": "changed_file_outside_allowlist"
         });
     }
@@ -32458,27 +32479,78 @@ fn assistant_run_answer_quality_autofix_output_validation(output: &Value) -> Val
             "accepted": false,
             "status": "needs_human",
             "auto_apply_allowed": false,
+            "patch_review_required": true,
+            "failure_type": failure_type,
             "reason": "tests_required"
         });
     }
-    let risk_level = output
-        .get("risk_level")
+    let rollback_notes_present = output
+        .get("rollback_notes")
         .and_then(Value::as_str)
-        .unwrap_or("medium");
-    if risk_level != "low" {
+        .map(str::trim)
+        .is_some_and(|notes| !notes.is_empty());
+    if !rollback_notes_present {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "patch_review_required": true,
+            "failure_type": failure_type,
+            "reason": "rollback_notes_required"
+        });
+    }
+    let Some(risk_level) = output.get("risk_level").and_then(Value::as_str) else {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "patch_review_required": true,
+            "failure_type": failure_type,
+            "reason": "risk_level_required"
+        });
+    };
+    if !matches!(risk_level, "low" | "medium" | "high") {
+        return json!({
+            "accepted": false,
+            "status": "needs_human",
+            "auto_apply_allowed": false,
+            "patch_review_required": true,
+            "failure_type": failure_type,
+            "reason": "invalid_risk_level"
+        });
+    }
+    if risk_level == "high" {
         return json!({
             "accepted": true,
             "status": "needs_human",
             "auto_apply_allowed": false,
-            "reason": "risk_requires_human_review"
+            "patch_review_required": true,
+            "failure_type": failure_type,
+            "risk_level": risk_level,
+            "reason": "high_risk_requires_human_review"
         });
     }
     json!({
         "accepted": true,
         "status": "patch_ready",
-        "auto_apply_allowed": true,
-        "reason": "low_risk_allowlisted_patch_with_tests"
+        "auto_apply_allowed": false,
+        "patch_review_required": true,
+        "failure_type": failure_type,
+        "risk_level": risk_level,
+        "reason": "patch_ready_requires_human_review"
     })
+}
+
+fn assistant_run_answer_quality_autofix_failure_type_allowed(failure_type: &str) -> bool {
+    matches!(
+        failure_type,
+        "missing_source"
+            | "parse_quality"
+            | "retrieval_supply"
+            | "answer_policy"
+            | "not_reproducible"
+            | "unsafe_or_out_of_scope"
+    )
 }
 
 fn assistant_run_answer_quality_autofix_file_allowed(file: &str) -> bool {
@@ -33034,6 +33106,11 @@ fn codex_host_fixed_task_output_summary(output: Option<&Value>) -> Value {
         "test_commands": test_commands,
         "risk_level": output.get("risk_level").cloned().unwrap_or(Value::Null),
         "failure_type": output.get("failure_type").cloned().unwrap_or(Value::Null),
+        "rollback_notes_present": output
+            .get("rollback_notes")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|notes| !notes.is_empty()),
         "human_review_reason": output
             .get("human_review_reason")
             .and_then(Value::as_str)
@@ -34270,6 +34347,30 @@ fn data_ingestion_analysis_result_summary_from_output(
     })
 }
 
+fn external_channel_output_artifact_manifest(
+    artifact_type: &str,
+    artifact_kind: &str,
+    title: &str,
+    status: Value,
+    primary_url: Option<&str>,
+    links: Vec<Value>,
+    refs: Value,
+    safety: Value,
+) -> Value {
+    json!({
+        "schema": "v3.output_artifact_manifest",
+        "schema_version": 1,
+        "artifact_type": artifact_type,
+        "artifact_kind": artifact_kind,
+        "title": title,
+        "status": status,
+        "primary_url": primary_url,
+        "links": links,
+        "refs": refs,
+        "safety": safety,
+    })
+}
+
 async fn maybe_attach_external_data_ingestion_analysis_artifact_to_run(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -34298,10 +34399,55 @@ async fn maybe_attach_external_data_ingestion_analysis_artifact_to_run(
     }) {
         return Ok(());
     }
+    let staging_plan_available = completed_payload
+        .get("staging_plan_available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let artifact_kind = if staging_plan_available {
+        "data_ingestion_staging_plan"
+    } else {
+        "data_ingestion_analysis_result"
+    };
+    let staging_plan_id = completed_payload
+        .pointer("/staging_plan/plan_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let artifact_manifest = external_channel_output_artifact_manifest(
+        "data_ingestion_analysis",
+        artifact_kind,
+        "data_ingestion_analysis",
+        completed_payload
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| json!("unknown")),
+        None,
+        Vec::new(),
+        json!({
+            "codex_host_workflow_execution_id": completed_payload
+                .get("codex_host_workflow_execution_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "template_id": "data_ingestion_analysis",
+            "staging_plan_id": staging_plan_id,
+            "staging_plan_available": staging_plan_available,
+        }),
+        json!({
+            "customer_visible": true,
+            "credentials_exposed": false,
+            "raw_logs_exposed": false,
+            "raw_table_dump_exposed": false,
+            "production_write_allowed": false,
+            "human_review_required": completed_payload
+                .get("human_review_required")
+                .cloned()
+                .unwrap_or(Value::Bool(true)),
+        }),
+    );
     output_artifacts.push(json!({
         "type": "external_channel_data_ingestion_analysis",
         "artifact_type": "data_ingestion_analysis",
         "title": "data_ingestion_analysis",
+        "artifact_manifest": artifact_manifest,
         "codex_host_workflow_execution_id": completed_payload
             .get("codex_host_workflow_execution_id")
             .cloned()
@@ -34615,10 +34761,38 @@ async fn maybe_attach_external_static_page_artifact_to_run(
     }) {
         return Ok(());
     }
+    let artifact_manifest = external_channel_output_artifact_manifest(
+        "static_page",
+        "generated_artifact",
+        "static_page_image2_data_publish",
+        json!("published"),
+        Some(public_url),
+        vec![
+            json!({"rel": "public", "url": public_url}),
+            json!({"rel": "download", "url": public_url}),
+        ],
+        json!({
+            "draft_id": completed_payload.get("draft_id").cloned().unwrap_or(Value::Null),
+            "image_job_id": completed_payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "codex_host_workflow_execution_id": completed_payload
+                .get("codex_host_workflow_execution_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "template_id": "static_page_image2_data_publish",
+        }),
+        json!({
+            "customer_visible": true,
+            "credentials_exposed": false,
+            "raw_logs_exposed": false,
+            "generated_artifact_only": true,
+            "overwrite_allowed": false,
+        }),
+    );
     output_artifacts.push(json!({
         "type": "external_channel_static_page_artifact",
         "artifact_type": "static_page",
         "title": "static_page_image2_data_publish",
+        "artifact_manifest": artifact_manifest,
         "public_url": public_url,
         "download_url": public_url,
         "draft_id": completed_payload.get("draft_id").cloned().unwrap_or(Value::Null),
@@ -49727,6 +49901,7 @@ async fn load_workflow_runtime_inspect_view(
                 format!("workflow execution {} was not found", execution_id),
             )
         })?;
+    let artifact_manifests = load_workflow_runtime_artifact_manifests(state, &execution).await?;
 
     let dataset_output = match state
         .storage
@@ -49814,11 +49989,100 @@ async fn load_workflow_runtime_inspect_view(
         tool_executions,
         model_facing: None,
         pretty_summaries: Vec::new(),
+        artifact_manifests,
     };
     inspect.model_facing = Some(derive_model_facing_summary(&inspect));
     inspect.pretty_summaries = render_workflow_runtime_pretty_summaries(&inspect);
 
     Ok(inspect)
+}
+
+async fn load_workflow_runtime_artifact_manifests(
+    state: &AppState,
+    execution: &WorkflowExecution,
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let Some(run_id) = workflow_runtime_assistant_run_id(&execution.context) else {
+        return Ok(Vec::new());
+    };
+    let Some(run) = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut manifests = output_artifact_manifests_from_output_artifacts(&run.output_artifacts);
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    manifests.extend(
+        events
+            .iter()
+            .filter_map(|event| safe_output_artifact_manifest(&event.payload)),
+    );
+    Ok(dedupe_output_artifact_manifests(manifests))
+}
+
+fn workflow_runtime_assistant_run_id(context: &Value) -> Option<AssistantRunId> {
+    workflow_context_uuid(context, "assistant_run_id")
+        .or_else(|| {
+            context
+                .pointer("/fixed_task/assistant_run_id")
+                .and_then(Value::as_str)
+                .and_then(|raw| Uuid::parse_str(raw).ok())
+        })
+        .map(AssistantRunId)
+}
+
+fn output_artifact_manifests_from_output_artifacts(output_artifacts: &Value) -> Vec<Value> {
+    dedupe_output_artifact_manifests(
+        value_array(output_artifacts.clone())
+            .into_iter()
+            .filter_map(|artifact| safe_output_artifact_manifest(&artifact))
+            .collect(),
+    )
+}
+
+fn dedupe_output_artifact_manifests(manifests: Vec<Value>) -> Vec<Value> {
+    let mut seen = BTreeSet::new();
+    manifests
+        .into_iter()
+        .filter(|manifest| {
+            let key = serde_json::to_string(manifest).unwrap_or_default();
+            seen.insert(key)
+        })
+        .collect()
+}
+
+fn safe_output_artifact_manifest(artifact: &Value) -> Option<Value> {
+    let manifest = artifact
+        .get("artifact_manifest")
+        .or_else(|| artifact.get("artifactManifest"))?;
+    let schema = manifest.get("schema").and_then(Value::as_str)?;
+    let schema_version = manifest
+        .get("schema_version")
+        .or_else(|| manifest.get("schemaVersion"))
+        .and_then(Value::as_i64)?;
+    if schema != "v3.output_artifact_manifest" || schema_version != 1 {
+        return None;
+    }
+    Some(json!({
+        "schema": "v3.output_artifact_manifest",
+        "schema_version": 1,
+        "artifact_type": manifest.get("artifact_type").cloned().unwrap_or(Value::Null),
+        "artifact_kind": manifest.get("artifact_kind").cloned().unwrap_or(Value::Null),
+        "title": manifest.get("title").cloned().unwrap_or(Value::Null),
+        "status": manifest.get("status").cloned().unwrap_or(Value::Null),
+        "primary_url": manifest.get("primary_url").cloned().unwrap_or(Value::Null),
+        "links": manifest.get("links").cloned().unwrap_or_else(|| json!([])),
+        "refs": manifest.get("refs").cloned().unwrap_or_else(|| json!({})),
+        "safety": manifest.get("safety").cloned().unwrap_or_else(|| json!({})),
+    }))
 }
 
 async fn list_llm_invocations(
@@ -53303,12 +53567,36 @@ fn report_render_summary_artifact_from_view(
     let asset_kind = report_render_output_asset_kind(output).unwrap_or_default();
     let publishable = output.status == contracts::ReportRenderOutputStatusView::Rendered
         && !asset_path.is_empty();
+    let title = format!("{} · 渲染摘要", plan.title);
+    let status = html_artifact_serialized_variant(&output.status);
+    let artifact_manifest = external_channel_output_artifact_manifest(
+        "report",
+        "report_render_summary",
+        &title,
+        json!(status.clone()),
+        None,
+        Vec::new(),
+        json!({
+            "report_plan_id": plan.id,
+            "report_render_output_id": output.id,
+            "workflow_execution_id": output.execution_id,
+            "ast_version_id": output.ast_version_id,
+            "asset_kind": asset_kind,
+            "asset_path_present": !asset_path.is_empty(),
+        }),
+        json!({
+            "customer_visible": true,
+            "credentials_exposed": false,
+            "raw_logs_exposed": false,
+            "publishable": publishable,
+        }),
+    );
 
     HtmlArtifactManifestView {
         kind: "html_artifact".to_string(),
         version: 1,
         id: format!("html-report-render-{output_id}"),
-        title: format!("{} · 渲染摘要", plan.title),
+        title,
         source_type: contracts::HtmlArtifactSourceTypeView::Report,
         template_id: contracts::HtmlArtifactTemplateIdView::ReportRenderSummary,
         owner_scope: contracts::HtmlArtifactOwnerScopeView {
@@ -53343,10 +53631,11 @@ fn report_render_summary_artifact_from_view(
             "reportTitle": plan.title,
             "objective": plan.objective,
             "surface": output.surface.as_str(),
-            "status": html_artifact_serialized_variant(&output.status),
+            "status": status,
             "publishable": publishable,
             "assetPath": asset_path,
             "assetKind": asset_kind,
+            "artifactManifest": artifact_manifest,
             "reportPlanId": plan.id,
             "reportRenderOutputId": output.id,
             "workflowExecutionId": output.execution_id,
@@ -73145,10 +73434,12 @@ mod tests {
         let outside = assistant_run_answer_quality_autofix_output_validation(&json!({
             "template_id": "answer_quality_autofix",
             "status": "patch_ready",
+            "failure_type": "retrieval_supply",
             "changed_files": ["apps/web/app/globals.css"],
             "tests_added": ["assistant_run_answer_quality_case"],
             "test_commands": ["cargo test -p platform-api assistant_run_answer_quality --lib"],
-            "risk_level": "low"
+            "risk_level": "low",
+            "rollback_notes": "revert the candidate answer quality patch"
         }));
         assert_eq!(outside["status"], json!("needs_human"));
         assert_eq!(outside["reason"], json!("changed_file_outside_allowlist"));
@@ -73156,29 +73447,78 @@ mod tests {
         let missing_tests = assistant_run_answer_quality_autofix_output_validation(&json!({
             "template_id": "answer_quality_autofix",
             "status": "patch_ready",
+            "failure_type": "retrieval_supply",
             "changed_files": ["crates/platform-api/src/lib.rs"],
             "tests_added": [],
             "test_commands": ["cargo test -p platform-api assistant_run_answer_quality --lib"],
-            "risk_level": "low"
+            "risk_level": "low",
+            "rollback_notes": "revert the candidate answer quality patch"
         }));
         assert_eq!(missing_tests["status"], json!("needs_human"));
         assert_eq!(missing_tests["reason"], json!("tests_required"));
     }
 
     #[test]
-    fn answer_quality_autofix_output_allows_low_risk_patch_with_tests() {
+    fn answer_quality_autofix_output_keeps_patch_ready_review_gated() {
         let decision = assistant_run_answer_quality_autofix_output_validation(&json!({
             "template_id": "answer_quality_autofix",
             "status": "patch_ready",
+            "failure_type": "retrieval_supply",
             "changed_files": ["crates/platform-api/src/lib.rs", "fixtures/document-quality/smoke-cases.json"],
             "tests_added": ["assistant_run_answer_quality_autofix_collects_weak_insufficient_case"],
             "test_commands": ["cargo test -p platform-api assistant_run_answer_quality --lib"],
-            "risk_level": "low"
+            "risk_level": "low",
+            "rollback_notes": "revert the candidate answer quality patch"
         }));
 
         assert_eq!(decision["accepted"], json!(true));
         assert_eq!(decision["status"], json!("patch_ready"));
-        assert_eq!(decision["auto_apply_allowed"], json!(true));
+        assert_eq!(decision["auto_apply_allowed"], json!(false));
+        assert_eq!(decision["patch_review_required"], json!(true));
+        assert_eq!(
+            decision["reason"],
+            json!("patch_ready_requires_human_review")
+        );
+    }
+
+    #[test]
+    fn answer_quality_autofix_output_requires_failure_type_and_rollback_notes() {
+        let invalid_failure_type = assistant_run_answer_quality_autofix_output_validation(&json!({
+            "template_id": "answer_quality_autofix",
+            "status": "needs_human",
+            "failure_type": "unknown",
+            "human_review_reason": "cannot classify"
+        }));
+        assert_eq!(invalid_failure_type["accepted"], json!(false));
+        assert_eq!(
+            invalid_failure_type["reason"],
+            json!("invalid_failure_type")
+        );
+
+        let missing_rollback = assistant_run_answer_quality_autofix_output_validation(&json!({
+            "template_id": "answer_quality_autofix",
+            "status": "patch_ready",
+            "failure_type": "parse_quality",
+            "changed_files": ["crates/platform-api/src/lib.rs"],
+            "tests_added": ["assistant_run_answer_quality_parse_quality_regression"],
+            "test_commands": ["cargo test -p platform-api assistant_run_answer_quality --lib"],
+            "risk_level": "low"
+        }));
+        assert_eq!(missing_rollback["accepted"], json!(false));
+        assert_eq!(missing_rollback["reason"], json!("rollback_notes_required"));
+
+        let unsafe_scope = assistant_run_answer_quality_autofix_output_validation(&json!({
+            "template_id": "answer_quality_autofix",
+            "status": "needs_human",
+            "failure_type": "unsafe_or_out_of_scope",
+            "human_review_reason": "requires product decision"
+        }));
+        assert_eq!(unsafe_scope["accepted"], json!(true));
+        assert_eq!(unsafe_scope["status"], json!("needs_human"));
+        assert_eq!(
+            unsafe_scope["failure_type"],
+            json!("unsafe_or_out_of_scope")
+        );
     }
 
     #[test]
@@ -79136,6 +79476,77 @@ retrieve_evidence:
         );
     }
 
+    #[test]
+    fn output_artifact_manifests_from_output_artifacts_returns_only_safe_manifests() {
+        let output_artifacts = json!([
+            {
+                "type": "external_channel_static_page_artifact",
+                "artifact_manifest": {
+                    "schema": "v3.output_artifact_manifest",
+                    "schema_version": 1,
+                    "artifact_type": "static_page",
+                    "artifact_kind": "generated_artifact",
+                    "primary_url": "https://v3.elepcloud.com/generated-artifacts/a/index.html",
+                    "safety": {
+                        "credentials_exposed": false,
+                        "raw_logs_exposed": false
+                    },
+                    "raw_log": "must-not-leak"
+                }
+            },
+            {
+                "type": "external_channel_data_ingestion_analysis",
+                "artifactManifest": {
+                    "schema": "v3.output_artifact_manifest",
+                    "schema_version": 1,
+                    "artifact_type": "data_ingestion_analysis",
+                    "artifact_kind": "data_ingestion_staging_plan",
+                    "safety": {
+                        "production_write_allowed": false,
+                        "raw_table_dump_exposed": false
+                    }
+                }
+            },
+            {
+                "artifact_manifest": {
+                    "schema": "legacy",
+                    "schema_version": 1,
+                    "artifact_type": "raw_log"
+                }
+            },
+            {
+                "artifact_manifest": {
+                    "schema": "v3.output_artifact_manifest",
+                    "schema_version": 2,
+                    "artifact_type": "future"
+                }
+            },
+            {
+                "artifact_manifest": {
+                    "schema": "v3.output_artifact_manifest",
+                    "schema_version": 1,
+                    "artifact_type": "static_page",
+                    "artifact_kind": "generated_artifact",
+                    "primary_url": "https://v3.elepcloud.com/generated-artifacts/a/index.html",
+                    "safety": {
+                        "credentials_exposed": false,
+                        "raw_logs_exposed": false
+                    }
+                }
+            }
+        ]);
+
+        let manifests = output_artifact_manifests_from_output_artifacts(&output_artifacts);
+
+        assert_eq!(manifests.len(), 2);
+        assert_eq!(manifests[0]["artifact_type"], json!("static_page"));
+        assert!(manifests[0].get("raw_log").is_none());
+        assert_eq!(
+            manifests[1]["artifact_kind"],
+            json!("data_ingestion_staging_plan")
+        );
+    }
+
     #[tokio::test]
     async fn external_channel_assistant_run_reply_endpoint_returns_static_page_artifact() {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -79406,11 +79817,35 @@ retrieve_evidence:
             .await
             .expect("run loads")
             .expect("run exists");
-        assert!(value_array(updated_run.output_artifacts)
+        let updated_artifacts = value_array(updated_run.output_artifacts);
+        let static_page_artifact = updated_artifacts
             .iter()
-            .any(
-                |artifact| artifact.get("public_url").and_then(Value::as_str) == Some(public_url)
-            ));
+            .find(|artifact| artifact.get("public_url").and_then(Value::as_str) == Some(public_url))
+            .expect("published static page artifact should be attached");
+        assert_eq!(
+            static_page_artifact["artifact_manifest"]["schema"],
+            json!("v3.output_artifact_manifest")
+        );
+        assert_eq!(
+            static_page_artifact["artifact_manifest"]["artifact_type"],
+            json!("static_page")
+        );
+        assert_eq!(
+            static_page_artifact["artifact_manifest"]["artifact_kind"],
+            json!("generated_artifact")
+        );
+        assert_eq!(
+            static_page_artifact["artifact_manifest"]["primary_url"],
+            json!(public_url)
+        );
+        assert_eq!(
+            static_page_artifact["artifact_manifest"]["links"][0],
+            json!({"rel": "public", "url": public_url})
+        );
+        assert_eq!(
+            static_page_artifact["artifact_manifest"]["safety"]["overwrite_allowed"],
+            json!(false)
+        );
     }
 
     #[tokio::test]
@@ -79582,16 +80017,38 @@ retrieve_evidence:
             .await
             .expect("run loads")
             .expect("run exists");
-        assert!(value_array(updated_run.output_artifacts.clone())
+        let updated_artifacts = value_array(updated_run.output_artifacts.clone());
+        let ingestion_artifact = updated_artifacts
             .iter()
-            .any(|artifact| {
+            .find(|artifact| {
                 artifact.get("type").and_then(Value::as_str)
                     == Some("external_channel_data_ingestion_analysis")
                     && artifact
                         .get("staging_plan_available")
                         .and_then(Value::as_bool)
                         == Some(true)
-            }));
+            })
+            .expect("data-ingestion analysis artifact should be attached");
+        assert_eq!(
+            ingestion_artifact["artifact_manifest"]["schema"],
+            json!("v3.output_artifact_manifest")
+        );
+        assert_eq!(
+            ingestion_artifact["artifact_manifest"]["artifact_kind"],
+            json!("data_ingestion_staging_plan")
+        );
+        assert_eq!(
+            ingestion_artifact["artifact_manifest"]["refs"]["staging_plan_available"],
+            json!(true)
+        );
+        assert_eq!(
+            ingestion_artifact["artifact_manifest"]["safety"]["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            ingestion_artifact["artifact_manifest"]["safety"]["raw_table_dump_exposed"],
+            json!(false)
+        );
         let plan_id = payload["staging_plan"]["plan_id"]
             .as_str()
             .expect("plan id")
@@ -80080,7 +80537,15 @@ retrieve_evidence:
         );
         assert_eq!(
             event.payload["validation"]["reason"],
-            json!("low_risk_allowlisted_patch_with_tests")
+            json!("patch_ready_requires_human_review")
+        );
+        assert_eq!(
+            event.payload["validation"]["auto_apply_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            event.payload["validation"]["patch_review_required"],
+            json!(true)
         );
     }
 
@@ -81250,6 +81715,26 @@ retrieve_evidence:
         );
         assert_eq!(artifact.payload["assetKind"], json!("html"));
         assert_eq!(artifact.payload["publishable"], json!(true));
+        assert_eq!(
+            artifact.payload["artifactManifest"]["schema"],
+            json!("v3.output_artifact_manifest")
+        );
+        assert_eq!(
+            artifact.payload["artifactManifest"]["artifact_type"],
+            json!("report")
+        );
+        assert_eq!(
+            artifact.payload["artifactManifest"]["artifact_kind"],
+            json!("report_render_summary")
+        );
+        assert_eq!(
+            artifact.payload["artifactManifest"]["refs"]["report_render_output_id"],
+            json!(output_id)
+        );
+        assert_eq!(
+            artifact.payload["artifactManifest"]["safety"]["publishable"],
+            json!(true)
+        );
         assert!(value_array(artifact.payload["warnings"].clone()).is_empty());
     }
 
@@ -105440,6 +105925,7 @@ retrieve_evidence:
             tool_executions: Vec::new(),
             model_facing: None,
             pretty_summaries: Vec::new(),
+            artifact_manifests: Vec::new(),
         };
 
         let summary = derive_model_facing_summary(&inspect);
@@ -106466,6 +106952,7 @@ retrieve_evidence:
             tool_executions: Vec::new(),
             model_facing: None,
             pretty_summaries: Vec::new(),
+            artifact_manifests: Vec::new(),
         };
 
         let summary = derive_model_facing_summary(&inspect);
@@ -106593,6 +107080,7 @@ retrieve_evidence:
             tool_executions: Vec::new(),
             model_facing: None,
             pretty_summaries: Vec::new(),
+            artifact_manifests: Vec::new(),
         };
 
         let summary = render_latest_assistant_turn_summary(&inspect)
@@ -106763,6 +107251,7 @@ retrieve_evidence:
             tool_executions: Vec::new(),
             model_facing: None,
             pretty_summaries: Vec::new(),
+            artifact_manifests: Vec::new(),
         };
 
         let summary = render_dataset_output_runtime_summary(&inspect)
@@ -106863,6 +107352,7 @@ retrieve_evidence:
                 signals: vec!["workflow_kind=report_render_workflow".to_string()],
             }),
             pretty_summaries: Vec::new(),
+            artifact_manifests: Vec::new(),
         };
 
         let summaries = render_workflow_runtime_pretty_summaries(&inspect);
@@ -107033,6 +107523,7 @@ retrieve_evidence:
                 signals: vec!["workflow_kind=chat_session_workflow".to_string()],
             }),
             pretty_summaries: Vec::new(),
+            artifact_manifests: Vec::new(),
         };
 
         let summaries = render_workflow_runtime_pretty_summaries(&inspect);

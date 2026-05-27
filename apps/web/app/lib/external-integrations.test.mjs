@@ -863,10 +863,32 @@ test('codex executor helpers expose poll retry and remote task id', () => {
       stage: 'run_codex_host_task',
     },
     workflow_tasks: [task],
+    artifact_manifests: [
+      {
+        schema: 'v3.output_artifact_manifest',
+        schema_version: 1,
+        artifact_type: 'static_page',
+        artifact_kind: 'generated_artifact',
+        primary_url: 'https://v3.elepcloud.com/generated-artifacts/demo/index.html',
+        links: [{ rel: 'public', url: 'https://v3.elepcloud.com/generated-artifacts/demo/index.html' }],
+        safety: {
+          credentials_exposed: false,
+          raw_logs_exposed: false,
+        },
+      },
+      {
+        schema: 'legacy',
+        schema_version: 1,
+        artifact_type: 'raw_log',
+      },
+    ],
   });
   assert.equal(summary.poll_retry.active, true);
   assert.equal(summary.poll_retry.cloudflare_task_id, 'cf-001');
   assert.equal(summary.latest_task.attempt, 2);
+  assert.equal(summary.artifact_manifests.length, 1);
+  assert.equal(summary.artifact_manifests[0].artifactType, 'static_page');
+  assert.equal(summary.artifact_manifests[0].primaryUrl, 'https://v3.elepcloud.com/generated-artifacts/demo/index.html');
 });
 
 test('external integrations page does not include direct home navigation links', () => {

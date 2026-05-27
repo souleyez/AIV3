@@ -984,6 +984,41 @@ export function normalizeWorkflowTask(item = {}) {
   };
 }
 
+export function normalizeArtifactManifest(item = {}) {
+  const manifest = item && typeof item === 'object' ? item : {};
+  const links = Array.isArray(manifest.links)
+    ? manifest.links
+      .map((link) => ({
+        rel: link?.rel || '',
+        url: link?.url || '',
+      }))
+      .filter((link) => link.url)
+    : [];
+  const refs = manifest.refs && typeof manifest.refs === 'object' ? manifest.refs : {};
+  const safety = manifest.safety && typeof manifest.safety === 'object' ? manifest.safety : {};
+  return {
+    schema: manifest.schema || '',
+    schemaVersion: Number(manifest.schema_version || manifest.schemaVersion || 0),
+    artifactType: manifest.artifact_type || manifest.artifactType || '',
+    artifactKind: manifest.artifact_kind || manifest.artifactKind || '',
+    primaryUrl: manifest.primary_url || manifest.primaryUrl || '',
+    links,
+    refs,
+    safety,
+  };
+}
+
+export function normalizeArtifactManifests(value = []) {
+  const items = Array.isArray(value) ? value : [];
+  return items
+    .map(normalizeArtifactManifest)
+    .filter((manifest) => (
+      manifest.schema === 'v3.output_artifact_manifest'
+      && manifest.schemaVersion === 1
+      && (manifest.artifactType || manifest.artifactKind)
+    ));
+}
+
 export function normalizeCodexExecutorTask(item = {}) {
   return {
     id: item.id || '',
@@ -1016,6 +1051,11 @@ export function codexExecutorInspectSummary(detail = {}) {
     : Array.isArray(detail.prettySummaries)
       ? detail.prettySummaries
       : [];
+  const artifactManifests = normalizeArtifactManifests(
+    Array.isArray(detail.artifact_manifests)
+      ? detail.artifact_manifests
+      : detail.artifactManifests,
+  );
   const workflowTasks = (Array.isArray(detail.workflow_tasks)
     ? detail.workflow_tasks
     : Array.isArray(detail.workflowTasks)
@@ -1052,6 +1092,7 @@ export function codexExecutorInspectSummary(detail = {}) {
       }
       : { active: false },
     pretty_summaries: prettySummaries,
+    artifact_manifests: artifactManifests,
     model_facing: detail.model_facing || detail.modelFacing || null,
   };
 }

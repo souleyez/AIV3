@@ -12,7 +12,7 @@ use static_page_renderer::{render_static_page, StaticPageRenderRequest};
 use static_page_worker::{
     context_uuid, extract_first_image_artifact, merge_orchestrator_state,
     normalize_artifact_asset_key, poll_static_page_visual_task, submit_static_page_visual_task,
-    task_failure_message, CodexOrchestratorConfig,
+    task_failure_message, CodexOrchestratorConfig, StaticPageVisualArtifact,
 };
 use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
@@ -252,6 +252,11 @@ async fn process_static_page_image_task(
                     "width": artifact.width,
                     "height": artifact.height,
                 },
+                "artifact_manifest": static_page_image_preview_artifact_manifest(
+                    &job,
+                    &artifact,
+                    &completed_task.id,
+                ),
             }),
         )
         .await?;
@@ -1167,6 +1172,56 @@ async fn append_assistant_event(
     Ok(())
 }
 
+fn static_page_image_preview_artifact_manifest(
+    job: &StaticPageImageJob,
+    artifact: &StaticPageVisualArtifact,
+    orchestrator_task_id: &str,
+) -> Value {
+    let primary_url = if artifact.asset_key.starts_with("http://")
+        || artifact.asset_key.starts_with("https://")
+    {
+        Value::String(artifact.asset_key.clone())
+    } else {
+        Value::Null
+    };
+    let links = primary_url
+        .as_str()
+        .map(|url| json!([{"rel": "preview", "url": url}]))
+        .unwrap_or_else(|| json!([]));
+    let preview_asset_key_is_embedded =
+        artifact.asset_key.starts_with("data:image/") || artifact.asset_key.starts_with("blob:");
+    let preview_asset_key = if preview_asset_key_is_embedded {
+        Value::Null
+    } else {
+        Value::String(artifact.asset_key.clone())
+    };
+
+    json!({
+        "schema": "v3.output_artifact_manifest",
+        "schema_version": 1,
+        "artifact_type": "static_page_image_preview",
+        "artifact_kind": "image2_visual_contract",
+        "title": "static_page_image2_preview",
+        "status": "preview_ready",
+        "primary_url": primary_url,
+        "links": links,
+        "refs": {
+            "draft_id": job.draft_id,
+            "image_job_id": job.id,
+            "orchestrator_task_id": orchestrator_task_id,
+            "preview_asset_key": preview_asset_key,
+            "preview_asset_key_redacted": preview_asset_key_is_embedded,
+        },
+        "safety": {
+            "customer_visible": true,
+            "credentials_exposed": false,
+            "raw_logs_exposed": false,
+            "generated_artifact_only": true,
+            "overwrite_allowed": false,
+        },
+    })
+}
+
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
     if let Some(event) = task_waker
         .wait_for_event(Duration::from_millis(poll_interval_ms))
@@ -1252,6 +1307,89 @@ mod tests {
         assert!(!static_page_image_error_should_auto_retry(
             "orchestrator task ended with status failed"
         ));
+    }
+
+    #[test]
+    fn static_page_image_preview_manifest_exposes_safe_visual_contract_refs() {
+        let now = Utc::now();
+        let job = StaticPageImageJob {
+            id: domain_model::StaticPageImageJobId::new(),
+            tenant_id: TenantId::new(),
+            draft_id: domain_model::StaticPageDraftId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            status: StaticPageImageJobStatus::PreviewReady,
+            queue_position: None,
+            image_prompt_payload: json!({}),
+            preview_asset_key: None,
+            failure_reason: None,
+            confirmed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let artifact = StaticPageVisualArtifact {
+            asset_key: "https://souleye.cc/artifacts/preview.png".to_string(),
+            name: Some("preview.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            width: Some(1024),
+            height: Some(768),
+        };
+
+        let manifest = static_page_image_preview_artifact_manifest(&job, &artifact, "cf-task-001");
+
+        assert_eq!(manifest["schema"], json!("v3.output_artifact_manifest"));
+        assert_eq!(
+            manifest["artifact_type"],
+            json!("static_page_image_preview")
+        );
+        assert_eq!(manifest["artifact_kind"], json!("image2_visual_contract"));
+        assert_eq!(
+            manifest["primary_url"],
+            json!("https://souleye.cc/artifacts/preview.png")
+        );
+        assert_eq!(
+            manifest["links"][0],
+            json!({"rel": "preview", "url": "https://souleye.cc/artifacts/preview.png"})
+        );
+        assert_eq!(manifest["refs"]["image_job_id"], json!(job.id));
+        assert_eq!(
+            manifest["refs"]["orchestrator_task_id"],
+            json!("cf-task-001")
+        );
+        assert_eq!(manifest["safety"]["credentials_exposed"], json!(false));
+    }
+
+    #[test]
+    fn static_page_image_preview_manifest_redacts_embedded_data_urls() {
+        let now = Utc::now();
+        let job = StaticPageImageJob {
+            id: domain_model::StaticPageImageJobId::new(),
+            tenant_id: TenantId::new(),
+            draft_id: domain_model::StaticPageDraftId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            status: StaticPageImageJobStatus::PreviewReady,
+            queue_position: None,
+            image_prompt_payload: json!({}),
+            preview_asset_key: None,
+            failure_reason: None,
+            confirmed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let artifact = StaticPageVisualArtifact {
+            asset_key: "data:image/png;base64,abc123".to_string(),
+            name: None,
+            mime_type: Some("image/png".to_string()),
+            width: None,
+            height: None,
+        };
+
+        let manifest = static_page_image_preview_artifact_manifest(&job, &artifact, "cf-task-002");
+
+        assert_eq!(manifest["primary_url"], Value::Null);
+        assert_eq!(manifest["links"], json!([]));
+        assert_eq!(manifest["refs"]["preview_asset_key"], Value::Null);
+        assert_eq!(manifest["refs"]["preview_asset_key_redacted"], json!(true));
+        assert!(!manifest.to_string().contains("abc123"));
     }
 
     #[test]

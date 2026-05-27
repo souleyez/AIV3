@@ -4450,6 +4450,8 @@ pub struct WorkflowRuntimeInspectView {
     pub model_facing: Option<WorkflowModelFacingSummaryView>,
     #[serde(default)]
     pub pretty_summaries: Vec<String>,
+    #[serde(default)]
+    pub artifact_manifests: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -5455,6 +5457,7 @@ mod tests {
         .expect("missing pretty_summaries should deserialize");
 
         assert!(view.pretty_summaries.is_empty());
+        assert!(view.artifact_manifests.is_empty());
     }
 
     #[test]

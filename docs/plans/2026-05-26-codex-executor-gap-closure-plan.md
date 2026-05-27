@@ -23,9 +23,9 @@
 
 1. Static-page Codex publish has passed the core 8-server path, but still needs a named real smoke record for demo cases and rollback notes.
 2. `data_ingestion_analysis` validates output, exposes safe task status, records completion/needs-human/failure events, attaches a safe staging plan artifact, can create/reuse a private staging dataset after operator confirmation, can start the existing ExternalSourceSync workflow for confirmed database-source plans, and records sync running/completed/failed status back to the AssistantRun; real environment smoke still needs coverage.
-3. `answer_quality_autofix` can be represented and observed as a fixed task, but the auto-fix loop still needs strict failure classification, patch review, and test-result feedback.
+3. `answer_quality_autofix` can be represented and observed as a fixed task, now uses strict failure classification and review-gated patch-ready validation; remaining work is real smoke evidence and richer test-result feedback.
 4. Operator-facing summaries are now usable, but model-side follow-up still needs broader wiring into ordinary assistant context for non-third-party surfaces.
-5. Artifact manifests are not yet fully shared across static pages, Image2 previews, reports, data-ingestion plans, and generated artifacts.
+5. Artifact manifests now cover static-page generated artifacts, Image2 preview visual contracts, data-ingestion analysis/staging plans, report render summary artifacts, and Codex executor runtime inspect.
 6. Timeouts, retries, cancellation, concurrency budget, workspace retention, and cleanup policy need explicit operator rules and smoke coverage.
 7. Real execution deployment is still guarded by host validation, credentials isolation, and task workspace behavior checks on the approved executor host.
 
@@ -508,14 +508,38 @@ Update the main plan with:
 - The restored scope is explicit in `selected_scope.data_ingestion_staging_scope`, sets `datasets` and `canonical_datasets`, and does not cross conversation IDs.
 - Focused checks passed: `cargo test -p platform-api external_channel_restores_completed_data_ingestion_staging_dataset_for_same_conversation --lib`, `cargo test -p platform-api external_channel --lib`, and `cargo test -p platform-api data_ingestion_staging --lib`.
 
+2026-05-27 artifact manifest follow-up:
+- Static-page generated artifacts and data-ingestion analysis/staging-plan artifacts now both include a safe `artifact_manifest` in AssistantRun `output_artifacts`, using `schema=v3.output_artifact_manifest` and `schema_version=1`.
+- Report render summary HTML artifacts now expose the same manifest schema through `payload.artifactManifest`, so report outputs can be observed with the same `artifact_type` / `artifact_kind` / refs / safety shape.
+- Static-page manifests expose the final generated-artifact URL through `primary_url` plus `public`/`download` links, and record safety flags such as `generated_artifact_only=true` and `overwrite_allowed=false`.
+- Data-ingestion manifests expose the staging-plan identity and workflow execution refs without credentials, raw logs, or raw table dumps, and keep `production_write_allowed=false`.
+- Focused checks passed: `cargo test -p platform-api external_channel_static_page_fixed_task_completion_appends_final_publish_event --lib`, `cargo test -p platform-api external_channel_data_ingestion_fixed_task_completion_appends_result_event --lib`, `cargo test -p platform-api html_artifact_report_render_summary_from_output_exposes_publishability --lib`, `cargo test -p platform-api external_channel_static_page --lib`, and `cargo test -p platform-api external_channel_data_ingestion --lib`.
+
+2026-05-27 observability follow-up:
+- `WorkflowRuntimeInspectView` now exposes a default-empty `artifact_manifests` list derived from the linked AssistantRun output artifacts. Runtime inspect only returns normalized `v3.output_artifact_manifest` objects and leaves raw artifacts, logs, prompts, credentials, and stdout/stderr out of the detail payload.
+- The protected external integrations page renders the manifest list only inside a selected Codex executor task detail, preserving the existing lazy behavior: closed panel does not load tasks, and selecting one task is required before runtime inspect/manifest loading.
+- Focused checks passed: `cargo test -p contracts workflow_runtime_inspect_view_defaults_pretty_summaries_when_missing --lib`, `cargo test -p platform-api output_artifact_manifests_from_output_artifacts_returns_only_safe_manifests --lib`, `cargo test -p platform-api external_channel --lib`, `node --test app/lib/external-integrations.test.mjs`, and `npm run build`.
+
+2026-05-27 Image2 preview manifest follow-up:
+- `static_page_image_job.preview_ready` events now include a safe `artifact_manifest` with `artifact_type=static_page_image_preview` and `artifact_kind=image2_visual_contract`.
+- Runtime inspect now merges safe manifests from both AssistantRun `output_artifacts` and AssistantRun event payloads, with dedupe and strict manifest-field whitelisting. This allows preview-only visual-contract tasks to show up in the same centralized observability panel as final generated HTML artifacts.
+- HTTPS preview assets are exposed as `primary_url` / `preview` links. Embedded data/blob preview assets are redacted from the manifest refs to avoid pushing large inline image data through observability.
+- Focused checks passed: `cargo test -p static-page-worker static_page_image_preview_manifest`, `cargo test -p platform-api output_artifact_manifests_from_output_artifacts_returns_only_safe_manifests --lib`, and `cargo test -p platform-api external_channel_static_page_image_success_with_preview_enqueues_codex_once --lib`.
+
+2026-05-27 answer-quality autofix follow-up:
+- `answer_quality_autofix` output validation now requires normalized `failure_type` values from the agreed set, including `unsafe_or_out_of_scope`.
+- `patch_ready` now requires changed files, tests added/updated, test commands, rollback notes, and an explicit valid risk level. Even low/medium risk patches remain `auto_apply_allowed=false` with `patch_review_required=true`, preserving the review-gated boundary.
+- Fixed-task output summaries now expose whether rollback notes are present without exposing raw diff/provider logs.
+- `codex-host-agent` fixed-task schema hint now advertises `unsafe_or_out_of_scope`.
+- Focused checks passed: `cargo test -p platform-api answer_quality_autofix --lib` and `cargo test -p codex-host-agent answer_quality --lib`.
+
 ---
 
 ## Recommended Development Order
 
-1. Task 5: answer-quality autofix review-gated loop.
-2. Artifact manifest unification across static pages, Image2 previews, reports, and ingestion plans.
-3. Real customer-style database dataset question/report smoke from a confirmed staging dataset, including row materialization, indexing, and generated report evidence.
-4. Keep collecting 8-server smoke evidence for static-page publish failure/retry/cancelled cases.
+1. Real customer-style database dataset question/report smoke from a confirmed staging dataset, including row materialization, indexing, and generated report evidence.
+2. Keep collecting 8-server smoke evidence for static-page publish failure/retry/cancelled cases and answer-quality autofix diagnostics.
+3. Extend manifest coverage to any future generated artifact families as they are introduced.
 
 ## Stop Conditions
 

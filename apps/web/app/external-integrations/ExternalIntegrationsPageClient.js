@@ -44,6 +44,32 @@ import { applyDatabaseSourceProfile } from '../lib/database-source';
 const REFRESH_INTERVAL_MS = 15000;
 const CODEX_EXECUTOR_TASK_LIMIT = 20;
 
+function artifactManifestLabel(manifest) {
+  const type = manifest.artifactType || 'artifact';
+  const kind = manifest.artifactKind || 'output';
+  return `${type} / ${kind}`;
+}
+
+function artifactSafetyLabels(safety = {}) {
+  const labels = [];
+  if (safety.credentials_exposed === false || safety.credentialsExposed === false) {
+    labels.push('不含凭证');
+  }
+  if (safety.raw_logs_exposed === false || safety.rawLogsExposed === false) {
+    labels.push('不含原始日志');
+  }
+  if (safety.raw_table_dump_exposed === false || safety.rawTableDumpExposed === false) {
+    labels.push('不含原始表dump');
+  }
+  if (safety.production_write_allowed === false || safety.productionWriteAllowed === false) {
+    labels.push('不写生产');
+  }
+  if (safety.overwrite_allowed === false || safety.overwriteAllowed === false) {
+    labels.push('不覆盖');
+  }
+  return labels;
+}
+
 const PRODUCT_FEATURES = [
   '文档入库',
   '数据库入库',
@@ -1044,6 +1070,37 @@ export default function ExternalIntegrationsPageClient() {
                           </span>
                         </article>
                       ))}
+                    </div>
+                  ) : null}
+                  {codexExecutorInspect.artifact_manifests.length ? (
+                    <div className="external-executor-artifacts" aria-label="产物清单">
+                      {codexExecutorInspect.artifact_manifests.map((manifest, index) => {
+                        const safetyLabels = artifactSafetyLabels(manifest.safety);
+                        return (
+                          <article key={`${artifactManifestLabel(manifest)}:${manifest.primaryUrl || index}`}>
+                            <div>
+                              <strong>{artifactManifestLabel(manifest)}</strong>
+                              {manifest.primaryUrl ? (
+                                <a href={manifest.primaryUrl} target="_blank" rel="noreferrer">
+                                  打开产物
+                                </a>
+                              ) : null}
+                            </div>
+                            {manifest.links.length ? (
+                              <span>
+                                {manifest.links.map((link) => (
+                                  <a key={`${link.rel}:${link.url}`} href={link.url} target="_blank" rel="noreferrer">
+                                    {link.rel || 'link'}
+                                  </a>
+                                ))}
+                              </span>
+                            ) : null}
+                            {safetyLabels.length ? (
+                              <small>{safetyLabels.join(' · ')}</small>
+                            ) : null}
+                          </article>
+                        );
+                      })}
                     </div>
                   ) : null}
                   <JsonPreview value={codexExecutorTaskDetail} />
