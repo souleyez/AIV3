@@ -31790,8 +31790,15 @@ fn codex_host_fixed_task_sanitize_validation(mut validation: Value) -> Value {
 }
 
 fn codex_host_fixed_task_public_artifact_url_allowed(public_url: &str) -> bool {
-    public_url.starts_with("https://v3.elepcloud.com/generated-artifacts/")
-        || public_url.starts_with("/generated-artifacts/")
+    let normalized = public_url.trim();
+    if normalized.contains("/generated-artifacts/pending-")
+        || normalized.contains("/generated-artifacts/pending/")
+        || normalized.ends_with("/generated-artifacts/pending")
+    {
+        return false;
+    }
+    normalized.starts_with("https://v3.elepcloud.com/generated-artifacts/")
+        || normalized.starts_with("/generated-artifacts/")
 }
 
 fn codex_host_fixed_task_value_contains_sensitive_text(value: &Value) -> bool {
@@ -75405,6 +75412,19 @@ retrieve_evidence:
             json!("validation_report_required")
         );
         assert!(event.notify_human);
+    }
+
+    #[test]
+    fn codex_host_fixed_task_public_artifact_url_rejects_pending_placeholder() {
+        assert!(!codex_host_fixed_task_public_artifact_url_allowed(
+            "https://v3.elepcloud.com/generated-artifacts/pending/draft-1/"
+        ));
+        assert!(!codex_host_fixed_task_public_artifact_url_allowed(
+            "https://v3.elepcloud.com/generated-artifacts/pending-draft-1/index.html"
+        ));
+        assert!(codex_host_fixed_task_public_artifact_url_allowed(
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
+        ));
     }
 
     #[test]

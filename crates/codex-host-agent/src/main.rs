@@ -7,7 +7,7 @@ use codex_host_agent::{
     CodexHostTaskContext, CodexProcessOutput,
 };
 use contracts::CodexHostTaskOutputView;
-use domain_model::{AssistantRunId, WorkflowKind};
+use domain_model::{AssistantRunId, StaticPageDraftId, WorkflowExecutionId, WorkflowKind};
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
     EventSubscription,
@@ -20,6 +20,7 @@ use storage::{NewAssistantRunEvent, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DA
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{Duration, Instant};
+use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "codex_host";
@@ -188,7 +189,16 @@ async fn process_task(
             task.tenant_id,
             task_context.assistant_run_id,
             event_name,
-            output,
+            output.clone(),
+        )
+        .await?;
+        maybe_record_external_static_page_publish_completed_from_task_output(
+            storage,
+            task.tenant_id,
+            task_context.assistant_run_id,
+            task.execution_id,
+            &task_context,
+            &output,
         )
         .await?;
         storage
@@ -256,6 +266,321 @@ async fn append_assistant_event(
                 created_at: Utc::now(),
             },
         )
+        .await?;
+    Ok(())
+}
+
+async fn maybe_record_external_static_page_publish_completed_from_task_output(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    assistant_run_id: AssistantRunId,
+    workflow_execution_id: WorkflowExecutionId,
+    task_context: &CodexHostTaskContext,
+    task_output: &Value,
+) -> Result<()> {
+    let Some(fixed_task) = task_context.fixed_task.as_ref() else {
+        return Ok(());
+    };
+    if fixed_task.template_id.as_str() != "static_page_image2_data_publish" {
+        return Ok(());
+    }
+    let Some(fixed_task_output) = task_output
+        .get("fixed_task_output")
+        .filter(|value| value.is_object())
+    else {
+        return Ok(());
+    };
+    if fixed_task_output.get("status").and_then(Value::as_str) != Some("success") {
+        return Ok(());
+    }
+    let Some(public_url) = fixed_task_output
+        .pointer("/artifact/public_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| generated_artifact_url_allowed(value))
+        .map(str::to_string)
+    else {
+        return Ok(());
+    };
+
+    let existing_events = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await?;
+    if existing_events.iter().any(|event| {
+        event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+            && (event
+                .payload
+                .get("codex_host_workflow_execution_id")
+                .and_then(Value::as_str)
+                == Some(workflow_execution_id.to_string().as_str())
+                || event.payload.get("public_url").and_then(Value::as_str)
+                    == Some(public_url.as_str()))
+    }) {
+        return Ok(());
+    }
+
+    let source_refs =
+        external_static_page_source_refs_for_fixed_task(storage, tenant_id, fixed_task).await?;
+    let completed_payload = external_static_page_completed_payload_from_fixed_task_output(
+        workflow_execution_id,
+        fixed_task,
+        fixed_task_output,
+        &public_url,
+        source_refs,
+    );
+
+    attach_external_static_page_artifact_to_run(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        &completed_payload,
+    )
+    .await?;
+    append_assistant_event(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        "assistant_run.external_channel_static_page_publish_completed",
+        completed_payload,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn external_static_page_source_refs_for_fixed_task(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> Result<Value> {
+    if let Some(draft_id) = fixed_task
+        .draft_id
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(StaticPageDraftId)
+    {
+        if let Some(draft) = storage
+            .static_page_drafts()
+            .get_by_id(tenant_id, draft_id)
+            .await?
+        {
+            return Ok(external_static_page_filtered_source_refs(
+                &draft.source_refs,
+            ));
+        }
+    }
+
+    let mut refs = Map::new();
+    for key in [
+        "channel_connection_id",
+        "platform",
+        "tenant_external_id",
+        "bot_external_id",
+        "conversation_external_id",
+        "thread_external_id",
+        "sender_external_id",
+        "message_external_id",
+        "output_format",
+        "render_mode",
+    ] {
+        if let Some(value) = fixed_task
+            .requirements
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            refs.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    if !refs.contains_key("channel_connection_id") {
+        if let Some(value) = fixed_task
+            .trace_summary
+            .pointer("/external_channel/connection_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            refs.insert(
+                "channel_connection_id".to_string(),
+                Value::String(value.to_string()),
+            );
+        }
+    }
+    for (key, pointer) in [
+        (
+            "conversation_external_id",
+            "/external_channel/conversation_external_id",
+        ),
+        (
+            "message_external_id",
+            "/external_channel/message_external_id",
+        ),
+    ] {
+        if refs.contains_key(key) {
+            continue;
+        }
+        if let Some(value) = fixed_task
+            .trace_summary
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            refs.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    Ok(Value::Object(refs))
+}
+
+fn external_static_page_filtered_source_refs(source_refs: &Value) -> Value {
+    let mut output = Map::new();
+    for key in [
+        "channel_connection_id",
+        "platform",
+        "tenant_external_id",
+        "bot_external_id",
+        "conversation_external_id",
+        "thread_external_id",
+        "sender_external_id",
+        "message_external_id",
+        "output_format",
+        "render_mode",
+    ] {
+        if let Some(value) = source_refs
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            output.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    Value::Object(output)
+}
+
+fn external_static_page_completed_payload_from_fixed_task_output(
+    workflow_execution_id: WorkflowExecutionId,
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    fixed_task_output: &Value,
+    public_url: &str,
+    source_refs: Value,
+) -> Value {
+    let validation_summary =
+        external_static_page_validation_summary_from_fixed_output(fixed_task_output);
+    json!({
+        "channel_connection_id": source_refs.get("channel_connection_id").cloned().unwrap_or(Value::Null),
+        "platform": source_refs.get("platform").cloned().unwrap_or(Value::Null),
+        "conversation_external_id": source_refs
+            .get("conversation_external_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "message_external_id": source_refs
+            .get("message_external_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "draft_id": fixed_task.draft_id.clone(),
+        "image_job_id": fixed_task
+            .image2
+            .get("image_job_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "codex_host_workflow_execution_id": workflow_execution_id.to_string(),
+        "template_id": "static_page_image2_data_publish",
+        "publish_mode": fixed_task
+            .policies
+            .get("publish_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("new_generated_artifact_only"),
+        "public_url": public_url,
+        "artifact_links": [public_url],
+        "local_path": fixed_task_output
+            .pointer("/artifact/local_path")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "manifest_path": fixed_task_output
+            .pointer("/artifact/manifest_path")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "validation_summary": validation_summary,
+        "source_refs": source_refs,
+    })
+}
+
+fn external_static_page_validation_summary_from_fixed_output(fixed_task_output: &Value) -> Value {
+    let report = fixed_task_output
+        .get("validation_report")
+        .unwrap_or(&Value::Null);
+    json!({
+        "status": fixed_task_output.get("status").cloned().unwrap_or(Value::Null),
+        "reason": "new_generated_artifact_validated",
+        "latest_snapshot": report.get("latest_snapshot").cloned().unwrap_or(Value::Null),
+        "source_row_count": report.get("source_row_count").cloned().unwrap_or(Value::Null),
+        "current_state_row_count": report
+            .get("current_state_row_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "detail_row_count": report.get("detail_row_count").cloned().unwrap_or(Value::Null),
+        "unit_policy": report.get("unit_policy").cloned().unwrap_or(Value::Null),
+        "warnings": report
+            .get("warnings")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    })
+}
+
+async fn attach_external_static_page_artifact_to_run(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    assistant_run_id: AssistantRunId,
+    completed_payload: &Value,
+) -> Result<()> {
+    let Some(run) = storage
+        .assistant_runs()
+        .get_by_id(tenant_id, assistant_run_id)
+        .await?
+    else {
+        return Ok(());
+    };
+    let Some(public_url) = completed_payload
+        .get("public_url")
+        .and_then(Value::as_str)
+        .filter(|value| generated_artifact_url_allowed(value))
+    else {
+        return Ok(());
+    };
+    let mut output_artifacts = run
+        .output_artifacts
+        .as_array()
+        .cloned()
+        .unwrap_or_else(Vec::new);
+    if output_artifacts.iter().any(|artifact| {
+        artifact.get("type").and_then(Value::as_str)
+            == Some("external_channel_static_page_artifact")
+            && artifact.get("public_url").and_then(Value::as_str) == Some(public_url)
+    }) {
+        return Ok(());
+    }
+    output_artifacts.push(json!({
+        "type": "external_channel_static_page_artifact",
+        "artifact_type": "static_page",
+        "title": "static_page_image2_data_publish",
+        "public_url": public_url,
+        "download_url": public_url,
+        "draft_id": completed_payload.get("draft_id").cloned().unwrap_or(Value::Null),
+        "image_job_id": completed_payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+        "codex_host_workflow_execution_id": completed_payload
+            .get("codex_host_workflow_execution_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "validation_summary": completed_payload
+            .get("validation_summary")
+            .cloned()
+            .unwrap_or(Value::Null),
+    }));
+    storage
+        .assistant_runs()
+        .attach_output_artifacts(tenant_id, assistant_run_id, &Value::Array(output_artifacts))
         .await?;
     Ok(())
 }
@@ -1300,7 +1625,10 @@ fn generated_artifact_public_url(relative_dir: &str) -> String {
 
 fn generated_artifact_url_allowed(public_url: &str) -> bool {
     let normalized = public_url.trim();
-    if normalized.contains("/generated-artifacts/pending-") {
+    if normalized.contains("/generated-artifacts/pending-")
+        || normalized.contains("/generated-artifacts/pending/")
+        || normalized.ends_with("/generated-artifacts/pending")
+    {
         return false;
     }
     normalized.starts_with("https://v3.elepcloud.com/generated-artifacts/")
@@ -1965,6 +2293,77 @@ mod tests {
         let html = std::fs::read_to_string(local_path).expect("html should be readable");
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("经营分析"));
+    }
+
+    #[test]
+    fn generated_artifact_url_allowed_rejects_pending_placeholders() {
+        assert!(!generated_artifact_url_allowed(
+            "https://v3.elepcloud.com/generated-artifacts/pending/draft-1/"
+        ));
+        assert!(!generated_artifact_url_allowed(
+            "https://v3.elepcloud.com/generated-artifacts/pending-draft-1/index.html"
+        ));
+        assert!(generated_artifact_url_allowed(
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/codex-host/run/task/index.html"
+        ));
+    }
+
+    #[test]
+    fn external_static_page_completed_payload_keeps_public_summary_only() {
+        let mut fixed_task =
+            contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.draft_id = Some("draft-123".to_string());
+        fixed_task.image2["image_job_id"] = json!("image-job-123");
+        fixed_task.policies["publish_mode"] = json!("new_generated_artifact_only");
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "local_path": "/srv/aiv3/shared/objects/generated-artifacts/database-static-pages/final/index.html",
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+                "manifest_path": "/srv/aiv3/shared/objects/generated-artifacts/database-static-pages/final/manifest.json"
+            },
+            "validation_report": {
+                "latest_snapshot": "2026-05-10",
+                "source_row_count": 862,
+                "current_state_row_count": 851,
+                "detail_row_count": 40,
+                "unit_policy": "validate_raw_value_then_choose_wan_or_yi",
+                "warnings": ["已按最新快照口径输出"]
+            }
+        });
+        let source_refs = json!({
+            "channel_connection_id": "generic-chat-main",
+            "platform": "generic_chat",
+            "conversation_external_id": "conv-1",
+            "message_external_id": "msg-1",
+            "selected_scope": {"must": "not leak"}
+        });
+        let workflow_execution_id = WorkflowExecutionId::new();
+
+        let payload = external_static_page_completed_payload_from_fixed_task_output(
+            workflow_execution_id,
+            &fixed_task,
+            &output,
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+            external_static_page_filtered_source_refs(&source_refs),
+        );
+
+        assert_eq!(
+            payload["codex_host_workflow_execution_id"],
+            json!(workflow_execution_id.to_string())
+        );
+        assert_eq!(payload["draft_id"], json!("draft-123"));
+        assert_eq!(payload["image_job_id"], json!("image-job-123"));
+        assert_eq!(
+            payload["source_refs"]["conversation_external_id"],
+            json!("conv-1")
+        );
+        assert_eq!(
+            payload["validation_summary"]["source_row_count"],
+            json!(862)
+        );
+        assert!(!payload.to_string().contains("must"));
     }
 
     #[test]
