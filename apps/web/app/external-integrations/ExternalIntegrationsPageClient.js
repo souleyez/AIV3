@@ -244,6 +244,7 @@ function readInitialUrlState() {
       : '',
     actionId: params.get('action_id') || '',
     conversationTestsOpen: params.get('conversation_tests') === '1',
+    codexExecutorOpen: params.get('codex_executor') === '1',
   };
 }
 
@@ -614,6 +615,9 @@ export default function ExternalIntegrationsPageClient() {
     if (initialUrlState.conversationTestsOpen) {
       setConversationTestsOpen(true);
     }
+    if (initialUrlState.codexExecutorOpen) {
+      setCodexExecutorOpen(true);
+    }
     loadIntegrations();
     const timer = window.setInterval(() => {
       loadIntegrations({ silent: true });
@@ -914,6 +918,7 @@ export default function ExternalIntegrationsPageClient() {
           <div className="external-empty-state">需要时再展开查看最近消息。</div>
         ) : conversationAccessRequired ? (
           <form className="external-conversation-access-form" action="/external-integrations/access" method="post">
+            <input type="hidden" name="observation_panel" value="conversation_tests" />
             <label>
               <span>对话测试访问密钥</span>
               <input name="access_key" type="password" autoComplete="current-password" required />
@@ -988,6 +993,7 @@ export default function ExternalIntegrationsPageClient() {
           <div className="external-empty-state">不打开不读取执行器任务；选择某条任务后才读取 runtime inspect。</div>
         ) : codexExecutorAccessRequired ? (
           <form className="external-conversation-access-form" action="/external-integrations/access" method="post">
+            <input type="hidden" name="observation_panel" value="codex_executor" />
             <label>
               <span>执行器观测访问密钥</span>
               <input name="access_key" type="password" autoComplete="current-password" required />

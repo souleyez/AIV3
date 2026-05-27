@@ -74,6 +74,10 @@
   - Added scoped fact aggregate regressions proving selected-document scopes and third-party external temporary dataset scopes supply `document_facts_scoped_aggregate`.
   - The regressions prove out-of-scope documents in the same source dataset are excluded from company/organization aggregates.
   - Local regression passed for `external_channel`, `dataset_fact_snapshot`, and `scoped_fact`.
+- Continued on 2026-05-27 by closing the centralized observation page lazy-access gap:
+  - Codex executor tasks remain default-collapsed; opening the panel only loads the lightweight task list, and selecting one task loads runtime inspect.
+  - The protected access form now preserves whether the operator was unlocking conversation tests or Codex executor observation, so the page returns to the intended lazy-loaded panel instead of always opening conversation tests.
+  - Local web production build passed after the change.
 
 ## Immediate Execution Queue
 

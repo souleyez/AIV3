@@ -27,6 +27,20 @@ function externalIntegrationsUrl(request, search = '') {
   return url;
 }
 
+function observationPanelSearch(panel, { accessError = false } = {}) {
+  const normalized = String(panel || '').trim();
+  const params = new URLSearchParams();
+  if (normalized === 'codex_executor') {
+    params.set('codex_executor', '1');
+  } else {
+    params.set('conversation_tests', '1');
+  }
+  if (accessError) {
+    params.set('access_error', '1');
+  }
+  return `?${params.toString()}`;
+}
+
 export async function GET(request) {
   return NextResponse.redirect(externalIntegrationsUrl(request));
 }
@@ -34,10 +48,14 @@ export async function GET(request) {
 export async function POST(request) {
   const form = await request.formData();
   const accessKey = form.get('access_key');
+  const panel = form.get('observation_panel');
   if (!consumeExternalObservabilityAccessKey(accessKey)) {
-    return NextResponse.redirect(externalIntegrationsUrl(request, '?conversation_tests=1&access_error=1'), 303);
+    return NextResponse.redirect(
+      externalIntegrationsUrl(request, observationPanelSearch(panel, { accessError: true })),
+      303,
+    );
   }
-  const response = NextResponse.redirect(externalIntegrationsUrl(request, '?conversation_tests=1'), 303);
+  const response = NextResponse.redirect(externalIntegrationsUrl(request, observationPanelSearch(panel)), 303);
   response.cookies.set(
     EXTERNAL_OBSERVABILITY_COOKIE,
     externalObservabilityCookieValue(),
