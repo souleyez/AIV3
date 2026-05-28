@@ -6018,6 +6018,37 @@ impl PgWorkflowTaskRepository {
         row.as_ref().map(map_workflow_task_row).transpose()
     }
 
+    pub async fn list_stale_claimed(
+        &self,
+        queue: &str,
+        task_key: Option<&str>,
+        claimed_before: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<WorkflowTask>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, execution_id, queue, task_key, payload, status, attempt, max_attempts,
+                   available_at, claimed_at, finished_at, error, created_at, updated_at
+            from workflow_tasks
+            where queue = $1
+              and status = 'claimed'
+              and claimed_at is not null
+              and claimed_at < $2
+              and ($3::text is null or task_key = $3)
+            order by claimed_at asc, created_at asc, id asc
+            limit $4
+            "#,
+        )
+        .bind(queue)
+        .bind(claimed_before)
+        .bind(task_key)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_workflow_task_row).collect()
+    }
+
     pub async fn mark_succeeded(
         &self,
         task_id: WorkflowTaskId,

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use domain_model::{
     AssistantRunId, StaticPageDraft, StaticPageDraftStatus, StaticPageImageJob,
     StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
@@ -23,6 +23,9 @@ const DEFAULT_IMAGE_TASK_KEY: &str = "generate_static_page_image";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_ORCHESTRATOR_MAX_POLLS: u32 = 360;
+const DEFAULT_STALE_CLAIM_AFTER_MS: u64 = 2 * 60 * 60 * 1_000;
+const DEFAULT_STALE_SWEEP_INTERVAL_MS: u64 = 60_000;
+const DEFAULT_STALE_SWEEP_LIMIT: u32 = 25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StaticPageRenderTaskOutcome {
@@ -60,6 +63,18 @@ async fn main() -> Result<()> {
         "STATIC_PAGE_ORCHESTRATOR_MAX_POLLS",
         DEFAULT_ORCHESTRATOR_MAX_POLLS,
     );
+    let stale_claim_after_ms = env_u64(
+        "STATIC_PAGE_WORKER_STALE_CLAIM_AFTER_MS",
+        DEFAULT_STALE_CLAIM_AFTER_MS,
+    );
+    let stale_sweep_interval_ms = env_u64(
+        "STATIC_PAGE_WORKER_STALE_SWEEP_INTERVAL_MS",
+        DEFAULT_STALE_SWEEP_INTERVAL_MS,
+    );
+    let stale_sweep_limit = env_u32(
+        "STATIC_PAGE_WORKER_STALE_SWEEP_LIMIT",
+        DEFAULT_STALE_SWEEP_LIMIT,
+    );
 
     let storage = PgStorage::connect(&database_url).await?;
     let workflow_catalog = workflow_definitions::catalog();
@@ -92,13 +107,48 @@ async fn main() -> Result<()> {
         poll_interval_ms = poll_interval,
         orchestrator_poll_interval_ms = orchestrator_poll_interval,
         orchestrator_max_polls,
+        stale_claim_after_ms,
+        stale_sweep_interval_ms,
+        stale_sweep_limit,
         orchestrator_configured = orchestrator_config.is_some(),
         orchestrator_base_url = orchestrator_config.as_ref().map(|config| config.base_url.as_str()).unwrap_or("not-configured"),
         orchestrator_runtime_target = orchestrator_config.as_ref().map(|config| config.runtime_target_id.as_str()).unwrap_or("not-configured"),
         "static-page-worker polling started"
     );
 
+    let mut next_stale_sweep_at = Utc::now();
     loop {
+        let now = Utc::now();
+        if stale_claim_after_ms > 0 && now >= next_stale_sweep_at {
+            match expire_stale_claimed_tasks(
+                &storage,
+                &workflow_catalog,
+                &event_bus,
+                &queue,
+                task_key.as_deref(),
+                stale_claim_after_ms,
+                stale_sweep_limit,
+                now,
+            )
+            .await
+            {
+                Ok(expired_count) if expired_count > 0 => {
+                    tracing::warn!(
+                        expired_count,
+                        "static-page-worker expired stale claimed tasks"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(
+                        error = ?error,
+                        "static-page-worker stale task sweep failed"
+                    );
+                }
+            }
+            next_stale_sweep_at = stale_sweep_next_at(now, stale_sweep_interval_ms);
+        }
+
         match storage
             .workflow_tasks()
             .claim_next_available(&queue, task_key.as_deref(), Utc::now())
@@ -129,6 +179,111 @@ async fn main() -> Result<()> {
             }
         }
     }
+}
+
+async fn expire_stale_claimed_tasks(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    queue: &str,
+    task_key: Option<&str>,
+    stale_claim_after_ms: u64,
+    stale_sweep_limit: u32,
+    now: chrono::DateTime<Utc>,
+) -> Result<usize> {
+    let claimed_before = stale_claim_cutoff(now, stale_claim_after_ms);
+    let tasks = storage
+        .workflow_tasks()
+        .list_stale_claimed(
+            queue,
+            task_key,
+            claimed_before,
+            i64::from(stale_sweep_limit.max(1)),
+        )
+        .await?;
+    let mut expired_count = 0usize;
+    for task in tasks {
+        let task_id = task.id;
+        let execution_id = task.execution_id;
+        if let Err(error) =
+            expire_stale_claimed_task(storage, workflow_catalog, event_bus, task, now).await
+        {
+            tracing::warn!(
+                error = ?error,
+                task_id = %task_id,
+                execution_id = %execution_id,
+                "static-page-worker failed to expire stale claimed task"
+            );
+            continue;
+        }
+        expired_count += 1;
+    }
+    Ok(expired_count)
+}
+
+async fn expire_stale_claimed_task(
+    storage: &PgStorage,
+    workflow_catalog: &WorkflowCatalog,
+    event_bus: &EventBus,
+    task: domain_model::WorkflowTask,
+    now: chrono::DateTime<Utc>,
+) -> Result<()> {
+    let error_message = "静态页任务超过执行租约，已自动清理，请重新提交。";
+    let execution = storage
+        .workflow_executions()
+        .get_by_id(task.tenant_id, task.execution_id)
+        .await?
+        .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
+    if matches!(execution.kind, WorkflowKind::StaticPageImageGeneration) {
+        let job_id = domain_model::StaticPageImageJobId(context_uuid(
+            &execution.context,
+            "static_page_image_job_id",
+        )?);
+        if let Some(mut job) = storage
+            .static_page_image_jobs()
+            .get_by_id(task.tenant_id, job_id)
+            .await?
+        {
+            if matches!(
+                job.status,
+                StaticPageImageJobStatus::Queued | StaticPageImageJobStatus::Running
+            ) {
+                mark_job_failed(storage, &mut job, error_message).await?;
+                append_assistant_event(
+                    storage,
+                    job.tenant_id,
+                    job.assistant_run_id,
+                    "static_page_image_job.expired",
+                    json!({
+                        "draft_id": job.draft_id,
+                        "image_job_id": job.id,
+                        "error": error_message,
+                        "retryable": false,
+                        "status": "expired",
+                    }),
+                )
+                .await?;
+            }
+        }
+    }
+
+    platform_api::apply_workflow_signal_with_dependencies(
+        storage,
+        workflow_catalog,
+        event_bus,
+        task.tenant_id,
+        task.execution_id,
+        WorkflowSignal::StepFailed {
+            task_key: task.task_key.clone(),
+            error: error_message.to_string(),
+        },
+    )
+    .await?;
+    storage
+        .workflow_tasks()
+        .mark_failed(task.id, error_message, now)
+        .await?;
+    Ok(())
 }
 
 async fn process_task(
@@ -1229,6 +1384,24 @@ async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_inte
     {
         tracing::debug!(subject = %event.subject, "static page worker received task wake signal");
     }
+}
+
+fn stale_claim_cutoff(
+    now: chrono::DateTime<Utc>,
+    stale_claim_after_ms: u64,
+) -> chrono::DateTime<Utc> {
+    now - duration_from_millis(stale_claim_after_ms)
+}
+
+fn stale_sweep_next_at(
+    now: chrono::DateTime<Utc>,
+    stale_sweep_interval_ms: u64,
+) -> chrono::DateTime<Utc> {
+    now + duration_from_millis(stale_sweep_interval_ms.max(1))
+}
+
+fn duration_from_millis(value: u64) -> TimeDelta {
+    TimeDelta::milliseconds(value.min(i64::MAX as u64) as i64)
 }
 
 fn env_u64(key: &str, default_value: u64) -> u64 {
