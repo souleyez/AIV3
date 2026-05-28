@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose, Engine as _};
 use chrono::{TimeDelta, Utc};
 use domain_model::{
     AssistantRunId, StaticPageDraft, StaticPageDraftStatus, StaticPageImageJob,
@@ -14,6 +15,7 @@ use static_page_worker::{
     normalize_artifact_asset_key, poll_static_page_visual_task, submit_static_page_visual_task,
     task_failure_message, CodexOrchestratorConfig, StaticPageVisualArtifact,
 };
+use std::path::{Path, PathBuf};
 use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -390,6 +392,11 @@ async fn process_static_page_image_task(
         let mut artifact = extract_first_image_artifact(&completed_task)?;
         artifact.asset_key =
             normalize_artifact_asset_key(&artifact.asset_key, &orchestrator_config.base_url);
+        if let Some(materialized_asset_key) =
+            materialize_preview_asset(http_client, orchestrator_config, job.id, &artifact)
+        {
+            artifact.asset_key = materialized_asset_key;
+        }
         mark_job_preview_ready(storage, &job, &artifact.asset_key).await?;
         append_assistant_event(
             storage,
@@ -1325,6 +1332,140 @@ async fn append_assistant_event(
         )
         .await?;
     Ok(())
+}
+
+fn materialize_preview_asset(
+    http_client: &Client,
+    orchestrator_config: &CodexOrchestratorConfig,
+    job_id: domain_model::StaticPageImageJobId,
+    artifact: &StaticPageVisualArtifact,
+) -> Option<String> {
+    let mime_type = artifact.mime_type.as_deref().unwrap_or("image/png");
+    let bytes = if artifact.asset_key.starts_with("data:image/") {
+        decode_data_url_image(&artifact.asset_key)
+    } else if artifact.asset_key.starts_with("http://")
+        || artifact.asset_key.starts_with("https://")
+    {
+        download_orchestrator_preview_asset(http_client, orchestrator_config, &artifact.asset_key)
+    } else {
+        None
+    }?;
+
+    let extension = image_extension_for_mime(mime_type);
+    match persist_generated_preview_asset(job_id, extension, &bytes) {
+        Ok(asset_key) => Some(asset_key),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                static_page_image_job_id = %job_id,
+                "failed to persist static page preview asset; falling back to original asset key"
+            );
+            None
+        }
+    }
+}
+
+fn decode_data_url_image(asset_key: &str) -> Option<Vec<u8>> {
+    let (_, base64_payload) = asset_key.split_once(",")?;
+    general_purpose::STANDARD.decode(base64_payload).ok()
+}
+
+fn download_orchestrator_preview_asset(
+    http_client: &Client,
+    orchestrator_config: &CodexOrchestratorConfig,
+    asset_url: &str,
+) -> Option<Vec<u8>> {
+    let response = http_client
+        .get(asset_url)
+        .bearer_auth(&orchestrator_config.access_key)
+        .header(
+            "X-Client-Name",
+            static_page_worker::STATIC_PAGE_ORCHESTRATOR_SOURCE,
+        )
+        .header(
+            "User-Agent",
+            static_page_worker::STATIC_PAGE_ORCHESTRATOR_USER_AGENT,
+        )
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        tracing::warn!(
+            status = %response.status(),
+            "static page preview artifact download failed"
+        );
+        return None;
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if !content_type.starts_with("image/") {
+        tracing::warn!(
+            content_type,
+            "static page preview artifact response was not an image"
+        );
+        return None;
+    }
+    response.bytes().ok().map(|bytes| bytes.to_vec())
+}
+
+fn persist_generated_preview_asset(
+    job_id: domain_model::StaticPageImageJobId,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<String> {
+    if bytes.is_empty() {
+        return Err(anyhow!("preview asset bytes were empty"));
+    }
+    let root = generated_artifact_root();
+    let relative_dir = PathBuf::from("static-page-previews").join(job_id.to_string());
+    let target_dir = root.join(&relative_dir);
+    std::fs::create_dir_all(&target_dir)?;
+    let filename = format!("preview{}", extension);
+    let target_path = target_dir.join(&filename);
+    std::fs::write(&target_path, bytes)?;
+    let relative_url = relative_dir
+        .join(&filename)
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(format!(
+        "{}/{}",
+        generated_artifact_public_base_url().trim_end_matches('/'),
+        relative_url
+    ))
+}
+
+fn generated_artifact_root() -> PathBuf {
+    optional_env("V3_GENERATED_ARTIFACT_ROOT")
+        .map(PathBuf::from)
+        .or_else(|| {
+            optional_env("PLATFORM_LOCAL_OBJECT_ROOT")
+                .map(|path| Path::new(&path).join("generated-artifacts"))
+        })
+        .unwrap_or_else(|| PathBuf::from("target/generated-artifacts"))
+}
+
+fn generated_artifact_public_base_url() -> String {
+    optional_env("V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL")
+        .unwrap_or_else(|| "https://v3.elepcloud.com/generated-artifacts".to_string())
+}
+
+fn image_extension_for_mime(mime_type: &str) -> &'static str {
+    match mime_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "image/jpeg" | "image/jpg" => ".jpg",
+        "image/webp" => ".webp",
+        "image/gif" => ".gif",
+        "image/svg+xml" => ".svg",
+        _ => ".png",
+    }
 }
 
 fn static_page_image_preview_artifact_manifest(
