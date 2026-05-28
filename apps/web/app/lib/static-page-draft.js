@@ -1610,9 +1610,13 @@ function bindingNeedsPreviewAttention(binding = {}) {
   if (chartDataFit && !['ready', 'not_required', 'non_chart_ready', 'needs_sample_rows', 'inferred_signal'].includes(chartDataFit)) return true;
 
   const visualizationType = String(binding.visualizationType || binding.visualization_type || '').trim();
-  const source = binding.binding || binding.dataBinding || binding.data_binding || {};
-  const hasBinding = Boolean(source.sourceId || source.source_id || source.fieldPath || source.field_path || source.label);
+  const hasBinding = bindingHasSource(binding);
   return VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualizationType) && bindingSampleRows(binding) === 0 && !hasBinding;
+}
+
+function bindingHasSource(binding = {}) {
+  const source = binding.binding || binding.dataBinding || binding.data_binding || {};
+  return Boolean(source.sourceId || source.source_id || source.fieldPath || source.field_path || source.label);
 }
 
 function bindingNeedsFinalAttention(binding = {}) {
@@ -1623,7 +1627,7 @@ function bindingNeedsFinalAttention(binding = {}) {
       || binding.binding_quality?.status
       || '',
   ).trim();
-  if (status && !['confirmed', 'ready', 'non_chart'].includes(status)) return true;
+  if (status && !['confirmed', 'ready', 'non_chart', 'partial'].includes(status)) return true;
 
   const chartDataFit = String(
     binding.chartDataFit
@@ -1632,10 +1636,10 @@ function bindingNeedsFinalAttention(binding = {}) {
       || binding.binding_quality?.chart_data_fit
       || '',
   ).trim();
-  if (chartDataFit && !['ready', 'not_required', 'non_chart_ready'].includes(chartDataFit)) return true;
+  if (chartDataFit && !['ready', 'not_required', 'non_chart_ready', 'needs_sample_rows', 'inferred_signal'].includes(chartDataFit)) return true;
 
   const visualizationType = String(binding.visualizationType || binding.visualization_type || '').trim();
-  return VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualizationType) && bindingSampleRows(binding) === 0;
+  return VISUALIZATIONS_REQUIRING_SAMPLE_ROWS.has(visualizationType) && bindingSampleRows(binding) === 0 && !bindingHasSource(binding);
 }
 
 function bindingPreviewLabel(binding = {}) {

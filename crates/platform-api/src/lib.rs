@@ -63699,7 +63699,12 @@ fn static_page_final_render_binding_module_needs_attention(module: &Value) -> bo
         &["bindingQualityStatus", "binding_quality_status", "status"],
     )
     .unwrap_or_default();
-    if !status.is_empty() && !matches!(status.as_str(), "confirmed" | "ready" | "non_chart") {
+    if !status.is_empty()
+        && !matches!(
+            status.as_str(),
+            "confirmed" | "ready" | "non_chart" | "partial"
+        )
+    {
         return true;
     }
 
@@ -63708,7 +63713,7 @@ fn static_page_final_render_binding_module_needs_attention(module: &Value) -> bo
     if !chart_data_fit.is_empty()
         && !matches!(
             chart_data_fit.as_str(),
-            "ready" | "not_required" | "non_chart_ready"
+            "ready" | "not_required" | "non_chart_ready" | "needs_sample_rows" | "inferred_signal"
         )
     {
         return true;
@@ -63717,8 +63722,15 @@ fn static_page_final_render_binding_module_needs_attention(module: &Value) -> bo
     let visualization_type =
         static_page_artifact_string(module, &["visualizationType", "visualization_type"])
             .unwrap_or_default();
+    let has_binding = static_page_preview_module_has_binding_source(module)
+        || module
+            .get("binding")
+            .or_else(|| module.get("dataBinding"))
+            .or_else(|| module.get("data_binding"))
+            .is_some_and(static_page_preview_module_has_binding_source);
     static_page_visualization_needs_sample_rows(&visualization_type)
         && static_page_preview_quality_u64(module, &["sampleRows", "sample_rows"]) == 0
+        && !has_binding
 }
 
 fn static_page_preview_quality_u64(value: &Value, keys: &[&str]) -> u64 {
@@ -89745,20 +89757,9 @@ retrieve_evidence:
             "bound chart modules may enter design preview before sample rows are repaired"
         );
 
-        let (reason, details) = static_page_final_render_data_quality_gate_for_draft(&draft)
-            .expect("chart without sample rows should still block final render");
-
-        assert!(reason.contains("订单趋势"));
-        assert!(reason.contains("needs_sample_rows"));
-        assert!(reason.contains("补充样本行"));
-        assert_eq!(details["blockedAction"], json!("render_static_page"));
-        assert!(details["attentionModules"][0]["gateReasons"]
-            .as_array()
-            .expect("gate reasons")
-            .contains(&json!("chart_data_fit:needs_sample_rows")));
-        assert_eq!(
-            details["gateReasonCounts"]["chart_sample_rows_missing"],
-            json!(1)
+        assert!(
+            static_page_final_render_data_quality_gate_for_draft(&draft).is_none(),
+            "bound chart modules should proceed to final render; renderer carries data-quality warnings"
         );
     }
 
@@ -89861,30 +89862,9 @@ retrieve_evidence:
             "inferred evidence signals can guide design preview before final data repair"
         );
 
-        let (reason, details) = static_page_final_render_data_quality_gate_for_draft(&draft)
-            .expect("inferred evidence signals should be repaired before final render");
-        let attention_module = &details["attentionModules"][0];
-
-        assert!(reason.contains("订单趋势"));
-        assert!(reason.contains("inferred_signal"));
-        assert_eq!(details["blockedAction"], json!("render_static_page"));
-        assert_eq!(attention_module["chartDataFit"], json!("inferred_signal"));
-        assert_eq!(
-            attention_module["reason"],
-            json!("inferred_evidence_signal")
-        );
-        assert_eq!(attention_module["sampleRows"], json!(1));
-        assert!(attention_module["gateReasons"]
-            .as_array()
-            .expect("gate reasons")
-            .contains(&json!("binding_quality_status:partial")));
-        assert!(attention_module["gateReasons"]
-            .as_array()
-            .expect("gate reasons")
-            .contains(&json!("chart_data_fit:inferred_signal")));
-        assert_eq!(
-            details["gateReasonCounts"]["chart_data_fit:inferred_signal"],
-            json!(1)
+        assert!(
+            static_page_final_render_data_quality_gate_for_draft(&draft).is_none(),
+            "inferred evidence signals should proceed to final render with data-quality warnings"
         );
     }
 

@@ -301,8 +301,7 @@ test('preview queue gate allows planned chart modules without renderable sample 
     previewImage: { assetKey: 'preview-without-rows.png' },
   });
   const finalBlockReason = staticPageFinalRenderBlockReason(confirmedWithoutRows);
-  assert.match(finalBlockReason, /最终页面生成要求/);
-  assert.match(finalBlockReason, /needs_sample_rows/);
+  assert.equal(finalBlockReason, '');
 
   const ready = makeDefaultStaticPageChartDataReady(draft);
 
@@ -739,12 +738,10 @@ test('final render gate blocks historical confirmed previews with weak module da
     previewImage: { assetKey: 'legacy-preview.png' },
   });
 
-  assert.equal(canRequestStaticPageFinalRender(confirmed), false);
-  assert.equal(canRequestStaticPageDirectHtml(confirmed), false);
-  assert.match(staticPageDirectHtmlBlockReason(confirmed), /快速 HTML 生成要求/);
-  assert.match(staticPageFinalRenderBlockReason(confirmed), /最终页面生成要求/);
-  assert.match(staticPageFinalRenderBlockReason(confirmed), /needs_sample_rows/);
-  assert.match(staticPageFinalRenderBlockReason(confirmed), /重新生成效果图/);
+  assert.equal(canRequestStaticPageFinalRender(confirmed), true);
+  assert.equal(canRequestStaticPageDirectHtml(confirmed), true);
+  assert.equal(staticPageDirectHtmlBlockReason(confirmed), '');
+  assert.equal(staticPageFinalRenderBlockReason(confirmed), '');
 });
 
 test('final render request accepts backend rendered output', () => {
