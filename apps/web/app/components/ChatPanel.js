@@ -266,7 +266,7 @@ function AssistantContextStrip({ dataset, selectedDatasets = [], startupBriefing
         <p>
           可见数据集 {startupBriefing?.visibleDatasetCount || 0} 个，
           文档 {startupBriefing?.visibleDocumentCount || 0} 份。
-          {scopePlan?.hint ? ` ${scopePlan.hint}` : ' 暂未命中具体供料范围。'}
+          {scopePlan?.hint ? ` ${scopePlan.hint}` : ' 暂未选中具体供料范围。'}
         </p>
       </div>
       <div className="assistant-context-chips" aria-label="模型范围判断">
@@ -275,7 +275,7 @@ function AssistantContextStrip({ dataset, selectedDatasets = [], startupBriefing
           const candidateDocumentCount = candidate.documentCount || candidate.document_count;
           return (
             <span className="message-chip blue" key={`${candidate.type}-${candidate.id}`}>
-              预选 {candidate.label}
+              已选中 {candidate.label}
               {candidateDocumentCount ? ` · ${candidateDocumentCount}文档` : ''}
             </span>
           );
@@ -509,7 +509,7 @@ export default function ChatPanel({
               ? `会话 ${truncateText(session.id, 16)} · 最后更新 ${formatRelativeTime(session.updated_at)}`
               : selectedScope.length
                 ? `已选 ${selectedScopeLabel} 作为优先供料范围；不会切换对话。`
-                : '可以直接提问；系统会先做范围判断，命中资料意图时再预选相关数据集。'}
+                : '可以直接提问；系统会先做范围判断，命中资料意图时自动选中相关数据集。'}
           </p>
         </div>
         {session ? (
@@ -635,7 +635,7 @@ export default function ChatPanel({
                 <p>
                   {selectedScope.length
                     ? '输入问题仍在当前对话里进行，系统会优先从已选数据集供料，正文由模型自行回答。'
-                    : '未选数据集时按普通模型聊天处理；如果问题命中资料范围，系统会在左侧预选相关数据集并优先供料。'}
+                    : '未选数据集时按普通模型聊天处理；如果问题命中资料范围，系统会自动选中相关数据集并优先供料。'}
                 </p>
               </div>
             )}
@@ -663,7 +663,7 @@ export default function ChatPanel({
                 ? session
                   ? `继续追问 ${session.title}`
                   : `围绕 ${selectedScopeLabel} 提问，系统会优先供料`
-                : '直接提问；系统会按意图预选资料范围'
+                : '直接提问；系统会按意图自动选中资料范围'
             }
             disabled={submitting}
             onKeyDown={(event) => {

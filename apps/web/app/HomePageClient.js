@@ -755,7 +755,7 @@ function scopeHintFromCandidates(candidates) {
     .map((candidate) => candidate?.label)
     .filter(Boolean)
     .slice(0, 3);
-  return labels.length ? `可能相关：${labels.join('、')}` : '';
+  return labels.length ? `已选中：${labels.join('、')}` : '';
 }
 
 function createLocalMessage(role, content) {
@@ -2764,7 +2764,10 @@ export default function HomePageClient() {
               hint: scopeHintFromCandidates(backendCandidates),
             });
           }
-          const backendDatasetIds = datasetIdsFromScope(responsePayload?.selected_scope);
+          const backendDatasetIds = normalizeDatasetIds([
+            ...datasetIdsFromScope(responsePayload?.selected_scope),
+            ...selectPlannerDatasetIds({ candidates: backendCandidates }),
+          ]);
           if (backendDatasetIds.length) {
             setSelectedDatasetIds((current) => normalizeDatasetIds([...current, ...backendDatasetIds]));
             setSelectedDatasetId((current) => current || backendDatasetIds[0]);
@@ -3868,7 +3871,7 @@ export default function HomePageClient() {
     onClearLocalSecret: handleClearLocalSecret,
     onSelectDataset: handleToggleDatasetSelection,
     onClearDatasetSelection: () => {
-      setBanner('已清空供料范围；后续对话会先按普通聊天处理，命中资料意图时再预选。');
+      setBanner('已清空供料范围；后续对话会先按普通聊天处理，命中资料意图时会自动选中相关数据集。');
       setError('');
       setComposingNewSession(false);
       setSelectedDatasetId(null);

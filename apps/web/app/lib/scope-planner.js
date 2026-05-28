@@ -319,7 +319,7 @@ function buildScopeHint(candidates, intent = 'ordinary_chat') {
     .slice(0, 3);
   const parts = [];
   if (visible.length) {
-    parts.push(`可能相关：${visible.join('、')}`);
+    parts.push(`已选中：${visible.join('、')}`);
   }
   const intentLabel = INTENT_LABELS[intent] || '';
   if (intentLabel && intent !== 'ordinary_chat') {

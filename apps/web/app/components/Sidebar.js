@@ -270,14 +270,8 @@ export default function Sidebar({
   loading,
   mobileOpen = false,
   onClose,
-  scopePlan,
   accountAuth,
 }) {
-  const scopeCandidateIds = new Set(
-    (scopePlan?.candidates || [])
-      .filter((candidate) => candidate.type === 'dataset')
-      .map((candidate) => candidate.id),
-  );
   const selectedIdSet = new Set(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []);
 
   return (
@@ -314,23 +308,22 @@ export default function Sidebar({
             disabled={loading && !selectedIdSet.size}
           >
             <span className="dataset-item-title">普通聊天</span>
-            <span className="dataset-item-meta">清空供料范围 · 命中资料意图后可预选</span>
+            <span className="dataset-item-meta">清空供料范围 · 命中资料意图后自动选中</span>
           </button>
           {datasets.length ? (
             datasets.map((dataset) => {
               const active = selectedIdSet.has(dataset.id);
-              const preselected = !active && scopeCandidateIds.has(dataset.id);
               return (
                 <button
                   key={dataset.id}
                   type="button"
-                  className={`dataset-item ${active ? 'active' : ''} ${preselected ? 'preselected' : ''}`.trim()}
+                  className={`dataset-item ${active ? 'active' : ''}`.trim()}
                   onClick={() => onSelectDataset(dataset.id)}
                   disabled={loading && !active}
                 >
                   <span className="dataset-item-title">
                     {dataset.title}
-                    {active ? <small>已选</small> : preselected ? <small>预选</small> : null}
+                    {active ? <small>已选</small> : null}
                   </span>
                   <span className="dataset-item-meta">
                     {dataset.key} · {dataset.visibility === 'private' ? '私密' : '公开'} · {dataset.lifecycle}

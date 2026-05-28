@@ -36,7 +36,7 @@ test('scope planner keeps user selected dataset as highest priority', () => {
   assert.equal(selectPlannerDatasetId(plan), 'dataset-orders');
 });
 
-test('scope planner preselects matching visible dataset when none is selected', () => {
+test('scope planner auto-selects matching visible dataset when none is selected', () => {
   const plan = planAssistantScope({
     prompt: '最近订单营收和复购怎么样',
     datasets,
@@ -54,7 +54,7 @@ test('scope planner preselects matching visible dataset when none is selected', 
   assert.equal(plan.candidates[0].parseStatusSummary, 'completed:12');
 });
 
-test('scope planner preselects visible dataset from document title hints', () => {
+test('scope planner auto-selects visible dataset from document title hints', () => {
   const plan = planAssistantScope({
     prompt: '固定资产怎么操作',
     datasets: [
@@ -74,7 +74,7 @@ test('scope planner preselects visible dataset from document title hints', () =>
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'standard');
 });
 
-test('scope planner preselects visible dataset from document understanding hints', () => {
+test('scope planner auto-selects visible dataset from document understanding hints', () => {
   const plan = planAssistantScope({
     prompt: '查找供应商确认这个主题在哪个库里',
     datasets: [
@@ -96,7 +96,7 @@ test('scope planner preselects visible dataset from document understanding hints
   assert.deepEqual(plan.candidates[0].sectionTitleHints, ['履约概览']);
 });
 
-test('scope planner preselects visible dataset from visible document titles', () => {
+test('scope planner auto-selects visible dataset from visible document titles', () => {
   const plan = planAssistantScope({
     prompt: '固定资产怎么操作',
     datasets: [
@@ -208,7 +208,7 @@ test('scope planner recommends uploaded video extraction without public URL reso
   assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.extract_ppt_transcript']);
 });
 
-test('scope planner preselects media dataset for audio and video prompts', () => {
+test('scope planner auto-selects media dataset for audio and video prompts', () => {
   const plan = planAssistantScope({
     prompt: '这段录音讲了什么，帮我提炼重点',
     datasets: [

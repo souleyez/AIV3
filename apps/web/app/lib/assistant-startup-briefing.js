@@ -136,7 +136,7 @@ export function buildAssistantStartupBriefing({
     productCapabilities: {
       staticPage: '可以在主对话区发起静态页规划、确认生图文案、效果图排队、最终静态页渲染，并导出 index.html 与包含 manifest/data/modules/render-spec/runtime/README 的 ZIP 交付包。高级静态页默认按 Image2 视觉稿 -> 真实数据 HTML -> 快照/单位口径校验 -> V3 产物发布执行；快照表当前状态只取最新快照，趋势图才跨日期展开。',
       report: '可以让模型主动发起报表/看板创建，但必须先通过工具列出选项并由宿主执行。',
-      retrieval: '选中或预选数据集时，宿主会尽量检索相关证据；静态页/报表意图优先深度供料。',
+      retrieval: '选中数据集时，宿主会尽量检索相关证据；命中资料意图的数据集会自动进入已选范围，静态页/报表意图优先深度供料。',
       media: '音视频上传按后台任务解析；支持上传视频文件、直接视频 URL、公开页面可解析视频地址后的 PPT/原文提取；完整视频/PPT 包应输出截图型 PPTX、video_slides.md、讲稿备注、字幕对页和清单类文件；有本地转写、场景或关键帧 OCR 时会以可引用证据供料，缺失时保持 partial 而不编造；登录态、扫码、Cookie 或录屏绕过不在当前自动能力范围。',
       memory: '本轮对话历史是隐藏数据集，只有用户语义需要上下文时才进入供料。',
       continuousExecution: '模型可以连续提出检索、细读、静态页规划/修改、报表规划、渲染或导出等受控动作；宿主负责校验权限、执行动作并把简要步骤回写到对话。',
