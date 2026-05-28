@@ -622,7 +622,7 @@ async fn process_static_page_render_task(
         };
         if image_job
             .as_ref()
-            .map(|job| job.status != StaticPageImageJobStatus::Confirmed)
+            .map(|job| !static_page_render_image_job_ready(&draft, job))
             .unwrap_or(false)
         {
             return Err(anyhow!(
@@ -789,6 +789,32 @@ async fn process_static_page_render_task(
     );
 
     Ok(())
+}
+
+fn static_page_draft_requires_effect_image_confirmation(draft: &StaticPageDraft) -> bool {
+    draft
+        .source_refs
+        .get("effect_image_confirmation_required")
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+fn static_page_render_image_job_ready(
+    draft: &StaticPageDraft,
+    job: &StaticPageImageJob,
+) -> bool {
+    match job.status {
+        StaticPageImageJobStatus::Confirmed => true,
+        StaticPageImageJobStatus::PreviewReady => {
+            !static_page_draft_requires_effect_image_confirmation(draft)
+                && job
+                    .preview_asset_key
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|asset_key| !asset_key.is_empty())
+        }
+        _ => false,
+    }
 }
 
 async fn poll_until_finished(
@@ -1739,6 +1765,52 @@ mod tests {
         assert_eq!(payload["previewContract"]["status"], json!("retry_queued"));
         assert_eq!(payload["preview_contract"]["status"], json!("retry_queued"));
         assert_eq!(payload["previewContract"]["retryable"], json!(true));
+    }
+
+    #[test]
+    fn render_accepts_preview_ready_job_unless_confirmation_is_required() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let mut draft = StaticPageDraft {
+            id: domain_model::StaticPageDraftId::new(),
+            tenant_id,
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: None,
+            title: "经营分析静态页".to_string(),
+            status: StaticPageDraftStatus::Previewed,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({}),
+            draft_payload: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut job = StaticPageImageJob {
+            id: domain_model::StaticPageImageJobId::new(),
+            tenant_id,
+            draft_id: draft.id,
+            assistant_run_id: draft.assistant_run_id,
+            status: StaticPageImageJobStatus::PreviewReady,
+            queue_position: None,
+            image_prompt_payload: json!({}),
+            preview_asset_key: Some(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png"
+                    .to_string(),
+            ),
+            failure_reason: None,
+            confirmed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(static_page_render_image_job_ready(&draft, &job));
+
+        draft.source_refs = json!({"effect_image_confirmation_required": true});
+        assert!(!static_page_render_image_job_ready(&draft, &job));
+
+        draft.source_refs = json!({});
+        job.preview_asset_key = Some(" ".to_string());
+        assert!(!static_page_render_image_job_ready(&draft, &job));
     }
 
     #[test]
