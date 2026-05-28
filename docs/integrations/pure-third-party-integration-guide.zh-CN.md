@@ -498,6 +498,8 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.html_preview_url` | 已直接生成 HTML 时返回；浏览器 inline 预览地址 |
 | `reply.card.html_download_url` | 已直接生成 HTML 时返回；HTML 附件下载地址 |
 | `reply.card.generated_artifact_url` / `reply.card.public_url` | 已发布 generated-artifact 时返回；第三方优先把这个链接展示或转存 |
+| `reply.card.status_url` | 生成中返回；第三方服务端用 `GET` 轮询该 URL，直到 `reply.reply_type=artifact_link` 或进入失败/取消状态 |
+| `reply.card.poll_after_seconds` | 建议轮询间隔；生成中通常为 `15`，重试中通常为 `30` |
 | `reply.card.demo_generated_artifact_publish` | `true` 表示固定 Codex 发布能力未启用时，V3 已用内置 HTML 生成并发布演示可访问页面 |
 | `reply.card.direct_html_fallback` | `true` 表示固定 Codex 发布能力未启用，本次已走 V3 内置 HTML 直出兜底 |
 | `reply.card.auto_publish_after_preview` | `true` 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路 |
@@ -506,7 +508,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
 | `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
 
-若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.render_output_id` 已存在，可直接按 3.4 查询/预览/下载；若只有 `draft_id` 和 `image_job_id`，表示当前仍在效果图或自动发布阶段，第三方继续等待 `completed` 响应或后续状态事件即可。若状态进入 `static_page_publish_retrying`，第三方继续轮询；若进入 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要展示旧的效果图为最终产物，应提示稍后重试或由 V3 侧人工处理。效果图是过程预览，不是最终交付物。
+若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.render_output_id` 已存在，可直接按 3.4 查询/预览/下载；若 `card.public_url` 为空但 `card.status_url` 存在，表示当前仍在效果图或自动发布阶段，第三方按 `poll_after_seconds` 轮询 `status_url`，或用原 `/events` 请求体和同一 `idempotency_key` 重试。若状态进入 `static_page_publish_retrying`，第三方继续轮询；若进入 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要展示旧的效果图为最终产物，应提示稍后重试或由 V3 侧人工处理。效果图是过程预览，不是最终交付物。
 
 固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
 

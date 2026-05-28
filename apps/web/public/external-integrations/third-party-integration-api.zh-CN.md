@@ -1027,7 +1027,7 @@ Host: v3.elepcloud.com
 Authorization: Bearer <V3 inbound token>
 ```
 
-该接口返回与 `/events` 相同的 `ExternalChannelEventResponse`。如果仍在生成，`reply.reply_type=task_status`，常见状态包括 `static_page_image_preview_queued`、`static_page_effect_image_ready`、`static_page_publish_queued`、`static_page_publish_running` 和 `static_page_publish_retrying`；如果已发布，`reply.reply_type=artifact_link`，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 为最终页面链接；如果返回 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要把效果图当成最终产物展示，应提示重试或等待 V3 人工处理。第三方也可以用原 `/events` 请求体和同一 `idempotency_key` 重试，V3 会在最终产物发布后返回同一个 artifact link。
+该接口返回与 `/events` 相同的 `ExternalChannelEventResponse`。如果仍在生成，`reply.reply_type=task_status`，常见状态包括 `static_page_image_preview_queued`、`static_page_effect_image_ready`、`static_page_publish_queued`、`static_page_publish_running` 和 `static_page_publish_retrying`，此时卡片会带 `reply.card.status_url` 和 `reply.card.poll_after_seconds`，第三方应按建议间隔继续轮询；如果已发布，`reply.reply_type=artifact_link`，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 为最终页面链接；如果返回 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要把效果图当成最终产物展示，应提示重试或等待 V3 人工处理。第三方也可以用原 `/events` 请求体和同一 `idempotency_key` 重试，V3 会在最终产物发布后返回同一个 artifact link。
 
 `static_page_image2_data_publish` 只有在 V3 平台任务开关、平台 allowlist、Codex Host agent allowlist、执行模式和可信宿主就绪时才算已启用。当前推荐固定执行器为 `cloudflare_orchestrator + cloudflare_codex`，需要配置 Codex Web orchestrator 访问密钥；旧的本机 `codex_exec` 模式仍要求真实执行许可和任务工作区。响应卡片里的 `codex_auto_publish_ready=false` 表示本次已经走内置 HTML 兜底；`codex_auto_publish_disabled_reason` 仅用于服务端日志和联调排查。
 

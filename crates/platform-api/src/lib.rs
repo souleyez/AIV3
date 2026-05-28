@@ -21606,6 +21606,8 @@ fn external_channel_static_page_reply_from_events(
                         "heartbeat_count": heartbeat_count,
                         "elapsed_ms": elapsed_ms,
                         "poll_after_seconds": 15,
+                        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                     })),
                     Vec::new(),
                 ));
@@ -21634,6 +21636,13 @@ fn external_channel_static_page_reply_from_events(
                         .get("publish_mode")
                         .cloned()
                         .unwrap_or(Value::Null),
+                    "poll_after_seconds": event
+                        .payload
+                        .get("poll_after_seconds")
+                        .cloned()
+                        .unwrap_or_else(|| json!(15)),
+                    "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                    "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                 })),
                 Vec::new(),
             ));
@@ -21677,6 +21686,8 @@ fn external_channel_static_page_reply_from_events(
                             .cloned()
                             .unwrap_or(Value::Null),
                         "poll_after_seconds": 15,
+                        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                     })),
                     Vec::new(),
                 ));
@@ -21702,6 +21713,8 @@ fn external_channel_static_page_reply_from_events(
                             .unwrap_or_else(|| json!(true)),
                         "error": retry_queued.payload.get("error").cloned().unwrap_or(Value::Null),
                         "poll_after_seconds": 30,
+                        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                     })),
                     Vec::new(),
                 ));
@@ -21722,6 +21735,8 @@ fn external_channel_static_page_reply_from_events(
                         "image_job_id": failed.payload.get("image_job_id").cloned().unwrap_or_else(|| event.payload.get("image_job_id").cloned().unwrap_or(Value::Null)),
                         "retryable": true,
                         "poll_after_seconds": 30,
+                        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                     })),
                     Vec::new(),
                 ));
@@ -21753,6 +21768,8 @@ fn external_channel_static_page_reply_from_events(
                             .cloned()
                             .unwrap_or(Value::Null),
                         "poll_after_seconds": 15,
+                        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                     })),
                     Vec::new(),
                 ));
@@ -21785,6 +21802,13 @@ fn external_channel_static_page_reply_from_events(
                         .get("template_id")
                         .cloned()
                         .unwrap_or(Value::Null),
+                    "poll_after_seconds": event
+                        .payload
+                        .get("poll_after_seconds")
+                        .cloned()
+                        .unwrap_or_else(|| json!(15)),
+                    "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                    "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                 })),
                 Vec::new(),
             ));
@@ -22224,6 +22248,8 @@ fn external_channel_fixed_task_processing_reply(
             "status": task_status,
             "template_id": template_id,
             "codex_host_workflow_execution_id": external_channel_fixed_task_workflow_execution_id(fixed_event),
+            "status_url": fixed_event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+            "status_method": fixed_event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
             "runtime_event": runtime_event.map(|event| json!({
                 "event_name": event.event_name.clone(),
                 "status": event.payload.get("status").cloned().unwrap_or(Value::Null),
@@ -22307,6 +22333,8 @@ fn external_channel_fixed_task_terminal_or_queued_reply(
         "template_id": template_id,
         "output_status": event_status,
         "codex_host_workflow_execution_id": external_channel_fixed_task_workflow_execution_id(event),
+        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
         "artifact_public_url": artifact_url.clone().map(Value::String).unwrap_or(Value::Null),
         "output": event.payload.get("output").cloned().unwrap_or(Value::Null),
         "validation": event.payload.get("validation").cloned().unwrap_or(Value::Null),
@@ -24822,6 +24850,12 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                         "template_id": "static_page_image2_data_publish",
                         "publish_mode": "new_generated_artifact_only",
                         "effect_image_confirmation_required": false,
+                        "status_url": external_channel_assistant_run_reply_status_url(
+                            &connection_id,
+                            run.id,
+                        ),
+                        "status_method": "GET",
+                        "poll_after_seconds": 15,
                     }),
                     created_at: Utc::now(),
                 },
@@ -24968,6 +25002,12 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .and_then(|payload| payload.get("public_url"))
         .and_then(Value::as_str)
         .map(str::to_string);
+    let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
+    let poll_after_seconds = if generated_artifact_url.is_none() && direct_render_output.is_none() {
+        Value::from(15)
+    } else {
+        Value::Null
+    };
 
     state
         .storage
@@ -25002,6 +25042,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         .as_ref()
                         .map(|value| Value::String(value.clone()))
                         .unwrap_or(Value::Null),
+                    "status_url": status_url.clone(),
+                    "status_method": "GET",
+                    "poll_after_seconds": poll_after_seconds.clone(),
                     "codex_host_workflow_execution_id": Value::Null,
                     "template_id": if codex_auto_publish_enabled {
                         Value::String("static_page_image2_data_publish".to_string())
@@ -25084,6 +25127,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 .as_ref()
                 .map(|value| Value::String(value.clone()))
                 .unwrap_or(Value::Null),
+            "status_url": status_url.clone(),
+            "status_method": "GET",
+            "poll_after_seconds": poll_after_seconds.clone(),
             "codex_host_workflow_execution_id": Value::Null,
             "fixed_task_template_id": if codex_auto_publish_enabled {
                 Value::String("static_page_image2_data_publish".to_string())
@@ -25157,6 +25203,34 @@ fn external_channel_generated_artifact_public_url(relative_dir: &str) -> String 
         "{}/{}/index.html",
         external_channel_generated_artifact_public_base_url(),
         relative_dir.trim_matches('/')
+    )
+}
+
+fn external_channel_api_public_base_url() -> String {
+    std::env::var("V3_EXTERNAL_API_PUBLIC_BASE_URL")
+        .or_else(|_| std::env::var("V3_PUBLIC_BASE_URL"))
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://v3.elepcloud.com".to_string())
+}
+
+fn external_channel_assistant_run_reply_status_url(
+    connection_id: &str,
+    run_id: AssistantRunId,
+) -> String {
+    external_channel_assistant_run_reply_status_url_str(connection_id, &run_id.to_string())
+}
+
+fn external_channel_assistant_run_reply_status_url_str(
+    connection_id: &str,
+    run_id: &str,
+) -> String {
+    format!(
+        "{}/v1/external/channels/{}/assistant-runs/{}/reply",
+        external_channel_api_public_base_url(),
+        encode_url_path_segment(connection_id),
+        encode_url_path_segment(run_id)
     )
 }
 
@@ -33529,12 +33603,25 @@ fn codex_host_fixed_task_base_payload(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let external_status_url = assistant_run_id
+        .zip(
+            fixed_task
+                .pointer("/requirements/channel_connection_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        )
+        .map(|(run_id, connection_id)| {
+            external_channel_assistant_run_reply_status_url_str(connection_id, run_id)
+        });
     json!({
         "template_id": template_id,
         "assistant_run_id": assistant_run_id,
         "workflow_execution_id": execution.id.to_string(),
         "capability": capability,
         "status": status,
+        "status_url": external_status_url.clone(),
+        "status_method": if external_status_url.is_some() { Value::String("GET".to_string()) } else { Value::Null },
         "human_review_policy": fixed_task
             .get("human_review_policy")
             .cloned()
@@ -69639,6 +69726,8 @@ mod tests {
                     "status": "static_page_image2_auto_publish_pending",
                     "auto_publish_after_preview": true,
                     "template_id": "static_page_image2_data_publish",
+                    "status_url": "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply",
+                    "poll_after_seconds": 15,
                 }),
             ),
         ];
@@ -69655,6 +69744,12 @@ mod tests {
         assert_eq!(card["type"], json!("v3_static_page_image2_preview_queued"));
         assert_eq!(card["stage"], json!("image2_preview_generation"));
         assert_eq!(card["poll_after_seconds"], json!(15));
+        assert_eq!(
+            card["status_url"],
+            json!(
+                "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply"
+            )
+        );
     }
 
     #[test]
@@ -69724,6 +69819,8 @@ mod tests {
                     "codex_host_workflow_execution_id": codex_execution_id.to_string(),
                     "template_id": "static_page_image2_data_publish",
                     "publish_mode": "new_generated_artifact_only",
+                    "status_url": "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-2/reply",
+                    "poll_after_seconds": 15,
                 }),
             ),
             static_page_reply_test_event(
@@ -69754,6 +69851,12 @@ mod tests {
         assert_eq!(card["stage"], json!("codex_static_page_publish"));
         assert_eq!(card["heartbeat_count"], json!(3));
         assert_eq!(card["elapsed_ms"], json!(45000));
+        assert_eq!(
+            card["status_url"],
+            json!(
+                "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-2/reply"
+            )
+        );
     }
 
     #[test]
@@ -70001,6 +70104,13 @@ mod tests {
             reply.artifact_links.first().map(String::as_str),
             card["html_download_url"].as_str()
         );
+        assert!(card["status_url"]
+            .as_str()
+            .expect("status url")
+            .contains(&format!(
+                "/v1/external/channels/generic-chat-main/assistant-runs/{}/reply",
+                run.id
+            )));
 
         let events = state
             .storage
@@ -70024,6 +70134,7 @@ mod tests {
             queued.payload["render_output_id"].as_str(),
             Some(render_output_id)
         );
+        assert_eq!(queued.payload["status_url"], card["status_url"]);
     }
 
     #[test]
