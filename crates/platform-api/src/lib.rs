@@ -66613,12 +66613,7 @@ fn static_page_draft_allows_preview_ready_render(draft: &StaticPageDraft) -> boo
         .source_refs
         .get("effect_image_confirmation_required")
         .and_then(Value::as_bool)
-        == Some(false)
-        && draft
-            .source_refs
-            .get("continue_to_publish_after_effect_image")
-            .and_then(Value::as_bool)
-            == Some(true)
+        != Some(true)
 }
 
 fn static_page_image_job_has_preview_asset(job: &StaticPageImageJob) -> bool {
@@ -66754,10 +66749,11 @@ fn ensure_static_page_preview_contract_current(
     }
     let contract_fingerprint = static_page_preview_contract_fingerprint(&preview_contract);
     let job_fingerprint = image_job.and_then(static_page_image_job_prompt_fingerprint);
+    let has_any_fingerprint = contract_fingerprint.is_some() || job_fingerprint.is_some();
     let has_matching_fingerprint = contract_fingerprint.as_deref()
         == Some(current_fingerprint.as_str())
         || job_fingerprint.as_deref() == Some(current_fingerprint.as_str());
-    if !has_matching_fingerprint {
+    if has_any_fingerprint && !has_matching_fingerprint {
         return Err(ApiError::bad_request(
             "static_page_preview_stale",
             "effect preview does not match the current static page draft".to_string(),
