@@ -20617,6 +20617,143 @@ fn external_requested_skills_summary(skills: &[ExternalRequestedSkillView]) -> V
         .collect()
 }
 
+fn external_channel_static_page_recipient_delivery(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> Value {
+    let explicit_mapping = external_requested_skills_permission_mapping(&message.requested_skills);
+    let role_scope_candidates = external_channel_static_page_role_scope_candidates(prompt);
+    let mapping_status = if explicit_mapping.is_some() {
+        "provided_for_auto_configuration"
+    } else if !message.mention_external_user_ids.is_empty() && !role_scope_candidates.is_empty() {
+        "needs_user_role_scope_mapping"
+    } else if !role_scope_candidates.is_empty() {
+        "role_requirements_detected"
+    } else {
+        "needs_user_role_mapping"
+    };
+    json!({
+        "enabled": true,
+        "editable_after_publish": true,
+        "can_create_recipient_specific_links": true,
+        "recipient_link_policy": "create_separate_static_page_link_per_role_or_store_scope",
+        "current_delivery_mode": "base_link_first_then_recipient_specific_adjustment",
+        "mapping_status": mapping_status,
+        "permission_review_status": mapping_status,
+        "operator_external_user_id": message.sender_external_id,
+        "target_external_user_ids": message.mention_external_user_ids,
+        "role_scope_candidates": role_scope_candidates,
+        "provided_mapping": explicit_mapping.unwrap_or(Value::Null),
+        "default_page_scope": "summary_view_until_user_role_store_mapping_is_confirmed",
+        "operator_hint": "页面链接可先交付；如需分别发送给总部、分店店总或指定门店人员，请继续提供用户-角色-门店映射，V3 可基于当前页面继续生成对应权限口径的单独链接。",
+        "mapping_input_hint": {
+            "users": "external_user_id -> role",
+            "scopes": "role -> store_ids/region_ids/brand_ids",
+            "examples": [
+                {"external_user_id": "user-hq-001", "role": "headquarters", "scope": "all_stores"},
+                {"external_user_id": "user-store-001", "role": "store_manager", "store_scope": ["南京新百店"]}
+            ]
+        }
+    })
+}
+
+fn external_requested_skills_permission_mapping(
+    skills: &[ExternalRequestedSkillView],
+) -> Option<Value> {
+    for skill in skills {
+        let Some(arguments) = skill.arguments.as_ref().and_then(Value::as_object) else {
+            continue;
+        };
+        for key in [
+            "user_role_mappings",
+            "userRoleMappings",
+            "recipient_permissions",
+            "recipientPermissions",
+            "permission_mappings",
+            "permissionMappings",
+            "user_permission_scope",
+            "userPermissionScope",
+        ] {
+            if let Some(value) = arguments.get(key).filter(|value| !value.is_null()) {
+                return Some(value.clone());
+            }
+        }
+    }
+    None
+}
+
+fn external_channel_static_page_role_scope_candidates(prompt: &str) -> Vec<Value> {
+    let normalized = prompt.to_ascii_lowercase();
+    let mut candidates = Vec::new();
+    let has_headquarters = prompt.contains("总部")
+        || prompt.contains("管理层")
+        || normalized.contains("headquarters")
+        || normalized.contains("hq");
+    if has_headquarters {
+        candidates.push(json!({
+            "role": "headquarters",
+            "label": "总部管理层",
+            "default_scope": "all_stores",
+            "page_focus": ["经营健康度", "区域/门店排行", "风险机会池", "全量汇总"]
+        }));
+    }
+    let has_store_manager = prompt.contains("分店")
+        || prompt.contains("店总")
+        || prompt.contains("门店")
+        || prompt.contains("店长")
+        || normalized.contains("store_manager")
+        || normalized.contains("store manager");
+    if has_store_manager {
+        candidates.push(json!({
+            "role": "store_manager",
+            "label": "分店店总",
+            "default_scope": "assigned_store_only",
+            "page_focus": ["本店经营问题", "品牌明细", "行动清单", "本店风险预警"]
+        }));
+    }
+    candidates
+}
+
+fn external_channel_recipient_delivery_from_payload(payload: &Value) -> Value {
+    [
+        payload.get("recipient_delivery"),
+        payload.pointer("/source_refs/recipient_delivery"),
+        payload.pointer("/requirements/recipient_delivery"),
+        payload.pointer("/fixed_task/requirements/recipient_delivery"),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.is_null())
+    .cloned()
+    .unwrap_or(Value::Null)
+}
+
+fn external_channel_permission_review_status_from_payload(payload: &Value) -> Value {
+    if let Some(value) = payload
+        .get("permission_review_status")
+        .filter(|value| !value.is_null())
+    {
+        return value.clone();
+    }
+    external_channel_recipient_delivery_from_payload(payload)
+        .get("permission_review_status")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn external_channel_editable_after_publish_from_payload(payload: &Value) -> Value {
+    if let Some(value) = payload
+        .get("editable_after_publish")
+        .filter(|value| !value.is_null())
+    {
+        return value.clone();
+    }
+    external_channel_recipient_delivery_from_payload(payload)
+        .get("editable_after_publish")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 fn external_requested_skill_argument_object(
     skill: &ExternalRequestedSkillView,
 ) -> Option<&Map<String, Value>> {
@@ -21608,6 +21745,9 @@ fn external_channel_static_page_reply_from_events(
                         "poll_after_seconds": 15,
                         "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                         "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
                     })),
                     Vec::new(),
                 ));
@@ -21643,6 +21783,9 @@ fn external_channel_static_page_reply_from_events(
                         .unwrap_or_else(|| json!(15)),
                     "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                     "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                    "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                    "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                    "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
                 })),
                 Vec::new(),
             ));
@@ -21688,6 +21831,9 @@ fn external_channel_static_page_reply_from_events(
                         "poll_after_seconds": 15,
                         "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                         "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
                     })),
                     Vec::new(),
                 ));
@@ -21715,6 +21861,9 @@ fn external_channel_static_page_reply_from_events(
                         "poll_after_seconds": 30,
                         "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                         "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
                     })),
                     Vec::new(),
                 ));
@@ -21737,6 +21886,9 @@ fn external_channel_static_page_reply_from_events(
                         "poll_after_seconds": 30,
                         "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                         "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
                     })),
                     Vec::new(),
                 ));
@@ -21770,6 +21922,9 @@ fn external_channel_static_page_reply_from_events(
                         "poll_after_seconds": 15,
                         "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                         "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
                     })),
                     Vec::new(),
                 ));
@@ -21809,6 +21964,9 @@ fn external_channel_static_page_reply_from_events(
                         .unwrap_or_else(|| json!(15)),
                     "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                     "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                    "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                    "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                    "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
                 })),
                 Vec::new(),
             ));
@@ -22250,6 +22408,9 @@ fn external_channel_fixed_task_processing_reply(
             "codex_host_workflow_execution_id": external_channel_fixed_task_workflow_execution_id(fixed_event),
             "status_url": fixed_event.payload.get("status_url").cloned().unwrap_or(Value::Null),
             "status_method": fixed_event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+            "recipient_delivery": external_channel_recipient_delivery_from_payload(&fixed_event.payload),
+            "permission_review_status": external_channel_permission_review_status_from_payload(&fixed_event.payload),
+            "editable_after_publish": external_channel_editable_after_publish_from_payload(&fixed_event.payload),
             "runtime_event": runtime_event.map(|event| json!({
                 "event_name": event.event_name.clone(),
                 "status": event.payload.get("status").cloned().unwrap_or(Value::Null),
@@ -22335,6 +22496,9 @@ fn external_channel_fixed_task_terminal_or_queued_reply(
         "codex_host_workflow_execution_id": external_channel_fixed_task_workflow_execution_id(event),
         "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
         "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
         "artifact_public_url": artifact_url.clone().map(Value::String).unwrap_or(Value::Null),
         "output": event.payload.get("output").cloned().unwrap_or(Value::Null),
         "validation": event.payload.get("validation").cloned().unwrap_or(Value::Null),
@@ -24244,6 +24408,11 @@ fn external_channel_static_page_image2_fixed_task(
         .unwrap_or_else(|_| truncate_assistant_supply_text(prompt, 2000));
     let image_prompt_payload_summary =
         external_static_page_image_prompt_payload_summary(image_prompt_payload);
+    let recipient_delivery = draft
+        .source_refs
+        .get("recipient_delivery")
+        .cloned()
+        .unwrap_or_else(|| external_channel_static_page_recipient_delivery(message, prompt));
     CodexHostFixedTaskTemplateContextView {
         template_id: CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish,
         version: 1,
@@ -24266,6 +24435,11 @@ fn external_channel_static_page_image2_fixed_task(
             "render_mode": message.render_mode,
             "requested_skills": external_requested_skills_summary(&message.requested_skills),
             "template_reference": template_reference.cloned().unwrap_or(Value::Null),
+            "recipient_delivery": recipient_delivery.clone(),
+            "permission_review_status": recipient_delivery
+                .get("permission_review_status")
+                .cloned()
+                .unwrap_or(Value::Null),
             "evidence_summary": evidence_summary,
             "missing_evidence": missing_evidence,
             "time_dimension_required": external_static_page_prompt_contains_any(prompt, &[
@@ -24321,6 +24495,7 @@ fn external_channel_static_page_image2_fixed_task(
             },
             "draft_id": draft.id.to_string(),
             "image_job_id": image_job.id.to_string(),
+            "recipient_delivery": recipient_delivery,
             "execution_trail": run.execution_trail,
         }),
         allowed_write_scope: None,
@@ -24792,6 +24967,11 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
     if connection.status != "enabled" {
         return Ok(());
     }
+    let recipient_delivery = draft
+        .source_refs
+        .get("recipient_delivery")
+        .cloned()
+        .unwrap_or(Value::Null);
     let message = external_channel_static_page_message_from_source_refs(
         &draft.source_refs,
         &connection,
@@ -24850,6 +25030,15 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                         "template_id": "static_page_image2_data_publish",
                         "publish_mode": "new_generated_artifact_only",
                         "effect_image_confirmation_required": false,
+                        "recipient_delivery": recipient_delivery.clone(),
+                        "permission_review_status": recipient_delivery
+                            .get("permission_review_status")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "editable_after_publish": recipient_delivery
+                            .get("editable_after_publish")
+                            .cloned()
+                            .unwrap_or(Value::Null),
                         "status_url": external_channel_assistant_run_reply_status_url(
                             &connection_id,
                             run.id,
@@ -24915,6 +25104,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         return Ok(None);
     }
 
+    let recipient_delivery =
+        external_channel_static_page_recipient_delivery(message, &assistant_request.prompt);
     let source_refs = json!({
         "source": "external_channel_static_page_artifact_request",
         "auto_publish_generated_artifact": true,
@@ -24939,6 +25130,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             &run.selected_scope,
             &run.evidence_state,
         ),
+        "recipient_delivery": recipient_delivery.clone(),
         "answer_policy": external_answer_policy_value(message),
     });
     let draft_outcome = create_static_page_draft_for_assistant_run_id(
@@ -25045,6 +25237,15 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     "status_url": status_url.clone(),
                     "status_method": "GET",
                     "poll_after_seconds": poll_after_seconds.clone(),
+                    "recipient_delivery": recipient_delivery.clone(),
+                    "permission_review_status": recipient_delivery
+                        .get("permission_review_status")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "editable_after_publish": recipient_delivery
+                        .get("editable_after_publish")
+                        .cloned()
+                        .unwrap_or(Value::Null),
                     "codex_host_workflow_execution_id": Value::Null,
                     "template_id": if codex_auto_publish_enabled {
                         Value::String("static_page_image2_data_publish".to_string())
@@ -25130,6 +25331,15 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             "status_url": status_url.clone(),
             "status_method": "GET",
             "poll_after_seconds": poll_after_seconds.clone(),
+            "recipient_delivery": recipient_delivery.clone(),
+            "permission_review_status": recipient_delivery
+                .get("permission_review_status")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "editable_after_publish": recipient_delivery
+                .get("editable_after_publish")
+                .cloned()
+                .unwrap_or(Value::Null),
             "codex_host_workflow_execution_id": Value::Null,
             "fixed_task_template_id": if codex_auto_publish_enabled {
                 Value::String("static_page_image2_data_publish".to_string())
@@ -33614,6 +33824,10 @@ fn codex_host_fixed_task_base_payload(
         .map(|(run_id, connection_id)| {
             external_channel_assistant_run_reply_status_url_str(connection_id, run_id)
         });
+    let recipient_delivery = fixed_task
+        .pointer("/requirements/recipient_delivery")
+        .cloned()
+        .unwrap_or(Value::Null);
     json!({
         "template_id": template_id,
         "assistant_run_id": assistant_run_id,
@@ -33622,6 +33836,15 @@ fn codex_host_fixed_task_base_payload(
         "status": status,
         "status_url": external_status_url.clone(),
         "status_method": if external_status_url.is_some() { Value::String("GET".to_string()) } else { Value::Null },
+        "recipient_delivery": recipient_delivery.clone(),
+        "permission_review_status": recipient_delivery
+            .get("permission_review_status")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "editable_after_publish": recipient_delivery
+            .get("editable_after_publish")
+            .cloned()
+            .unwrap_or(Value::Null),
         "human_review_policy": fixed_task
             .get("human_review_policy")
             .cloned()
@@ -35576,6 +35799,9 @@ async fn maybe_attach_external_static_page_artifact_to_run(
             .get("codex_host_workflow_execution_id")
             .cloned()
             .unwrap_or(Value::Null),
+        "recipient_delivery": external_channel_recipient_delivery_from_payload(completed_payload),
+        "permission_review_status": external_channel_permission_review_status_from_payload(completed_payload),
+        "editable_after_publish": external_channel_editable_after_publish_from_payload(completed_payload),
         "validation_summary": completed_payload
             .get("validation_summary")
             .cloned()
@@ -35606,6 +35832,9 @@ fn external_channel_static_page_status_source_refs(source_refs: &Value) -> Value
         if let Some(value) = external_channel_static_page_source_ref_string(source_refs, key) {
             output.insert(key.to_string(), Value::String(value));
         }
+    }
+    if let Some(value) = source_refs.get("recipient_delivery") {
+        output.insert("recipient_delivery".to_string(), value.clone());
     }
     Value::Object(output)
 }
@@ -35671,6 +35900,9 @@ fn external_channel_static_page_published_reply(
                 .get("codex_host_workflow_execution_id")
                 .cloned()
                 .unwrap_or(Value::Null),
+            "recipient_delivery": external_channel_recipient_delivery_from_payload(payload),
+            "permission_review_status": external_channel_permission_review_status_from_payload(payload),
+            "editable_after_publish": external_channel_editable_after_publish_from_payload(payload),
             "validation_summary": payload
                 .get("validation_summary")
                 .cloned()
@@ -70227,6 +70459,72 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_recipient_delivery_reports_role_scope_hints() {
+        let mut message = sample_external_bot_message();
+        message.sender_external_id = "operator-001".to_string();
+        message.mention_external_user_ids = vec!["user-store-001".to_string()];
+
+        let delivery = external_channel_static_page_recipient_delivery(
+            &message,
+            "按总部和分店店总各自权限生成能单独发送的静态页链接",
+        );
+
+        assert_eq!(delivery["enabled"], json!(true));
+        assert_eq!(delivery["editable_after_publish"], json!(true));
+        assert_eq!(delivery["can_create_recipient_specific_links"], json!(true));
+        assert_eq!(
+            delivery["permission_review_status"],
+            json!("needs_user_role_scope_mapping")
+        );
+        assert_eq!(delivery["operator_external_user_id"], json!("operator-001"));
+        assert_eq!(
+            delivery["target_external_user_ids"],
+            json!(["user-store-001"])
+        );
+        let roles = delivery["role_scope_candidates"]
+            .as_array()
+            .expect("role candidates");
+        assert!(roles
+            .iter()
+            .any(|role| role["role"] == json!("headquarters")));
+        assert!(roles
+            .iter()
+            .any(|role| role["role"] == json!("store_manager")));
+    }
+
+    #[test]
+    fn external_channel_static_page_recipient_delivery_accepts_skill_mapping() {
+        let mut message = sample_external_bot_message();
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "document_template_skill".to_string(),
+            version: None,
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "output_type": "static_page",
+                "user_role_mappings": [
+                    {
+                        "external_user_id": "user-hq-001",
+                        "role": "headquarters",
+                        "scope": "all_stores"
+                    }
+                ]
+            })),
+        }];
+
+        let delivery =
+            external_channel_static_page_recipient_delivery(&message, "生成总部经营静态页");
+
+        assert_eq!(
+            delivery["permission_review_status"],
+            json!("provided_for_auto_configuration")
+        );
+        assert_eq!(
+            delivery["provided_mapping"][0]["external_user_id"],
+            json!("user-hq-001")
+        );
+    }
+
+    #[test]
     fn external_channel_static_page_skill_is_not_legacy_html_artifact() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("artifact".to_string());
@@ -70517,6 +70815,18 @@ mod tests {
         assert_eq!(
             encoded["image2"]["human_confirmation_required"],
             json!(false)
+        );
+        assert_eq!(
+            encoded["requirements"]["recipient_delivery"]["can_create_recipient_specific_links"],
+            json!(true)
+        );
+        assert_eq!(
+            encoded["requirements"]["permission_review_status"],
+            json!("role_requirements_detected")
+        );
+        assert_eq!(
+            encoded["trace_summary"]["recipient_delivery"]["permission_review_status"],
+            json!("role_requirements_detected")
         );
         assert_eq!(
             encoded["policies"]["effect_image_confirmation_required"],

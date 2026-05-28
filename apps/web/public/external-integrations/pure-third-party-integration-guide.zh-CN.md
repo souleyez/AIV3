@@ -482,6 +482,8 @@ Content-Type: application/json
 
 V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会把固定任务投递到配置好的 Cloudflare Codex 执行器，效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact，本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。
 
+第三方操作人员可以先把 `card.public_url` 或 `artifact_links[0]` 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；V3 会在静态页卡片返回 `recipient_delivery`，说明当前是否已具备自动配置条件，或还缺哪些权限映射。
+
 `static_page_image2_data_publish` 只有在 V3 平台任务开关、平台 allowlist、Codex Host agent allowlist、执行模式和可信宿主就绪时才算已启用。当前推荐固定执行器为 `cloudflare_orchestrator + cloudflare_codex`，需要配置 Codex Web orchestrator 访问密钥；旧的本机 `codex_exec` 模式仍要求真实执行许可和任务工作区。第三方不需要关心这些内部配置，只需按响应字段判断是否已拿到最终 HTML 或仍在自动发布队列。
 
 若进入静态页/Image2 流水线，响应通常为：
@@ -498,6 +500,9 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.html_preview_url` | 已直接生成 HTML 时返回；浏览器 inline 预览地址 |
 | `reply.card.html_download_url` | 已直接生成 HTML 时返回；HTML 附件下载地址 |
 | `reply.card.generated_artifact_url` / `reply.card.public_url` | 已发布 generated-artifact 时返回；第三方优先把这个链接展示或转存 |
+| `reply.card.recipient_delivery` | 静态页分发辅助信息；包含 `can_create_recipient_specific_links`、`operator_external_user_id`、`target_external_user_ids`、识别到的角色范围和补充映射提示 |
+| `reply.card.permission_review_status` | 权限/分发映射状态：`provided_for_auto_configuration` 表示已传映射可自动配置；`needs_user_role_scope_mapping` 表示需要补充用户-角色-门店/区域范围；`role_requirements_detected` 表示只识别到角色要求 |
+| `reply.card.editable_after_publish` | `true` 表示最终页面生成后仍可继续让 V3 按人员、角色或门店范围调整并产出新的单独链接 |
 | `reply.card.status_url` | 生成中返回；第三方服务端用 `GET` 轮询该 URL，直到 `reply.reply_type=artifact_link` 或进入失败/取消状态 |
 | `reply.card.poll_after_seconds` | 建议轮询间隔；生成中通常为 `15`，重试中通常为 `30` |
 | `reply.card.demo_generated_artifact_publish` | `true` 表示固定 Codex 发布能力未启用时，V3 已用内置 HTML 生成并发布演示可访问页面 |
@@ -519,6 +524,9 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.artifact_links[0]` | 最终 V3 generated-artifact 页面链接，例如 `https://v3.elepcloud.com/generated-artifacts/.../index.html` |
 | `reply.card.type` | `v3_static_page_image2_publish_completed` |
 | `reply.card.codex_host_workflow_execution_id` | 固定发布任务 ID；初始响应为空时，会在最终事件中补齐 |
+| `reply.card.recipient_delivery` | 与生成中卡片一致；第三方可据此判断是否直接发送基础链接，或提示操作人员补充用户-角色-范围映射后再生成分权限链接 |
+| `reply.card.permission_review_status` | 与生成中卡片一致 |
+| `reply.card.editable_after_publish` | 与生成中卡片一致 |
 | `reply.card.validation_summary` | 口径摘要，如最新快照日期、源行数、明细行数、单位策略和告警；不会包含原始明细行或内部检索日志 |
 
 如果第三方使用 `assistant_run_id` 做轮询，推荐直接调用 3.4 的运行结果查询接口；返回仍是 2.1 的 `reply` 对象。固定发布完成后，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 就是最终页面链接。第三方不需要再针对 Image2 效果图做确认、下载或二次提交。

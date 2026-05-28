@@ -1073,6 +1073,7 @@ GET /users/{user_external_id}/memberships</code></pre>
   </figure>
 <p>兼容旧写法仍然有效：已接入第三方可以继续传 <code>render_mode: &quot;artifact&quot;</code>、<code>output_format: &quot;image_text&quot;</code>，模板 skill 可继续在 <code>requested_skills[].arguments.output_type</code> 中传 <code>static_page</code>。若同时传 <code>template</code> 和旧 skill，V3 会按模板文档去重。</p>
 <p>V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点。若服务端已完整启用 <code>static_page_image2_data_publish</code> 固定发布能力，V3 会把固定任务投递到配置好的 Cloudflare Codex 执行器，在效果图完成后继续自动生成并发布最终 generated-artifact 静态页；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact，本次回复优先返回 <code>reply.artifact_links[0]</code>、<code>reply.card.generated_artifact_url</code> / <code>reply.card.public_url</code>，同时兼容保留 <code>reply.card.render_output_id</code>、<code>reply.card.html_preview_url</code> 和 <code>reply.card.html_download_url</code>。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。</p>
+<p>静态页状态卡和最终发布卡会带 <code>reply.card.recipient_delivery</code>、<code>reply.card.permission_review_status</code> 和 <code>reply.card.editable_after_publish</code>。第三方操作人员可以先发送基础页面链接；若需要给总部、分店店总或指定人员发送不同权限口径的页面，继续传用户-角色-门店/区域范围映射，V3 可基于已生成页面继续调整并产出新的单独链接。</p>
 <p>第三方拿到 <code>assistant_run_id</code> 后，可以查询该运行的最新第三方回复：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>

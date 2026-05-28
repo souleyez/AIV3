@@ -1019,6 +1019,8 @@ V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，�
 
 V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点。若服务端已完整启用 `static_page_image2_data_publish` 固定发布能力，V3 会把固定任务投递到配置好的 Cloudflare Codex 执行器，在效果图完成后继续自动生成并发布最终 generated-artifact 静态页；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact，本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
 
+静态页状态卡和最终发布卡会带 `reply.card.recipient_delivery`、`reply.card.permission_review_status` 和 `reply.card.editable_after_publish`。第三方操作人员可以先发送基础页面链接；若需要给总部、分店店总或指定人员发送不同权限口径的页面，继续传用户-角色-门店/区域范围映射，V3 可基于已生成页面继续调整并产出新的单独链接。
+
 第三方拿到 `assistant_run_id` 后，可以查询该运行的最新第三方回复：
 
 ```http
