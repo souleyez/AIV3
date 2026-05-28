@@ -1341,8 +1341,8 @@ textarea {
 
 .static-page-notice-image img {
   width: 100%;
-  max-height: 280px;
-  object-fit: cover;
+  max-height: min(72vh, 760px);
+  object-fit: contain;
   border-radius: 16px;
   border: 1px solid rgba(37, 99, 235, 0.14);
   background: #f8fafc;
@@ -1868,7 +1868,7 @@ textarea {
 .static-page-preview-image-card img {
   display: block;
   width: 100%;
-  max-height: 380px;
+  max-height: min(72vh, 820px);
   object-fit: contain;
   background:
     radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.1), transparent 32%),

@@ -686,6 +686,30 @@ test('final render can start from generated preview without manual confirmation'
   assert.equal(rendering.finalPage.payload.previewImage.assetKey, 'preview-ready-1.png');
 });
 
+test('final render trusts backend ready image job over stale failed preview contract', () => {
+  const draft = makeDefaultStaticPageChartDataReady(buildInitialStaticPageDraft());
+  const recovered = {
+    ...draft,
+    status: 'preview_ready',
+    imageJob: {
+      id: 'job-recovered-1',
+      status: 'preview_ready',
+      queuePosition: null,
+      queueMessage: '',
+    },
+    previewImage: { assetKey: 'https://v3.elepcloud.com/generated-artifacts/static-page-previews/job-recovered-1/preview.png' },
+    previewContract: {
+      status: 'failed',
+      imageJobId: 'job-recovered-1',
+      assetKey: null,
+      failureReason: 'previous stale retry failed after preview was materialized',
+    },
+  };
+
+  assert.equal(canRequestStaticPageFinalRender(recovered), true);
+  assert.equal(staticPageFinalRenderBlockReason(recovered), '');
+});
+
 test('direct HTML render can start before preview confirmation when data is ready', () => {
   const draft = makeDefaultStaticPageChartDataReady(buildInitialStaticPageDraft());
   const rendered = applyStaticPageOperation(draft, {

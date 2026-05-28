@@ -1677,6 +1677,9 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
   const retryableFinalStatus = finalStatus === 'failed' || finalStatus === 'cancelled';
   const previewStatus = draft?.previewContract?.status || '';
   const imageJobStatus = draft?.imageJob?.status || '';
+  const effectivePreviewStatus = ['preview_ready', 'confirmed'].includes(imageJobStatus)
+    ? imageJobStatus
+    : previewStatus;
   const previewReady = previewStatus === 'preview_ready'
     || previewStatus === 'confirmed'
     || imageJobStatus === 'preview_ready'
@@ -1686,7 +1689,7 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
   if (!previewReady && !retryableFinalStatus) {
     return '先生成效果图，再按效果制作可交付静态页。';
   }
-  if (!['preview_ready', 'confirmed'].includes(previewStatus) && !retryableFinalStatus) {
+  if (!['preview_ready', 'confirmed'].includes(effectivePreviewStatus) && !retryableFinalStatus) {
     return '效果图状态未同步，请刷新或重新生成效果图。';
   }
   if (!draft?.previewImage?.assetKey && !draft?.previewContract?.assetKey) {
