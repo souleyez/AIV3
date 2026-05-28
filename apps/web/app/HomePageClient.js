@@ -746,6 +746,17 @@ function datasetIdsFromScope(scope) {
   );
 }
 
+function uiDatasetIdsFromBackendScope(scope) {
+  const policy = scope?.dataset_scope_policy
+    || scope?.datasetScopePolicy
+    || scope?.supply_policy?.candidatePolicy
+    || scope?.supplyPolicy?.candidatePolicy;
+  if (policy === 'all_visible_datasets_with_preselection_priority') {
+    return normalizeDatasetIds(scope?.preferred_dataset_ids || scope?.preferredDatasetIds || []);
+  }
+  return datasetIdsFromScope(scope);
+}
+
 function firstDatasetIdFromScope(scope) {
   return datasetIdsFromScope(scope)[0] || '';
 }
@@ -2672,7 +2683,10 @@ export default function HomePageClient() {
     });
     setScopePlan(nextScopePlan);
     const plannedDatasetIds = selectPlannerDatasetIds(nextScopePlan);
-    const effectiveDatasetIds = normalizeDatasetIds([...selectedDatasetIds, ...plannedDatasetIds]);
+    const currentSelectedDatasetIds = normalizeDatasetIds(selectedDatasetIds);
+    const effectiveDatasetIds = currentSelectedDatasetIds.length
+      ? currentSelectedDatasetIds
+      : plannedDatasetIds;
     const effectiveDatasets = effectiveDatasetIds
       .map((datasetId) => datasets.find((dataset) => dataset.id === datasetId))
       .filter(Boolean);
@@ -2764,9 +2778,12 @@ export default function HomePageClient() {
               hint: scopeHintFromCandidates(backendCandidates),
             });
           }
+          const backendCandidateDatasetIds = currentSelectedDatasetIds.length
+            ? []
+            : selectPlannerDatasetIds({ candidates: backendCandidates });
           const backendDatasetIds = normalizeDatasetIds([
-            ...datasetIdsFromScope(responsePayload?.selected_scope),
-            ...selectPlannerDatasetIds({ candidates: backendCandidates }),
+            ...uiDatasetIdsFromBackendScope(responsePayload?.selected_scope),
+            ...backendCandidateDatasetIds,
           ]);
           if (backendDatasetIds.length) {
             setSelectedDatasetIds((current) => normalizeDatasetIds([...current, ...backendDatasetIds]));
