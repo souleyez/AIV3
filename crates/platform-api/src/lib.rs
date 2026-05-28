@@ -160,8 +160,8 @@ use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
 };
 use uuid::Uuid;
-use zip::ZipArchive;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
+use zip::ZipArchive;
 
 pub mod auth_email;
 pub mod external_feishu;
@@ -11987,7 +11987,7 @@ async fn create_external_source_sync(
     )
     .await?;
 
-    let response = enqueue_external_source_sync_for_source(&state, source, request).await?;
+    let response = enqueue_external_source_sync_for_source(&state, source, request, None).await?;
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
@@ -12199,13 +12199,14 @@ async fn enqueue_external_source_sync(
     request: CreateExternalSourceSyncRequest,
 ) -> std::result::Result<CreateExternalSourceSyncResponse, ApiError> {
     let source = load_external_source_connection(state, source_id).await?;
-    enqueue_external_source_sync_for_source(state, source, request).await
+    enqueue_external_source_sync_for_source(state, source, request, None).await
 }
 
 async fn enqueue_external_source_sync_for_source(
     state: &AppState,
     source: ExternalSourceConnectionSummary,
     request: CreateExternalSourceSyncRequest,
+    owner_user_id: Option<UserId>,
 ) -> std::result::Result<CreateExternalSourceSyncResponse, ApiError> {
     if source.disabled_at.is_some() {
         return Err(ApiError::forbidden(
@@ -12242,6 +12243,7 @@ async fn enqueue_external_source_sync_for_source(
         sync_run_id,
         &sync_kind,
         request.dataset_id,
+        owner_user_id,
         &checkpoint,
         &connector_context,
     )?;
@@ -12310,6 +12312,13 @@ async fn create_external_document_parse(
         &source,
         &active_secret_binding_ids,
         current_user_id,
+    )
+    .await?;
+    claim_legacy_public_external_document_duplicates(
+        &state,
+        &source_id,
+        &request.document_external_id,
+        external_system_user.id,
     )
     .await?;
 
@@ -12437,6 +12446,12 @@ async fn resolve_external_document_parse_dataset(
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
 ) -> std::result::Result<ResolvedExternalDocumentParseDataset, ApiError> {
+    let owner_user_id = current_user_id.ok_or_else(|| {
+        ApiError::internal(
+            "external_owner_missing",
+            "external document parse requires a system owner".to_string(),
+        )
+    })?;
     let requested_dataset_external_id = trim_optional(request.dataset_external_id.clone());
     let dataset_external_id = effective_external_document_parse_dataset_external_id(
         requested_dataset_external_id.as_deref(),
@@ -12449,6 +12464,9 @@ async fn resolve_external_document_parse_dataset(
             current_user_id,
         )
         .await?;
+        let dataset =
+            harden_external_owned_dataset(state, dataset, owner_user_id, "external_document_parse")
+                .await?;
         return Ok(ResolvedExternalDocumentParseDataset {
             requested_dataset_key: dataset.key.clone(),
             dataset,
@@ -12470,6 +12488,9 @@ async fn resolve_external_document_parse_dataset(
         .into_iter()
         .find(|dataset| dataset.key == requested_dataset_key);
     if let Some(dataset) = existing {
+        let dataset =
+            harden_external_owned_dataset(state, dataset, owner_user_id, "external_document_parse")
+                .await?;
         return Ok(ResolvedExternalDocumentParseDataset {
             dataset,
             dataset_external_id,
@@ -12492,10 +12513,10 @@ async fn resolve_external_document_parse_dataset(
                     "Auto-created for external source {} document parsing.",
                     source.source_id
                 )),
-                owner_user_id: current_user_id,
+                owner_user_id: Some(owner_user_id),
             },
             json!({
-                "visibility": DatasetVisibility::Public.as_str(),
+                "visibility": DatasetVisibility::Private.as_str(),
                 "default_secret_binding_ids": [],
                 "external_source": {
                     "source_id": source.source_id.clone(),
@@ -12519,6 +12540,62 @@ async fn resolve_external_document_parse_dataset(
         resolution_mode: "source_dataset_created",
         auto_created: true,
     })
+}
+
+async fn harden_external_owned_dataset(
+    state: &AppState,
+    mut dataset: Dataset,
+    owner_user_id: UserId,
+    reason: &str,
+) -> std::result::Result<Dataset, ApiError> {
+    if let Some(existing_owner_user_id) = dataset.owner_user_id {
+        if existing_owner_user_id != owner_user_id {
+            return Err(ApiError::forbidden(
+                "external_dataset_owner_mismatch",
+                format!(
+                    "dataset {} belongs to another account and cannot be used by this external integration",
+                    dataset.id
+                ),
+            ));
+        }
+    } else {
+        dataset = state
+            .storage
+            .datasets()
+            .update_owner_user_id(state.tenant_id, dataset.id, owner_user_id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .ok_or_else(|| {
+                ApiError::forbidden(
+                    "external_dataset_owner_mismatch",
+                    format!(
+                        "dataset {} belongs to another account and cannot be claimed by this external integration",
+                        dataset.id
+                    ),
+                )
+            })?;
+    }
+
+    if dataset.visibility != DatasetVisibility::Private {
+        dataset = state
+            .storage
+            .datasets()
+            .update_metadata(
+                state.tenant_id,
+                dataset.id,
+                &json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "external_privacy": {
+                        "hardened_at": Utc::now(),
+                        "reason": reason,
+                    }
+                }),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+
+    Ok(dataset)
 }
 
 fn effective_external_document_parse_dataset_external_id(value: Option<&str>) -> Option<String> {
@@ -12610,6 +12687,7 @@ async fn get_external_document_parse_detail(
     let connection = load_external_channel_connection(&state, &connection_id).await?;
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     ensure_external_channel_enabled(&connection_id, &connection)?;
+    let external_system_user = ensure_external_channel_system_user(&state, &connection_id).await?;
 
     let source_id = query
         .get("source_id")
@@ -12679,6 +12757,8 @@ async fn get_external_document_parse_detail(
             }
         }
     }
+
+    documents = claim_external_owned_documents(&state, documents, external_system_user.id).await?;
 
     let mut details = Vec::new();
     for document in documents {
@@ -12810,7 +12890,9 @@ async fn update_external_document_dataset(
 
     let mut previous_dataset_ids = BTreeSet::new();
     let mut moved_documents = Vec::new();
-    for document in documents {
+    for document in
+        claim_external_owned_documents(&state, documents, external_system_user.id).await?
+    {
         previous_dataset_ids.insert(document.dataset_id);
         let metadata_updates = external_document_dataset_move_metadata(
             &document,
@@ -12831,6 +12913,12 @@ async fn update_external_document_dataset(
             .await
             .map_err(ApiError::from_storage)?;
         moved_documents.push(to_external_document_parse_document_view(updated));
+    }
+    if moved_documents.is_empty() {
+        return Err(ApiError::not_found(
+            "external_document_not_found",
+            format!("external document {document_external_id} was not found"),
+        ));
     }
     moved_documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
@@ -13560,6 +13648,63 @@ async fn find_external_documents_by_external_id(
             )
         })
         .collect())
+}
+
+async fn claim_legacy_public_external_document_duplicates(
+    state: &AppState,
+    source_id: &str,
+    document_external_id: &str,
+    owner_user_id: UserId,
+) -> std::result::Result<usize, ApiError> {
+    let documents =
+        find_external_documents_by_external_id(state, source_id, document_external_id, None)
+            .await?;
+    let mut claimed = 0usize;
+    for document in documents {
+        if document.owner_user_id.is_some() {
+            continue;
+        }
+        if state
+            .storage
+            .documents()
+            .update_owner_user_id(state.tenant_id, document.id, owner_user_id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .is_some()
+        {
+            claimed += 1;
+        }
+    }
+    Ok(claimed)
+}
+
+async fn claim_external_owned_documents(
+    state: &AppState,
+    documents: Vec<Document>,
+    owner_user_id: UserId,
+) -> std::result::Result<Vec<Document>, ApiError> {
+    let mut scoped_documents = Vec::with_capacity(documents.len());
+    for document in documents {
+        if document
+            .owner_user_id
+            .is_some_and(|existing_owner| existing_owner != owner_user_id)
+        {
+            continue;
+        }
+        let document = if document.owner_user_id.is_none() {
+            state
+                .storage
+                .documents()
+                .update_owner_user_id(state.tenant_id, document.id, owner_user_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .unwrap_or(document)
+        } else {
+            document
+        };
+        scoped_documents.push(document);
+    }
+    Ok(scoped_documents)
 }
 
 async fn find_external_documents_by_dataset_external_id(
@@ -18949,6 +19094,8 @@ async fn enrich_external_channel_document_scope(
     message: &ExternalBotMessageView,
     selected_scope: &mut Value,
 ) -> std::result::Result<(), ApiError> {
+    let external_system_user = ensure_external_channel_system_user(state, connection_id).await?;
+    let external_owner_user_id = external_system_user.id;
     let mut requested_external_ids = Vec::new();
     for raw in &message.available_document_external_ids {
         if let Some(value) = non_empty_trimmed_string(raw) {
@@ -19049,6 +19196,7 @@ async fn enrich_external_channel_document_scope(
                 state,
                 connection_id,
                 message,
+                external_owner_user_id,
                 &source_id,
                 &dataset_external_id_pairs,
                 &requested_external_ids,
@@ -19085,8 +19233,13 @@ async fn enrich_external_channel_document_scope(
             if explicit_source_id.is_some()
                 && external_channel_source_document_scope_enabled(&connection.config_redacted)
             {
-                enrich_external_channel_source_document_scope(state, &source_id, selected_scope)
-                    .await?;
+                enrich_external_channel_source_document_scope(
+                    state,
+                    &source_id,
+                    external_owner_user_id,
+                    selected_scope,
+                )
+                .await?;
             }
         }
         return Ok(());
@@ -19129,6 +19282,8 @@ async fn enrich_external_channel_document_scope(
     for external_id in &requested_external_ids {
         let mut candidates =
             find_external_documents_by_external_id(state, &source_id, external_id, None).await?;
+        candidates =
+            claim_external_owned_documents(state, candidates, external_owner_user_id).await?;
         candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         if let Some(document) = candidates.into_iter().next() {
             if !selected_datasets
@@ -19330,6 +19485,7 @@ fn set_external_channel_document_scope_missing_documents(
 async fn enrich_external_channel_source_document_scope(
     state: &AppState,
     source_id: &str,
+    owner_user_id: UserId,
     selected_scope: &mut Value,
 ) -> std::result::Result<(), ApiError> {
     let mut documents = state
@@ -19341,6 +19497,7 @@ async fn enrich_external_channel_source_document_scope(
         .into_iter()
         .filter(|document| external_document_source_matches(&document.metadata, source_id, None))
         .collect::<Vec<_>>();
+    documents = claim_external_owned_documents(state, documents, owner_user_id).await?;
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
     let mut dataset_ids = Vec::new();
@@ -19409,6 +19566,7 @@ async fn enrich_external_channel_dataset_documents_scope(
     state: &AppState,
     connection_id: &str,
     message: &ExternalBotMessageView,
+    owner_user_id: UserId,
     source_id: &str,
     dataset_external_id_pairs: &[(String, String)],
     requested_document_external_ids: &[String],
@@ -19421,6 +19579,7 @@ async fn enrich_external_channel_dataset_documents_scope(
                 .await?,
         );
     }
+    documents = claim_external_owned_documents(state, documents, owner_user_id).await?;
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
     set_payload_value(
@@ -19472,6 +19631,7 @@ async fn enrich_external_channel_dataset_documents_scope(
         }
         let mut candidates =
             find_external_documents_by_external_id(state, source_id, external_id, None).await?;
+        candidates = claim_external_owned_documents(state, candidates, owner_user_id).await?;
         candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         let Some(document) = candidates.into_iter().next() else {
             unresolved_external_ids.push(external_id.clone());
@@ -34729,6 +34889,7 @@ async fn sync_data_ingestion_staging_plan_for_run(
             checkpoint,
             connector_context,
         },
+        None,
     )
     .await?;
     let payload = json!({
@@ -49977,12 +50138,7 @@ async fn get_document_detail(
         local_thread_id.as_deref(),
     )
     .await?;
-    detail.document = hydrate_document_summary_dataset_ids(
-        &state,
-        detail.document,
-        None,
-    )
-    .await?;
+    detail.document = hydrate_document_summary_dataset_ids(&state, detail.document, None).await?;
     Ok(Json(detail))
 }
 
@@ -50373,8 +50529,8 @@ async fn create_zip_archive_child_ingests(
         child_documents.push(child_document);
     }
 
-    let child_document_views = to_document_summaries_with_dataset_ids(state, child_documents, None)
-        .await?;
+    let child_document_views =
+        to_document_summaries_with_dataset_ids(state, child_documents, None).await?;
     let parent_metadata = json!({
         "parse_status": "zip_expanded",
         "ingest": {
@@ -50405,15 +50561,12 @@ async fn create_zip_archive_child_ingests(
 
     Ok(CreateDocumentIngestResponse {
         document: to_document_summary(updated_parent),
-        workflow_execution: child_workflow_executions
-            .first()
-            .cloned()
-            .ok_or_else(|| {
-                ApiError::internal(
-                    "zip_archive_ingest_missing_child_workflow",
-                    "zip archive expansion did not create child workflows".to_string(),
-                )
-            })?,
+        workflow_execution: child_workflow_executions.first().cloned().ok_or_else(|| {
+            ApiError::internal(
+                "zip_archive_ingest_missing_child_workflow",
+                "zip archive expansion did not create child workflows".to_string(),
+            )
+        })?,
         child_documents: child_document_views.clone(),
         child_documents_camel: child_document_views,
         child_workflow_executions: child_workflow_executions.clone(),
@@ -50459,8 +50612,7 @@ fn expand_zip_document_to_local_files(
     })?;
 
     let max_entries = zip_ingest_env_usize("ZIP_INGEST_MAX_ENTRIES", 80).clamp(1, 500);
-    let max_entry_bytes =
-        zip_ingest_env_u64("ZIP_INGEST_MAX_ENTRY_BYTES", 80 * 1024 * 1024).max(1);
+    let max_entry_bytes = zip_ingest_env_u64("ZIP_INGEST_MAX_ENTRY_BYTES", 80 * 1024 * 1024).max(1);
     let max_total_bytes =
         zip_ingest_env_u64("ZIP_INGEST_MAX_TOTAL_BYTES", 300 * 1024 * 1024).max(1);
     let output_root = zip_child_output_root(&path, document)?;
@@ -50520,12 +50672,13 @@ fn expand_zip_document_to_local_files(
                 format!("failed to create extracted zip entry: {error}"),
             )
         })?;
-        let copied = std::io::copy(&mut file.take(max_entry_bytes + 1), &mut output).map_err(|error| {
-            ApiError::internal(
-                "zip_archive_expand_failed",
-                format!("failed to write extracted zip entry: {error}"),
-            )
-        })?;
+        let copied =
+            std::io::copy(&mut file.take(max_entry_bytes + 1), &mut output).map_err(|error| {
+                ApiError::internal(
+                    "zip_archive_expand_failed",
+                    format!("failed to write extracted zip entry: {error}"),
+                )
+            })?;
         output.flush().map_err(|error| {
             ApiError::internal(
                 "zip_archive_expand_failed",
@@ -50586,7 +50739,9 @@ fn zip_child_output_root(
     let base = zip_path
         .parent()
         .map(StdPath::to_path_buf)
-        .unwrap_or_else(|| external_document_object_root().unwrap_or_else(|_| std::env::temp_dir()));
+        .unwrap_or_else(|| {
+            external_document_object_root().unwrap_or_else(|_| std::env::temp_dir())
+        });
     Ok(base
         .join("_zip_extracted")
         .join(safe_external_path_segment(&document.id.to_string())))
@@ -50677,7 +50832,9 @@ fn infer_zip_child_content_type(extension: &str) -> &'static str {
         ".doc" => "application/msword",
         ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".xlsx" | ".xlsm" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".pptx" | ".pptm" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".pptx" | ".pptm" => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
         ".png" => "image/png",
         ".jpg" | ".jpeg" => "image/jpeg",
         ".webp" => "image/webp",
@@ -52319,6 +52476,7 @@ fn build_initial_external_source_sync_execution(
     sync_run_id: Uuid,
     sync_kind: &str,
     dataset_id: Option<DatasetId>,
+    owner_user_id: Option<UserId>,
     checkpoint: &Value,
     connector_context: &Value,
 ) -> std::result::Result<WorkflowExecution, ApiError> {
@@ -52377,6 +52535,12 @@ fn build_initial_external_source_sync_execution(
         context.insert(
             "dataset_id".to_string(),
             Value::String(dataset_id.to_string()),
+        );
+    }
+    if let Some(owner_user_id) = owner_user_id {
+        context.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner_user_id.to_string()),
         );
     }
 
@@ -84057,7 +84221,9 @@ retrieve_evidence:
         assert!(input.contains("必须直接回答用户问题"));
         assert!(input.contains("外部通道供料表达要求"));
         assert!(input.contains("优先把相关证据整理成可执行结论、步骤、表格或清单"));
-        assert!(input.contains("不要把“当前可见”“暂未直接检索到”“资料不足”“建议补充资料”放在答案开头"));
+        assert!(
+            input.contains("不要把“当前可见”“暂未直接检索到”“资料不足”“建议补充资料”放在答案开头")
+        );
         assert!(input.contains("必须区分“文档明文规定”和“按相关章节/通用规范整理的可参考流程”"));
         assert!(input.contains(
             "禁止把“已收到/处理中/稍后为您分析/系统将结合知识库与数据源/为您输出结论”当作最终答案"
@@ -95896,7 +96062,6 @@ retrieve_evidence:
         .execute(state.storage.pool())
         .await
         .expect("external source connection should be inserted");
-
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let url = format!(
             "http://{}/doc-alpha.md",
@@ -96116,6 +96281,42 @@ retrieve_evidence:
         .execute(state.storage.pool())
         .await
         .expect("external source connection should be inserted");
+        let legacy_public_dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("legacy-public-external-docs-{}", Uuid::new_v4()),
+                    title: "Legacy Public External Docs".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("legacy public dataset should be created");
+        let legacy_public_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: legacy_public_dataset.id,
+                    title: "Legacy public duplicate".to_string(),
+                    object_key: "legacy/doc-auto.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-auto-docs",
+                            "document_external_id": "doc-auto"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("legacy public duplicate should be created");
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let url = format!(
@@ -96181,6 +96382,7 @@ retrieve_evidence:
             "external-source-src-auto-docs-dataset-third-party-main"
         );
         assert_eq!(created_dataset.title, "Third-party Main Docs");
+        assert_eq!(created_dataset.visibility, DatasetVisibility::Private);
         let owner_user_id = created_dataset
             .owner_user_id
             .expect("external parse dataset should belong to the third-party system user");
@@ -96228,6 +96430,14 @@ retrieve_evidence:
             external_source.get("dataset_key").and_then(Value::as_str),
             Some("external-source-src-auto-docs-dataset-third-party-main")
         );
+        let claimed_legacy_document = state
+            .storage
+            .documents()
+            .get_by_id(state.tenant_id, legacy_public_document.id)
+            .await
+            .expect("legacy public duplicate lookup should succeed")
+            .expect("legacy public duplicate should remain");
+        assert_eq!(claimed_legacy_document.owner_user_id, Some(owner_user_id));
         let dataset_resolution = document
             .metadata
             .get("external_document_parse")
@@ -96273,7 +96483,7 @@ retrieve_evidence:
             },
             &source,
             &[],
-            None,
+            Some(owner_user_id),
         )
         .await
         .expect("source dataset should be reused");
@@ -101566,6 +101776,113 @@ retrieve_evidence:
             .await
             .expect("dataset membership ids should list");
         assert_eq!(dataset_ids, vec![secondary_dataset.id]);
+    }
+
+    #[tokio::test]
+    async fn document_dataset_membership_endpoints_allow_main_site_public_document_moves() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping document dataset membership endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("membership-endpoint-test-{}", Uuid::new_v4()),
+                "Membership Endpoint Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let canonical_dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("membership-canonical-{}", Uuid::new_v4()),
+                    title: "Membership Canonical".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("canonical dataset should be created");
+        let secondary_dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("membership-secondary-{}", Uuid::new_v4()),
+                    title: "Membership Secondary".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("secondary dataset should be created");
+        let document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: canonical_dataset.id,
+                    title: "Membership Editable Document".to_string(),
+                    object_key: "documents/membership-editable.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let Json(added) = add_document_dataset_membership(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path((document.id.to_string(), secondary_dataset.id.to_string())),
+        )
+        .await
+        .expect("public document should join a second public dataset");
+        assert_eq!(
+            added.dataset_ids,
+            vec![canonical_dataset.id, secondary_dataset.id]
+        );
+
+        let Json(removed_secondary) = remove_document_dataset_membership(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path((document.id.to_string(), secondary_dataset.id.to_string())),
+        )
+        .await
+        .expect("public document should leave the secondary dataset");
+        assert_eq!(removed_secondary.dataset_ids, vec![canonical_dataset.id]);
+
+        let _ = add_document_dataset_membership(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path((document.id.to_string(), secondary_dataset.id.to_string())),
+        )
+        .await
+        .expect("public document should rejoin the secondary dataset");
+        let Json(promoted) = remove_document_dataset_membership(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path((document.id.to_string(), canonical_dataset.id.to_string())),
+        )
+        .await
+        .expect("public document should leave its canonical dataset when another dataset remains");
+        assert_eq!(promoted.canonical_dataset_id, secondary_dataset.id);
+        assert_eq!(promoted.dataset_ids, vec![secondary_dataset.id]);
     }
 
     #[tokio::test]

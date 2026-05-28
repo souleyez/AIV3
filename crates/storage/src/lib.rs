@@ -1850,6 +1850,32 @@ impl PgDocumentRepository {
 
         map_document_row(&row)
     }
+
+    pub async fn update_owner_user_id(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+        owner_user_id: UserId,
+    ) -> Result<Option<Document>> {
+        let row = sqlx::query(
+            r#"
+            update documents
+            set owner_user_id = $3,
+                updated_at = now()
+            where tenant_id = $1
+              and id = $2
+              and (owner_user_id is null or owner_user_id = $3)
+            returning id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_id.0)
+        .bind(owner_user_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_document_row).transpose()
+    }
 }
 
 impl PgDatasetDocumentMembershipRepository {

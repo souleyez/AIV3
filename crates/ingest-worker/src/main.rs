@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use domain_model::{Document, DocumentLifecycle, WorkflowStatus, WorkflowTask};
+use domain_model::{Document, DocumentLifecycle, UserId, WorkflowStatus, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventEnvelope, EventSubscription};
 use ingest_worker::{
     split_text_chunks, split_text_paragraphs, IngestJob, IngestOutcome, IngestProcessor,
@@ -679,6 +679,7 @@ async fn process_external_source_ingest_task(
         Some(sync_run_id) => Some(sync_run_id),
         None => context_string(&task.payload, "external_sync_run_id")?,
     };
+    let owner_user_id = context_user_id(&execution.context, "owner_user_id")?;
     let documents = external_source_documents_from_context(&execution.context, &task.payload)?;
 
     let process_result: Result<Value> = async {
@@ -692,6 +693,7 @@ async fn process_external_source_ingest_task(
                 dataset_id,
                 &source_id,
                 sync_run_id.as_deref(),
+                owner_user_id,
                 &input,
             )
             .await?;
@@ -932,11 +934,56 @@ async fn upsert_external_source_document(
     dataset_id: domain_model::DatasetId,
     source_id: &str,
     sync_run_id: Option<&str>,
+    owner_user_id: Option<UserId>,
     input: &ExternalSourceDocumentInput,
 ) -> Result<Document> {
+    if let Some(owner_user_id) = owner_user_id {
+        claim_legacy_public_external_source_documents(
+            storage,
+            tenant_id,
+            source_id,
+            &input.document_external_id,
+            owner_user_id,
+        )
+        .await?;
+    }
     if let Some(document) =
         find_external_source_document(storage, tenant_id, dataset_id, source_id, input).await?
     {
+        if let Some(owner_user_id) = owner_user_id {
+            if document
+                .owner_user_id
+                .is_some_and(|existing_owner| existing_owner != owner_user_id)
+            {
+                return storage
+                    .documents()
+                    .create(
+                        tenant_id,
+                        NewDocument {
+                            dataset_id,
+                            title: input.title.clone(),
+                            object_key: external_source_object_key(source_id, input),
+                            content_type: input.content_type.clone(),
+                            secret_binding_ids: Vec::new(),
+                            owner_user_id: Some(owner_user_id),
+                            metadata: json!({
+                                "external_source": external_source_ref(source_id, sync_run_id, input),
+                                "external_metadata": input.metadata.clone(),
+                            }),
+                        },
+                    )
+                    .await;
+            }
+            if document.owner_user_id.is_none() {
+                if let Some(claimed) = storage
+                    .documents()
+                    .update_owner_user_id(tenant_id, document.id, owner_user_id)
+                    .await?
+                {
+                    return Ok(claimed);
+                }
+            }
+        }
         return Ok(document);
     }
 
@@ -950,7 +997,7 @@ async fn upsert_external_source_document(
                 object_key: external_source_object_key(source_id, input),
                 content_type: input.content_type.clone(),
                 secret_binding_ids: Vec::new(),
-                owner_user_id: None,
+                owner_user_id,
                 metadata: json!({
                     "external_source": external_source_ref(source_id, sync_run_id, input),
                     "external_metadata": input.metadata.clone(),
@@ -958,6 +1005,43 @@ async fn upsert_external_source_document(
             },
         )
         .await
+}
+
+async fn claim_legacy_public_external_source_documents(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    source_id: &str,
+    document_external_id: &str,
+    owner_user_id: UserId,
+) -> Result<usize> {
+    let documents = storage.documents().list_by_tenant(tenant_id).await?;
+    let mut claimed = 0usize;
+    for document in documents {
+        if document.owner_user_id.is_some() {
+            continue;
+        }
+        let matches = document
+            .metadata
+            .get("external_source")
+            .and_then(Value::as_object)
+            .is_some_and(|metadata| {
+                metadata.get("source_id").and_then(Value::as_str) == Some(source_id)
+                    && metadata.get("document_external_id").and_then(Value::as_str)
+                        == Some(document_external_id)
+            });
+        if !matches {
+            continue;
+        }
+        if storage
+            .documents()
+            .update_owner_user_id(tenant_id, document.id, owner_user_id)
+            .await?
+            .is_some()
+        {
+            claimed += 1;
+        }
+    }
+    Ok(claimed)
 }
 
 async fn find_external_source_document(
@@ -1252,6 +1336,16 @@ fn context_string(value: &Value, key: &str) -> Result<Option<String>> {
         Value::Null => Ok(None),
         _ => Err(anyhow!("workflow execution context must be a JSON object")),
     }
+}
+
+fn context_user_id(value: &Value, key: &str) -> Result<Option<UserId>> {
+    let Some(raw) = context_string(value, key)? else {
+        return Ok(None);
+    };
+    let parsed = uuid::Uuid::parse_str(&raw).map_err(|error| {
+        anyhow!("workflow execution context {key} is not a valid user id: {error}")
+    })?;
+    Ok(Some(UserId(parsed)))
 }
 
 fn external_source_ref(
