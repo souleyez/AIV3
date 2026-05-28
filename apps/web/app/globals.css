@@ -4523,6 +4523,65 @@ body {
   font-size: 12px;
 }
 
+.directory-batch-hint {
+  margin-left: auto;
+  color: #6ee7b7;
+}
+
+.directory-membership-editor {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12);
+}
+
+.directory-membership-editor > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.directory-membership-editor strong {
+  color: #f8fbff;
+  font-size: 13px;
+}
+
+.directory-membership-editor span {
+  color: #9aa7b9;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.directory-membership-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.directory-membership-chip {
+  display: grid;
+  gap: 4px;
+  min-height: 62px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(10, 15, 22, 0.28);
+  color: inherit;
+  text-align: left;
+}
+
+.directory-membership-chip.active {
+  border-color: rgba(45, 212, 191, 0.42);
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.22), rgba(37, 99, 235, 0.12));
+}
+
+.directory-membership-chip:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .directory-empty {
   padding: 14px;
   border-radius: 16px;

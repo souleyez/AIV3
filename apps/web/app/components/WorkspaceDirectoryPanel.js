@@ -92,6 +92,44 @@ function MiniMetric({ label, value }) {
   );
 }
 
+function DocumentMembershipEditor({
+  datasets,
+  document,
+  busy,
+  onToggleDocumentDatasetMembership,
+}) {
+  if (!document?.id) {
+    return null;
+  }
+  const activeIds = new Set(documentDatasetIds(document));
+  return (
+    <section className="directory-membership-editor">
+      <div>
+        <strong>文档归属数据集</strong>
+        <span>当前编辑：{document.title || '当前文档'}。点击数据集即可加入或移出。</span>
+      </div>
+      <div className="directory-membership-grid">
+        {datasets.map((dataset) => {
+          const active = activeIds.has(dataset.id);
+          return (
+            <button
+              key={dataset.id}
+              type="button"
+              className={`directory-membership-chip ${active ? 'active' : ''}`.trim()}
+              aria-pressed={active}
+              disabled={Boolean(busy)}
+              onClick={() => onToggleDocumentDatasetMembership?.(dataset.id)}
+            >
+              <strong>{dataset.title}</strong>
+              <span>{active ? '已加入，点击移出' : '未加入，点击加入'}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function DatabaseSourcePanel({ datasets }) {
   const [sources, setSources] = useState([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
@@ -412,6 +450,7 @@ function DatasetsPage({
   datasetActionBusy,
   onArchiveDocuments,
   documentActionBusy,
+  onToggleDocumentDatasetMembership,
 }) {
   const selectedIdSet = new Set(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []);
   const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
@@ -426,6 +465,7 @@ function DatasetsPage({
   });
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
   const [datasetTitleDraft, setDatasetTitleDraft] = useState('');
+  const selectedDocument = documents.find((document) => document.id === selectedDocumentId) || null;
 
   useEffect(() => {
     setDatasetTitleDraft(selectedDataset?.title || '');
@@ -554,7 +594,9 @@ function DatasetsPage({
         />
         <div className="directory-batch-bar">
           <span>{documentsLoading ? '同步文档中...' : `当前 ${filteredDocuments.length} 个文档`}</span>
-          <button type="button" className="ghost-btn compact-action-btn" disabled>批量归类</button>
+          <span className="directory-batch-hint">
+            {selectedDocument ? '下方可直接编辑当前文档归属' : '勾选文档后可编辑归属'}
+          </span>
           <button
             type="button"
             className="ghost-btn compact-action-btn danger-action"
@@ -567,6 +609,12 @@ function DatasetsPage({
             归档 {selectedDocumentIds.length || ''}
           </button>
         </div>
+        <DocumentMembershipEditor
+          datasets={datasets}
+          document={selectedDocument}
+          busy={documentActionBusy}
+          onToggleDocumentDatasetMembership={onToggleDocumentDatasetMembership}
+        />
         <div className="directory-document-list">
           {filteredDocuments.length ? filteredDocuments.map((document) => (
             <article
@@ -605,6 +653,7 @@ function DocumentDetailPage({
   onUpdateDocument,
   onArchiveDocuments,
   documentActionBusy,
+  onToggleDocumentDatasetMembership,
 }) {
   const {
     orderedChunks,
@@ -750,6 +799,13 @@ function DocumentDetailPage({
                 </div>
               </form>
             </section>
+
+            <DocumentMembershipEditor
+              datasets={datasets}
+              document={selectedDocument}
+              busy={documentActionBusy}
+              onToggleDocumentDatasetMembership={onToggleDocumentDatasetMembership}
+            />
 
             <section className="directory-card">
               <div className="directory-section-head">
@@ -970,6 +1026,7 @@ export default function WorkspaceDirectoryPanel({
   onUpdateDocument,
   onArchiveDocuments,
   documentActionBusy,
+  onToggleDocumentDatasetMembership,
   stats,
   accountStatusSummary,
   activityEvents,
@@ -1008,6 +1065,7 @@ export default function WorkspaceDirectoryPanel({
           datasetActionBusy={datasetActionBusy}
           onArchiveDocuments={onArchiveDocuments}
           documentActionBusy={documentActionBusy}
+          onToggleDocumentDatasetMembership={onToggleDocumentDatasetMembership}
         />
       ) : null}
       {activePage === 'document-detail' ? (
@@ -1022,6 +1080,7 @@ export default function WorkspaceDirectoryPanel({
           onUpdateDocument={onUpdateDocument}
           onArchiveDocuments={onArchiveDocuments}
           documentActionBusy={documentActionBusy}
+          onToggleDocumentDatasetMembership={onToggleDocumentDatasetMembership}
         />
       ) : null}
       {activePage === 'sources' ? <SourcesPage documents={documents} datasets={datasets} /> : null}

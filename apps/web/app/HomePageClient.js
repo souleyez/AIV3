@@ -4129,6 +4129,7 @@ export default function HomePageClient() {
     onUpdateDocument: handleUpdateDocument,
     onArchiveDocuments: handleArchiveDocuments,
     documentActionBusy,
+    onToggleDocumentDatasetMembership: handleToggleDocumentDatasetMembership,
     stats,
     accountStatusSummary,
     activityEvents,
