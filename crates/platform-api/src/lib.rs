@@ -28617,6 +28617,10 @@ fn build_assistant_run_provider_input_with_evidence(
             "外部通道直答合同：本次输出会同步返回给第三方用户，必须直接回答用户问题；禁止把“已收到/处理中/稍后为您分析/系统将结合知识库与数据源/为您输出结论”当作最终答案。若文档未解析、不可见或供料不足，请直接说明当前可见状态和下一步，而不是承诺稍后输出。"
                 .to_string(),
         );
+        sections.push(
+            "外部通道供料表达要求：如果已经收到文档、检索切片、事实快照或会话范围供料，优先把相关证据整理成可执行结论、步骤、表格或清单；不要把“当前可见”“暂未直接检索到”“资料不足”“建议补充资料”放在答案开头。只有完全没有相关供料、或确实只能确认文档未就绪/不可见时，才用缺资料说明，并给出最短下一步。"
+                .to_string(),
+        );
     }
     sections.extend(assistant_run_v3_awareness_lines());
     if let Some(answer_policy) = assistant_run_request_external_answer_policy(request) {
@@ -83342,6 +83346,9 @@ retrieve_evidence:
 
         assert!(input.contains("外部通道直答合同"));
         assert!(input.contains("必须直接回答用户问题"));
+        assert!(input.contains("外部通道供料表达要求"));
+        assert!(input.contains("优先把相关证据整理成可执行结论、步骤、表格或清单"));
+        assert!(input.contains("不要把“当前可见”“暂未直接检索到”“资料不足”“建议补充资料”放在答案开头"));
         assert!(input.contains(
             "禁止把“已收到/处理中/稍后为您分析/系统将结合知识库与数据源/为您输出结论”当作最终答案"
         ));
@@ -83421,6 +83428,8 @@ retrieve_evidence:
 
         assert!(input.contains("外部通道直答合同"));
         assert!(input.contains("必须直接回答用户问题"));
+        assert!(input.contains("外部通道供料表达要求"));
+        assert!(input.contains("只有完全没有相关供料"));
         assert!(input.contains("禁止把"));
         assert!(input.contains("已收到/处理中/稍后为您分析"));
         assert!(input.contains("系统将结合知识库与数据源"));

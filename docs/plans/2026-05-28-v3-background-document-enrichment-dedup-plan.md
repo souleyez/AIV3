@@ -1,0 +1,368 @@
+# V3 Background Document Enrichment And Dedup Implementation Plan
+
+This plan is a living document. Update the checkboxes as work lands.
+
+## Goal
+
+Make document understanding a background capability of V3 instead of a one-shot parse result:
+
+- After a document enters the system, keep enriching its parsed content during idle time.
+- Reuse parsed content for identical files across datasets and local/third-party uploads.
+- Preserve existing external interfaces, URLs, auth, request fields, and response fields unless a later change is explicitly approved.
+- Keep dataset authorization flexible: one parsed document can belong to multiple dataset scopes, and a conversation can authorize both dataset groups and individual documents.
+
+## Current Findings
+
+- `documents` currently stores a primary `dataset_id` and object location, but has no durable content fingerprint or canonical-document relationship.
+- `dataset_document_memberships` already supports one document being visible in multiple dataset scopes.
+- Dataset reads already union direct `documents.dataset_id` rows and membership rows through `list_by_dataset_scope`.
+- Third-party parse currently downloads the file and creates a new `documents` row every time, even when content is duplicated.
+- `ingest-worker` already queues post-ingest fact indexing through `workflow_tasks`.
+- `retrieval-worker` already handles post-ingest fact cleanup and writes `document_facts`, `document_fact_sources`, and `dataset_fact_snapshots`.
+- The elderly-care manual work showed that richer facts and section-aware extraction materially improve answers for procedures such as turning, medication checks, and nursing handover.
+
+## Design Principles
+
+- Do not block upload or chat on expensive enrichment.
+- Do not delete duplicate local files in the first rollout.
+- Deduplicate content only after tenant and permission checks.
+- Keep external document IDs and uploaded document rows stable for traceability.
+- Store reusable parsed artifacts once, then expose them through dataset membership or canonical read-through.
+- Treat VLM reparse as a premium fallback for low parse quality, not a default path.
+
+## Task 1: Add Fingerprint And Enrichment Schema
+
+Status: `pending`
+
+Files:
+
+- `crates/storage/migrations/0013_document_canonical_enrichment.sql`
+- `crates/storage/src/lib.rs`
+- domain structs that mirror document metadata, if required
+
+Changes:
+
+- Add document fingerprint fields:
+  - `content_sha256`
+  - `content_size_bytes`
+  - `canonical_document_id`
+  - `dedup_state`
+  - `deduped_at`
+- Add `document_content_fingerprints`:
+  - `tenant_id`
+  - `content_sha256`
+  - `content_size_bytes`
+  - `canonical_document_id`
+  - timestamps
+  - primary key on `(tenant_id, content_sha256)`
+- Add `document_enrichment_runs`:
+  - `tenant_id`
+  - `document_id`
+  - `enrichment_kind`
+  - `parse_version`
+  - `input_fingerprint`
+  - `status`
+  - `priority`
+  - `attempt_count`
+  - `max_attempts`
+  - run timestamps
+  - `error_message`
+  - `output_summary`
+- Add idempotency index on `(tenant_id, document_id, enrichment_kind, input_fingerprint)`.
+
+Acceptance:
+
+- Migrations run locally and on 8 server.
+- Existing documents remain readable.
+- No public API contract changes.
+
+## Task 2: Capture Content Fingerprints During Ingest
+
+Status: `pending`
+
+Files:
+
+- `crates/platform-api/src/lib.rs`
+- `crates/storage/src/lib.rs`
+- local upload and third-party parse paths that create `NewDocument`
+
+Changes:
+
+- Compute SHA-256 and byte size while receiving or downloading file bytes.
+- Store fingerprint fields on `documents`.
+- Keep existing object storage behavior unchanged.
+- Add a backfill command or maintenance script to compute fingerprints for existing local files.
+
+Acceptance:
+
+- Third-party parse and local upload both persist `content_sha256`.
+- Existing idempotency behavior remains unchanged.
+- Smoke upload of a large document still succeeds under the current 50 MB cap.
+
+## Task 3: Canonical Dedup Without Breaking Document IDs
+
+Status: `pending`
+
+Files:
+
+- `crates/platform-api/src/lib.rs`
+- `crates/storage/src/lib.rs`
+- optional helper module such as `document_dedup.rs`
+
+Changes:
+
+- On new document creation, look up `(tenant_id, content_sha256)`.
+- If no match exists:
+  - mark the new document as canonical
+  - insert `document_content_fingerprints`
+- If a match exists:
+  - keep the new document row for external traceability
+  - set `canonical_document_id`
+  - mark `dedup_state = duplicate`
+  - do not immediately delete the uploaded object
+- Add dataset membership for the canonical document where appropriate, so one parsed body can serve multiple dataset scopes.
+
+Acceptance:
+
+- A duplicate upload keeps its original document ID and external document ID.
+- A dataset authorized through the duplicate can still answer from canonical parsed content.
+- No duplicate facts are counted twice in dataset-level aggregation.
+
+## Task 4: Canonical Read-Through In Retrieval And Facts
+
+Status: `pending`
+
+Files:
+
+- `crates/storage/src/lib.rs`
+- `crates/platform-api/src/lib.rs`
+- `crates/retrieval-worker/src/main.rs`
+- `crates/platform-api/src/fact_index.rs`
+
+Changes:
+
+- Resolve authorized document IDs to canonical content IDs only after authorization.
+- Let duplicate aliases read chunks, facts, and snapshots from their canonical document when needed.
+- Skip full re-indexing for duplicate aliases and record metadata such as `retrieval_index: reused_canonical`.
+- Ensure global and cross-document statistics collapse duplicate aliases unless the user explicitly requests upload-level records.
+
+Acceptance:
+
+- Dataset-scope search finds facts through canonical content.
+- Individual duplicate document authorization still works.
+- Resume/project-experience style queries across many documents do not lose documents due to dedup.
+
+## Task 5: Background Enrichment Orchestrator
+
+Status: `pending`
+
+Files:
+
+- `crates/ingest-worker/src/main.rs`
+- `crates/retrieval-worker/src/main.rs`
+- `crates/platform-api/src/fact_index.rs`
+- optional new module `document_enrichment.rs`
+
+Changes:
+
+- After parse/index completes, enqueue asynchronous enrichment tasks:
+  - `structure_outline_v1`
+  - `fact_index_v2`
+  - `qa_seed_v1`
+  - `entity_relation_v1`
+- Make each task idempotent by:
+  - `tenant_id`
+  - `document_id`
+  - `enrichment_kind`
+  - `content_sha256`
+  - `parse_version`
+- Add feature flags:
+  - `DOCUMENT_ENRICHMENT_ENABLED`
+  - `DOCUMENT_ENRICHMENT_IDLE_ONLY`
+  - `DOCUMENT_ENRICHMENT_MAX_CONCURRENCY`
+  - `DOCUMENT_ENRICHMENT_PREMIUM_VLM_ENABLED`
+- Prefer idle execution or low-priority queue processing so chat latency is not affected.
+- Use VLM/deep reparse only when parse quality is poor or operator policy allows it.
+
+Acceptance:
+
+- Upload returns before enrichment finishes.
+- Failed enrichment retries with backoff and is visible in diagnostics.
+- Disabling the feature flags returns the system to current behavior.
+
+## Task 6: Enrichment Outputs For Dense Manuals
+
+Status: `pending`
+
+Target documents:
+
+- Elderly-care operating manuals
+- Smart home manuals
+- Smart elevator-control manuals
+- Attendance/work-hour spreadsheets
+- Resume collections
+
+Extract:
+
+- Clean heading hierarchy and section boundaries.
+- Table/list blocks with semantic labels.
+- Procedure steps.
+- Checklists.
+- Time intervals and thresholds.
+- Entity aliases and relations.
+- Aggregation-friendly facts.
+- Likely QA seeds for common customer questions.
+
+Examples:
+
+- Medication distribution checks:
+  - bed number
+  - name
+  - medicine name
+  - concentration
+  - dose
+  - time
+  - method
+  - validity period
+  - medical order
+- Nursing handover:
+  - medication status
+  - physical abnormality
+  - emotional abnormality
+  - bed condition
+  - bowel and urine condition
+  - pressure injury or skin condition
+  - infusion
+  - oxygen
+  - tubes
+  - belongings
+  - records
+- Turning and pressure-injury prevention:
+  - bedridden residents turn at least once every 2 hours
+  - wheelchair residents change position at least once every 0.5 hours
+  - avoid dragging, pulling, and pushing during movement
+
+Acceptance:
+
+- Demo questions cite enriched evidence instead of generic fallback knowledge.
+- The three elderly-care smoke questions pass:
+  - 长期卧床老人多长时间翻身一次？
+  - 给老人发药时，需要执行哪些核对步骤？
+  - 护理交接班时，必须交接的内容有哪些？
+
+## Task 7: Existing 8 Server Backfill And Dedup
+
+Status: `pending`
+
+Steps:
+
+- Deploy schema and fingerprint capture first.
+- Run fingerprint backfill in dry-run mode.
+- Produce a duplicate candidate report:
+  - content hash
+  - document IDs
+  - dataset IDs
+  - titles
+  - object keys
+  - parse/index status
+- Link canonical documents for exact content duplicates.
+- Add dataset memberships for reused canonical content.
+- Run enrichment backfill for priority documents.
+- Do not delete duplicate files in the first pass.
+
+Acceptance:
+
+- Existing third-party and local documents remain reachable.
+- Duplicate exact-content documents no longer require duplicate parsing/fact extraction.
+- Existing V3 answers improve without requiring users to re-upload files.
+
+## Task 8: Observability
+
+Status: `pending`
+
+Files:
+
+- internal task/status endpoints
+- existing observability pages
+- parse detail diagnostics
+
+Show:
+
+- content hash prefix
+- canonical document ID
+- dedup state
+- duplicate count
+- dataset memberships
+- enrichment task status
+- last run and next eligible run
+- last error summary
+
+Acceptance:
+
+- Operators can tell whether a document is parsed, indexed, enriched, deduped, or stuck.
+- Public third-party docs remain stable unless optional diagnostics are approved later.
+
+## Task 9: Rollout And Rollback
+
+Status: `pending`
+
+Rollout order:
+
+1. Fingerprint capture only.
+2. Enrichment background tasks.
+3. Enrichment backfill for priority documents.
+4. Canonical read-through for duplicate aliases.
+5. Dataset membership reuse.
+6. Optional storage cleanup after separate approval and backup-first deletion.
+
+Rollback:
+
+- Disable enrichment flags.
+- Disable canonical read-through.
+- Keep alias document rows intact.
+- Keep original files intact.
+- No destructive cleanup in this plan.
+
+## Smoke Suite
+
+Run before deployment:
+
+- Third-party plain QA.
+- Third-party `dataset_external_ids` authorization reuse.
+- Individual `available_document_external_ids` authorization reuse.
+- Dataset plus standalone document authorization.
+- Duplicate upload exact-content smoke.
+- Elderly-care three-question smoke.
+- Resume project-experience cross-document smoke.
+- Attendance table date and work-hour query smoke.
+- Static page fast HTML artifact smoke.
+
+Run after deployment on 8 server:
+
+- Health check for `platform-api`.
+- Worker status check for `ingest-worker` and `retrieval-worker`.
+- One local upload and one third-party parse.
+- One enrichment backfill dry run.
+- One duplicate candidate report.
+
+## Open Decisions
+
+- Whether duplicate aliases should appear as separate records in document lists by default, or collapse visually with an upload/history count.
+- Whether optional third-party parse detail should expose dedup/enrichment diagnostics later.
+- Whether `entity_relation_v1` should remain relational tables first, or later graduate to a time-aware graph store.
+- What threshold should trigger VLM reparse:
+  - low text coverage
+  - image-heavy PDF
+  - bad table confidence
+  - repeated customer dissatisfaction
+  - manual operator request
+
+## Recommended Next Step
+
+Start with Task 1 and Task 2 together:
+
+- Add schema and storage support.
+- Capture fingerprints for all new uploads.
+- Add a dry-run backfill report for existing documents.
+
+This gives immediate observability and prepares dedup/enrichment without changing customer behavior.
