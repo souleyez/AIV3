@@ -136,10 +136,11 @@ use std::{
     collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     convert::Infallible,
     fmt::Display,
-    fs,
+    fs::{self, File},
     hash::{Hash, Hasher},
+    io::{Read, Write},
     net::IpAddr,
-    path::PathBuf,
+    path::{Path as StdPath, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -159,6 +160,7 @@ use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
 };
 use uuid::Uuid;
+use zip::ZipArchive;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 
 pub mod auth_email;
@@ -1247,6 +1249,11 @@ pub fn router(
         .route(
             "/v1/documents/{document_id}",
             axum::routing::patch(update_document),
+        )
+        .route(
+            "/v1/documents/{document_id}/dataset-memberships/{dataset_id}",
+            axum::routing::put(add_document_dataset_membership)
+                .delete(remove_document_dataset_membership),
         )
         .route(
             "/v1/documents/compare",
@@ -13466,6 +13473,7 @@ fn external_document_extension_from_content_type(content_type: &str) -> Option<S
         "text/html" => ".html",
         "application/pdf" => ".pdf",
         "application/json" => ".json",
+        "application/zip" | "application/x-zip-compressed" => ".zip",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation" => ".pptx",
@@ -49726,7 +49734,8 @@ async fn list_documents(
             .await?;
 
     Ok(Json(
-        documents.into_iter().map(to_document_summary).collect(),
+        to_document_summaries_with_dataset_ids(&state, documents, Some(&visible_dataset_ids))
+            .await?,
     ))
 }
 
@@ -49784,6 +49793,173 @@ async fn update_document(
     Ok(Json(to_document_summary(updated)))
 }
 
+#[derive(Debug, Serialize)]
+struct DocumentDatasetMembershipResponse {
+    document: DocumentSummary,
+    dataset_ids: Vec<DatasetId>,
+    #[serde(rename = "datasetIds")]
+    dataset_ids_camel: Vec<DatasetId>,
+    canonical_dataset_id: DatasetId,
+    #[serde(rename = "canonicalDatasetId")]
+    canonical_dataset_id_camel: DatasetId,
+}
+
+async fn add_document_dataset_membership(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((document_id, dataset_id)): Path<(String, String)>,
+) -> std::result::Result<Json<DocumentDatasetMembershipResponse>, ApiError> {
+    let document_id = parse_document_id(&document_id)?;
+    let dataset_id = parse_dataset_id(&dataset_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let document = load_visible_document_for_user(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "document",
+        document.id.to_string(),
+        document.owner_user_id,
+        current_user_id,
+    )?;
+    let dataset = load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "dataset",
+        dataset.id.to_string(),
+        dataset.owner_user_id,
+        current_user_id,
+    )?;
+
+    if document.dataset_id != dataset_id {
+        state
+            .storage
+            .dataset_document_memberships()
+            .create_or_update(
+                state.tenant_id,
+                NewDatasetDocumentMembership {
+                    dataset_id,
+                    document_id,
+                    membership_kind: "curated".to_string(),
+                    source: "manual".to_string(),
+                    expires_at: None,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+
+    document_dataset_membership_response(&state, document, None).await
+}
+
+async fn remove_document_dataset_membership(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((document_id, dataset_id)): Path<(String, String)>,
+) -> std::result::Result<Json<DocumentDatasetMembershipResponse>, ApiError> {
+    let document_id = parse_document_id(&document_id)?;
+    let dataset_id = parse_dataset_id(&dataset_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let document = load_visible_document_for_user(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+    ensure_owner_managed_resource(
+        "document",
+        document.id.to_string(),
+        document.owner_user_id,
+        current_user_id,
+    )?;
+    load_visible_dataset_for_user(
+        &state,
+        dataset_id,
+        &active_secret_binding_ids,
+        current_user_id,
+    )
+    .await?;
+
+    let updated_document = if document.dataset_id == dataset_id {
+        let membership_dataset_ids = state
+            .storage
+            .dataset_document_memberships()
+            .list_dataset_ids_by_document(state.tenant_id, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let mut promote_to = None;
+        for membership_dataset_id in membership_dataset_ids {
+            if membership_dataset_id == dataset_id {
+                continue;
+            }
+            if load_visible_dataset_for_user(
+                &state,
+                membership_dataset_id,
+                &active_secret_binding_ids,
+                current_user_id,
+            )
+            .await
+            .is_ok()
+            {
+                promote_to = Some(membership_dataset_id);
+                break;
+            }
+        }
+        let promote_to = promote_to.ok_or_else(|| {
+            ApiError::bad_request(
+                "document_dataset_membership_required",
+                "document must belong to at least one visible dataset".to_string(),
+            )
+        })?;
+        let moved = state
+            .storage
+            .documents()
+            .move_to_dataset(
+                state.tenant_id,
+                document.id,
+                promote_to,
+                &json!({
+                    "dataset_membership_update": {
+                        "removed_dataset_id": dataset_id,
+                        "promoted_dataset_id": promote_to,
+                        "updated_at": Utc::now(),
+                    }
+                }),
+                Utc::now(),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .dataset_document_memberships()
+            .delete(state.tenant_id, promote_to, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        moved
+    } else {
+        state
+            .storage
+            .dataset_document_memberships()
+            .delete(state.tenant_id, dataset_id, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        document
+    };
+
+    document_dataset_membership_response(&state, updated_document, None).await
+}
+
 async fn get_document_detail(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -49793,12 +49969,18 @@ async fn get_document_detail(
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let local_thread_id = local_thread_id_from_headers(&headers);
-    let detail = load_document_detail_with_state_and_local_scope(
+    let mut detail = load_document_detail_with_state_and_local_scope(
         &state,
         document_id,
         &active_secret_binding_ids,
         current_user_id,
         local_thread_id.as_deref(),
+    )
+    .await?;
+    detail.document = hydrate_document_summary_dataset_ids(
+        &state,
+        detail.document,
+        None,
     )
     .await?;
     Ok(Json(detail))
@@ -50093,6 +50275,11 @@ async fn create_document_ingest(
     )
     .await?;
 
+    if document_is_zip_archive(&document) {
+        let response = create_zip_archive_child_ingests(&state, &document).await?;
+        return Ok((StatusCode::CREATED, Json(response)));
+    }
+
     let execution = build_initial_upload_ingest_execution(&state, &document)?;
     let initial_event = build_initial_upload_ingest_event(&execution, &document);
     state
@@ -50108,8 +50295,424 @@ async fn create_document_ingest(
         Json(CreateDocumentIngestResponse {
             document: to_document_summary(document),
             workflow_execution: started.execution,
+            child_documents: Vec::new(),
+            child_documents_camel: Vec::new(),
+            child_workflow_executions: Vec::new(),
+            child_workflow_executions_camel: Vec::new(),
         }),
     ))
+}
+
+#[derive(Clone, Debug)]
+struct ExpandedZipEntry {
+    entry_name: String,
+    title: String,
+    object_key: String,
+    content_type: String,
+    size_bytes: u64,
+}
+
+async fn create_zip_archive_child_ingests(
+    state: &AppState,
+    parent_document: &Document,
+) -> std::result::Result<CreateDocumentIngestResponse, ApiError> {
+    let entries = expand_zip_document_to_local_files(parent_document)?;
+    if entries.is_empty() {
+        return Err(ApiError::bad_request(
+            "zip_archive_empty",
+            "zip archive did not contain supported files to ingest".to_string(),
+        ));
+    }
+
+    let mut child_documents = Vec::new();
+    let mut child_workflow_executions = Vec::new();
+    for (index, entry) in entries.into_iter().enumerate() {
+        let child_document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: parent_document.dataset_id,
+                    title: entry.title.clone(),
+                    object_key: entry.object_key.clone(),
+                    content_type: entry.content_type.clone(),
+                    secret_binding_ids: parent_document.secret_binding_ids.clone(),
+                    owner_user_id: parent_document.owner_user_id,
+                    metadata: json!({
+                        "zip_parent": {
+                            "document_id": parent_document.id,
+                            "title": parent_document.title,
+                            "object_key": parent_document.object_key,
+                        },
+                        "zip_entry": {
+                            "name": entry.entry_name,
+                            "index": index,
+                            "size_bytes": entry.size_bytes,
+                        },
+                        "parse_state": {
+                            "stage": "queued",
+                            "user_blocking": false,
+                        }
+                    }),
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+
+        let execution = build_initial_upload_ingest_execution(state, &child_document)?;
+        let initial_event = build_initial_upload_ingest_event(&execution, &child_document);
+        state
+            .storage
+            .workflow_executions()
+            .create_with_initial_event(&execution, &initial_event)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let started = apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+        child_workflow_executions.push(started.execution);
+        child_documents.push(child_document);
+    }
+
+    let child_document_views = to_document_summaries_with_dataset_ids(state, child_documents, None)
+        .await?;
+    let parent_metadata = json!({
+        "parse_status": "zip_expanded",
+        "ingest": {
+            "processor": "zip_expander",
+            "parse_method": "zip-child-documents",
+            "parse_status": "zip_expanded",
+            "child_document_count": child_document_views.len(),
+            "child_document_ids": child_document_views
+                .iter()
+                .map(|document| document.id.to_string())
+                .collect::<Vec<_>>(),
+            "extracted_at": Utc::now(),
+        }
+    });
+    let updated_parent = state
+        .storage
+        .documents()
+        .update_state(
+            state.tenant_id,
+            parent_document.id,
+            DocumentLifecycle::Indexed,
+            Some(&parent_document.title),
+            &parent_metadata,
+            Utc::now(),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(CreateDocumentIngestResponse {
+        document: to_document_summary(updated_parent),
+        workflow_execution: child_workflow_executions
+            .first()
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::internal(
+                    "zip_archive_ingest_missing_child_workflow",
+                    "zip archive expansion did not create child workflows".to_string(),
+                )
+            })?,
+        child_documents: child_document_views.clone(),
+        child_documents_camel: child_document_views,
+        child_workflow_executions: child_workflow_executions.clone(),
+        child_workflow_executions_camel: child_workflow_executions,
+    })
+}
+
+fn document_is_zip_archive(document: &Document) -> bool {
+    let content_type = document
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or(&document.content_type)
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        content_type.as_str(),
+        "application/zip" | "application/x-zip-compressed" | "multipart/x-zip"
+    ) || document.title.to_ascii_lowercase().ends_with(".zip")
+        || document.object_key.to_ascii_lowercase().ends_with(".zip")
+}
+
+fn expand_zip_document_to_local_files(
+    document: &Document,
+) -> std::result::Result<Vec<ExpandedZipEntry>, ApiError> {
+    let path = resolve_platform_local_object_path(&document.object_key).ok_or_else(|| {
+        ApiError::bad_request(
+            "zip_archive_object_not_found",
+            "zip archive object file was not found on this server".to_string(),
+        )
+    })?;
+    let file = File::open(&path).map_err(|error| {
+        ApiError::bad_request(
+            "zip_archive_open_failed",
+            format!("failed to open zip archive: {error}"),
+        )
+    })?;
+    let mut archive = ZipArchive::new(file).map_err(|error| {
+        ApiError::bad_request(
+            "zip_archive_invalid",
+            format!("uploaded file is not a readable zip archive: {error}"),
+        )
+    })?;
+
+    let max_entries = zip_ingest_env_usize("ZIP_INGEST_MAX_ENTRIES", 80).clamp(1, 500);
+    let max_entry_bytes =
+        zip_ingest_env_u64("ZIP_INGEST_MAX_ENTRY_BYTES", 80 * 1024 * 1024).max(1);
+    let max_total_bytes =
+        zip_ingest_env_u64("ZIP_INGEST_MAX_TOTAL_BYTES", 300 * 1024 * 1024).max(1);
+    let output_root = zip_child_output_root(&path, document)?;
+    fs::create_dir_all(&output_root).map_err(|error| {
+        ApiError::internal(
+            "zip_archive_expand_failed",
+            format!("failed to create zip extraction directory: {error}"),
+        )
+    })?;
+
+    let mut entries = Vec::new();
+    let mut total_bytes = 0u64;
+    for index in 0..archive.len() {
+        if entries.len() >= max_entries {
+            break;
+        }
+        let file = archive.by_index(index).map_err(|error| {
+            ApiError::bad_request(
+                "zip_archive_read_failed",
+                format!("failed to read zip entry {index}: {error}"),
+            )
+        })?;
+        if file.is_dir() {
+            continue;
+        }
+        let Some(enclosed_name) = file.enclosed_name().map(PathBuf::from) else {
+            continue;
+        };
+        let entry_name = enclosed_name.to_string_lossy().replace('\\', "/");
+        if zip_entry_should_skip(&entry_name) {
+            continue;
+        }
+        let extension = enclosed_name
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{}", value.to_ascii_lowercase()))
+            .unwrap_or_default();
+        if !zip_entry_extension_supported(&extension) {
+            continue;
+        }
+        let entry_size = file.size();
+        if entry_size > max_entry_bytes {
+            continue;
+        }
+        total_bytes = total_bytes.saturating_add(entry_size);
+        if total_bytes > max_total_bytes {
+            return Err(ApiError::bad_request(
+                "zip_archive_too_large",
+                format!("zip expanded content exceeds {} bytes", max_total_bytes),
+            ));
+        }
+        let safe_name = safe_zip_entry_output_name(entries.len(), &entry_name, &extension);
+        let output_path = output_root.join(safe_name);
+        let mut output = File::create(&output_path).map_err(|error| {
+            ApiError::internal(
+                "zip_archive_expand_failed",
+                format!("failed to create extracted zip entry: {error}"),
+            )
+        })?;
+        let copied = std::io::copy(&mut file.take(max_entry_bytes + 1), &mut output).map_err(|error| {
+            ApiError::internal(
+                "zip_archive_expand_failed",
+                format!("failed to write extracted zip entry: {error}"),
+            )
+        })?;
+        output.flush().map_err(|error| {
+            ApiError::internal(
+                "zip_archive_expand_failed",
+                format!("failed to flush extracted zip entry: {error}"),
+            )
+        })?;
+        if copied > max_entry_bytes {
+            let _ = fs::remove_file(&output_path);
+            continue;
+        }
+        entries.push(ExpandedZipEntry {
+            entry_name: entry_name.clone(),
+            title: zip_entry_title(&entry_name),
+            object_key: output_path.to_string_lossy().to_string(),
+            content_type: infer_zip_child_content_type(&extension).to_string(),
+            size_bytes: copied,
+        });
+    }
+
+    Ok(entries)
+}
+
+fn resolve_platform_local_object_path(object_key: &str) -> Option<PathBuf> {
+    let raw = object_key.trim().trim_start_matches("file://");
+    if raw.is_empty() {
+        return None;
+    }
+
+    let direct = PathBuf::from(raw);
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    if cfg!(windows) {
+        if let Some(rest) = raw.strip_prefix("/mnt/") {
+            let mut parts = rest.splitn(2, '/');
+            if let (Some(drive), Some(path)) = (parts.next(), parts.next()) {
+                if drive.len() == 1 {
+                    let windows_path = format!("{}:\\{}", drive, path.replace('/', "\\"));
+                    let candidate = PathBuf::from(windows_path);
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
+    let rooted = StdPath::new(&root).join(raw);
+    rooted.is_file().then_some(rooted)
+}
+
+fn zip_child_output_root(
+    zip_path: &StdPath,
+    document: &Document,
+) -> std::result::Result<PathBuf, ApiError> {
+    let base = zip_path
+        .parent()
+        .map(StdPath::to_path_buf)
+        .unwrap_or_else(|| external_document_object_root().unwrap_or_else(|_| std::env::temp_dir()));
+    Ok(base
+        .join("_zip_extracted")
+        .join(safe_external_path_segment(&document.id.to_string())))
+}
+
+fn safe_zip_entry_output_name(index: usize, entry_name: &str, extension: &str) -> String {
+    let stem = StdPath::new(entry_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(safe_external_path_segment)
+        .unwrap_or_else(|| "entry".to_string());
+    let safe_extension = if extension.len() <= 16 {
+        extension.to_string()
+    } else {
+        String::new()
+    };
+    format!("{:03}-{}{}", index + 1, stem, safe_extension)
+}
+
+fn zip_entry_title(entry_name: &str) -> String {
+    StdPath::new(entry_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| entry_name.to_string())
+}
+
+fn zip_entry_should_skip(entry_name: &str) -> bool {
+    let lower = entry_name.to_ascii_lowercase();
+    lower.starts_with("__macosx/")
+        || lower.ends_with("/.ds_store")
+        || lower.contains("/.git/")
+        || lower.contains("/node_modules/")
+}
+
+fn zip_entry_extension_supported(extension: &str) -> bool {
+    matches!(
+        extension,
+        ".txt"
+            | ".md"
+            | ".csv"
+            | ".json"
+            | ".html"
+            | ".htm"
+            | ".xml"
+            | ".pdf"
+            | ".doc"
+            | ".docx"
+            | ".xlsx"
+            | ".xlsm"
+            | ".pptx"
+            | ".pptm"
+            | ".png"
+            | ".jpg"
+            | ".jpeg"
+            | ".webp"
+            | ".bmp"
+            | ".tif"
+            | ".tiff"
+            | ".gif"
+            | ".mp3"
+            | ".wav"
+            | ".m4a"
+            | ".aac"
+            | ".flac"
+            | ".ogg"
+            | ".opus"
+            | ".mp4"
+            | ".mov"
+            | ".mkv"
+            | ".webm"
+            | ".avi"
+            | ".mpeg"
+            | ".mpg"
+    )
+}
+
+fn infer_zip_child_content_type(extension: &str) -> &'static str {
+    match extension {
+        ".md" => "text/markdown",
+        ".csv" => "text/csv",
+        ".json" => "application/json",
+        ".html" | ".htm" => "text/html",
+        ".xml" => "application/xml",
+        ".pdf" => "application/pdf",
+        ".doc" => "application/msword",
+        ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx" | ".xlsm" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".pptx" | ".pptm" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".png" => "image/png",
+        ".jpg" | ".jpeg" => "image/jpeg",
+        ".webp" => "image/webp",
+        ".bmp" => "image/bmp",
+        ".tif" | ".tiff" => "image/tiff",
+        ".gif" => "image/gif",
+        ".mp3" => "audio/mpeg",
+        ".wav" => "audio/wav",
+        ".m4a" => "audio/mp4",
+        ".aac" => "audio/aac",
+        ".flac" => "audio/flac",
+        ".ogg" => "audio/ogg",
+        ".opus" => "audio/opus",
+        ".mp4" => "video/mp4",
+        ".mov" => "video/quicktime",
+        ".mkv" => "video/x-matroska",
+        ".webm" => "video/webm",
+        ".avi" => "video/x-msvideo",
+        ".mpeg" | ".mpg" => "video/mpeg",
+        _ => "text/plain",
+    }
+}
+
+fn zip_ingest_env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn zip_ingest_env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
 }
 
 async fn create_report_plan(
@@ -53534,12 +54137,23 @@ fn to_report_plan_summary(
 }
 
 fn to_document_summary(document: Document) -> DocumentSummary {
+    let dataset_ids = vec![document.dataset_id];
+    to_document_summary_with_dataset_ids(document, dataset_ids)
+}
+
+fn to_document_summary_with_dataset_ids(
+    document: Document,
+    dataset_ids: Vec<DatasetId>,
+) -> DocumentSummary {
     let parse_status = document_metadata_parse_status(&document)
         .unwrap_or_else(|| document.lifecycle.as_str().to_string());
     let parse_quality_status = assistant_run_document_parse_quality_status(&document);
+    let dataset_ids = normalize_document_dataset_ids(document.dataset_id, dataset_ids);
     DocumentSummary {
         id: document.id,
         dataset_id: document.dataset_id,
+        dataset_ids: dataset_ids.clone(),
+        dataset_ids_camel: dataset_ids,
         title: document.title,
         object_key: document.object_key,
         content_type: document.content_type,
@@ -53552,6 +54166,101 @@ fn to_document_summary(document: Document) -> DocumentSummary {
         created_at: document.created_at,
         updated_at: document.updated_at,
     }
+}
+
+fn normalize_document_dataset_ids(
+    canonical_dataset_id: DatasetId,
+    dataset_ids: Vec<DatasetId>,
+) -> Vec<DatasetId> {
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    if seen.insert(canonical_dataset_id) {
+        normalized.push(canonical_dataset_id);
+    }
+    for dataset_id in dataset_ids {
+        if seen.insert(dataset_id) {
+            normalized.push(dataset_id);
+        }
+    }
+    normalized
+}
+
+async fn to_document_summaries_with_dataset_ids(
+    state: &AppState,
+    documents: Vec<Document>,
+    visible_dataset_ids: Option<&HashSet<DatasetId>>,
+) -> std::result::Result<Vec<DocumentSummary>, ApiError> {
+    let document_ids: Vec<DocumentId> = documents.iter().map(|document| document.id).collect();
+    let membership_pairs = state
+        .storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_documents(state.tenant_id, &document_ids)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut memberships_by_document: HashMap<DocumentId, Vec<DatasetId>> = HashMap::new();
+    for (document_id, dataset_id) in membership_pairs {
+        if visible_dataset_ids.is_none_or(|visible| visible.contains(&dataset_id)) {
+            memberships_by_document
+                .entry(document_id)
+                .or_default()
+                .push(dataset_id);
+        }
+    }
+    Ok(documents
+        .into_iter()
+        .map(|document| {
+            let dataset_ids = memberships_by_document
+                .remove(&document.id)
+                .unwrap_or_default();
+            to_document_summary_with_dataset_ids(document, dataset_ids)
+        })
+        .collect())
+}
+
+async fn hydrate_document_summary_dataset_ids(
+    state: &AppState,
+    summary: DocumentSummary,
+    visible_dataset_ids: Option<&HashSet<DatasetId>>,
+) -> std::result::Result<DocumentSummary, ApiError> {
+    let membership_dataset_ids = state
+        .storage
+        .dataset_document_memberships()
+        .list_dataset_ids_by_document(state.tenant_id, summary.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let mut dataset_ids = Vec::new();
+    for dataset_id in membership_dataset_ids {
+        if visible_dataset_ids.is_none_or(|visible| visible.contains(&dataset_id)) {
+            dataset_ids.push(dataset_id);
+        }
+    }
+    let dataset_ids = normalize_document_dataset_ids(summary.dataset_id, dataset_ids);
+    Ok(DocumentSummary {
+        dataset_ids: dataset_ids.clone(),
+        dataset_ids_camel: dataset_ids,
+        ..summary
+    })
+}
+
+async fn document_dataset_membership_response(
+    state: &AppState,
+    document: Document,
+    visible_dataset_ids: Option<&HashSet<DatasetId>>,
+) -> std::result::Result<Json<DocumentDatasetMembershipResponse>, ApiError> {
+    let document = hydrate_document_summary_dataset_ids(
+        state,
+        to_document_summary(document),
+        visible_dataset_ids,
+    )
+    .await?;
+    let dataset_ids = document.dataset_ids.clone();
+    Ok(Json(DocumentDatasetMembershipResponse {
+        canonical_dataset_id: document.dataset_id,
+        canonical_dataset_id_camel: document.dataset_id,
+        document,
+        dataset_ids: dataset_ids.clone(),
+        dataset_ids_camel: dataset_ids,
+    }))
 }
 
 fn to_document_detail_view(
@@ -101120,6 +101829,77 @@ retrieve_evidence:
         assert_eq!(summary.lifecycle, contracts::DocumentLifecycleView::Indexed);
         assert_eq!(summary.content_type, "application/pdf");
         assert_eq!(summary.secret_binding_ids.len(), 1);
+        assert_eq!(summary.dataset_ids, vec![summary.dataset_id]);
+        assert_eq!(summary.dataset_ids_camel, vec![summary.dataset_id]);
+    }
+
+    #[test]
+    fn document_summary_dataset_ids_keep_canonical_first_and_deduplicate() {
+        let canonical_dataset_id = DatasetId::new();
+        let secondary_dataset_id = DatasetId::new();
+        let normalized = normalize_document_dataset_ids(
+            canonical_dataset_id,
+            vec![
+                secondary_dataset_id,
+                canonical_dataset_id,
+                secondary_dataset_id,
+            ],
+        );
+
+        assert_eq!(normalized, vec![canonical_dataset_id, secondary_dataset_id]);
+    }
+
+    #[test]
+    fn zip_archive_expansion_extracts_supported_entries_safely() {
+        use zip::{write::SimpleFileOptions, ZipWriter};
+
+        let root = std::env::temp_dir().join(format!("aidp-v3-zip-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("zip test directory should be created");
+        let zip_path = root.join("bundle.zip");
+        let file = File::create(&zip_path).expect("zip file should be created");
+        let mut writer = ZipWriter::new(file);
+        writer
+            .start_file("docs/readme.md", SimpleFileOptions::default())
+            .expect("markdown entry should start");
+        writer
+            .write_all(b"# Hello")
+            .expect("markdown entry should write");
+        writer
+            .start_file("../escape.md", SimpleFileOptions::default())
+            .expect("unsafe entry should start");
+        writer
+            .write_all(b"escape")
+            .expect("unsafe entry should write");
+        writer
+            .start_file("ignored.exe", SimpleFileOptions::default())
+            .expect("ignored entry should start");
+        writer
+            .write_all(b"ignored")
+            .expect("ignored entry should write");
+        writer.finish().expect("zip should finish");
+
+        let document = Document {
+            id: DocumentId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: "bundle.zip".to_string(),
+            object_key: zip_path.to_string_lossy().to_string(),
+            content_type: "application/zip".to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Received,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let entries = expand_zip_document_to_local_files(&document)
+            .expect("zip archive should expand supported entries");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry_name, "docs/readme.md");
+        assert_eq!(entries[0].content_type, "text/markdown");
+        assert!(PathBuf::from(&entries[0].object_key).is_file());
     }
 
     #[test]
@@ -107303,6 +108083,8 @@ retrieve_evidence:
             document: DocumentSummary {
                 id: DocumentId::new(),
                 dataset_id: DatasetId::new(),
+                dataset_ids: Vec::new(),
+                dataset_ids_camel: Vec::new(),
                 title: "Broken Detail".to_string(),
                 object_key: "documents/broken.md".to_string(),
                 content_type: "text/markdown".to_string(),
@@ -107515,6 +108297,8 @@ retrieve_evidence:
                     document: DocumentSummary {
                         id: DocumentId::new(),
                         dataset_id: DatasetId::new(),
+                        dataset_ids: Vec::new(),
+                        dataset_ids_camel: Vec::new(),
                         title: "Doc A".to_string(),
                         object_key: "documents/a.md".to_string(),
                         content_type: "text/markdown".to_string(),
@@ -107571,6 +108355,8 @@ retrieve_evidence:
                     document: DocumentSummary {
                         id: DocumentId::new(),
                         dataset_id: DatasetId::new(),
+                        dataset_ids: Vec::new(),
+                        dataset_ids_camel: Vec::new(),
                         title: "Doc B".to_string(),
                         object_key: "documents/b.md".to_string(),
                         content_type: "text/markdown".to_string(),

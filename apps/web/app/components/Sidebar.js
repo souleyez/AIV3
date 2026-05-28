@@ -253,6 +253,7 @@ export default function Sidebar({
   selectedDatasetIds = [],
   selectedDataset,
   selectedDatasets = [],
+  selectedDocument,
   datasetDraft,
   onDatasetDraftChange,
   onCreateDataset,
@@ -273,6 +274,7 @@ export default function Sidebar({
   accountAuth,
 }) {
   const selectedIdSet = new Set(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []);
+  const documentMembershipMode = Boolean(selectedDocument?.id);
 
   return (
     <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
@@ -299,17 +301,19 @@ export default function Sidebar({
       </div>
 
       <section className="side-card">
-        <div className="card-title">可选数据集</div>
+        <div className="card-title">{documentMembershipMode ? '文档归属数据集' : '可选数据集'}</div>
         <div className="dataset-list">
-          <button
-            type="button"
-            className={`dataset-item ordinary-chat-item ${selectedIdSet.size ? '' : 'active'}`}
-            onClick={onClearDatasetSelection}
-            disabled={loading && !selectedIdSet.size}
-          >
-            <span className="dataset-item-title">普通聊天</span>
-            <span className="dataset-item-meta">清空供料范围 · 命中资料意图后自动选中</span>
-          </button>
+          {!documentMembershipMode ? (
+            <button
+              type="button"
+              className={`dataset-item ordinary-chat-item ${selectedIdSet.size ? '' : 'active'}`}
+              onClick={onClearDatasetSelection}
+              disabled={loading && !selectedIdSet.size}
+            >
+              <span className="dataset-item-title">普通聊天</span>
+              <span className="dataset-item-meta">清空供料范围 · 命中资料意图后自动选中</span>
+            </button>
+          ) : null}
           {datasets.length ? (
             datasets.map((dataset) => {
               const active = selectedIdSet.has(dataset.id);
@@ -326,7 +330,9 @@ export default function Sidebar({
                     {active ? <small>已选</small> : null}
                   </span>
                   <span className="dataset-item-meta">
-                    {dataset.key} · {dataset.visibility === 'private' ? '私密' : '公开'} · {dataset.lifecycle}
+                    {documentMembershipMode
+                      ? `${active ? '点击移出该文档' : '点击加入该文档'} · ${dataset.visibility === 'private' ? '私密' : '公开'}`
+                      : `${dataset.key} · ${dataset.visibility === 'private' ? '私密' : '公开'} · ${dataset.lifecycle}`}
                   </span>
                 </button>
               );
@@ -337,7 +343,11 @@ export default function Sidebar({
             </div>
           )}
         </div>
-        {selectedDatasets.length ? (
+        {documentMembershipMode ? (
+          <p className="side-form-hint selected-scope-hint">
+            正在编辑《{selectedDocument.title || '当前文档'}》归属；文档至少保留一个数据集。
+          </p>
+        ) : selectedDatasets.length ? (
           <p className="side-form-hint selected-scope-hint">
             已选 {selectedDatasets.length} 个供料范围：{selectedDatasets.map((dataset) => dataset.title).join('、')}。
           </p>

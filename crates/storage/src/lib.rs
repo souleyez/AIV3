@@ -1940,6 +1940,65 @@ impl PgDatasetDocumentMembershipRepository {
             .collect())
     }
 
+    pub async fn list_dataset_ids_by_documents(
+        &self,
+        tenant_id: TenantId,
+        document_ids: &[DocumentId],
+    ) -> Result<Vec<(DocumentId, DatasetId)>> {
+        if document_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids: Vec<Uuid> = document_ids.iter().map(|id| id.0).collect();
+        let rows = sqlx::query(
+            r#"
+            select document_id, dataset_id
+            from dataset_document_memberships
+            where tenant_id = $1
+              and document_id = any($2)
+              and (expires_at is null or expires_at > now())
+            order by document_id, dataset_id
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| {
+                (
+                    DocumentId(row.get::<Uuid, _>("document_id")),
+                    DatasetId(row.get::<Uuid, _>("dataset_id")),
+                )
+            })
+            .collect())
+    }
+
+    pub async fn delete(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: DatasetId,
+        document_id: DocumentId,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            delete from dataset_document_memberships
+            where tenant_id = $1
+              and dataset_id = $2
+              and document_id = $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id.0)
+        .bind(document_id.0)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn delete_expired(&self, tenant_id: TenantId, now: DateTime<Utc>) -> Result<u64> {
         let result = sqlx::query(
             r#"

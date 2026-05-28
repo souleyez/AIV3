@@ -435,6 +435,15 @@ function normalizeDatasetIds(ids) {
     .filter(Boolean))];
 }
 
+function documentDatasetIds(document) {
+  return normalizeDatasetIds([
+    document?.dataset_id,
+    document?.datasetId,
+    ...(Array.isArray(document?.dataset_ids) ? document.dataset_ids : []),
+    ...(Array.isArray(document?.datasetIds) ? document.datasetIds : []),
+  ]);
+}
+
 function sameDatasetIds(left, right) {
   const leftIds = normalizeDatasetIds(left);
   const rightIds = normalizeDatasetIds(right);
@@ -894,6 +903,12 @@ export default function HomePageClient() {
       .filter(Boolean),
     [datasets, selectedDatasetIds],
   );
+  const selectedDocument = useMemo(
+    () => selectedDocumentDetail?.document
+      || documents.find((document) => document.id === selectedDocumentId)
+      || null,
+    [documents, selectedDocumentDetail, selectedDocumentId],
+  );
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) || null,
     [sessions, selectedSessionId],
@@ -984,12 +999,33 @@ export default function HomePageClient() {
       return;
     }
     const document = documents.find((item) => item.id === documentId);
-    if (document?.dataset_id) {
-      setSelectedDatasetId(document.dataset_id);
-      setSelectedDatasetIds((current) => normalizeDatasetIds([document.dataset_id, ...current]));
+    const datasetIds = documentDatasetIds(document);
+    if (datasetIds.length) {
+      setSelectedDatasetId(datasetIds[0]);
+      setSelectedDatasetIds(datasetIds);
     }
     setSelectedDocumentId(documentId);
     setActivePage('document-detail');
+  }
+
+  function handleFocusDocumentMembership(documentId) {
+    if (!documentId) {
+      setSelectedDocumentId('');
+      setSelectedDocumentDetail(null);
+      return;
+    }
+    const document = documents.find((item) => item.id === documentId);
+    const datasetIds = documentDatasetIds(document);
+    if (datasetIds.length) {
+      setSelectedDatasetId(datasetIds[0]);
+      setSelectedDatasetIds(datasetIds);
+    }
+    setSelectedDocumentId(documentId);
+  }
+
+  function handleClearDocumentSelection() {
+    setSelectedDocumentId('');
+    setSelectedDocumentDetail(null);
   }
 
   function promptRequestsStaticPage(prompt) {
@@ -1008,7 +1044,7 @@ export default function HomePageClient() {
       draftDataset?.id,
     ].filter(Boolean));
     const relatedDocuments = documents
-      .filter((document) => draftDatasetIds.has(document.dataset_id || document.datasetId))
+      .filter((document) => documentDatasetIds(document).some((datasetId) => draftDatasetIds.has(datasetId)))
       .slice(0, 8);
     const recentMessages = sourceMessages
       .slice(-6)
@@ -1057,7 +1093,7 @@ export default function HomePageClient() {
       hints.push(draftDataset.title || draftDataset.key);
     }
     documents
-      .filter((document) => datasetIds.has(document.dataset_id || document.datasetId))
+      .filter((document) => documentDatasetIds(document).some((datasetId) => datasetIds.has(datasetId)))
       .slice(0, 10)
       .forEach((document) => {
         const title = document.title || document.name || document.filename;
@@ -2528,7 +2564,9 @@ export default function HomePageClient() {
     return {
       file,
       document: registered.document,
+      childDocuments: ingestResponse.child_documents || ingestResponse.childDocuments || [],
       workflowExecution: ingestResponse.workflow_execution,
+      childWorkflowExecutions: ingestResponse.child_workflow_executions || ingestResponse.childWorkflowExecutions || [],
       started: ingestResponse.workflow_execution || null,
       targetDataset,
       classification,
@@ -2593,10 +2631,15 @@ export default function HomePageClient() {
         ? ' 未选私密数据集时当前按公开/default 数据集处理。'
         : '';
       const workflowLabel = uploadResults
-        .map((result) => result.started?.enqueued_tasks?.[0]?.id)
+        .flatMap((result) => [
+          result.started?.enqueued_tasks?.[0]?.id,
+          ...((result.childWorkflowExecutions || []).map((execution) => execution?.enqueued_tasks?.[0]?.id)),
+        ])
         .filter(Boolean)
         .slice(0, 2)
         .join('、');
+      const expandedZipChildCount = uploadResults
+        .reduce((count, result) => count + (Array.isArray(result.childDocuments) ? result.childDocuments.length : 0), 0);
 
       setActivityEvents((current) => [
         {
@@ -2628,6 +2671,7 @@ export default function HomePageClient() {
         [
           summary,
           createdDatasetTitles.length ? `已补建默认公开数据集：${createdDatasetTitles.join('、')}。` : '',
+          expandedZipChildCount ? `已从压缩包展开 ${expandedZipChildCount} 个子文档。` : '',
           workflowLabel ? `解析任务已入队：${workflowLabel}。` : '解析任务已提交。',
           publicWarning,
         ].filter(Boolean).join(' '),
@@ -3848,7 +3892,52 @@ export default function HomePageClient() {
     return () => window.clearInterval(timer);
   }, [selectedReportPlanId]);
 
-  function handleToggleDatasetSelection(datasetId) {
+  async function handleToggleDocumentDatasetMembership(datasetId) {
+    if (!selectedDocumentId || !datasetId) {
+      return false;
+    }
+    const currentIds = normalizeDatasetIds(selectedDatasetIds);
+    const active = currentIds.includes(datasetId);
+    setBanner('');
+    setError('');
+    setDocumentActionBusy(selectedDocumentId);
+    try {
+      const response = await fetchJson(
+        `/api/v3/documents/${selectedDocumentId}/dataset-memberships/${datasetId}`,
+        { method: active ? 'DELETE' : 'PUT' },
+      );
+      const nextIds = normalizeDatasetIds(response?.dataset_ids || response?.datasetIds || response?.document?.dataset_ids || response?.document?.datasetIds || []);
+      if (nextIds.length) {
+        setSelectedDatasetIds(nextIds);
+        setSelectedDatasetId(nextIds[0]);
+      }
+      if (response?.document) {
+        setDocuments((current) => current.map((document) => (
+          document.id === response.document.id ? { ...document, ...response.document } : document
+        )));
+        setSelectedDocumentDetail((current) => (
+          current?.document?.id === response.document.id
+            ? { ...current, document: { ...current.document, ...response.document } }
+            : current
+        ));
+      }
+      setBanner(active ? '已将文档移出该数据集。' : '已将文档加入该数据集。');
+      await refreshDocuments({ silent: true });
+      await refreshDocumentDetail(selectedDocumentId);
+      return true;
+    } catch (membershipError) {
+      setError(membershipError instanceof Error ? membershipError.message : '文档数据集归属更新失败');
+      return false;
+    } finally {
+      setDocumentActionBusy('');
+    }
+  }
+
+  async function handleToggleDatasetSelection(datasetId) {
+    if (selectedDocumentId) {
+      await handleToggleDocumentDatasetMembership(datasetId);
+      return;
+    }
     setBanner('');
     setError('');
     setComposingNewSession(false);
@@ -3875,6 +3964,7 @@ export default function HomePageClient() {
     selectedDatasetIds,
     selectedDataset,
     selectedDatasets,
+    selectedDocument,
     datasetDraft,
     onDatasetDraftChange: (field, value) =>
       setDatasetDraft((current) => ({ ...current, [field]: value })),
@@ -4023,8 +4113,13 @@ export default function HomePageClient() {
     documentSearch,
     onDocumentSearchChange: setDocumentSearch,
     selectedDocumentId,
+    onFocusDocumentMembership: handleFocusDocumentMembership,
+    onClearDocumentSelection: handleClearDocumentSelection,
     onOpenDocumentPage: handleOpenDocumentPage,
-    onBackToDatasets: () => setActivePage('datasets'),
+    onBackToDatasets: () => {
+      handleClearDocumentSelection();
+      setActivePage('datasets');
+    },
     selectedDocumentDetail,
     documentDetailLoading,
     onRefreshDocuments: () => refreshDocuments({ silent: false }),

@@ -45,6 +45,22 @@ function datasetTitle(datasetId, datasets = []) {
   return datasets.find((dataset) => dataset.id === datasetId)?.title || '未知数据集';
 }
 
+function documentDatasetIds(document) {
+  return [...new Set([
+    document?.dataset_id,
+    document?.datasetId,
+    ...(Array.isArray(document?.dataset_ids) ? document.dataset_ids : []),
+    ...(Array.isArray(document?.datasetIds) ? document.datasetIds : []),
+  ].map((id) => String(id || '').trim()).filter(Boolean))];
+}
+
+function documentDatasetTitles(document, datasets = []) {
+  const titles = documentDatasetIds(document)
+    .map((datasetId) => datasetTitle(datasetId, datasets))
+    .filter(Boolean);
+  return titles.length ? titles.join('、') : '未知数据集';
+}
+
 function documentKind(contentType = '') {
   const lower = String(contentType || '').toLowerCase();
   if (lower.startsWith('audio/') || lower.startsWith('video/')) return '音视频';
@@ -387,6 +403,8 @@ function DatasetsPage({
   documentSearch,
   onDocumentSearchChange,
   selectedDocumentId,
+  onFocusDocumentMembership,
+  onClearDocumentSelection,
   onOpenDocumentPage,
   onRefreshDocuments,
   onUpdateDataset,
@@ -398,7 +416,7 @@ function DatasetsPage({
   const selectedIdSet = new Set(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []);
   const selectedDataset = datasets.find((dataset) => dataset.id === selectedDatasetId) || null;
   const filteredDocuments = documents.filter((document) => {
-    const inDataset = !selectedIdSet.size || selectedIdSet.has(document.dataset_id);
+    const inDataset = !selectedIdSet.size || documentDatasetIds(document).some((datasetId) => selectedIdSet.has(datasetId));
     const query = documentSearch.trim().toLowerCase();
     const matches = !query
       || String(document.title || '').toLowerCase().includes(query)
@@ -419,11 +437,23 @@ function DatasetsPage({
   }, [filteredDocuments.map((document) => document.id).join('|')]);
 
   const toggleDocumentSelection = (documentId) => {
-    setSelectedDocumentIds((current) => (
-      current.includes(documentId)
-        ? current.filter((id) => id !== documentId)
-        : [...current, documentId]
-    ));
+    const alreadySelected = selectedDocumentIds.includes(documentId);
+    const next = alreadySelected
+      ? selectedDocumentIds.filter((id) => id !== documentId)
+      : [...selectedDocumentIds, documentId];
+    setSelectedDocumentIds(next);
+    if (alreadySelected && documentId === selectedDocumentId) {
+      const fallbackId = next[next.length - 1] || '';
+      if (fallbackId) {
+        onFocusDocumentMembership?.(fallbackId);
+      } else {
+        onClearDocumentSelection?.();
+      }
+      return;
+    }
+    if (!alreadySelected) {
+      onFocusDocumentMembership?.(documentId);
+    }
   };
 
   return (
@@ -551,7 +581,7 @@ function DatasetsPage({
               />
               <button type="button" className="directory-document-open" onClick={() => onOpenDocumentPage?.(document.id)}>
                 <strong>{document.title}</strong>
-                <span>{datasetTitle(document.dataset_id, datasets)} · {documentKind(document.content_type)} · {formatSnakeCaseLabel(document.lifecycle)}</span>
+                <span>{documentDatasetTitles(document, datasets)} · {documentKind(document.content_type)} · {formatSnakeCaseLabel(document.lifecycle)}</span>
                 <em>{truncateText(document.object_key, 64)}</em>
               </button>
             </article>
@@ -646,7 +676,7 @@ function DocumentDetailPage({
             <div className="directory-section-head">
               <div>
                 <h3>{selectedDocument.title}</h3>
-                <p>{datasetTitle(selectedDocument.dataset_id, datasets)} · {documentKind(selectedDocument.content_type)}</p>
+                <p>{documentDatasetTitles(selectedDocument, datasets)} · {documentKind(selectedDocument.content_type)}</p>
               </div>
             </div>
             <div className="document-detail-meta-grid">
@@ -818,7 +848,7 @@ function SourcesPage({ documents, datasets }) {
             {group.items.slice(0, 8).map((document) => (
               <article key={document.id}>
                 <strong>{document.title}</strong>
-                <span>{datasetTitle(document.dataset_id, datasets)} · {formatRelativeTime(document.updated_at)}</span>
+                <span>{documentDatasetTitles(document, datasets)} · {formatRelativeTime(document.updated_at)}</span>
               </article>
             ))}
           </div>
@@ -927,6 +957,8 @@ export default function WorkspaceDirectoryPanel({
   documentSearch,
   onDocumentSearchChange,
   selectedDocumentId,
+  onFocusDocumentMembership,
+  onClearDocumentSelection,
   onOpenDocumentPage,
   onBackToDatasets,
   selectedDocumentDetail,
@@ -967,6 +999,8 @@ export default function WorkspaceDirectoryPanel({
           documentSearch={documentSearch}
           onDocumentSearchChange={onDocumentSearchChange}
           selectedDocumentId={selectedDocumentId}
+          onFocusDocumentMembership={onFocusDocumentMembership}
+          onClearDocumentSelection={onClearDocumentSelection}
           onOpenDocumentPage={onOpenDocumentPage}
           onRefreshDocuments={onRefreshDocuments}
           onUpdateDataset={onUpdateDataset}

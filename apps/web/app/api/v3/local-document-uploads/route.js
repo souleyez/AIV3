@@ -47,7 +47,14 @@ function toWorkerReadablePath(filePath) {
 }
 
 function inferContentType(file) {
-  return file.type || 'application/octet-stream';
+  if (file.type) {
+    return file.type;
+  }
+  const lowerName = String(file.name || '').toLowerCase();
+  if (lowerName.endsWith('.zip')) {
+    return 'application/zip';
+  }
+  return 'application/octet-stream';
 }
 
 export async function POST(request) {

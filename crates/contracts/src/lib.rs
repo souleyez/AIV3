@@ -2869,6 +2869,10 @@ pub struct ResolveDatasetSecretBindingsResponse {
 pub struct DocumentSummary {
     pub id: DocumentId,
     pub dataset_id: DatasetId,
+    #[serde(default)]
+    pub dataset_ids: Vec<DatasetId>,
+    #[serde(default, rename = "datasetIds")]
+    pub dataset_ids_camel: Vec<DatasetId>,
     pub title: String,
     pub object_key: String,
     pub content_type: String,
@@ -3898,6 +3902,22 @@ pub struct RegisterDocumentResponse {
 pub struct CreateDocumentIngestResponse {
     pub document: DocumentSummary,
     pub workflow_execution: WorkflowExecutionView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_documents: Vec<DocumentSummary>,
+    #[serde(
+        default,
+        rename = "childDocuments",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub child_documents_camel: Vec<DocumentSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_workflow_executions: Vec<WorkflowExecutionView>,
+    #[serde(
+        default,
+        rename = "childWorkflowExecutions",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub child_workflow_executions_camel: Vec<WorkflowExecutionView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -68,6 +68,23 @@ test('document detail view model switches previous and next inside the same data
   assert.equal(viewModel.nextDocument.id, 'doc-d');
 });
 
+test('document detail view model treats secondary dataset memberships as siblings', () => {
+  const documents = [
+    { id: 'doc-a', dataset_id: 'dataset-a', title: 'A' },
+    { id: 'doc-b', dataset_id: 'dataset-b', dataset_ids: ['dataset-b', 'dataset-a'], title: 'B' },
+    { id: 'doc-c', dataset_id: 'dataset-c', title: 'C' },
+  ];
+
+  const viewModel = buildDocumentDetailViewModel({
+    documents,
+    selectedDocumentId: 'doc-b',
+    selectedDocumentDetail: null,
+  });
+
+  assert.equal(viewModel.previousDocument.id, 'doc-a');
+  assert.equal(viewModel.nextDocument, null);
+});
+
 test('chunk section hints ignore blank values and missing metadata', () => {
   assert.deepEqual(chunkSectionHints({ metadata: { section_title_hints: ['接口', '', '  验收  '] } }), [
     '接口',

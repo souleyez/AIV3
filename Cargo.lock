@@ -1898,6 +1898,7 @@ dependencies = [
  "uuid",
  "workflow-definitions",
  "workflow-engine",
+ "zip",
 ]
 
 [[package]]

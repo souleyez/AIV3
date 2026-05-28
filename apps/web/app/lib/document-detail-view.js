@@ -13,6 +13,15 @@ export function chunkSectionHints(chunk) {
   return [];
 }
 
+function documentDatasetIds(document) {
+  return [...new Set([
+    document?.dataset_id,
+    document?.datasetId,
+    ...(Array.isArray(document?.dataset_ids) ? document.dataset_ids : []),
+    ...(Array.isArray(document?.datasetIds) ? document.datasetIds : []),
+  ].map((id) => String(id || '').trim()).filter(Boolean))];
+}
+
 export function buildDocumentDetailViewModel({
   documents = [],
   selectedDocumentId = '',
@@ -26,8 +35,9 @@ export function buildDocumentDetailViewModel({
   const selectedDocument = selectedDocumentDetail?.document
     || documents.find((document) => document.id === selectedDocumentId)
     || null;
-  const siblingDocuments = selectedDocument?.dataset_id
-    ? documents.filter((document) => document.dataset_id === selectedDocument.dataset_id)
+  const selectedDatasetIds = new Set(documentDatasetIds(selectedDocument));
+  const siblingDocuments = selectedDatasetIds.size
+    ? documents.filter((document) => documentDatasetIds(document).some((datasetId) => selectedDatasetIds.has(datasetId)))
     : documents;
   const currentIndex = siblingDocuments.findIndex((document) => document.id === selectedDocument?.id);
   const previousDocument = currentIndex > 0 ? siblingDocuments[currentIndex - 1] : null;
