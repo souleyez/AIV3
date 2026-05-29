@@ -65,6 +65,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
     let echarts_hydration_script = render_echarts_hydration_script(&modules, &data_snapshot);
     let visual_bridge_manifest =
         build_visual_bridge_manifest(request, &preview_contract, &style, &render_spec);
+    let dynamic_page_contract = build_dynamic_page_contract();
     let html = format!(
         concat!(
             "<!doctype html><html><head><meta charset=\"utf-8\">",
@@ -112,6 +113,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
         "visual_spec": visual_spec,
         "render_spec": render_spec,
         "data_snapshot": data_snapshot,
+        "dynamic_page_contract": dynamic_page_contract,
         "chart_runtime": chart_runtime_manifest,
         "visual_bridge": visual_bridge_manifest,
         "export_package": export_package,
@@ -156,6 +158,7 @@ fn build_export_package_manifest(
         .get("source")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let dynamic_page_contract = build_dynamic_page_contract();
     json!({
         "kind": "static-page-export-package",
         "version": 1,
@@ -180,6 +183,11 @@ fn build_export_package_manifest(
             {
                 "path": "data-snapshot.json",
                 "role": "render_data_snapshot",
+                "mime": "application/json"
+            },
+            {
+                "path": "data.json",
+                "role": "dynamic_data_snapshot",
                 "mime": "application/json"
             },
             {
@@ -228,8 +236,12 @@ fn build_export_package_manifest(
             "remote_scripts_allowed": false,
             "deterministic_chart_fallback": true,
             "optional_echarts_hydration": "safe_json_option_islands",
-            "mobile_viewport": "responsive_no_horizontal_overflow_expected"
+            "mobile_viewport": "responsive_no_horizontal_overflow_expected",
+            "dynamic_data_file": "data.json",
+            "client_refresh_policy": "poll_data_json_when_published",
+            "default_controls": ["time_range", "primary_partition", "manual_refresh", "auto_refresh"]
         },
+        "dynamic_page_contract": dynamic_page_contract,
         "debug": {
             "renderer": STATIC_PAGE_RENDERER_ID,
             "module_count": module_count,
@@ -243,6 +255,22 @@ fn build_export_package_manifest(
             "visual_bridge": visual_bridge_manifest,
             "data_snapshot_source": data_snapshot_source
         }
+    })
+}
+
+fn build_dynamic_page_contract() -> Value {
+    json!({
+        "version": 1,
+        "data_file": "data.json",
+        "source_snapshot_file": "data-snapshot.json",
+        "data_role": "client_refresh_snapshot",
+        "default_controls": ["time_range", "primary_partition", "manual_refresh", "auto_refresh"],
+        "refresh_policy": {
+            "mode": "poll_data_json_when_published",
+            "interval_seconds": 60,
+            "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"]
+        },
+        "rendering_policy": "final_html_should_render_stateful_business_modules_from_data_json_when_present"
     })
 }
 
@@ -1687,6 +1715,11 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
+            .any(|file| file["path"] == json!("data.json")));
+        assert!(result.asset_manifest["export_package"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|file| file["path"] == json!("data-quality-report.json")));
         assert!(result.asset_manifest["export_package"]["files"]
             .as_array()
@@ -1765,6 +1798,15 @@ mod tests {
             result.asset_manifest["export_package"]["browser_delivery_contract"]
                 ["deterministic_chart_fallback"],
             true
+        );
+        assert_eq!(
+            result.asset_manifest["dynamic_page_contract"]["data_file"],
+            "data.json"
+        );
+        assert_eq!(
+            result.asset_manifest["export_package"]["browser_delivery_contract"]
+                ["dynamic_data_file"],
+            "data.json"
         );
     }
 

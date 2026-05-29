@@ -85,6 +85,12 @@
   - Tightened local fact extraction so post-ingest cleanup now collects candidates across the full document, filters TOC dot-leader noise, then ranks higher-value care-domain facts before applying the cap.
   - Added a nursing-handover retrieval ranking guard so `护理交接班时，必须交接的内容有哪些？` prefers the concrete `四、交接内容` chunk over generic `交接班制度` / `床旁交接班` references.
   - Focused local regressions passed for fact-index TOC noise, nursing handover, and the neighboring elderly-care retrieval ranking cases for 翻身、发药、跌倒.
+- Continued on 2026-05-29 by turning the Xinbai dynamic static-page lesson into an internal V3 contract:
+  - Static-page export packages now declare both `data-snapshot.json` and `data.json`; `data.json` is the client-refresh data entry for generated pages, while `data-snapshot.json` remains the renderer/source-of-truth handoff file.
+  - Renderer manifests and queued export manifests now carry a `dynamic_page_contract` with time selector, primary partition selector, manual refresh, auto-refresh, 60-second polling, and snapshot/version change-detection expectations.
+  - `static_page_image2_data_publish` fixed-task packages now instruct Cloudflare Codex to produce final HTML that can load local `data.json` and support time/primary-partition controls. This is internal task guidance only; public third-party fields stay unchanged.
+  - V3's Codex Host generated-artifact publisher can persist returned `data_json` as `data.json` / `data-snapshot.json`, strip the large inline data from the fixed-task output, and publish only artifact paths/URLs plus the manifest.
+  - Local validation passed for the export-artifact validator, static-page renderer unit, Codex Host publication unit, contracts fixed-task example, platform data-snapshot render regression, and the full static-page render smoke.
 
 ## Immediate Execution Queue
 
@@ -118,6 +124,7 @@
    - Treat Image2 as a visual contract/reference, not final HTML source of truth.
    - Do not send ordinary chat detail pages, resume matrices, evidence tables, or answer appendices through Image2. Those stay on the rapid HTML artifact path unless the user explicitly asks for a designed/published static page.
    - Generate final HTML from structured real-data snapshots and validated source summaries.
+   - Publish designed static pages with `data.json` as the dynamic refresh entry and `data-snapshot.json` as the renderer handoff snapshot.
    - Keep default page requirements:
      - time selector;
      - primary partition selector, such as store/region/project;

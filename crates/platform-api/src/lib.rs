@@ -24451,6 +24451,18 @@ fn external_channel_static_page_image2_fixed_task(
             "detail_table_required": external_static_page_prompt_contains_any(prompt, &[
                 "明细", "名单", "列表", "表格", "建表", "detail", "table", "list",
             ]),
+            "dynamic_page_contract": {
+                "required": true,
+                "data_file": "data.json",
+                "source_snapshot_file": "data-snapshot.json",
+                "time_selector_required": true,
+                "primary_partition_selector_required": true,
+                "manual_refresh_required": true,
+                "auto_refresh_required": true,
+                "refresh_interval_seconds": 60,
+                "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
+                "static_html_must_render_from_data_json": true
+            },
         }),
         image2: json!({
             "prompt_text": prompt_text,
@@ -24476,6 +24488,7 @@ fn external_channel_static_page_image2_fixed_task(
             "trend_aggregation": "date_series_only_for_trends",
             "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
             "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
+            "dynamic_data_contract": "final HTML must load local data.json when present and support time/primary partition controls plus manual/auto refresh",
             "publish_mode": "new_generated_artifact_only",
             "effect_image_confirmation_required": false,
             "continue_to_publish_after_effect_image": true,
@@ -25409,10 +25422,18 @@ fn external_channel_generated_artifact_public_base_url() -> String {
 }
 
 fn external_channel_generated_artifact_public_url(relative_dir: &str) -> String {
+    external_channel_generated_artifact_public_file_url(relative_dir, "index.html")
+}
+
+fn external_channel_generated_artifact_public_file_url(
+    relative_dir: &str,
+    file_name: &str,
+) -> String {
     format!(
-        "{}/{}/index.html",
+        "{}/{}/{}",
         external_channel_generated_artifact_public_base_url(),
-        relative_dir.trim_matches('/')
+        relative_dir.trim_matches('/'),
+        file_name.trim_matches('/')
     )
 }
 
@@ -25495,6 +25516,34 @@ async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
         )
     })?;
     let public_url = external_channel_generated_artifact_public_url(&relative_dir);
+    let data_snapshot = render_output
+        .asset_manifest
+        .get("data_snapshot")
+        .or_else(|| render_output.asset_manifest.get("dataSnapshot"))
+        .cloned();
+    let data_url = data_snapshot
+        .as_ref()
+        .map(|_| external_channel_generated_artifact_public_file_url(&relative_dir, "data.json"));
+    if let Some(data_snapshot) = data_snapshot.as_ref() {
+        let data_bytes = serde_json::to_vec_pretty(data_snapshot).map_err(|error| {
+            ApiError::internal(
+                "static_page_generated_artifact_publish_failed",
+                format!("failed to serialize generated static-page data: {error}"),
+            )
+        })?;
+        fs::write(artifact_dir.join("data-snapshot.json"), &data_bytes).map_err(|error| {
+            ApiError::internal(
+                "static_page_generated_artifact_publish_failed",
+                format!("failed to write generated static-page data snapshot: {error}"),
+            )
+        })?;
+        fs::write(artifact_dir.join("data.json"), &data_bytes).map_err(|error| {
+            ApiError::internal(
+                "static_page_generated_artifact_publish_failed",
+                format!("failed to write generated static-page dynamic data: {error}"),
+            )
+        })?;
+    }
     let source_refs = external_channel_static_page_status_source_refs(&draft.source_refs);
     let channel_connection_id = source_refs
         .get("channel_connection_id")
@@ -25520,6 +25569,9 @@ async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
         "render_output_id": render_output_id,
         "image_job_id": image_job_id.clone(),
         "public_url": public_url.clone(),
+        "data_url": data_url.clone(),
+        "data_snapshot_url": data_url.as_ref().map(|_| external_channel_generated_artifact_public_file_url(&relative_dir, "data-snapshot.json")),
+        "dynamic_page_contract": build_static_page_dynamic_page_contract(),
         "source_refs": source_refs.clone(),
         "reason": codex_host_fixed_task_safe_text(reason),
         "created_at": Utc::now(),
@@ -64272,11 +64324,17 @@ fn build_static_page_queued_export_package_manifest(
                 "mime": "application/json"
             },
             {
+                "path": "data.json",
+                "role": "dynamic_data_snapshot",
+                "mime": "application/json"
+            },
+            {
                 "path": "modules.json",
                 "role": "editable_module_plan",
                 "mime": "application/json"
             }
         ],
+        "dynamic_page_contract": build_static_page_dynamic_page_contract(),
         "debug": {
             "renderer": "static-page-renderer-v1",
             "module_count": module_count,
@@ -64285,6 +64343,22 @@ fn build_static_page_queued_export_package_manifest(
                 .and_then(Value::as_str)
                 .unwrap_or("unknown")
         }
+    })
+}
+
+fn build_static_page_dynamic_page_contract() -> Value {
+    json!({
+        "version": 1,
+        "data_file": "data.json",
+        "source_snapshot_file": "data-snapshot.json",
+        "data_role": "client_refresh_snapshot",
+        "default_controls": ["time_range", "primary_partition", "manual_refresh", "auto_refresh"],
+        "refresh_policy": {
+            "mode": "poll_data_json_when_published",
+            "interval_seconds": 60,
+            "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"]
+        },
+        "rendering_policy": "final_html_should_render_stateful_business_modules_from_data_json_when_present"
     })
 }
 
@@ -64377,6 +64451,17 @@ fn build_static_page_render_spec() -> Value {
             "advancedOptions": "plain-json-echarts-option-only",
             "finalRendererFallback": "ECharts modules must still have dataSnapshot sampleData so the final renderer can fall back to deterministic DOM/SVG output.",
             "advancedHydration": "Final HTML preserves safe ECharts JSON option islands; if an approved ECharts bundle is present, the page can hydrate charts without losing deterministic fallback."
+        },
+        "dynamicData": {
+            "dataFile": "data.json",
+            "sourceSnapshotFile": "data-snapshot.json",
+            "clientRefresh": {
+                "enabled": true,
+                "intervalSeconds": 60,
+                "changeDetectionFields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"]
+            },
+            "defaultControls": ["time_range", "primary_partition", "manual_refresh", "auto_refresh"],
+            "updateContract": "When datasets or source documents change, regenerate or replace data.json and let the final HTML re-render from the latest snapshot."
         },
         "editableContent": ["title", "content", "dataBinding", "visualization", "chartRuntime", "chartOptions", "layout"],
         "generationGuardrails": [
@@ -91143,6 +91228,10 @@ retrieve_evidence:
             Some("按用户确认数据生成经营分析效果图"),
         );
         assert_eq!(image_prompt_payload["data_snapshot"], data_snapshot);
+        assert_eq!(
+            image_prompt_payload["render_spec"]["dynamicData"]["dataFile"],
+            json!("data.json")
+        );
 
         let rendered = render_static_page(&StaticPageRenderRequest {
             draft_id: draft.id.to_string(),
@@ -91155,6 +91244,10 @@ retrieve_evidence:
             image_job_id: Some(StaticPageImageJobId::new().to_string()),
         });
         assert_eq!(rendered.asset_manifest["data_snapshot"], data_snapshot);
+        assert_eq!(
+            rendered.asset_manifest["dynamic_page_contract"]["data_file"],
+            json!("data.json")
+        );
         assert_eq!(
             rendered.asset_manifest["chart_runtime"]["fallbackModules"],
             json!(1)

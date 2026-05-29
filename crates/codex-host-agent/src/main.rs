@@ -1680,14 +1680,18 @@ fn normalize_cloudflare_fixed_task_output(
         .and_then(Value::as_str)
         .unwrap_or_default();
     if generated_artifact_url_allowed(public_url) {
+        let mut output = output;
+        strip_static_page_inline_artifact_payload(&mut output)?;
         return Ok(output);
     }
     let Some(html) = extract_static_page_html_from_fixed_output(&output) else {
         return Ok(output);
     };
+    let data_json = extract_static_page_data_json_from_fixed_output(&output);
     publish_cloudflare_static_page_html(
         output,
         &html,
+        data_json,
         task_context,
         execution_id,
         orchestrator_task_id,
@@ -1714,6 +1718,41 @@ fn extract_static_page_html_from_fixed_output(output: &Value) -> Option<String> 
     None
 }
 
+fn extract_static_page_data_json_from_fixed_output(output: &Value) -> Option<Value> {
+    for pointer in [
+        "/artifact/data_json",
+        "/artifact/data",
+        "/artifact/data_snapshot",
+        "/data_json",
+        "/data",
+        "/data_snapshot",
+    ] {
+        if let Some(data) = output
+            .pointer(pointer)
+            .and_then(normalize_static_page_data_json)
+        {
+            return Some(data);
+        }
+    }
+    None
+}
+
+fn normalize_static_page_data_json(value: &Value) -> Option<Value> {
+    match value {
+        Value::Array(_) | Value::Object(_) => Some(value.clone()),
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<Value>(trimmed)
+                .ok()
+                .filter(|value| value.is_array() || value.is_object())
+        }
+        _ => None,
+    }
+}
+
 fn standalone_html_document(html: &str) -> String {
     let trimmed = html.trim();
     let lower = trimmed
@@ -1734,6 +1773,7 @@ fn standalone_html_document(html: &str) -> String {
 fn publish_cloudflare_static_page_html(
     mut output: Value,
     html: &str,
+    data_json: Option<Value>,
     task_context: &CodexHostTaskContext,
     execution_id: domain_model::WorkflowExecutionId,
     orchestrator_task_id: &str,
@@ -1759,6 +1799,37 @@ fn publish_cloudflare_static_page_html(
         )
     })?;
     let public_url = generated_artifact_public_url(&relative_dir);
+    let (data_path, data_url, data_snapshot_url) = if let Some(data_json) = data_json.as_ref() {
+        let data_path = artifact_dir.join("data.json");
+        let data_snapshot_path = artifact_dir.join("data-snapshot.json");
+        let data_bytes = serde_json::to_vec_pretty(data_json)
+            .map_err(|error| anyhow!("failed to serialize generated artifact data: {error}"))?;
+        fs::write(&data_path, &data_bytes).map_err(|error| {
+            anyhow!(
+                "failed to write Cloudflare Codex generated static-page data {}: {error}",
+                data_path.display()
+            )
+        })?;
+        fs::write(&data_snapshot_path, &data_bytes).map_err(|error| {
+            anyhow!(
+                "failed to write Cloudflare Codex generated static-page data snapshot {}: {error}",
+                data_snapshot_path.display()
+            )
+        })?;
+        (
+            Some(data_path),
+            Some(generated_artifact_public_file_url(
+                &relative_dir,
+                "data.json",
+            )),
+            Some(generated_artifact_public_file_url(
+                &relative_dir,
+                "data-snapshot.json",
+            )),
+        )
+    } else {
+        (None, None, None)
+    };
     let manifest = json!({
         "kind": "v3_codex_host_generated_static_page",
         "version": 1,
@@ -1767,6 +1838,9 @@ fn publish_cloudflare_static_page_html(
         "orchestrator_task_id": orchestrator_task_id,
         "capability": task_context.capability.clone(),
         "public_url": public_url.clone(),
+        "data_url": data_url.clone(),
+        "data_snapshot_url": data_snapshot_url.clone(),
+        "dynamic_page_contract": static_page_dynamic_page_contract(),
         "created_at": Utc::now(),
     });
     let manifest_path = artifact_dir.join("manifest.json");
@@ -1792,9 +1866,6 @@ fn publish_cloudflare_static_page_html(
         *artifact = json!({});
     }
     if let Some(artifact_object) = artifact.as_object_mut() {
-        artifact_object.remove("html");
-        artifact_object.remove("html_text");
-        artifact_object.remove("index_html");
         artifact_object.insert(
             "local_path".to_string(),
             Value::String(index_path.display().to_string()),
@@ -1804,10 +1875,38 @@ fn publish_cloudflare_static_page_html(
             "manifest_path".to_string(),
             Value::String(manifest_path.display().to_string()),
         );
+        if let (Some(data_path), Some(data_url)) = (data_path.as_ref(), data_url.as_ref()) {
+            artifact_object.insert(
+                "data_path".to_string(),
+                Value::String(data_path.display().to_string()),
+            );
+            artifact_object.insert("data_url".to_string(), Value::String(data_url.clone()));
+        }
     }
-    object.remove("html");
-    object.remove("html_text");
+    strip_static_page_inline_artifact_payload(&mut output)?;
     Ok(output)
+}
+
+fn strip_static_page_inline_artifact_payload(output: &mut Value) -> Result<()> {
+    let object = output
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("fixed task output must be a JSON object"))?;
+    if let Some(artifact_object) = object.get_mut("artifact").and_then(Value::as_object_mut) {
+        for key in [
+            "html",
+            "html_text",
+            "index_html",
+            "data_json",
+            "data",
+            "data_snapshot",
+        ] {
+            artifact_object.remove(key);
+        }
+    }
+    for key in ["html", "html_text", "data_json", "data", "data_snapshot"] {
+        object.remove(key);
+    }
+    Ok(())
 }
 
 fn generated_artifact_root() -> Result<PathBuf> {
@@ -1845,11 +1944,32 @@ fn generated_artifact_public_base_url() -> String {
 }
 
 fn generated_artifact_public_url(relative_dir: &str) -> String {
+    generated_artifact_public_file_url(relative_dir, "index.html")
+}
+
+fn generated_artifact_public_file_url(relative_dir: &str, file_name: &str) -> String {
     format!(
-        "{}/{}/index.html",
+        "{}/{}/{}",
         generated_artifact_public_base_url(),
-        relative_dir.trim_matches('/')
+        relative_dir.trim_matches('/'),
+        file_name.trim_matches('/')
     )
+}
+
+fn static_page_dynamic_page_contract() -> Value {
+    json!({
+        "version": 1,
+        "data_file": "data.json",
+        "source_snapshot_file": "data-snapshot.json",
+        "data_role": "client_refresh_snapshot",
+        "default_controls": ["time_range", "primary_partition", "manual_refresh", "auto_refresh"],
+        "refresh_policy": {
+            "mode": "poll_data_json_when_published",
+            "interval_seconds": 60,
+            "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"]
+        },
+        "rendering_policy": "final_html_should_render_stateful_business_modules_from_data_json_when_present"
+    })
 }
 
 fn generated_artifact_url_allowed(public_url: &str) -> bool {
@@ -2498,7 +2618,12 @@ mod tests {
             "status": "success",
             "artifact": {
                 "public_url": "https://v3.elepcloud.com/generated-artifacts/pending-host-publication",
-                "html": "<main><h1>经营分析</h1></main>"
+                "html": "<main><h1>经营分析</h1><script type=\"application/json\" id=\"v3-data-source\">data.json</script></main>",
+                "data_json": {
+                    "source": "unit-test",
+                    "snapshotVersion": "snapshot-1",
+                    "rows": [{"store": "新世界", "value": 1}]
+                }
             },
             "validation_report": {
                 "source_row_count": 1
@@ -2521,6 +2646,7 @@ mod tests {
         assert!(public_url.contains(&assistant_run_id.to_string()));
         assert!(!public_url.contains("pending-host-agent-publication"));
         assert!(normalized.pointer("/artifact/html").is_none());
+        assert!(normalized.pointer("/artifact/data_json").is_none());
         let local_path = normalized
             .pointer("/artifact/local_path")
             .and_then(Value::as_str)
@@ -2529,6 +2655,78 @@ mod tests {
         let html = std::fs::read_to_string(local_path).expect("html should be readable");
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("经营分析"));
+        let data_path = normalized
+            .pointer("/artifact/data_path")
+            .and_then(Value::as_str)
+            .expect("data path");
+        let data = std::fs::read_to_string(data_path).expect("data should be readable");
+        assert!(data.contains("snapshot-1"));
+        assert_eq!(
+            normalized.pointer("/artifact/data_url"),
+            Some(&json!(public_url.replace("index.html", "data.json")))
+        );
+        let manifest_path = normalized
+            .pointer("/artifact/manifest_path")
+            .and_then(Value::as_str)
+            .expect("manifest path");
+        let manifest: Value = serde_json::from_str(
+            &std::fs::read_to_string(manifest_path).expect("manifest should be readable"),
+        )
+        .expect("manifest json");
+        assert_eq!(
+            manifest["dynamic_page_contract"]["data_file"],
+            json!("data.json")
+        );
+        assert_eq!(
+            manifest["data_url"],
+            json!(public_url.replace("index.html", "data.json"))
+        );
+    }
+
+    #[test]
+    fn cloudflare_static_page_allowed_public_url_strips_inline_payload() {
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:static-page".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+        };
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+                "html": "<main>inline html</main>",
+                "data_json": {"source": "inline"}
+            },
+            "data": {"source": "top-level"},
+            "validation_report": {
+                "source_row_count": 1
+            }
+        });
+
+        let normalized = normalize_cloudflare_fixed_task_output(
+            output,
+            &task_context,
+            domain_model::WorkflowExecutionId::new(),
+            "task_test",
+        )
+        .expect("output should normalize");
+
+        assert_eq!(
+            normalized.pointer("/artifact/public_url"),
+            Some(&json!(
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
+            ))
+        );
+        assert!(normalized.pointer("/artifact/html").is_none());
+        assert!(normalized.pointer("/artifact/data_json").is_none());
+        assert!(normalized.pointer("/data").is_none());
     }
 
     #[test]

@@ -195,6 +195,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     write_json_file(
         &output_dir,
+        "data.json",
+        &result.asset_manifest["data_snapshot"],
+    )?;
+    write_json_file(
+        &output_dir,
         "data-quality-report.json",
         &data_quality_report,
     )?;
@@ -274,6 +279,7 @@ fn render_smoke_readme(request: &StaticPageRenderRequest, manifest: &serde_json:
             "- ECharts 可选增强模块：{}\n",
             "- 视觉合同：{} / {}\n",
             "- 浏览器交付：index.html 可直接打开；无远程脚本；图表保留 deterministic DOM/SVG 回退。\n",
+            "- 动态数据入口：data.json（与 data-snapshot.json 同源，可由发布侧在资料更新后替换）。\n",
             "- 模块级数据质量报告：data-quality-report.json\n",
             "- 视觉合同桥：visual-bridge.json\n",
             "- 运行要求：runtime-requirements.json\n"

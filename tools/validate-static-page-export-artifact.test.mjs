@@ -10,6 +10,7 @@ const PACKAGE_FILES = [
   { path: 'asset-manifest.json', role: 'renderer_manifest', mime: 'application/json' },
   { path: 'export-package.json', role: 'export_package_manifest', mime: 'application/json' },
   { path: 'data-snapshot.json', role: 'render_data_snapshot', mime: 'application/json' },
+  { path: 'data.json', role: 'dynamic_data_snapshot', mime: 'application/json' },
   { path: 'data-quality-report.json', role: 'module_data_quality_report', mime: 'application/json' },
   { path: 'visual-bridge.json', role: 'confirmed_visual_contract_bridge', mime: 'application/json' },
   { path: 'modules.json', role: 'editable_module_plan', mime: 'application/json' },
@@ -72,6 +73,14 @@ function makeArtifact(overrides = {}) {
       deterministic_chart_fallback: true,
       optional_echarts_hydration: 'safe_json_option_islands',
       mobile_viewport: 'responsive_no_horizontal_overflow_expected',
+      dynamic_data_file: 'data.json',
+      client_refresh_policy: 'poll_data_json_when_published',
+      default_controls: ['time_range', 'primary_partition', 'manual_refresh', 'auto_refresh'],
+    },
+    dynamic_page_contract: {
+      version: 1,
+      data_file: 'data.json',
+      source_snapshot_file: 'data-snapshot.json',
     },
   };
   const manifest = {
@@ -87,6 +96,7 @@ function makeArtifact(overrides = {}) {
       modules: [{ moduleId: 'overview', title: '总览', dataQualityStatus: 'confirmed' }],
     },
     export_package: exportPackage,
+    dynamic_page_contract: exportPackage.dynamic_page_contract,
     data_snapshot: dataSnapshot,
     visual_bridge: visualBridge,
     modules,
@@ -104,6 +114,7 @@ function makeArtifact(overrides = {}) {
     'asset-manifest.json': manifest,
     'export-package.json': exportPackage,
     'data-snapshot.json': dataSnapshot,
+    'data.json': dataSnapshot,
     'data-quality-report.json': {
       kind: 'static-page-data-quality-report',
       summary: manifest.chart_runtime.dataQualitySummary,
@@ -113,7 +124,7 @@ function makeArtifact(overrides = {}) {
     'modules.json': modules,
     'runtime-requirements.json': [{ name: 'Apache ECharts', license: 'Apache-2.0', required: false }],
     'render-spec.json': renderSpec,
-    'README.md': '打开 index.html。检查 data-quality-report.json、visual-bridge.json 和 runtime-requirements.json。\n',
+    'README.md': '打开 index.html。检查 data.json、data-quality-report.json、visual-bridge.json 和 runtime-requirements.json。\n',
     ...overrides.files,
   };
   for (const [filePath, content] of Object.entries(files)) {
@@ -253,6 +264,19 @@ test('validateStaticPageExportArtifact rejects data snapshot drift', () => {
 
   assert.equal(report.ready, false);
   assert.ok(report.errors.some((error) => error.code === 'data_snapshot_manifest_mismatch'));
+});
+
+test('validateStaticPageExportArtifact rejects dynamic data drift', () => {
+  const artifact = makeArtifact();
+  const dataPath = path.join(artifact, 'data.json');
+  const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+  data.module_bindings[0].sampleData[0].value = 44;
+  writeJson(dataPath, data);
+
+  const report = validateStaticPageExportArtifact(artifact);
+
+  assert.equal(report.ready, false);
+  assert.ok(report.errors.some((error) => error.code === 'dynamic_data_snapshot_mismatch'));
 });
 
 test('validateStaticPageExportArtifact rejects visual bridge drift', () => {

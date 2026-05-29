@@ -53,6 +53,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     write_json_file(
         &output_dir,
+        "data.json",
+        &result.asset_manifest["data_snapshot"],
+    )?;
+    write_json_file(
+        &output_dir,
         "data-quality-report.json",
         &data_quality_report,
     )?;
@@ -124,6 +129,7 @@ fn render_readme(request: &StaticPageRenderRequest, manifest: &serde_json::Value
             "- 入口：index.html\n",
             "- Manifest：asset-manifest.json\n",
             "- 数据快照：data-snapshot.json\n",
+            "- 动态数据入口：data.json\n",
             "- 质量报告：data-quality-report.json\n",
             "- 视觉桥接：visual-bridge.json\n",
             "- 运行要求：runtime-requirements.json\n"

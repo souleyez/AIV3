@@ -8,6 +8,7 @@ const REQUIRED_FILE_PATHS = [
   'asset-manifest.json',
   'export-package.json',
   'data-snapshot.json',
+  'data.json',
   'data-quality-report.json',
   'visual-bridge.json',
   'modules.json',
@@ -76,14 +77,6 @@ function stringListsEqual(left, right) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
-function flatObjectsEqual(left, right) {
-  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
-  if (Array.isArray(left) || Array.isArray(right)) return false;
-  const leftKeys = Object.keys(left).sort();
-  const rightKeys = Object.keys(right).sort();
-  return stringListsEqual(leftKeys, rightKeys) && leftKeys.every((key) => left[key] === right[key]);
-}
-
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
   if (!value || typeof value !== 'object') return value;
@@ -104,7 +97,14 @@ function browserDeliveryContractReady(contract) {
     && contract?.remote_scripts_allowed === false
     && contract?.deterministic_chart_fallback === true
     && contract?.optional_echarts_hydration === 'safe_json_option_islands'
-    && contract?.mobile_viewport === 'responsive_no_horizontal_overflow_expected';
+    && contract?.mobile_viewport === 'responsive_no_horizontal_overflow_expected'
+    && contract?.dynamic_data_file === 'data.json'
+    && contract?.client_refresh_policy === 'poll_data_json_when_published'
+    && Array.isArray(contract?.default_controls)
+    && contract.default_controls.includes('time_range')
+    && contract.default_controls.includes('primary_partition')
+    && contract.default_controls.includes('manual_refresh')
+    && contract.default_controls.includes('auto_refresh');
 }
 
 export function validateStaticPageExportArtifact(artifactDir) {
@@ -126,6 +126,7 @@ export function validateStaticPageExportArtifact(artifactDir) {
   const html = readText(htmlPath, errors, 'index_html_missing', 'index.html');
   const dataQualityReport = readJson(path.join(artifact, 'data-quality-report.json'), errors, 'data_quality_report_missing', 'data-quality-report.json');
   const dataSnapshot = readJson(path.join(artifact, 'data-snapshot.json'), errors, 'data_snapshot_missing', 'data-snapshot.json');
+  const dynamicData = readJson(path.join(artifact, 'data.json'), errors, 'dynamic_data_missing', 'data.json');
   const visualBridge = readJson(path.join(artifact, 'visual-bridge.json'), errors, 'visual_bridge_missing', 'visual-bridge.json');
   const modules = readJson(path.join(artifact, 'modules.json'), errors, 'modules_missing', 'modules.json');
   const runtimeRequirements = readJson(path.join(artifact, 'runtime-requirements.json'), errors, 'runtime_requirements_missing', 'runtime-requirements.json');
@@ -257,6 +258,20 @@ export function validateStaticPageExportArtifact(artifactDir) {
   addCheck(
     checks,
     errors,
+    'dynamic data mirrors renderer snapshot',
+    typeof dynamicData?.source === 'string'
+      && dataSnapshot
+      && jsonValuesEqual(dynamicData, dataSnapshot)
+      && manifest?.dynamic_page_contract?.data_file === 'data.json'
+      && manifest?.export_package?.dynamic_page_contract?.data_file === 'data.json',
+    'data.json must mirror data-snapshot.json and be declared by the dynamic page contract.',
+    'dynamic_data_snapshot_mismatch',
+    path.join(artifact, 'data.json'),
+  );
+
+  addCheck(
+    checks,
+    errors,
     'visual bridge mirrors renderer manifest',
     visualBridge?.kind === 'static-page-visual-bridge'
       && manifest?.visual_bridge
@@ -296,13 +311,14 @@ export function validateStaticPageExportArtifact(artifactDir) {
     errors,
     'supporting JSON files are self-contained',
     typeof dataSnapshot?.source === 'string'
+      && typeof dynamicData?.source === 'string'
       && visualBridge?.kind === 'static-page-visual-bridge'
       && Array.isArray(modules)
       && Array.isArray(runtimeRequirements)
       && runtimeRequirements.some((item) => item?.license === 'Apache-2.0')
       && typeof renderSpec === 'object'
       && renderSpec !== null,
-    'data-snapshot, visual-bridge, runtime-requirements, and render-spec must be parseable without the main manifest.',
+    'data-snapshot, data.json, visual-bridge, runtime-requirements, and render-spec must be parseable without the main manifest.',
     'supporting_json_contract_invalid',
     artifact,
   );
@@ -313,7 +329,7 @@ export function validateStaticPageExportArtifact(artifactDir) {
     'browser delivery contract is direct and offline-safe',
     browserDeliveryContractReady(manifestBrowserContract)
       && browserDeliveryContractReady(exportPackageBrowserContract)
-      && flatObjectsEqual(exportPackageBrowserContract, manifestBrowserContract),
+      && jsonValuesEqual(exportPackageBrowserContract, manifestBrowserContract),
     'browser delivery contract must be valid in both manifests and match exactly.',
     'browser_delivery_contract_invalid',
     exportPackagePath,
@@ -324,6 +340,7 @@ export function validateStaticPageExportArtifact(artifactDir) {
     errors,
     'handoff README points reviewers to key files',
     readme.includes('index.html')
+      && readme.includes('data.json')
       && readme.includes('data-quality-report.json')
       && readme.includes('visual-bridge.json')
       && readme.includes('runtime-requirements.json'),

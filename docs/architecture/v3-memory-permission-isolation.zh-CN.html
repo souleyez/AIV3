@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DataMax 企业记忆与权限隔离说明</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f8;
+      --paper: #ffffff;
+      --ink: #17202a;
+      --muted: #5f6b76;
+      --line: #d9e0e6;
+      --line-strong: #b8c4cf;
+      --navy: #12324a;
+      --blue: #1d5f8f;
+      --teal: #0f766e;
+      --slate: #32465a;
+      --amber: #9a5b13;
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+      line-height: 1.68;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    .doc-header {
+      padding: 34px 38px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 22px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .meta span {
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #f8fafb;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      color: var(--navy);
+      font-size: clamp(34px, 5vw, 56px);
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 960px;
+      margin-top: 18px;
+      color: var(--slate);
+      font-size: 18px;
+    }
+
+    .statement {
+      max-width: 980px;
+      margin-top: 18px;
+      padding: 16px 18px;
+      border: 1px solid #d6e4ee;
+      border-left: 5px solid var(--blue);
+      border-radius: var(--radius);
+      color: var(--navy);
+      background: #f5f9fc;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 28px;
+    }
+
+    .summary-item {
+      min-height: 132px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfd;
+    }
+
+    .summary-item b {
+      display: block;
+      color: var(--navy);
+      font-size: 17px;
+    }
+
+    .summary-item span {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      gap: 22px;
+      margin-top: 22px;
+      align-items: start;
+    }
+
+    .toc {
+      position: sticky;
+      top: 18px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+    }
+
+    .toc-title {
+      color: var(--navy);
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .toc a {
+      display: block;
+      padding: 7px 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .content {
+      display: grid;
+      gap: 18px;
+    }
+
+    section {
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+    }
+
+    .section-kicker {
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin-top: 6px;
+      color: var(--navy);
+      font-size: 28px;
+      line-height: 1.22;
+    }
+
+    section > p {
+      margin-top: 14px;
+      color: var(--slate);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+      background: #fff;
+    }
+
+    th,
+    td {
+      padding: 13px 15px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: var(--navy);
+      background: #f3f7fa;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      padding: 2px 6px;
+      border: 1px solid #d7e2ea;
+      border-radius: 6px;
+      color: #114c72;
+      background: #f5f9fc;
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-size: 0.92em;
+    }
+
+    .steps,
+    .principles,
+    .cards {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      align-items: start;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfd;
+    }
+
+    .num {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--navy);
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .step strong,
+    .card strong {
+      display: block;
+      color: var(--navy);
+      font-size: 16px;
+    }
+
+    .step span,
+    .card span,
+    .principles li {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .cards {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .card {
+      min-height: 150px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfd;
+    }
+
+    .card span {
+      display: block;
+      margin-top: 8px;
+    }
+
+    .principles {
+      padding-left: 18px;
+    }
+
+    .principles li {
+      padding: 6px 0;
+    }
+
+    .notice {
+      margin-top: 18px;
+      padding: 16px;
+      border: 1px solid #ead6b8;
+      border-left: 5px solid var(--amber);
+      border-radius: var(--radius);
+      color: #5d3a10;
+      background: #fffaf2;
+      font-size: 14px;
+    }
+
+    footer {
+      margin-top: 18px;
+      padding: 18px 4px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 920px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .toc {
+        position: static;
+      }
+
+      .summary,
+      .cards {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        width: min(100% - 24px, 1180px);
+        padding-top: 16px;
+      }
+
+      .doc-header,
+      section {
+        padding: 22px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="doc-header">
+      <div class="meta">
+        <span>DataMax</span>
+        <span>企业记忆</span>
+        <span>第三方对接</span>
+        <span>权限隔离说明</span>
+      </div>
+      <h1>DataMax 企业记忆与权限隔离说明</h1>
+      <p class="lead">
+        DataMax 的企业记忆由平台侧统一管理，不依赖模型厂商侧长期记忆，也不将企业资料作为模型持久化记忆保存。模型仅在单次请求中接收 DataMax 明确提供的临时上下文，用于组织最终回答。
+      </p>
+      <p class="statement">
+        DataMax 不依赖模型侧记忆。每次模型调用均为无状态请求，显式关闭 provider 侧存储，不复用 provider 侧会话线程；企业记忆、会话授权和资料范围均由 DataMax 平台侧恢复和裁剪后临时提供给模型。
+      </p>
+      <div class="summary" aria-label="核心结论">
+        <div class="summary-item">
+          <b>平台侧记忆</b>
+          <span>企业知识、文档解析、事实抽取、会话授权和产物状态由 DataMax 数据库、对象存储、索引与权限系统维护。</span>
+        </div>
+        <div class="summary-item">
+          <b>受控供料</b>
+          <span>DataMax 不向模型提供完整资料库、完整文档集合或完整检索结果，只提供与本轮问题相关的证据包。</span>
+        </div>
+        <div class="summary-item">
+          <b>并发隔离</b>
+          <span>同一个模型并发处理多个用户请求时，每次调用都由 DataMax 显式构造独立上下文，不共享企业资料记忆。</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="toc" aria-label="目录">
+        <div class="toc-title">目录</div>
+        <a href="#position">1. 定位</a>
+        <a href="#boundary">2. 第三方上下文边界</a>
+        <a href="#workflow">3. 问答执行机制</a>
+        <a href="#agent">4. 本地智能体职责</a>
+        <a href="#isolation">5. 并发隔离</a>
+        <a href="#session">6. 会话记忆与权限复核</a>
+        <a href="#principles">7. 安全原则</a>
+      </nav>
+
+      <div class="content">
+        <section id="position">
+          <div class="section-kicker">Position</div>
+          <h2>1. 定位</h2>
+          <p>
+            DataMax 的企业记忆系统由平台侧统一管理，不依赖模型厂商侧的长期记忆能力，也不将企业资料作为模型持久化记忆保存。
+          </p>
+          <p>
+            企业知识、文档解析结果、数据集关系、第三方会话授权、事实抽取结果、问答证据、静态页产物状态等，均由 DataMax 自有数据库、对象存储、索引系统和权限系统维护。
+          </p>
+          <p>
+            模型只在单次请求中接收 DataMax 明确提供的临时上下文，用于组织最终回答。模型调用结束后，本轮上下文不会成为模型侧长期记忆。
+          </p>
+          <div class="notice">
+            DataMax 不依赖模型侧记忆。每次模型调用均为无状态请求，显式关闭 provider 侧存储，不复用 provider 侧会话线程；企业记忆、会话授权和资料范围均由 DataMax 平台侧恢复和裁剪后临时提供给模型。
+          </div>
+        </section>
+
+        <section id="boundary">
+          <div class="section-kicker">Third-party Boundary</div>
+          <h2>2. 第三方接入后的上下文边界</h2>
+          <p>
+            第三方系统接入后，DataMax 按以下字段建立身份、会话和资料授权边界。
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>字段</th>
+                  <th>含义</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>tenant_external_id</code></td>
+                  <td>第三方租户或客户边界。</td>
+                </tr>
+                <tr>
+                  <td><code>bot_external_id</code></td>
+                  <td>第三方机器人或应用边界。</td>
+                </tr>
+                <tr>
+                  <td><code>conversation_external_id</code></td>
+                  <td>会话边界。同一会话下可持续使用此前传入的授权上下文。</td>
+                </tr>
+                <tr>
+                  <td><code>sender_external_id</code></td>
+                  <td>第三方用户身份边界。</td>
+                </tr>
+                <tr>
+                  <td><code>dataset_external_ids</code></td>
+                  <td>本会话授权使用的资料分组。</td>
+                </tr>
+                <tr>
+                  <td><code>available_document_external_ids</code> / <code>documentExternalId</code></td>
+                  <td>本会话授权使用的具体文档。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            当第三方在某个 <code>conversation_external_id</code> 下传入数据集或文档授权后，DataMax 会在该会话范围内持续保留该授权上下文。后续同一会话可以继续使用已授权资料；当会话 ID 变化时，授权范围重新计算。
+          </p>
+          <p>
+            第三方内部如何判断用户能访问哪些资料，由第三方系统负责。DataMax 以第三方传入的授权范围作为本轮和本会话的可用资料边界，并在 DataMax 内部继续执行租户、会话、数据集、文档和产物级隔离。
+          </p>
+        </section>
+
+        <section id="workflow">
+          <div class="section-kicker">Execution Workflow</div>
+          <h2>3. 问答执行机制</h2>
+          <p>
+            DataMax 的问答流程不是将完整资料库、完整文档或完整检索结果直接提供给模型，而是采用平台侧受控供料机制。
+          </p>
+          <div class="steps">
+            <div class="step">
+              <span class="num">01</span>
+              <div>
+                <strong>接收请求</strong>
+                <span>DataMax 接收用户问题及第三方传入的身份、会话和资料授权信息。</span>
+              </div>
+            </div>
+            <div class="step">
+              <span class="num">02</span>
+              <div>
+                <strong>问题理解</strong>
+                <span>模型先用于理解问题意图，并判断任务类型，例如文档问答、统计分析、排序汇总、表格查询、静态页生成或普通问答。</span>
+              </div>
+            </div>
+            <div class="step">
+              <span class="num">03</span>
+              <div>
+                <strong>本地智能体检索</strong>
+                <span>DataMax 本地智能体根据任务类型，在当前授权范围内执行检索、事实查询、表格分析、文档细节读取或数据快照查询。</span>
+              </div>
+            </div>
+            <div class="step">
+              <span class="num">04</span>
+              <div>
+                <strong>证据处理</strong>
+                <span>DataMax 对候选内容进行权限校验、证据裁剪、结构化整理和上下文压缩。</span>
+              </div>
+            </div>
+            <div class="step">
+              <span class="num">05</span>
+              <div>
+                <strong>受控供料</strong>
+                <span>DataMax 仅向模型提供与本轮问题相关的证据摘要、必要片段、结构化事实、表格结果和来源定位。</span>
+              </div>
+            </div>
+            <div class="step">
+              <span class="num">06</span>
+              <div>
+                <strong>生成回答</strong>
+                <span>模型基于 DataMax 提供的受控证据组织最终回答，并返回给第三方用户。</span>
+              </div>
+            </div>
+          </div>
+          <div class="notice">
+            模型不直接获得完整企业资料，也不承担企业记忆存储职责。模型只根据本次请求中 DataMax 提供的临时上下文完成回答生成。
+          </div>
+        </section>
+
+        <section id="agent">
+          <div class="section-kicker">Local Agent</div>
+          <h2>4. 本地智能体职责</h2>
+          <p>
+            DataMax 本地智能体不是企业记忆的持久化载体，也不是最终答案的唯一生成者。它承担的是平台侧的受控检索和上下文组织工作。
+          </p>
+          <div class="cards">
+            <div class="card">
+              <strong>问题拆解</strong>
+              <span>识别查询对象、指标、时间、维度、格式和任务类型。</span>
+            </div>
+            <div class="card">
+              <strong>范围选择</strong>
+              <span>根据会话和资料授权边界选择可用数据集、文档、事实表或结构化数据。</span>
+            </div>
+            <div class="card">
+              <strong>受控查询</strong>
+              <span>在授权范围内执行检索、事实聚合、表格分析和文档细节读取。</span>
+            </div>
+            <div class="card">
+              <strong>证据裁剪</strong>
+              <span>对候选证据进行去噪、裁剪、合并和来源标注。</span>
+            </div>
+            <div class="card">
+              <strong>证据供给</strong>
+              <span>将必要证据包提供给模型，由模型组织自然语言回答。</span>
+            </div>
+            <div class="card">
+              <strong>非完整喂入</strong>
+              <span>不把完整检索内容、完整知识库或完整文档集合交给模型。</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="isolation">
+          <div class="section-kicker">Concurrency Isolation</div>
+          <h2>5. 并发隔离</h2>
+          <p>
+            DataMax 不使用模型侧长期记忆，因此同一个模型服务并发处理多个用户问题时，不会因模型记忆共享导致上下文串场。
+          </p>
+          <p>
+            每一次模型调用都由 DataMax 显式构造独立上下文，包括当前租户、当前机器人或应用、当前会话、当前用户、当前授权的数据集和文档、当前检索或聚合得到的证据，以及当前允许引用的事实范围。
+          </p>
+          <p>
+            模型调用之间不共享 DataMax 企业资料上下文。模型侧不会因为服务多个用户而自动记住其他用户的资料、文档或历史问答。
+          </p>
+        </section>
+
+        <section id="session">
+          <div class="section-kicker">Session Memory</div>
+          <h2>6. 会话记忆与权限复核</h2>
+          <p>
+            DataMax 可以在平台侧保留会话上下文和授权状态，但这属于 DataMax 自身的会话记忆，不属于模型厂商侧记忆。
+          </p>
+          <p>
+            当用户在同一 <code>conversation_external_id</code> 下继续提问时，DataMax 可以恢复该会话此前授权的数据集、文档和上下文摘要。恢复前仍需满足以下条件：
+          </p>
+          <ul class="principles">
+            <li>租户边界一致；</li>
+            <li>机器人或应用边界一致；</li>
+            <li>会话 ID 一致；</li>
+            <li>第三方传入或此前确认的授权范围仍有效；</li>
+            <li>DataMax 内部资料、产物和任务状态仍可用。</li>
+          </ul>
+          <p>
+            如果会话 ID 变化，或者资料授权发生变化，DataMax 会重新计算可用范围，不默认继承其他会话的资料。
+          </p>
+        </section>
+
+        <section id="principles">
+          <div class="section-kicker">Security Principles</div>
+          <h2>7. 安全原则</h2>
+          <ul class="principles">
+            <li>不使用模型厂商侧长期记忆保存企业资料；</li>
+            <li>不向模型提供完整资料库、完整文档集合或完整检索结果；</li>
+            <li>不跨租户、跨会话、跨用户共享未授权上下文；</li>
+            <li>不因模型并发调用产生用户资料串场；</li>
+            <li>所有可引用内容必须来自当前授权范围内的 DataMax 证据供料；</li>
+            <li>企业知识的存储、更新、去重、解析深化和权限控制均由 DataMax 平台侧完成。</li>
+          </ul>
+        </section>
+      </div>
+    </div>
+
+    <footer>
+      DataMax 企业记忆与权限隔离说明
+    </footer>
+  </main>
+</body>
+</html>
