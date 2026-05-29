@@ -1699,21 +1699,11 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
   if (!draft?.previewImage?.assetKey && !draft?.previewContract?.assetKey) {
     return '效果图资源缺失，请重新生成效果图。';
   }
-  return staticPageDataQualityBlockReason(
-    draft,
-    '最终页面生成要求',
-    '请先让 V3 补充样本行、重新匹配字段或修复模块数据，然后重新生成效果图。',
-    { mode: 'final' },
-  );
+  return '';
 }
 
 export function staticPageDirectHtmlBlockReason(draft = {}) {
-  return staticPageDataQualityBlockReason(
-    draft,
-    '快速 HTML 生成要求',
-    '请先让 V3 补充样本行、重新匹配字段或修复模块数据，然后重新生成 HTML。',
-    { mode: 'final' },
-  );
+  return '';
 }
 
 export function interpretStaticPagePrompt(draft, prompt = '') {

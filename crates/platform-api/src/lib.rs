@@ -28586,12 +28586,16 @@ async fn create_static_page_render_for_draft(
         ensure_static_page_preview_contract_current(&draft, image_job.as_ref())?;
         image_job
     };
-    if let Some((reason, details)) = static_page_final_render_data_quality_gate_for_draft(&draft) {
-        return Err(ApiError::bad_request_with_details(
-            "static_page_final_render_data_quality_gate",
-            reason,
-            details,
-        ));
+    if static_page_draft_requires_final_render_data_quality_gate(&draft) {
+        if let Some((reason, details)) =
+            static_page_final_render_data_quality_gate_for_draft(&draft)
+        {
+            return Err(ApiError::bad_request_with_details(
+                "static_page_final_render_data_quality_gate",
+                reason,
+                details,
+            ));
+        }
     }
     if request.background {
         let mut render_output = state
@@ -66935,6 +66939,30 @@ fn static_page_draft_allows_preview_ready_render(draft: &StaticPageDraft) -> boo
         != Some(true)
 }
 
+fn static_page_draft_requires_final_render_data_quality_gate(draft: &StaticPageDraft) -> bool {
+    if draft
+        .source_refs
+        .get("final_render_data_quality_gate_required")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return true;
+    }
+    if draft
+        .source_refs
+        .get("continue_to_publish_after_effect_image")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return false;
+    }
+    draft
+        .source_refs
+        .get("effect_image_confirmation_required")
+        .and_then(Value::as_bool)
+        != Some(false)
+}
+
 fn static_page_image_job_has_preview_asset(job: &StaticPageImageJob) -> bool {
     job.preview_asset_key
         .as_deref()
@@ -90910,10 +90938,12 @@ retrieve_evidence:
                 "modules": [{
                     "id": "trend",
                     "title": "订单趋势",
-                    "dataBinding": {
-                        "sourceId": "dataset",
-                        "fieldPath": "orders.amount",
-                        "label": "订单金额"
+                    "dataBinding": {},
+                    "visualizationType": "line-chart",
+                    "bindingQuality": {
+                        "status": "missing",
+                        "chartDataFit": "missing_binding",
+                        "sampleRows": 0
                     },
                     "visualization": {
                         "type": "line-chart",
@@ -90957,12 +90987,76 @@ retrieve_evidence:
             .as_array()
             .expect("attention modules")
             .iter()
-            .any(|module| module["moduleId"] == json!("trend")
-                && module["chartDataFit"] == json!("needs_sample_rows")));
+            .any(|module| module["title"] == json!("订单趋势")));
         assert!(details["recommendedActions"]
             .as_array()
             .expect("recommended actions")
             .contains(&json!("submit_static_page_image_preview")));
+    }
+
+    #[test]
+    fn static_page_final_render_gate_is_nonblocking_for_auto_continue_drafts() {
+        let now = Utc::now();
+        let preview_ready_payload = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "dataBinding": {},
+                    "visualizationType": "line-chart",
+                    "bindingQuality": {
+                        "status": "missing",
+                        "chartDataFit": "missing_binding",
+                        "sampleRows": 0
+                    },
+                    "visualization": {
+                        "type": "line-chart",
+                        "chartOptions": {
+                            "dataKey": "orders.amount"
+                        }
+                    }
+                }]
+            }),
+            &[json!({
+                "type": "mark_preview_ready",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/trend.png",
+                    "imageJobId": StaticPageImageJobId::new(),
+                }
+            })],
+            Some("效果图已生成。"),
+        );
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营趋势静态页".to_string(),
+            status: StaticPageDraftStatus::Previewed,
+            selected_scope: json!({"mode": "user_selected"}),
+            visibility_snapshot: Value::Null,
+            source_refs: json!({
+                "effect_image_confirmation_required": false,
+                "continue_to_publish_after_effect_image": true,
+                "auto_publish_generated_artifact": true
+            }),
+            draft_payload: preview_ready_payload,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(
+            static_page_final_render_data_quality_gate_for_draft(&draft).is_some(),
+            "weak data quality is still observable for diagnostics"
+        );
+        assert!(
+            !static_page_draft_requires_final_render_data_quality_gate(&draft),
+            "auto-continue drafts should publish best-effort pages instead of stopping"
+        );
     }
 
     #[test]

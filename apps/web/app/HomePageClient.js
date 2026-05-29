@@ -892,6 +892,7 @@ export default function HomePageClient() {
   const reportDetailLoadIdRef = useRef(0);
   const fileInputRef = useRef(null);
   const staticPageAutoRenderKeysRef = useRef(new Set());
+  const staticPageProgressMessageKeysRef = useRef(new Set());
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -1173,6 +1174,41 @@ export default function HomePageClient() {
     };
   }
 
+  function appendStaticPageProgressMessage(key, content) {
+    const stableKey = `static-page:${key}`;
+    setLocalMessages((current) => {
+      if (staticPageProgressMessageKeysRef.current.has(stableKey)
+        || current.some((message) => message?.metadata?.key === stableKey)) {
+        return current;
+      }
+      staticPageProgressMessageKeysRef.current.add(stableKey);
+      return [
+        ...current,
+        {
+          ...createLocalMessage('assistant', content),
+          metadata: {
+            source: 'static_page_progress',
+            key: stableKey,
+          },
+        },
+      ].slice(-40);
+    });
+  }
+
+  function staticPageRenderedUrl(draftOrOutput) {
+    const finalPage = draftOrOutput?.finalPage || draftOrOutput || {};
+    return finalPage.html_preview_url
+      || finalPage.htmlPreviewUrl
+      || finalPage.html_download_url
+      || finalPage.htmlDownloadUrl
+      || finalPage.download_url
+      || finalPage.downloadUrl
+      || finalPage.asset_manifest?.public_url
+      || finalPage.assetManifest?.public_url
+      || finalPage.assetManifest?.publicUrl
+      || '';
+  }
+
   function mergeBackendStaticPageDraft(localDraft, backendDraft) {
     const payload = backendDraft?.draft_payload && typeof backendDraft.draft_payload === 'object'
       ? backendDraft.draft_payload
@@ -1228,6 +1264,7 @@ export default function HomePageClient() {
         imageJobId: renderOutput.image_job_id || draft.finalPage?.imageJobId || null,
         assetManifest: renderOutput.asset_manifest || draft.finalPage?.assetManifest || {},
         html: renderOutput.html || draft.finalPage?.html || '',
+        htmlPreviewUrl: renderOutput.html_preview_url || renderOutput.htmlPreviewUrl || draft.finalPage?.htmlPreviewUrl || '',
         htmlDownloadUrl: renderOutput.html_download_url || renderOutput.htmlDownloadUrl || draft.finalPage?.htmlDownloadUrl || '',
         directHtml: Boolean(draft.finalPage?.directHtml || renderOutput.asset_manifest?.directHtml || renderOutput.asset_manifest?.direct_html),
       },
@@ -1574,6 +1611,10 @@ export default function HomePageClient() {
     const imageJob = response?.image_job;
     const latestDraft = staticPageDrafts[baseDraft.id] || staticPageDrafts[baseDraft.backendDraftId] || baseDraft;
     const draft = replaceDraftWithOperation(latestDraft, staticPageImageJobQueueOperation(imageJob, operation));
+    appendStaticPageProgressMessage(
+      `${baseDraft.id}:image-queued:${imageJob?.id || 'pending'}`,
+      '已确认生图文案，效果图任务已入队。效果图只作为过程预览，完成后会自动继续生成静态页。',
+    );
     setBanner(`效果图任务已进入资源队列，当前前方约 ${imageJob?.queue_position ?? 1} 个任务。`);
     return { imageJob, draft };
   }
@@ -1650,6 +1691,12 @@ export default function HomePageClient() {
         throw new Error(staticPageFinalRenderBlockReason(draft) || '效果图还未准备好。');
       }
     }
+    appendStaticPageProgressMessage(
+      `${draft.id}:render-requested:${directHtml ? 'direct-html' : imageJobId || 'image-ready'}`,
+      directHtml
+        ? '已进入快速 HTML 制作，V3 会先产出一个可打开的页面版本。'
+        : '效果图已接上，正在把视觉稿和数据绑定为可访问静态页。',
+    );
     const response = await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/renders`, {
       method: 'POST',
       body: {
@@ -1670,6 +1717,7 @@ export default function HomePageClient() {
         imageJobId: directHtml ? null : renderOutput?.image_job_id || imageJobId || null,
         assetManifest: renderOutput?.asset_manifest || {},
         html: renderOutput?.html || '',
+        htmlPreviewUrl: renderOutput?.html_preview_url || renderOutput?.htmlPreviewUrl || '',
         htmlDownloadUrl: renderOutput?.html_download_url || renderOutput?.htmlDownloadUrl || '',
         directHtml,
       },
@@ -1681,6 +1729,15 @@ export default function HomePageClient() {
       finalPage: rendered.finalPage,
     };
     replaceStaticPageDraft(baseDraft.id, finalDraft);
+    if (renderStatus === 'rendered') {
+      const finalUrl = staticPageRenderedUrl(renderOutput || finalDraft);
+      appendStaticPageProgressMessage(
+        `${draft.id}:rendered:${renderOutput?.id || finalUrl || 'ready'}`,
+        finalUrl
+          ? `静态页已生成：${finalUrl}`
+          : '静态页已生成，可以在右侧生成结果区打开。',
+      );
+    }
     setBanner(renderStatus === 'rendered'
       ? directHtml
         ? '快速 HTML 已生成，可以下载 index.html。'
@@ -3303,7 +3360,13 @@ export default function HomePageClient() {
 
     if (finalStatus === 'rendered' || draft.status === 'rendered') {
       setStaticPageEditorOpen(false);
-      setBanner('静态页已经生成；如果要重做，先回到模块编辑修改内容，再重新发起效果图。');
+      const finalUrl = staticPageRenderedUrl(draft);
+      if (finalUrl && typeof window !== 'undefined') {
+        window.open(finalUrl, '_blank', 'noopener,noreferrer');
+        setBanner('静态页已打开；需要调整时继续在对话里提出即可。');
+      } else {
+        setBanner('静态页已经生成；需要调整时继续在对话里提出即可。');
+      }
       return draft;
     }
 
@@ -3801,6 +3864,10 @@ export default function HomePageClient() {
     setStaticPageEditorOpen(false);
     setMobilePanel('chat');
     setBanner('效果图已生成，正在自动继续制作静态页。');
+    appendStaticPageProgressMessage(
+      `${activeStaticPageDraft.id}:preview-ready:${activeStaticPageDraft.previewImage?.assetKey || activeStaticPageDraft.previewContract?.assetKey || 'ready'}`,
+      '效果图已生成，正在继续读取视觉稿并制作最终页面。',
+    );
   }, [activeStaticPageDraft?.id, activeStaticPageDraft?.imageJob?.status, staticPageEditorOpen]);
 
   useEffect(() => {
@@ -3833,6 +3900,10 @@ export default function HomePageClient() {
 
     staticPageAutoRenderKeysRef.current.add(autoRenderKey);
     setStaticPageActionBusy(true);
+    appendStaticPageProgressMessage(
+      `${draft.id}:auto-render:${jobId || previewAssetKey}`,
+      '已自动进入静态页制作，不需要再确认效果图。完成后会直接给出页面链接。',
+    );
     const optimisticDraft = replaceDraftWithOperation(draft, {
       type: 'request_final_render',
       finalPage: {
@@ -3879,6 +3950,26 @@ export default function HomePageClient() {
 
     return () => window.clearInterval(timer);
   }, [activeStaticPageDraft?.backendDraftId, activeStaticPageDraft?.finalPage?.status]);
+
+  useEffect(() => {
+    const draft = activeStaticPageDraft;
+    if (!draft || draft.finalPage?.status !== 'rendered') {
+      return;
+    }
+    const finalUrl = staticPageRenderedUrl(draft);
+    appendStaticPageProgressMessage(
+      `${draft.id}:rendered:${draft.finalPage?.renderOutputId || finalUrl || 'ready'}`,
+      finalUrl
+        ? `静态页已生成：${finalUrl}`
+        : '静态页已生成，可以在右侧生成结果区打开。',
+    );
+  }, [
+    activeStaticPageDraft?.id,
+    activeStaticPageDraft?.finalPage?.status,
+    activeStaticPageDraft?.finalPage?.renderOutputId,
+    activeStaticPageDraft?.finalPage?.htmlPreviewUrl,
+    activeStaticPageDraft?.finalPage?.htmlDownloadUrl,
+  ]);
 
   useEffect(() => {
     if (!selectedReportPlanId) {
