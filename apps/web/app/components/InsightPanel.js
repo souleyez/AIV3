@@ -14,6 +14,7 @@ import {
   downloadTextArtifact,
   downloadUrlArtifact,
   hasDataQualitySummary,
+  staticPageHtmlDownloadHref,
   staticPageHtmlFilename,
 } from '../lib/static-page-export-package';
 import { normalizeHtmlArtifactManifest } from '../lib/html-artifact-manifest';
@@ -147,6 +148,31 @@ function staticPageIsPreviewStale(draft) {
   return draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
 }
 
+function staticPageFinalPageUrl(draft) {
+  const finalPage = draft?.finalPage || {};
+  const manifest = finalPage.assetManifest || finalPage.asset_manifest || {};
+  return finalPage.publicUrl
+    || finalPage.public_url
+    || finalPage.generatedArtifactUrl
+    || finalPage.generated_artifact_url
+    || finalPage.htmlPreviewUrl
+    || finalPage.html_preview_url
+    || finalPage.htmlDownloadUrl
+    || finalPage.html_download_url
+    || finalPage.downloadUrl
+    || finalPage.download_url
+    || manifest.publicUrl
+    || manifest.public_url
+    || manifest.generatedArtifactUrl
+    || manifest.generated_artifact_url
+    || manifest.artifactPublicUrl
+    || manifest.artifact_public_url
+    || manifest.publish_result?.public_url
+    || manifest.publishResult?.publicUrl
+    || manifest.output?.artifact_public_url
+    || '';
+}
+
 function downloadStaticPageHtmlFromShelf(draft) {
   const downloadHref = draft?.finalPage?.htmlDownloadUrl || draft?.finalPage?.html_download_url || '';
   if (downloadHref && downloadUrlArtifact({ href: downloadHref })) {
@@ -159,6 +185,20 @@ function downloadStaticPageHtmlFromShelf(draft) {
     filename: staticPageHtmlFilename(draft),
     mime: 'text/html;charset=utf-8',
   });
+}
+
+function openStaticPageFromShelf(draft) {
+  const href = staticPageHtmlDownloadHref(staticPageFinalPageUrl(draft));
+  if (href && typeof window !== 'undefined') {
+    window.open(href, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+  const html = buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || '');
+  if (!html || typeof window === 'undefined') return false;
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  window.open(url, '_blank', 'noopener,noreferrer');
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return true;
 }
 
 function downloadStaticPagePackageFromShelf(draft) {
@@ -801,6 +841,8 @@ function GeneratedProjectCard({
 }) {
   const stage = staticPageProjectStage(draft);
   const exportable = staticPageProjectCanExport(draft);
+  const finalPageUrl = staticPageFinalPageUrl(draft);
+  const canOpenFinalPage = Boolean(finalPageUrl || buildStaticPageStandaloneHtml(draft, draft?.finalPage?.html || ''));
   const staleReason = staticPageIsPreviewStale(draft)
     ? staticPageFinalRenderBlockReason(draft)
     : '';
@@ -830,6 +872,11 @@ function GeneratedProjectCard({
           ) : null}
           {stage.key === 'static' ? (
             <>
+              {canOpenFinalPage ? (
+                <button type="button" className="primary-btn compact-action-btn" onClick={() => openStaticPageFromShelf(draft)}>
+                  打开页面
+                </button>
+              ) : null}
               <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageHtmlFromShelf(draft)}>
                 HTML
               </button>
@@ -950,9 +997,14 @@ export default function InsightPanel({
   const resultCount = staticPageDrafts.length + shelfHtmlArtifacts.length;
 
   async function copyProjectLink(draft) {
-    const link = typeof window === 'undefined'
+    const finalPageUrl = staticPageHtmlDownloadHref(staticPageFinalPageUrl(draft));
+    const link = finalPageUrl
+      ? finalPageUrl.startsWith('/') && typeof window !== 'undefined'
+        ? `${window.location.origin}${finalPageUrl}`
+        : finalPageUrl
+      : (typeof window === 'undefined'
       ? `#static-page-${draft.id}`
-      : `${window.location.origin}${window.location.pathname}#static-page-${draft.id}`;
+      : `${window.location.origin}${window.location.pathname}#static-page-${draft.id}`);
     try {
       await navigator.clipboard.writeText(link);
       setCopiedProjectId(draft.id);
