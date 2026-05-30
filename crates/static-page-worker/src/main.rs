@@ -49,6 +49,15 @@ enum StaticPageImageTaskOutcome {
     Requeued,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StaticPagePreviewAssetMaterialization {
+    source_asset_key: String,
+    persisted_asset_key: Option<String>,
+    byte_size: Option<usize>,
+    storage_status: &'static str,
+    error: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     observability::install("static_page_worker")?;
@@ -551,12 +560,17 @@ async fn process_static_page_image_task(
         let mut artifact = extract_first_image_artifact(&completed_task)?;
         artifact.asset_key =
             normalize_artifact_asset_key(&artifact.asset_key, &orchestrator_config.base_url);
-        if let Some(materialized_asset_key) =
-            materialize_preview_asset(http_client, orchestrator_config, job.id, &artifact)
+        let materialization =
+            materialize_preview_asset(http_client, orchestrator_config, job.id, &artifact);
+        if let Some(materialized_asset_key) = materialization
+            .as_ref()
+            .and_then(|materialization| materialization.persisted_asset_key.as_deref())
         {
-            artifact.asset_key = materialized_asset_key;
+            artifact.asset_key = materialized_asset_key.to_string();
         }
-        mark_job_preview_ready(storage, &job, &artifact.asset_key).await?;
+        let asset_provenance =
+            static_page_image_preview_asset_provenance(&artifact, materialization.as_ref());
+        mark_job_preview_ready(storage, &job, &artifact.asset_key, &asset_provenance).await?;
         append_assistant_event(
             storage,
             job.tenant_id,
@@ -573,10 +587,12 @@ async fn process_static_page_image_task(
                     "width": artifact.width,
                     "height": artifact.height,
                 },
+                "asset_provenance": asset_provenance,
                 "artifact_manifest": static_page_image_preview_artifact_manifest(
                     &job,
                     &artifact,
                     &completed_task.id,
+                    &asset_provenance,
                 ),
             }),
         )
@@ -1119,11 +1135,17 @@ async fn requeue_static_page_image_task(
 
 fn orchestrator_poll_error_is_transient(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
+    if static_page_orchestrator_waf_blocked_error(&message)
+        || static_page_orchestrator_auth_failed_error(&message)
+    {
+        return false;
+    }
     message.contains("error decoding response body")
         || message.contains("eof while parsing")
         || message.contains("json decode failed")
         || message.contains("connection")
         || message.contains("timed out")
+        || message.contains("status=500")
         || message.contains("status=502")
         || message.contains("status=503")
         || message.contains("status=504")
@@ -1131,6 +1153,11 @@ fn orchestrator_poll_error_is_transient(error: &anyhow::Error) -> bool {
 
 fn static_page_image_error_should_auto_retry(error_message: &str) -> bool {
     let message = error_message.to_ascii_lowercase();
+    if static_page_orchestrator_waf_blocked_error(&message)
+        || static_page_orchestrator_auth_failed_error(&message)
+    {
+        return false;
+    }
     message.contains("did not finish after")
         || message.contains("error decoding response body")
         || message.contains("eof while parsing")
@@ -1138,9 +1165,33 @@ fn static_page_image_error_should_auto_retry(error_message: &str) -> bool {
         || message.contains("connection")
         || message.contains("timed out")
         || message.contains("timeout")
+        || message.contains("status=500")
         || message.contains("status=502")
         || message.contains("status=503")
         || message.contains("status=504")
+}
+
+fn static_page_orchestrator_waf_blocked_error(lowercase_message: &str) -> bool {
+    (lowercase_message.contains("status=403")
+        || lowercase_message.contains("status: 403")
+        || lowercase_message.contains("http 403"))
+        && (lowercase_message.contains("1010")
+            || lowercase_message.contains("browser_signature")
+            || lowercase_message.contains("browser signature")
+            || lowercase_message.contains("challenge")
+            || lowercase_message.contains("attention required")
+            || lowercase_message.contains("cf-error")
+            || lowercase_message.contains("cloudflare ray"))
+}
+
+fn static_page_orchestrator_auth_failed_error(lowercase_message: &str) -> bool {
+    (lowercase_message.contains("status=401")
+        || lowercase_message.contains("status: 401")
+        || lowercase_message.contains("http 401")
+        || lowercase_message.contains("status=403")
+        || lowercase_message.contains("status: 403")
+        || lowercase_message.contains("http 403"))
+        && !static_page_orchestrator_waf_blocked_error(lowercase_message)
 }
 
 fn bounded_error_message(error: &anyhow::Error, max_chars: usize) -> String {
@@ -1194,6 +1245,7 @@ async fn mark_job_preview_ready(
     storage: &PgStorage,
     job: &StaticPageImageJob,
     asset_key: &str,
+    asset_provenance: &Value,
 ) -> Result<()> {
     let mut next_job = job.clone();
     next_job.status = StaticPageImageJobStatus::PreviewReady;
@@ -1205,6 +1257,7 @@ async fn mark_job_preview_ready(
         json!({
             "status": "completed",
             "previewAssetKey": asset_key,
+            "previewAssetProvenance": asset_provenance,
             "updatedAt": Utc::now(),
         }),
     );
@@ -1603,7 +1656,7 @@ fn materialize_preview_asset(
     orchestrator_config: &CodexOrchestratorConfig,
     job_id: domain_model::StaticPageImageJobId,
     artifact: &StaticPageVisualArtifact,
-) -> Option<String> {
+) -> Option<StaticPagePreviewAssetMaterialization> {
     let mime_type = artifact.mime_type.as_deref().unwrap_or("image/png");
     let bytes = if artifact.asset_key.starts_with("data:image/") {
         decode_data_url_image(&artifact.asset_key)
@@ -1617,14 +1670,26 @@ fn materialize_preview_asset(
 
     let extension = image_extension_for_mime(mime_type);
     match persist_generated_preview_asset(job_id, extension, &bytes) {
-        Ok(asset_key) => Some(asset_key),
+        Ok(asset_key) => Some(StaticPagePreviewAssetMaterialization {
+            source_asset_key: artifact.asset_key.clone(),
+            persisted_asset_key: Some(asset_key),
+            byte_size: Some(bytes.len()),
+            storage_status: "persisted",
+            error: None,
+        }),
         Err(error) => {
             tracing::warn!(
                 error = %error,
                 static_page_image_job_id = %job_id,
                 "failed to persist static page preview asset; falling back to original asset key"
             );
-            None
+            Some(StaticPagePreviewAssetMaterialization {
+                source_asset_key: artifact.asset_key.clone(),
+                persisted_asset_key: None,
+                byte_size: Some(bytes.len()),
+                storage_status: "persist_failed",
+                error: Some(bounded_text(&error.to_string(), 160)),
+            })
         }
     }
 }
@@ -1736,6 +1801,7 @@ fn static_page_image_preview_artifact_manifest(
     job: &StaticPageImageJob,
     artifact: &StaticPageVisualArtifact,
     orchestrator_task_id: &str,
+    asset_provenance: &Value,
 ) -> Value {
     let primary_url = if artifact.asset_key.starts_with("http://")
         || artifact.asset_key.starts_with("https://")
@@ -1772,6 +1838,7 @@ fn static_page_image_preview_artifact_manifest(
             "preview_asset_key": preview_asset_key,
             "preview_asset_key_redacted": preview_asset_key_is_embedded,
         },
+        "provenance": asset_provenance,
         "safety": {
             "customer_visible": true,
             "credentials_exposed": false,
@@ -1779,6 +1846,90 @@ fn static_page_image_preview_artifact_manifest(
             "generated_artifact_only": true,
             "overwrite_allowed": false,
         },
+    })
+}
+
+fn static_page_image_preview_asset_provenance(
+    artifact: &StaticPageVisualArtifact,
+    materialization: Option<&StaticPagePreviewAssetMaterialization>,
+) -> Value {
+    let source_asset_key = materialization
+        .map(|item| item.source_asset_key.as_str())
+        .unwrap_or(artifact.asset_key.as_str());
+    let source_ref = safe_preview_asset_source_ref(source_asset_key);
+    let persisted_asset_key = materialization
+        .and_then(|item| item.persisted_asset_key.as_ref())
+        .map(|value| Value::String(value.clone()))
+        .unwrap_or(Value::Null);
+    json!({
+        "schema": "v3.static_page_preview_asset_provenance",
+        "schemaVersion": 1,
+        "sourceAssetKind": preview_asset_source_kind(source_asset_key),
+        "sourceAssetRef": source_ref["ref"].clone(),
+        "sourceAssetRefRedacted": source_ref["redacted"].clone(),
+        "sourceAssetHadQuery": source_ref["had_query"].clone(),
+        "persisted": materialization
+            .and_then(|item| item.persisted_asset_key.as_ref())
+            .is_some(),
+        "persistedPreviewAssetKey": persisted_asset_key,
+        "storageStatus": materialization
+            .map(|item| item.storage_status)
+            .unwrap_or("not_materialized"),
+        "byteSize": materialization
+            .and_then(|item| item.byte_size)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        "mimeType": artifact.mime_type.clone().map(Value::String).unwrap_or(Value::Null),
+        "width": artifact.width.map(Value::from).unwrap_or(Value::Null),
+        "height": artifact.height.map(Value::from).unwrap_or(Value::Null),
+        "materializationError": materialization
+            .and_then(|item| item.error.as_ref())
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
+    })
+}
+
+fn preview_asset_source_kind(asset_key: &str) -> &'static str {
+    if asset_key.starts_with("data:image/") {
+        "embedded_data_url"
+    } else if asset_key.starts_with("blob:") {
+        "browser_blob_url"
+    } else if asset_key.starts_with("http://") || asset_key.starts_with("https://") {
+        "remote_url"
+    } else {
+        "stored_asset_key"
+    }
+}
+
+fn safe_preview_asset_source_ref(asset_key: &str) -> Value {
+    if asset_key.starts_with("data:image/") || asset_key.starts_with("blob:") {
+        return json!({
+            "ref": Value::Null,
+            "redacted": true,
+            "had_query": false,
+        });
+    }
+    if asset_key.starts_with("http://") || asset_key.starts_with("https://") {
+        if let Ok(mut url) = reqwest::Url::parse(asset_key) {
+            let had_query = url.query().is_some() || url.fragment().is_some();
+            url.set_query(None);
+            url.set_fragment(None);
+            return json!({
+                "ref": url.to_string(),
+                "redacted": had_query,
+                "had_query": had_query,
+            });
+        }
+        return json!({
+            "ref": Value::Null,
+            "redacted": true,
+            "had_query": false,
+        });
+    }
+    json!({
+        "ref": bounded_text(asset_key, 240),
+        "redacted": false,
+        "had_query": false,
     })
 }
 
@@ -1858,6 +2009,15 @@ mod tests {
         assert!(orchestrator_poll_error_is_transient(&anyhow!(
             "orchestrator response JSON decode failed: status=200 body_chars=0 body_excerpt=\"\": EOF while parsing a value at line 1 column 0"
         )));
+        assert!(orchestrator_poll_error_is_transient(&anyhow!(
+            "orchestrator poll failed: status=500 body_excerpt=\"temporary upstream error\""
+        )));
+        assert!(!orchestrator_poll_error_is_transient(&anyhow!(
+            "orchestrator response JSON decode failed: status=403 body_excerpt=\"1010 browser_signature_banned\""
+        )));
+        assert!(!orchestrator_poll_error_is_transient(&anyhow!(
+            "orchestrator poll failed: status=401 body_excerpt=\"invalid service key\""
+        )));
         assert!(!orchestrator_poll_error_is_transient(&anyhow!(
             "orchestrator task ended with status failed"
         )));
@@ -1873,6 +2033,15 @@ mod tests {
         ));
         assert!(static_page_image_error_should_auto_retry(
             "orchestrator poll failed: status=503"
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "orchestrator poll failed: status=500"
+        ));
+        assert!(!static_page_image_error_should_auto_retry(
+            "orchestrator response JSON decode failed: status=403 body_excerpt=\"1010 browser_signature_banned\""
+        ));
+        assert!(!static_page_image_error_should_auto_retry(
+            "orchestrator poll failed: status=401 body_excerpt=\"invalid service key\""
         ));
         assert!(!static_page_image_error_should_auto_retry(
             "orchestrator task ended with status failed"
@@ -1969,7 +2138,13 @@ mod tests {
             height: Some(768),
         };
 
-        let manifest = static_page_image_preview_artifact_manifest(&job, &artifact, "cf-task-001");
+        let provenance = static_page_image_preview_asset_provenance(&artifact, None);
+        let manifest = static_page_image_preview_artifact_manifest(
+            &job,
+            &artifact,
+            "cf-task-001",
+            &provenance,
+        );
 
         assert_eq!(manifest["schema"], json!("v3.output_artifact_manifest"));
         assert_eq!(
@@ -1989,6 +2164,18 @@ mod tests {
         assert_eq!(
             manifest["refs"]["orchestrator_task_id"],
             json!("cf-task-001")
+        );
+        assert_eq!(
+            manifest["provenance"]["storageStatus"],
+            json!("not_materialized")
+        );
+        assert_eq!(
+            manifest["provenance"]["sourceAssetKind"],
+            json!("remote_url")
+        );
+        assert_eq!(
+            manifest["provenance"]["sourceAssetRef"],
+            json!("https://souleye.cc/artifacts/preview.png")
         );
         assert_eq!(manifest["safety"]["credentials_exposed"], json!(false));
     }
@@ -2018,13 +2205,82 @@ mod tests {
             height: None,
         };
 
-        let manifest = static_page_image_preview_artifact_manifest(&job, &artifact, "cf-task-002");
+        let materialization = StaticPagePreviewAssetMaterialization {
+            source_asset_key: artifact.asset_key.clone(),
+            persisted_asset_key: Some(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png"
+                    .to_string(),
+            ),
+            byte_size: Some(6),
+            storage_status: "persisted",
+            error: None,
+        };
+        let provenance =
+            static_page_image_preview_asset_provenance(&artifact, Some(&materialization));
+        let mut persisted_artifact = artifact.clone();
+        persisted_artifact.asset_key = materialization
+            .persisted_asset_key
+            .clone()
+            .expect("persisted key");
+        let manifest = static_page_image_preview_artifact_manifest(
+            &job,
+            &persisted_artifact,
+            "cf-task-002",
+            &provenance,
+        );
 
-        assert_eq!(manifest["primary_url"], Value::Null);
-        assert_eq!(manifest["links"], json!([]));
-        assert_eq!(manifest["refs"]["preview_asset_key"], Value::Null);
-        assert_eq!(manifest["refs"]["preview_asset_key_redacted"], json!(true));
+        assert_eq!(
+            manifest["primary_url"],
+            json!(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png"
+            )
+        );
+        assert_eq!(manifest["refs"]["preview_asset_key_redacted"], json!(false));
+        assert_eq!(
+            manifest["provenance"]["sourceAssetKind"],
+            json!("embedded_data_url")
+        );
+        assert_eq!(manifest["provenance"]["sourceAssetRef"], Value::Null);
+        assert_eq!(
+            manifest["provenance"]["sourceAssetRefRedacted"],
+            json!(true)
+        );
+        assert_eq!(manifest["provenance"]["persisted"], json!(true));
+        assert_eq!(manifest["provenance"]["byteSize"], json!(6));
         assert!(!manifest.to_string().contains("abc123"));
+    }
+
+    #[test]
+    fn preview_asset_provenance_strips_signed_remote_query() {
+        let artifact = StaticPageVisualArtifact {
+            asset_key: "https://souleye.cc/artifacts/preview.png?token=secret#frag".to_string(),
+            name: Some("preview.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            width: Some(1536),
+            height: Some(1024),
+        };
+        let materialization = StaticPagePreviewAssetMaterialization {
+            source_asset_key: artifact.asset_key.clone(),
+            persisted_asset_key: Some(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png"
+                    .to_string(),
+            ),
+            byte_size: Some(1234),
+            storage_status: "persisted",
+            error: None,
+        };
+
+        let provenance =
+            static_page_image_preview_asset_provenance(&artifact, Some(&materialization));
+
+        assert_eq!(provenance["sourceAssetKind"], json!("remote_url"));
+        assert_eq!(
+            provenance["sourceAssetRef"],
+            json!("https://souleye.cc/artifacts/preview.png")
+        );
+        assert_eq!(provenance["sourceAssetRefRedacted"], json!(true));
+        assert_eq!(provenance["sourceAssetHadQuery"], json!(true));
+        assert!(!provenance.to_string().contains("secret"));
     }
 
     #[test]

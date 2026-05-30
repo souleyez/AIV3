@@ -30,6 +30,7 @@ const DEFAULT_ORCHESTRATOR_BASE_URL: &str = "https://souleye.cc";
 const DEFAULT_ORCHESTRATOR_API_PATH: &str = "/api/codex/orchestrator/v1";
 const DEFAULT_ORCHESTRATOR_RUNTIME_TARGET: &str = "cloudflare";
 const DEFAULT_ORCHESTRATOR_SOURCE: &str = "v3-codex-host-agent";
+const DEFAULT_ORCHESTRATOR_USER_AGENT: &str = "v3-codex-host-agent/1.0";
 const DEFAULT_ORCHESTRATOR_KIND: &str = "code-task";
 const DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS: u64 = 15_000;
 const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 6_500;
@@ -923,6 +924,11 @@ fn cloudflare_orchestrator_pending_progress_error(error_message: &str) -> bool {
 
 fn cloudflare_orchestrator_requeueable_error(error_message: &str) -> bool {
     let message = error_message.to_ascii_lowercase();
+    if cloudflare_orchestrator_waf_blocked_error(&message)
+        || cloudflare_orchestrator_auth_failed_error(&message)
+    {
+        return false;
+    }
     cloudflare_orchestrator_pending_progress_error(error_message)
         || message.contains("cloudflare codex task timed out after")
         || message.contains("failed to poll cloudflare codex task")
@@ -936,7 +942,11 @@ fn cloudflare_orchestrator_requeueable_error(error_message: &str) -> bool {
 
 fn cloudflare_orchestrator_retry_reason(error_message: &str) -> &'static str {
     let message = error_message.to_ascii_lowercase();
-    if message.contains("cloudflare codex task submitted and pending") {
+    if cloudflare_orchestrator_waf_blocked_error(&message) {
+        "cloudflare_orchestrator_waf_blocked"
+    } else if cloudflare_orchestrator_auth_failed_error(&message) {
+        "cloudflare_orchestrator_auth_failed"
+    } else if message.contains("cloudflare codex task submitted and pending") {
         "cloudflare_orchestrator_submitted"
     } else if message.contains("cloudflare codex task still running") {
         "cloudflare_orchestrator_pending"
@@ -945,6 +955,29 @@ fn cloudflare_orchestrator_retry_reason(error_message: &str) -> &'static str {
     } else {
         "cloudflare_orchestrator_poll_transient"
     }
+}
+
+fn cloudflare_orchestrator_waf_blocked_error(lowercase_message: &str) -> bool {
+    (lowercase_message.contains("status=403")
+        || lowercase_message.contains("status: 403")
+        || lowercase_message.contains("http 403"))
+        && (lowercase_message.contains("1010")
+            || lowercase_message.contains("browser_signature")
+            || lowercase_message.contains("browser signature")
+            || lowercase_message.contains("challenge")
+            || lowercase_message.contains("attention required")
+            || lowercase_message.contains("cf-error")
+            || lowercase_message.contains("cloudflare ray"))
+}
+
+fn cloudflare_orchestrator_auth_failed_error(lowercase_message: &str) -> bool {
+    (lowercase_message.contains("status=401")
+        || lowercase_message.contains("status: 401")
+        || lowercase_message.contains("http 401")
+        || lowercase_message.contains("status=403")
+        || lowercase_message.contains("status: 403")
+        || lowercase_message.contains("http 403"))
+        && !cloudflare_orchestrator_waf_blocked_error(lowercase_message)
 }
 
 fn cloudflare_orchestrator_retry_delay_ms() -> u64 {
@@ -980,6 +1013,7 @@ struct CloudflareOrchestratorConfig {
     runtime_target_id: String,
     project_id: Option<String>,
     source: String,
+    user_agent: String,
     kind: String,
 }
 
@@ -1013,6 +1047,10 @@ impl CloudflareOrchestratorConfig {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
             source: env_or_default("CODEX_ORCHESTRATOR_SOURCE", DEFAULT_ORCHESTRATOR_SOURCE),
+            user_agent: env_or_default(
+                "CODEX_ORCHESTRATOR_USER_AGENT",
+                DEFAULT_ORCHESTRATOR_USER_AGENT,
+            ),
             kind: env_or_default("CODEX_ORCHESTRATOR_KIND", DEFAULT_ORCHESTRATOR_KIND),
         })
     }
@@ -1025,6 +1063,25 @@ impl CloudflareOrchestratorConfig {
             suffix
         )
     }
+}
+
+fn cloudflare_orchestrator_service_headers(
+    config: &CloudflareOrchestratorConfig,
+    content_type: Option<&'static str>,
+    idempotency_key: Option<String>,
+) -> Vec<(&'static str, String)> {
+    let mut headers = vec![
+        ("Authorization", format!("Bearer {}", config.access_key)),
+        ("X-Client-Name", config.source.clone()),
+        ("User-Agent", config.user_agent.clone()),
+    ];
+    if let Some(content_type) = content_type {
+        headers.push(("Content-Type", content_type.to_string()));
+    }
+    if let Some(idempotency_key) = idempotency_key {
+        headers.push(("Idempotency-Key", idempotency_key));
+    }
+    headers
 }
 
 fn read_orchestrator_key_file() -> Result<Option<String>> {
@@ -1372,6 +1429,10 @@ fn compact_static_page_image2_fixed_task_for_orchestrator(
             "visual_contract_status": fixed_task.image2.get("visual_contract_status").cloned().unwrap_or(Value::Null),
             "visual_contract_url": fixed_task.image2.get("visual_contract_url").cloned().unwrap_or(Value::Null),
             "preview_asset_key": fixed_task.image2.get("preview_asset_key").cloned().unwrap_or(Value::Null),
+            "render_asset_url": fixed_task.image2.get("render_asset_url").cloned().unwrap_or(Value::Null),
+            "asset_provenance": compact_static_page_image2_asset_provenance_for_orchestrator(
+                fixed_task.image2.get("asset_provenance"),
+            ),
             "human_confirmation_required": fixed_task.image2.get("human_confirmation_required").cloned().unwrap_or(Value::Null),
             "image_prompt_payload": compact_image_prompt_payload_for_orchestrator(
                 fixed_task.image2.get("image_prompt_payload"),
@@ -1573,6 +1634,10 @@ fn minimal_fixed_task_for_orchestrator(
             "image_job_id": fixed_task.image2.get("image_job_id").cloned().unwrap_or(Value::Null),
             "visual_contract_status": fixed_task.image2.get("visual_contract_status").cloned().unwrap_or(Value::Null),
             "preview_asset_key": fixed_task.image2.get("preview_asset_key").cloned().unwrap_or(Value::Null),
+            "render_asset_url": fixed_task.image2.get("render_asset_url").cloned().unwrap_or(Value::Null),
+            "asset_provenance": compact_static_page_image2_asset_provenance_for_orchestrator(
+                fixed_task.image2.get("asset_provenance"),
+            ),
             "image_prompt_payload_excerpt": value_excerpt_for_orchestrator(
                 fixed_task.image2.get("image_prompt_payload"),
                 900,
@@ -1585,6 +1650,42 @@ fn minimal_fixed_task_for_orchestrator(
         },
         "human_review_policy": fixed_task.human_review_policy,
     })
+}
+
+fn compact_static_page_image2_asset_provenance_for_orchestrator(value: Option<&Value>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    json!({
+        "schema": value.get("schema").and_then(Value::as_str).map(|item| truncate_chars(item, 80)).unwrap_or_else(|| "v3.static_page_preview_asset_provenance".to_string()),
+        "schemaVersion": value.get("schemaVersion").or_else(|| value.get("schema_version")).and_then(Value::as_u64).map(Value::from).unwrap_or(Value::Null),
+        "renderAssetUrl": value.get("renderAssetUrl").or_else(|| value.get("render_asset_url")).and_then(Value::as_str).map(safe_static_page_asset_ref_for_orchestrator).unwrap_or(Value::Null),
+        "renderAssetPolicy": value.get("renderAssetPolicy").or_else(|| value.get("render_asset_policy")).and_then(Value::as_str).map(|item| Value::String(truncate_chars(item, 120))).unwrap_or(Value::Null),
+        "sourceAssetKind": value.get("sourceAssetKind").or_else(|| value.get("source_asset_kind")).and_then(Value::as_str).map(|item| Value::String(truncate_chars(item, 80))).unwrap_or(Value::Null),
+        "sourceAssetRef": value.get("sourceAssetRef").or_else(|| value.get("source_asset_ref")).and_then(Value::as_str).map(safe_static_page_asset_ref_for_orchestrator).unwrap_or(Value::Null),
+        "sourceAssetRefRedacted": value.get("sourceAssetRefRedacted").or_else(|| value.get("source_asset_ref_redacted")).and_then(Value::as_bool).unwrap_or(true),
+        "sourceAssetHadQuery": value.get("sourceAssetHadQuery").or_else(|| value.get("source_asset_had_query")).and_then(Value::as_bool).unwrap_or(false),
+        "persisted": value.get("persisted").and_then(Value::as_bool).unwrap_or(false),
+        "persistedPreviewAssetKey": value.get("persistedPreviewAssetKey").or_else(|| value.get("persisted_preview_asset_key")).and_then(Value::as_str).map(safe_static_page_asset_ref_for_orchestrator).unwrap_or(Value::Null),
+        "storageStatus": value.get("storageStatus").or_else(|| value.get("storage_status")).and_then(Value::as_str).map(|item| Value::String(truncate_chars(item, 80))).unwrap_or(Value::Null),
+        "byteSize": value.get("byteSize").or_else(|| value.get("byte_size")).and_then(Value::as_u64).map(Value::from).unwrap_or(Value::Null),
+        "mimeType": value.get("mimeType").or_else(|| value.get("mime_type")).and_then(Value::as_str).map(|item| Value::String(truncate_chars(item, 80))).unwrap_or(Value::Null),
+        "width": value.get("width").and_then(Value::as_i64).map(Value::from).unwrap_or(Value::Null),
+        "height": value.get("height").and_then(Value::as_i64).map(Value::from).unwrap_or(Value::Null),
+    })
+}
+
+fn safe_static_page_asset_ref_for_orchestrator(value: &str) -> Value {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.starts_with("data:image/") || trimmed.starts_with("blob:") {
+        return Value::Null;
+    }
+    let without_fragment = trimmed.split('#').next().unwrap_or(trimmed);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    Value::String(truncate_chars(without_query, 500))
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -1694,22 +1795,18 @@ async fn submit_cloudflare_orchestrator_task(
     if let Some(project_id) = config.project_id.as_ref() {
         body["projectId"] = Value::String(project_id.clone());
     }
-    let (status, text) = curl_orchestrator_json(
-        "POST",
-        &config.endpoint("/tasks"),
-        Some(&body),
-        &[
-            ("Authorization", format!("Bearer {}", config.access_key)),
-            ("Content-Type", "application/json".to_string()),
-            ("X-Client-Name", "v3-codex-host-agent".to_string()),
-            (
-                "Idempotency-Key",
-                format!("v3-codex-host:{execution_id}:{}", task_context.capability),
-            ),
-        ],
-    )
-    .await
-    .map_err(|error| anyhow!("failed to submit Cloudflare Codex task: {error}"))?;
+    let headers = cloudflare_orchestrator_service_headers(
+        config,
+        Some("application/json"),
+        Some(format!(
+            "v3-codex-host:{execution_id}:{}",
+            task_context.capability
+        )),
+    );
+    let (status, text) =
+        curl_orchestrator_json("POST", &config.endpoint("/tasks"), Some(&body), &headers)
+            .await
+            .map_err(|error| anyhow!("failed to submit Cloudflare Codex task: {error}"))?;
     if !(200..300).contains(&status) {
         let excerpt = safe_response_excerpt(&text, 300);
         return Err(anyhow!(
@@ -1731,14 +1828,12 @@ async fn poll_cloudflare_orchestrator_task_once(
     config: &CloudflareOrchestratorConfig,
     task_id: &str,
 ) -> Result<Value> {
+    let headers = cloudflare_orchestrator_service_headers(config, None, None);
     let (status_code, text) = curl_orchestrator_json(
         "GET",
         &config.endpoint(&format!("/tasks/{task_id}")),
         None,
-        &[
-            ("Authorization", format!("Bearer {}", config.access_key)),
-            ("X-Client-Name", "v3-codex-host-agent".to_string()),
-        ],
+        &headers,
     )
     .await
     .map_err(|error| anyhow!("failed to poll Cloudflare Codex task: {error}"))?;
@@ -2947,6 +3042,26 @@ mod tests {
             "data_snapshot": "数据快照".repeat(2_000),
             "preview_contract": "预览契约".repeat(2_000),
         });
+        fixed_task.image2["render_asset_url"] = json!(
+            "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png"
+        );
+        fixed_task.image2["asset_provenance"] = json!({
+            "schema": "v3.static_page_preview_asset_provenance",
+            "schemaVersion": 1,
+            "renderAssetUrl": "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png",
+            "renderAssetPolicy": "use_persisted_v3_preview_asset_for_final_html",
+            "sourceAssetKind": "remote_url",
+            "sourceAssetRef": "https://souleye.cc/artifacts/preview.png?token=secret-token#download",
+            "sourceAssetRefRedacted": true,
+            "sourceAssetHadQuery": true,
+            "persisted": true,
+            "persistedPreviewAssetKey": "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png",
+            "storageStatus": "persisted",
+            "byteSize": 1234,
+            "mimeType": "image/png",
+            "width": 1536,
+            "height": 1024
+        });
         fixed_task.trace_summary = json!({
             "external_channel": {"conversation_external_id": "conv-1"},
             "execution_trail": "执行轨迹".repeat(2_000),
@@ -2963,6 +3078,15 @@ mod tests {
             json!("static_page_image2_data_publish")
         );
         assert!(prompt_json.contains("preview_asset_key"));
+        assert_eq!(
+            parsed["image2"]["asset_provenance"]["sourceAssetRef"],
+            json!("https://souleye.cc/artifacts/preview.png")
+        );
+        assert_eq!(
+            parsed["image2"]["asset_provenance"]["renderAssetPolicy"],
+            json!("use_persisted_v3_preview_asset_for_final_html")
+        );
+        assert!(!prompt_json.contains("secret-token"));
     }
 
     #[test]
@@ -2997,6 +3121,38 @@ mod tests {
             orchestrator_access_key_from_file_text("# comment\n plain-secret \n"),
             Some("plain-secret".to_string())
         );
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_service_headers_identify_v3_callers() {
+        let config = CloudflareOrchestratorConfig {
+            base_url: "https://souleye.cc".to_string(),
+            api_path: "/api/codex/orchestrator/v1".to_string(),
+            access_key: "service-key".to_string(),
+            runtime_target_id: "cloudflare".to_string(),
+            project_id: None,
+            source: "v3-codex-host-agent".to_string(),
+            user_agent: "v3-codex-host-agent/1.0".to_string(),
+            kind: "code-task".to_string(),
+        };
+
+        let headers = cloudflare_orchestrator_service_headers(
+            &config,
+            Some("application/json"),
+            Some("idempotent-1".to_string()),
+        );
+        let header_value = |name: &str| {
+            headers
+                .iter()
+                .find(|(candidate, _)| *candidate == name)
+                .map(|(_, value)| value.as_str())
+        };
+
+        assert_eq!(header_value("Authorization"), Some("Bearer service-key"));
+        assert_eq!(header_value("X-Client-Name"), Some("v3-codex-host-agent"));
+        assert_eq!(header_value("User-Agent"), Some("v3-codex-host-agent/1.0"));
+        assert_eq!(header_value("Content-Type"), Some("application/json"));
+        assert_eq!(header_value("Idempotency-Key"), Some("idempotent-1"));
     }
 
     #[test]
@@ -3078,6 +3234,33 @@ mod tests {
             ),
             "cloudflare_orchestrator_pending"
         );
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_waf_and_auth_errors_are_operator_failures() {
+        let task = test_workflow_task(1, 3);
+        let waf_error = "Cloudflare Codex poll failed: status=403 body_excerpt=\"1010 browser_signature_banned\"";
+        let auth_error =
+            "Cloudflare Codex poll failed: status=401 body_excerpt=\"invalid service key\"";
+
+        assert!(!cloudflare_orchestrator_requeueable_error(waf_error));
+        assert!(!cloudflare_orchestrator_requeueable_error(auth_error));
+        assert!(!should_requeue_cloudflare_orchestrator_poll(
+            &CodexHostExecutionMode::CloudflareOrchestrator,
+            waf_error,
+            &task
+        ));
+        assert_eq!(
+            cloudflare_orchestrator_retry_reason(waf_error),
+            "cloudflare_orchestrator_waf_blocked"
+        );
+        assert_eq!(
+            cloudflare_orchestrator_retry_reason(auth_error),
+            "cloudflare_orchestrator_auth_failed"
+        );
+        assert!(cloudflare_orchestrator_requeueable_error(
+            "Cloudflare Codex poll failed: status=500 body_excerpt=\"temporary upstream error\""
+        ));
     }
 
     #[test]

@@ -1606,6 +1606,19 @@ impl CodexHostFixedTaskTemplateContextView {
                 "visual_contract_status": "preview_ready",
                 "visual_contract_url": "https://v3.elepcloud.com/generated-artifacts/example.png",
                 "preview_asset_key": "static-page-previews/example.png",
+                "render_asset_url": "https://v3.elepcloud.com/generated-artifacts/example.png",
+                "asset_provenance": {
+                    "schema": "v3.static_page_preview_asset_provenance",
+                    "schemaVersion": 1,
+                    "renderAssetPolicy": "use_persisted_v3_preview_asset_for_final_html",
+                    "sourceAssetKind": "remote_url",
+                    "sourceAssetRef": "https://souleye.cc/artifacts/example.png",
+                    "sourceAssetRefRedacted": true,
+                    "persisted": true,
+                    "persistedPreviewAssetKey": "https://v3.elepcloud.com/generated-artifacts/example.png",
+                    "storageStatus": "persisted",
+                    "mimeType": "image/png"
+                },
                 "customer_preview_delivery": "stream_event_or_status_card",
                 "human_confirmation_required": false
             }),

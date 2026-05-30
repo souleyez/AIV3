@@ -133,6 +133,11 @@
   - External-channel answer policy now emits explicit model-facing guidance for `rich_text`, `image_text`, `markdown_table`, and `json`, instead of relying only on the raw policy JSON blob.
   - ReAct compact natural fallback now distinguishes customer JSON output from internal JSON leakage, so `output_format=json` no longer conflicts with the internal "do not output observation/execution JSON" guard.
   - Deterministic answer-quality fallback tables now honor `output_format=json` for spreadsheet row analysis and point-list/elevator rows, rather than returning Markdown tables on JSON-only third-party turns.
+- Continued static-page visual asset hardening on 2026-05-30:
+  - Effect-image completion now records a safe preview-asset provenance summary alongside the stable V3 preview URL, including source kind, redacted source reference, persisted URL, byte size, mime type, dimensions, storage status, and orchestrator task id.
+  - Embedded `data:image` payloads and signed remote query strings are redacted from manifests, so final HTML generation can rely on V3-owned preview assets without leaking upstream temporary URLs.
+  - The third-party Image2 fixed task now passes `render_asset_url` plus the safe provenance summary into Codex Host, and `prompt_text` no longer serializes the raw image payload where signed source URLs can appear.
+  - Verified with `cargo fmt --package static-page-worker --check`, `cargo test -p static-page-worker`, `cargo test -p platform-api external_channel_static_page_fixed_task_packages_scope_and_policy --lib`, and `cargo test -p codex-host-agent cloudflare_orchestrator_fixed_task_prompt_is_hard_bounded -- --nocapture`.
 
 ## Immediate Execution Queue
 

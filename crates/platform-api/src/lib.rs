@@ -24574,11 +24574,9 @@ fn external_channel_static_page_image2_fixed_task(
     missing_evidence: &Value,
 ) -> CodexHostFixedTaskTemplateContextView {
     let image_prompt_payload = &image_job.image_prompt_payload;
-    let prompt_text = serde_json::to_string_pretty(image_prompt_payload)
-        .map(|value| truncate_assistant_supply_text(&value, 2000))
-        .unwrap_or_else(|_| truncate_assistant_supply_text(prompt, 2000));
     let image_prompt_payload_summary =
         external_static_page_image_prompt_payload_summary(image_prompt_payload);
+    let prompt_text = external_static_page_image_prompt_text(&image_prompt_payload_summary, prompt);
     let recipient_delivery = draft
         .source_refs
         .get("recipient_delivery")
@@ -24650,6 +24648,8 @@ fn external_channel_static_page_image2_fixed_task(
                 .map(|value| json!(value))
                 .unwrap_or(Value::Null),
             "preview_asset_key": image_job.preview_asset_key.clone(),
+            "render_asset_url": image_job.preview_asset_key.clone(),
+            "asset_provenance": external_static_page_image_asset_provenance_summary(image_job),
             "customer_preview_delivery": "stream_event_or_status_card",
             "human_confirmation_required": false,
             "image_prompt_payload": image_prompt_payload_summary,
@@ -24685,6 +24685,96 @@ fn external_channel_static_page_image2_fixed_task(
         allowed_write_scope: None,
         human_review_policy: CodexHostFixedTaskHumanReviewPolicyView::AutoForNewGeneratedArtifact,
     }
+}
+
+fn external_static_page_image_asset_provenance_summary(
+    image_job: &StaticPageImageJobView,
+) -> Value {
+    let raw = image_job
+        .image_prompt_payload
+        .pointer("/orchestrator/previewAssetProvenance")
+        .or_else(|| {
+            image_job
+                .image_prompt_payload
+                .pointer("/orchestrator/preview_asset_provenance")
+        })
+        .unwrap_or(&Value::Null);
+    let render_asset_url = image_job
+        .preview_asset_key
+        .as_deref()
+        .map(external_static_page_safe_preview_asset_ref)
+        .unwrap_or(Value::Null);
+    let persisted_preview_asset_key = raw
+        .get("persistedPreviewAssetKey")
+        .or_else(|| raw.get("persisted_preview_asset_key"))
+        .and_then(Value::as_str)
+        .map(external_static_page_safe_preview_asset_ref)
+        .filter(|value| !value.is_null())
+        .unwrap_or_else(|| render_asset_url.clone());
+    json!({
+        "schema": "v3.static_page_preview_asset_provenance",
+        "schemaVersion": 1,
+        "renderAssetUrl": render_asset_url,
+        "renderAssetPolicy": "use_persisted_v3_preview_asset_for_final_html",
+        "sourceAssetKind": raw.get("sourceAssetKind")
+            .or_else(|| raw.get("source_asset_kind"))
+            .and_then(Value::as_str)
+            .map(|value| truncate_assistant_supply_text(value, 64))
+            .unwrap_or_else(|| "unknown".to_string()),
+        "sourceAssetRef": raw.get("sourceAssetRef")
+            .or_else(|| raw.get("source_asset_ref"))
+            .and_then(Value::as_str)
+            .map(external_static_page_safe_preview_asset_ref)
+            .unwrap_or(Value::Null),
+        "sourceAssetRefRedacted": raw.get("sourceAssetRefRedacted")
+            .or_else(|| raw.get("source_asset_ref_redacted"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        "sourceAssetHadQuery": raw.get("sourceAssetHadQuery")
+            .or_else(|| raw.get("source_asset_had_query"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "persisted": raw.get("persisted").and_then(Value::as_bool).unwrap_or_else(|| image_job.preview_asset_key.is_some()),
+        "persistedPreviewAssetKey": persisted_preview_asset_key,
+        "storageStatus": raw.get("storageStatus")
+            .or_else(|| raw.get("storage_status"))
+            .and_then(Value::as_str)
+            .map(|value| truncate_assistant_supply_text(value, 64))
+            .unwrap_or_else(|| if image_job.preview_asset_key.is_some() { "ready".to_string() } else { "unknown".to_string() }),
+        "byteSize": raw.get("byteSize").or_else(|| raw.get("byte_size")).and_then(Value::as_u64).map(Value::from).unwrap_or(Value::Null),
+        "mimeType": raw.get("mimeType").or_else(|| raw.get("mime_type")).and_then(Value::as_str).map(|value| Value::String(truncate_assistant_supply_text(value, 80))).unwrap_or(Value::Null),
+        "width": raw.get("width").and_then(Value::as_i64).map(Value::from).unwrap_or(Value::Null),
+        "height": raw.get("height").and_then(Value::as_i64).map(Value::from).unwrap_or(Value::Null),
+    })
+}
+
+fn external_static_page_safe_preview_asset_ref(value: &str) -> Value {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.starts_with("data:image/") || trimmed.starts_with("blob:") {
+        return Value::Null;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        if let Ok(mut url) = reqwest::Url::parse(trimmed) {
+            url.set_query(None);
+            url.set_fragment(None);
+            return Value::String(truncate_assistant_supply_text(url.as_str(), 500));
+        }
+        return Value::Null;
+    }
+    Value::String(truncate_assistant_supply_text(trimmed, 500))
+}
+
+fn external_static_page_image_prompt_text(
+    image_prompt_payload_summary: &Value,
+    fallback_prompt: &str,
+) -> String {
+    image_prompt_payload_summary
+        .get("prompt_text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| truncate_assistant_supply_text(value, 2000))
+        .unwrap_or_else(|| truncate_assistant_supply_text(fallback_prompt, 2000))
 }
 
 fn external_static_page_image_prompt_payload_summary(payload: &Value) -> Value {
@@ -73119,8 +73209,28 @@ mod tests {
             assistant_run_id: run_id,
             status: contracts::StaticPageImageJobStatusView::PreviewReady,
             queue_position: None,
-            image_prompt_payload: json!({"prompt_text": "Image2 visual brief"}),
-            preview_asset_key: Some("static-page-previews/xinbai.png".to_string()),
+            image_prompt_payload: json!({
+                "prompt_text": "Image2 visual brief",
+                "orchestrator": {
+                    "previewAssetProvenance": {
+                        "sourceAssetKind": "remote_url",
+                        "sourceAssetRef": "https://souleye.cc/artifacts/xinbai.png?token=secret-token#download",
+                        "sourceAssetRefRedacted": true,
+                        "sourceAssetHadQuery": true,
+                        "persisted": true,
+                        "persistedPreviewAssetKey": "https://v3.elepcloud.com/generated-artifacts/static-page-previews/xinbai.png",
+                        "storageStatus": "persisted",
+                        "byteSize": 2048,
+                        "mimeType": "image/png",
+                        "width": 1536,
+                        "height": 1024
+                    }
+                }
+            }),
+            preview_asset_key: Some(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/xinbai.png"
+                    .to_string(),
+            ),
             failure_reason: None,
             confirmed_at: None,
             created_at: now,
@@ -73175,8 +73285,34 @@ mod tests {
         );
         assert_eq!(
             encoded["image2"]["preview_asset_key"],
-            json!("static-page-previews/xinbai.png")
+            json!("https://v3.elepcloud.com/generated-artifacts/static-page-previews/xinbai.png")
         );
+        assert_eq!(
+            encoded["image2"]["render_asset_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/static-page-previews/xinbai.png")
+        );
+        assert_eq!(
+            encoded["image2"]["prompt_text"],
+            json!("Image2 visual brief")
+        );
+        assert_eq!(
+            encoded["image2"]["asset_provenance"]["renderAssetPolicy"],
+            json!("use_persisted_v3_preview_asset_for_final_html")
+        );
+        assert_eq!(
+            encoded["image2"]["asset_provenance"]["sourceAssetRef"],
+            json!("https://souleye.cc/artifacts/xinbai.png")
+        );
+        assert_eq!(
+            encoded["image2"]["asset_provenance"]["sourceAssetRefRedacted"],
+            json!(true)
+        );
+        assert_eq!(
+            encoded["image2"]["asset_provenance"]["persistedPreviewAssetKey"],
+            json!("https://v3.elepcloud.com/generated-artifacts/static-page-previews/xinbai.png")
+        );
+        let encoded_text = encoded.to_string();
+        assert!(!encoded_text.contains("secret-token"), "{encoded_text}");
         assert_eq!(
             encoded["image2"]["customer_preview_delivery"],
             json!("stream_event_or_status_card")

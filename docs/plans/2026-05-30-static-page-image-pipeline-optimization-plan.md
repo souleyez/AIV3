@@ -21,6 +21,12 @@
 
 **Progress update 2026-05-30 P2 UI slice:** The external integrations Codex executor panel now loads `/api/v3/external/codex-executor-tasks/queue-stats` on demand and shows a queue snapshot above the task list. The web helper layer normalizes logical queue/task-key counts and treats submitted/pending remote Cloudflare tasks as active poll states, so operators can see whether time is being spent in effect-image generation, final page publishing, or generic Codex fixed tasks.
 
+**Progress update 2026-05-30 P4 asset provenance slice:** Static-page effect images now keep a stable V3 preview asset as the render-facing URL and attach a safe provenance summary to the image job payload and preview-ready artifact manifest. The provenance records the source asset kind, redacted source reference, persisted preview URL, byte size, mime type, dimensions, storage status, and orchestrator task id without leaking embedded data URLs or signed query tokens.
+
+**Progress update 2026-05-30 P4 fixed-task handoff slice:** The third-party `static_page_image2_data_publish` fixed-task context now includes `render_asset_url` and a compact `asset_provenance` block for Codex Host. Platform API and Codex Host both strip signed query strings and embedded image refs before the final executor prompt is built, and `prompt_text` is sourced from the safe Image2 summary instead of the raw payload.
+
+**Progress update 2026-05-30 P3 service-call slice:** Codex Host orchestrator submit/poll requests now use a shared service-header helper that sends `Authorization`, `X-Client-Name`, and explicit `User-Agent` headers, with optional JSON and idempotency headers for submit. Static-page and Codex Host retry classification now treats HTTP 500/502/503/504 as transient, while 401/403 auth failures and Cloudflare 1010/browser-signature blocks are surfaced as operator-visible infrastructure/configuration errors instead of endless user-facing retries.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection
