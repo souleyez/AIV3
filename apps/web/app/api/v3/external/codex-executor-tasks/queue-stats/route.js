@@ -51,11 +51,21 @@ export async function GET(request) {
     '/v1/workflow-tasks/queue-stats',
     `?limit=${limit}`,
   );
-  const response = await fetch(targetUrl, {
-    method: 'GET',
-    headers: proxyHeaders(request),
-    cache: 'no-store',
-  });
-  const payload = await response.json().catch(() => ({}));
-  return Response.json(payload, { status: response.status });
+  try {
+    const response = await fetch(targetUrl, {
+      method: 'GET',
+      headers: proxyHeaders(request),
+      cache: 'no-store',
+    });
+    const payload = await response.json().catch(() => ({}));
+    return Response.json(payload, { status: response.status });
+  } catch (error) {
+    return Response.json(
+      {
+        error: 'platform_api_unreachable',
+        message: error instanceof Error ? error.message : 'platform-api 不可用',
+      },
+      { status: 502 },
+    );
+  }
 }
