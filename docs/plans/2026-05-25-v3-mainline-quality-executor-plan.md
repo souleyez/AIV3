@@ -91,6 +91,15 @@
   - `static_page_image2_data_publish` fixed-task packages now instruct Cloudflare Codex to produce final HTML that can load local `data.json` and support time/primary-partition controls. This is internal task guidance only; public third-party fields stay unchanged.
   - V3's Codex Host generated-artifact publisher can persist returned `data_json` as `data.json` / `data-snapshot.json`, strip the large inline data from the fixed-task output, and publish only artifact paths/URLs plus the manifest.
   - Local validation passed for the export-artifact validator, static-page renderer unit, Codex Host publication unit, contracts fixed-task example, platform data-snapshot render regression, and the full static-page render smoke.
+- Continued on 2026-05-30 by tightening the static-page data snapshot itself:
+  - Draft `dataSnapshot` now carries `snapshotVersion` / `updatedAt`, a `data.json` refresh policy, module validation summary, sample/detail row counts, and metric/unit hints before the page enters Image2 or final HTML rendering.
+  - Database aggregate bindings preserve metric unit hints into field candidates and sample rows, so database-backed reports can expose row count, detail count, snapshot date, and unit smoke signals.
+  - Focused local regressions passed for `static_page_data_snapshot_binds_database_aggregate_rows` and the full `static_page_data_snapshot` test slice.
+- Continued the same batch by expanding the read-only database live smoke:
+  - `run-data-ingestion-staging-live-smoke.sh` now reports whether a synced database-derived dataset is ready for follow-up Q&A and static-page report generation, including the basis dataset, ready source tables, safe suggested questions, and the report smoke command.
+  - This remains a V3-state-only smoke: it reads stored V3 source/sync/dataset/chunk/evidence status and does not connect to the customer/source database or execute customer-facing questions automatically.
+  - The same script now supports `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true`, which validates the report builder with synthetic V3 status fixtures when Postgres or the 8-server source is not available.
+  - `run-data-ingestion-staging-sync-smoke.sh` now includes that live-source readiness self-test by default, so local staging sync smoke also guards the database Q&A/report readiness report shape.
 
 ## Immediate Execution Queue
 

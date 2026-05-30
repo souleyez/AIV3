@@ -12,6 +12,7 @@ report_md="${report_dir}/${report_basename}.md"
 cargo_bin="${CARGO_BIN:-cargo}"
 npm_bin="${NPM_BIN:-npm}"
 skip_guide_check="${DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_GUIDE_CHECK:-false}"
+skip_live_self_test="${DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_LIVE_SELF_TEST:-false}"
 
 if ! command -v "${cargo_bin}" >/dev/null 2>&1; then
   for candidate in \
@@ -50,6 +51,9 @@ if [[ "${skip_guide_check}" == "true" ]]; then
 else
   echo "npm: ${npm_bin}"
 fi
+if [[ "${skip_live_self_test}" == "true" ]]; then
+  echo "Live source self-test: skipped by DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_LIVE_SELF_TEST=true"
+fi
 
 checks=()
 
@@ -72,6 +76,18 @@ run_check "ingest-worker source document ingestion" \
   "${cargo_bin}" test -p ingest-worker
 run_check "retrieval-worker source indexing" \
   "${cargo_bin}" test -p retrieval-worker
+
+live_self_test_status="skipped"
+live_self_test_reason="set DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_LIVE_SELF_TEST=false to validate the live-source readiness report builder"
+if [[ "${skip_live_self_test}" != "true" ]]; then
+  run_check "live database-source readiness report self-test" \
+    env \
+      DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true \
+      DATA_INGESTION_LIVE_SMOKE_REPORT_DIR="${report_dir}/live-self-test" \
+      bash scripts/run-data-ingestion-staging-live-smoke.sh
+  live_self_test_status="passed"
+  live_self_test_reason=""
+fi
 
 guide_check_status="skipped"
 guide_check_reason="set DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_GUIDE_CHECK=false with npm available to validate generated public integration docs"
@@ -98,6 +114,8 @@ SMOKE_FINISHED_AT="${finished_at}" \
 SMOKE_CHECKS_JSON="${checks_json}" \
 SMOKE_GUIDE_CHECK_STATUS="${guide_check_status}" \
 SMOKE_GUIDE_CHECK_REASON="${guide_check_reason}" \
+SMOKE_LIVE_SELF_TEST_STATUS="${live_self_test_status}" \
+SMOKE_LIVE_SELF_TEST_REASON="${live_self_test_reason}" \
 node >"${report_json}" <<'NODE'
 const fs = require("fs");
 const report = {
@@ -132,6 +150,10 @@ const report = {
   guide_check: {
     status: process.env.SMOKE_GUIDE_CHECK_STATUS,
     reason: process.env.SMOKE_GUIDE_CHECK_REASON
+  },
+  live_source_readiness_self_test: {
+    status: process.env.SMOKE_LIVE_SELF_TEST_STATUS,
+    reason: process.env.SMOKE_LIVE_SELF_TEST_REASON
   },
   notes: [
     "Default smoke is non-destructive and does not load /etc/aiv3/aiv3.env.",
@@ -175,6 +197,11 @@ const lines = [
   "",
   `- Status: ${report.guide_check.status}`,
   report.guide_check.reason ? `- Reason: ${report.guide_check.reason}` : "",
+  "",
+  "## Live Source Readiness Self-Test",
+  "",
+  `- Status: ${report.live_source_readiness_self_test.status}`,
+  report.live_source_readiness_self_test.reason ? `- Reason: ${report.live_source_readiness_self_test.reason}` : "",
   "",
   "## Notes",
   "",

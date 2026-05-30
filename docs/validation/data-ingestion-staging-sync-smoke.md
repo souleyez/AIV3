@@ -31,6 +31,7 @@ Expected:
   - `data_ingestion_staging_sync_completed`;
   - `data_ingestion_staging_sync_failed`.
 - Worker unit tests confirm existing database/source materialization stages still parse, ingest, chunk, and index external-source documents.
+- The local sync smoke also runs the live-source readiness report builder in `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true` mode, unless `DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_LIVE_SELF_TEST=true` is set.
 - The script writes JSON and Markdown reports under `target/data-ingestion-staging-sync-smoke/`.
 - If Node/npm is not available on a deployment target, set `DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_GUIDE_CHECK=true` to skip only the generated public guide check.
 
@@ -60,6 +61,7 @@ Useful options:
 - `DATA_INGESTION_LIVE_SMOKE_REQUIRE_DEFAULT_READY=true` makes the smoke fail unless the source default dataset is already indexed.
 - `DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000` selects the local platform API used only for the selected-source status snapshot.
 - `DATA_INGESTION_LIVE_SMOKE_REPO_ROOT=/srv/aiv3/repo` can be used when piping the script through SSH before it is deployed.
+- `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true` runs the report builder against synthetic V3 status fixtures without requiring Postgres or the platform API; use this only to verify the smoke/report logic itself.
 
 The live smoke is non-destructive. It reads only V3 PostgreSQL and the internal selected-source status route. It does not connect to the source/customer database, does not start a sync, does not print raw credentials, and does not dump source rows.
 
@@ -68,6 +70,8 @@ Expected report signals:
 - Source exists, is enabled, and has a server-side connection env reference.
 - At least one succeeded sync run exists.
 - At least one source-derived dataset has indexed documents and indexed chunks.
+- Question/report readiness is reported separately and requires a source-derived dataset with indexed documents, indexed chunks, retrieval evidence, and at least one ready source table.
+- The report includes safe suggested follow-up questions and the local static-page report smoke command, but it does not execute those customer-facing questions automatically.
 - The default dataset readiness is reported separately from alternate ready datasets, so an empty newly-bound default dataset is visible without hiding older ready data.
 - Latest failed sync is a warning/attention signal, not proof that historical indexed data disappeared.
 

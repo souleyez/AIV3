@@ -17,9 +17,10 @@ report_md="${report_dir}/${report_basename}.md"
 api_base="${DATA_INGESTION_LIVE_SMOKE_API_BASE:-http://127.0.0.1:3000}"
 api_timeout="${DATA_INGESTION_LIVE_SMOKE_API_TIMEOUT_SECONDS:-20}"
 require_default_ready="${DATA_INGESTION_LIVE_SMOKE_REQUIRE_DEFAULT_READY:-false}"
+self_test="${DATA_INGESTION_LIVE_SMOKE_SELF_TEST:-false}"
 psql_bin="${PSQL_BIN:-psql}"
 
-if ! command -v "${psql_bin}" >/dev/null 2>&1; then
+if [[ "${self_test}" != "true" ]] && ! command -v "${psql_bin}" >/dev/null 2>&1; then
   echo "psql was not found. Install PostgreSQL client tools or set PSQL_BIN=/path/to/psql." >&2
   exit 1
 fi
@@ -54,6 +55,15 @@ echo "Report directory: ${report_dir}"
 echo "Postgres target: server-provided configuration (credentials are not printed)"
 echo "API status endpoint: ${api_base}/v1/external/sources/${source_key}/database/status"
 
+if [[ "${self_test}" == "true" ]]; then
+  echo "Self-test mode: using synthetic V3 source/sync/dataset fixtures"
+  source_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","connector_kind":"mysql","status":"enabled","health_status":"healthy","display_name":"HY SQL Traffic Area","database":"hy_sql","connection_env_present":true,"default_dataset_id":"dataset-smoke","mapped_table_count":1,"last_sync_at":"2026-05-30T09:00:00Z","last_success_at":"2026-05-30T09:00:00Z","last_failure_at":null,"updated_at":"2026-05-30T09:05:00Z"}'
+  sync_runs_json='[{"sync_run_id":"sync-smoke","sync_kind":"content","status":"succeeded","failure_kind":null,"workflow_stage":"completed","workflow_status":"succeeded","documents_ingested":50,"chunks_ingested":50,"chunks_indexed":50,"retrieval_evidences_indexed":50,"enqueued_task_count":0,"created_at":"2026-05-30T08:55:00Z","updated_at":"2026-05-30T09:00:00Z"}]'
+  datasets_json='[{"dataset_id":"dataset-smoke","key":"external-source-hy-sql-auto-dataset-hy-sql-main","title":"HY SQL Ready Dataset","lifecycle":"active","is_default":true,"dataset_external_id":"hy-sql-main","document_count":50,"indexed_document_count":50,"failed_document_count":0,"processing_document_count":0,"chunk_count":50,"indexed_chunk_count":50,"retrieval_evidence_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z","updated_at":"2026-05-30T09:05:00Z"}]'
+  tables_json='[{"table":"bi_traffic_area","document_count":50,"indexed_document_count":50,"chunk_count":50,"indexed_chunk_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z"}]'
+  api_status_json='{"source_id":"source-smoke","status":{"config_valid":true,"dataset_readiness":{"signal":"ready"},"sync_readiness":{"signal":"ready"},"health_findings":{"signal":"healthy","items":[]}}}'
+  api_fetch_status="self_test"
+else
 source_json="$(
   run_psql_json <<'SQL'
 select coalesce(
@@ -268,6 +278,7 @@ if command -v curl >/dev/null 2>&1; then
     api_fetch_status="failed"
   fi
 fi
+fi
 
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -311,6 +322,17 @@ const latestSyncFailed = latestSync
   ? ['failed', 'cancelled', 'dead_lettered'].includes(String(latestSync.status || '').toLowerCase()) ||
     Boolean(latestSync.failure_kind)
   : false;
+const sortedReadyDatasets = [...readyDatasets].sort((left, right) => {
+  const leftDefault = left.is_default ? 1 : 0;
+  const rightDefault = right.is_default ? 1 : 0;
+  if (leftDefault !== rightDefault) return rightDefault - leftDefault;
+  return Number(right.retrieval_evidence_count || 0) - Number(left.retrieval_evidence_count || 0);
+});
+const primaryReadyDataset = sortedReadyDatasets[0] || null;
+const readyTables = tables.filter((table) =>
+  Number(table?.indexed_document_count || 0) > 0 &&
+  Number(table?.indexed_chunk_count || 0) > 0
+);
 const apiSummary = apiStatus && typeof apiStatus === 'object'
   ? {
       source_id: apiStatus.source_id || null,
@@ -345,6 +367,14 @@ if (!readyDatasets.length) {
   warnings.push('no source-derived dataset has indexed documents and chunks');
 }
 const ready = sourceExists && hasSucceededSync && readyDatasets.length > 0 && (!requireDefaultReady || defaultDatasetReady);
+const questionReportReady = Boolean(
+  ready &&
+    primaryReadyDataset &&
+    Number(primaryReadyDataset.retrieval_evidence_count || 0) > 0 &&
+    readyTables.length > 0
+);
+const shellSingleQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+const reportCommand = `HY_SQL_TRAFFIC_SOURCE_ID=${shellSingleQuote(process.env.SMOKE_SOURCE_KEY || 'hy-sql-traffic-area')} bash scripts/run-hy-sql-traffic-area-live-report.sh`;
 
 const report = {
   smoke: 'data-ingestion-staging-live',
@@ -371,6 +401,7 @@ const report = {
     ready_dataset_count: readyDatasets.length,
     default_dataset_ready: defaultDatasetReady,
     require_default_ready: requireDefaultReady,
+    question_report_ready: questionReportReady,
   },
   source: source
     ? {
@@ -399,6 +430,34 @@ const report = {
     retrieval_evidence_count: Number(dataset.retrieval_evidence_count || 0),
   })),
   table_readiness: tables,
+  question_report_readiness: {
+    ready: questionReportReady,
+    basis: primaryReadyDataset
+      ? {
+          dataset_id: primaryReadyDataset.dataset_id,
+          dataset_key: primaryReadyDataset.key,
+          dataset_title: primaryReadyDataset.title,
+          is_default: Boolean(primaryReadyDataset.is_default),
+          indexed_document_count: Number(primaryReadyDataset.indexed_document_count || 0),
+          indexed_chunk_count: Number(primaryReadyDataset.indexed_chunk_count || 0),
+          retrieval_evidence_count: Number(primaryReadyDataset.retrieval_evidence_count || 0),
+        }
+      : null,
+    ready_table_count: readyTables.length,
+    ready_tables: readyTables.slice(0, 8).map((table) => ({
+      table: table.table,
+      indexed_document_count: Number(table.indexed_document_count || 0),
+      indexed_chunk_count: Number(table.indexed_chunk_count || 0),
+    })),
+    can_answer_dataset_questions: questionReportReady,
+    can_generate_static_page_report: questionReportReady,
+    suggested_questions: [
+      '这个数据库主要记录什么业务内容？',
+      '按主要维度做一个排行表，列出 Top 10 和口径说明。',
+      '基于当前数据生成一份经营分析静态页报表。',
+    ],
+    suggested_report_command: reportCommand,
+  },
   recent_sync_runs: syncRuns,
   api_status: {
     fetch_status: process.env.SMOKE_API_FETCH_STATUS,
@@ -409,6 +468,7 @@ const report = {
     'This live smoke validates V3-stored source, sync, dataset, chunk, and evidence state only.',
     'It does not connect to or query the customer/source database.',
     'A latest failed sync can coexist with an older ready dataset; the report separates those signals.',
+    'Question/report readiness means V3 has a source-derived dataset with indexed documents, chunks, retrieval evidence, and at least one ready source table.',
   ],
 };
 
@@ -440,6 +500,7 @@ const lines = [
   `- Ready dataset count: ${report.checks.ready_dataset_count}`,
   `- Default dataset ready: ${bool(report.checks.default_dataset_ready)}`,
   `- Require default ready: ${bool(report.checks.require_default_ready)}`,
+  `- Question/report ready: ${bool(report.checks.question_report_ready)}`,
   '',
   '## Ready Datasets',
   '',
@@ -465,6 +526,17 @@ const lines = [
   `- Health signal: ${report.api_status.summary?.health_signal || 'n/a'}`,
   `- Health codes: ${(report.api_status.summary?.health_item_codes || []).join(', ') || 'none'}`,
   '',
+  '## Question And Report Readiness',
+  '',
+  `- Ready: ${bool(report.question_report_readiness.ready)}`,
+  `- Basis dataset: ${report.question_report_readiness.basis?.dataset_key || 'none'}`,
+  `- Ready table count: ${report.question_report_readiness.ready_table_count}`,
+  `- Can answer dataset questions: ${bool(report.question_report_readiness.can_answer_dataset_questions)}`,
+  `- Can generate static-page report: ${bool(report.question_report_readiness.can_generate_static_page_report)}`,
+  '- Suggested questions:',
+  ...report.question_report_readiness.suggested_questions.map((question) => `  - ${question}`),
+  `- Suggested report command: \`${report.question_report_readiness.suggested_report_command}\``,
+  '',
   '## Warnings',
   '',
   ...(report.warnings.length ? report.warnings.map((warning) => `- ${warning}`) : ['- none']),
@@ -481,7 +553,7 @@ NODE
 echo ""
 echo "Data-ingestion staging live smoke report: ${report_json}"
 echo "Data-ingestion staging live smoke summary: ${report_md}"
-if node -e "const r=require(process.argv[1]); process.exit(r.ready ? 0 : 1)" "${report_json}"; then
+if node -e "const fs=require('fs'); const r=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.exit(r.ready ? 0 : 1)" "${report_json}"; then
   echo "OK data-ingestion-staging-live smoke completed."
 else
   echo "WARN data-ingestion-staging-live smoke completed with attention_required. See report." >&2

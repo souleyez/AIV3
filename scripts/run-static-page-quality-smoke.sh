@@ -58,6 +58,8 @@ run_check "data snapshot prefers explicit evidence values" \
   "${cargo_bin}" test -p platform-api static_page_data_snapshot_prefers_explicit_evidence_values
 run_check "data snapshot carries section title hints" \
   "${cargo_bin}" test -p platform-api static_page_data_snapshot_carries_section_title_hints
+run_check "data snapshot summarizes database rows and refresh metadata" \
+  "${cargo_bin}" test -p platform-api static_page_data_snapshot_binds_database_aggregate_rows
 run_check "preview gate blocks unrenderable chart bindings" \
   "${cargo_bin}" test -p platform-api static_page_preview_gate_blocks_unrenderable_chart_bindings
 run_check "preview gate blocks inferred evidence signals" \
@@ -99,7 +101,7 @@ const report = {
   started_at: process.env.SMOKE_STARTED_AT,
   finished_at: process.env.SMOKE_FINISHED_AT,
   contract: {
-    data_snapshot: "Static pages carry field candidates, explicit evidence values, media windows, module sample data, and section-title hints into the draft data snapshot.",
+    data_snapshot: "Static pages carry field candidates, explicit evidence values, media windows, module sample data, section-title hints, dynamic refresh metadata, sample/detail row counts, and unit hints into the draft data snapshot.",
     preview_gate: "Effect-image preview is blocked when chart modules lack renderable sample rows or only have inferred evidence signals.",
     final_render_gate: "Final static-page render is blocked when chart modules still lack renderable sample rows.",
     codex_plan_only: "Codex plan-only suggestions must repair weak static-page data quality before submitting preview generation."
