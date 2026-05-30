@@ -247,6 +247,15 @@ function LocalSecretPanel({
   );
 }
 
+function documentDatasetIds(document) {
+  return [...new Set([
+    document?.dataset_id,
+    document?.datasetId,
+    ...(Array.isArray(document?.dataset_ids) ? document.dataset_ids : []),
+    ...(Array.isArray(document?.datasetIds) ? document.datasetIds : []),
+  ].map((id) => String(id || '').trim()).filter(Boolean))];
+}
+
 export default function Sidebar({
   datasets,
   selectedDatasetId,
@@ -273,8 +282,16 @@ export default function Sidebar({
   onClose,
   accountAuth,
 }) {
-  const selectedIdSet = new Set(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []);
   const documentMembershipMode = Boolean(selectedDocument?.id);
+  const selectedIdSet = new Set(
+    documentMembershipMode
+      ? documentDatasetIds(selectedDocument)
+      : selectedDatasetIds.length
+        ? selectedDatasetIds
+        : selectedDatasetId
+          ? [selectedDatasetId]
+          : [],
+  );
 
   return (
     <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>

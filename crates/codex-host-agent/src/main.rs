@@ -31,9 +31,9 @@ const DEFAULT_ORCHESTRATOR_API_PATH: &str = "/api/codex/orchestrator/v1";
 const DEFAULT_ORCHESTRATOR_RUNTIME_TARGET: &str = "cloudflare";
 const DEFAULT_ORCHESTRATOR_SOURCE: &str = "v3-codex-host-agent";
 const DEFAULT_ORCHESTRATOR_KIND: &str = "code-task";
-const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS: u64 = 15_000;
 const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 6_500;
+const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -265,6 +265,24 @@ async fn process_task(
             let retry_delay_ms = cloudflare_orchestrator_retry_delay_ms();
             let available_at =
                 now + chrono::Duration::milliseconds(retry_delay_ms.min(i64::MAX as u64) as i64);
+            let retry_reason = cloudflare_orchestrator_retry_reason(&error_message);
+            let logical_queue = cloudflare_orchestrator_logical_queue(&task_context);
+            let logical_task_key = cloudflare_orchestrator_poll_logical_task_key(&task_context);
+            let updated_payload = workflow_task_payload_with_cloudflare_orchestrator_poll(
+                &task.payload,
+                retry_reason,
+                logical_queue,
+                logical_task_key,
+                task.attempt,
+                retry_delay_ms,
+                available_at,
+                now,
+                Some(&error_message),
+            );
+            storage
+                .workflow_tasks()
+                .update_payload(task.id, &updated_payload, now)
+                .await?;
             append_assistant_event(
                 storage,
                 task.tenant_id,
@@ -273,7 +291,7 @@ async fn process_task(
                 json!({
                     "mode": "cloudflare_orchestrator",
                     "status": "processing",
-                    "reason": "cloudflare_orchestrator_poll_timeout",
+                    "reason": retry_reason,
                     "retryable": true,
                     "attempt": task.attempt,
                     "max_attempts": task.max_attempts,
@@ -294,7 +312,8 @@ async fn process_task(
                 attempt = task.attempt,
                 max_attempts = task.max_attempts,
                 retry_delay_ms,
-                "Cloudflare Codex poll timed out; task requeued for continued polling"
+                reason = retry_reason,
+                "Cloudflare Codex task requeued for non-blocking continued polling"
             );
             return Ok(());
         }
@@ -891,12 +910,41 @@ fn should_requeue_cloudflare_orchestrator_poll(
     task: &domain_model::WorkflowTask,
 ) -> bool {
     matches!(mode, CodexHostExecutionMode::CloudflareOrchestrator)
-        && task.attempt < task.max_attempts
-        && cloudflare_orchestrator_poll_timeout_error(error_message)
+        && cloudflare_orchestrator_requeueable_error(error_message)
+        && (cloudflare_orchestrator_pending_progress_error(error_message)
+            || task.attempt < task.max_attempts)
 }
 
-fn cloudflare_orchestrator_poll_timeout_error(error_message: &str) -> bool {
-    error_message.contains("Cloudflare Codex task timed out after")
+fn cloudflare_orchestrator_pending_progress_error(error_message: &str) -> bool {
+    let message = error_message.to_ascii_lowercase();
+    message.contains("cloudflare codex task submitted and pending")
+        || message.contains("cloudflare codex task still running")
+}
+
+fn cloudflare_orchestrator_requeueable_error(error_message: &str) -> bool {
+    let message = error_message.to_ascii_lowercase();
+    cloudflare_orchestrator_pending_progress_error(error_message)
+        || message.contains("cloudflare codex task timed out after")
+        || message.contains("failed to poll cloudflare codex task")
+        || message.contains("cloudflare codex poll response is invalid json")
+        || message.contains("cloudflare codex poll response missing task")
+        || message.contains("cloudflare codex poll failed: status=500")
+        || message.contains("cloudflare codex poll failed: status=502")
+        || message.contains("cloudflare codex poll failed: status=503")
+        || message.contains("cloudflare codex poll failed: status=504")
+}
+
+fn cloudflare_orchestrator_retry_reason(error_message: &str) -> &'static str {
+    let message = error_message.to_ascii_lowercase();
+    if message.contains("cloudflare codex task submitted and pending") {
+        "cloudflare_orchestrator_submitted"
+    } else if message.contains("cloudflare codex task still running") {
+        "cloudflare_orchestrator_pending"
+    } else if message.contains("cloudflare codex task timed out after") {
+        "cloudflare_orchestrator_poll_timeout"
+    } else {
+        "cloudflare_orchestrator_poll_transient"
+    }
 }
 
 fn cloudflare_orchestrator_retry_delay_ms() -> u64 {
@@ -904,6 +952,24 @@ fn cloudflare_orchestrator_retry_delay_ms() -> u64 {
         "CODEX_ORCHESTRATOR_RETRY_DELAY_MS",
         DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS,
     )
+}
+
+fn cloudflare_orchestrator_logical_queue(task_context: &CodexHostTaskContext) -> &'static str {
+    if task_context.capability == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        "static_page_publish"
+    } else {
+        "codex_fixed_task"
+    }
+}
+
+fn cloudflare_orchestrator_poll_logical_task_key(
+    task_context: &CodexHostTaskContext,
+) -> &'static str {
+    if task_context.capability == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        "poll_static_page_publish"
+    } else {
+        "poll_codex_fixed_task"
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -915,7 +981,6 @@ struct CloudflareOrchestratorConfig {
     project_id: Option<String>,
     source: String,
     kind: String,
-    poll_interval_ms: u64,
 }
 
 impl CloudflareOrchestratorConfig {
@@ -949,10 +1014,6 @@ impl CloudflareOrchestratorConfig {
                 .filter(|value| !value.is_empty()),
             source: env_or_default("CODEX_ORCHESTRATOR_SOURCE", DEFAULT_ORCHESTRATOR_SOURCE),
             kind: env_or_default("CODEX_ORCHESTRATOR_KIND", DEFAULT_ORCHESTRATOR_KIND),
-            poll_interval_ms: env_u64(
-                "CODEX_ORCHESTRATOR_POLL_INTERVAL_MS",
-                DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS,
-            ),
         })
     }
 
@@ -1026,8 +1087,18 @@ fn workflow_task_payload_with_cloudflare_orchestrator_task(
     orchestrator_task_id: &str,
     submitted_task: &Value,
     submitted_at: chrono::DateTime<Utc>,
+    logical_queue: &str,
+    next_logical_task_key: &str,
 ) -> Value {
     let mut root = payload.as_object().cloned().unwrap_or_default();
+    root.insert(
+        "logical_queue".to_string(),
+        Value::String(logical_queue.to_string()),
+    );
+    root.insert(
+        "logical_task_key".to_string(),
+        Value::String(next_logical_task_key.to_string()),
+    );
     let mut orchestrator = root
         .get("cloudflare_orchestrator")
         .and_then(Value::as_object)
@@ -1058,6 +1129,61 @@ fn workflow_task_payload_with_cloudflare_orchestrator_task(
     Value::Object(root)
 }
 
+fn workflow_task_payload_with_cloudflare_orchestrator_poll(
+    payload: &Value,
+    reason: &str,
+    logical_queue: &str,
+    logical_task_key: &str,
+    poll_attempt: u32,
+    retry_delay_ms: u64,
+    next_poll_at: chrono::DateTime<Utc>,
+    last_poll_at: chrono::DateTime<Utc>,
+    error_message: Option<&str>,
+) -> Value {
+    let mut root = payload.as_object().cloned().unwrap_or_default();
+    root.insert(
+        "logical_queue".to_string(),
+        Value::String(logical_queue.to_string()),
+    );
+    root.insert(
+        "logical_task_key".to_string(),
+        Value::String(logical_task_key.to_string()),
+    );
+    let mut orchestrator = root
+        .get("cloudflare_orchestrator")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    orchestrator.insert("status".to_string(), Value::String(reason.to_string()));
+    orchestrator.insert(
+        "last_poll_at".to_string(),
+        Value::String(last_poll_at.to_rfc3339()),
+    );
+    orchestrator.insert(
+        "poll_attempt".to_string(),
+        Value::Number(serde_json::Number::from(u64::from(poll_attempt))),
+    );
+    orchestrator.insert(
+        "retry_delay_ms".to_string(),
+        Value::Number(serde_json::Number::from(retry_delay_ms)),
+    );
+    orchestrator.insert(
+        "next_poll_at".to_string(),
+        Value::String(next_poll_at.to_rfc3339()),
+    );
+    if let Some(error_message) = error_message {
+        orchestrator.insert(
+            "last_error".to_string(),
+            Value::String(safe_response_excerpt(error_message, 300)),
+        );
+    }
+    root.insert(
+        "cloudflare_orchestrator".to_string(),
+        Value::Object(orchestrator),
+    );
+    Value::Object(root)
+}
+
 async fn run_cloudflare_orchestrator(
     storage: &PgStorage,
     workflow_task_id: domain_model::WorkflowTaskId,
@@ -1065,13 +1191,13 @@ async fn run_cloudflare_orchestrator(
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
     execution_id: domain_model::WorkflowExecutionId,
-    runtime_config: &CodexHostRuntimeConfig,
+    _runtime_config: &CodexHostRuntimeConfig,
 ) -> Result<serde_json::Value> {
     let config = CloudflareOrchestratorConfig::from_env()?;
-    let task_id = if let Some(task_id) =
+    let (task_id, submitted_this_claim) = if let Some(task_id) =
         cloudflare_orchestrator_task_id_from_payload(workflow_task_payload)
     {
-        task_id
+        (task_id, false)
     } else {
         let prompt = build_cloudflare_orchestrator_prompt(task_context)?;
         let submitted =
@@ -1087,21 +1213,46 @@ async fn run_cloudflare_orchestrator(
             &task_id,
             &submitted,
             Utc::now(),
+            cloudflare_orchestrator_logical_queue(task_context),
+            cloudflare_orchestrator_poll_logical_task_key(task_context),
         );
         storage
             .workflow_tasks()
             .update_payload(workflow_task_id, &updated_payload, Utc::now())
             .await?;
-        task_id
+        (task_id, true)
     };
-    let completed =
-        poll_cloudflare_orchestrator_task(&config, &task_id, runtime_config.task_timeout_ms())
-            .await?;
+    if submitted_this_claim {
+        return Err(anyhow!(
+            "Cloudflare Codex task submitted and pending; task_id={task_id}"
+        ));
+    }
+    let polled = poll_cloudflare_orchestrator_task_once(&config, &task_id).await?;
+    let status = polled
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if status != "completed" {
+        if matches!(status, "failed" | "cancelled") {
+            let code = polled
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .unwrap_or("cloudflare_codex_task_failed");
+            let excerpt = safe_response_excerpt(&polled.to_string(), 500);
+            return Err(anyhow!(
+                "Cloudflare Codex task ended with status={code}; task_excerpt=\"{}\"",
+                excerpt
+            ));
+        }
+        return Err(anyhow!(
+            "Cloudflare Codex task still running; task_id={task_id} status={status}"
+        ));
+    }
     let fixed_task_output = task_context
         .fixed_task
         .as_ref()
         .map(|fixed_task| {
-            let text = cloudflare_orchestrator_result_text(&completed);
+            let text = cloudflare_orchestrator_result_text(&polled);
             let output = extract_fixed_task_output_from_stdout(
                 text.as_bytes(),
                 fixed_task.template_id.as_str(),
@@ -1576,68 +1727,36 @@ async fn submit_cloudflare_orchestrator_task(
         .ok_or_else(|| anyhow!("Cloudflare Codex submit response missing task"))
 }
 
-async fn poll_cloudflare_orchestrator_task(
+async fn poll_cloudflare_orchestrator_task_once(
     config: &CloudflareOrchestratorConfig,
     task_id: &str,
-    timeout_ms: u64,
 ) -> Result<Value> {
-    let started_at = Instant::now();
-    loop {
-        if started_at.elapsed() > Duration::from_millis(timeout_ms.max(1)) {
-            return Err(anyhow!(
-                "Cloudflare Codex task timed out after {}ms; task_id={}",
-                timeout_ms.max(1),
-                task_id
-            ));
-        }
-        let (status_code, text) = curl_orchestrator_json(
-            "GET",
-            &config.endpoint(&format!("/tasks/{task_id}")),
-            None,
-            &[
-                ("Authorization", format!("Bearer {}", config.access_key)),
-                ("X-Client-Name", "v3-codex-host-agent".to_string()),
-            ],
-        )
-        .await
-        .map_err(|error| anyhow!("failed to poll Cloudflare Codex task: {error}"))?;
-        if !(200..300).contains(&status_code) {
-            let excerpt = safe_response_excerpt(&text, 300);
-            return Err(anyhow!(
-                "Cloudflare Codex poll failed: status={} body_chars={} body_excerpt=\"{}\"",
-                status_code,
-                text.chars().count(),
-                excerpt
-            ));
-        }
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|error| anyhow!("Cloudflare Codex poll response is invalid JSON: {error}"))?;
-        let task = value
-            .get("task")
-            .cloned()
-            .ok_or_else(|| anyhow!("Cloudflare Codex poll response missing task"))?;
-        match task
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-        {
-            "completed" => return Ok(task),
-            "failed" | "cancelled" => {
-                let code = task
-                    .pointer("/error/code")
-                    .and_then(Value::as_str)
-                    .unwrap_or("cloudflare_codex_task_failed");
-                let excerpt = safe_response_excerpt(&task.to_string(), 500);
-                return Err(anyhow!(
-                    "Cloudflare Codex task ended with status={code}; task_excerpt=\"{}\"",
-                    excerpt
-                ));
-            }
-            _ => {
-                tokio::time::sleep(Duration::from_millis(config.poll_interval_ms.max(250))).await;
-            }
-        }
+    let (status_code, text) = curl_orchestrator_json(
+        "GET",
+        &config.endpoint(&format!("/tasks/{task_id}")),
+        None,
+        &[
+            ("Authorization", format!("Bearer {}", config.access_key)),
+            ("X-Client-Name", "v3-codex-host-agent".to_string()),
+        ],
+    )
+    .await
+    .map_err(|error| anyhow!("failed to poll Cloudflare Codex task: {error}"))?;
+    if !(200..300).contains(&status_code) {
+        let excerpt = safe_response_excerpt(&text, 300);
+        return Err(anyhow!(
+            "Cloudflare Codex poll failed: status={} body_chars={} body_excerpt=\"{}\"",
+            status_code,
+            text.chars().count(),
+            excerpt
+        ));
     }
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|error| anyhow!("Cloudflare Codex poll response is invalid JSON: {error}"))?;
+    value
+        .get("task")
+        .cloned()
+        .ok_or_else(|| anyhow!("Cloudflare Codex poll response missing task"))
 }
 
 fn safe_response_excerpt(text: &str, max_chars: usize) -> String {
@@ -2894,6 +3013,8 @@ mod tests {
                 "prompt": "should-not-be-persisted"
             }),
             Utc::now(),
+            "static_page_publish",
+            "poll_static_page_publish",
         );
 
         assert_eq!(
@@ -2903,6 +3024,11 @@ mod tests {
         assert_eq!(
             updated["cloudflare_orchestrator"]["runtime_target_id"],
             json!("cloudflare")
+        );
+        assert_eq!(updated["logical_queue"], json!("static_page_publish"));
+        assert_eq!(
+            updated["logical_task_key"],
+            json!("poll_static_page_publish")
         );
         assert!(updated["cloudflare_orchestrator"].get("prompt").is_none());
     }
@@ -2929,6 +3055,74 @@ mod tests {
             "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
             &task
         ));
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_pending_requeue_does_not_consume_attempt_budget() {
+        let task = test_workflow_task(9, 3);
+
+        assert!(should_requeue_cloudflare_orchestrator_poll(
+            &CodexHostExecutionMode::CloudflareOrchestrator,
+            "Cloudflare Codex task still running; task_id=abc status=running",
+            &task
+        ));
+        assert_eq!(
+            cloudflare_orchestrator_retry_reason(
+                "Cloudflare Codex task submitted and pending; task_id=abc"
+            ),
+            "cloudflare_orchestrator_submitted"
+        );
+        assert_eq!(
+            cloudflare_orchestrator_retry_reason(
+                "Cloudflare Codex task still running; task_id=abc status=running"
+            ),
+            "cloudflare_orchestrator_pending"
+        );
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_poll_payload_tracks_next_poll_without_prompt() {
+        let now = Utc::now();
+        let payload = workflow_task_payload_with_cloudflare_orchestrator_task(
+            &json!({"execution_id": "exec-1"}),
+            "task-cloudflare-1",
+            &json!({"status": "running", "runtimeTargetId": "cloudflare"}),
+            now,
+            "static_page_publish",
+            "poll_static_page_publish",
+        );
+        let next_poll_at = now + chrono::Duration::seconds(15);
+        let updated = workflow_task_payload_with_cloudflare_orchestrator_poll(
+            &payload,
+            "cloudflare_orchestrator_pending",
+            "static_page_publish",
+            "poll_static_page_publish",
+            7,
+            15_000,
+            next_poll_at,
+            now,
+            Some("Cloudflare Codex task still running; task_id=task-cloudflare-1 status=running"),
+        );
+
+        assert_eq!(
+            cloudflare_orchestrator_task_id_from_payload(&updated).as_deref(),
+            Some("task-cloudflare-1")
+        );
+        assert_eq!(
+            updated["cloudflare_orchestrator"]["status"],
+            json!("cloudflare_orchestrator_pending")
+        );
+        assert_eq!(updated["logical_queue"], json!("static_page_publish"));
+        assert_eq!(
+            updated["logical_task_key"],
+            json!("poll_static_page_publish")
+        );
+        assert_eq!(updated["cloudflare_orchestrator"]["poll_attempt"], json!(7));
+        assert_eq!(
+            updated["cloudflare_orchestrator"]["next_poll_at"],
+            json!(next_poll_at.to_rfc3339())
+        );
+        assert!(updated["cloudflare_orchestrator"].get("prompt").is_none());
     }
 
     #[test]

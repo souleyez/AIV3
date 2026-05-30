@@ -2879,11 +2879,11 @@ export default function HomePageClient() {
               hint: scopeHintFromCandidates(backendCandidates),
             });
           }
-          const backendCandidateDatasetIds = currentSelectedDatasetIds.length
+          const backendCandidateDatasetIds = effectiveDatasetIds.length
             ? []
             : selectPlannerDatasetIds({ candidates: backendCandidates });
           const backendDatasetIds = normalizeDatasetIds([
-            ...uiDatasetIdsFromBackendScope(responsePayload?.selected_scope),
+            ...(effectiveDatasetIds.length ? [] : uiDatasetIdsFromBackendScope(responsePayload?.selected_scope)),
             ...backendCandidateDatasetIds,
           ]);
           if (backendDatasetIds.length) {
@@ -3987,7 +3987,10 @@ export default function HomePageClient() {
     if (!selectedDocumentId || !datasetId) {
       return false;
     }
-    const currentIds = normalizeDatasetIds(selectedDatasetIds);
+    const documentDatasetIdList = documentDatasetIds(selectedDocument);
+    const currentIds = documentDatasetIdList.length
+      ? documentDatasetIdList
+      : normalizeDatasetIds(selectedDatasetIds);
     const active = currentIds.includes(datasetId);
     setBanner('');
     setError('');

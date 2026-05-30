@@ -978,22 +978,104 @@ export function normalizeWorkflowTask(item = {}) {
   const cloudflare = payload.cloudflare_orchestrator && typeof payload.cloudflare_orchestrator === 'object'
     ? payload.cloudflare_orchestrator
     : {};
+  const imageOrchestrator = payload.static_page_image_orchestrator && typeof payload.static_page_image_orchestrator === 'object'
+    ? payload.static_page_image_orchestrator
+    : {};
   return {
     id: item.id || '',
     status: item.status || '',
     queue: item.queue || '',
     taskKey: item.task_key || item.taskKey || '',
+    logicalQueue: item.logical_queue || item.logicalQueue || payload.logical_queue || '',
+    logicalTaskKey: item.logical_task_key || item.logicalTaskKey || payload.logical_task_key || '',
     attempt: Number(item.attempt || 0),
     maxAttempts: Number(item.max_attempts || item.maxAttempts || 0),
     availableAt: item.available_at || item.availableAt || null,
+    nextPollAt: item.next_poll_at || item.nextPollAt || cloudflare.next_poll_at || imageOrchestrator.next_poll_at || null,
     claimedAt: item.claimed_at || item.claimedAt || null,
     finishedAt: item.finished_at || item.finishedAt || null,
     updatedAt: item.updated_at || item.updatedAt || item.available_at || null,
     error: item.error || '',
-    cloudflareTaskId: item.cloudflareTaskId || cloudflare.task_id || cloudflare.taskId || '',
+    cloudflareTaskId: item.remote_task_id || item.remoteTaskId || item.cloudflareTaskId || cloudflare.task_id || cloudflare.taskId || imageOrchestrator.task_id || imageOrchestrator.taskId || '',
     cloudflareStatus: item.cloudflareStatus || cloudflare.status || '',
     cloudflareRuntimeTargetId: item.cloudflareRuntimeTargetId || cloudflare.runtime_target_id || cloudflare.runtimeTargetId || '',
   };
+}
+
+function normalizeWorkflowQueueSummary(item = {}) {
+  const taskKeys = Array.isArray(item.task_keys)
+    ? item.task_keys
+    : Array.isArray(item.taskKeys)
+      ? item.taskKeys
+      : [];
+  return {
+    logicalQueue: item.logical_queue || item.logicalQueue || '',
+    physicalQueues: Array.isArray(item.physical_queues)
+      ? item.physical_queues
+      : Array.isArray(item.physicalQueues)
+        ? item.physicalQueues
+        : [],
+    taskCount: numberOrZero(item.task_count ?? item.taskCount),
+    queued: numberOrZero(item.queued),
+    running: numberOrZero(item.running),
+    retrying: numberOrZero(item.retrying),
+    succeeded: numberOrZero(item.succeeded),
+    failed: numberOrZero(item.failed),
+    cancelled: numberOrZero(item.cancelled),
+    deadLettered: numberOrZero(item.dead_lettered ?? item.deadLettered),
+    nextAvailableAt: item.next_available_at || item.nextAvailableAt || null,
+    taskKeys: taskKeys.map((taskKey) => ({
+      logicalTaskKey: taskKey.logical_task_key || taskKey.logicalTaskKey || '',
+      physicalTaskKeys: Array.isArray(taskKey.physical_task_keys)
+        ? taskKey.physical_task_keys
+        : Array.isArray(taskKey.physicalTaskKeys)
+          ? taskKey.physicalTaskKeys
+          : [],
+      taskCount: numberOrZero(taskKey.task_count ?? taskKey.taskCount),
+      queued: numberOrZero(taskKey.queued),
+      running: numberOrZero(taskKey.running),
+      retrying: numberOrZero(taskKey.retrying),
+      succeeded: numberOrZero(taskKey.succeeded),
+      failed: numberOrZero(taskKey.failed),
+      cancelled: numberOrZero(taskKey.cancelled),
+      deadLettered: numberOrZero(taskKey.dead_lettered ?? taskKey.deadLettered),
+      nextAvailableAt: taskKey.next_available_at || taskKey.nextAvailableAt || null,
+    })),
+  };
+}
+
+export function normalizeWorkflowQueueStats(raw = {}) {
+  const queues = Array.isArray(raw.queues) ? raw.queues : [];
+  return {
+    generatedAt: raw.generated_at || raw.generatedAt || null,
+    executionCount: numberOrZero(raw.execution_count ?? raw.executionCount),
+    taskCount: numberOrZero(raw.task_count ?? raw.taskCount),
+    queues: queues.map(normalizeWorkflowQueueSummary),
+  };
+}
+
+export function workflowQueueLabel(value) {
+  const labels = {
+    static_page_image_preview: '效果图',
+    static_page_publish: '页面发布',
+    product_image_generation: '商品图',
+    codex_fixed_task: '通用 Codex',
+    static_page_render: '静态页渲染',
+  };
+  return labels[value] || value || '未分组';
+}
+
+export function workflowTaskKeyLabel(value) {
+  const labels = {
+    submit_static_page_image_preview: '提交效果图',
+    poll_static_page_image_preview: '轮询效果图',
+    submit_static_page_publish: '提交页面发布',
+    poll_static_page_publish: '轮询页面发布',
+    submit_codex_fixed_task: '提交通用任务',
+    poll_codex_fixed_task: '轮询通用任务',
+    render_static_page: '渲染静态页',
+  };
+  return labels[value] || value || '未分组';
 }
 
 export function normalizeArtifactManifest(item = {}) {
@@ -1051,8 +1133,19 @@ function latestWorkflowTask(tasks) {
 
 function taskLooksLikePollRetry(task) {
   const error = String(task?.error || '');
+  const status = normalizeWorkflowStatusKey(task?.status);
   return normalizeWorkflowStatusKey(task?.status) === 'queued'
-    && error.includes('Cloudflare Codex task timed out after');
+    && (
+      task?.nextPollAt
+      || task?.cloudflareTaskId
+      || task?.logicalTaskKey?.startsWith('poll_')
+      || error.includes('Cloudflare Codex task timed out after')
+      || error.includes('Cloudflare Codex task still running')
+      || error.includes('Cloudflare Codex task submitted and pending')
+      || task?.cloudflareStatus === 'cloudflare_orchestrator_pending'
+      || task?.cloudflareStatus === 'cloudflare_orchestrator_submitted'
+    )
+    && status === 'queued';
 }
 
 export function codexExecutorInspectSummary(detail = {}) {
@@ -1099,7 +1192,7 @@ export function codexExecutorInspectSummary(detail = {}) {
         cloudflare_task_id: pollRetryTask.cloudflareTaskId,
         attempt: pollRetryTask.attempt,
         max_attempts: pollRetryTask.maxAttempts,
-        next_available_at: pollRetryTask.availableAt,
+        next_available_at: pollRetryTask.nextPollAt || pollRetryTask.availableAt,
         error: pollRetryTask.error,
       }
       : { active: false },

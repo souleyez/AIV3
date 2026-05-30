@@ -24,7 +24,6 @@ const DEFAULT_QUEUE: &str = "static_page";
 const DEFAULT_IMAGE_TASK_KEY: &str = "generate_static_page_image";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
-const DEFAULT_ORCHESTRATOR_MAX_POLLS: u32 = 360;
 const DEFAULT_STALE_CLAIM_AFTER_MS: u64 = 2 * 60 * 60 * 1_000;
 const DEFAULT_STALE_SWEEP_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_STALE_SWEEP_LIMIT: u32 = 25;
@@ -44,6 +43,12 @@ impl StaticPageRenderTaskOutcome {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StaticPageImageTaskOutcome {
+    Completed,
+    Requeued,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     observability::install("static_page_worker")?;
@@ -60,10 +65,6 @@ async fn main() -> Result<()> {
     let orchestrator_poll_interval = env_u64(
         "STATIC_PAGE_ORCHESTRATOR_POLL_INTERVAL_MS",
         DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS,
-    );
-    let orchestrator_max_polls = env_u32(
-        "STATIC_PAGE_ORCHESTRATOR_MAX_POLLS",
-        DEFAULT_ORCHESTRATOR_MAX_POLLS,
     );
     let stale_claim_after_ms = env_u64(
         "STATIC_PAGE_WORKER_STALE_CLAIM_AFTER_MS",
@@ -108,7 +109,6 @@ async fn main() -> Result<()> {
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
         orchestrator_poll_interval_ms = orchestrator_poll_interval,
-        orchestrator_max_polls,
         stale_claim_after_ms,
         stale_sweep_interval_ms,
         stale_sweep_limit,
@@ -164,7 +164,6 @@ async fn main() -> Result<()> {
                     &http_client,
                     orchestrator_config.as_ref(),
                     orchestrator_poll_interval,
-                    orchestrator_max_polls,
                     task,
                 )
                 .await
@@ -295,7 +294,6 @@ async fn process_task(
     http_client: &Client,
     orchestrator_config: Option<&CodexOrchestratorConfig>,
     orchestrator_poll_interval_ms: u64,
-    orchestrator_max_polls: u32,
     task: domain_model::WorkflowTask,
 ) -> Result<()> {
     let execution = storage
@@ -317,7 +315,6 @@ async fn process_task(
                 http_client,
                 orchestrator_config,
                 orchestrator_poll_interval_ms,
-                orchestrator_max_polls,
                 &execution,
                 &task,
             )
@@ -342,7 +339,6 @@ async fn process_static_page_image_task(
     http_client: &Client,
     orchestrator_config: &CodexOrchestratorConfig,
     orchestrator_poll_interval_ms: u64,
-    orchestrator_max_polls: u32,
     execution: &domain_model::WorkflowExecution,
     task: &domain_model::WorkflowTask,
 ) -> Result<()> {
@@ -350,45 +346,208 @@ async fn process_static_page_image_task(
         &execution.context,
         "static_page_image_job_id",
     )?);
-    let process_result: Result<()> = async {
+    let process_result: Result<StaticPageImageTaskOutcome> = async {
         let mut job = storage
             .static_page_image_jobs()
             .get_by_id(task.tenant_id, job_id)
             .await?
             .ok_or_else(|| anyhow!("static page image job {job_id} not found"))?;
-        mark_job_running(storage, &mut job).await?;
+        let orchestrator_task_id =
+            if let Some(task_id) = static_page_image_orchestrator_task_id(&job.image_prompt_payload)
+            {
+                task_id
+            } else {
+                mark_job_running(storage, &mut job).await?;
+                let submitted_task = submit_static_page_visual_task(
+                    http_client,
+                    orchestrator_config,
+                    job.id,
+                    &job.image_prompt_payload,
+                )?;
+                let now = Utc::now();
+                job.image_prompt_payload = merge_orchestrator_state(
+                    &job.image_prompt_payload,
+                    json!({
+                        "status": submitted_task.status,
+                        "taskId": submitted_task.id,
+                        "queuePosition": submitted_task.queue_position,
+                        "submittedAt": now,
+                        "lastPollAt": Value::Null,
+                        "nextPollAt": static_page_next_poll_at(now, orchestrator_poll_interval_ms).to_rfc3339(),
+                    }),
+                );
+                job.queue_position = submitted_task.queue_position;
+                storage
+                    .static_page_image_jobs()
+                    .update(task.tenant_id, &job)
+                    .await?;
+                update_static_page_image_task_payload(
+                    storage,
+                    task,
+                    &submitted_task.id,
+                    "submitted",
+                    "poll_static_page_image_preview",
+                    submitted_task.queue_position,
+                    0,
+                    now,
+                    static_page_next_poll_at(now, orchestrator_poll_interval_ms),
+                    None,
+                )
+                .await?;
+                append_assistant_event(
+                    storage,
+                    job.tenant_id,
+                    job.assistant_run_id,
+                    "static_page_image_job.submitted",
+                    json!({
+                        "draft_id": job.draft_id,
+                        "image_job_id": job.id,
+                        "orchestrator_task_id": submitted_task.id,
+                        "status": submitted_task.status,
+                        "queue_position": submitted_task.queue_position,
+                        "poll_after_seconds": static_page_poll_after_seconds(orchestrator_poll_interval_ms),
+                    }),
+                )
+                .await?;
+                requeue_static_page_image_task(
+                    storage,
+                    task,
+                    orchestrator_poll_interval_ms,
+                    "static_page_image_orchestrator_submitted",
+                    now,
+                )
+                .await?;
+                return Ok(StaticPageImageTaskOutcome::Requeued);
+            };
 
-        let submitted_task = submit_static_page_visual_task(
-            http_client,
-            orchestrator_config,
-            job.id,
-            &job.image_prompt_payload,
-        )?;
-        job.image_prompt_payload = merge_orchestrator_state(
-            &job.image_prompt_payload,
-            json!({
-                "status": submitted_task.status,
-                "taskId": submitted_task.id,
-                "queuePosition": submitted_task.queue_position,
-                "submittedAt": Utc::now(),
-            }),
-        );
-        job.queue_position = submitted_task.queue_position;
-        job = storage
-            .static_page_image_jobs()
-            .update(task.tenant_id, &job)
-            .await?;
-
-        let completed_task = poll_until_finished(
-            http_client,
-            orchestrator_config,
-            &submitted_task.id,
-            orchestrator_poll_interval_ms,
-            orchestrator_max_polls,
-            &mut job,
-            storage,
-        )
-        .await?;
+        let polled_at = Utc::now();
+        let completed_task =
+            match poll_static_page_visual_task(http_client, orchestrator_config, &orchestrator_task_id)
+            {
+                Ok(task_view) => match task_view.status.as_str() {
+                    "completed" => task_view,
+                    "failed" | "cancelled" => return Err(anyhow!(task_failure_message(&task_view))),
+                    status if orchestrator_task_status_is_pending(status) => {
+                        job.status = StaticPageImageJobStatus::Running;
+                        job.queue_position = task_view.queue_position;
+                        job.image_prompt_payload = merge_orchestrator_state(
+                            &job.image_prompt_payload,
+                            json!({
+                                "status": task_view.status,
+                                "taskId": task_view.id,
+                                "queuePosition": task_view.queue_position,
+                                "lastPollAt": polled_at,
+                                "nextPollAt": static_page_next_poll_at(polled_at, orchestrator_poll_interval_ms).to_rfc3339(),
+                                "pollAttempt": task.attempt,
+                            }),
+                        );
+                        storage
+                            .static_page_image_jobs()
+                            .update(job.tenant_id, &job)
+                            .await?;
+                        update_static_page_image_task_payload(
+                            storage,
+                            task,
+                            &task_view.id,
+                            &task_view.status,
+                            "poll_static_page_image_preview",
+                            task_view.queue_position,
+                            task.attempt,
+                            polled_at,
+                            static_page_next_poll_at(polled_at, orchestrator_poll_interval_ms),
+                            None,
+                        )
+                        .await?;
+                        append_assistant_event(
+                            storage,
+                            job.tenant_id,
+                            job.assistant_run_id,
+                            "static_page_image_job.running",
+                            json!({
+                                "draft_id": job.draft_id,
+                                "image_job_id": job.id,
+                                "orchestrator_task_id": task_view.id,
+                                "status": task_view.status,
+                                "queue_position": task_view.queue_position,
+                                "poll_attempt": task.attempt,
+                                "poll_after_seconds": static_page_poll_after_seconds(orchestrator_poll_interval_ms),
+                            }),
+                        )
+                        .await?;
+                        requeue_static_page_image_task(
+                            storage,
+                            task,
+                            orchestrator_poll_interval_ms,
+                            "static_page_image_orchestrator_pending",
+                            polled_at,
+                        )
+                        .await?;
+                        return Ok(StaticPageImageTaskOutcome::Requeued);
+                    }
+                    other => return Err(anyhow!("orchestrator returned unknown task status {other}")),
+                },
+                Err(error) if orchestrator_poll_error_is_transient(&error) => {
+                    let next_poll_at =
+                        static_page_next_poll_at(polled_at, orchestrator_poll_interval_ms);
+                    job.status = StaticPageImageJobStatus::Running;
+                    job.queue_position = None;
+                    job.image_prompt_payload = merge_orchestrator_state(
+                        &job.image_prompt_payload,
+                        json!({
+                            "status": "poll_retry",
+                            "taskId": orchestrator_task_id,
+                            "transientError": bounded_error_message(&error, 240),
+                            "lastPollAt": polled_at,
+                            "nextPollAt": next_poll_at.to_rfc3339(),
+                            "pollAttempt": task.attempt,
+                        }),
+                    );
+                    storage
+                        .static_page_image_jobs()
+                        .update(job.tenant_id, &job)
+                        .await?;
+                    update_static_page_image_task_payload(
+                        storage,
+                        task,
+                        &orchestrator_task_id,
+                        "poll_retry",
+                        "poll_static_page_image_preview",
+                        None,
+                        task.attempt,
+                        polled_at,
+                        next_poll_at,
+                        Some(&bounded_error_message(&error, 240)),
+                    )
+                    .await?;
+                    append_assistant_event(
+                        storage,
+                        job.tenant_id,
+                        job.assistant_run_id,
+                        "static_page_image_job.poll_retry",
+                        json!({
+                            "draft_id": job.draft_id,
+                            "image_job_id": job.id,
+                            "orchestrator_task_id": orchestrator_task_id,
+                            "error": bounded_error_message(&error, 240),
+                            "retryable": true,
+                            "status": "poll_retry",
+                            "poll_attempt": task.attempt,
+                            "poll_after_seconds": static_page_poll_after_seconds(orchestrator_poll_interval_ms),
+                        }),
+                    )
+                    .await?;
+                    requeue_static_page_image_task(
+                        storage,
+                        task,
+                        orchestrator_poll_interval_ms,
+                        "static_page_image_orchestrator_poll_retry",
+                        polled_at,
+                    )
+                    .await?;
+                    return Ok(StaticPageImageTaskOutcome::Requeued);
+                }
+                Err(error) => return Err(error),
+            };
         let mut artifact = extract_first_image_artifact(&completed_task)?;
         artifact.asset_key =
             normalize_artifact_asset_key(&artifact.asset_key, &orchestrator_config.base_url);
@@ -440,94 +599,107 @@ async fn process_static_page_image_task(
         )
         .await?;
 
-        Ok(())
+        Ok(StaticPageImageTaskOutcome::Completed)
     }
     .await;
 
-    if let Err(error) = process_result {
-        let error_message = error.to_string();
-        let retryable = static_page_image_error_should_auto_retry(&error_message);
-        if let Ok(mut job) = storage
-            .static_page_image_jobs()
-            .get_by_id(task.tenant_id, job_id)
-            .await
-        {
-            if let Some(mut job) = job.take() {
-                if retryable {
-                    let _ = mark_job_retrying(storage, &mut job, &error_message).await;
-                    let _ = append_assistant_event(
-                        storage,
-                        job.tenant_id,
-                        job.assistant_run_id,
-                        "static_page_image_job.retry_queued",
-                        json!({
-                            "draft_id": job.draft_id,
-                            "image_job_id": job.id,
-                            "error": error_message,
-                            "retryable": true,
-                            "status": "retry_queued",
-                        }),
-                    )
-                    .await;
-                } else {
-                    let _ = mark_job_failed(storage, &mut job, &error_message).await;
-                    let _ = append_assistant_event(
-                        storage,
-                        job.tenant_id,
-                        job.assistant_run_id,
-                        "static_page_image_job.failed",
-                        json!({
-                            "draft_id": job.draft_id,
-                            "image_job_id": job.id,
-                            "error": error_message,
-                            "retryable": false,
-                        }),
-                    )
-                    .await;
+    let outcome = match process_result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let error_message = error.to_string();
+            let retryable = static_page_image_error_should_auto_retry(&error_message);
+            if let Ok(mut job) = storage
+                .static_page_image_jobs()
+                .get_by_id(task.tenant_id, job_id)
+                .await
+            {
+                if let Some(mut job) = job.take() {
+                    if retryable {
+                        let _ = mark_job_retrying(storage, &mut job, &error_message).await;
+                        let _ = append_assistant_event(
+                            storage,
+                            job.tenant_id,
+                            job.assistant_run_id,
+                            "static_page_image_job.retry_queued",
+                            json!({
+                                "draft_id": job.draft_id,
+                                "image_job_id": job.id,
+                                "error": error_message,
+                                "retryable": true,
+                                "status": "retry_queued",
+                            }),
+                        )
+                        .await;
+                    } else {
+                        let _ = mark_job_failed(storage, &mut job, &error_message).await;
+                        let _ = append_assistant_event(
+                            storage,
+                            job.tenant_id,
+                            job.assistant_run_id,
+                            "static_page_image_job.failed",
+                            json!({
+                                "draft_id": job.draft_id,
+                                "image_job_id": job.id,
+                                "error": error_message,
+                                "retryable": false,
+                            }),
+                        )
+                        .await;
+                    }
                 }
             }
-        }
-        if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
-            storage,
-            workflow_catalog,
-            event_bus,
-            task.tenant_id,
-            task.execution_id,
-            WorkflowSignal::StepFailed {
-                task_key: task.task_key.clone(),
-                error: error_message.clone(),
-            },
-        )
-        .await
-        {
-            tracing::error!(
-                error = ?signal_error,
-                task_id = %task.id,
-                "static page image failed to send workflow step_failed signal"
-            );
-        }
-        if retryable {
-            if let Err(retry_error) = auto_retry_static_page_image_workflow(
+            if let Err(signal_error) = platform_api::apply_workflow_signal_with_dependencies(
                 storage,
                 workflow_catalog,
                 event_bus,
-                task,
-                &error_message,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepFailed {
+                    task_key: task.task_key.clone(),
+                    error: error_message.clone(),
+                },
             )
             .await
             {
-                tracing::warn!(
-                    error = ?retry_error,
+                tracing::error!(
+                    error = ?signal_error,
                     task_id = %task.id,
-                    "static page image auto retry enqueue failed"
+                    "static page image failed to send workflow step_failed signal"
                 );
             }
+            if retryable {
+                if let Err(retry_error) = auto_retry_static_page_image_workflow(
+                    storage,
+                    workflow_catalog,
+                    event_bus,
+                    task,
+                    &error_message,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = ?retry_error,
+                        task_id = %task.id,
+                        "static page image auto retry enqueue failed"
+                    );
+                }
+            }
+            storage
+                .workflow_tasks()
+                .mark_failed(task.id, &error_message, Utc::now())
+                .await?;
+            return Err(error);
         }
-        storage
-            .workflow_tasks()
-            .mark_failed(task.id, &error_message, Utc::now())
-            .await?;
-        return Err(error);
+    };
+
+    if outcome == StaticPageImageTaskOutcome::Requeued {
+        tracing::info!(
+            task_id = %task.id,
+            execution_id = %task.execution_id,
+            static_page_image_job_id = %job_id,
+            "static page image task released while remote orchestrator continues"
+        );
+        return Ok(());
     }
 
     storage
@@ -799,10 +971,7 @@ fn static_page_draft_requires_effect_image_confirmation(draft: &StaticPageDraft)
         == Some(true)
 }
 
-fn static_page_render_image_job_ready(
-    draft: &StaticPageDraft,
-    job: &StaticPageImageJob,
-) -> bool {
+fn static_page_render_image_job_ready(draft: &StaticPageDraft, job: &StaticPageImageJob) -> bool {
     match job.status {
         StaticPageImageJobStatus::Confirmed => true,
         StaticPageImageJobStatus::PreviewReady => {
@@ -817,66 +986,135 @@ fn static_page_render_image_job_ready(
     }
 }
 
-async fn poll_until_finished(
-    http_client: &Client,
-    orchestrator_config: &CodexOrchestratorConfig,
-    task_id: &str,
+fn static_page_image_orchestrator_task_id(image_prompt_payload: &Value) -> Option<String> {
+    image_prompt_payload
+        .pointer("/orchestrator/taskId")
+        .or_else(|| image_prompt_payload.pointer("/orchestrator/task_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn static_page_next_poll_at(
+    now: chrono::DateTime<Utc>,
     poll_interval_ms: u64,
-    max_polls: u32,
-    job: &mut StaticPageImageJob,
-    storage: &PgStorage,
-) -> Result<static_page_worker::OrchestratorTaskView> {
-    for _ in 0..max_polls {
-        let task = match poll_static_page_visual_task(http_client, orchestrator_config, task_id) {
-            Ok(task) => task,
-            Err(error) if orchestrator_poll_error_is_transient(&error) => {
-                job.status = StaticPageImageJobStatus::Running;
-                job.queue_position = None;
-                job.image_prompt_payload = merge_orchestrator_state(
-                    &job.image_prompt_payload,
-                    json!({
-                        "status": "poll_retry",
-                        "taskId": task_id,
-                        "transientError": bounded_error_message(&error, 240),
-                        "updatedAt": Utc::now(),
-                    }),
-                );
-                *job = storage
-                    .static_page_image_jobs()
-                    .update(job.tenant_id, job)
-                    .await?;
-                tokio::time::sleep(Duration::from_millis(poll_interval_ms)).await;
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        match task.status.as_str() {
-            "completed" => return Ok(task),
-            "failed" | "cancelled" => return Err(anyhow!(task_failure_message(&task))),
-            status if orchestrator_task_status_is_pending(status) => {
-                job.status = StaticPageImageJobStatus::Running;
-                job.queue_position = task.queue_position;
-                job.image_prompt_payload = merge_orchestrator_state(
-                    &job.image_prompt_payload,
-                    json!({
-                        "status": task.status,
-                        "taskId": task.id,
-                        "queuePosition": task.queue_position,
-                        "updatedAt": Utc::now(),
-                    }),
-                );
-                *job = storage
-                    .static_page_image_jobs()
-                    .update(job.tenant_id, job)
-                    .await?;
-            }
-            other => return Err(anyhow!("orchestrator returned unknown task status {other}")),
-        }
-        tokio::time::sleep(Duration::from_millis(poll_interval_ms)).await;
+) -> chrono::DateTime<Utc> {
+    now + TimeDelta::milliseconds(poll_interval_ms.min(i64::MAX as u64) as i64)
+}
+
+fn static_page_poll_after_seconds(poll_interval_ms: u64) -> u64 {
+    poll_interval_ms.saturating_add(999) / 1_000
+}
+
+fn static_page_image_task_payload_with_orchestrator_state(
+    payload: &Value,
+    orchestrator_task_id: &str,
+    status: &str,
+    logical_task_key: &str,
+    queue_position: Option<i32>,
+    poll_attempt: u32,
+    last_poll_at: chrono::DateTime<Utc>,
+    next_poll_at: chrono::DateTime<Utc>,
+    error_message: Option<&str>,
+) -> Value {
+    let mut root = payload.as_object().cloned().unwrap_or_default();
+    root.insert(
+        "logical_queue".to_string(),
+        Value::String("static_page_image_preview".to_string()),
+    );
+    root.insert(
+        "logical_task_key".to_string(),
+        Value::String(logical_task_key.to_string()),
+    );
+    let mut orchestrator = root
+        .get("static_page_image_orchestrator")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    orchestrator.insert(
+        "task_id".to_string(),
+        Value::String(orchestrator_task_id.to_string()),
+    );
+    orchestrator.insert("status".to_string(), Value::String(status.to_string()));
+    orchestrator.insert(
+        "queue_position".to_string(),
+        queue_position
+            .map(|value| Value::Number(serde_json::Number::from(i64::from(value))))
+            .unwrap_or(Value::Null),
+    );
+    orchestrator.insert(
+        "poll_attempt".to_string(),
+        Value::Number(serde_json::Number::from(u64::from(poll_attempt))),
+    );
+    orchestrator.insert(
+        "last_poll_at".to_string(),
+        Value::String(last_poll_at.to_rfc3339()),
+    );
+    orchestrator.insert(
+        "next_poll_at".to_string(),
+        Value::String(next_poll_at.to_rfc3339()),
+    );
+    if let Some(error_message) = error_message {
+        orchestrator.insert(
+            "last_error".to_string(),
+            Value::String(bounded_text(error_message, 240)),
+        );
     }
-    Err(anyhow!(
-        "orchestrator task {task_id} did not finish after {max_polls} polls"
-    ))
+    root.insert(
+        "static_page_image_orchestrator".to_string(),
+        Value::Object(orchestrator),
+    );
+    Value::Object(root)
+}
+
+async fn update_static_page_image_task_payload(
+    storage: &PgStorage,
+    task: &domain_model::WorkflowTask,
+    orchestrator_task_id: &str,
+    status: &str,
+    logical_task_key: &str,
+    queue_position: Option<i32>,
+    poll_attempt: u32,
+    last_poll_at: chrono::DateTime<Utc>,
+    next_poll_at: chrono::DateTime<Utc>,
+    error_message: Option<&str>,
+) -> Result<()> {
+    let payload = static_page_image_task_payload_with_orchestrator_state(
+        &task.payload,
+        orchestrator_task_id,
+        status,
+        logical_task_key,
+        queue_position,
+        poll_attempt,
+        last_poll_at,
+        next_poll_at,
+        error_message,
+    );
+    storage
+        .workflow_tasks()
+        .update_payload(task.id, &payload, Utc::now())
+        .await?;
+    Ok(())
+}
+
+async fn requeue_static_page_image_task(
+    storage: &PgStorage,
+    task: &domain_model::WorkflowTask,
+    poll_interval_ms: u64,
+    reason: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<()> {
+    storage
+        .workflow_tasks()
+        .requeue_after_transient_error(
+            task.id,
+            reason,
+            static_page_next_poll_at(now, poll_interval_ms),
+            now,
+        )
+        .await?;
+    Ok(())
 }
 
 fn orchestrator_poll_error_is_transient(error: &anyhow::Error) -> bool {
@@ -1626,14 +1864,6 @@ mod tests {
     }
 
     #[test]
-    fn default_orchestrator_poll_window_allows_slow_cloudflare_tasks() {
-        assert!(
-            u64::from(DEFAULT_ORCHESTRATOR_MAX_POLLS) * DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS
-                >= 30 * 60 * 1_000
-        );
-    }
-
-    #[test]
     fn static_page_image_auto_retry_classifies_transient_errors() {
         assert!(static_page_image_error_should_auto_retry(
             "orchestrator task task_1 did not finish after 120 polls"
@@ -1647,6 +1877,71 @@ mod tests {
         assert!(!static_page_image_error_should_auto_retry(
             "orchestrator task ended with status failed"
         ));
+    }
+
+    #[test]
+    fn extracts_orchestrator_task_id_from_image_prompt_payload() {
+        assert_eq!(
+            static_page_image_orchestrator_task_id(&json!({
+                "orchestrator": {
+                    "taskId": "task-static-page-1",
+                    "status": "running"
+                }
+            }))
+            .as_deref(),
+            Some("task-static-page-1")
+        );
+        assert_eq!(
+            static_page_image_orchestrator_task_id(&json!({"orchestrator": {"taskId": ""}})),
+            None
+        );
+    }
+
+    #[test]
+    fn static_page_image_task_payload_tracks_non_blocking_poll_state() {
+        let now = Utc::now();
+        let next_poll_at = static_page_next_poll_at(now, 15_000);
+        let payload = static_page_image_task_payload_with_orchestrator_state(
+            &json!({"execution_id": "exec-1"}),
+            "task-static-page-1",
+            "running",
+            "poll_static_page_image_preview",
+            Some(4),
+            6,
+            now,
+            next_poll_at,
+            Some("temporary poll error"),
+        );
+
+        assert_eq!(
+            payload["static_page_image_orchestrator"]["task_id"],
+            json!("task-static-page-1")
+        );
+        assert_eq!(payload["logical_queue"], json!("static_page_image_preview"));
+        assert_eq!(
+            payload["logical_task_key"],
+            json!("poll_static_page_image_preview")
+        );
+        assert_eq!(
+            payload["static_page_image_orchestrator"]["status"],
+            json!("running")
+        );
+        assert_eq!(
+            payload["static_page_image_orchestrator"]["queue_position"],
+            json!(4)
+        );
+        assert_eq!(
+            payload["static_page_image_orchestrator"]["poll_attempt"],
+            json!(6)
+        );
+        assert_eq!(
+            payload["static_page_image_orchestrator"]["next_poll_at"],
+            json!(next_poll_at.to_rfc3339())
+        );
+        assert_eq!(
+            payload["static_page_image_orchestrator"]["last_error"],
+            json!("temporary poll error")
+        );
     }
 
     #[test]

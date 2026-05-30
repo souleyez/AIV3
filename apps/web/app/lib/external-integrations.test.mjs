@@ -33,10 +33,13 @@ import {
   normalizeDatabaseSourceStatus,
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
+  normalizeWorkflowQueueStats,
   normalizeWorkflowTask,
   searchEvidenceSignalLabel,
   signalLabel,
+  workflowQueueLabel,
   workflowStatusLabel,
+  workflowTaskKeyLabel,
 } from './external-integrations.js';
 
 test('buildThirdPartyApiUrl uses v3.elepcloud.com by default', () => {
@@ -900,6 +903,43 @@ test('codex executor helpers expose poll retry and remote task id', () => {
   assert.equal(summary.artifact_manifests.length, 1);
   assert.equal(summary.artifact_manifests[0].artifactType, 'static_page');
   assert.equal(summary.artifact_manifests[0].primaryUrl, 'https://v3.elepcloud.com/generated-artifacts/demo/index.html');
+});
+
+test('workflow queue stats helpers normalize logical queue counts', () => {
+  const stats = normalizeWorkflowQueueStats({
+    generated_at: '2026-05-30T12:00:00Z',
+    execution_count: 5,
+    task_count: 8,
+    queues: [
+      {
+        logical_queue: 'static_page_publish',
+        physical_queues: ['codex_host'],
+        task_count: 3,
+        queued: 2,
+        running: 1,
+        retrying: 2,
+        failed: 0,
+        next_available_at: '2026-05-30T12:00:30Z',
+        task_keys: [
+          {
+            logical_task_key: 'poll_static_page_publish',
+            physical_task_keys: ['run_codex_host_task'],
+            task_count: 2,
+            queued: 2,
+            retrying: 2,
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(stats.executionCount, 5);
+  assert.equal(stats.taskCount, 8);
+  assert.equal(stats.queues[0].logicalQueue, 'static_page_publish');
+  assert.equal(stats.queues[0].retrying, 2);
+  assert.equal(stats.queues[0].taskKeys[0].logicalTaskKey, 'poll_static_page_publish');
+  assert.equal(workflowQueueLabel('static_page_publish'), '页面发布');
+  assert.equal(workflowTaskKeyLabel('poll_static_page_publish'), '轮询页面发布');
 });
 
 test('external integrations page does not include direct home navigation links', () => {

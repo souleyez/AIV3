@@ -1359,6 +1359,14 @@ pub struct WorkflowTaskView {
     pub status: WorkflowTaskStatus,
     pub queue: String,
     pub task_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_queue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_task_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_poll_at: Option<DateTime<Utc>>,
     pub attempt: u32,
     pub max_attempts: u32,
     pub available_at: DateTime<Utc>,
@@ -1367,6 +1375,47 @@ pub struct WorkflowTaskView {
     pub error: Option<String>,
     pub updated_at: DateTime<Utc>,
     pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowTaskQueueStatsView {
+    pub generated_at: DateTime<Utc>,
+    pub execution_count: u64,
+    pub task_count: u64,
+    pub queues: Vec<WorkflowTaskQueueSummaryView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowTaskQueueSummaryView {
+    pub logical_queue: String,
+    pub physical_queues: Vec<String>,
+    pub task_count: u64,
+    pub queued: u64,
+    pub running: u64,
+    pub retrying: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub dead_lettered: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_available_at: Option<DateTime<Utc>>,
+    pub task_keys: Vec<WorkflowTaskKeySummaryView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowTaskKeySummaryView {
+    pub logical_task_key: String,
+    pub physical_task_keys: Vec<String>,
+    pub task_count: u64,
+    pub queued: u64,
+    pub running: u64,
+    pub retrying: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub dead_lettered: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_available_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

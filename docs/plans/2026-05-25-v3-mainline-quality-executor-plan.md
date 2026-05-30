@@ -100,6 +100,39 @@
   - This remains a V3-state-only smoke: it reads stored V3 source/sync/dataset/chunk/evidence status and does not connect to the customer/source database or execute customer-facing questions automatically.
   - The same script now supports `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true`, which validates the report builder with synthetic V3 status fixtures when Postgres or the 8-server source is not available.
   - `run-data-ingestion-staging-sync-smoke.sh` now includes that live-source readiness self-test by default, so local staging sync smoke also guards the database Q&A/report readiness report shape.
+- Continued P0 dataset document movement cleanup on 2026-05-30:
+  - The main web app now derives document-membership active state from the selected document's own `dataset_ids` / `datasetIds` while editing document归属, rather than reusing ordinary chat selected dataset scope.
+  - This keeps the left dataset rail and membership toggle direction aligned with the actual document memberships, so clicking a joined dataset sends remove and clicking an unjoined dataset sends add.
+  - AssistantRun response handling no longer unions backend-selected scopes into the left rail when this turn already has an effective selected dataset scope, preventing an explicit 新百/report selection from visually expanding to every visible dataset.
+  - Verified with `cargo test -p platform-api document_dataset_membership_endpoints_allow_main_site_public_document_moves --lib`, `cargo test -p platform-api assistant_run_native_empty_preselection_broadens_to_visible_supply --lib`, `npm --prefix apps/web run build`, and `git diff --check`.
+- Continued P0 static-page handoff cleanup on 2026-05-30:
+  - Third-party static-page requests now create a V3 direct HTML/generated-artifact link even when fixed Cloudflare Codex publish is ready, so `public_url` / `artifact_links[0]` can be returned quickly while the Image2 + Codex final page continues in the background.
+  - The response and status-restored cards preserve `provisional_direct_html=true`, `codex_final_status=static_page_image2_auto_publish_pending`, `poll_after_seconds`, and the same `status_url`, so third parties can send the first page immediately and still poll for the later final publish.
+  - The pure third-party and full third-party integration docs describe the provisional-link behavior, new card fields, and no-confirm Image2-to-Codex flow.
+- Continued P0 third-party privacy cleanup on 2026-05-30:
+  - External document parse still creates/reuses private third-party-owned datasets by default, and now also hardens legacy public duplicate datasets when the old dataset only contains same-source third-party documents.
+  - This keeps old public duplicate document shells out of the standard main-station dataset and document lists after a third-party account re-uploads the same external document id.
+  - Verified with `cargo test -p platform-api external_document_parse --lib`.
+- Continued P0 selected-scope recovery on 2026-05-30:
+  - Ordinary main-station chat now drops stale or inaccessible requested dataset ids from `selected_scope` instead of carrying a dirty selected state into evidence planning or later ReAct steps.
+  - Existing data-question behavior remains: empty selected/preselected scopes can broaden to visible datasets with `dataset_scope_policy=all_visible_datasets_with_preselection_priority`.
+  - Verified with `cargo test -p platform-api assistant_run_ordinary_chat_drops_unavailable_selected_dataset --lib` and `cargo test -p platform-api assistant_run_native_empty_preselection_broadens_to_visible_supply --lib`.
+- Continued weak-retrieval procedure expansion on 2026-05-30:
+  - Elder-care death/after-death procedure prompts now expand across `离世/去世/死亡/身故/善后/遗体/遗物/生命体征/医护确认/通知家属/殡仪接运/遗物交接/记录归档`.
+  - Ranking now gives domain hints to death/after-death procedure sections, so `长者在院离世，现场处置、家属对接流程` prefers actual善后处置 evidence over generic家属探望/物品交接 text.
+  - Verified with `cargo test -p platform-api rank_document_chunks_for_prompt_expands_elder_death_procedure_terms --lib`, `cargo test -p platform-api lexical_query_term_weights_extend_elder_death_terms --lib`, and the existing elder-fall ranking regression.
+- Continued TOC/section-hop retrieval recovery on 2026-05-30:
+  - Procedure fallback ranking now extracts clean section title hints from dotted TOC lines, uses those titles as query-hop terms, and downranks TOC/index chunks so actual section content wins when available.
+  - This targets cases where the directory says `突发事件应急预防与处置` but the answer previously only cited the directory or a nearby sign/definition page.
+  - Verified with `cargo test -p platform-api rank_document_chunks_for_prompt_uses_toc_title_to_prefer_actual_section --lib` plus the elder-fall and elder-death procedure regressions.
+- Continued answer recovery guidance on 2026-05-30:
+  - Weak or empty document supply now adds a model-facing `recovery_followup` with a concrete same-conversation follow-up and next-action hint, instead of letting the model end on a bare "not found" statement.
+  - The model supply brief and ReAct natural fallback input both surface that recovery follow-up, requiring one useful answer first when any evidence exists, then a precise follow-up only if exact verification still needs more input.
+  - Answer-quality autofix case packages now preserve the recovery follow-up context for later diagnosis.
+- Continued third-party output-format enforcement on 2026-05-30:
+  - External-channel answer policy now emits explicit model-facing guidance for `rich_text`, `image_text`, `markdown_table`, and `json`, instead of relying only on the raw policy JSON blob.
+  - ReAct compact natural fallback now distinguishes customer JSON output from internal JSON leakage, so `output_format=json` no longer conflicts with the internal "do not output observation/execution JSON" guard.
+  - Deterministic answer-quality fallback tables now honor `output_format=json` for spreadsheet row analysis and point-list/elevator rows, rather than returning Markdown tables on JSON-only third-party turns.
 
 ## Immediate Execution Queue
 
@@ -207,6 +240,8 @@ systemctl restart aiv3-web.service
 ```
 
 ## Consolidated Plans
+
+Top-level product and engineering roadmap now lives in `docs/plans/2026-05-30-v3-complete-development-plan.md`. Use that file first for priority, product boundary, release rules, and cross-workstream ordering; use this file for the active mainline execution queue and smoke history.
 
 This plan supersedes the prior active parsing/answer-quality, quality-gate/ReAct/VLM, queryable-fact-index, fixed Codex escalation, and executor-boundary plans.
 

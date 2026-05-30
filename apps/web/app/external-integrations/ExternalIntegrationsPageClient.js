@@ -29,6 +29,7 @@ import {
   normalizeControlResult,
   normalizeDatabaseSourceStatus,
   normalizeCodexExecutorTask,
+  normalizeWorkflowQueueStats,
   normalizeAuditItem,
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
@@ -36,13 +37,16 @@ import {
   searchEvidenceSignalLabel,
   signalLabel,
   thirdPartyApiBaseUrl,
+  workflowQueueLabel,
   workflowStatusClass,
   workflowStatusLabel,
+  workflowTaskKeyLabel,
 } from '../lib/external-integrations';
 import { applyDatabaseSourceProfile } from '../lib/database-source';
 
 const REFRESH_INTERVAL_MS = 15000;
 const CODEX_EXECUTOR_TASK_LIMIT = 20;
+const CODEX_EXECUTOR_QUEUE_STATS_LIMIT = 200;
 
 function artifactManifestLabel(manifest) {
   const type = manifest.artifactType || 'artifact';
@@ -237,6 +241,7 @@ export default function ExternalIntegrationsPageClient() {
   const [conversationAccessRequired, setConversationAccessRequired] = useState(false);
   const [codexExecutorOpen, setCodexExecutorOpen] = useState(false);
   const [codexExecutorTasks, setCodexExecutorTasks] = useState([]);
+  const [codexExecutorQueueStats, setCodexExecutorQueueStats] = useState(null);
   const [codexExecutorAccessRequired, setCodexExecutorAccessRequired] = useState(false);
   const [selectedCodexExecutorTaskId, setSelectedCodexExecutorTaskId] = useState('');
   const [codexExecutorTaskDetail, setCodexExecutorTaskDetail] = useState(null);
@@ -249,6 +254,7 @@ export default function ExternalIntegrationsPageClient() {
   const [loading, setLoading] = useState(true);
   const [conversationTestsLoading, setConversationTestsLoading] = useState(false);
   const [codexExecutorTasksLoading, setCodexExecutorTasksLoading] = useState(false);
+  const [codexExecutorQueueStatsLoading, setCodexExecutorQueueStatsLoading] = useState(false);
   const [codexExecutorDetailLoading, setCodexExecutorDetailLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [actionDetailLoading, setActionDetailLoading] = useState(false);
@@ -374,6 +380,34 @@ export default function ExternalIntegrationsPageClient() {
     }
   }
 
+  async function loadCodexExecutorQueueStats() {
+    setCodexExecutorQueueStatsLoading(true);
+    try {
+      const payload = await fetchJson(
+        `/api/v3/external/codex-executor-tasks/queue-stats?limit=${CODEX_EXECUTOR_QUEUE_STATS_LIMIT}`,
+      );
+      setCodexExecutorAccessRequired(false);
+      setCodexExecutorQueueStats(normalizeWorkflowQueueStats(payload || {}));
+    } catch (loadError) {
+      if (loadError?.status === 401 || loadError?.code === 'external_observability_access_required') {
+        setCodexExecutorAccessRequired(true);
+        setCodexExecutorQueueStats(null);
+        return;
+      }
+      setCodexExecutorQueueStats(null);
+      setError(loadError instanceof Error ? loadError.message : 'Codex 执行器队列统计读取失败');
+    } finally {
+      setCodexExecutorQueueStatsLoading(false);
+    }
+  }
+
+  async function refreshCodexExecutorPanel() {
+    await Promise.all([
+      loadCodexExecutorTasks(),
+      loadCodexExecutorQueueStats(),
+    ]);
+  }
+
   async function loadCodexExecutorTaskDetail(executionId) {
     if (!executionId) {
       setCodexExecutorTaskDetail(null);
@@ -413,6 +447,7 @@ export default function ExternalIntegrationsPageClient() {
     if (codexExecutorOpen) {
       setCodexExecutorOpen(false);
       setCodexExecutorTasks([]);
+      setCodexExecutorQueueStats(null);
       setSelectedCodexExecutorTaskId('');
       setCodexExecutorTaskDetail(null);
       setCodexExecutorAccessRequired(false);
@@ -609,7 +644,7 @@ export default function ExternalIntegrationsPageClient() {
 
   useEffect(() => {
     if (codexExecutorOpen) {
-      loadCodexExecutorTasks();
+      refreshCodexExecutorPanel();
     }
   }, [codexExecutorOpen]);
 
@@ -642,6 +677,12 @@ export default function ExternalIntegrationsPageClient() {
   const codexExecutorInspect = codexExecutorTaskDetail
     ? codexExecutorInspectSummary(codexExecutorTaskDetail)
     : null;
+  const codexExecutorQueueSummaries = (codexExecutorQueueStats?.queues || [])
+    .filter((queue) => queue.taskCount > 0)
+    .sort((left, right) => (
+      (right.running + right.retrying + right.queued)
+      - (left.running + left.retrying + left.queued)
+    ));
   const totals = {
     pending: metricTotal(integrations, 'pendingActionCount'),
     blocked: metricTotal(integrations, 'blockedActionCount'),
@@ -942,8 +983,8 @@ export default function ExternalIntegrationsPageClient() {
               <button
                 type="button"
                 className="external-refresh-button"
-                disabled={codexExecutorTasksLoading}
-                onClick={loadCodexExecutorTasks}
+                disabled={codexExecutorTasksLoading || codexExecutorQueueStatsLoading}
+                onClick={refreshCodexExecutorPanel}
               >
                 刷新
               </button>
@@ -969,8 +1010,52 @@ export default function ExternalIntegrationsPageClient() {
             <button type="submit">解锁执行器观测</button>
           </form>
         ) : (
-          <div className="external-executor-layout">
-            <div className="external-executor-list" aria-label="Codex 执行器任务列表">
+          <>
+            <div className="external-executor-queue-stats" aria-label="Codex 执行器队列统计">
+              <div className="external-executor-queue-head">
+                <div>
+                  <strong>队列快照</strong>
+                  <span>
+                    {codexExecutorQueueStatsLoading
+                      ? '读取中'
+                      : codexExecutorQueueStats
+                        ? `${codexExecutorQueueStats.executionCount} 个 workflow · ${codexExecutorQueueStats.taskCount} 个任务`
+                        : '未读取'}
+                  </span>
+                </div>
+                <small>{formatObservationTime(codexExecutorQueueStats?.generatedAt)}</small>
+              </div>
+              {codexExecutorQueueSummaries.length ? (
+                <div className="external-executor-queue-grid">
+                  {codexExecutorQueueSummaries.map((queue) => (
+                    <article key={queue.logicalQueue || queue.physicalQueues.join(':')}>
+                      <div>
+                        <strong>{workflowQueueLabel(queue.logicalQueue)}</strong>
+                        <span>{queue.logicalQueue || queue.physicalQueues.join(' / ') || '-'}</span>
+                      </div>
+                      <div className="external-executor-queue-counts">
+                        <span>排队 {queue.queued}</span>
+                        <span>运行 {queue.running}</span>
+                        <span>重试 {queue.retrying}</span>
+                        <span>失败 {queue.failed}</span>
+                      </div>
+                      <small>
+                        {queue.nextAvailableAt ? `下次 ${formatObservationTime(queue.nextAvailableAt)} · ` : ''}
+                        {queue.taskKeys.slice(0, 2).map((taskKey) => (
+                          `${workflowTaskKeyLabel(taskKey.logicalTaskKey)} ${taskKey.queued + taskKey.running + taskKey.retrying}`
+                        )).join(' · ') || '暂无活跃任务键'}
+                      </small>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="external-empty-state">
+                  {codexExecutorQueueStatsLoading ? '队列统计读取中' : '暂无可见队列统计'}
+                </div>
+              )}
+            </div>
+            <div className="external-executor-layout">
+              <div className="external-executor-list" aria-label="Codex 执行器任务列表">
               {codexExecutorTasks.map((task) => (
                 <button
                   type="button"
@@ -989,8 +1074,8 @@ export default function ExternalIntegrationsPageClient() {
               {!codexExecutorTasksLoading && !codexExecutorTasks.length ? (
                 <div className="external-empty-state">暂无 Codex 执行器任务</div>
               ) : null}
-            </div>
-            <div className="external-executor-detail" aria-label="Codex 执行器任务详情">
+              </div>
+              <div className="external-executor-detail" aria-label="Codex 执行器任务详情">
               <div className="external-executor-detail-head">
                 <div>
                   <span>任务详情</span>
@@ -1039,7 +1124,7 @@ export default function ExternalIntegrationsPageClient() {
                       <span>下次轮询</span>
                       <strong>
                         {codexExecutorInspect.latest_task
-                          ? formatObservationTime(codexExecutorInspect.latest_task.availableAt)
+                          ? formatObservationTime(codexExecutorInspect.latest_task.nextPollAt || codexExecutorInspect.latest_task.availableAt)
                           : '-'}
                       </strong>
                     </div>
@@ -1108,8 +1193,9 @@ export default function ExternalIntegrationsPageClient() {
               ) : (
                 <div className="external-empty-state">未读取到任务详情</div>
               )}
+              </div>
             </div>
-          </div>
+          </>
         )}
       </section>
 

@@ -480,7 +480,7 @@ Content-Type: application/json
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，V3 会去重，不重复加载同一模板文档。
 
-V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会把固定任务投递到配置好的 Cloudflare Codex 执行器，效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact，本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。
+V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会先生成一份可发送的 V3 直出 HTML/generated-artifact 链接，同时把固定任务投递到配置好的 Cloudflare Codex 执行器，效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。
 
 第三方操作人员可以先把 `card.public_url` 或 `artifact_links[0]` 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；V3 会在静态页卡片返回 `recipient_delivery`，说明当前是否已具备自动配置条件，或还缺哪些权限映射。
 
@@ -508,15 +508,17 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.editable_after_publish` | `true` 表示最终页面生成后仍可继续让 V3 按人员、角色或门店范围调整并产出新的单独链接 |
 | `reply.card.status_url` | 生成中返回；第三方服务端用 `GET` 轮询该 URL，直到 `reply.reply_type=artifact_link` 或进入失败/取消状态 |
 | `reply.card.poll_after_seconds` | 建议轮询间隔；生成中通常为 `15`，重试中通常为 `30` |
-| `reply.card.demo_generated_artifact_publish` | `true` 表示固定 Codex 发布能力未启用时，V3 已用内置 HTML 生成并发布演示可访问页面 |
-| `reply.card.direct_html_fallback` | `true` 表示固定 Codex 发布能力未启用，本次已走 V3 内置 HTML 直出兜底 |
+| `reply.card.demo_generated_artifact_publish` | `true` 表示 V3 已用内置 HTML 生成并发布可访问页面；Codex 已启用时该链接可作为先发版本，最终版继续后台发布 |
+| `reply.card.direct_html_fallback` | `true` 表示本次已走 V3 内置 HTML 直出；若 `codex_auto_publish_ready=true`，它是先发版本而不是失败兜底 |
+| `reply.card.provisional_direct_html` | `true` 表示固定 Codex 自动发布已启用，但本次先返回 V3 直出页面链接，效果图和最终 Codex 页面继续后台处理 |
+| `reply.card.codex_final_status` | `provisional_direct_html=true` 时返回后台最终 Codex 页面状态，例如 `static_page_image2_auto_publish_pending` |
 | `reply.card.auto_publish_after_preview` | `true` 表示效果图完成后会自动进入固定 Cloudflare Codex 发布链路 |
 | `reply.card.codex_auto_publish_ready` | `true` 表示服务端当前已完整启用固定 Codex 自动发布；`false` 表示本次会走内置 HTML 直出兜底 |
 | `reply.card.codex_auto_publish_disabled_reason` | `codex_auto_publish_ready=false` 时返回内部诊断原因；第三方通常只用于日志，不需要展示给最终用户 |
 | `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
 | `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
 
-若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.render_output_id` 已存在，可直接按 3.4 查询/预览/下载；若 `card.public_url` 为空但 `card.status_url` 存在，表示当前仍在效果图或自动发布阶段，第三方按 `poll_after_seconds` 轮询 `status_url`，或用原 `/events` 请求体和同一 `idempotency_key` 重试。若状态进入 `static_page_publish_retrying`，第三方继续轮询；若进入 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要展示旧的效果图为最终产物，应提示稍后重试或由 V3 侧人工处理。效果图是过程预览，不是最终交付物。
+若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.public_url` 或 `artifact_links[0]` 已存在，可先把该页面作为可发送链接；若同时有 `provisional_direct_html=true`，表示最终 Codex 页面仍在后台，第三方按 `poll_after_seconds` 轮询 `status_url` 获取后续状态。若只存在 `card.render_output_id`，可直接按 3.4 查询/预览/下载；若 `card.public_url` 为空但 `card.status_url` 存在，表示当前仍在效果图或自动发布阶段，第三方继续轮询，或用原 `/events` 请求体和同一 `idempotency_key` 重试。若状态进入 `static_page_publish_retrying`，第三方继续轮询；若进入 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要展示旧的效果图为最终产物，应提示稍后重试或由 V3 侧人工处理。效果图是过程预览，不是最终交付物。
 
 固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
 

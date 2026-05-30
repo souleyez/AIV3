@@ -6712,6 +6712,89 @@ body {
   box-shadow: none;
 }
 
+.external-executor-queue-stats {
+  display: grid;
+  gap: 10px;
+  padding: 12px 12px 0;
+}
+
+.external-executor-queue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.external-executor-queue-head strong,
+.external-executor-queue-head span,
+.external-executor-queue-head small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.external-executor-queue-head strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.external-executor-queue-head span,
+.external-executor-queue-head small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.external-executor-queue-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.external-executor-queue-grid article {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e5ded2;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.external-executor-queue-grid strong,
+.external-executor-queue-grid span,
+.external-executor-queue-grid small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.external-executor-queue-grid strong {
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.external-executor-queue-grid span,
+.external-executor-queue-grid small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.external-executor-queue-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.external-executor-queue-counts span {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: #f8fafc;
+  text-align: center;
+  font-weight: 800;
+}
+
 .external-executor-layout {
   display: grid;
   grid-template-columns: minmax(320px, 0.78fr) minmax(420px, 1.22fr);
@@ -8249,6 +8332,10 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .external-executor-queue-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .external-capability-strip,
   .external-reference-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8363,6 +8450,10 @@ body {
 
   .external-executor-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .external-executor-queue-grid {
+    grid-template-columns: 1fr;
   }
 
   .external-conversation-access-form {

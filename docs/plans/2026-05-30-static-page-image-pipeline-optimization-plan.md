@@ -1,0 +1,483 @@
+# Static Page Image-First Pipeline Optimization Plan
+
+**Date:** 2026-05-30
+
+**Goal:** Make the static-page and image-generation chain stable, observable, and faster where it can be faster, while keeping the product rule that high-quality static pages must start from a generated visual image.
+
+**Primary repos:**
+
+- `ai-data-platform-v3`: system of record, third-party assistant, static-page image jobs, workflow tasks, status snapshots, final artifact publishing.
+- `codex-web`: Codex orchestrator, Cloudflare Codex runtime target, image artifacts, fixed Codex execution, runtime usage and queue policy.
+
+**Core product decision:** The formal high-quality static-page path remains image-first. V3 should generate a visual/effect image first, persist it, and then ask Cloudflare Codex to generate the final static page from the visual plus structured data. A fast direct renderer may exist only as a fallback preview or low-requirement draft path. It must not replace the formal image-first delivery path.
+
+**Progress update 2026-05-30:** P0 status backfill has started in `crates/platform-api/src/lib.rs`. Static-page publish rejection now writes `assistant_run.external_channel_static_page_publish_failed`, status replies prefer that business event over the raw fixed-task event, and targeted tests cover failed-event priority plus failed-event append/dedupe.
+
+**Progress update 2026-05-30 P1 slice:** Static-page visual generation and Codex Host final publish now use non-blocking remote polling slices. The worker submits or polls once, persists the remote task id/poll state into the workflow task payload, requeues itself with `available_at`, and releases the local worker while the Cloudflare/Codex task continues. Status replies now surface `static_page_image_job.submitted/running/poll_retry` as visible image-generation progress.
+
+**Progress update 2026-05-30 P1/P2 queue metadata slice:** Workflow task views now expose `logical_queue`, `logical_task_key`, `remote_task_id`, and `next_poll_at` from durable task payloads. Static-page image preview and final static-page publish tasks persist logical poll metadata such as `static_page_image_preview` / `poll_static_page_image_preview` and `static_page_publish` / `poll_static_page_publish`, while leaving the physical database `task_key` unchanged for compatibility with existing workflow stages and worker filters.
+
+**Progress update 2026-05-30 P2 stats slice:** Added a lightweight visible-workflow queue stats surface at `/v1/workflow-tasks/queue-stats`. It summarizes recent visible workflow tasks by logical queue and logical task key, including queued/running/retrying/succeeded/failed/cancelled/dead-lettered counts and the next queued `available_at`, so the UI and operators can distinguish effect-image generation from final static-page publish without changing the physical worker queues.
+
+**Progress update 2026-05-30 P2 UI slice:** The external integrations Codex executor panel now loads `/api/v3/external/codex-executor-tasks/queue-stats` on demand and shows a queue snapshot above the task list. The web helper layer normalizes logical queue/task-key counts and treats submitted/pending remote Cloudflare tasks as active poll states, so operators can see whether time is being spent in effect-image generation, final page publishing, or generic Codex fixed tasks.
+
+---
+
+## Baseline From 2026-05-30 Inspection
+
+Observed from 8 server PostgreSQL events, worker logs, and 1 server orchestrator HTTPS API:
+
+- Static HTML rendering itself is not the bottleneck.
+  - `static_page_render` succeeded in about `0.9s`.
+  - Failed render validation also returned in about `0.1s`.
+- Image/effect visual generation is the first real bottleneck.
+  - 8-side successful `static_page_image_jobs`: average about `300s`, P50 about `226s`, P95 about `606s`.
+  - 1-side orchestrator `static-page-visual`: P50 about `214s`, P95 about `294s`.
+  - 1-side orchestrator `image-draft`: P50 about `223s`, P95 about `384s`.
+- Final Cloudflare Codex static-page execution is the second bottleneck.
+  - Successful `codex_host_task_workflow`: P50 about `142s`, P95 about `552s`.
+  - Failed tasks include 500/503 polling failures and old `900000ms` timeout behavior.
+- Wake/submit overhead is small.
+  - `runtimeWakeToSubmitMs` is usually about `8-10s`.
+  - `submitToFirstPollMs` is usually `0-3s`.
+  - Artifact backfill is usually a few seconds.
+- Queue blocking was previously a major risk.
+  - Old stale claimed `static_page` tasks have been cleaned and automatic stale cleanup is deployed.
+  - Current snapshot after cleanup showed no queued/running stuck tasks in `workflow_tasks` for `static_page`/`codex_host`.
+- Status accuracy is still a major risk.
+  - Some runs reach `static_page_image_job.preview_ready`, then Codex publish fails or stalls.
+  - The assistant/user-facing status can remain effectively "processing" because publish failure is not always written back as a clear `publish_failed` state.
+- Cloudflare WAF can affect service-to-service calls.
+  - A generic Python user agent received Cloudflare `1010 browser_signature_banned`.
+  - Explicit service/curl/browser user agents succeeded.
+  - Existing worker paths already set service user agents in key places, but orchestrator service routes should still be explicitly allowed.
+
+---
+
+## Target User-Visible Flow
+
+```text
+User / third-party assistant request
+  -> V3 creates assistant_run and static_page_draft
+  -> V3 queues image_preview job
+  -> 1 server / Cloudflare Codex generates visual image
+  -> V3 persists preview asset and marks preview_ready
+  -> V3 queues static_page_publish job
+  -> 1 server / Cloudflare Codex generates final HTML from visual + uiSpec/modelOutput/data snapshot
+  -> V3 validates and publishes generated artifact
+  -> User sees final URL, with accurate status snapshots throughout
+```
+
+Important behavior:
+
+- Once a task is accepted, it should not look dead just because it is slow.
+- A task may wait for a long time, but it must keep an accurate status snapshot.
+- Only true terminal failures should show failure/refund/retry UI.
+- Slow/pending states should stay pending, not become fake "failed" states.
+
+---
+
+## Status Model
+
+Use a unified status vocabulary across V3, mini program/web clients, and `codex-web`.
+
+| Stage | Internal examples | User-facing meaning |
+| --- | --- | --- |
+| `accepted` | request received, draft created | 已提交 |
+| `image_queued` | `static_page_image_job.created` | 效果图排队中 |
+| `image_running` | orchestrator submitted/running/heartbeat | 效果图生成中 |
+| `image_ready` | `static_page_image_job.preview_ready` | 效果图已生成 |
+| `publish_queued` | `assistant_run.external_channel_static_page_publish_queued` | 页面生成排队中 |
+| `publish_running` | `codex_host_task.cloudflare_heartbeat` / `exec_heartbeat` | 页面生成中 |
+| `published` | `assistant_run.external_channel_static_page_publish_completed` | 页面已生成 |
+| `retrying` | poll retry / transient 500/503 / lease retry | 临时异常，继续重试 |
+| `failed` | true terminal failure | 生成失败，可重试/退款 |
+| `cancelled` | user/system cancellation | 已取消 |
+
+Processing statuses that must not be treated as terminal failure:
+
+```text
+queued
+submitted
+running
+pending
+processing
+in_progress
+retry_wait
+retrying
+waking_runtime
+waiting
+poll_retry
+```
+
+Terminal failure should require one of:
+
+- Cloudflare orchestrator task explicitly returns `failed`/`cancelled`.
+- V3 validation rejects a completed artifact.
+- User cancels.
+- Stale lease cleanup expires an abandoned local worker task.
+
+---
+
+## Architecture Direction
+
+### 1. Keep Image-First Static Page Quality Path
+
+Formal static-page generation keeps this dependency:
+
+```text
+uiSpec/modelOutput/data snapshot
+  -> effect image
+  -> final HTML generation from effect image and structured contract
+```
+
+`uiSpec` / `modelOutput` should contain:
+
+- title and objective;
+- content modules;
+- image slots and selected effect image references;
+- button/link requirements;
+- style tokens;
+- mobile layout intent;
+- data bindings or evidence references;
+- delivery rules and validation constraints.
+
+The effect image is a first-class artifact, not just a temporary prompt aid.
+
+### 2. Make Worker Polling Non-Blocking
+
+Current risk: one worker can submit a remote task and then hold the local workflow execution while polling the remote runtime.
+
+Target:
+
+```text
+submit_remote_task
+  -> persist remote task id
+  -> finish current local task quickly
+  -> enqueue poll_remote_task with available_at
+  -> poll until terminal
+  -> backfill final state
+```
+
+Expected effect:
+
+- Multiple jobs no longer block behind one long remote task.
+- Worker restarts are safer because the remote task id is durable.
+- Slow Cloudflare tasks become "tracked pending" instead of occupying a local worker slot.
+
+### 3. Split Logical Queues
+
+Suggested logical queues:
+
+| Queue | Purpose |
+| --- | --- |
+| `static_page_image_preview` | Effect image generation for static pages |
+| `static_page_publish` | Final HTML/page generation after image ready |
+| `product_image_generation` | Goods editor / mini program product images |
+| `codex_fixed_task` | General fixed Codex tasks |
+
+The physical implementation can still use existing `workflow_tasks` first. The important change is separate task keys, status counters, and user-visible estimates.
+
+### 4. Stabilize Cloudflare Service Calls
+
+`https://souleye.cc/api/codex/orchestrator/*` should be treated as service-to-service API traffic.
+
+Requirements:
+
+- Send explicit `User-Agent` and `X-Client-Name` from every V3 caller.
+- Add Cloudflare WAF/Access rules that allow known service calls from 8 server or trusted service keys.
+- Do not rely on browser-signature behavior for server jobs.
+- Treat 500/503 and empty/invalid JSON as transient unless repeated past retry policy.
+
+### 5. Persist Images Once, Use Stable URLs
+
+When the effect image is ready:
+
+- Persist it in V3 generated-artifacts/static-page preview storage.
+- Store stable `preview_asset_key`.
+- Avoid passing temporary or expiring remote image URLs into final Codex generation.
+- Continue to keep retention generous on 1 server until storage reaches the configured threshold.
+
+---
+
+## Implementation Phases
+
+## P0: Status Accuracy And Failure Backfill
+
+**Objective:** Stop fake "stuck" behavior by making every slow/fail path visible and accurate.
+
+Tasks:
+
+1. Add explicit publish failure event.
+   - When `codex_host_task_workflow` fails after `assistant_run.external_channel_static_page_publish_queued`, append:
+     - `assistant_run.external_channel_static_page_publish_failed`
+     - payload with `codex_host_workflow_execution_id`, safe error code, retryability, elapsed time, and related image job/draft ids.
+   - Preserve existing local fallback HTML only as fallback, not as final success.
+
+2. Normalize status responses.
+   - `GET /assistant-runs/{id}/reply` and external status endpoints should map events into the unified status model above.
+   - `preview_ready_only` should become a clear "effect image ready, final page pending/running/failed" state.
+
+3. Keep transient polling non-terminal.
+   - 500/503, empty body, JSON decode failures, and short network errors write `poll_retry` or `retrying`.
+   - They should not immediately mark final failure unless retry policy is exhausted.
+
+4. Add status tests.
+   - Preview ready + no publish yet -> `publish_queued` or `publish_running`.
+   - Preview ready + Codex failure -> `publish_failed`.
+   - Preview ready + Codex completed -> `published`.
+   - Transient poll error -> `retrying`.
+
+Files likely involved:
+
+- `crates/platform-api/src/lib.rs`
+- `crates/codex-host-agent/src/main.rs`
+- `crates/static-page-worker/src/main.rs`
+- `crates/contracts/src/lib.rs`
+- external integration docs under `docs/integrations/`
+
+Done when:
+
+- A real failed publish no longer looks like endless processing.
+- User-facing status can explain which stage is slow.
+
+## P1: Non-Blocking Remote Task Polling
+
+**Objective:** Local workers should not be occupied while remote Cloudflare tasks run for minutes.
+
+Tasks:
+
+1. Introduce durable remote task tracking.
+   - Persist remote orchestrator task id in workflow context/task payload.
+   - Store `remote_submitted_at`, `last_poll_at`, `poll_attempt`, and `next_poll_at`.
+
+2. Split task keys.
+   - `submit_static_page_image_preview`
+   - `poll_static_page_image_preview`
+   - `submit_static_page_publish`
+   - `poll_static_page_publish`
+
+3. Make submit tasks finish quickly.
+   - Submit remote task.
+   - Persist task id.
+   - Enqueue poll task with `available_at`.
+   - Release worker.
+
+4. Make poll tasks idempotent.
+   - If remote task is still running, requeue poll with backoff.
+   - If remote task completed, import artifact and mark next local state.
+   - If remote task failed/cancelled, write clear terminal status.
+
+5. Add lease/stale cleanup compatibility.
+   - Local poll tasks may expire and retry safely because remote task id is durable.
+   - Do not create duplicate remote tasks after restart.
+
+Done when:
+
+- One slow Cloudflare task does not block other static-page or product-image tasks.
+- Worker restart can resume polling the same remote task.
+
+## P2: Queue Split And Estimates
+
+**Objective:** Separate workloads so product image jobs, effect images, and final page generation do not hide each other.
+
+Tasks:
+
+1. Add logical queue/task stats.
+   - Count queued/running/retrying/failed/succeeded by queue and task key.
+   - Expose P50/P95 from recent events where available.
+
+2. Update user-facing estimates.
+   - Mini program and web should show estimates by queue type.
+   - Static page should distinguish "effect image" time from "final page" time.
+
+3. Add queue policy.
+   - Static page image preview and static page publish can have separate concurrency/limits.
+   - Product image generation should not starve static page publish.
+
+4. Keep refund/failure UI subdued.
+   - Only true `failed` states show refund/retry affordances.
+   - Pending/retrying states stay quiet.
+
+Done when:
+
+- A product-image spike does not make static-page final publish look broken.
+- Queue estimates describe the current stage, not a single vague wait time.
+
+## P3: Cloudflare API Allowlist And Retry Policy
+
+**Objective:** Make 8 -> 1 service calls reliable and predictable.
+
+Tasks:
+
+1. Ensure all V3 orchestrator requests include:
+
+```text
+User-Agent: AIDataPlatformV3StaticPageWorker/1.0 or v3-codex-host-agent
+X-Client-Name: ai-data-platform-static-pages or v3-codex-host-agent
+Authorization: Bearer <service key>
+```
+
+2. Configure Cloudflare rule for orchestrator API.
+   - Scope path: `/api/codex/orchestrator/*`
+   - Allow trusted 8 server IP/service traffic and valid service keys.
+   - Avoid browser-signature challenges for service API calls.
+
+3. Add smoke checks.
+   - From 8 server using worker UA.
+   - From 8 server using codex-host-agent UA.
+   - Confirm no 1010/WAF challenge.
+
+4. Retry policy.
+   - 500/503: retry with backoff.
+   - 403 Cloudflare 1010: infrastructure/config failure, not user failure.
+   - 401/403 auth failure from app: credential failure, requires operator action.
+
+Done when:
+
+- 8 server service calls do not depend on browser-like behavior.
+- WAF/config failures are reported as operator-visible infrastructure errors.
+
+## P4: Stable Asset Storage And Retention
+
+**Objective:** Prevent 401/404 temporary-image problems and avoid unnecessary image cleanup during active work.
+
+Tasks:
+
+1. Import every successful effect image into V3 stable storage.
+2. Use the stable V3 preview URL for final Codex generation.
+3. Track image provenance:
+   - remote orchestrator task id;
+   - original artifact URL;
+   - persisted V3 asset key;
+   - mime type and size;
+   - created time.
+4. Align retention:
+   - 1 server can keep generated images until storage reaches configured threshold.
+   - V3 should retain artifacts needed by active assistant runs and published pages.
+
+Done when:
+
+- Final page generation does not fail because an upstream image URL expired.
+- A published static page can be audited back to its effect image.
+
+## P5: Observability Dashboard
+
+**Objective:** Make future optimization measurable instead of anecdotal.
+
+Metrics to expose:
+
+- image preview queue wait;
+- image preview runtime;
+- image preview import time;
+- publish queue wait;
+- publish runtime;
+- artifact validation time;
+- total request-to-final-page time;
+- failures by code;
+- transient retry count;
+- current queue depth by queue;
+- P50/P95 by queue and task kind.
+
+Data sources:
+
+- `assistant_run_events`
+- `workflow_tasks`
+- `workflow_executions`
+- `static_page_image_jobs`
+- `codex-web` orchestrator task `phaseDurationsMs`
+
+Suggested surfaces:
+
+- operator-only V3 page;
+- lightweight CLI/report query first;
+- later add admin UI.
+
+Done when:
+
+- Before/after optimization can be compared by P50/P95.
+- A bad day can be diagnosed by queue, runtime, provider, or Cloudflare errors.
+
+## P6: Optional Multi-Executor Scale-Out
+
+**Objective:** Add throughput only after the status and queue model is stable.
+
+Options:
+
+1. Add a second Cloudflare Codex runtime target.
+2. Dedicate one runtime to image tasks and one to final static-page tasks.
+3. Add provider-backed image generation outside Codex only if product quality and tool access are acceptable.
+
+Rules:
+
+- Do not add concurrency before P0/P1 are stable.
+- Per-user/per-tenant fairness should be enforced before opening wide concurrency.
+- Multi-executor should improve throughput, not hide broken task status.
+
+---
+
+## Testing Plan
+
+Unit tests:
+
+- event-to-status mapping;
+- retryable vs terminal error classification;
+- durable remote task id extraction;
+- duplicate submit prevention after worker restart;
+- queue position and estimate calculation.
+
+Integration tests:
+
+- submit image preview -> remote task id persisted -> poll -> preview ready;
+- preview ready -> submit publish -> remote task id persisted -> poll -> published;
+- preview ready -> publish failed -> `publish_failed` status;
+- remote 503 -> retry event, not terminal failure;
+- remote task still running after worker restart -> resumed polling.
+
+Live smoke:
+
+1. From 8 server, submit static-page request through external channel.
+2. Confirm `static_page_image_job.created`.
+3. Confirm 1 server orchestrator task exists.
+4. Confirm `preview_ready`.
+5. Confirm `assistant_run.external_channel_static_page_publish_queued`.
+6. Confirm final generated artifact URL returns HTTP 200.
+7. Confirm status endpoint moves through accurate stages.
+8. Confirm metrics show phase durations.
+
+---
+
+## Rollout Order
+
+1. P0 status accuracy and publish failure backfill.
+2. P3 Cloudflare service-call allowlist and retry classification.
+3. P1 non-blocking polling for image preview.
+4. P1 non-blocking polling for static page publish.
+5. P2 logical queue split and estimates.
+6. P4 stable image asset storage audit fields.
+7. P5 observability dashboard.
+8. P6 second runtime or multi-executor scale-out.
+
+This order prioritizes "do not look stuck" and "do not block the queue" before raw speed. It also preserves the image-first quality requirement.
+
+---
+
+## Open Questions
+
+1. Should every `preview_ready` static page automatically enter final publish, or should some channels require user confirmation first?
+2. What is the default maximum wait shown to users for formal high-quality static pages: 10 minutes, 20 minutes, or "will notify when done"?
+3. Should effect images be retained as part of the published page artifact bundle, or only as audit/source assets?
+4. Should product images and static-page effect images share the same Cloudflare image queue long term, or be split at the runtime target level?
+5. Which admin surface should own the observability dashboard: V3 main admin, external integrations page, or `codex-web` admin?
+
+---
+
+## Success Criteria
+
+- Formal static pages still use the image-first path.
+- Slow tasks keep accurate status snapshots instead of appearing stuck.
+- One slow Cloudflare task does not occupy the local static-page worker indefinitely.
+- Transient 500/503/WAF issues are visible as retrying or infrastructure errors.
+- Final HTML generation has clear P50/P95 metrics.
+- Effect images are stable assets before final page generation begins.
+- Future multi-executor scaling has a clean queue/status foundation.

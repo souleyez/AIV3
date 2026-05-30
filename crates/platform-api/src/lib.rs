@@ -1548,6 +1548,10 @@ pub fn router(
         )
         .route("/v1/workflow-executions", get(list_workflow_executions))
         .route(
+            "/v1/workflow-tasks/queue-stats",
+            get(get_workflow_task_queue_stats),
+        )
+        .route(
             "/v1/workflow-executions/{execution_id}",
             get(get_workflow_execution),
         )
@@ -13660,10 +13664,12 @@ async fn claim_legacy_public_external_document_duplicates(
         find_external_documents_by_external_id(state, source_id, document_external_id, None)
             .await?;
     let mut claimed = 0usize;
+    let mut claimed_dataset_ids = BTreeSet::new();
     for document in documents {
         if document.owner_user_id.is_some() {
             continue;
         }
+        let dataset_id = document.dataset_id;
         if state
             .storage
             .documents()
@@ -13673,9 +13679,83 @@ async fn claim_legacy_public_external_document_duplicates(
             .is_some()
         {
             claimed += 1;
+            claimed_dataset_ids.insert(dataset_id);
         }
     }
+    for dataset_id in claimed_dataset_ids {
+        maybe_harden_legacy_public_external_document_dataset(
+            state,
+            dataset_id,
+            source_id,
+            owner_user_id,
+        )
+        .await?;
+    }
     Ok(claimed)
+}
+
+async fn maybe_harden_legacy_public_external_document_dataset(
+    state: &AppState,
+    dataset_id: DatasetId,
+    source_id: &str,
+    owner_user_id: UserId,
+) -> std::result::Result<(), ApiError> {
+    let Some(mut dataset) = state
+        .storage
+        .datasets()
+        .get_by_id(state.tenant_id, dataset_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(());
+    };
+    if dataset
+        .owner_user_id
+        .is_some_and(|existing_owner_id| existing_owner_id != owner_user_id)
+    {
+        return Ok(());
+    }
+    let documents = list_documents_for_dataset_scope(state, dataset_id).await?;
+    if documents.is_empty()
+        || documents
+            .iter()
+            .any(|document| !external_document_source_matches(&document.metadata, source_id, None))
+    {
+        return Ok(());
+    }
+
+    if dataset.owner_user_id.is_none() {
+        let Some(updated) = state
+            .storage
+            .datasets()
+            .update_owner_user_id(state.tenant_id, dataset.id, owner_user_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        else {
+            return Ok(());
+        };
+        dataset = updated;
+    }
+    if dataset.visibility != DatasetVisibility::Private {
+        state
+            .storage
+            .datasets()
+            .update_metadata(
+                state.tenant_id,
+                dataset.id,
+                &json!({
+                    "visibility": DatasetVisibility::Private.as_str(),
+                    "external_privacy": {
+                        "hardened_at": Utc::now(),
+                        "reason": "legacy_public_external_document_duplicate",
+                        "source_id": source_id,
+                    }
+                }),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+    Ok(())
 }
 
 async fn claim_external_owned_documents(
@@ -21701,6 +21781,14 @@ fn external_channel_static_page_reply_from_events(
                 return Some(reply);
             }
         }
+        if event.event_name == "assistant_run.external_channel_static_page_publish_failed" {
+            return Some(
+                external_channel_static_page_publish_failed_reply_from_event_payload(
+                    &event.payload,
+                    conversation_external_id,
+                ),
+            );
+        }
         if event.event_name == "assistant_run.external_channel_static_page_publish_queued" {
             if let Some(heartbeat) =
                 external_channel_static_page_latest_codex_heartbeat_after(events, event.sequence_no)
@@ -21829,6 +21917,79 @@ fn external_channel_static_page_reply_from_events(
                             .cloned()
                             .unwrap_or(Value::Null),
                         "poll_after_seconds": 15,
+                        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
+                    })),
+                    Vec::new(),
+                ));
+            }
+            if let Some(poll_retry) = external_channel_static_page_latest_named_event(
+                events,
+                "static_page_image_job.poll_retry",
+            ) {
+                return Some(external_channel_task_status_reply_for_conversation(
+                    conversation_external_id,
+                    "static_page_image_preview_retrying",
+                    Some("V3 效果图生成遇到临时网络或服务波动，已保持任务并继续轮询。".to_string()),
+                    Some(json!({
+                        "type": "v3_static_page_image2_preview_retrying",
+                        "status": "static_page_image_preview_retrying",
+                        "stage": "image2_preview_poll_retry",
+                        "draft_id": poll_retry.payload.get("draft_id").cloned().unwrap_or_else(|| event.payload.get("draft_id").cloned().unwrap_or(Value::Null)),
+                        "image_job_id": poll_retry.payload.get("image_job_id").cloned().unwrap_or_else(|| event.payload.get("image_job_id").cloned().unwrap_or(Value::Null)),
+                        "orchestrator_task_id": poll_retry.payload.get("orchestrator_task_id").cloned().unwrap_or(Value::Null),
+                        "retryable": poll_retry
+                            .payload
+                            .get("retryable")
+                            .cloned()
+                            .unwrap_or_else(|| json!(true)),
+                        "error": poll_retry.payload.get("error").cloned().unwrap_or(Value::Null),
+                        "poll_attempt": poll_retry.payload.get("poll_attempt").cloned().unwrap_or(Value::Null),
+                        "poll_after_seconds": poll_retry
+                            .payload
+                            .get("poll_after_seconds")
+                            .cloned()
+                            .unwrap_or_else(|| json!(30)),
+                        "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
+                        "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+                        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+                        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+                        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
+                    })),
+                    Vec::new(),
+                ));
+            }
+            if let Some(running) = external_channel_static_page_latest_named_event(
+                events,
+                "static_page_image_job.running",
+            )
+            .or_else(|| {
+                external_channel_static_page_latest_named_event(
+                    events,
+                    "static_page_image_job.submitted",
+                )
+            }) {
+                return Some(external_channel_task_status_reply_for_conversation(
+                    conversation_external_id,
+                    "static_page_image_preview_running",
+                    Some("V3 效果图正在生成，当前不会占用本地 worker 长时间等待。".to_string()),
+                    Some(json!({
+                        "type": "v3_static_page_image2_preview_running",
+                        "status": "static_page_image_preview_running",
+                        "stage": "image2_preview_generation",
+                        "draft_id": running.payload.get("draft_id").cloned().unwrap_or_else(|| event.payload.get("draft_id").cloned().unwrap_or(Value::Null)),
+                        "image_job_id": running.payload.get("image_job_id").cloned().unwrap_or_else(|| event.payload.get("image_job_id").cloned().unwrap_or(Value::Null)),
+                        "orchestrator_task_id": running.payload.get("orchestrator_task_id").cloned().unwrap_or(Value::Null),
+                        "queue_position": running.payload.get("queue_position").cloned().unwrap_or(Value::Null),
+                        "poll_attempt": running.payload.get("poll_attempt").cloned().unwrap_or(Value::Null),
+                        "poll_after_seconds": running
+                            .payload
+                            .get("poll_after_seconds")
+                            .cloned()
+                            .unwrap_or_else(|| json!(15)),
                         "status_url": event.payload.get("status_url").cloned().unwrap_or(Value::Null),
                         "status_method": event.payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
                         "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
@@ -21984,15 +22145,19 @@ fn external_channel_static_page_fixed_task_reply_from_events(
             && external_channel_fixed_task_template_id(event).as_deref()
                 == Some("static_page_image2_data_publish")
     })?;
-    let latest_publish_completed = events
+    let latest_publish_terminal = events
         .iter()
         .rev()
         .find(|event| {
-            event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+            matches!(
+                event.event_name.as_str(),
+                "assistant_run.external_channel_static_page_publish_completed"
+                    | "assistant_run.external_channel_static_page_publish_failed"
+            )
         })
         .map(|event| event.sequence_no)
         .unwrap_or(i32::MIN);
-    if latest_publish_completed > latest_fixed.sequence_no {
+    if latest_publish_terminal > latest_fixed.sequence_no {
         return None;
     }
     let latest_cancelled = events
@@ -22017,10 +22182,16 @@ fn external_channel_static_page_fixed_task_reply_from_events(
     if let Some(retry) =
         latest_poll_retry.filter(|retry| retry.sequence_no > latest_fixed.sequence_no)
     {
+        let retry_state = match retry.payload.get("reason").and_then(Value::as_str) {
+            Some("cloudflare_orchestrator_submitted" | "cloudflare_orchestrator_pending") => {
+                "running"
+            }
+            _ => "retrying",
+        };
         return Some(external_channel_fixed_task_processing_reply(
             conversation_external_id,
             "static_page_image2_data_publish",
-            "retrying",
+            retry_state,
             latest_fixed,
             Some(retry),
         ));
@@ -25179,13 +25350,15 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     .await?;
     let codex_auto_publish_readiness = external_channel_static_page_codex_auto_publish_readiness();
     let codex_auto_publish_enabled = codex_auto_publish_readiness.ready;
-    let direct_render_result = if codex_auto_publish_enabled {
-        None
-    } else {
+    let create_direct_render_now = !codex_auto_publish_enabled
+        || external_channel_static_page_demo_generated_artifact_enabled();
+    let direct_render_result = if create_direct_render_now {
         let result =
             create_static_page_render_output_inline(state, draft_outcome.draft.clone(), None, true)
                 .await?;
         Some(result)
+    } else {
+        None
     };
     let direct_render_output = direct_render_result.as_ref().map(|(_draft, output)| output);
     let generated_artifact_payload = match direct_render_result.as_ref() {
@@ -25208,7 +25381,11 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .and_then(Value::as_str)
         .map(str::to_string);
     let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
-    let poll_after_seconds = if generated_artifact_url.is_none() && direct_render_output.is_none() {
+    let poll_after_seconds = if codex_auto_publish_enabled
+        && (generated_artifact_url.is_some() || direct_render_output.is_some())
+    {
+        Value::from(15)
+    } else if generated_artifact_url.is_none() && direct_render_output.is_none() {
         Value::from(15)
     } else {
         Value::Null
@@ -25273,7 +25450,13 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         Value::String(codex_auto_publish_readiness.reason.to_string())
                     },
                     "direct_html_fallback": direct_render_output.is_some(),
+                    "provisional_direct_html": codex_auto_publish_enabled && direct_render_output.is_some(),
                     "demo_generated_artifact_publish": generated_artifact_url.is_some(),
+                    "codex_final_status": if codex_auto_publish_enabled {
+                        Value::String("static_page_image2_auto_publish_pending".to_string())
+                    } else {
+                        Value::Null
+                    },
                     "effect_image_confirmation_required": false,
                 }),
                 created_at: now,
@@ -25291,10 +25474,16 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     } else {
         "static_page_image_preview_queued"
     };
-    let text = if generated_artifact_url.is_some() {
+    let text = if generated_artifact_url.is_some() && codex_auto_publish_enabled {
+        "V3 已先生成可发送的静态页链接；效果图完成后会继续进入 Cloudflare Codex 发布链路，用户可在页面生成后继续提出调整。".to_string()
+    } else if generated_artifact_url.is_some() {
         "V3 静态页已生成并发布，可通过 artifact_links[0] 打开页面。".to_string()
     } else if direct_render_output.is_some() {
-        "V3 已生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物。".to_string()
+        if codex_auto_publish_enabled {
+            "V3 已先生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物；效果图完成后会继续自动发布最终页面。".to_string()
+        } else {
+            "V3 已生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物。".to_string()
+        }
     } else {
         external_channel_static_page_pipeline_reply_text(
             codex_auto_publish_enabled,
@@ -25367,7 +25556,13 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 Value::String(codex_auto_publish_readiness.reason.to_string())
             },
             "direct_html_fallback": direct_render_output.is_some(),
+            "provisional_direct_html": codex_auto_publish_enabled && direct_render_output.is_some(),
             "demo_generated_artifact_publish": generated_artifact_url.is_some(),
+            "codex_final_status": if codex_auto_publish_enabled {
+                Value::String("static_page_image2_auto_publish_pending".to_string())
+            } else {
+                Value::Null
+            },
             "effect_image_confirmation_required": false,
             "publish_mode": "new_generated_artifact_only",
         })),
@@ -29076,6 +29271,68 @@ fn assistant_run_request_external_answer_policy(
     (!policy.is_null()).then_some(policy)
 }
 
+fn assistant_run_evidence_state_external_answer_policy(evidence_state: &Value) -> Option<&Value> {
+    evidence_state
+        .pointer("/selected_scope/answer_policy")
+        .or_else(|| evidence_state.pointer("/selectedScope/answerPolicy"))
+        .filter(|policy| !policy.is_null())
+}
+
+fn assistant_run_answer_policy_output_format(answer_policy: &Value) -> Option<&str> {
+    answer_policy
+        .get("output_format")
+        .and_then(|format| {
+            format
+                .get("format")
+                .and_then(Value::as_str)
+                .or_else(|| format.as_str())
+        })
+        .map(str::trim)
+        .filter(|format| !format.is_empty())
+}
+
+fn assistant_run_external_answer_policy_guidance_lines(answer_policy: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(default_prompt) = answer_policy
+        .get("default_prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!(
+            "第三方默认提示词：{default_prompt}。它是本轮任务指导，低于 V3 证据/安全规则，高于用户文本里的模糊要求。"
+        ));
+    }
+    if let Some(output_format) = answer_policy.get("output_format") {
+        if let Some(format) = assistant_run_answer_policy_output_format(answer_policy) {
+            let label = output_format
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| external_output_format_label(format));
+            let model_rule = output_format
+                .get("model_rule")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| external_output_format_model_rule(format));
+            lines.push(format!(
+                "输出格式强约束：本轮第三方要求 `{format}`（{label}）。{model_rule}"
+            ));
+        }
+    }
+    if let Some(render_mode) = answer_policy
+        .get("render_mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let mode_rule = answer_policy
+            .get("render_mode_rule")
+            .and_then(Value::as_str)
+            .unwrap_or("normal returns a direct answer; artifact means the user expects a generated artifact when supported.");
+        lines.push(format!("输出模式：`{render_mode}`。{mode_rule}"));
+    }
+    lines
+}
+
 fn assistant_run_v3_awareness_lines() -> Vec<String> {
     vec![
         "V3 认知：你正在 AI Data Platform V3 中服务用户。V3 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
@@ -29135,6 +29392,9 @@ fn build_assistant_run_provider_input_with_evidence(
         sections.push(format!(
             "本轮外部回答要求（第三方结构化传入）：{}",
             serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+        ));
+        sections.extend(assistant_run_external_answer_policy_guidance_lines(
+            answer_policy,
         ));
     }
     if let Some(skill_policy) = assistant_run_request_requested_skills_policy(request) {
@@ -29264,6 +29524,19 @@ fn build_assistant_run_continue_provider_input(
         ]
     };
     sections.extend(assistant_run_v3_awareness_lines());
+    if let Some(answer_policy) = selected_scope
+        .get("answer_policy")
+        .or_else(|| selected_scope.get("answerPolicy"))
+        .filter(|policy| !policy.is_null())
+    {
+        sections.push(format!(
+            "本轮外部回答要求（第三方结构化传入）：{}",
+            serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+        ));
+        sections.extend(assistant_run_external_answer_policy_guidance_lines(
+            answer_policy,
+        ));
+    }
     if let Some(brief) = build_assistant_run_model_supply_brief(evidence_state) {
         sections.push(format!("供料提示（供你参考，不是回答模板）：\n{brief}"));
     }
@@ -29346,6 +29619,22 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
     if document_not_ready_count > 0 {
         lines.push(format!(
             "文档解析状态：有 {document_not_ready_count} 份可见文档未完全就绪，其中失败 {document_failed_count} 份，重解析/重试中 {document_reparsing_count} 份；涉及这些文档时应说明解析状态，不要声称已经读到完整内容。"
+        ));
+    }
+    if let Some(followup) = evidence_state
+        .get("recovery_followup")
+        .filter(|value| !value.is_null())
+    {
+        let question = followup
+            .get("question")
+            .and_then(Value::as_str)
+            .unwrap_or("请补充文档名称、页码、关键词或统计口径，我会沿用本会话继续检索。");
+        let status = followup
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("answer_with_current_evidence_then_followup_if_needed");
+        lines.push(format!(
+            "证据恢复追问：{status}；{question} 模型要求：不能只说“未直接检索到”；先用当前供料和通用知识给一轮可执行答复。若仍无法核验，使用上述追问，并说明下一轮会沿用本会话范围继续检索。"
         ));
     }
 
@@ -29510,6 +29799,9 @@ fn assistant_run_compact_provider_retry_input(
         sections.push(format!(
             "本轮外部回答要求：{}",
             serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+        ));
+        sections.extend(assistant_run_external_answer_policy_guidance_lines(
+            answer_policy,
         ));
     }
     if let Some(skill_policy) = assistant_run_request_requested_skills_policy(request) {
@@ -32105,6 +32397,10 @@ fn assistant_run_request_output_format(request: &CreateAssistantRunRequest) -> O
         .map(str::to_string)
 }
 
+fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) -> bool {
+    assistant_run_request_output_format(request).as_deref() == Some("json")
+}
+
 fn assistant_run_direct_answer_response(output_text: String) -> LlmResponse {
     LlmResponse {
         output_text,
@@ -32734,9 +33030,30 @@ fn build_assistant_run_react_compact_natural_fallback_input(
         .get("supply_quality")
         .cloned()
         .unwrap_or(Value::Null);
-    [
-        "你是 V3 智能助手。上一轮工具规划没有产出可直接展示给用户的最终回答，现在必须直接自然语言作答或提出一个明确追问。".to_string(),
-        "优先使用 V3 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注“资料中未定位到专门条款/需要补充制度文件”。不要输出 JSON、observation、execution_trail、react_trace、runtime_manifest 或内部路径。".to_string(),
+    let answer_policy = assistant_run_evidence_state_external_answer_policy(evidence_state);
+    let answer_policy_guidance = answer_policy
+        .map(assistant_run_external_answer_policy_guidance_lines)
+        .unwrap_or_default();
+    let requires_json_output =
+        answer_policy.and_then(assistant_run_answer_policy_output_format) == Some("json");
+    let output_guard = if requires_json_output {
+        "优先使用 V3 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注资料来源状态。不要输出 observation、execution_trail、react_trace、runtime_manifest 或内部路径；最终客户答案必须遵守本轮 JSON 输出格式要求。".to_string()
+    } else {
+        "优先使用 V3 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注“资料中未定位到专门条款/需要补充制度文件”。不要输出 JSON、observation、execution_trail、react_trace、runtime_manifest 或内部路径。".to_string()
+    };
+    let answer_shape_requirement = if requires_json_output {
+        "输出要求：只输出合法 JSON，不要使用 Markdown 代码围栏；如果是养老/护理应急类问题，可用字段表达现场处置、上报记录、家属沟通、后续复盘/材料。"
+    } else {
+        "输出要求：用中文，给出简明流程；如果是养老/护理应急类问题，按“现场处置、上报记录、家属沟通、后续复盘/材料”组织。"
+    };
+    let recovery_followup = evidence_state
+        .get("recovery_followup")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let mut sections = vec![
+        "你是 V3 智能助手。上一轮工具规划没有产出可直接展示给用户的最终回答，现在必须直接给客户可展示答案或提出一个明确追问。".to_string(),
+        output_guard,
         format!("用户问题：{}", user_prompt.trim()),
         format!("兜底原因：{reason}"),
         format!(
@@ -32748,12 +33065,22 @@ fn build_assistant_run_react_compact_natural_fallback_input(
             serde_json::to_string(&evidence_items).unwrap_or_else(|_| "[]".to_string())
         ),
         format!(
+            "可继续追问/恢复动作：{}",
+            serde_json::to_string(&recovery_followup).unwrap_or_else(|_| "null".to_string())
+        ),
+        format!(
             "已执行动作摘要：{}",
             serde_json::to_string(&observation_summaries).unwrap_or_else(|_| "[]".to_string())
         ),
-        "输出要求：用中文，给出简明流程；如果是养老/护理应急类问题，按“现场处置、上报记录、家属沟通、后续复盘/材料”组织。".to_string(),
-    ]
-    .join("\n\n")
+        answer_shape_requirement.to_string(),
+    ];
+    if !answer_policy_guidance.is_empty() {
+        sections.push(format!(
+            "外部输出要求：\n{}",
+            answer_policy_guidance.join("\n")
+        ));
+    }
+    sections.join("\n\n")
 }
 
 fn assistant_run_compact_evidence_items_for_natural_fallback(
@@ -33155,6 +33482,11 @@ fn assistant_run_answer_quality_low_quality_case_package(
         "selected_scope_summary": assistant_run_answer_quality_case_selected_scope_summary(selected_scope),
         "evidence_summary": {
             "supply_quality": supply_quality,
+            "recovery_followup": evidence_state
+                .get("recovery_followup")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .unwrap_or(Value::Null),
             "answer_supply_sources": assistant_run_answer_quality_case_supply_sources(evidence_state),
             "retrieval_or_fact_snapshot_status": assistant_run_answer_quality_case_supply_status(evidence_state),
         },
@@ -35654,6 +35986,217 @@ async fn maybe_record_external_data_ingestion_analysis_result(
     Ok(())
 }
 
+async fn maybe_record_external_static_page_publish_failed(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    execution: &WorkflowExecution,
+    event: &CodexHostFixedTaskAuditEvent,
+) -> std::result::Result<(), ApiError> {
+    if event.event_name != "codex_host.fixed_task.rejected"
+        || event.payload.get("template_id").and_then(Value::as_str)
+            != Some("static_page_image2_data_publish")
+    {
+        return Ok(());
+    }
+    let Some(assistant_run_id) = event
+        .payload
+        .get("assistant_run_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(AssistantRunId)
+    else {
+        return Ok(());
+    };
+    let execution_id_text = execution.id.to_string();
+    let existing_events = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if existing_events.iter().any(|existing| {
+        matches!(
+            existing.event_name.as_str(),
+            "assistant_run.external_channel_static_page_publish_completed"
+                | "assistant_run.external_channel_static_page_publish_failed"
+        ) && existing
+            .payload
+            .get("codex_host_workflow_execution_id")
+            .and_then(Value::as_str)
+            == Some(execution_id_text.as_str())
+    }) {
+        return Ok(());
+    }
+
+    let fixed_task = execution
+        .context
+        .get("fixed_task")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let draft_id_text = fixed_task
+        .get("draft_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let image_job_id = fixed_task
+        .pointer("/image2/image_job_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let queued_payload = existing_events
+        .iter()
+        .rev()
+        .find(|existing| {
+            existing.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                && existing
+                    .payload
+                    .get("codex_host_workflow_execution_id")
+                    .and_then(Value::as_str)
+                    == Some(execution_id_text.as_str())
+        })
+        .map(|existing| existing.payload.clone())
+        .unwrap_or(Value::Null);
+
+    let draft = draft_id_text
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(StaticPageDraftId)
+        .map(|draft_id| async move {
+            storage
+                .static_page_drafts()
+                .get_by_id(tenant_id, draft_id)
+                .await
+                .map_err(ApiError::from_storage)
+        });
+    let draft = match draft {
+        Some(future) => future.await?,
+        None => None,
+    };
+    let source_refs = draft
+        .as_ref()
+        .map(|draft| external_channel_static_page_status_source_refs(&draft.source_refs))
+        .unwrap_or_else(|| external_channel_static_page_status_source_refs(&queued_payload));
+    let channel_connection_id =
+        external_channel_static_page_source_ref_string(&source_refs, "channel_connection_id")
+            .or_else(|| {
+                external_channel_static_page_source_ref_string(
+                    &queued_payload,
+                    "channel_connection_id",
+                )
+            });
+    let platform = external_channel_static_page_source_ref_string(&source_refs, "platform")
+        .or_else(|| external_channel_static_page_source_ref_string(&queued_payload, "platform"));
+    let conversation_external_id =
+        external_channel_static_page_source_ref_string(&source_refs, "conversation_external_id")
+            .or_else(|| {
+                external_channel_static_page_source_ref_string(
+                    &queued_payload,
+                    "conversation_external_id",
+                )
+            });
+    let message_external_id =
+        external_channel_static_page_source_ref_string(&source_refs, "message_external_id")
+            .or_else(|| {
+                external_channel_static_page_source_ref_string(
+                    &queued_payload,
+                    "message_external_id",
+                )
+            });
+    let validation_reason = event
+        .payload
+        .pointer("/validation/reason")
+        .and_then(Value::as_str)
+        .map(codex_host_fixed_task_safe_text);
+    let validation_error = event
+        .payload
+        .pointer("/validation/error")
+        .and_then(Value::as_str)
+        .map(codex_host_fixed_task_safe_text);
+    let output_reason = event
+        .payload
+        .pointer("/output/human_review_reason")
+        .and_then(Value::as_str)
+        .map(codex_host_fixed_task_safe_text);
+    let error_code = validation_reason
+        .clone()
+        .or_else(|| output_reason.clone())
+        .unwrap_or_else(|| "static_page_publish_failed".to_string());
+    let error_message = validation_error
+        .clone()
+        .or_else(|| output_reason.clone())
+        .or_else(|| validation_reason.clone())
+        .unwrap_or_else(|| "static_page_publish_failed".to_string());
+    let status_url = queued_payload
+        .get("status_url")
+        .cloned()
+        .or_else(|| event.payload.get("status_url").cloned())
+        .unwrap_or(Value::Null);
+    let status_method = queued_payload
+        .get("status_method")
+        .cloned()
+        .or_else(|| event.payload.get("status_method").cloned())
+        .unwrap_or_else(|| json!("GET"));
+    let retryable = event
+        .payload
+        .get("preflight_rejection")
+        .and_then(Value::as_bool)
+        != Some(true);
+    let failed_payload = json!({
+        "channel_connection_id": channel_connection_id,
+        "platform": platform,
+        "conversation_external_id": conversation_external_id,
+        "message_external_id": message_external_id,
+        "draft_id": draft_id_text,
+        "image_job_id": image_job_id,
+        "codex_host_workflow_execution_id": execution_id_text,
+        "template_id": "static_page_image2_data_publish",
+        "status": "static_page_publish_failed",
+        "publish_mode": event
+            .payload
+            .get("publish_mode")
+            .cloned()
+            .or_else(|| queued_payload.get("publish_mode").cloned())
+            .unwrap_or_else(|| json!("new_generated_artifact_only")),
+        "retryable": retryable,
+        "error": {
+            "code": error_code,
+            "message": error_message,
+            "workflow_event_name": event
+                .payload
+                .get("workflow_event_name")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "output_status": event
+                .payload
+                .pointer("/output/status")
+                .cloned()
+                .unwrap_or(Value::Null),
+        },
+        "output": event.payload.get("output").cloned().unwrap_or(Value::Null),
+        "validation": event.payload.get("validation").cloned().unwrap_or(Value::Null),
+        "validation_summary": external_channel_static_page_publish_validation_summary(&event.payload),
+        "status_url": status_url,
+        "status_method": status_method,
+        "recipient_delivery": external_channel_recipient_delivery_from_payload(&event.payload),
+        "permission_review_status": external_channel_permission_review_status_from_payload(&event.payload),
+        "editable_after_publish": external_channel_editable_after_publish_from_payload(&event.payload),
+        "source_refs": source_refs,
+    });
+
+    storage
+        .assistant_runs()
+        .append_event(
+            tenant_id,
+            assistant_run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_static_page_publish_failed".to_string(),
+                payload: failed_payload,
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
 async fn maybe_record_external_static_page_publish_completed(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -36003,10 +36546,19 @@ fn external_channel_static_page_published_reply(
     } else {
         dynamic_page_contract
     };
+    let provisional_direct_html = payload
+        .get("provisional_direct_html")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if provisional_direct_html {
+        "V3 已先生成可发送的静态页链接；最终 Codex 页面仍在后台继续发布。"
+    } else {
+        "V3 静态页已生成并发布。"
+    };
     ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
-        text: Some("V3 静态页已生成并发布。".to_string()),
+        text: Some(text.to_string()),
         card: Some(json!({
             "type": "v3_static_page_image2_publish_completed",
             "status": "static_page_published",
@@ -36023,6 +36575,37 @@ fn external_channel_static_page_published_reply(
             "render_output_id": payload.get("render_output_id").cloned().unwrap_or(Value::Null),
             "codex_host_workflow_execution_id": payload
                 .get("codex_host_workflow_execution_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "status_url": payload.get("status_url").cloned().unwrap_or(Value::Null),
+            "status_method": payload.get("status_method").cloned().unwrap_or(Value::Null),
+            "poll_after_seconds": payload.get("poll_after_seconds").cloned().unwrap_or(Value::Null),
+            "auto_publish_after_preview": payload
+                .get("auto_publish_after_preview")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "codex_auto_publish_ready": payload
+                .get("codex_auto_publish_ready")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "codex_auto_publish_disabled_reason": payload
+                .get("codex_auto_publish_disabled_reason")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "direct_html_fallback": payload
+                .get("direct_html_fallback")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "provisional_direct_html": payload
+                .get("provisional_direct_html")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "demo_generated_artifact_publish": payload
+                .get("demo_generated_artifact_publish")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "codex_final_status": payload
+                .get("codex_final_status")
                 .cloned()
                 .unwrap_or(Value::Null),
             "recipient_delivery": external_channel_recipient_delivery_from_payload(payload),
@@ -36066,6 +36649,67 @@ fn external_channel_static_page_publish_completed_reply_from_event_payload(
         public_url,
         payload,
     ))
+}
+
+fn external_channel_static_page_publish_failed_reply_from_event_payload(
+    payload: &Value,
+    fallback_conversation_external_id: &str,
+) -> ExternalBotReplyView {
+    let conversation_external_id = payload
+        .get("conversation_external_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .pointer("/source_refs/conversation_external_id")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_conversation_external_id);
+    external_channel_task_status_reply_for_conversation(
+        conversation_external_id,
+        "static_page_publish_failed",
+        Some(
+            "V3 已生成效果图，但最终静态页发布失败，已记录失败原因，可稍后重试或人工处理。"
+                .to_string(),
+        ),
+        Some(json!({
+            "type": "v3_static_page_image2_publish_status",
+            "status": "static_page_publish_failed",
+            "template_id": payload
+                .get("template_id")
+                .cloned()
+                .unwrap_or_else(|| json!("static_page_image2_data_publish")),
+            "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
+            "image_job_id": payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "codex_host_workflow_execution_id": payload
+                .get("codex_host_workflow_execution_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "publish_mode": payload
+                .get("publish_mode")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "retryable": payload
+                .get("retryable")
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+            "error": payload.get("error").cloned().unwrap_or(Value::Null),
+            "output": payload.get("output").cloned().unwrap_or(Value::Null),
+            "validation": payload.get("validation").cloned().unwrap_or(Value::Null),
+            "validation_summary": payload
+                .get("validation_summary")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "status_url": payload.get("status_url").cloned().unwrap_or(Value::Null),
+            "status_method": payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+            "recipient_delivery": external_channel_recipient_delivery_from_payload(payload),
+            "permission_review_status": external_channel_permission_review_status_from_payload(payload),
+            "editable_after_publish": external_channel_editable_after_publish_from_payload(payload),
+            "poll_after_seconds": Value::Null,
+        })),
+        Vec::new(),
+    )
 }
 
 pub(crate) async fn record_codex_host_fixed_task_preflight_rejected(
@@ -36120,10 +36764,21 @@ pub(crate) async fn record_codex_host_fixed_task_preflight_rejected(
         "auto_apply_allowed": false,
         "reason": codex_host_fixed_task_safe_text(reason),
     });
+    let followup_event = event.clone();
     if let Err(error) =
         record_codex_host_fixed_task_audit_event(&state.storage, state.tenant_id, event).await
     {
         tracing::warn!(%error, "failed to record Codex Host fixed task preflight rejection");
+    }
+    if let Err(error) = maybe_record_external_static_page_publish_failed(
+        &state.storage,
+        state.tenant_id,
+        &execution,
+        &followup_event,
+    )
+    .await
+    {
+        tracing::warn!(%error, "failed to record static-page publish preflight failure");
     }
 }
 
@@ -36399,6 +37054,30 @@ fn assistant_run_answer_quality_exhausted_controlled_answer(
         .and_then(|quality| quality.get("suppliedItemCount"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    if assistant_run_request_wants_json_output(request) {
+        let status = if supplied_count > 0 {
+            "needs_more_input_after_retry"
+        } else {
+            "no_verifiable_evidence"
+        };
+        let message = if supplied_count > 0 {
+            "我已重新核对当前可见材料，但这轮仍未形成可核验结论。"
+        } else {
+            "我已尝试重新获取可见材料，但这轮没有形成可核验结论。"
+        };
+        return serde_json::to_string_pretty(&json!({
+            "status": status,
+            "message": message,
+            "question": request.prompt.trim(),
+            "supplied_item_count": supplied_count,
+            "next_action": "continue_same_conversation_with_more_scope_or_clarification",
+            "suggested_user_inputs": ["文档ID", "数据集分组", "页码或章节", "关键词", "统计口径或对象"],
+        }))
+        .unwrap_or_else(|_| {
+            "{\"status\":\"needs_more_input_after_retry\",\"message\":\"需要补充信息后继续。\"}"
+                .to_string()
+        });
+    }
     let is_dissatisfied = assistant_run_request_expresses_dissatisfaction(request);
     if supplied_count > 0 {
         if is_dissatisfied {
@@ -36445,6 +37124,60 @@ fn assistant_run_answer_quality_spreadsheet_controlled_answer(
         && (!requests_work_hours || (longest.is_none() && shortest.is_none()))
     {
         return None;
+    }
+    if assistant_run_request_wants_json_output(request) {
+        let absence_json = if requests_absence {
+            absence_rows
+                .iter()
+                .take(20)
+                .map(|row| {
+                    let category = if row
+                        .get("counts_as_absence")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true)
+                    {
+                        "缺勤/未打卡"
+                    } else {
+                        "未打卡/不考勤"
+                    };
+                    json!({
+                        "category": category,
+                        "date": assistant_run_spreadsheet_row_text(row, "date"),
+                        "employee": assistant_run_spreadsheet_row_text(row, "employee"),
+                        "shift": assistant_run_spreadsheet_row_text(row, "shift"),
+                        "status": assistant_run_spreadsheet_row_text(row, "status"),
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut work_hour_extremes = Vec::new();
+        if requests_work_hours {
+            if let Some(row) = longest {
+                work_hour_extremes.push(assistant_run_spreadsheet_work_hour_result_json(
+                    "longest",
+                    "最长工时",
+                    row,
+                ));
+            }
+            if let Some(row) = shortest {
+                work_hour_extremes.push(assistant_run_spreadsheet_work_hour_result_json(
+                    "shortest",
+                    "最短工时",
+                    row,
+                ));
+            }
+        }
+        return serde_json::to_string_pretty(&json!({
+            "status": "answered",
+            "source": "spreadsheet_row_analysis",
+            "question": request.prompt.trim(),
+            "documents": assistant_run_spreadsheet_row_analysis_document_titles(evidence_state),
+            "absence_rows": absence_json,
+            "work_hour_extremes": work_hour_extremes,
+        }))
+        .ok();
     }
 
     let mut lines = vec!["根据已解析的考勤明细，结果如下：".to_string()];
@@ -36507,6 +37240,18 @@ fn assistant_run_spreadsheet_work_hour_result_row(label: &str, row: &Value) -> S
     )
 }
 
+fn assistant_run_spreadsheet_work_hour_result_json(kind: &str, label: &str, row: &Value) -> Value {
+    json!({
+        "kind": kind,
+        "label": label,
+        "date": assistant_run_spreadsheet_row_text(row, "date"),
+        "employee": assistant_run_spreadsheet_row_text(row, "employee"),
+        "shift": assistant_run_spreadsheet_row_text(row, "shift"),
+        "work_hours_text": assistant_run_spreadsheet_row_text(row, "work_hours_text"),
+        "status": assistant_run_spreadsheet_row_text(row, "status"),
+    })
+}
+
 fn assistant_run_spreadsheet_row_text<'a>(row: &'a Value, key: &str) -> &'a str {
     row.get(key).and_then(Value::as_str).unwrap_or("")
 }
@@ -36543,6 +37288,27 @@ fn assistant_run_answer_quality_point_list_controlled_answer(
     let rows = assistant_run_point_list_rows_from_retrieval_evidence(evidence_state);
     if rows.is_empty() {
         return None;
+    }
+    if assistant_run_request_wants_json_output(request) {
+        let rows = rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "floor": row.floor,
+                    "location": row.location,
+                    "name": row.name,
+                    "areaid": row.area_id,
+                    "type": row.type_label,
+                })
+            })
+            .collect::<Vec<_>>();
+        return serde_json::to_string_pretty(&json!({
+            "status": "answered",
+            "source": "retrieval_point_list",
+            "question": request.prompt.trim(),
+            "rows": rows,
+        }))
+        .ok();
     }
     let mut lines = vec![
         "根据已检索到的点位证据，智能梯控/电梯点位如下：".to_string(),
@@ -41465,6 +42231,14 @@ async fn build_assistant_run_evidence_state(
         fallback_supply_count,
         limit,
     );
+    let recovery_followup = assistant_run_recovery_followup_for_weak_supply(
+        selected_scope,
+        prompt,
+        status,
+        &supplied_items,
+        &supply_quality,
+        &unavailable_dataset_ids,
+    );
     Ok(json!({
         "status": status,
         "policy": "host_supplies_model_answers",
@@ -41481,6 +42255,7 @@ async fn build_assistant_run_evidence_state(
             dataset_entity_scan_requested,
         ),
         "supply_quality": supply_quality,
+        "recovery_followup": recovery_followup,
         "detail_targets": detail_targets,
         "selected_scope": selected_scope,
         "datasets": supplied_datasets,
@@ -47582,7 +48357,9 @@ fn assistant_run_supply_item_identity(item: &Value) -> Option<String> {
 }
 
 fn assistant_run_prompt_requests_expanded_supply(prompt: &str) -> bool {
-    prompt_requests_procedure_or_action(prompt) || prompt_contains_elder_fall_signal(prompt)
+    prompt_requests_procedure_or_action(prompt)
+        || prompt_contains_elder_fall_signal(prompt)
+        || prompt_contains_elder_death_signal(prompt)
 }
 
 fn prompt_requests_procedure_or_action(prompt: &str) -> bool {
@@ -47622,6 +48399,26 @@ fn prompt_contains_elder_fall_signal(prompt: &str) -> bool {
     )
 }
 
+fn prompt_contains_elder_death_signal(prompt: &str) -> bool {
+    prompt_contains_any(
+        prompt,
+        &[
+            "离世",
+            "去世",
+            "死亡",
+            "身故",
+            "过世",
+            "病故",
+            "善后",
+            "殡葬",
+            "遗体",
+            "遗物",
+            "家属对接",
+            "生命体征",
+        ],
+    )
+}
+
 fn assistant_run_expanded_supply_prompt(prompt: &str) -> String {
     let mut parts = vec![prompt.trim().to_string()];
     if prompt_requests_procedure_or_action(prompt) {
@@ -47635,12 +48432,202 @@ fn assistant_run_expanded_supply_prompt(prompt: &str) -> String {
                 .to_string(),
         );
     }
+    if prompt_contains_elder_death_signal(prompt) {
+        parts.push(
+            "离世 去世 死亡 身故 病故 善后 殡葬 遗体 遗物 生命体征 医护确认 现场保护 通知负责人 通知家属 家属沟通 家属对接 死亡证明 殡仪接运 遗物清点 遗物交接 记录归档 事件报告"
+                .to_string(),
+        );
+    }
     parts
         .into_iter()
         .map(|part| part.trim().to_string())
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn assistant_run_recovery_followup_for_weak_supply(
+    selected_scope: &Value,
+    prompt: &str,
+    status: &str,
+    supplied_items: &[Value],
+    supply_quality: &Value,
+    unavailable_dataset_ids: &[String],
+) -> Option<Value> {
+    let supply_requested = supply_quality
+        .get("supplyRequested")
+        .and_then(Value::as_bool)
+        .unwrap_or(status != "not_requested");
+    if !supply_requested {
+        return None;
+    }
+
+    let quality_status = supply_quality
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let answerable_supply_count = [
+        "indexedEvidenceCount",
+        "fallbackChunkCount",
+        "datasetEntityScanCount",
+        "datasetFactSnapshotCount",
+        "spreadsheetRowAnalysisCount",
+        "mediaContextCount",
+        "conversationMemoryItemCount",
+    ]
+    .iter()
+    .filter_map(|key| supply_quality.get(*key).and_then(Value::as_u64))
+    .sum::<u64>();
+    let has_weak_expansion =
+        assistant_run_supply_has_weak_indexed_evidence_expansion(supplied_items, supply_quality);
+    let has_low_text_evidence = supply_quality
+        .get("lowTextEvidenceCount")
+        .and_then(Value::as_u64)
+        .map(|count| count > 0)
+        .unwrap_or_else(|| {
+            assistant_run_supply_quality_has_note(supply_quality, "low_text_document_evidence")
+        });
+    let has_parse_blocker = [
+        "documentNotReadyCount",
+        "documentFailedCount",
+        "documentReparsingCount",
+        "documentDegradedParseCount",
+    ]
+    .iter()
+    .any(|key| {
+        supply_quality
+            .get(*key)
+            .and_then(Value::as_u64)
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    });
+    let procedure_question = prompt_requests_procedure_or_action(prompt);
+    let no_answerable_supply = status == "empty"
+        || quality_status == "missing"
+        || (answerable_supply_count == 0 && (supplied_items.is_empty() || has_parse_blocker));
+    let weak_but_answerable = answerable_supply_count > 0
+        && (has_weak_expansion
+            || has_low_text_evidence
+            || has_parse_blocker
+            || (procedure_question && quality_status == "partial"));
+    if !no_answerable_supply && !weak_but_answerable {
+        return None;
+    }
+
+    let selected_dataset_count = supply_quality
+        .get("selectedDatasetCount")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| selected_dataset_ids_from_scope(selected_scope).len() as u64);
+    let selected_document_count =
+        selected_document_ids_for_evidence_from_scope(selected_scope).len();
+    let (trigger, status, question, model_rule) = if no_answerable_supply {
+        (
+            "no_answerable_supply",
+            "needs_user_clarification",
+            "当前可见资料里还没定位到可引用内容。请补充制度名称、章节/页码、关键词，或确认本轮要搜索的文档范围；收到补充后，我会沿用本会话继续扩大检索并完成回答。",
+            "If the answer cannot be verified from supplied evidence, state the visible status briefly, ask this exact follow-up, and make it clear the same conversation can continue with expanded retrieval.",
+        )
+    } else if has_low_text_evidence || has_parse_blocker {
+        (
+            "parse_or_low_text_quality",
+            "answer_with_current_evidence_then_followup_if_needed",
+            "当前资料存在解析质量或就绪状态风险。请补充清晰文件、制度名称、章节/页码或关键词；我会沿用本会话继续重检索/细读并修正答案。",
+            "Give a useful answer from current evidence and general professional knowledge first; clearly mark unverified parts, then ask this follow-up if exact source wording is still needed.",
+        )
+    } else if assistant_run_prompt_contains_elder_death_followup_signal(prompt) {
+        (
+            "weak_procedure_evidence_expansion",
+            "answer_with_current_evidence_then_followup_if_needed",
+            "我可以先按已检索到的突发事件/善后相关章节整理现场处置、家属沟通、上报记录和后续复盘；如需核对原文，请补充制度名称、章节/页码或关键词。",
+            "Use the expanded chunks before saying the document lacks a direct section; organize the answer as a procedure, then ask this follow-up only for exact verification.",
+        )
+    } else if prompt_contains_elder_fall_signal(prompt) {
+        (
+            "weak_procedure_evidence_expansion",
+            "answer_with_current_evidence_then_followup_if_needed",
+            "我可以先按已检索到的防跌倒/突发事件相关章节整理现场处置、家属沟通、上报记录和后续复盘；如需核对原文，请补充制度名称、章节/页码或关键词。",
+            "Use the expanded chunks before saying the document lacks a direct section; organize the answer as a procedure, then ask this follow-up only for exact verification.",
+        )
+    } else if procedure_question {
+        (
+            "weak_procedure_evidence_expansion",
+            "answer_with_current_evidence_then_followup_if_needed",
+            "我可以先按已检索到的相关章节整理可执行流程；如需核对原文，请补充制度名称、章节/页码或关键词。",
+            "Use the expanded chunks before saying the document lacks a direct process; give a procedure-style answer, then ask this follow-up only for exact verification.",
+        )
+    } else {
+        (
+            "weak_document_evidence",
+            "answer_with_current_evidence_then_followup_if_needed",
+            "我可以先按已检索到的资料给出当前结论；如需更准确，请补充文档名称、页码、关键词或统计口径。",
+            "Answer with current evidence first; if the requested fact cannot be verified, ask this follow-up instead of ending with a generic unavailable message.",
+        )
+    };
+
+    Some(json!({
+        "status": status,
+        "trigger": trigger,
+        "question": question,
+        "model_rule": model_rule,
+        "can_continue_same_conversation": true,
+        "next_action": "continue_same_conversation_expanded_retrieval",
+        "suggested_user_inputs": [
+            "制度名称",
+            "章节或页码",
+            "关键词",
+            "文档范围或数据集分组",
+            "统计口径或对象"
+        ],
+        "prompt_kind": if procedure_question { "procedure_or_action" } else { "data_or_document_question" },
+        "scope_summary": {
+            "intent": assistant_run_scope_intent(selected_scope),
+            "selected_dataset_count": selected_dataset_count,
+            "selected_document_count": selected_document_count,
+            "unavailable_dataset_count": unavailable_dataset_ids.len(),
+            "unavailable_dataset_ids": unavailable_dataset_ids,
+        },
+        "answerable_supply_count": answerable_supply_count,
+        "quality_status": quality_status,
+    }))
+}
+
+fn assistant_run_supply_has_weak_indexed_evidence_expansion(
+    supplied_items: &[Value],
+    supply_quality: &Value,
+) -> bool {
+    supplied_items.iter().any(|item| {
+        item.get("source").and_then(Value::as_str) == Some("document_chunk_fallback")
+            && item.get("fallback_reason").and_then(Value::as_str)
+                == Some("weak_indexed_evidence_expansion")
+    }) || assistant_run_supply_quality_has_note(
+        supply_quality,
+        "supply_selection:weak_indexed_evidence_expanded_with_visible_chunks",
+    )
+}
+
+fn assistant_run_supply_quality_has_note(supply_quality: &Value, expected: &str) -> bool {
+    supply_quality
+        .get("notes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|note| note.as_str() == Some(expected))
+}
+
+fn assistant_run_prompt_contains_elder_death_followup_signal(prompt: &str) -> bool {
+    prompt_contains_elder_death_signal(prompt)
+        || prompt_contains_any(
+            prompt,
+            &[
+                "在院离世",
+                "院内离世",
+                "长者离世",
+                "老人离世",
+                "离世善后",
+                "身故善后",
+                "善后流程",
+            ],
+        )
 }
 
 fn filter_retrieval_evidences_for_selected_documents(
@@ -47830,6 +48817,7 @@ fn assistant_run_supply_quality_report(
             "when document_parse_status reports not-ready, failed, reparsing, or degraded documents, tell the user the relevant document is still parsing or failed instead of claiming its contents",
             "fallback_visible_document_chunks_used means indexed retrieval was expanded with visible document chunks; do not describe that as parser-not-ready unless document_parse_status or low_text_document_evidence says so",
             "when fallback_reason is weak_indexed_evidence_expansion, use those expanded chunks before saying the document did not directly mention the requested flow",
+            "when evidence_state.recovery_followup is present, answer with current evidence first; if still unverifiable, ask that follow-up and keep the task continuable in the same conversation",
             "when low_text_document_evidence is present, treat the document extraction as too sparse or low quality, avoid inferring contents from the title, and recommend OCR/reparse/manual review if needed",
             "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
         ],
@@ -48399,12 +49387,27 @@ fn normalize_section_title_hint(line: &str) -> Option<String> {
             .then_some(trimmed)
         })
         .or_else(|| looks_like_standalone_heading(trimmed).then_some(trimmed))?;
-    let normalized = candidate
+    let normalized = normalize_toc_section_title_candidate(candidate)
         .trim_matches(|ch: char| ch.is_whitespace() || "#*-_".contains(ch))
         .chars()
         .take(80)
         .collect::<String>();
     (!normalized.is_empty()).then_some(normalized)
+}
+
+fn normalize_toc_section_title_candidate(candidate: &str) -> String {
+    let mut value = candidate.trim().to_string();
+    if let Some(index) = value.find("....") {
+        value.truncate(index);
+    } else if let Some(index) = value.find('…') {
+        value.truncate(index);
+    }
+    value
+        .trim_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(ch, '.' | '．' | '。' | '·' | '•' | '-' | '_' | '—' | '–')
+        })
+        .to_string()
 }
 
 fn looks_like_heading_marker(value: &str) -> bool {
@@ -48825,9 +49828,14 @@ fn assistant_run_scope_with_visible_dataset_range(
 ) -> Value {
     if assistant_run_scope_is_external_channel(Some(&selected_scope))
         || selected_scope_has_document_selection(&selected_scope)
-        || assistant_run_scope_intent(&selected_scope) == "ordinary_chat"
     {
         return selected_scope;
+    }
+    if assistant_run_scope_intent(&selected_scope) == "ordinary_chat" {
+        return assistant_run_scope_without_unavailable_requested_datasets(
+            selected_scope,
+            visible_datasets,
+        );
     }
 
     let visible_by_id = visible_datasets
@@ -48948,6 +49956,75 @@ fn assistant_run_scope_with_visible_dataset_range(
                 json!(["retrieval.search"]),
             );
         }
+    }
+    set_payload_value(&mut selected_scope, "supply_policy", supply_policy);
+    selected_scope
+}
+
+fn assistant_run_scope_without_unavailable_requested_datasets(
+    mut selected_scope: Value,
+    visible_datasets: &[Dataset],
+) -> Value {
+    let requested_dataset_ids = selected_dataset_ids_from_scope(&selected_scope);
+    if requested_dataset_ids.is_empty() {
+        return selected_scope;
+    }
+    let visible_dataset_ids = visible_datasets
+        .iter()
+        .map(|dataset| dataset.id)
+        .collect::<HashSet<_>>();
+    let mut visible_requested_dataset_ids = Vec::new();
+    let mut unavailable_requested_dataset_ids = Vec::new();
+    for dataset_id in requested_dataset_ids {
+        if visible_dataset_ids.contains(&dataset_id) {
+            visible_requested_dataset_ids.push(dataset_id);
+        } else {
+            unavailable_requested_dataset_ids.push(dataset_id.to_string());
+        }
+    }
+    if unavailable_requested_dataset_ids.is_empty() {
+        return selected_scope;
+    }
+
+    let dataset_scope = visible_requested_dataset_ids
+        .iter()
+        .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+        .collect::<Vec<_>>();
+    set_payload_value(&mut selected_scope, "datasets", json!(dataset_scope));
+    set_payload_value(&mut selected_scope, "selected", json!(dataset_scope));
+    set_payload_value(
+        &mut selected_scope,
+        "preferred_dataset_ids",
+        json!(visible_requested_dataset_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()),
+    );
+    set_payload_value(
+        &mut selected_scope,
+        "ignored_dataset_ids",
+        json!(unavailable_requested_dataset_ids),
+    );
+    set_payload_value(
+        &mut selected_scope,
+        "dataset_scope_policy",
+        json!("requested_visible_datasets_only"),
+    );
+    if visible_requested_dataset_ids.is_empty()
+        && !selected_scope_requests_conversation_memory(&selected_scope)
+    {
+        set_payload_value(&mut selected_scope, "mode", json!("ordinary_chat"));
+    }
+
+    let mut supply_policy = assistant_run_scope_supply_policy(&selected_scope);
+    ensure_json_object(&mut supply_policy);
+    if let Some(policy) = supply_policy.as_object_mut() {
+        policy.insert(
+            "candidatePolicy".to_string(),
+            json!("requested_visible_datasets_only"),
+        );
+        policy.insert("retrievalPolicy".to_string(), json!("standard"));
+        policy.insert("noFakeData".to_string(), json!(true));
     }
     set_payload_value(&mut selected_scope, "supply_policy", supply_policy);
     selected_scope
@@ -51856,6 +52933,13 @@ struct WorkflowExecutionListQuery {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WorkflowTaskQueueStatsQuery {
+    kind: Option<String>,
+    status: Option<String>,
+    limit: Option<usize>,
+}
+
 fn parse_workflow_kind_query(value: &str) -> std::result::Result<WorkflowKind, ApiError> {
     let normalized = value.trim();
     if let Some(kind) = WorkflowKind::from_str(normalized) {
@@ -51943,6 +53027,83 @@ async fn list_workflow_executions(
     }
 
     Ok(Json(visible))
+}
+
+async fn get_workflow_task_queue_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WorkflowTaskQueueStatsQuery>,
+) -> std::result::Result<Json<contracts::WorkflowTaskQueueStatsView>, ApiError> {
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let kind_filter = query
+        .kind
+        .as_deref()
+        .map(parse_workflow_kind_query)
+        .transpose()?;
+    let status_filter = query
+        .status
+        .as_deref()
+        .map(parse_workflow_status_query)
+        .transpose()?;
+    let limit = query
+        .limit
+        .filter(|limit| *limit > 0)
+        .unwrap_or(200)
+        .min(500);
+    let executions = state
+        .storage
+        .workflow_executions()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let mut visible = Vec::with_capacity(executions.len().min(limit));
+    for execution in executions {
+        if kind_filter
+            .as_ref()
+            .is_some_and(|kind| &execution.kind != kind)
+        {
+            continue;
+        }
+        if status_filter
+            .as_ref()
+            .is_some_and(|status| &execution.status != status)
+        {
+            continue;
+        }
+        match ensure_workflow_execution_visible_for_user(
+            &state,
+            &execution,
+            &active_secret_binding_ids,
+            current_user_id,
+        )
+        .await
+        {
+            Ok(()) => visible.push(execution),
+            Err(error) if error.status == StatusCode::NOT_FOUND => {}
+            Err(error) => return Err(error),
+        }
+    }
+    visible.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    visible.truncate(limit);
+
+    let mut tasks = Vec::new();
+    for execution in &visible {
+        let execution_tasks = state
+            .storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        tasks.extend(execution_tasks.into_iter().map(to_workflow_task_view));
+    }
+
+    Ok(Json(summarize_workflow_task_queue_stats(
+        Utc::now(),
+        visible.len(),
+        &tasks,
+    )))
 }
 
 async fn get_workflow_execution(
@@ -52621,6 +53782,13 @@ pub async fn apply_workflow_signal_with_dependencies(
         let followup_event = event.clone();
         record_codex_host_fixed_task_audit_event(storage, tenant_id, event).await?;
         maybe_record_external_static_page_publish_completed(
+            storage,
+            tenant_id,
+            &next_execution,
+            &followup_event,
+        )
+        .await?;
+        maybe_record_external_static_page_publish_failed(
             storage,
             tenant_id,
             &next_execution,
@@ -55267,6 +56435,12 @@ fn assistant_run_reduced_query_texts(prompt: &str) -> Vec<String> {
     if prompt_contains_elder_fall_signal(prompt) {
         variants.push("摔倒 跌倒 意外伤害 突发事件 事故处理 应急处置 120 通知家属".to_string());
     }
+    if prompt_contains_elder_death_signal(prompt) {
+        variants.push(
+            "离世 去世 死亡 身故 善后 遗体 遗物 医护确认 生命体征 通知家属 家属沟通 殡仪接运 遗物交接 记录归档"
+                .to_string(),
+        );
+    }
 
     let mut seen = BTreeSet::new();
     variants
@@ -55448,18 +56622,22 @@ fn rank_document_chunks_for_prompt(
         return Vec::new();
     }
 
-    let query_variants = assistant_run_rank_query_variants(prompt);
+    let query_variants = assistant_run_rank_query_variants_for_chunks(prompt, &sources);
     let mut ranked = sources
         .into_iter()
         .map(|(document, chunk)| {
             let search_text = document_chunk_search_text(&document, &chunk);
-            let lexical_score = query_variants
+            let mut lexical_score = query_variants
                 .iter()
                 .map(|query| {
                     lexical_text_score(&search_text, &query.weights, query.norm)
                         + lexical_domain_hint_score(&search_text, &query.text)
                 })
                 .fold(0.0, f64::max);
+            lexical_score += lexical_original_query_signal_overlap_score(&search_text, prompt);
+            if document_chunk_looks_like_toc_or_index(&chunk) {
+                lexical_score *= 0.35;
+            }
             RankedDocumentChunk {
                 document,
                 chunk,
@@ -55480,6 +56658,140 @@ fn rank_document_chunks_for_prompt(
             .then_with(|| left.document.title.cmp(&right.document.title))
     });
     ranked.into_iter().take(limit).collect()
+}
+
+fn assistant_run_rank_query_variants_for_chunks(
+    prompt: &str,
+    sources: &[(Document, DocumentChunk)],
+) -> Vec<AssistantRunRankQuery> {
+    let mut variants = assistant_run_rank_query_variants(prompt);
+    let mut seen = variants
+        .iter()
+        .map(|variant| variant.text.clone())
+        .collect::<BTreeSet<_>>();
+    for text in assistant_run_section_title_hop_query_texts(prompt, sources, 4) {
+        let text = normalize_assistant_reduced_query_text(&text);
+        if text.is_empty() || !seen.insert(text.clone()) {
+            continue;
+        }
+        let weights = lexical_query_term_weights(&text);
+        let norm = vector_norm(&weights);
+        if norm > 0.0 {
+            variants.push(AssistantRunRankQuery {
+                text,
+                weights,
+                norm,
+            });
+        }
+    }
+    variants
+}
+
+fn assistant_run_section_title_hop_query_texts(
+    prompt: &str,
+    sources: &[(Document, DocumentChunk)],
+    limit: usize,
+) -> Vec<String> {
+    if limit == 0
+        || (!prompt_requests_procedure_or_action(prompt)
+            && !prompt_contains_elder_fall_signal(prompt)
+            && !prompt_contains_elder_death_signal(prompt))
+    {
+        return Vec::new();
+    }
+    let expanded_prompt = assistant_run_expanded_supply_prompt(prompt);
+    let original_query_weights = lexical_query_term_weights(prompt);
+    let original_query_norm = vector_norm(&original_query_weights);
+    let query_weights = lexical_query_term_weights(&expanded_prompt);
+    let query_norm = vector_norm(&query_weights);
+    if query_weights.is_empty() || query_norm <= 0.0 {
+        return Vec::new();
+    }
+
+    let mut scored_titles = Vec::<(String, f64, bool)>::new();
+    for (_document, chunk) in sources {
+        let title_hints = document_chunk_section_title_hints(chunk);
+        if title_hints.is_empty() {
+            continue;
+        }
+        let toc_like = document_chunk_looks_like_toc_or_index(chunk);
+        for title in title_hints {
+            let original_overlap_score =
+                lexical_text_score(&title, &original_query_weights, original_query_norm);
+            let domain_score = lexical_domain_hint_score(&title, &expanded_prompt);
+            if original_overlap_score <= 0.0 && domain_score <= 0.0 {
+                continue;
+            }
+            let score = lexical_text_score(&title, &query_weights, query_norm)
+                + domain_score
+                + original_overlap_score;
+            if score > 0.0 {
+                scored_titles.push((title, score, toc_like));
+            }
+        }
+    }
+    scored_titles.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    let mut seen = BTreeSet::new();
+    scored_titles
+        .into_iter()
+        .filter_map(|(title, _score, _toc_like)| {
+            if seen.insert(title.clone()) {
+                Some(format!("{title} {expanded_prompt}"))
+            } else {
+                None
+            }
+        })
+        .take(limit)
+        .collect()
+}
+
+fn document_chunk_looks_like_toc_or_index(chunk: &DocumentChunk) -> bool {
+    let content = chunk.content.trim();
+    if content.is_empty() {
+        return false;
+    }
+    let dotted_leader_count = content.matches("....").count();
+    let has_page_tail = content
+        .split_whitespace()
+        .last()
+        .is_some_and(|tail| tail.chars().all(|ch| ch.is_ascii_digit()) && tail.len() <= 4);
+    let short_line_count = content
+        .lines()
+        .filter(|line| line.trim().len() <= 80)
+        .count();
+    let line_count = content.lines().count().max(1);
+    dotted_leader_count >= 1
+        || (content.contains("目录") && short_line_count >= line_count.saturating_sub(1))
+        || (has_page_tail && content.contains('…'))
+}
+
+fn lexical_original_query_signal_overlap_score(content: &str, prompt: &str) -> f64 {
+    let lower_content = content.to_ascii_lowercase();
+    let mut seen = BTreeSet::new();
+    let mut cjk_score: f64 = 0.0;
+    let mut ascii_score: f64 = 0.0;
+    for term in lexical_query_term_weights(prompt).keys() {
+        if !seen.insert(term.clone()) || !assistant_run_reduced_query_term_is_signal(term) {
+            continue;
+        }
+        let char_count = term.chars().count();
+        if term.chars().all(|value| is_cjk_query_token_char(value)) {
+            if char_count >= 2 && content.contains(term) {
+                cjk_score += (0.018 * char_count.min(6) as f64).min(0.08);
+            }
+        } else if lower_content.contains(&term.to_ascii_lowercase()) {
+            ascii_score += 0.018;
+        }
+    }
+    cjk_score.min(0.24) + ascii_score.min(0.06)
 }
 
 fn retrieval_evidence_search_text(evidence: &RetrievalEvidence) -> String {
@@ -57743,8 +59055,13 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
         || query.contains("药品")
         || (query.contains("药") && (query.contains("核对") || query.contains("发放")));
     let elder_fall_query = prompt_contains_elder_fall_signal(query);
+    let elder_death_query = prompt_contains_elder_death_signal(query);
     let nursing_handover_query = prompt_contains_nursing_handover_signal(query);
-    if !medication_dispense_query && !elder_fall_query && !nursing_handover_query {
+    if !medication_dispense_query
+        && !elder_fall_query
+        && !elder_death_query
+        && !nursing_handover_query
+    {
         return 0.0;
     }
     if content.contains("................................................................") {
@@ -57805,6 +59122,34 @@ fn lexical_domain_hint_score(content: &str, query: &str) -> f64 {
                 || content.contains("医护人员"))
         {
             score += 0.3;
+        }
+    }
+
+    if elder_death_query {
+        if content.contains("离世")
+            || content.contains("去世")
+            || content.contains("死亡")
+            || content.contains("身故")
+            || content.contains("病故")
+            || content.contains("善后")
+            || content.contains("遗体")
+            || content.contains("殡仪")
+            || content.contains("殡葬")
+        {
+            score += 0.65;
+        }
+        if prompt_requests_procedure_or_action(query)
+            && (content.contains("生命体征")
+                || content.contains("医护确认")
+                || content.contains("通知家属")
+                || content.contains("联系家属")
+                || content.contains("保护现场")
+                || content.contains("遗物")
+                || content.contains("交接")
+                || content.contains("记录")
+                || content.contains("归档"))
+        {
+            score += 0.35;
         }
     }
 
@@ -58013,6 +59358,46 @@ fn extend_lexical_domain_hint_tokens(content: &str, tokens: &mut Vec<String>) {
             "记录",
             "报告",
             "现场评估",
+        ] {
+            tokens.push(token.to_string());
+        }
+    }
+
+    let elder_death_context = prompt_contains_elder_death_signal(content)
+        || content.contains("医护确认")
+        || content.contains("生命体征")
+        || content.contains("保护现场")
+        || content.contains("联系家属")
+        || content.contains("殡仪")
+        || content.contains("遗物交接")
+        || content.contains("记录归档");
+    if elder_death_context {
+        for token in [
+            "离世",
+            "去世",
+            "死亡",
+            "身故",
+            "病故",
+            "过世",
+            "善后",
+            "殡葬",
+            "遗体",
+            "遗物",
+            "生命体征",
+            "医护确认",
+            "现场保护",
+            "保护现场",
+            "通知负责人",
+            "通知家属",
+            "联系家属",
+            "家属沟通",
+            "家属对接",
+            "死亡证明",
+            "殡仪接运",
+            "遗物清点",
+            "遗物交接",
+            "记录归档",
+            "事件报告",
         ] {
             tokens.push(token.to_string());
         }
@@ -62503,11 +63888,19 @@ fn to_workflow_event_view(event: WorkflowEventRecord) -> WorkflowEventView {
 }
 
 fn to_workflow_task_view(task: WorkflowTask) -> WorkflowTaskView {
+    let logical_queue = workflow_task_logical_queue(&task);
+    let logical_task_key = workflow_task_logical_task_key(&task);
+    let remote_task_id = workflow_task_remote_task_id(&task.payload);
+    let next_poll_at = workflow_task_next_poll_at(&task.payload);
     WorkflowTaskView {
         id: task.id,
         status: task.status,
         queue: task.queue,
         task_key: task.task_key,
+        logical_queue,
+        logical_task_key,
+        remote_task_id,
+        next_poll_at,
         attempt: task.attempt,
         max_attempts: task.max_attempts,
         available_at: task.available_at,
@@ -62517,6 +63910,258 @@ fn to_workflow_task_view(task: WorkflowTask) -> WorkflowTaskView {
         updated_at: task.updated_at,
         payload: task.payload,
     }
+}
+
+fn workflow_task_logical_queue(task: &WorkflowTask) -> Option<String> {
+    task.payload
+        .get("logical_queue")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| match task.task_key.as_str() {
+            "generate_static_page_image" => Some("static_page_image_preview".to_string()),
+            "render_static_page" => Some("static_page_render".to_string()),
+            "run_codex_host_task" => {
+                if workflow_task_is_static_page_publish(task) {
+                    Some("static_page_publish".to_string())
+                } else {
+                    Some("codex_fixed_task".to_string())
+                }
+            }
+            _ => None,
+        })
+}
+
+fn workflow_task_logical_task_key(task: &WorkflowTask) -> Option<String> {
+    task.payload
+        .get("logical_task_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| match task.task_key.as_str() {
+            "generate_static_page_image" => Some("submit_static_page_image_preview".to_string()),
+            "render_static_page" => Some("render_static_page".to_string()),
+            "run_codex_host_task" => {
+                let has_remote_task = workflow_task_remote_task_id(&task.payload).is_some();
+                let is_static_page_publish = workflow_task_is_static_page_publish(task);
+                Some(match (is_static_page_publish, has_remote_task) {
+                    (true, true) => "poll_static_page_publish".to_string(),
+                    (true, false) => "submit_static_page_publish".to_string(),
+                    (false, true) => "poll_codex_fixed_task".to_string(),
+                    (false, false) => "submit_codex_fixed_task".to_string(),
+                })
+            }
+            _ => None,
+        })
+}
+
+fn workflow_task_is_static_page_publish(task: &WorkflowTask) -> bool {
+    task.task_key == "run_codex_host_task"
+        && workflow_task_codex_template_id(&task.payload).as_deref()
+            == Some("static_page_image2_data_publish")
+}
+
+fn workflow_task_codex_template_id(payload: &Value) -> Option<String> {
+    ["/template_id", "/capability", "/fixed_task/template_id"]
+        .iter()
+        .find_map(|pointer| {
+            payload
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn workflow_task_remote_task_id(payload: &Value) -> Option<String> {
+    [
+        "/static_page_image_orchestrator/task_id",
+        "/cloudflare_orchestrator/task_id",
+        "/remote_task_id",
+    ]
+    .iter()
+    .find_map(|pointer| {
+        payload
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn workflow_task_next_poll_at(payload: &Value) -> Option<DateTime<Utc>> {
+    [
+        "/static_page_image_orchestrator/next_poll_at",
+        "/cloudflare_orchestrator/next_poll_at",
+        "/next_poll_at",
+    ]
+    .iter()
+    .find_map(|pointer| {
+        payload
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+    })
+}
+
+#[derive(Default)]
+struct WorkflowTaskQueueStatsAccumulator {
+    physical_queues: BTreeSet<String>,
+    task_count: u64,
+    queued: u64,
+    running: u64,
+    retrying: u64,
+    succeeded: u64,
+    failed: u64,
+    cancelled: u64,
+    dead_lettered: u64,
+    next_available_at: Option<DateTime<Utc>>,
+    task_keys: BTreeMap<String, WorkflowTaskKeyStatsAccumulator>,
+}
+
+#[derive(Default)]
+struct WorkflowTaskKeyStatsAccumulator {
+    physical_task_keys: BTreeSet<String>,
+    task_count: u64,
+    queued: u64,
+    running: u64,
+    retrying: u64,
+    succeeded: u64,
+    failed: u64,
+    cancelled: u64,
+    dead_lettered: u64,
+    next_available_at: Option<DateTime<Utc>>,
+}
+
+fn summarize_workflow_task_queue_stats(
+    generated_at: DateTime<Utc>,
+    execution_count: usize,
+    tasks: &[WorkflowTaskView],
+) -> contracts::WorkflowTaskQueueStatsView {
+    let mut queues = BTreeMap::<String, WorkflowTaskQueueStatsAccumulator>::new();
+    for task in tasks {
+        let logical_queue = task
+            .logical_queue
+            .clone()
+            .unwrap_or_else(|| task.queue.clone());
+        let logical_task_key = task
+            .logical_task_key
+            .clone()
+            .unwrap_or_else(|| task.task_key.clone());
+        let queue = queues.entry(logical_queue).or_default();
+        queue.physical_queues.insert(task.queue.clone());
+        record_workflow_task_queue_stats(queue, task);
+        let task_key = queue.task_keys.entry(logical_task_key).or_default();
+        task_key.physical_task_keys.insert(task.task_key.clone());
+        record_workflow_task_key_stats(task_key, task);
+    }
+
+    contracts::WorkflowTaskQueueStatsView {
+        generated_at,
+        execution_count: execution_count as u64,
+        task_count: tasks.len() as u64,
+        queues: queues
+            .into_iter()
+            .map(
+                |(logical_queue, accumulator)| contracts::WorkflowTaskQueueSummaryView {
+                    logical_queue,
+                    physical_queues: accumulator.physical_queues.into_iter().collect(),
+                    task_count: accumulator.task_count,
+                    queued: accumulator.queued,
+                    running: accumulator.running,
+                    retrying: accumulator.retrying,
+                    succeeded: accumulator.succeeded,
+                    failed: accumulator.failed,
+                    cancelled: accumulator.cancelled,
+                    dead_lettered: accumulator.dead_lettered,
+                    next_available_at: accumulator.next_available_at,
+                    task_keys: accumulator
+                        .task_keys
+                        .into_iter()
+                        .map(
+                            |(logical_task_key, task_key)| contracts::WorkflowTaskKeySummaryView {
+                                logical_task_key,
+                                physical_task_keys: task_key
+                                    .physical_task_keys
+                                    .into_iter()
+                                    .collect(),
+                                task_count: task_key.task_count,
+                                queued: task_key.queued,
+                                running: task_key.running,
+                                retrying: task_key.retrying,
+                                succeeded: task_key.succeeded,
+                                failed: task_key.failed,
+                                cancelled: task_key.cancelled,
+                                dead_lettered: task_key.dead_lettered,
+                                next_available_at: task_key.next_available_at,
+                            },
+                        )
+                        .collect(),
+                },
+            )
+            .collect(),
+    }
+}
+
+fn record_workflow_task_queue_stats(
+    accumulator: &mut WorkflowTaskQueueStatsAccumulator,
+    task: &WorkflowTaskView,
+) {
+    accumulator.task_count += 1;
+    match task.status {
+        domain_model::WorkflowTaskStatus::Queued => {
+            accumulator.queued += 1;
+            accumulator.next_available_at =
+                earliest_optional_datetime(accumulator.next_available_at, task.available_at);
+        }
+        domain_model::WorkflowTaskStatus::Claimed => accumulator.running += 1,
+        domain_model::WorkflowTaskStatus::Succeeded => accumulator.succeeded += 1,
+        domain_model::WorkflowTaskStatus::Failed => accumulator.failed += 1,
+        domain_model::WorkflowTaskStatus::Cancelled => accumulator.cancelled += 1,
+        domain_model::WorkflowTaskStatus::DeadLettered => accumulator.dead_lettered += 1,
+    }
+    if workflow_task_view_is_retrying(task) {
+        accumulator.retrying += 1;
+    }
+}
+
+fn record_workflow_task_key_stats(
+    accumulator: &mut WorkflowTaskKeyStatsAccumulator,
+    task: &WorkflowTaskView,
+) {
+    accumulator.task_count += 1;
+    match task.status {
+        domain_model::WorkflowTaskStatus::Queued => {
+            accumulator.queued += 1;
+            accumulator.next_available_at =
+                earliest_optional_datetime(accumulator.next_available_at, task.available_at);
+        }
+        domain_model::WorkflowTaskStatus::Claimed => accumulator.running += 1,
+        domain_model::WorkflowTaskStatus::Succeeded => accumulator.succeeded += 1,
+        domain_model::WorkflowTaskStatus::Failed => accumulator.failed += 1,
+        domain_model::WorkflowTaskStatus::Cancelled => accumulator.cancelled += 1,
+        domain_model::WorkflowTaskStatus::DeadLettered => accumulator.dead_lettered += 1,
+    }
+    if workflow_task_view_is_retrying(task) {
+        accumulator.retrying += 1;
+    }
+}
+
+fn workflow_task_view_is_retrying(task: &WorkflowTaskView) -> bool {
+    matches!(task.status, domain_model::WorkflowTaskStatus::Queued)
+        && (task.attempt > 0 || task.error.is_some() || task.next_poll_at.is_some())
+}
+
+fn earliest_optional_datetime(
+    current: Option<DateTime<Utc>>,
+    candidate: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    Some(current.map_or(candidate, |value| value.min(candidate)))
 }
 
 fn to_llm_invocation_view(llm_invocation: LlmInvocation) -> LlmInvocationView {
@@ -69572,6 +71217,7 @@ mod tests {
 
         let input = build_assistant_run_provider_input(&request);
         assert!(input.contains("本轮外部回答要求"));
+        assert!(input.contains("输出格式强约束"));
         assert!(input.contains("Markdown 表格"));
         assert!(input.contains("请面向业务用户，用本轮文档回答"));
     }
@@ -70431,6 +72077,54 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_reply_reports_image_preview_running_poll() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_pipeline_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "status": "static_page_image2_auto_publish_pending",
+                    "auto_publish_after_preview": true,
+                    "template_id": "static_page_image2_data_publish",
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "static_page_image_job.running",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "orchestrator_task_id": "task-image-1",
+                    "status": "running",
+                    "queue_position": 2,
+                    "poll_attempt": 3,
+                    "poll_after_seconds": 15,
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("running progress reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_image_preview_running")
+        );
+        let card = reply.card.expect("status card");
+        assert_eq!(card["type"], json!("v3_static_page_image2_preview_running"));
+        assert_eq!(card["orchestrator_task_id"], json!("task-image-1"));
+        assert_eq!(card["queue_position"], json!(2));
+        assert_eq!(card["poll_attempt"], json!(3));
+    }
+
+    #[test]
     fn external_channel_static_page_reply_reports_codex_publish_running() {
         let run_id = AssistantRunId::new();
         let draft_id = StaticPageDraftId::new();
@@ -70545,6 +72239,49 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_reply_reports_codex_publish_pending_as_running() {
+        let run_id = AssistantRunId::new();
+        let codex_execution_id = WorkflowExecutionId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "codex_host.fixed_task.queued",
+                json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "queued",
+                    "workflow_execution_id": codex_execution_id.to_string(),
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "codex_host_task.poll_retry",
+                json!({
+                    "status": "processing",
+                    "reason": "cloudflare_orchestrator_pending",
+                    "attempt": 7,
+                    "retryable": true,
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("running publish reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_publish_running")
+        );
+        let card = reply.card.expect("status card");
+        assert_eq!(
+            card["runtime_event"]["reason"],
+            json!("cloudflare_orchestrator_pending")
+        );
+        assert_eq!(card["poll_after_seconds"], json!(15));
+    }
+
+    #[test]
     fn external_channel_static_page_reply_reports_codex_publish_failure_after_publish_queued() {
         let run_id = AssistantRunId::new();
         let draft_id = StaticPageDraftId::new();
@@ -70598,6 +72335,77 @@ mod tests {
             card["validation"]["reason"],
             json!("validation_report_required")
         );
+    }
+
+    #[test]
+    fn external_channel_static_page_reply_prefers_publish_failed_business_event() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let codex_execution_id = WorkflowExecutionId::new();
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_publish_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "codex_host_workflow_execution_id": codex_execution_id.to_string(),
+                    "template_id": "static_page_image2_data_publish",
+                    "publish_mode": "new_generated_artifact_only",
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "codex_host.fixed_task.rejected",
+                json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "rejected",
+                    "workflow_execution_id": codex_execution_id.to_string(),
+                    "validation": {
+                        "accepted": false,
+                        "reason": "validation_report_required",
+                    },
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                3,
+                "assistant_run.external_channel_static_page_publish_failed",
+                json!({
+                    "conversation_external_id": "conv-static-page",
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "codex_host_workflow_execution_id": codex_execution_id.to_string(),
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "static_page_publish_failed",
+                    "retryable": true,
+                    "error": {
+                        "code": "validation_report_required",
+                        "message": "validation_report_required"
+                    },
+                    "validation": {
+                        "accepted": false,
+                        "reason": "validation_report_required",
+                    },
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("failed publish reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_publish_failed")
+        );
+        let card = reply.card.expect("status card");
+        assert_eq!(card["status"], json!("static_page_publish_failed"));
+        assert_eq!(card["error"]["code"], json!("validation_report_required"));
+        assert_eq!(card["draft_id"], json!(draft_id.to_string()));
+        assert_eq!(card["image_job_id"], json!(image_job_id.to_string()));
     }
 
     #[tokio::test]
@@ -70763,6 +72571,171 @@ mod tests {
             Some(render_output_id)
         );
         assert_eq!(queued.payload["status_url"], card["status_url"]);
+    }
+
+    #[tokio::test]
+    async fn external_channel_static_page_pipeline_returns_provisional_link_when_codex_publish_ready(
+    ) {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external static-page provisional publish test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+        let artifact_root = std::env::temp_dir()
+            .join("ai-data-platform-v3-tests")
+            .join(format!("generated-artifacts-{}", Uuid::new_v4()));
+        let artifact_root = artifact_root.display().to_string();
+        let _artifact_root = TestEnvVarRestore::set("V3_GENERATED_ARTIFACT_ROOT", &artifact_root);
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-static-page-provisional-{}", Uuid::new_v4()),
+                "External Static Page Provisional Publish Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-static-provisional".to_string();
+        message.message_external_id = "msg-static-provisional-001".to_string();
+        message.text = Some("随便生成一个报表我看看".to_string());
+        message.output_format = Some("rich_text".to_string());
+        message.render_mode = Some("artifact".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        let assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let now = Utc::now();
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: assistant_request.prompt.clone(),
+                    startup_briefing: assistant_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: assistant_request
+                        .selected_scope
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    scope_candidates: json!(assistant_request.scope_candidates.clone()),
+                    context_policy: assistant_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+
+        let reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &run,
+            &assistant_request,
+            &message,
+            now,
+        )
+        .await
+        .expect("static-page pipeline should complete")
+        .expect("static-page reply should be returned");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.artifact_links.len(), 1);
+        let public_url = reply.artifact_links[0].clone();
+        assert!(public_url.contains("/generated-artifacts/database-static-pages/external-channel/"));
+        let card = reply.card.expect("card should be returned");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["codex_auto_publish_ready"], json!(true));
+        assert_eq!(card["auto_publish_after_preview"], json!(true));
+        assert_eq!(card["direct_html_fallback"], json!(true));
+        assert_eq!(card["provisional_direct_html"], json!(true));
+        assert_eq!(
+            card["codex_final_status"],
+            json!("static_page_image2_auto_publish_pending")
+        );
+        assert_eq!(card["poll_after_seconds"], json!(15));
+        assert!(reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("先生成可发送的静态页链接"));
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let queued = events
+            .iter()
+            .find(|event| {
+                event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+            })
+            .expect("pipeline event should be recorded");
+        assert_eq!(queued.payload["public_url"], json!(public_url));
+        assert_eq!(queued.payload["codex_auto_publish_ready"], json!(true));
+        assert_eq!(queued.payload["provisional_direct_html"], json!(true));
+
+        let restored = external_channel_static_page_reply_from_events(
+            &events,
+            &message.conversation_external_id,
+        )
+        .expect("status reply should restore provisional artifact link");
+        assert_eq!(restored.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        let restored_card = restored.card.expect("restored card should be returned");
+        assert_eq!(restored_card["public_url"], json!(public_url));
+        assert_eq!(restored_card["provisional_direct_html"], json!(true));
+        assert_eq!(
+            restored_card["codex_final_status"],
+            json!("static_page_image2_auto_publish_pending")
+        );
+        assert_eq!(restored_card["poll_after_seconds"], json!(15));
+        assert!(restored
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("后台继续发布"));
     }
 
     #[test]
@@ -76052,6 +78025,70 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_answer_quality_autofix_preserves_recovery_followup_context() {
+        let request = CreateAssistantRunRequest {
+            prompt: "老年人摔倒后怎么办".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["dataset-1"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "indexedEvidenceCount": 0,
+                "fallbackChunkCount": 1,
+                "datasetEntityScanCount": 0,
+                "spreadsheetRowAnalysisCount": 0,
+                "mediaContextCount": 0,
+                "conversationMemoryItemCount": 0,
+                "documentNotReadyCount": 0,
+                "documentFailedCount": 0,
+                "documentReparsingCount": 0,
+                "notes": ["fallback_visible_document_chunks_used"]
+            },
+            "recovery_followup": {
+                "status": "answer_with_current_evidence_then_followup_if_needed",
+                "question": "我可以先按已检索到的防跌倒/突发事件相关章节整理流程；如需核对原文，请补充制度名称、章节/页码或关键词。"
+            },
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "source": "document_chunk_fallback",
+                "fallback_reason": "weak_indexed_evidence_expansion",
+                "content_excerpt": "防跌倒标识表示该老年人易发生跌倒，应有防护措施。"
+            }]
+        });
+        let output_artifacts = vec![json!({
+            "type": "assistant_message",
+            "content": "供料中未直接检索到老年人摔倒后的处理流程。"
+        })];
+
+        let package = assistant_run_answer_quality_low_quality_case_package(
+            AssistantRunId::new(),
+            &request,
+            &json!({"mode": "user_selected", "datasets": ["dataset-1"]}),
+            &evidence_state,
+            &output_artifacts,
+            &[],
+        )
+        .expect("weak fallback answer should collect case");
+
+        assert_eq!(
+            package["evidence_summary"]["recovery_followup"]["status"],
+            json!("answer_with_current_evidence_then_followup_if_needed")
+        );
+        assert!(package["evidence_summary"]["recovery_followup"]["question"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("补充制度名称"));
+    }
+
+    #[test]
     fn answer_quality_autofix_fixed_task_builds_allowlisted_package() {
         let case_package = json!({
             "template_id": "answer_quality_autofix",
@@ -76820,6 +78857,109 @@ retrieve_evidence:
     }
 
     #[test]
+    fn assistant_run_recovery_followup_guides_empty_procedure_supply() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": ["00000000-0000-0000-0000-000000000001"],
+        });
+        let supplied_items: Vec<Value> = Vec::new();
+        let supplied_datasets = vec![json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "title": "养老资料",
+        })];
+        let supply_quality = assistant_run_supply_quality_report(
+            &selected_scope,
+            true,
+            &supplied_items,
+            &supplied_datasets,
+            &[],
+            &[],
+            0,
+            8,
+        );
+
+        let followup = assistant_run_recovery_followup_for_weak_supply(
+            &selected_scope,
+            "长者在院离世，现场处置、家属对接流程",
+            "empty",
+            &supplied_items,
+            &supply_quality,
+            &[],
+        )
+        .expect("empty procedure supply should get a recovery follow-up");
+
+        assert_eq!(followup["status"], json!("needs_user_clarification"));
+        assert_eq!(followup["can_continue_same_conversation"], json!(true));
+        assert!(followup["question"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("制度名称"));
+
+        let brief = build_assistant_run_model_supply_brief(&json!({
+            "status": "empty",
+            "supply_quality": supply_quality,
+            "recovery_followup": followup,
+            "supplied_items": [],
+        }))
+        .expect("supply brief should be built");
+        assert!(brief.contains("证据恢复追问"));
+        assert!(brief.contains("不能只说"));
+        assert!(brief.contains("沿用本会话"));
+    }
+
+    #[test]
+    fn assistant_run_recovery_followup_prefers_answer_first_for_weak_expansion() {
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": ["00000000-0000-0000-0000-000000000001"],
+        });
+        let supplied_items = vec![json!({
+            "type": "retrieval_evidence",
+            "source": "document_chunk_fallback",
+            "fallback_reason": "weak_indexed_evidence_expansion",
+            "source_locator": "养老手册#page=81",
+            "content_excerpt": "突发事件应急预防与处置：事故处理、通知家属、记录归档。"
+        })];
+        let supplied_datasets = vec![json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "title": "养老资料",
+        })];
+        let supply_quality = assistant_run_supply_quality_report(
+            &selected_scope,
+            true,
+            &supplied_items,
+            &supplied_datasets,
+            &[],
+            &[],
+            1,
+            8,
+        );
+
+        let followup = assistant_run_recovery_followup_for_weak_supply(
+            &selected_scope,
+            "老年人摔倒后怎么办",
+            "supplied",
+            &supplied_items,
+            &supply_quality,
+            &[],
+        )
+        .expect("weak expanded procedure evidence should get answer-first follow-up guidance");
+
+        assert_eq!(
+            followup["status"],
+            json!("answer_with_current_evidence_then_followup_if_needed")
+        );
+        assert_eq!(
+            followup["trigger"],
+            json!("weak_procedure_evidence_expansion")
+        );
+        assert!(followup["question"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("先按已检索到"));
+    }
+
+    #[test]
     fn assistant_run_document_entity_scan_detects_elevator_point_lists() {
         assert!(prompt_requests_document_entity_scan(
             "智能梯控/电梯点位有哪些？请按楼层和位置出表。"
@@ -77005,6 +79145,41 @@ retrieve_evidence:
         assert!(!fallback.contains("未形成可核验结论"));
     }
 
+    #[test]
+    fn assistant_run_answer_quality_gate_uses_spreadsheet_json_when_requested() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这份考勤表里最近有没缺勤的人？工时最长和最短分别是谁？请输出 JSON。"
+                .to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: Some(json!({
+                "answer_policy": {
+                    "output_format": {"format": "json"}
+                }
+            })),
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_spreadsheet_row_analysis_evidence_state();
+
+        let fallback = assistant_run_answer_quality_exhausted_controlled_answer(
+            &evidence_state,
+            &request,
+            "model_judge_customer_unsafe_answer",
+        );
+        let parsed: Value =
+            serde_json::from_str(&fallback).expect("controlled answer should be valid JSON");
+
+        assert_eq!(parsed["status"], json!("answered"));
+        assert_eq!(parsed["source"], json!("spreadsheet_row_analysis"));
+        assert_eq!(parsed["documents"][0], json!("A3-坐班0900考勤记录.xlsx"));
+        assert_eq!(parsed["absence_rows"][0]["employee"], json!("A5"));
+        assert_eq!(parsed["work_hour_extremes"][0]["kind"], json!("longest"));
+        assert!(!fallback.contains("| 类别 |"));
+    }
+
     fn assistant_run_test_spreadsheet_row_analysis_evidence_state() -> Value {
         json!({
             "status": "supplied",
@@ -77108,6 +79283,39 @@ retrieve_evidence:
         assert!(fallback.contains("| B1F | 东电梯 | B1F东电梯 | 4301116 | 电梯 |"));
         assert!(fallback.contains("| B2 | 观光电梯口 | B2观光电梯口 | 4301101 | 电梯 |"));
         assert!(!fallback.contains("未形成可核验结论"));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_gate_uses_point_rows_json_when_requested() {
+        let request = CreateAssistantRunRequest {
+            prompt: "智能梯控/电梯点位有哪些？请输出 JSON。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: Some(json!({
+                "answer_policy": {
+                    "output_format": {"format": "json"}
+                }
+            })),
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = assistant_run_test_point_list_evidence_state();
+
+        let fallback = assistant_run_answer_quality_exhausted_controlled_answer(
+            &evidence_state,
+            &request,
+            "model_judge_customer_unsafe_answer",
+        );
+        let parsed: Value =
+            serde_json::from_str(&fallback).expect("controlled answer should be valid JSON");
+
+        assert_eq!(parsed["status"], json!("answered"));
+        assert_eq!(parsed["source"], json!("retrieval_point_list"));
+        assert_eq!(parsed["rows"][0]["name"], json!("B1F东电梯"));
+        assert_eq!(parsed["rows"][0]["areaid"], json!("4301116"));
+        assert!(!fallback.contains("| 楼层 |"));
     }
 
     fn assistant_run_test_point_list_evidence_state() -> Value {
@@ -82620,6 +84828,115 @@ retrieve_evidence:
         assert_eq!(
             static_page_artifact["artifact_manifest"]["safety"]["overwrite_allowed"],
             json!(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_static_page_publish_failure_appends_failed_event() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external static-page publish failure test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-static-page-publish-failure-{}", Uuid::new_v4()),
+                "External Static Page Publish Failure Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let (run, draft, job, _) = create_external_static_page_auto_publish_fixture(
+            &state,
+            Some("static-page-previews/xinbai-final.png"),
+        )
+        .await;
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.assistant_run_id = Some(run.id.to_string());
+        fixed_task.draft_id = Some(draft.id.to_string());
+        fixed_task.image2["image_job_id"] = json!(job.id.to_string());
+        fixed_task.image2["preview_asset_key"] = json!("static-page-previews/xinbai-final.png");
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "failed",
+            "human_review_reason": "cloudflare_orchestrator_poll_timeout",
+            "failure_type": "transient_remote_publish_failure"
+        });
+        let mut execution = codex_host_fixed_task_test_execution(fixed_task, Some(output));
+        execution.tenant_id = state.tenant_id;
+        let workflow_event =
+            codex_host_fixed_task_test_workflow_event(execution.id, "workflow.step_completed");
+        let event = codex_host_fixed_task_transition_audit_event(&execution, &workflow_event, 0)
+            .expect("rejected event");
+
+        maybe_record_external_static_page_publish_failed(
+            &state.storage,
+            state.tenant_id,
+            &execution,
+            &event,
+        )
+        .await
+        .expect("failed event should append");
+        maybe_record_external_static_page_publish_failed(
+            &state.storage,
+            state.tenant_id,
+            &execution,
+            &event,
+        )
+        .await
+        .expect("failed event should dedupe");
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let failed_events = events
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.external_channel_static_page_publish_failed"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(failed_events.len(), 1);
+        let payload = &failed_events[0].payload;
+        assert_eq!(payload["draft_id"], json!(draft.id.to_string()));
+        assert_eq!(payload["image_job_id"], json!(job.id.to_string()));
+        assert_eq!(
+            payload["codex_host_workflow_execution_id"],
+            json!(execution.id.to_string())
+        );
+        assert_eq!(payload["retryable"], json!(true));
+        assert_eq!(
+            payload["error"]["code"],
+            json!("cloudflare_orchestrator_poll_timeout")
+        );
+        assert_eq!(
+            payload["source_refs"]["conversation_external_id"],
+            json!("chat-static-page")
+        );
+
+        let reply = external_channel_static_page_reply_from_events(&events, "chat-static-page")
+            .expect("failed status reply");
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_publish_failed")
+        );
+        let card = reply.card.expect("failed card");
+        assert_eq!(
+            card["error"]["message"],
+            json!("cloudflare_orchestrator_poll_timeout")
         );
     }
 
@@ -88142,11 +90459,52 @@ retrieve_evidence:
             "react_step_limit",
         );
 
-        assert!(input.contains("必须直接自然语言作答"));
+        assert!(input.contains("必须直接给客户可展示答案"));
         assert!(input.contains("长者在院离世"));
         assert!(input.contains("养老机构突发事件应急处置"));
         assert!(input.contains("突发事件得到有效处置后"));
         assert!(input.contains("不要输出 JSON"));
+    }
+
+    #[test]
+    fn assistant_run_compact_natural_fallback_honors_external_json_output_policy() {
+        let input = build_assistant_run_react_compact_natural_fallback_input(
+            "请用 JSON 输出长者在院离世处置流程",
+            &json!({
+                "status": "supplied",
+                "selected_scope": {
+                    "answer_policy": {
+                        "output_format": {
+                            "format": "json",
+                            "label": "JSON",
+                            "model_rule": "只输出合法 JSON，不要使用 Markdown 代码围栏。"
+                        },
+                        "render_mode": "normal"
+                    }
+                },
+                "supplied_items": [{
+                    "type": "retrieval_evidence",
+                    "summary": "养老机构突发事件应急处置",
+                    "source_locator": "document://doc-1/chunks/211",
+                    "content_excerpt": "发现异常应保护现场、通知负责人、联系家属并记录归档。"
+                }],
+                "supply_quality": {
+                    "status": "partial"
+                }
+            }),
+            &[json!({
+                "status": "completed",
+                "action_type": "retrieve_evidence",
+                "items": [],
+                "supplied_count": 1
+            })],
+            "react_step_limit",
+        );
+
+        assert!(input.contains("输出格式强约束"));
+        assert!(input.contains("最终客户答案必须遵守本轮 JSON 输出格式要求"));
+        assert!(input.contains("只输出合法 JSON"));
+        assert!(!input.contains("不要输出 JSON、observation"));
     }
 
     #[test]
@@ -94113,6 +96471,82 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn assistant_run_ordinary_chat_drops_unavailable_selected_dataset() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant unavailable selected dataset test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-unavailable-selected-dataset-{}", Uuid::new_v4()),
+                "Assistant Unavailable Selected Dataset Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("visible-general-{}", Uuid::new_v4()),
+                    title: "可见普通资料库".to_string(),
+                    description: Some(
+                        "A visible dataset that should not be selected implicitly.".to_string(),
+                    ),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("visible dataset should be created");
+
+        let stale_dataset_id = DatasetId::new();
+        let (_, Json(response)) = create_assistant_run(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "你好".to_string(),
+                local_thread_id: Some("ordinary-stale-dataset-thread".to_string()),
+                startup_briefing: Some(json!({})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [stale_dataset_id],
+                    "intent": "ordinary_chat",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await
+        .expect("assistant run should ignore stale selected dataset");
+
+        assert_eq!(response.selected_scope["mode"], json!("ordinary_chat"));
+        assert_eq!(response.selected_scope["datasets"], json!([]));
+        assert_eq!(response.selected_scope["selected"], json!([]));
+        assert_eq!(
+            response.selected_scope["ignored_dataset_ids"],
+            json!([stale_dataset_id.to_string()])
+        );
+        assert_eq!(response.evidence_state["status"], json!("not_requested"));
+        assert_eq!(response.evidence_state["supplied_items"], json!([]));
+    }
+
+    #[tokio::test]
     async fn assistant_run_supplies_ranked_retrieval_evidence_for_selected_scope() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
@@ -97366,6 +99800,18 @@ retrieve_evidence:
             .expect("legacy public duplicate lookup should succeed")
             .expect("legacy public duplicate should remain");
         assert_eq!(claimed_legacy_document.owner_user_id, Some(owner_user_id));
+        let claimed_legacy_dataset = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, legacy_public_dataset.id)
+            .await
+            .expect("legacy public dataset lookup should succeed")
+            .expect("legacy public dataset should remain");
+        assert_eq!(claimed_legacy_dataset.owner_user_id, Some(owner_user_id));
+        assert_eq!(
+            claimed_legacy_dataset.visibility,
+            DatasetVisibility::Private
+        );
         let dataset_resolution = document
             .metadata
             .get("external_document_parse")
@@ -97389,6 +99835,15 @@ retrieve_evidence:
         assert!(!listed_datasets
             .iter()
             .any(|dataset| dataset.id == created_dataset.id));
+        assert!(!listed_datasets
+            .iter()
+            .any(|dataset| dataset.id == legacy_public_dataset.id));
+        let Json(listed_documents) = list_documents(State(state.clone()), HeaderMap::new())
+            .await
+            .expect("standard document list should load");
+        assert!(!listed_documents
+            .iter()
+            .any(|document| document.id == legacy_public_document.id));
 
         let source = load_external_source_connection(&state, "src-auto-docs")
             .await
@@ -102990,6 +105445,170 @@ retrieve_evidence:
     }
 
     #[test]
+    fn workflow_task_view_exposes_logical_remote_poll_state() {
+        let now = Utc::now();
+        let next_poll_at = now + Duration::seconds(15);
+        let task = WorkflowTask {
+            id: domain_model::WorkflowTaskId::new(),
+            tenant_id: TenantId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            queue: "static_page".to_string(),
+            task_key: "generate_static_page_image".to_string(),
+            payload: json!({
+                "logical_queue": "static_page_image_preview",
+                "logical_task_key": "poll_static_page_image_preview",
+                "static_page_image_orchestrator": {
+                    "task_id": "task-static-page-1",
+                    "next_poll_at": next_poll_at.to_rfc3339()
+                }
+            }),
+            status: domain_model::WorkflowTaskStatus::Queued,
+            attempt: 3,
+            max_attempts: 3,
+            available_at: now,
+            claimed_at: None,
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let view = to_workflow_task_view(task);
+
+        assert_eq!(
+            view.logical_queue.as_deref(),
+            Some("static_page_image_preview")
+        );
+        assert_eq!(
+            view.logical_task_key.as_deref(),
+            Some("poll_static_page_image_preview")
+        );
+        assert_eq!(view.remote_task_id.as_deref(), Some("task-static-page-1"));
+        assert_eq!(view.next_poll_at, Some(next_poll_at));
+    }
+
+    #[test]
+    fn workflow_task_view_infers_static_page_publish_logical_queue_from_legacy_payload() {
+        let now = Utc::now();
+        let next_poll_at = now + Duration::seconds(30);
+        let task = WorkflowTask {
+            id: domain_model::WorkflowTaskId::new(),
+            tenant_id: TenantId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            queue: "codex_host".to_string(),
+            task_key: "run_codex_host_task".to_string(),
+            payload: json!({
+                "template_id": "static_page_image2_data_publish",
+                "cloudflare_orchestrator": {
+                    "task_id": "codex-task-1",
+                    "next_poll_at": next_poll_at.to_rfc3339()
+                }
+            }),
+            status: domain_model::WorkflowTaskStatus::Queued,
+            attempt: 1,
+            max_attempts: 3,
+            available_at: now,
+            claimed_at: None,
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let view = to_workflow_task_view(task);
+
+        assert_eq!(view.logical_queue.as_deref(), Some("static_page_publish"));
+        assert_eq!(
+            view.logical_task_key.as_deref(),
+            Some("poll_static_page_publish")
+        );
+        assert_eq!(view.remote_task_id.as_deref(), Some("codex-task-1"));
+        assert_eq!(view.next_poll_at, Some(next_poll_at));
+    }
+
+    #[test]
+    fn workflow_task_queue_stats_group_logical_queues_and_retrying_tasks() {
+        let now = Utc::now();
+        let next_poll_at = now + Duration::seconds(30);
+        let image_task = to_workflow_task_view(WorkflowTask {
+            id: domain_model::WorkflowTaskId::new(),
+            tenant_id: TenantId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            queue: "static_page".to_string(),
+            task_key: "generate_static_page_image".to_string(),
+            payload: json!({}),
+            status: domain_model::WorkflowTaskStatus::Queued,
+            attempt: 0,
+            max_attempts: 3,
+            available_at: now,
+            claimed_at: None,
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        });
+        let publish_task = to_workflow_task_view(WorkflowTask {
+            id: domain_model::WorkflowTaskId::new(),
+            tenant_id: TenantId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            queue: "codex_host".to_string(),
+            task_key: "run_codex_host_task".to_string(),
+            payload: json!({
+                "template_id": "static_page_image2_data_publish",
+                "cloudflare_orchestrator": {
+                    "task_id": "codex-task-1",
+                    "next_poll_at": next_poll_at.to_rfc3339()
+                }
+            }),
+            status: domain_model::WorkflowTaskStatus::Queued,
+            attempt: 2,
+            max_attempts: 3,
+            available_at: next_poll_at,
+            claimed_at: None,
+            finished_at: None,
+            error: Some("Cloudflare Codex task still running".to_string()),
+            created_at: now,
+            updated_at: now,
+        });
+        let stats = summarize_workflow_task_queue_stats(
+            now,
+            2,
+            &[image_task.clone(), publish_task.clone()],
+        );
+
+        assert_eq!(stats.execution_count, 2);
+        assert_eq!(stats.task_count, 2);
+        let image_queue = stats
+            .queues
+            .iter()
+            .find(|queue| queue.logical_queue == "static_page_image_preview")
+            .expect("image queue summary should exist");
+        assert_eq!(image_queue.queued, 1);
+        assert_eq!(image_queue.retrying, 0);
+        assert_eq!(
+            image_queue.task_keys[0].logical_task_key,
+            "submit_static_page_image_preview"
+        );
+        let publish_queue = stats
+            .queues
+            .iter()
+            .find(|queue| queue.logical_queue == "static_page_publish")
+            .expect("publish queue summary should exist");
+        assert_eq!(
+            publish_queue.physical_queues,
+            vec!["codex_host".to_string()]
+        );
+        assert_eq!(publish_queue.queued, 1);
+        assert_eq!(publish_queue.retrying, 1);
+        assert_eq!(publish_queue.next_available_at, Some(next_poll_at));
+        assert_eq!(
+            publish_queue.task_keys[0].logical_task_key,
+            "poll_static_page_publish"
+        );
+        assert_eq!(publish_queue.task_keys[0].retrying, 1);
+    }
+
+    #[test]
     fn to_tool_definition_view_exposes_cli_contract() {
         let tool = ToolDefinition::cli(
             "weather.lookup",
@@ -104979,6 +107598,95 @@ retrieve_evidence:
     }
 
     #[test]
+    fn rank_document_chunks_for_prompt_uses_toc_title_to_prefer_actual_section() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "养老机构精细化运营实操手册".to_string(),
+            object_key: "documents/care-manual.docx".to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let toc_chunk_id = DocumentChunkId::new();
+        let signage_chunk_id = DocumentChunkId::new();
+        let section_chunk_id = DocumentChunkId::new();
+        let toc_chunk = DocumentChunk {
+            id: toc_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 7,
+            content: "（六）突发事件应急预防与处置.................................................................. 81"
+                .to_string(),
+            token_count: 10,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let signage_chunk = DocumentChunk {
+            id: signage_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 44,
+            content: "防跌倒标识表示该老年人易发生跌倒，应有防护措施。".to_string(),
+            token_count: 12,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut section_metadata = BTreeMap::new();
+        section_metadata.insert(
+            "section_title_hints".to_string(),
+            json!(["突发事件应急预防与处置"]),
+        );
+        let section_chunk = DocumentChunk {
+            id: section_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 212,
+            content: "现场人员应立即按本章流程处理，做好报告、记录和后续复盘。".to_string(),
+            token_count: 20,
+            state: DocumentChunkState::Extracted,
+            metadata: section_metadata,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert_eq!(
+            document_chunk_section_title_hints(&toc_chunk),
+            vec!["突发事件应急预防与处置"]
+        );
+        let ranked = rank_document_chunks_for_prompt(
+            vec![
+                (document.clone(), toc_chunk),
+                (document.clone(), signage_chunk),
+                (document, section_chunk),
+            ],
+            "老年人摔倒后怎么办",
+            3,
+        );
+
+        assert_eq!(ranked[0].chunk.id, section_chunk_id);
+        assert_ne!(ranked[0].chunk.id, toc_chunk_id);
+        assert!(ranked[0].lexical_score > ranked[1].lexical_score);
+    }
+
+    #[test]
     fn lexical_query_term_weights_extend_elder_fall_terms_without_medication_context() {
         let weights =
             lexical_query_term_weights("老人突发事件应急处置：重伤事故直接拨打120并通知家属");
@@ -104987,6 +107695,82 @@ retrieve_evidence:
             assert!(
                 weights.contains_key(expected),
                 "missing elder-fall expansion term {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn rank_document_chunks_for_prompt_expands_elder_death_procedure_terms() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let document = Document {
+            id: document_id,
+            tenant_id,
+            dataset_id,
+            owner_user_id: None,
+            title: "养老机构精细化运营实操手册".to_string(),
+            object_key: "documents/care-manual.docx".to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_string(),
+            lifecycle: domain_model::DocumentLifecycle::Extracted,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let visitor_chunk_id = DocumentChunkId::new();
+        let death_chunk_id = DocumentChunkId::new();
+        let visitor_chunk = DocumentChunk {
+            id: visitor_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 118,
+            content: "家属探望物品交接流程：长者在院期间，家属探望带来的衣物、食品和日用品应登记，护理员与家属对接签字。"
+                .to_string(),
+            token_count: 34,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        let death_chunk = DocumentChunk {
+            id: death_chunk_id,
+            tenant_id,
+            dataset_id,
+            document_id,
+            chunk_index: 216,
+            content:
+                "老人死亡善后处理制度：发现长者无生命体征后应保护现场，通知负责人和医护确认，及时联系家属，协助殡仪接运，清点遗物并办理遗物交接，完整记录归档。"
+                    .to_string(),
+            token_count: 44,
+            state: DocumentChunkState::Extracted,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let ranked = rank_document_chunks_for_prompt(
+            vec![(document.clone(), visitor_chunk), (document, death_chunk)],
+            "长者在院离世，现场处置、家属对接流程",
+            2,
+        );
+
+        assert_eq!(ranked[0].chunk.id, death_chunk_id);
+        assert_eq!(ranked[1].chunk.id, visitor_chunk_id);
+        assert!(ranked[0].lexical_score > ranked[1].lexical_score);
+    }
+
+    #[test]
+    fn lexical_query_term_weights_extend_elder_death_terms() {
+        let weights = lexical_query_term_weights("长者离世后通知家属并做好遗物交接");
+
+        for expected in ["死亡", "身故", "殡仪接运", "遗物清点", "记录归档"] {
+            assert!(
+                weights.contains_key(expected),
+                "missing elder-death expansion term {expected}"
             );
         }
     }
