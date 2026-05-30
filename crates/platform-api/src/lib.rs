@@ -34342,6 +34342,15 @@ async fn maybe_recover_external_static_page_publish_completed_from_exec_event(
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| external_channel_conversation_external_id_from_run(run));
+    let dynamic_page_contract = external_channel_static_page_artifact_payload_value(
+        fixed_task_output,
+        "dynamic_page_contract",
+    );
+    let dynamic_page_contract = if dynamic_page_contract.is_null() {
+        build_static_page_dynamic_page_contract()
+    } else {
+        dynamic_page_contract
+    };
     let completed_payload = json!({
         "channel_connection_id": source_refs
             .get("channel_connection_id")
@@ -34363,6 +34372,9 @@ async fn maybe_recover_external_static_page_publish_completed_from_exec_event(
         "artifact_links": [public_url],
         "local_path": local_path,
         "manifest_path": manifest_path,
+        "data_url": external_channel_static_page_artifact_payload_value(fixed_task_output, "data_url"),
+        "data_snapshot_url": external_channel_static_page_artifact_payload_value(fixed_task_output, "data_snapshot_url"),
+        "dynamic_page_contract": dynamic_page_contract,
         "validation_summary": external_channel_static_page_publish_validation_summary_from_fixed_task_output(fixed_task_output),
         "source_refs": source_refs,
     });
@@ -35745,6 +35757,15 @@ async fn maybe_record_external_static_page_publish_completed(
         .get("message_external_id")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let dynamic_page_contract = external_channel_static_page_artifact_payload_value(
+        &event.payload,
+        "dynamic_page_contract",
+    );
+    let dynamic_page_contract = if dynamic_page_contract.is_null() {
+        build_static_page_dynamic_page_contract()
+    } else {
+        dynamic_page_contract
+    };
 
     let completed_payload = json!({
         "channel_connection_id": channel_connection_id,
@@ -35758,6 +35779,9 @@ async fn maybe_record_external_static_page_publish_completed(
         "publish_mode": "new_generated_artifact_only",
         "public_url": public_url,
         "artifact_links": [public_url],
+        "data_url": external_channel_static_page_artifact_payload_value(&event.payload, "data_url"),
+        "data_snapshot_url": external_channel_static_page_artifact_payload_value(&event.payload, "data_snapshot_url"),
+        "dynamic_page_contract": dynamic_page_contract,
         "validation_summary": validation_summary,
         "source_refs": source_refs,
     });
@@ -35849,6 +35873,15 @@ async fn maybe_attach_external_static_page_artifact_to_run(
         "artifact_manifest": artifact_manifest,
         "public_url": public_url,
         "download_url": public_url,
+        "data_url": completed_payload.get("data_url").cloned().unwrap_or(Value::Null),
+        "data_snapshot_url": completed_payload
+            .get("data_snapshot_url")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "dynamic_page_contract": completed_payload
+            .get("dynamic_page_contract")
+            .cloned()
+            .unwrap_or_else(build_static_page_dynamic_page_contract),
         "draft_id": completed_payload.get("draft_id").cloned().unwrap_or(Value::Null),
         "image_job_id": completed_payload.get("image_job_id").cloned().unwrap_or(Value::Null),
         "codex_host_workflow_execution_id": completed_payload
@@ -35932,11 +35965,44 @@ fn external_channel_static_page_publish_validation_summary(payload: &Value) -> V
     })
 }
 
+fn external_channel_static_page_artifact_payload_value(payload: &Value, key: &str) -> Value {
+    payload
+        .get(key)
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("artifact")
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("output")
+                .and_then(|output| output.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("output")
+                .and_then(|output| output.get("artifact"))
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
 fn external_channel_static_page_published_reply(
     conversation_external_id: &str,
     public_url: &str,
     payload: &Value,
 ) -> ExternalBotReplyView {
+    let dynamic_page_contract =
+        external_channel_static_page_artifact_payload_value(payload, "dynamic_page_contract");
+    let dynamic_page_contract = if dynamic_page_contract.is_null() {
+        build_static_page_dynamic_page_contract()
+    } else {
+        dynamic_page_contract
+    };
     ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
@@ -35949,6 +36015,9 @@ fn external_channel_static_page_published_reply(
             "download_url": public_url,
             "html_download_url": public_url,
             "artifact_links": [public_url],
+            "data_url": external_channel_static_page_artifact_payload_value(payload, "data_url"),
+            "data_snapshot_url": external_channel_static_page_artifact_payload_value(payload, "data_snapshot_url"),
+            "dynamic_page_contract": dynamic_page_contract,
             "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
             "image_job_id": payload.get("image_job_id").cloned().unwrap_or(Value::Null),
             "render_output_id": payload.get("render_output_id").cloned().unwrap_or(Value::Null),
@@ -81863,6 +81932,13 @@ retrieve_evidence:
             "image_job_id": StaticPageImageJobId::new().to_string(),
             "codex_host_workflow_execution_id": WorkflowExecutionId::new().to_string(),
             "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+            "data_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data.json",
+            "data_snapshot_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data-snapshot.json",
+            "dynamic_page_contract": {
+                "version": 1,
+                "data_file": "data.json",
+                "source_snapshot_file": "data-snapshot.json"
+            },
             "validation_summary": {
                 "latest_snapshot": "2026-05-10",
                 "source_row_count": 862,
@@ -81897,6 +81973,15 @@ retrieve_evidence:
         assert_eq!(card["download_url"], json!(payload["public_url"]));
         assert_eq!(card["html_download_url"], json!(payload["public_url"]));
         assert_eq!(card["artifact_links"], json!([payload["public_url"]]));
+        assert_eq!(card["data_url"], json!(payload["data_url"]));
+        assert_eq!(
+            card["data_snapshot_url"],
+            json!(payload["data_snapshot_url"])
+        );
+        assert_eq!(
+            card["dynamic_page_contract"]["data_file"],
+            json!("data.json")
+        );
         let serialized = serde_json::to_string(&reply).expect("reply serializes");
         assert!(!serialized.contains("selected_scope"));
     }
@@ -81910,6 +81995,13 @@ retrieve_evidence:
             "image_job_id": StaticPageImageJobId::new().to_string(),
             "codex_host_workflow_execution_id": WorkflowExecutionId::new().to_string(),
             "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+            "data_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data.json",
+            "data_snapshot_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data-snapshot.json",
+            "dynamic_page_contract": {
+                "version": 1,
+                "data_file": "data.json",
+                "source_snapshot_file": "data-snapshot.json"
+            },
             "validation_summary": {
                 "latest_snapshot": "2026-05-10",
                 "source_row_count": 862
@@ -81937,6 +82029,11 @@ retrieve_evidence:
         assert_eq!(
             card["generated_artifact_url"],
             json!(reply.artifact_links[0])
+        );
+        assert_eq!(card["data_url"], json!(output_artifacts[0]["data_url"]));
+        assert_eq!(
+            card["dynamic_page_contract"]["source_snapshot_file"],
+            json!("data-snapshot.json")
         );
     }
 
