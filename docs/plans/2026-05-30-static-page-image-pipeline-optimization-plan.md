@@ -37,6 +37,10 @@
 
 **Progress update 2026-05-31 P0 auto-repair slice:** Static-page preview/final-render entry points now refresh the V3 data contract before gating or rendering, including third-party supplied image prompt payloads. Database aggregate rows are carried into field-candidate sample data, and chart `dataKey` / binding-quality field paths are treated as repairable bindings so V3 can generate a page first and keep data warnings/adjustment paths visible instead of stopping on `needs_sample_rows`.
 
+**Progress update 2026-05-31 smoke-mutation-readiness slice:** `run-cloudflare-codex-fixed-task-smoke.ps1` now supports a reviewed real `static-page-no-confirm` third-party mutation smoke with private bearer/config input, polling of the returned status URL, and redacted artifact/status reporting. The guard was verified against 8服务器 without a bearer: the script fails before mutation with `mutation_attempted=false`.
+
+**Progress update 2026-05-31 data-ingestion smoke-readiness slice:** The same fixed-task smoke now supports reviewed real `data-ingestion-analysis` mutation checks. It requires both a private bearer and a private source selector before mutation, then polls the assistant-run reply status URL for queued/running/completed/needs-human states without exposing credentials or source dumps.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection

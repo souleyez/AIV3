@@ -149,6 +149,11 @@
 - Continued static-page data repair on 2026-05-31:
   - Static-page生图和最终渲染入口会先刷新 V3 数据合同，第三方传来的旧 image prompt payload 也会用草稿里的最新供料上下文重建快照。
   - 数据库聚合行现在会随字段候选携带为 sampleData；`chartOptions.dataKey` / `bindingQuality.fieldPath` 被识别为可修复绑定，避免把可先生成再调整的图表误判成阻断。
+- Continued fixed-task smoke hardening on 2026-05-31:
+  - `run-cloudflare-codex-fixed-task-smoke.ps1` now supports reviewed real `static-page-no-confirm` third-party mutation smoke against 8服务器, using `-BearerToken`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, or private `ServerCaseConfigPath.bearer_token_env`.
+  - The real smoke builds a third-party static-page event, polls the returned status URL when present, and reports redacted status/artifact fields without printing credentials.
+  - Missing-bearer guard was verified: `-AllowServerMutation` fails before sending the mutation request with `mutation_attempted=false`.
+  - The same guarded pattern now covers `data-ingestion-analysis`; it also requires a private source selector before mutation and reports `source_configured=false` when the case config is incomplete.
 
 ## Immediate Execution Queue
 

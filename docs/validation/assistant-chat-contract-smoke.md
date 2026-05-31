@@ -44,6 +44,10 @@ This case asserts that customers can see the Image2 effect card while V3 continu
 
 Remote mode is guarded. Use `-BaseUrl https://v3.elepcloud.com -PlanOnly` for a read-only readiness check covering the public guide, external API auth guard, and workflow queue diagnostics. Server mutation cases require deployment review plus `-AllowServerMutation`; they must still create only new generated artifacts and must not deploy answer-quality patches automatically.
 
+`static-page-no-confirm` can run as a real third-party server mutation smoke after review. Pass the bearer through `-BearerToken`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, or a private `-ServerCaseConfigPath` with `bearer_token_env`. The config may also include the target `connection_id`, source/dataset/document scope, and requested template skill payload. Without a configured bearer, the script fails before sending the mutation request and records `mutation_attempted=false`.
+
+`data-ingestion-analysis` uses the same guard pattern and additionally requires a private source selector such as `dataset_external_ids` or `available_document_external_ids`; missing source scope also fails before mutation.
+
 ## 2026-05-25 Fixed Task No-Confirm Evidence
 
 - Environment: local Windows workspace, plan-only, no customer-visible output
@@ -64,6 +68,13 @@ Read-only deployment readiness:
 - Result: passed read-only readiness checks; mutation skipped by guard
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T021620Z.json`
 - Checked public guide, external events auth guard, and workflow queue diagnostics.
+
+Guarded mutation dry run:
+
+- Environment: `8服务器` public V3 endpoint, no token configured
+- Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case static-page-no-confirm -Json`
+- Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=false`
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043121Z.json`
 
 ## 2026-05-17 Deployment Target Evidence
 

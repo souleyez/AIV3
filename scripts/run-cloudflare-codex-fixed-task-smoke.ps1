@@ -3,6 +3,10 @@ param(
     [switch] $Local,
     [switch] $PlanOnly,
     [string] $BaseUrl = "",
+    [string] $BearerToken = "",
+    [string] $ServerCaseConfigPath = "",
+    [int] $ServerPollTimeoutSec = 600,
+    [int] $ServerPollIntervalSec = 15,
     [string] $ReportDir = "",
     [string] $CargoBin = "cargo",
     [switch] $AllowServerMutation,
@@ -103,7 +107,8 @@ function Invoke-SmokeHttpRequest {
         [string] $Method,
         [string] $Uri,
         [string] $Body = "",
-        [string] $ContentType = ""
+        [string] $ContentType = "",
+        [hashtable] $Headers = @{}
     )
 
     $params = @{
@@ -112,6 +117,9 @@ function Invoke-SmokeHttpRequest {
         TimeoutSec = 20
         UseBasicParsing = $true
         MaximumRedirection = 0
+    }
+    if ($Headers.Count -gt 0) {
+        $params.Headers = $Headers
     }
     if ((Get-Command Invoke-WebRequest).Parameters.ContainsKey("SkipHttpErrorCheck")) {
         $params.SkipHttpErrorCheck = $true
@@ -187,6 +195,461 @@ function New-ContentExcerpt {
         return ""
     }
     return $Content.Substring(0, [Math]::Min(240, $Content.Length))
+}
+
+function Get-ConfiguredBearerToken {
+    param([object] $Config)
+    if (-not [string]::IsNullOrWhiteSpace($BearerToken)) {
+        return $BearerToken.Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:V3_EXTERNAL_CHANNEL_BEARER_TOKEN)) {
+        return $env:V3_EXTERNAL_CHANNEL_BEARER_TOKEN.Trim()
+    }
+    if ($null -ne $Config) {
+        if (-not [string]::IsNullOrWhiteSpace($Config.bearer_token)) {
+            return ([string]$Config.bearer_token).Trim()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Config.bearer_token_env)) {
+            $envName = [string]$Config.bearer_token_env
+            $value = [Environment]::GetEnvironmentVariable($envName)
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                return $value.Trim()
+            }
+        }
+    }
+    return ""
+}
+
+function Read-ServerCaseConfig {
+    if ([string]::IsNullOrWhiteSpace($ServerCaseConfigPath)) {
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $ServerCaseConfigPath)) {
+        throw "ServerCaseConfigPath not found: $ServerCaseConfigPath"
+    }
+    return Get-Content -Raw -LiteralPath $ServerCaseConfigPath | ConvertFrom-Json
+}
+
+function Get-ConfigValue {
+    param(
+        [object] $Config,
+        [string] $Name,
+        [object] $Default = $null
+    )
+    if ($null -ne $Config -and $Config.PSObject.Properties.Name -contains $Name) {
+        return $Config.$Name
+    }
+    return $Default
+}
+
+function Convert-ToStringArray {
+    param([object] $Value)
+    if ($null -eq $Value) {
+        return @()
+    }
+    if ($Value -is [array]) {
+        return @($Value | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        return @($Value | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return @()
+    }
+    return @($text.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function New-ExternalStaticPageSmokeBody {
+    param(
+        [object] $Config,
+        [string] $RunId
+    )
+
+    $tenantExternalId = [string](Get-ConfigValue -Config $Config -Name "tenant_external_id" -Default "tenant-ext-001")
+    $botExternalId = [string](Get-ConfigValue -Config $Config -Name "bot_external_id" -Default "bot-v3")
+    $conversationExternalId = [string](Get-ConfigValue -Config $Config -Name "conversation_external_id" -Default "smoke-static-page-$RunId")
+    $senderExternalId = [string](Get-ConfigValue -Config $Config -Name "sender_external_id" -Default "operator-smoke")
+    $sourceId = [string](Get-ConfigValue -Config $Config -Name "available_document_source_id" -Default "")
+    $documentExternalIds = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids")
+    $datasetExternalIds = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "dataset_external_ids")
+    $requestedSkills = Get-ConfigValue -Config $Config -Name "requested_skills" -Default @()
+    $template = Get-ConfigValue -Config $Config -Name "template" -Default $null
+
+    $body = [ordered]@{
+        platform = [string](Get-ConfigValue -Config $Config -Name "platform" -Default "generic_chat")
+        tenant_external_id = $tenantExternalId
+        bot_external_id = $botExternalId
+        conversation_external_id = $conversationExternalId
+        thread_external_id = $null
+        sender_external_id = $senderExternalId
+        sender_display_name = [string](Get-ConfigValue -Config $Config -Name "sender_display_name" -Default "V3 smoke")
+        message_external_id = "msg-static-page-$RunId"
+        message_type = "text"
+        text = [string](Get-ConfigValue -Config $Config -Name "text" -Default "请生成一页演示报表，先返回可访问链接，后续自动进入 Image2 和 Cloudflare Codex 静态页发布链路。")
+        default_prompt = [string](Get-ConfigValue -Config $Config -Name "default_prompt" -Default "请面向业务用户，优先基于本轮文档和数据源回答。")
+        output_format = [string](Get-ConfigValue -Config $Config -Name "output_format" -Default "rich_text")
+        render_mode = "artifact"
+        artifact_type = "static_page"
+        available_document_source_id = if ([string]::IsNullOrWhiteSpace($sourceId)) { $null } else { $sourceId }
+        available_document_external_ids = $documentExternalIds
+        dataset_external_ids = $datasetExternalIds
+        requested_skills = $requestedSkills
+        mention_external_user_ids = @()
+        attachment_refs = @()
+        idempotency_key = "cloudflare-codex-smoke:static-page:$RunId"
+        received_at = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    if ($null -ne $template) {
+        $body["template"] = $template
+    }
+    return $body
+}
+
+function Test-ConfigHasDataSourceScope {
+    param([object] $Config)
+    if ($null -eq $Config) {
+        return $false
+    }
+    foreach ($key in @("dataset_external_id", "dataset_external_ids", "available_document_external_ids")) {
+        $value = Get-ConfigValue -Config $Config -Name $key -Default $null
+        if ($key -eq "dataset_external_id") {
+            if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                return $true
+            }
+        } elseif ((Convert-ToStringArray $value).Count -gt 0) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function New-ExternalDataIngestionSmokeBody {
+    param(
+        [object] $Config,
+        [string] $RunId
+    )
+
+    $sourceId = [string](Get-ConfigValue -Config $Config -Name "available_document_source_id" -Default "")
+    $datasetExternalId = [string](Get-ConfigValue -Config $Config -Name "dataset_external_id" -Default "")
+    $body = [ordered]@{
+        platform = [string](Get-ConfigValue -Config $Config -Name "platform" -Default "generic_chat")
+        tenant_external_id = [string](Get-ConfigValue -Config $Config -Name "tenant_external_id" -Default "tenant-ext-001")
+        bot_external_id = [string](Get-ConfigValue -Config $Config -Name "bot_external_id" -Default "bot-v3")
+        conversation_external_id = [string](Get-ConfigValue -Config $Config -Name "data_ingestion_conversation_external_id" -Default "smoke-data-ingestion-$RunId")
+        thread_external_id = $null
+        sender_external_id = [string](Get-ConfigValue -Config $Config -Name "sender_external_id" -Default "operator-smoke")
+        sender_display_name = [string](Get-ConfigValue -Config $Config -Name "sender_display_name" -Default "V3 smoke")
+        message_external_id = "msg-data-ingestion-$RunId"
+        message_type = "text"
+        text = [string](Get-ConfigValue -Config $Config -Name "data_ingestion_text" -Default "请对本轮选中的数据源或文档做数据接入分析，输出只读字段映射、清洗建议、校验项和 staging 入库方案，不写生产库。")
+        default_prompt = [string](Get-ConfigValue -Config $Config -Name "default_prompt" -Default "请面向业务用户，优先基于本轮文档和数据源回答。")
+        output_format = [string](Get-ConfigValue -Config $Config -Name "output_format" -Default "rich_text")
+        available_document_source_id = if ([string]::IsNullOrWhiteSpace($sourceId)) { $null } else { $sourceId }
+        available_document_external_ids = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids")
+        dataset_external_ids = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "dataset_external_ids")
+        mention_external_user_ids = @()
+        attachment_refs = @()
+        idempotency_key = "cloudflare-codex-smoke:data-ingestion:$RunId"
+        received_at = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($datasetExternalId)) {
+        $body["dataset_external_id"] = $datasetExternalId
+    }
+    return $body
+}
+
+function Get-FirstArtifactUrl {
+    param([object] $Response)
+    if ($null -eq $Response) {
+        return ""
+    }
+    if ($Response.PSObject.Properties.Name -contains "reply" -and $null -ne $Response.reply) {
+        $reply = $Response.reply
+        if ($reply.PSObject.Properties.Name -contains "artifact_links" -and $null -ne $reply.artifact_links -and @($reply.artifact_links).Count -gt 0) {
+            return [string]@($reply.artifact_links)[0]
+        }
+        if ($reply.PSObject.Properties.Name -contains "card" -and $null -ne $reply.card) {
+            foreach ($key in @("public_url", "generated_artifact_url", "html_preview_url", "html_download_url")) {
+                if ($reply.card.PSObject.Properties.Name -contains $key -and -not [string]::IsNullOrWhiteSpace($reply.card.$key)) {
+                    return [string]$reply.card.$key
+                }
+            }
+        }
+    }
+    return ""
+}
+
+function Get-StatusUrl {
+    param(
+        [object] $Response,
+        [string] $Base,
+        [string] $ConnectionId = ""
+    )
+    if ($null -eq $Response) {
+        return ""
+    }
+    $statusUrl = ""
+    if ($Response.PSObject.Properties.Name -contains "reply" -and $null -ne $Response.reply) {
+        $reply = $Response.reply
+        if ($reply.PSObject.Properties.Name -contains "card" -and $null -ne $reply.card -and $reply.card.PSObject.Properties.Name -contains "status_url") {
+            $statusUrl = [string]$reply.card.status_url
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($statusUrl)) {
+        $runId = if ($Response.PSObject.Properties.Name -contains "assistant_run_id") { [string]$Response.assistant_run_id } else { "" }
+        if (-not [string]::IsNullOrWhiteSpace($ConnectionId) -and -not [string]::IsNullOrWhiteSpace($runId)) {
+            return "$($Base.TrimEnd('/'))/v1/external/channels/$ConnectionId/assistant-runs/$runId/reply"
+        }
+        return ""
+    }
+    if ($statusUrl.StartsWith("http://") -or $statusUrl.StartsWith("https://")) {
+        return $statusUrl
+    }
+    return "$($Base.TrimEnd('/'))/$($statusUrl.TrimStart('/'))"
+}
+
+function Test-StaticPageTerminalFailure {
+    param([object] $Response)
+    $statusValues = New-Object System.Collections.Generic.List[string]
+    if ($null -ne $Response -and $Response.PSObject.Properties.Name -contains "reply" -and $null -ne $Response.reply) {
+        foreach ($key in @("task_status", "reply_type")) {
+            if ($Response.reply.PSObject.Properties.Name -contains $key -and -not [string]::IsNullOrWhiteSpace($Response.reply.$key)) {
+                $statusValues.Add([string]$Response.reply.$key) | Out-Null
+            }
+        }
+        if ($Response.reply.PSObject.Properties.Name -contains "card" -and $null -ne $Response.reply.card) {
+            foreach ($key in @("status", "codex_final_status", "render_output_status", "image_job_status")) {
+                if ($Response.reply.card.PSObject.Properties.Name -contains $key -and -not [string]::IsNullOrWhiteSpace($Response.reply.card.$key)) {
+                    $statusValues.Add([string]$Response.reply.card.$key) | Out-Null
+                }
+            }
+        }
+    }
+    return @($statusValues.ToArray() | Where-Object { $_ -match "failed|cancelled|needs_human" }).Count -gt 0
+}
+
+function Get-ReplyTaskStatusValues {
+    param([object] $Response)
+    $statusValues = New-Object System.Collections.Generic.List[string]
+    if ($null -ne $Response -and $Response.PSObject.Properties.Name -contains "reply" -and $null -ne $Response.reply) {
+        foreach ($key in @("task_status", "reply_type")) {
+            if ($Response.reply.PSObject.Properties.Name -contains $key -and -not [string]::IsNullOrWhiteSpace($Response.reply.$key)) {
+                $statusValues.Add([string]$Response.reply.$key) | Out-Null
+            }
+        }
+        if ($Response.reply.PSObject.Properties.Name -contains "card" -and $null -ne $Response.reply.card) {
+            foreach ($key in @("status", "workflow_status")) {
+                if ($Response.reply.card.PSObject.Properties.Name -contains $key -and -not [string]::IsNullOrWhiteSpace($Response.reply.card.$key)) {
+                    $statusValues.Add([string]$Response.reply.card.$key) | Out-Null
+                }
+            }
+        }
+    }
+    return $statusValues.ToArray()
+}
+
+function Test-DataIngestionTerminalSuccess {
+    param([object] $Response)
+    return @(
+        Get-ReplyTaskStatusValues -Response $Response |
+            Where-Object { $_ -match "^data_ingestion_analysis_(completed|needs_human)$|^data_ingestion_staging_(dataset_ready|sync_started|sync_running|sync_completed)$" }
+    ).Count -gt 0
+}
+
+function Test-DataIngestionTerminalFailure {
+    param([object] $Response)
+    return @(
+        Get-ReplyTaskStatusValues -Response $Response |
+            Where-Object { $_ -match "^data_ingestion_analysis_(failed|cancelled|source_required)$|^data_ingestion_staging_sync_failed$" }
+    ).Count -gt 0
+}
+
+function Invoke-ServerStaticPageMutationSmoke {
+    param(
+        [string] $Base,
+        [object] $Config,
+        [string] $Token
+    )
+    if ([string]::IsNullOrWhiteSpace($Token)) {
+        return New-SmokeResult -CaseId "static-page-no-confirm" -Status "failed" -Message "Server mutation smoke needs BearerToken, V3_EXTERNAL_CHANNEL_BEARER_TOKEN, or bearer_token_env in ServerCaseConfigPath." -Details @{
+            base_url = $Base
+            bearer_configured = $false
+            mutation_attempted = $false
+        }
+    }
+
+    $connectionId = [string](Get-ConfigValue -Config $Config -Name "connection_id" -Default "generic-chat-main")
+    $runId = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $body = New-ExternalStaticPageSmokeBody -Config $Config -RunId $runId
+    $url = "$($Base.TrimEnd('/'))/v1/external/channels/$connectionId/events"
+    $headers = @{ Authorization = "Bearer $Token" }
+    $bodyJson = $body | ConvertTo-Json -Depth 12
+    $submit = Invoke-SmokeHttpRequest -Method "POST" -Uri $url -Body $bodyJson -ContentType "application/json" -Headers $headers
+    $submitParsed = $null
+    if ($submit.ok -and $submit.status_code -ge 200 -and $submit.status_code -lt 300) {
+        try {
+            $submitParsed = $submit.content | ConvertFrom-Json
+        } catch {
+            $submitParsed = $null
+        }
+    }
+
+    $artifactUrl = Get-FirstArtifactUrl -Response $submitParsed
+    $statusUrl = Get-StatusUrl -Response $submitParsed -Base $Base -ConnectionId $connectionId
+    $polls = New-Object System.Collections.Generic.List[object]
+    $terminalFailure = Test-StaticPageTerminalFailure -Response $submitParsed
+    $deadline = (Get-Date).AddSeconds($ServerPollTimeoutSec)
+    while ([string]::IsNullOrWhiteSpace($artifactUrl) -and -not $terminalFailure -and -not [string]::IsNullOrWhiteSpace($statusUrl) -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds ([Math]::Max(1, $ServerPollIntervalSec))
+        $poll = Invoke-SmokeHttpRequest -Method "GET" -Uri $statusUrl -Headers $headers
+        $pollParsed = $null
+        if ($poll.ok -and $poll.status_code -ge 200 -and $poll.status_code -lt 300) {
+            try {
+                $pollParsed = $poll.content | ConvertFrom-Json
+            } catch {
+                $pollParsed = $null
+            }
+        }
+        $polls.Add([ordered]@{
+            status_code = $poll.status_code
+            task_status = if ($null -ne $pollParsed -and $null -ne $pollParsed.reply) { $pollParsed.reply.task_status } else { $null }
+            reply_type = if ($null -ne $pollParsed -and $null -ne $pollParsed.reply) { $pollParsed.reply.reply_type } else { $null }
+            has_artifact_url = -not [string]::IsNullOrWhiteSpace((Get-FirstArtifactUrl -Response $pollParsed))
+        }) | Out-Null
+        $artifactUrl = Get-FirstArtifactUrl -Response $pollParsed
+        $terminalFailure = Test-StaticPageTerminalFailure -Response $pollParsed
+    }
+
+    $submitStatus = if ($null -ne $submitParsed -and $null -ne $submitParsed.reply) { $submitParsed.reply.task_status } else { $null }
+    $details = @{
+        base_url = $Base
+        connection_id = $connectionId
+        bearer_configured = $true
+        status_code = $submit.status_code
+        accepted = if ($null -ne $submitParsed -and $submitParsed.PSObject.Properties.Name -contains "accepted") { $submitParsed.accepted } else { $null }
+        initial_task_status = $submitStatus
+        initial_reply_type = if ($null -ne $submitParsed -and $null -ne $submitParsed.reply) { $submitParsed.reply.reply_type } else { $null }
+        initial_has_artifact_url = -not [string]::IsNullOrWhiteSpace((Get-FirstArtifactUrl -Response $submitParsed))
+        status_url_present = -not [string]::IsNullOrWhiteSpace($statusUrl)
+        poll_count = $polls.Count
+        polls = $polls.ToArray()
+        final_has_artifact_url = -not [string]::IsNullOrWhiteSpace($artifactUrl)
+        final_artifact_url = if ([string]::IsNullOrWhiteSpace($artifactUrl)) { $null } else { $artifactUrl }
+        terminal_failure = $terminalFailure
+        content_excerpt = New-ContentExcerpt -Content $submit.content
+        error = $submit.error
+        idempotency_key = $body.idempotency_key
+        dataset_external_ids_count = @($body.dataset_external_ids).Count
+        available_document_external_ids_count = @($body.available_document_external_ids).Count
+    }
+    if ($submit.status_code -lt 200 -or $submit.status_code -ge 300 -or $null -eq $submitParsed) {
+        return New-SmokeResult -CaseId "static-page-no-confirm" -Status "failed" -Message "External static-page mutation request did not return a valid success response." -Details $details
+    }
+    if ($terminalFailure) {
+        return New-SmokeResult -CaseId "static-page-no-confirm" -Status "failed" -Message "External static-page mutation reached a terminal failure status." -Details $details
+    }
+    if (-not [string]::IsNullOrWhiteSpace($artifactUrl)) {
+        return New-SmokeResult -CaseId "static-page-no-confirm" -Status "passed" -Message "External static-page mutation returned an artifact URL." -Details $details
+    }
+    return New-SmokeResult -CaseId "static-page-no-confirm" -Status "passed" -Message "External static-page mutation was accepted and remains processing; status URL is available for continued polling." -Details $details
+}
+
+function Invoke-ServerDataIngestionMutationSmoke {
+    param(
+        [string] $Base,
+        [object] $Config,
+        [string] $Token
+    )
+    if ([string]::IsNullOrWhiteSpace($Token)) {
+        return New-SmokeResult -CaseId "data-ingestion-analysis" -Status "failed" -Message "Server mutation smoke needs BearerToken, V3_EXTERNAL_CHANNEL_BEARER_TOKEN, or bearer_token_env in ServerCaseConfigPath." -Details @{
+            base_url = $Base
+            bearer_configured = $false
+            mutation_attempted = $false
+        }
+    }
+    if (-not (Test-ConfigHasDataSourceScope -Config $Config)) {
+        return New-SmokeResult -CaseId "data-ingestion-analysis" -Status "failed" -Message "Data-ingestion mutation smoke needs a private ServerCaseConfigPath with dataset_external_id, dataset_external_ids, or available_document_external_ids." -Details @{
+            base_url = $Base
+            bearer_configured = $true
+            source_configured = $false
+            mutation_attempted = $false
+        }
+    }
+
+    $connectionId = [string](Get-ConfigValue -Config $Config -Name "connection_id" -Default "generic-chat-main")
+    $runId = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $body = New-ExternalDataIngestionSmokeBody -Config $Config -RunId $runId
+    $url = "$($Base.TrimEnd('/'))/v1/external/channels/$connectionId/events"
+    $headers = @{ Authorization = "Bearer $Token" }
+    $submit = Invoke-SmokeHttpRequest -Method "POST" -Uri $url -Body ($body | ConvertTo-Json -Depth 12) -ContentType "application/json" -Headers $headers
+    $submitParsed = $null
+    if ($submit.ok -and $submit.status_code -ge 200 -and $submit.status_code -lt 300) {
+        try {
+            $submitParsed = $submit.content | ConvertFrom-Json
+        } catch {
+            $submitParsed = $null
+        }
+    }
+
+    $statusUrl = Get-StatusUrl -Response $submitParsed -Base $Base -ConnectionId $connectionId
+    $terminalSuccess = Test-DataIngestionTerminalSuccess -Response $submitParsed
+    $terminalFailure = Test-DataIngestionTerminalFailure -Response $submitParsed
+    $polls = New-Object System.Collections.Generic.List[object]
+    $deadline = (Get-Date).AddSeconds($ServerPollTimeoutSec)
+    while (-not $terminalSuccess -and -not $terminalFailure -and -not [string]::IsNullOrWhiteSpace($statusUrl) -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds ([Math]::Max(1, $ServerPollIntervalSec))
+        $poll = Invoke-SmokeHttpRequest -Method "GET" -Uri $statusUrl -Headers $headers
+        $pollParsed = $null
+        if ($poll.ok -and $poll.status_code -ge 200 -and $poll.status_code -lt 300) {
+            try {
+                $pollParsed = $poll.content | ConvertFrom-Json
+            } catch {
+                $pollParsed = $null
+            }
+        }
+        $pollStatuses = @(Get-ReplyTaskStatusValues -Response $pollParsed)
+        $polls.Add([ordered]@{
+            status_code = $poll.status_code
+            task_status = if ($pollStatuses.Count -gt 0) { $pollStatuses[0] } else { $null }
+            status_values = $pollStatuses
+            terminal_success = Test-DataIngestionTerminalSuccess -Response $pollParsed
+            terminal_failure = Test-DataIngestionTerminalFailure -Response $pollParsed
+        }) | Out-Null
+        $terminalSuccess = Test-DataIngestionTerminalSuccess -Response $pollParsed
+        $terminalFailure = Test-DataIngestionTerminalFailure -Response $pollParsed
+    }
+
+    $initialStatuses = @(Get-ReplyTaskStatusValues -Response $submitParsed)
+    $details = @{
+        base_url = $Base
+        connection_id = $connectionId
+        bearer_configured = $true
+        source_configured = $true
+        status_code = $submit.status_code
+        accepted = if ($null -ne $submitParsed -and $submitParsed.PSObject.Properties.Name -contains "accepted") { $submitParsed.accepted } else { $null }
+        initial_status_values = $initialStatuses
+        status_url_present = -not [string]::IsNullOrWhiteSpace($statusUrl)
+        poll_count = $polls.Count
+        polls = $polls.ToArray()
+        terminal_success = $terminalSuccess
+        terminal_failure = $terminalFailure
+        content_excerpt = New-ContentExcerpt -Content $submit.content
+        error = $submit.error
+        idempotency_key = $body.idempotency_key
+        dataset_external_ids_count = @($body.dataset_external_ids).Count
+        available_document_external_ids_count = @($body.available_document_external_ids).Count
+    }
+    if ($submit.status_code -lt 200 -or $submit.status_code -ge 300 -or $null -eq $submitParsed) {
+        return New-SmokeResult -CaseId "data-ingestion-analysis" -Status "failed" -Message "External data-ingestion mutation request did not return a valid success response." -Details $details
+    }
+    if ($terminalFailure) {
+        return New-SmokeResult -CaseId "data-ingestion-analysis" -Status "failed" -Message "External data-ingestion mutation reached a terminal failure/source-required status." -Details $details
+    }
+    if ($terminalSuccess) {
+        return New-SmokeResult -CaseId "data-ingestion-analysis" -Status "passed" -Message "External data-ingestion mutation reached a reviewed terminal or staging status." -Details $details
+    }
+    return New-SmokeResult -CaseId "data-ingestion-analysis" -Status "passed" -Message "External data-ingestion mutation was accepted and remains processing; status URL is available for continued polling." -Details $details
 }
 
 function Invoke-LocalCaseSmoke {
@@ -309,6 +772,8 @@ if ($mode -eq "local_plan_only") {
     }
 } else {
     $base = $BaseUrl.TrimEnd("/")
+    $serverConfig = Read-ServerCaseConfig
+    $serverBearerToken = Get-ConfiguredBearerToken -Config $serverConfig
 
     $docsUrl = "$base/external-integrations/pure-third-party-integration-guide.zh-CN.html"
     $docs = Invoke-SmokeHttpRequest -Method "GET" -Uri $docsUrl
@@ -368,6 +833,7 @@ if ($mode -eq "local_plan_only") {
                 base_url = $BaseUrl
                 plan_only = [bool]$PlanOnly
                 customer_confirmation_required = $false
+                bearer_configured = -not [string]::IsNullOrWhiteSpace($serverBearerToken)
             }
             if ($caseId -eq "static-page-no-confirm") {
                 $guardDetails.expected_final_url_prefix = "$base/generated-artifacts/"
@@ -379,7 +845,13 @@ if ($mode -eq "local_plan_only") {
         }
     } else {
         foreach ($caseId in $selectedCases) {
-            $results.Add((New-SmokeResult -CaseId $caseId -Status "failed" -Message "Server mutation execution is not wired to a public smoke endpoint; run this script on the approved V3 host with -Local -PlanOnly or add a private server case config before enabling." -Details @{ base_url = $BaseUrl }))
+            if ($caseId -eq "static-page-no-confirm") {
+                $results.Add((Invoke-ServerStaticPageMutationSmoke -Base $base -Config $serverConfig -Token $serverBearerToken))
+            } elseif ($caseId -eq "data-ingestion-analysis") {
+                $results.Add((Invoke-ServerDataIngestionMutationSmoke -Base $base -Config $serverConfig -Token $serverBearerToken))
+            } else {
+                $results.Add((New-SmokeResult -CaseId $caseId -Status "failed" -Message "Server mutation execution for this case is not wired yet; use -PlanOnly or add a private server case implementation before enabling." -Details @{ base_url = $BaseUrl }))
+            }
         }
     }
 }

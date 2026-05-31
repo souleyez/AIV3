@@ -36,6 +36,19 @@ Read-only deployment readiness may be checked with:
 
 Actual remote mutation/execution requires explicit operator review plus `-AllowServerMutation`. The approved output must remain read-only analysis or staging-spec proposal; production writes and schema changes still require human confirmation.
 
+For a reviewed real third-party data-ingestion smoke, provide both a bearer and a private source scope:
+
+```powershell
+$env:V3_EXTERNAL_CHANNEL_BEARER_TOKEN = "<private token>"
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 `
+  -BaseUrl https://v3.elepcloud.com `
+  -AllowServerMutation `
+  -Case data-ingestion-analysis `
+  -ServerCaseConfigPath .\private\data-ingestion-smoke.case.json
+```
+
+The private config must include at least one external-channel source selector: `dataset_external_id`, `dataset_external_ids`, or `available_document_external_ids`. It may also include `connection_id`, `available_document_source_id`, `data_ingestion_text`, and `bearer_token_env`. Without a bearer or without a source selector, the script fails before mutation with `mutation_attempted=false`.
+
 ## 2026-05-25 Local Evidence
 
 - Environment: local Windows workspace, plan-only, no server writes
@@ -59,5 +72,14 @@ Read-only deployment readiness:
 - Checked workflow queue diagnostics: `GET /v1/workflow-tasks/queue-stats` returned JSON
 - Expected output statuses after reviewed mutation smoke: `analysis_ready`, `staging_spec_ready`, `needs_human`, or `failed`
 - Production writes allowed: false
+
+Guarded mutation dry runs:
+
+- No bearer command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case data-ingestion-analysis -Json`
+- Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=false`
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043600Z.json`
+- Source-scope guard command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case data-ingestion-analysis -BearerToken dummy-for-source-guard -Json`
+- Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=true`, `source_configured=false`
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043901Z.json`
 
 Do not record credentials, database URLs, raw customer data dumps, SSH details, or unrestricted filesystem paths in this validation note.

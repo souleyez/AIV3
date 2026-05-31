@@ -45,6 +45,19 @@ A guarded remote readiness check may be run after deployment:
 
 Remote mutation remains operator-gated. Only run without `-PlanOnly` and with `-AllowServerMutation` after explicit deployment review on the approved host.
 
+For a reviewed real third-party static-page smoke, provide a bearer token without committing it:
+
+```powershell
+$env:V3_EXTERNAL_CHANNEL_BEARER_TOKEN = "<private token>"
+.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 `
+  -BaseUrl https://v3.elepcloud.com `
+  -AllowServerMutation `
+  -Case static-page-no-confirm `
+  -ServerCaseConfigPath .\private\static-page-smoke.case.json
+```
+
+The optional private config can supply `connection_id`, `tenant_external_id`, `bot_external_id`, `available_document_source_id`, `available_document_external_ids`, `dataset_external_ids`, `requested_skills`, `template`, and `bearer_token_env`. If no bearer is configured, the script fails before mutation with `mutation_attempted=false`. Reports record only redacted counts/statuses and must not include the bearer value.
+
 ## 2026-05-25 No-Confirm Static-Page Smoke Evidence
 
 - Environment: local Windows workspace, plan-only, no server writes
@@ -68,6 +81,13 @@ Read-only deployment readiness:
 - Checked external events auth guard: no-token `POST /v1/external/channels/generic-chat-main/events` returned `external_channel_auth_failed`
 - Checked workflow queue diagnostics: `GET /v1/workflow-tasks/queue-stats` returned JSON
 - Expected artifact URL prefix for reviewed mutation smoke: `https://v3.elepcloud.com/generated-artifacts/`
+
+Guarded mutation dry run:
+
+- Environment: `8服务器` public V3 endpoint, no token configured
+- Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case static-page-no-confirm -Json`
+- Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=false`
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043121Z.json`
 
 ## 2026-05-17 Deployment Target Evidence
 
