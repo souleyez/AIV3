@@ -14,7 +14,7 @@ use event_bus::{
 };
 use serde_json::{json, Map, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use storage::{NewAssistantRunEvent, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::io::AsyncWriteExt;
@@ -2127,6 +2127,14 @@ fn normalize_cloudflare_fixed_task_output(
             strip_static_page_inline_artifact_payload(&mut output)?;
             return Ok(output);
         }
+        if let Some(output) = publish_workspace_static_page_artifact_if_available(
+            &output,
+            task_context,
+            execution_id,
+            orchestrator_task_id,
+        )? {
+            return Ok(output);
+        }
         if let Some(html) = extract_static_page_html_from_fixed_output(&output) {
             let data_json = extract_static_page_data_json_from_fixed_output(&output);
             return publish_cloudflare_static_page_html(
@@ -2392,6 +2400,181 @@ fn standalone_html_document(html: &str) -> String {
             trimmed
         )
     }
+}
+
+fn publish_workspace_static_page_artifact_if_available(
+    output: &Value,
+    task_context: &CodexHostTaskContext,
+    execution_id: domain_model::WorkflowExecutionId,
+    orchestrator_task_id: &str,
+) -> Result<Option<Value>> {
+    let public_url = output
+        .pointer("/artifact/public_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !generated_artifact_url_allowed(public_url) {
+        return Ok(None);
+    }
+
+    let Some(source_index_path) = output
+        .pointer("/artifact/local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(None);
+    };
+    if !source_index_path.is_absolute() || !source_index_path.is_file() {
+        return Ok(None);
+    }
+    if !local_artifact_path_is_under_task_workspace(&source_index_path)? {
+        return Ok(None);
+    }
+
+    let Some(source_dir) = source_index_path.parent() else {
+        return Ok(None);
+    };
+    let run_segment = safe_path_segment(&task_context.assistant_run_id.to_string());
+    let execution_segment = safe_path_segment(&execution_id.to_string());
+    let task_segment = safe_path_segment(orchestrator_task_id);
+    let relative_dir = format!(
+        "database-static-pages/codex-host/{run_segment}/{execution_segment}-{task_segment}"
+    );
+    let artifact_dir = generated_artifact_root()?.join(&relative_dir);
+    copy_generated_artifact_dir(source_dir, &artifact_dir)?;
+
+    let index_file_name = source_index_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("index.html");
+    let index_path = artifact_dir.join(index_file_name);
+    if !index_path.is_file() {
+        return Err(anyhow!(
+            "Codex Host workspace artifact copy did not produce {}",
+            index_path.display()
+        ));
+    }
+
+    let mut republished = output.clone();
+    let object = republished
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("fixed task output must be a JSON object"))?;
+    let artifact = object
+        .entry("artifact".to_string())
+        .or_insert_with(|| json!({}));
+    if !artifact.is_object() {
+        *artifact = json!({});
+    }
+    if let Some(artifact_object) = artifact.as_object_mut() {
+        artifact_object.insert(
+            "local_path".to_string(),
+            Value::String(index_path.display().to_string()),
+        );
+        artifact_object.insert(
+            "public_url".to_string(),
+            Value::String(generated_artifact_public_file_url(
+                &relative_dir,
+                index_file_name,
+            )),
+        );
+
+        let manifest_path = artifact_dir.join("manifest.json");
+        if manifest_path.is_file() {
+            artifact_object.insert(
+                "manifest_path".to_string(),
+                Value::String(manifest_path.display().to_string()),
+            );
+        }
+        let data_path = artifact_dir.join("data.json");
+        if data_path.is_file() {
+            artifact_object.insert(
+                "data_path".to_string(),
+                Value::String(data_path.display().to_string()),
+            );
+            artifact_object.insert(
+                "data_url".to_string(),
+                Value::String(generated_artifact_public_file_url(&relative_dir, "data.json")),
+            );
+        }
+        let data_snapshot_path = artifact_dir.join("data-snapshot.json");
+        if data_snapshot_path.is_file() {
+            artifact_object.insert(
+                "data_snapshot_path".to_string(),
+                Value::String(data_snapshot_path.display().to_string()),
+            );
+            artifact_object.insert(
+                "data_snapshot_url".to_string(),
+                Value::String(generated_artifact_public_file_url(
+                    &relative_dir,
+                    "data-snapshot.json",
+                )),
+            );
+        }
+    }
+    strip_static_page_inline_artifact_payload(&mut republished)?;
+    Ok(Some(republished))
+}
+
+fn local_artifact_path_is_under_task_workspace(path: &Path) -> Result<bool> {
+    let Some(root) = std::env::var("CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT")
+        .ok()
+        .map(|value| PathBuf::from(value.trim()))
+        .filter(|value| value.is_absolute())
+    else {
+        return Ok(false);
+    };
+    let canonical_root = match fs::canonicalize(&root) {
+        Ok(root) => root,
+        Err(_) => return Ok(false),
+    };
+    let canonical_path = match fs::canonicalize(path) {
+        Ok(path) => path,
+        Err(_) => return Ok(false),
+    };
+    Ok(canonical_path.starts_with(canonical_root))
+}
+
+fn copy_generated_artifact_dir(source_dir: &Path, target_dir: &Path) -> Result<()> {
+    fs::create_dir_all(target_dir).map_err(|error| {
+        anyhow!(
+            "failed to create generated artifact target dir {}: {error}",
+            target_dir.display()
+        )
+    })?;
+    for entry in fs::read_dir(source_dir).map_err(|error| {
+        anyhow!(
+            "failed to read generated artifact source dir {}: {error}",
+            source_dir.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            anyhow!(
+                "failed to read generated artifact source entry {}: {error}",
+                source_dir.display()
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            anyhow!(
+                "failed to read generated artifact entry type {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        let target_path = target_dir.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_generated_artifact_dir(&entry.path(), &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &target_path).map_err(|error| {
+                anyhow!(
+                    "failed to copy generated artifact {} to {}: {error}",
+                    entry.path().display(),
+                    target_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn publish_cloudflare_static_page_html(
@@ -3445,6 +3628,88 @@ mod tests {
         assert!(std::path::Path::new(local_path).exists());
         let html = std::fs::read_to_string(local_path).expect("html should be readable");
         assert!(html.contains("Image2 视觉合同页面"));
+    }
+
+    #[test]
+    fn codex_exec_workspace_local_static_page_dir_is_republished_by_host_agent() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let workspace_root = std::env::temp_dir()
+            .join("v3-codex-host-test-workspaces")
+            .join(Uuid::new_v4().to_string());
+        let workspace_artifact_dir = workspace_root.join("task/generated-artifacts/static-page-demo");
+        std::fs::create_dir_all(&workspace_artifact_dir).expect("workspace artifact dir");
+        std::fs::write(
+            workspace_artifact_dir.join("index.html"),
+            "<!doctype html><html><body><h1>Codex workspace page</h1></body></html>",
+        )
+        .expect("workspace html");
+        std::fs::write(workspace_artifact_dir.join("data.json"), "{\"ok\":true}")
+            .expect("workspace data");
+        std::fs::write(workspace_artifact_dir.join("manifest.json"), "{\"kind\":\"test\"}")
+            .expect("workspace manifest");
+        let _root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.display().to_string(),
+        );
+        let _workspace_root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            workspace_root.display().to_string(),
+        );
+        let _base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let assistant_run_id = AssistantRunId::new();
+        let task_context = CodexHostTaskContext {
+            assistant_run_id,
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:static-page".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+        };
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/static-page-demo/index.html",
+                "local_path": workspace_artifact_dir.join("index.html").display().to_string(),
+                "manifest_path": workspace_artifact_dir.join("manifest.json").display().to_string()
+            },
+            "validation_report": {
+                "source_row_count": 1
+            }
+        });
+
+        let normalized = normalize_cloudflare_fixed_task_output(
+            output,
+            &task_context,
+            domain_model::WorkflowExecutionId::new(),
+            "task_workspace_local_path",
+        )
+        .expect("output should normalize");
+
+        let public_url = normalized
+            .pointer("/artifact/public_url")
+            .and_then(Value::as_str)
+            .expect("public url");
+        assert!(public_url.contains("/generated-artifacts/database-static-pages/codex-host/"));
+        assert!(public_url.ends_with("/index.html"));
+        let local_path = normalized
+            .pointer("/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        assert!(std::path::Path::new(local_path).starts_with(&artifact_root));
+        let html = std::fs::read_to_string(local_path).expect("html should be readable");
+        assert!(html.contains("Codex workspace page"));
+        assert!(normalized.pointer("/artifact/data_url").is_some());
+        assert!(normalized.pointer("/artifact/manifest_path").is_some());
     }
 
     #[test]
