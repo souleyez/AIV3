@@ -474,7 +474,9 @@ async fn maybe_record_external_static_page_publish_completed_from_task_output(
         .pointer("/artifact/public_url")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| generated_artifact_url_allowed(value))
+        .filter(|value| {
+            generated_static_page_public_url_claim_is_host_published(fixed_task_output, value)
+        })
         .map(str::to_string)
     else {
         return Ok(());
@@ -2116,7 +2118,7 @@ fn normalize_cloudflare_fixed_task_output(
         .pointer("/artifact/public_url")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if generated_artifact_url_allowed(public_url) {
+    if generated_static_page_public_url_claim_is_host_published(&output, public_url) {
         let mut output = output;
         strip_static_page_inline_artifact_payload(&mut output)?;
         return Ok(output);
@@ -2419,6 +2421,28 @@ fn generated_artifact_url_allowed(public_url: &str) -> bool {
     }
     normalized.starts_with("https://v3.elepcloud.com/generated-artifacts/")
         || normalized.starts_with("/generated-artifacts/")
+}
+
+fn generated_static_page_public_url_claim_is_host_published(
+    output: &Value,
+    public_url: &str,
+) -> bool {
+    let normalized = public_url.trim();
+    if !generated_artifact_url_allowed(normalized) {
+        return false;
+    }
+    let local_path = output
+        .pointer("/artifact/local_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let remote_workspace_path =
+        local_path.starts_with("/workspace/") || local_path.starts_with("workspace/");
+    if remote_workspace_path {
+        return false;
+    }
+    normalized.contains("/generated-artifacts/database-static-pages/")
+        || local_path.starts_with("/srv/aiv3/shared/objects/generated-artifacts/")
 }
 
 fn safe_path_segment(value: &str) -> String {
@@ -3164,6 +3188,78 @@ mod tests {
         assert!(normalized.pointer("/artifact/html").is_none());
         assert!(normalized.pointer("/artifact/data_json").is_none());
         assert!(normalized.pointer("/data").is_none());
+    }
+
+    #[test]
+    fn cloudflare_static_page_workspace_public_url_is_republished_by_host_agent() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let _root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.display().to_string(),
+        );
+        let _base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let assistant_run_id = AssistantRunId::new();
+        let task_context = CodexHostTaskContext {
+            assistant_run_id,
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:static-page".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+        };
+        let draft_id = task_context
+            .fixed_task
+            .as_ref()
+            .and_then(|fixed_task| fixed_task.draft_id.as_deref())
+            .unwrap_or("draft");
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "public_url": format!(
+                    "https://v3.elepcloud.com/generated-artifacts/{draft_id}/index.html"
+                ),
+                "local_path": format!("/workspace/generated-artifacts/{draft_id}/index.html"),
+                "html": "<main><h1>Image2 视觉合同页面</h1></main>",
+                "data_json": {"source": "cloudflare-inline"}
+            },
+            "validation_report": {
+                "source_row_count": 1
+            }
+        });
+
+        let normalized = normalize_cloudflare_fixed_task_output(
+            output,
+            &task_context,
+            domain_model::WorkflowExecutionId::new(),
+            "task_workspace_url",
+        )
+        .expect("output should normalize");
+
+        let public_url = normalized
+            .pointer("/artifact/public_url")
+            .and_then(Value::as_str)
+            .expect("public url");
+        assert!(public_url.contains("/generated-artifacts/database-static-pages/codex-host/"));
+        assert!(public_url.contains(&assistant_run_id.to_string()));
+        assert!(!public_url.contains(&format!("/generated-artifacts/{draft_id}/")));
+        assert!(normalized.pointer("/artifact/html").is_none());
+        let local_path = normalized
+            .pointer("/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        assert!(std::path::Path::new(local_path).exists());
+        let html = std::fs::read_to_string(local_path).expect("html should be readable");
+        assert!(html.contains("Image2 视觉合同页面"));
     }
 
     #[test]
