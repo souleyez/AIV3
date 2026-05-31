@@ -220,6 +220,15 @@ async fn process_task(
             &output,
         )
         .await?;
+        maybe_record_external_data_ingestion_analysis_result_from_task_output(
+            storage,
+            task.tenant_id,
+            task_context.assistant_run_id,
+            task.execution_id,
+            &task_context,
+            &output,
+        )
+        .await?;
         storage
             .workflow_tasks()
             .mark_succeeded(task.id, Utc::now())
@@ -514,6 +523,202 @@ async fn maybe_record_external_static_page_publish_completed_from_task_output(
     )
     .await?;
     Ok(())
+}
+
+async fn maybe_record_external_data_ingestion_analysis_result_from_task_output(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    assistant_run_id: AssistantRunId,
+    workflow_execution_id: WorkflowExecutionId,
+    task_context: &CodexHostTaskContext,
+    task_output: &Value,
+) -> Result<()> {
+    let Some(fixed_task) = task_context.fixed_task.as_ref() else {
+        return Ok(());
+    };
+    if fixed_task.template_id.as_str() != "data_ingestion_analysis" {
+        return Ok(());
+    }
+    let Some(fixed_task_output) = task_output
+        .get("fixed_task_output")
+        .filter(|value| value.is_object())
+    else {
+        return Ok(());
+    };
+
+    let event_name = data_ingestion_analysis_assistant_event_name(fixed_task_output);
+    let existing_events = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await?;
+    if existing_events.iter().any(|event| {
+        matches!(
+            event.event_name.as_str(),
+            "assistant_run.data_ingestion_analysis_completed"
+                | "assistant_run.data_ingestion_analysis_needs_human"
+                | "assistant_run.data_ingestion_analysis_failed"
+        ) && event
+            .payload
+            .get("codex_host_workflow_execution_id")
+            .and_then(Value::as_str)
+            == Some(workflow_execution_id.to_string().as_str())
+    }) {
+        return Ok(());
+    }
+
+    append_assistant_event(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        event_name,
+        external_data_ingestion_analysis_payload_from_fixed_task_output(
+            workflow_execution_id,
+            fixed_task_output,
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+fn data_ingestion_analysis_assistant_event_name(output: &Value) -> &'static str {
+    match output
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("failed")
+    {
+        "analysis_ready" | "staging_spec_ready" => {
+            "assistant_run.data_ingestion_analysis_completed"
+        }
+        "needs_human" => "assistant_run.data_ingestion_analysis_needs_human",
+        _ => "assistant_run.data_ingestion_analysis_failed",
+    }
+}
+
+fn external_data_ingestion_analysis_payload_from_fixed_task_output(
+    workflow_execution_id: WorkflowExecutionId,
+    output: &Value,
+) -> Value {
+    let staging_spec = output.get("staging_spec").cloned().unwrap_or(Value::Null);
+    let staging_plan_available = !staging_spec.is_null();
+    json!({
+        "template_id": "data_ingestion_analysis",
+        "status": output.get("status").cloned().unwrap_or(Value::String("failed".to_string())),
+        "codex_host_workflow_execution_id": workflow_execution_id.to_string(),
+        "result_summary": external_data_ingestion_result_summary(output),
+        "staging_plan": if staging_plan_available {
+            json!({
+                "type": "v3_data_ingestion_staging_plan",
+                "plan_id": format!("staging-plan-{}", workflow_execution_id),
+                "codex_host_workflow_execution_id": workflow_execution_id.to_string(),
+                "template_id": "data_ingestion_analysis",
+                "staging_spec": bounded_public_value(&staging_spec, 8),
+                "production_write_allowed": false,
+                "requires_human_confirmation": true,
+            })
+        } else {
+            Value::Null
+        },
+        "staging_plan_available": staging_plan_available,
+        "staging_spec_available": staging_plan_available,
+        "human_review_required": output.get("status").and_then(Value::as_str) != Some("analysis_ready"),
+        "production_write_allowed": false,
+        "raw_credentials_exposed": false,
+        "raw_table_dump_exposed": false,
+        "validation": {
+            "status": output.get("status").cloned().unwrap_or(Value::String("failed".to_string())),
+            "auto_apply_allowed": false,
+        },
+    })
+}
+
+fn external_data_ingestion_result_summary(output: &Value) -> Value {
+    let data_quality_report = output.get("data_quality_report").unwrap_or(&Value::Null);
+    let mapping_plan = output.get("mapping_plan").unwrap_or(&Value::Null);
+    let staging_spec = output.get("staging_spec").unwrap_or(&Value::Null);
+    json!({
+        "status": output.get("status").cloned().unwrap_or(Value::String("failed".to_string())),
+        "source_summary": safe_public_string_array(output.get("source_summary"), 6, 260),
+        "data_quality_report": {
+            "row_count": data_quality_report.get("row_count").cloned().unwrap_or(Value::Null),
+            "warnings": safe_public_string_array(data_quality_report.get("warnings"), 8, 220),
+            "quality_notes": safe_public_string_array(data_quality_report.get("quality_notes"), 8, 220),
+        },
+        "mapping_plan_summary": {
+            "field_count": mapping_plan
+                .get("fields")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "available": !mapping_plan.is_null(),
+        },
+        "staging_spec_summary": {
+            "available": !staging_spec.is_null(),
+            "target": staging_spec.get("target").cloned().unwrap_or(Value::Null),
+            "step_count": staging_spec
+                .get("steps")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "write_policy": "requires_human_confirmation",
+        },
+        "staging_spec_available": !staging_spec.is_null(),
+        "validation_checks": safe_public_string_array(output.get("validation_checks"), 12, 220),
+        "recommended_next_actions": safe_public_string_array(output.get("recommended_next_actions"), 8, 260),
+        "human_review_reason": output
+            .get("human_review_reason")
+            .and_then(Value::as_str)
+            .map(|value| safe_public_text(value, 360)),
+        "production_write_allowed": false,
+        "raw_credentials_exposed": false,
+        "raw_table_dump_exposed": false,
+    })
+}
+
+fn safe_public_string_array(
+    value: Option<&Value>,
+    max_items: usize,
+    max_chars: usize,
+) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|value| safe_public_text(value, max_chars))
+                .filter(|value| !value.is_empty())
+                .take(max_items)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn safe_public_text(value: &str, max_chars: usize) -> String {
+    let excerpt = safe_log_excerpt(value.as_bytes(), max_chars);
+    excerpt.trim().to_string()
+}
+
+fn bounded_public_value(value: &Value, max_depth: usize) -> Value {
+    if max_depth == 0 {
+        return Value::String("[truncated]".to_string());
+    }
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .take(40)
+                .map(|item| bounded_public_value(item, max_depth - 1))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .take(40)
+                .map(|(key, value)| (key.clone(), bounded_public_value(value, max_depth - 1)))
+                .collect(),
+        ),
+        Value::String(text) => Value::String(safe_public_text(text, 500)),
+        _ => value.clone(),
+    }
 }
 
 async fn external_static_page_source_refs_for_fixed_task(
