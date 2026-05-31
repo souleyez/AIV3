@@ -269,8 +269,9 @@ async fn process_task(
             let retry_reason = cloudflare_orchestrator_retry_reason(&error_message);
             let logical_queue = cloudflare_orchestrator_logical_queue(&task_context);
             let logical_task_key = cloudflare_orchestrator_poll_logical_task_key(&task_context);
+            let current_payload = latest_workflow_task_payload(storage, &task).await?;
             let updated_payload = workflow_task_payload_with_cloudflare_orchestrator_poll(
-                &task.payload,
+                &current_payload,
                 retry_reason,
                 logical_queue,
                 logical_task_key,
@@ -280,6 +281,7 @@ async fn process_task(
                 now,
                 Some(&error_message),
             );
+            let remote_task_id = cloudflare_orchestrator_task_id_from_payload(&updated_payload);
             storage
                 .workflow_tasks()
                 .update_payload(task.id, &updated_payload, now)
@@ -298,6 +300,7 @@ async fn process_task(
                     "max_attempts": task.max_attempts,
                     "retry_delay_ms": retry_delay_ms,
                     "available_at": available_at.to_rfc3339(),
+                    "task_id": remote_task_id,
                     "error": error_message,
                     "secrets_exposed": false,
                 }),
@@ -353,6 +356,21 @@ async fn process_task(
     );
 
     Ok(())
+}
+
+async fn latest_workflow_task_payload(
+    storage: &PgStorage,
+    task: &domain_model::WorkflowTask,
+) -> Result<Value> {
+    let latest = storage
+        .workflow_tasks()
+        .list_by_execution(task.execution_id)
+        .await?
+        .into_iter()
+        .find(|candidate| candidate.id == task.id)
+        .map(|candidate| candidate.payload)
+        .unwrap_or_else(|| task.payload.clone());
+    Ok(latest)
 }
 
 fn codex_host_cancelled_error_reason(error_message: &str) -> Option<&'static str> {
