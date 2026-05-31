@@ -99,6 +99,43 @@ export const EXTERNAL_INTEGRATION_MODES = [
     ],
     guardrail: '凭证线下交付；观测页只展示模式和文档路径，不展示 token、客户 endpoint 或密钥。',
   },
+  {
+    key: 'database_integration',
+    title: '数据库对接',
+    status: '联调接入',
+    summary: '适合类似 8 服务器现有数据库源的接入：V3 托管密钥和表映射，数据库行同步入数据集后用于问答和静态页报表。',
+    docs: [
+      'docs/integrations/third-party-integration-api.zh-CN.html#section-26',
+      'docs/integrations/third-party-integration-api.zh-CN.md',
+    ],
+    documentLinks: [
+      {
+        key: 'database-complete-third-party-html',
+        label: '完整 API（含数据库）',
+        href: '/external-integrations/third-party-integration-api.zh-CN.html#section-26',
+        kind: 'html',
+        target: '_blank',
+      },
+      {
+        key: 'database-complete-third-party-md',
+        label: '完整 API MD 下载',
+        href: '/external-integrations/third-party-integration-api.zh-CN.md',
+        kind: 'markdown',
+        download: true,
+      },
+    ],
+    checklist: [
+      '数据库源配置：source_id、密钥引用、库名和表白名单',
+      '联调验证：连接测试、schema 扫描、表预览',
+      '语义画像：识别时间、指标、维度、实体和文本字段',
+      '同步入库：数据库行清洗为 V3 数据集证据',
+      '状态查询：同步状态、数据集可用性、行转换失败',
+      '聊天使用：传同步后的 dataset_external_ids',
+      '报表生成：基于数据库数据生成 Image2 和静态页',
+      '安全边界：不传密码、不执行任意 SQL、不暴露原始表 dump',
+    ],
+    guardrail: '数据库密码只放服务端密钥或密钥绑定；第三方聊天接口只传数据集范围，不传 SQL 和连接串。',
+  },
 ];
 
 export function thirdPartyApiBaseUrl() {

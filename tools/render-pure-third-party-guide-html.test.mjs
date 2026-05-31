@@ -14,6 +14,10 @@ const sampleMarkdown = `# V3 纯第三方简单版接口文档
 
 ## 1. 对接目标
 
+### 1.1 数据库对接
+
+#### 1.1.1 连接测试
+
 - 用户在第三方页面提问；
 - V3 按本轮文档范围供料。
 
@@ -51,6 +55,9 @@ test('renderPureThirdPartyGuideHtml renders a review-friendly HTML document', ()
   const html = fs.readFileSync(paths.output, 'utf8');
   assert.match(html, /<title>V3 纯第三方简单版接口文档<\/title>/);
   assert.match(html, /<nav aria-label="文档目录">/);
+  assert.match(html, /class="nav-depth-2" href="#section-01">1\. 对接目标<\/a>/);
+  assert.match(html, /class="nav-depth-3" href="#section-02">1\.1 数据库对接<\/a>/);
+  assert.match(html, /class="nav-depth-4" href="#section-03">1\.1\.1 连接测试<\/a>/);
   assert.match(html, /flow-board/);
   assert.match(html, /table-shell/);
   assert.match(html, /copy-code/);

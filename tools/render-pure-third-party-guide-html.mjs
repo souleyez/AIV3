@@ -196,8 +196,8 @@ function markdownToHtml(markdown, options = {}) {
       } else {
         sectionIndex += 1;
         const id = slugFor(sectionIndex);
-        if (level === 2) {
-          nav.push({ id, title });
+        if (level >= 2 && level <= 4) {
+          nav.push({ id, title, level });
         }
         html.push(`<h${level} id="${id}">${inlineMarkdown(title)}</h${level}>`);
       }
@@ -259,7 +259,9 @@ function markdownToHtml(markdown, options = {}) {
 
 function renderDocument({ body, nav }, profile = pureGuideProfile) {
   const navHtml = nav
-    .map(({ id, title }) => `<a href="#${id}">${escapeHtml(title.replace(/^\d+\.\s*/, ''))}</a>`)
+    .map(({ id, title, level = 2 }) => (
+      `<a class="nav-depth-${level}" href="#${id}">${escapeHtml(title)}</a>`
+    ))
     .join('\n');
   const metricsHtml = profile.metrics
     .map(([value, label]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
@@ -373,6 +375,20 @@ function renderDocument({ body, nav }, profile = pureGuideProfile) {
     nav a:hover {
       color: var(--ink);
       background: rgba(15, 118, 110, 0.09);
+    }
+    nav .nav-depth-3 {
+      margin-left: 12px;
+      padding-top: 6px;
+      padding-bottom: 6px;
+      font-size: 13px;
+      color: #51605b;
+    }
+    nav .nav-depth-4 {
+      margin-left: 24px;
+      padding-top: 5px;
+      padding-bottom: 5px;
+      font-size: 12px;
+      color: #73807c;
     }
 
     main {

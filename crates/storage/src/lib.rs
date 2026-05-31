@@ -4639,6 +4639,44 @@ impl PgStaticPageDraftRepository {
         rows.iter().map(map_static_page_draft_row).collect()
     }
 
+    pub async fn find_latest_accepted_baseline_by_artifact_key(
+        &self,
+        tenant_id: TenantId,
+        artifact_key: &str,
+    ) -> Result<Option<StaticPageDraft>> {
+        let artifact_key = artifact_key.trim();
+        if artifact_key.is_empty() {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, assistant_run_id, title, status, selected_scope,
+                   visibility_snapshot, source_refs, draft_payload, created_at, updated_at
+            from static_page_drafts
+            where tenant_id = $1
+              and (
+                    source_refs #>> '{artifact_stability,dataset_artifact_key}' = $2
+                 or source_refs ->> 'dataset_artifact_key' = $2
+                 or draft_payload #>> '{artifactStability,datasetArtifactKey}' = $2
+                 or draft_payload #>> '{artifact_stability,dataset_artifact_key}' = $2
+              )
+              and (
+                    source_refs #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
+                 or draft_payload #>> '{artifactStability,baselineStatus}' in ('accepted', 'published_baseline')
+                 or draft_payload #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
+              )
+            order by updated_at desc, created_at desc
+            limit 1
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(artifact_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_static_page_draft_row).transpose()
+    }
+
     pub async fn update(
         &self,
         tenant_id: TenantId,

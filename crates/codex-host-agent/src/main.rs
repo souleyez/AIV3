@@ -2909,6 +2909,11 @@ async fn run_codex_exec(
     }
     let mut command = Command::new(&command_plan.program);
     command.args(command_plan.process_args());
+    command.stdin(Stdio::null());
+    command.env(
+        "RUST_LOG",
+        std::env::var("CODEX_HOST_AGENT_CHILD_RUST_LOG").unwrap_or_else(|_| "warn".to_string()),
+    );
     if let Some(workspace_path) = command_plan.workspace_path.as_ref() {
         command.current_dir(workspace_path);
     }

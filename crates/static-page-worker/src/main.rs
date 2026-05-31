@@ -30,7 +30,7 @@ const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_STALE_CLAIM_AFTER_MS: u64 = 2 * 60 * 60 * 1_000;
 const DEFAULT_STALE_SWEEP_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_STALE_SWEEP_LIMIT: u32 = 25;
-const DEFAULT_IMAGE_HTTP_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+const DEFAULT_IMAGE_HTTP_TIMEOUT_MS: u64 = 3 * 60 * 1_000;
 const DEFAULT_IMAGE_HTTP_CONNECT_TIMEOUT_MS: u64 = 30 * 1_000;
 const DEFAULT_STATIC_PAGE_WORKER_CONCURRENCY: usize = 1;
 const MAX_STATIC_PAGE_WORKER_CONCURRENCY: usize = 16;
@@ -1352,6 +1352,10 @@ fn orchestrator_poll_error_is_transient(error: &anyhow::Error) -> bool {
         || message.contains("status=502")
         || message.contains("status=503")
         || message.contains("status=504")
+        || message.contains("status=524")
+        || message.contains("status=429")
+        || message.contains("excessive system load")
+        || message.contains("upstream_error")
 }
 
 fn static_page_image_error_should_auto_retry(error_message: &str) -> bool {
@@ -1372,6 +1376,10 @@ fn static_page_image_error_should_auto_retry(error_message: &str) -> bool {
         || message.contains("status=502")
         || message.contains("status=503")
         || message.contains("status=504")
+        || message.contains("status=524")
+        || message.contains("status=429")
+        || message.contains("excessive system load")
+        || message.contains("upstream_error")
 }
 
 fn static_page_orchestrator_waf_blocked_error(lowercase_message: &str) -> bool {
@@ -2260,6 +2268,15 @@ mod tests {
         ));
         assert!(static_page_image_error_should_auto_retry(
             "orchestrator poll failed: status=500"
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "direct image generation failed: status=524 <unknown status code>"
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "direct image generation failed: status=400 Bad Request body_excerpt=\"{\\\"error\\\":{\\\"message\\\":\\\"excessive system load\\\",\\\"type\\\":\\\"upstream_error\\\"}}\""
+        ));
+        assert!(static_page_image_error_should_auto_retry(
+            "direct image generation failed: status=429 Too Many Requests"
         ));
         assert!(!static_page_image_error_should_auto_retry(
             "orchestrator response JSON decode failed: status=403 body_excerpt=\"1010 browser_signature_banned\""

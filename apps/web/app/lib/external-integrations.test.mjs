@@ -54,9 +54,11 @@ test('external integration modes are generic customer-facing guidance without se
   const modeText = JSON.stringify(EXTERNAL_INTEGRATION_MODES);
   const standardMode = EXTERNAL_INTEGRATION_MODES.find((mode) => mode.key === 'standard_bot');
   const pureMode = EXTERNAL_INTEGRATION_MODES.find((mode) => mode.key === 'pure_third_party');
-  assert.equal(EXTERNAL_INTEGRATION_MODES.length, 2);
+  const databaseMode = EXTERNAL_INTEGRATION_MODES.find((mode) => mode.key === 'database_integration');
+  assert.equal(EXTERNAL_INTEGRATION_MODES.length, 3);
   assert(standardMode);
   assert(pureMode);
+  assert(databaseMode);
   assert.equal(
     standardMode.documentLinks.find((link) => link.key === 'complete-third-party-html').href,
     '/external-integrations/third-party-integration-api.zh-CN.html',
@@ -73,10 +75,20 @@ test('external integration modes are generic customer-facing guidance without se
     pureMode.documentLinks.find((link) => link.key === 'pure-third-party-md').download,
     true,
   );
+  assert.equal(
+    databaseMode.documentLinks.find((link) => link.key === 'database-complete-third-party-html').href,
+    '/external-integrations/third-party-integration-api.zh-CN.html#section-26',
+  );
+  assert.equal(
+    databaseMode.documentLinks.find((link) => link.key === 'database-complete-third-party-md').download,
+    true,
+  );
   assert(standardMode.checklist.includes('平台事件验签与消息解密'));
   assert(standardMode.checklist.includes('用户确认、动作派发和结果回调'));
   assert(pureMode.checklist.includes('文档解析：parse 与 parse-detail'));
   assert(pureMode.checklist.includes('按模板生成产物：artifact_type + template'));
+  assert(databaseMode.checklist.includes('同步入库：数据库行清洗为 V3 数据集证据'));
+  assert(databaseMode.checklist.includes('安全边界：不传密码、不执行任意 SQL、不暴露原始表 dump'));
   assert(!modeText.includes('用户权限'));
   assert(!modeText.includes('v3in_live_'));
   assert(!/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{12,}/.test(modeText));

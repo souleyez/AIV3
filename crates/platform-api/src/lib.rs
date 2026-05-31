@@ -15341,6 +15341,14 @@ async fn ingest_external_channel_message_with_connection(
         &mut selected_scope,
     )
     .await?;
+    enrich_external_channel_database_source_scope(
+        state,
+        connection,
+        &message,
+        assistant_request.prompt.trim(),
+        &mut selected_scope,
+    )
+    .await?;
     enrich_external_channel_user_context_scope(
         state,
         &message,
@@ -19553,6 +19561,21 @@ async fn enrich_external_channel_document_scope(
     let requested_dataset_external_ids =
         external_bot_message_requested_dataset_external_ids(message);
     if !requested_dataset_external_ids.is_empty() {
+        if enrich_external_channel_v3_dataset_scope(
+            state,
+            connection_id,
+            message,
+            external_owner_user_id,
+            &requested_dataset_external_ids,
+            explicit_source_id
+                .as_deref()
+                .or(default_source_id.as_deref()),
+            selected_scope,
+        )
+        .await?
+        {
+            return Ok(());
+        }
         let dataset_external_id_pairs = effective_external_document_parse_dataset_external_id_pairs(
             &requested_dataset_external_ids,
         );
@@ -20002,6 +20025,251 @@ async fn enrich_external_channel_source_document_scope(
     Ok(())
 }
 
+async fn enrich_external_channel_v3_dataset_scope(
+    state: &AppState,
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    owner_user_id: UserId,
+    requested_dataset_external_ids: &[String],
+    display_source_id: Option<&str>,
+    selected_scope: &mut Value,
+) -> std::result::Result<bool, ApiError> {
+    let mut requested_v3_dataset_ids = Vec::new();
+    let mut requested_v3_dataset_external_ids = Vec::new();
+    for requested in requested_dataset_external_ids {
+        let Some(dataset_id) = Uuid::parse_str(requested.trim()).ok().map(DatasetId) else {
+            continue;
+        };
+        if requested_v3_dataset_ids.contains(&dataset_id) {
+            continue;
+        }
+        requested_v3_dataset_ids.push(dataset_id);
+        requested_v3_dataset_external_ids.push(requested.trim().to_string());
+    }
+    if requested_v3_dataset_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let mut visible_dataset_ids = Vec::new();
+    let mut unresolved_dataset_external_ids = Vec::new();
+    for (index, dataset_id) in requested_v3_dataset_ids.iter().enumerate() {
+        let Some(dataset) = state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, *dataset_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        else {
+            unresolved_dataset_external_ids.push(requested_v3_dataset_external_ids[index].clone());
+            continue;
+        };
+        if !external_channel_v3_dataset_visible_to_owner(&dataset, owner_user_id) {
+            unresolved_dataset_external_ids.push(requested_v3_dataset_external_ids[index].clone());
+            continue;
+        }
+        visible_dataset_ids.push(dataset.id);
+    }
+    if visible_dataset_ids.is_empty() {
+        return Ok(false);
+    }
+
+    let mut selected_documents = Vec::new();
+    let mut selected_document_ids = Vec::new();
+    let mut selected_external_ids = Vec::new();
+    for dataset_id in &visible_dataset_ids {
+        let documents = list_documents_for_dataset_scope(state, *dataset_id).await?;
+        for document in documents {
+            if !owner_user_id_is_visible(document.owner_user_id, Some(owner_user_id)) {
+                continue;
+            }
+            if selected_document_ids.contains(&document.id) {
+                continue;
+            }
+            selected_document_ids.push(document.id);
+            let document_external_id =
+                external_document_external_id_from_metadata(&document.metadata)
+                    .unwrap_or_else(|| document.id.to_string());
+            if !selected_external_ids.contains(&document_external_id) {
+                selected_external_ids.push(document_external_id.clone());
+            }
+            let document_source_id =
+                external_document_source_id_from_metadata(&document.metadata, None)
+                    .or_else(|| display_source_id.and_then(non_empty_trimmed_string));
+            selected_documents.push(json!({
+                "type": "document",
+                "id": document.id,
+                "dataset_id": document.dataset_id,
+                "source_id": document_source_id,
+                "document_external_id": document_external_id,
+                "title": document.title,
+            }));
+        }
+    }
+
+    if let Some(source_id) = display_source_id.and_then(non_empty_trimmed_string) {
+        set_payload_value(
+            selected_scope,
+            "available_document_source_id",
+            json!(source_id),
+        );
+    }
+    set_payload_value(
+        selected_scope,
+        "dataset_external_id",
+        json!(requested_v3_dataset_external_ids.first()),
+    );
+    set_payload_value(
+        selected_scope,
+        "requested_dataset_external_id",
+        json!(requested_v3_dataset_external_ids.first()),
+    );
+    set_payload_value(
+        selected_scope,
+        "dataset_external_ids",
+        json!(requested_v3_dataset_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "requested_dataset_external_ids",
+        json!(requested_v3_dataset_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "unresolved_dataset_external_ids",
+        json!(unresolved_dataset_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "unresolved_document_external_ids",
+        json!([]),
+    );
+
+    if selected_document_ids.is_empty() {
+        set_payload_value(selected_scope, "available_document_external_ids", json!([]));
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_status",
+            json!("v3_dataset_empty"),
+        );
+        set_payload_value(
+            selected_scope,
+            "external_document_scope_summary",
+            json!("V3 dataset UUIDs were supplied, but no visible parsed documents were found in those datasets."),
+        );
+        set_payload_value(
+            selected_scope,
+            "datasets",
+            Value::Array(
+                visible_dataset_ids
+                    .iter()
+                    .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+                    .collect(),
+            ),
+        );
+        return Ok(true);
+    }
+
+    let scope_source = if requested_v3_dataset_external_ids.len() > 1 {
+        "v3_dataset_external_ids"
+    } else {
+        "v3_dataset_external_id"
+    };
+    let temporary_dataset = create_or_refresh_external_channel_temporary_dataset_scope(
+        state,
+        connection_id,
+        message,
+        None,
+        &selected_document_ids,
+        scope_source,
+        requested_v3_dataset_external_ids
+            .first()
+            .map(String::as_str),
+        requested_v3_dataset_external_ids
+            .first()
+            .map(String::as_str),
+        &requested_v3_dataset_external_ids,
+        &requested_v3_dataset_external_ids,
+    )
+    .await?;
+    set_external_channel_temporary_dataset_scope(
+        selected_scope,
+        connection_id,
+        message,
+        None,
+        selected_document_ids.len(),
+        temporary_dataset.as_ref(),
+        scope_source,
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_status",
+        json!(if unresolved_dataset_external_ids.is_empty() {
+            "v3_dataset_resolved"
+        } else {
+            "partial"
+        }),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_summary",
+        json!("V3 dataset UUIDs were supplied for this conversation; V3 converted their visible documents into a conversation-scoped temporary dataset for chat and artifact generation."),
+    );
+    set_payload_value(
+        selected_scope,
+        "available_document_external_ids",
+        json!(selected_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "documents",
+        Value::Array(selected_documents),
+    );
+    set_payload_value(
+        selected_scope,
+        "canonical_datasets",
+        Value::Array(
+            visible_dataset_ids
+                .iter()
+                .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+                .collect(),
+        ),
+    );
+    let active_datasets = temporary_dataset
+        .as_ref()
+        .map(|temporary_dataset| {
+            vec![json!({"type": "dataset", "id": temporary_dataset.dataset_id})]
+        })
+        .unwrap_or_else(|| {
+            visible_dataset_ids
+                .iter()
+                .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+                .collect()
+        });
+    set_payload_value(selected_scope, "datasets", Value::Array(active_datasets));
+    set_payload_value(
+        selected_scope,
+        "dataset_document_scope",
+        json!({
+            "source": scope_source,
+            "source_id": display_source_id,
+            "dataset_external_id": requested_v3_dataset_external_ids.first(),
+            "requested_dataset_external_id": requested_v3_dataset_external_ids.first(),
+            "dataset_external_ids": requested_v3_dataset_external_ids,
+            "requested_dataset_external_ids": requested_v3_dataset_external_ids,
+            "document_count": selected_document_ids.len(),
+            "dataset_count": visible_dataset_ids.len(),
+        }),
+    );
+    Ok(true)
+}
+
+fn external_channel_v3_dataset_visible_to_owner(dataset: &Dataset, owner_user_id: UserId) -> bool {
+    dataset
+        .owner_user_id
+        .is_some_and(|existing_owner| existing_owner == owner_user_id)
+        || (dataset.owner_user_id.is_none() && dataset.visibility == DatasetVisibility::Public)
+}
+
 async fn enrich_external_channel_dataset_documents_scope(
     state: &AppState,
     connection_id: &str,
@@ -20265,13 +20533,24 @@ async fn restore_external_channel_temporary_dataset_scope(
         return Ok(false);
     }
 
-    let restored_source_id = source_id.and_then(non_empty_trimmed_string).or_else(|| {
-        dataset
-            .metadata
-            .get("available_document_source_id")
-            .and_then(Value::as_str)
-            .and_then(non_empty_trimmed_string)
-    });
+    let restored_scope_source = dataset
+        .metadata
+        .get("scope_source")
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string)
+        .unwrap_or_else(|| "available_document_external_ids".to_string());
+    let restored_source_id = dataset
+        .metadata
+        .get("available_document_source_id")
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string)
+        .or_else(|| {
+            if restored_scope_source.starts_with("v3_dataset") {
+                None
+            } else {
+                source_id.and_then(non_empty_trimmed_string)
+            }
+        });
     let restored_dataset_external_id = dataset
         .metadata
         .get("dataset_external_id")
@@ -20302,12 +20581,6 @@ async fn restore_external_channel_temporary_dataset_scope(
             restored_requested_dataset_external_ids.push(value);
         }
     }
-    let restored_scope_source = dataset
-        .metadata
-        .get("scope_source")
-        .and_then(Value::as_str)
-        .and_then(non_empty_trimmed_string)
-        .unwrap_or_else(|| "available_document_external_ids".to_string());
     let document_ids = state
         .storage
         .dataset_document_memberships()
@@ -20339,11 +20612,8 @@ async fn restore_external_channel_temporary_dataset_scope(
         let document_source_id =
             external_document_source_id_from_metadata(&document.metadata, None)
                 .or_else(|| restored_source_id.clone());
-        let Some(document_external_id) =
-            external_document_external_id_from_metadata(&document.metadata)
-        else {
-            continue;
-        };
+        let document_external_id = external_document_external_id_from_metadata(&document.metadata)
+            .unwrap_or_else(|| document.id.to_string());
         if !selected_external_ids.contains(&document_external_id) {
             selected_external_ids.push(document_external_id.clone());
         }
@@ -20613,7 +20883,7 @@ async fn find_external_channel_temporary_dataset_scope(
     source_id: Option<&str>,
 ) -> std::result::Result<Option<Dataset>, ApiError> {
     if let Some(source_id) = source_id.and_then(non_empty_trimmed_string) {
-        return state
+        if let Some(dataset) = state
             .storage
             .datasets()
             .get_by_key(
@@ -20621,7 +20891,10 @@ async fn find_external_channel_temporary_dataset_scope(
                 &external_channel_temporary_dataset_key(connection_id, message, Some(&source_id)),
             )
             .await
-            .map_err(ApiError::from_storage);
+            .map_err(ApiError::from_storage)?
+        {
+            return Ok(Some(dataset));
+        }
     }
 
     let mut candidates = state
@@ -22132,6 +22405,12 @@ fn external_channel_static_page_reply_from_events(
         return Some(reply);
     }
     for event in events.iter().rev() {
+        if event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused" {
+            return Some(external_channel_static_page_stable_artifact_reused_reply(
+                conversation_external_id,
+                &event.payload,
+            ));
+        }
         if event.event_name == "assistant_run.external_channel_static_page_publish_completed" {
             if let Some(reply) =
                 external_channel_static_page_publish_completed_reply_from_event_payload(
@@ -24298,8 +24577,10 @@ fn external_channel_message_requests_static_page_artifact(
         return true;
     }
 
+    let explicit_report_workflow_request =
+        external_channel_prompt_requests_static_page_report_workflow(prompt);
     if message.render_mode.as_deref() != Some("artifact") {
-        return false;
+        return explicit_report_workflow_request;
     }
 
     if message
@@ -24314,6 +24595,10 @@ fn external_channel_message_requests_static_page_artifact(
             )
         })
     {
+        return true;
+    }
+
+    if explicit_report_workflow_request {
         return true;
     }
 
@@ -24345,6 +24630,169 @@ fn external_channel_message_requests_static_page_artifact(
             "htmlpage",
         ],
     )
+}
+
+fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let asks_for_report_artifact = external_channel_text_has_any(
+        &compact,
+        prompt,
+        &[
+            "静态页",
+            "报表页",
+            "可视化报表",
+            "经营分析报表",
+            "报表",
+            "看板",
+            "大屏",
+            "页面",
+            "网页",
+            "网站",
+            "dashboard",
+            "webpage",
+            "htmlpage",
+            "generated-artifact",
+        ],
+    );
+    if !asks_for_report_artifact {
+        return false;
+    }
+    external_channel_text_has_any(
+        &compact,
+        prompt,
+        &[
+            "重新生成",
+            "生成一版",
+            "生成",
+            "制作",
+            "创建",
+            "输出",
+            "发布",
+            "渲染",
+            "出页面",
+            "出报表",
+            "出图",
+            "生图",
+            "做成",
+            "做个",
+            "做一个",
+            "做一份",
+            "可访问",
+            "链接",
+            "create",
+            "generate",
+            "build",
+            "render",
+            "publish",
+            "make",
+        ],
+    )
+}
+
+async fn enrich_external_channel_database_source_scope(
+    state: &AppState,
+    connection: &ExternalChannelConnectionSummary,
+    message: &ExternalBotMessageView,
+    prompt: &str,
+    selected_scope: &mut Value,
+) -> std::result::Result<(), ApiError> {
+    if !external_channel_message_requests_static_page_artifact(message, prompt)
+        && !assistant_run_database_schema_context_requested(prompt)
+    {
+        return Ok(());
+    }
+
+    let mut requested_source_ids =
+        external_channel_allowed_database_source_ids(&connection.config_redacted);
+    if let Some(default_source_id) =
+        external_channel_default_source_id_from_config(&connection.config_redacted)
+    {
+        requested_source_ids.insert(default_source_id);
+    }
+    if requested_source_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut database_source_ids = BTreeSet::new();
+    let mut database_dataset_bindings = Vec::new();
+    for source_id in requested_source_ids {
+        let source = match load_enabled_database_source_connection(state, &source_id).await {
+            Ok(source) => source,
+            Err(_) => continue,
+        };
+        database_source_ids.insert(source.source_id.clone());
+        let default_dataset_id = mysql_source_config_for_request(&source, &Value::Null)
+            .ok()
+            .and_then(|config| config.default_dataset_id)
+            .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
+            .map(DatasetId);
+        if let Some(dataset_id) = default_dataset_id {
+            database_dataset_bindings.push((source.source_id.clone(), dataset_id));
+        }
+    }
+    if database_source_ids.is_empty() {
+        return Ok(());
+    }
+
+    set_payload_value(
+        selected_scope,
+        "database_source_ids",
+        json!(database_source_ids.iter().cloned().collect::<Vec<_>>()),
+    );
+    if !database_dataset_bindings.is_empty() {
+        append_database_source_default_datasets_to_scope(
+            selected_scope,
+            &database_dataset_bindings,
+        );
+    }
+    set_payload_value(
+        selected_scope,
+        "database_source_scope",
+        json!({
+            "source": "external_channel_allowed_database_sources",
+            "source_ids": database_source_ids.iter().cloned().collect::<Vec<_>>(),
+            "default_dataset_bindings": database_dataset_bindings
+                .iter()
+                .map(|(source_id, dataset_id)| json!({
+                    "source_id": source_id,
+                    "dataset_id": dataset_id,
+                }))
+                .collect::<Vec<_>>(),
+            "policy": "connection_allowed_database_sources_for_report_workflow",
+        }),
+    );
+    Ok(())
+}
+
+fn append_database_source_default_datasets_to_scope(
+    selected_scope: &mut Value,
+    bindings: &[(String, DatasetId)],
+) {
+    let mut datasets = selected_scope
+        .get("datasets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for (source_id, dataset_id) in bindings {
+        if datasets
+            .iter()
+            .filter_map(dataset_id_from_scope_item)
+            .any(|existing| existing == *dataset_id)
+        {
+            continue;
+        }
+        datasets.push(json!({
+            "type": "dataset",
+            "id": dataset_id,
+            "source": "database_source_default_dataset",
+            "database_source_id": source_id,
+        }));
+    }
+    set_payload_value(selected_scope, "datasets", Value::Array(datasets));
 }
 
 fn external_channel_static_page_template_reference_id(
@@ -24433,6 +24881,492 @@ fn collect_external_static_page_database_source_ids(
     }
 
     ids.into_iter().collect()
+}
+
+fn static_page_stable_key_token(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>();
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(
+        normalized
+            .replace('\\', "\\\\")
+            .replace('|', "\\|")
+            .replace(':', "\\:"),
+    )
+}
+
+fn static_page_stable_key_insert_value(
+    output: &mut BTreeSet<String>,
+    prefix: &str,
+    value: Option<&Value>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    for raw in external_string_ids_from_payload_value(value.clone()) {
+        if let Some(token) = static_page_stable_key_token(&raw) {
+            output.insert(format!("{prefix}:{token}"));
+        }
+    }
+}
+
+fn static_page_stable_key_insert_scope_item_id(
+    output: &mut BTreeSet<String>,
+    prefix: &str,
+    item: &Value,
+) {
+    if let Some(object) = item.as_object() {
+        for key in ["id", "dataset_id", "datasetId", "document_id", "documentId"] {
+            if let Some(value) = object
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(static_page_stable_key_token)
+            {
+                output.insert(format!("{prefix}:{value}"));
+                return;
+            }
+        }
+    }
+}
+
+fn static_page_stable_key_insert_scope_item_external_id(
+    output: &mut BTreeSet<String>,
+    prefix: &str,
+    item: &Value,
+) {
+    if let Some(object) = item.as_object() {
+        for key in [
+            "document_external_id",
+            "documentExternalId",
+            "external_document_id",
+            "externalDocumentId",
+        ] {
+            if let Some(value) = object
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(static_page_stable_key_token)
+            {
+                output.insert(format!("{prefix}:{value}"));
+                return;
+            }
+        }
+    }
+}
+
+fn static_page_stable_key_collect_scope_parts(
+    selected_scope: &Value,
+    source_refs: &Value,
+    connection_id: Option<&str>,
+) -> BTreeSet<String> {
+    let mut parts = BTreeSet::new();
+    if let Some(connection_id) = connection_id.and_then(static_page_stable_key_token) {
+        parts.insert(format!("channel:{connection_id}"));
+    }
+    for key in [
+        "dataset_external_ids",
+        "requested_dataset_external_ids",
+        "available_dataset_external_ids",
+    ] {
+        static_page_stable_key_insert_value(
+            &mut parts,
+            key.trim_end_matches('s'),
+            selected_scope.get(key),
+        );
+    }
+    if let Some(dataset_scope) = selected_scope.get("dataset_document_scope") {
+        for key in ["dataset_external_ids", "requested_dataset_external_ids"] {
+            static_page_stable_key_insert_value(
+                &mut parts,
+                key.trim_end_matches('s'),
+                dataset_scope.get(key),
+            );
+        }
+    }
+
+    let has_dataset_external_scope = parts.iter().any(|part| {
+        part.starts_with("dataset_external_id:")
+            || part.starts_with("requested_dataset_external_id:")
+            || part.starts_with("available_dataset_external_id:")
+    });
+
+    if !has_dataset_external_scope {
+        if let Some(items) = selected_scope
+            .get("canonical_datasets")
+            .and_then(Value::as_array)
+        {
+            for item in items {
+                static_page_stable_key_insert_scope_item_id(
+                    &mut parts,
+                    "canonical_dataset_id",
+                    item,
+                );
+            }
+        }
+    }
+
+    let has_canonical_dataset_scope = parts
+        .iter()
+        .any(|part| part.starts_with("canonical_dataset_id:"));
+    if !has_dataset_external_scope && !has_canonical_dataset_scope {
+        for dataset_id in selected_dataset_ids_from_scope(selected_scope) {
+            parts.insert(format!("dataset_id:{dataset_id}"));
+        }
+    }
+
+    if !parts.iter().any(|part| {
+        part.starts_with("dataset_external_id:")
+            || part.starts_with("requested_dataset_external_id:")
+            || part.starts_with("available_dataset_external_id:")
+            || part.starts_with("canonical_dataset_id:")
+            || part.starts_with("dataset_id:")
+    }) {
+        static_page_stable_key_insert_value(
+            &mut parts,
+            "available_document_external_id",
+            selected_scope.get("available_document_external_ids"),
+        );
+        if let Some(items) = selected_scope.get("documents").and_then(Value::as_array) {
+            for item in items {
+                static_page_stable_key_insert_scope_item_external_id(
+                    &mut parts,
+                    "document_external_id",
+                    item,
+                );
+                static_page_stable_key_insert_scope_item_id(&mut parts, "document_id", item);
+            }
+        }
+    }
+
+    for key in [
+        "database_source_ids",
+        "databaseSourceIds",
+        "database_source_id",
+        "databaseSourceId",
+    ] {
+        static_page_stable_key_insert_value(
+            &mut parts,
+            key.trim_end_matches('s'),
+            source_refs.get(key).or_else(|| selected_scope.get(key)),
+        );
+    }
+    if let Some(recipient_delivery) = source_refs.get("recipient_delivery") {
+        static_page_stable_key_insert_value(
+            &mut parts,
+            "recipient_user",
+            recipient_delivery.get("target_external_user_ids"),
+        );
+        if let Some(role_scope_candidates) = recipient_delivery
+            .get("role_scope_candidates")
+            .and_then(Value::as_array)
+        {
+            for candidate in role_scope_candidates {
+                if let Some(role) = candidate
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .and_then(static_page_stable_key_token)
+                {
+                    parts.insert(format!("recipient_role:{role}"));
+                }
+                if let Some(default_scope) = candidate
+                    .get("default_scope")
+                    .and_then(Value::as_str)
+                    .and_then(static_page_stable_key_token)
+                {
+                    parts.insert(format!("recipient_scope:{default_scope}"));
+                }
+            }
+        }
+        if let Some(provided_mapping) = recipient_delivery
+            .get("provided_mapping")
+            .filter(|value| !value.is_null())
+        {
+            if let Ok(mapping_text) = serde_json::to_string(provided_mapping) {
+                if let Some(token) = static_page_stable_key_token(&mapping_text) {
+                    parts.insert(format!("recipient_mapping:{token}"));
+                }
+            }
+        }
+    }
+    parts
+}
+
+fn external_channel_static_page_template_stability_key(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> String {
+    if let Some(template_reference_id) =
+        external_channel_static_page_template_reference_id(message, prompt)
+    {
+        if let Some(token) = static_page_stable_key_token(&template_reference_id) {
+            return format!("template:{token}");
+        }
+    }
+    for skill in message
+        .requested_skills
+        .iter()
+        .filter(|skill| external_requested_skill_mode(skill) != "disabled")
+    {
+        if !external_requested_skill_is_document_template(skill) {
+            continue;
+        }
+        let source_id = external_document_template_skill_source_id(skill)
+            .and_then(|value| static_page_stable_key_token(&value))
+            .unwrap_or_else(|| "source-default".to_string());
+        let document_external_id = external_document_template_skill_external_id(skill)
+            .or_else(|| {
+                external_document_template_skill_document_id(skill).map(|id| id.to_string())
+            })
+            .and_then(|value| static_page_stable_key_token(&value));
+        let revision = external_document_template_skill_revision_external_id(skill)
+            .and_then(|value| static_page_stable_key_token(&value))
+            .unwrap_or_else(|| "latest".to_string());
+        if let Some(document_external_id) = document_external_id {
+            return format!("document-template:{source_id}:{document_external_id}:{revision}");
+        }
+    }
+    "template:default".to_string()
+}
+
+fn static_page_dataset_artifact_key(
+    selected_scope: &Value,
+    source_refs: &Value,
+    template_stability_key: &str,
+    connection_id: Option<&str>,
+) -> Option<String> {
+    let scope_parts =
+        static_page_stable_key_collect_scope_parts(selected_scope, source_refs, connection_id);
+    let has_material_scope = scope_parts.iter().any(|part| {
+        part.starts_with("dataset_external_id:")
+            || part.starts_with("requested_dataset_external_id:")
+            || part.starts_with("canonical_dataset_id:")
+            || part.starts_with("dataset_id:")
+            || part.starts_with("available_document_external_id:")
+            || part.starts_with("document_external_id:")
+            || part.starts_with("document_id:")
+            || part.starts_with("database_source_id:")
+            || part.starts_with("databaseSourceId:")
+    });
+    if !has_material_scope {
+        return None;
+    }
+    let mut parts = vec!["v3-static-page".to_string()];
+    parts.push(template_stability_key.to_string());
+    parts.extend(scope_parts);
+    Some(parts.join("|"))
+}
+
+fn static_page_artifact_stability_metadata(
+    dataset_artifact_key: &str,
+    baseline_status: &str,
+    public_url: Option<&str>,
+    now: DateTime<Utc>,
+) -> Value {
+    json!({
+        "schema": "v3.static_page_artifact_stability",
+        "schemaVersion": 1,
+        "dataset_artifact_key": dataset_artifact_key,
+        "datasetArtifactKey": dataset_artifact_key,
+        "baseline_status": baseline_status,
+        "baselineStatus": baseline_status,
+        "reuse_policy": "reuse_accepted_baseline_unless_explicit_redesign",
+        "reusePolicy": "reuse_accepted_baseline_unless_explicit_redesign",
+        "edit_mode": "incremental_existing_artifact",
+        "editMode": "incremental_existing_artifact",
+        "image2_reuse_policy": "skip_when_accepted_baseline_exists",
+        "image2ReusePolicy": "skip_when_accepted_baseline_exists",
+        "public_url": public_url,
+        "publicUrl": public_url,
+        "updated_at": now,
+        "updatedAt": now,
+    })
+}
+
+fn apply_static_page_artifact_stability_to_source_refs(
+    mut source_refs: Value,
+    dataset_artifact_key: Option<&str>,
+    baseline_status: &str,
+    public_url: Option<&str>,
+    now: DateTime<Utc>,
+) -> Value {
+    let Some(dataset_artifact_key) = dataset_artifact_key else {
+        return source_refs;
+    };
+    ensure_json_object(&mut source_refs);
+    if let Some(object) = source_refs.as_object_mut() {
+        object.insert(
+            "dataset_artifact_key".to_string(),
+            json!(dataset_artifact_key),
+        );
+        object.insert(
+            "artifact_stability".to_string(),
+            static_page_artifact_stability_metadata(
+                dataset_artifact_key,
+                baseline_status,
+                public_url,
+                now,
+            ),
+        );
+    }
+    source_refs
+}
+
+fn apply_static_page_artifact_stability_to_payload(
+    mut payload: Value,
+    dataset_artifact_key: Option<&str>,
+    baseline_status: &str,
+    public_url: Option<&str>,
+    now: DateTime<Utc>,
+) -> Value {
+    let Some(dataset_artifact_key) = dataset_artifact_key else {
+        return payload;
+    };
+    ensure_json_object(&mut payload);
+    if let Some(object) = payload.as_object_mut() {
+        let metadata = static_page_artifact_stability_metadata(
+            dataset_artifact_key,
+            baseline_status,
+            public_url,
+            now,
+        );
+        object.insert("artifactStability".to_string(), metadata.clone());
+        object.insert("artifact_stability".to_string(), metadata.clone());
+        object.insert(
+            "datasetArtifactKey".to_string(),
+            json!(dataset_artifact_key),
+        );
+        if public_url.is_some() || object.contains_key("finalPage") {
+            let final_page = object
+                .entry("finalPage".to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            ensure_json_object(final_page);
+            if let Some(final_page_object) = final_page.as_object_mut() {
+                final_page_object.insert(
+                    "datasetArtifactKey".to_string(),
+                    json!(dataset_artifact_key),
+                );
+                final_page_object.insert("baselineStatus".to_string(), json!(baseline_status));
+                if let Some(public_url) = public_url {
+                    final_page_object.insert("publicUrl".to_string(), json!(public_url));
+                    final_page_object.insert("public_url".to_string(), json!(public_url));
+                    final_page_object.insert("generatedArtifactUrl".to_string(), json!(public_url));
+                    final_page_object
+                        .insert("generated_artifact_url".to_string(), json!(public_url));
+                }
+            }
+        }
+    }
+    payload
+}
+
+fn static_page_dataset_artifact_key_from_source_refs(source_refs: &Value) -> Option<String> {
+    source_refs
+        .get("dataset_artifact_key")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            source_refs
+                .pointer("/artifact_stability/dataset_artifact_key")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            source_refs
+                .pointer("/artifact_stability/datasetArtifactKey")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn static_page_dataset_artifact_key_from_draft_context(draft: &StaticPageDraft) -> Option<String> {
+    static_page_dataset_artifact_key_from_source_refs(&draft.source_refs).or_else(|| {
+        let template_stability_key =
+            static_page_template_reference_id_from_source_refs(&draft.source_refs)
+                .and_then(static_page_stable_key_token)
+                .map(|value| format!("template:{value}"))
+                .unwrap_or_else(|| "template:default".to_string());
+        static_page_dataset_artifact_key(
+            &draft.selected_scope,
+            &draft.source_refs,
+            &template_stability_key,
+            external_channel_static_page_source_ref_string(
+                &draft.source_refs,
+                "channel_connection_id",
+            )
+            .as_deref(),
+        )
+    })
+}
+
+fn static_page_published_public_url_from_draft(draft: &StaticPageDraft) -> Option<String> {
+    [
+        draft
+            .draft_payload
+            .pointer("/finalPage/publicUrl")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/finalPage/public_url")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/finalPage/generatedArtifactUrl")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/artifactStability/publicUrl")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/artifact_stability/public_url")
+            .and_then(Value::as_str),
+        draft
+            .source_refs
+            .pointer("/artifact_stability/public_url")
+            .and_then(Value::as_str),
+        draft
+            .source_refs
+            .pointer("/artifact_stability/publicUrl")
+            .and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+    .map(ToOwned::to_owned)
+    .next()
+}
+
+fn static_page_prompt_requests_explicit_redesign(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    external_channel_text_has_any(
+        &compact,
+        prompt,
+        &[
+            "重新出图",
+            "重新生成效果图",
+            "重新设计",
+            "重做一版",
+            "另起一版",
+            "全新页面",
+            "换个风格",
+            "换风格",
+            "从头做",
+            "newversion",
+            "newpage",
+            "redesign",
+            "reimage",
+            "fromscratch",
+        ],
+    )
 }
 
 fn external_static_page_template_reference_label(reference: &Value) -> Option<String> {
@@ -26204,7 +27138,15 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
 
     let recipient_delivery =
         external_channel_static_page_recipient_delivery(message, &assistant_request.prompt);
-    let source_refs = json!({
+    let selected_scope = assistant_request
+        .selected_scope
+        .clone()
+        .unwrap_or_else(|| run.selected_scope.clone());
+    let template_reference_id =
+        external_channel_static_page_template_reference_id(message, &assistant_request.prompt);
+    let template_stability_key =
+        external_channel_static_page_template_stability_key(message, &assistant_request.prompt);
+    let mut source_refs = json!({
         "source": "external_channel_static_page_artifact_request",
         "auto_publish_generated_artifact": true,
         "effect_image_confirmation_required": false,
@@ -26231,6 +27173,96 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         "recipient_delivery": recipient_delivery.clone(),
         "answer_policy": external_answer_policy_value(message),
     });
+    let dataset_artifact_key = static_page_dataset_artifact_key(
+        &selected_scope,
+        &source_refs,
+        &template_stability_key,
+        Some(connection_id),
+    );
+    source_refs = apply_static_page_artifact_stability_to_source_refs(
+        source_refs,
+        dataset_artifact_key.as_deref(),
+        "candidate",
+        None,
+        now,
+    );
+    if let Some(dataset_artifact_key) = dataset_artifact_key.as_deref() {
+        if !static_page_prompt_requests_explicit_redesign(&assistant_request.prompt) {
+            if let Some(baseline_draft) = state
+                .storage
+                .static_page_drafts()
+                .find_latest_accepted_baseline_by_artifact_key(
+                    state.tenant_id,
+                    dataset_artifact_key,
+                )
+                .await
+                .map_err(ApiError::from_storage)?
+            {
+                if let Some(public_url) =
+                    static_page_published_public_url_from_draft(&baseline_draft)
+                {
+                    let event_payload = json!({
+                        "type": "v3_static_page_stable_artifact",
+                        "status": "static_page_stable_artifact_reused",
+                        "channel_connection_id": connection_id,
+                        "platform": external_channel_platform_wire_value(&message.platform),
+                        "conversation_external_id": message.conversation_external_id,
+                        "message_external_id": message.message_external_id,
+                        "draft_id": baseline_draft.id,
+                        "baseline_draft_id": baseline_draft.id,
+                        "baseline_assistant_run_id": baseline_draft.assistant_run_id,
+                        "dataset_artifact_key": dataset_artifact_key,
+                        "baseline_status": "accepted",
+                        "public_url": public_url,
+                        "generated_artifact_url": public_url,
+                        "artifact_links": [public_url],
+                        "image2_skipped": true,
+                        "image2_skip_reason": "accepted_dataset_artifact_baseline",
+                        "edit_mode": "incremental_existing_artifact",
+                        "reuse_policy": "reuse_accepted_baseline_unless_explicit_redesign",
+                        "status_url": external_channel_assistant_run_reply_status_url(
+                            connection_id,
+                            run.id,
+                        ),
+                        "status_method": "GET",
+                        "poll_after_seconds": Value::Null,
+                        "recipient_delivery": recipient_delivery.clone(),
+                        "permission_review_status": recipient_delivery
+                            .get("permission_review_status")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "editable_after_publish": recipient_delivery
+                            .get("editable_after_publish")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "source_refs": source_refs.clone(),
+                    });
+                    state
+                        .storage
+                        .assistant_runs()
+                        .append_event(
+                            state.tenant_id,
+                            run.id,
+                            &NewAssistantRunEvent {
+                                event_name:
+                                    "assistant_run.external_channel_static_page_stable_artifact_reused"
+                                        .to_string(),
+                                payload: event_payload.clone(),
+                                created_at: now,
+                            },
+                        )
+                        .await
+                        .map_err(ApiError::from_storage)?;
+                    return Ok(Some(
+                        external_channel_static_page_stable_artifact_reused_reply(
+                            &message.conversation_external_id,
+                            &event_payload,
+                        ),
+                    ));
+                }
+            }
+        }
+    }
     let draft_outcome = create_static_page_draft_for_assistant_run_id(
         state,
         run.id,
@@ -26238,11 +27270,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         CreateStaticPageDraftRequest {
             title: None,
             prompt: Some(assistant_request.prompt.clone()),
-            template_reference_id: external_channel_static_page_template_reference_id(
-                message,
-                &assistant_request.prompt,
-            ),
-            selected_scope: assistant_request.selected_scope.clone(),
+            template_reference_id,
+            selected_scope: Some(selected_scope),
             visibility_snapshot: None,
             source_refs,
             draft_payload: Value::Null,
@@ -28922,6 +29951,25 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
     } else {
         source_refs
     };
+    let template_stability_key = template_reference_id
+        .and_then(static_page_stable_key_token)
+        .map(|value| format!("template:{value}"))
+        .unwrap_or_else(|| "template:default".to_string());
+    let dataset_artifact_key = static_page_dataset_artifact_key(
+        &selected_scope,
+        &source_refs,
+        &template_stability_key,
+        external_channel_static_page_source_ref_string(&source_refs, "channel_connection_id")
+            .as_deref(),
+    )
+    .or_else(|| static_page_dataset_artifact_key_from_source_refs(&source_refs));
+    let source_refs = apply_static_page_artifact_stability_to_source_refs(
+        source_refs,
+        dataset_artifact_key.as_deref(),
+        "candidate",
+        None,
+        Utc::now(),
+    );
     let draft_payload = if draft_payload_from_default {
         build_initial_static_page_draft_payload(&run, prompt)
     } else {
@@ -28949,6 +29997,13 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
         template_reference_payload.as_ref(),
         &evidence_summary,
         &missing_evidence,
+    );
+    let draft_payload = apply_static_page_artifact_stability_to_payload(
+        draft_payload,
+        dataset_artifact_key.as_deref(),
+        "candidate",
+        None,
+        Utc::now(),
     );
 
     let draft = state
@@ -37126,6 +38181,18 @@ async fn maybe_record_external_static_page_publish_completed(
     } else {
         dynamic_page_contract
     };
+    let dataset_artifact_key = static_page_dataset_artifact_key_from_source_refs(&source_refs)
+        .or_else(|| {
+            draft
+                .as_ref()
+                .and_then(static_page_dataset_artifact_key_from_draft_context)
+        });
+    let artifact_stability = dataset_artifact_key
+        .as_deref()
+        .map(|key| {
+            static_page_artifact_stability_metadata(key, "accepted", Some(public_url), Utc::now())
+        })
+        .unwrap_or(Value::Null);
 
     let completed_payload = json!({
         "channel_connection_id": channel_connection_id,
@@ -37144,6 +38211,13 @@ async fn maybe_record_external_static_page_publish_completed(
         "dynamic_page_contract": dynamic_page_contract,
         "validation_summary": validation_summary,
         "source_refs": source_refs,
+        "dataset_artifact_key": dataset_artifact_key,
+        "baseline_status": if artifact_stability.is_null() {
+            Value::Null
+        } else {
+            Value::String("accepted".to_string())
+        },
+        "artifact_stability": artifact_stability,
     });
 
     maybe_attach_external_static_page_artifact_to_run(
@@ -37308,6 +38382,18 @@ async fn mark_static_page_draft_generated_artifact_published(
         .get("data_snapshot_url")
         .cloned()
         .unwrap_or(Value::Null);
+    let dataset_artifact_key = completed_payload
+        .get("dataset_artifact_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            completed_payload
+                .get("source_refs")
+                .and_then(static_page_dataset_artifact_key_from_source_refs)
+        })
+        .or_else(|| static_page_dataset_artifact_key_from_draft_context(&draft));
 
     asset_manifest.insert("status".to_string(), json!("rendered"));
     asset_manifest.insert(
@@ -37379,7 +38465,20 @@ async fn mark_static_page_draft_generated_artifact_published(
     payload.insert("finalPage".to_string(), Value::Object(final_page));
     payload.insert("updatedAt".to_string(), json!(now));
     draft.status = StaticPageDraftStatus::Rendered;
-    draft.draft_payload = Value::Object(payload);
+    draft.source_refs = apply_static_page_artifact_stability_to_source_refs(
+        draft.source_refs,
+        dataset_artifact_key.as_deref(),
+        "accepted",
+        Some(public_url),
+        now,
+    );
+    draft.draft_payload = apply_static_page_artifact_stability_to_payload(
+        Value::Object(payload),
+        dataset_artifact_key.as_deref(),
+        "accepted",
+        Some(public_url),
+        now,
+    );
     storage
         .static_page_drafts()
         .update(tenant_id, &draft)
@@ -37587,6 +38686,7 @@ fn external_channel_static_page_status_source_refs(source_refs: &Value) -> Value
         "message_external_id",
         "output_format",
         "render_mode",
+        "dataset_artifact_key",
     ] {
         if let Some(value) = external_channel_static_page_source_ref_string(source_refs, key) {
             output.insert(key.to_string(), Value::String(value));
@@ -37594,6 +38694,9 @@ fn external_channel_static_page_status_source_refs(source_refs: &Value) -> Value
     }
     if let Some(value) = source_refs.get("recipient_delivery") {
         output.insert("recipient_delivery".to_string(), value.clone());
+    }
+    if let Some(value) = source_refs.get("artifact_stability") {
+        output.insert("artifact_stability".to_string(), value.clone());
     }
     Value::Object(output)
 }
@@ -37759,9 +38862,99 @@ fn external_channel_static_page_published_reply(
                 .get("validation_summary")
                 .cloned()
                 .unwrap_or(Value::Null),
+            "dataset_artifact_key": payload
+                .get("dataset_artifact_key")
+                .cloned()
+                .or_else(|| payload.pointer("/artifact_stability/dataset_artifact_key").cloned())
+                .or_else(|| payload.pointer("/source_refs/artifact_stability/dataset_artifact_key").cloned())
+                .unwrap_or(Value::Null),
+            "baseline_status": payload
+                .get("baseline_status")
+                .cloned()
+                .or_else(|| payload.pointer("/artifact_stability/baseline_status").cloned())
+                .or_else(|| payload.pointer("/source_refs/artifact_stability/baseline_status").cloned())
+                .unwrap_or(Value::Null),
         })),
         artifact_links: vec![public_url.to_string()],
         task_status: Some("static_page_published".to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+fn external_channel_static_page_stable_artifact_reused_reply(
+    conversation_external_id: &str,
+    payload: &Value,
+) -> ExternalBotReplyView {
+    let public_url = payload
+        .get("public_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+        .unwrap_or_default();
+    ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: ExternalBotReplyTypeView::ArtifactLink,
+        text: Some(
+            "已复用该数据集已发布的静态页；后续调整会在原产物基础上处理，本轮未重新发起 Image2。"
+                .to_string(),
+        ),
+        card: Some(json!({
+            "type": "v3_static_page_stable_artifact",
+            "status": "static_page_stable_artifact_reused",
+            "public_url": public_url,
+            "generated_artifact_url": public_url,
+            "download_url": public_url,
+            "html_download_url": public_url,
+            "artifact_links": [public_url],
+            "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
+            "baseline_draft_id": payload
+                .get("baseline_draft_id")
+                .cloned()
+                .or_else(|| payload.get("draft_id").cloned())
+                .unwrap_or(Value::Null),
+            "baseline_assistant_run_id": payload
+                .get("baseline_assistant_run_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "dataset_artifact_key": payload
+                .get("dataset_artifact_key")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "baseline_status": payload
+                .get("baseline_status")
+                .cloned()
+                .unwrap_or_else(|| json!("accepted")),
+            "image2_skipped": payload
+                .get("image2_skipped")
+                .cloned()
+                .unwrap_or_else(|| json!(true)),
+            "image2_skip_reason": payload
+                .get("image2_skip_reason")
+                .cloned()
+                .unwrap_or_else(|| json!("accepted_dataset_artifact_baseline")),
+            "edit_mode": payload
+                .get("edit_mode")
+                .cloned()
+                .unwrap_or_else(|| json!("incremental_existing_artifact")),
+            "reuse_policy": payload
+                .get("reuse_policy")
+                .cloned()
+                .unwrap_or_else(|| json!("reuse_accepted_baseline_unless_explicit_redesign")),
+            "status_url": payload.get("status_url").cloned().unwrap_or(Value::Null),
+            "status_method": payload.get("status_method").cloned().unwrap_or_else(|| json!("GET")),
+            "poll_after_seconds": Value::Null,
+            "recipient_delivery": external_channel_recipient_delivery_from_payload(payload),
+            "permission_review_status": external_channel_permission_review_status_from_payload(payload),
+            "editable_after_publish": external_channel_editable_after_publish_from_payload(payload),
+        })),
+        artifact_links: if public_url.is_empty() {
+            Vec::new()
+        } else {
+            vec![public_url.to_string()]
+        },
+        task_status: Some("static_page_stable_artifact_reused".to_string()),
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
@@ -42845,7 +44038,9 @@ fn selected_scope_allows_external_document_range_without_acl_snapshot(
         selected_scope
             .get("external_document_scope_status")
             .and_then(Value::as_str),
-        Some("resolved" | "partial" | "source_resolved" | "dataset_resolved")
+        Some(
+            "resolved" | "partial" | "source_resolved" | "dataset_resolved" | "v3_dataset_resolved",
+        )
     ) {
         return false;
     }
@@ -73071,6 +74266,39 @@ mod tests {
         assert!(external_user_context_key("generic_chat", "tenant-a", "bot-a", " ").is_none());
     }
 
+    #[test]
+    fn static_page_stable_artifact_key_uses_canonical_dataset_not_temporary_dataset() {
+        let canonical_dataset_id = DatasetId::new();
+        let temporary_dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "dataset_external_ids": ["xinbai-main"],
+            "canonical_datasets": [{"type": "dataset", "id": canonical_dataset_id}],
+            "datasets": [{"type": "dataset", "id": temporary_dataset_id}]
+        });
+        let source_refs = json!({
+            "source": "external_channel_static_page_artifact_request",
+            "channel_connection_id": "generic-chat-main"
+        });
+
+        let key = static_page_dataset_artifact_key(
+            &selected_scope,
+            &source_refs,
+            "template:default",
+            Some("generic-chat-main"),
+        )
+        .expect("stable key");
+
+        assert!(key.contains("dataset_external_id:xinbai-main"));
+        assert!(key.contains("channel:generic-chat-main"));
+        assert!(!key.contains(&temporary_dataset_id.to_string()));
+        assert!(!static_page_prompt_requests_explicit_redesign(
+            "把标题改一下"
+        ));
+        assert!(static_page_prompt_requests_explicit_redesign(
+            "重新出图，换个风格"
+        ));
+    }
+
     #[tokio::test]
     async fn external_user_memory_is_intent_gated_and_supplied() {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -73887,6 +75115,234 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_channel_static_page_reuses_accepted_dataset_artifact_baseline() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external static-page baseline reuse test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-static-page-baseline-{}", Uuid::new_v4()),
+                "External Static Page Baseline Reuse Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-static-baseline".to_string();
+        message.message_external_id = "msg-static-baseline-002".to_string();
+        message.text = Some("在这个报表基础上把标题改成新百经营日报".to_string());
+        message.output_format = Some("rich_text".to_string());
+        message.render_mode = Some("artifact".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        message.dataset_external_ids = vec!["xinbai-project-dataset".to_string()];
+        let mut assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let canonical_dataset_id = DatasetId::new();
+        let temporary_dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "dataset_external_ids": ["xinbai-project-dataset"],
+            "requested_dataset_external_ids": ["xinbai-project-dataset"],
+            "canonical_datasets": [{"type": "dataset", "id": canonical_dataset_id}],
+            "datasets": [{"type": "dataset", "id": temporary_dataset_id}],
+            "external_document_scope_status": "dataset_resolved"
+        });
+        assistant_request.selected_scope = Some(selected_scope.clone());
+        let template_stability_key = external_channel_static_page_template_stability_key(
+            &message,
+            &assistant_request.prompt,
+        );
+        let base_source_refs = json!({
+            "source": "external_channel_static_page_artifact_request",
+            "channel_connection_id": "generic-chat-main",
+            "platform": "generic_chat",
+            "conversation_external_id": "conv-static-baseline",
+            "message_external_id": "msg-static-baseline-001",
+            "artifact_type": "static_page"
+        });
+        let dataset_artifact_key = static_page_dataset_artifact_key(
+            &selected_scope,
+            &base_source_refs,
+            &template_stability_key,
+            Some("generic-chat-main"),
+        )
+        .expect("stable dataset artifact key");
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai/index.html";
+        let baseline_source_refs = apply_static_page_artifact_stability_to_source_refs(
+            base_source_refs,
+            Some(&dataset_artifact_key),
+            "accepted",
+            Some(public_url),
+            Utc::now(),
+        );
+        let baseline_payload = apply_static_page_artifact_stability_to_payload(
+            json!({
+                "status": "rendered",
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": public_url
+                }
+            }),
+            Some(&dataset_artifact_key),
+            "accepted",
+            Some(public_url),
+            Utc::now(),
+        );
+        let now = Utc::now();
+        let baseline_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: "生成新百经营报表".to_string(),
+                    startup_briefing: json!({"surface": "external_channel"}),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("baseline run should be created");
+        let baseline_draft = state
+            .storage
+            .static_page_drafts()
+            .create(
+                state.tenant_id,
+                &NewStaticPageDraft {
+                    assistant_run_id: baseline_run.id,
+                    owner_user_id: None,
+                    title: "静态页：新百经营报表".to_string(),
+                    status: StaticPageDraftStatus::Rendered,
+                    selected_scope: selected_scope.clone(),
+                    visibility_snapshot: json!({"policy": "test"}),
+                    source_refs: baseline_source_refs,
+                    draft_payload: baseline_payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("baseline draft should be created");
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: assistant_request.prompt.clone(),
+                    startup_briefing: assistant_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!(assistant_request.scope_candidates.clone()),
+                    context_policy: assistant_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+
+        let reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &run,
+            &assistant_request,
+            &message,
+            now,
+        )
+        .await
+        .expect("static-page pipeline should complete")
+        .expect("static-page reply should be returned");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_stable_artifact_reused")
+        );
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        let card = reply.card.expect("stable artifact card");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["draft_id"], json!(baseline_draft.id.to_string()));
+        assert_eq!(card["dataset_artifact_key"], json!(dataset_artifact_key));
+        assert_eq!(card["image2_skipped"], json!(true));
+
+        let new_run_drafts = state
+            .storage
+            .static_page_drafts()
+            .list_by_assistant_run(state.tenant_id, run.id)
+            .await
+            .expect("drafts should list");
+        assert!(
+            new_run_drafts.is_empty(),
+            "baseline reuse should not create a new draft or Image2 job"
+        );
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let reused = events
+            .iter()
+            .find(|event| {
+                event.event_name
+                    == "assistant_run.external_channel_static_page_stable_artifact_reused"
+            })
+            .expect("reuse event should be recorded");
+        let status_reply = external_channel_static_page_reply_from_events(
+            &events,
+            &message.conversation_external_id,
+        )
+        .expect("status reply should reuse baseline");
+        assert_eq!(
+            status_reply.task_status.as_deref(),
+            Some("static_page_stable_artifact_reused")
+        );
+        assert_eq!(
+            reused.payload["image2_skip_reason"],
+            json!("accepted_dataset_artifact_baseline")
+        );
+    }
+
+    #[tokio::test]
     async fn external_channel_static_page_pipeline_returns_provisional_link_when_codex_publish_ready(
     ) {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -74127,6 +75583,43 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_artifact_detects_rich_text_report_workflow() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("artifact".to_string());
+        message.output_format = Some("rich_text".to_string());
+        let prompt = "重新生成一版新百经营分析总报表，给可访问页面链接";
+
+        assert!(external_channel_message_requests_static_page_artifact(
+            &message, prompt
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_detects_explicit_report_workflow_without_artifact_mode(
+    ) {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+        let prompt = "生成一张经营分析可视化报表页，最终给 generated-artifact 页面链接";
+
+        assert!(external_channel_message_requests_static_page_artifact(
+            &message, prompt
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_ignores_report_analysis_question() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        assert!(!external_channel_message_requests_static_page_artifact(
+            &message,
+            "帮我分析这份报表口径有哪些问题"
+        ));
+    }
+
+    #[test]
     fn external_channel_static_page_artifact_uses_explicit_static_page_skill() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("artifact".to_string());
@@ -74144,6 +75637,114 @@ mod tests {
             &message,
             "按模板生成经营分析页"
         ));
+    }
+
+    #[tokio::test]
+    async fn external_channel_database_scope_adds_allowed_source_default_dataset_for_report() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external database scope enrichment test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-db-scope-test-{}", Uuid::new_v4()),
+                "External DB Scope Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-db-scope-dataset-{}", Uuid::new_v4()),
+                    title: "新百经营分析数据库".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let _mysql_url = TestEnvVarRestore::set(
+            "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "mysql://readonly:redacted@127.0.0.1:3306/hy_sql",
+        );
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                status,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'HY SQL', 'mysql://127.0.0.1/[redacted]', $3, 'manual', 'dataset_acl', 'enabled', 'healthy')
+            "#,
+        )
+        .bind("hy-sql-report")
+        .bind(state.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+                "database": "hy_sql",
+                "default_dataset_id": dataset.id.to_string(),
+                "tables": [traffic_area_mapping_for_test()]
+            }
+        }))
+        .execute(state.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({
+                "default_source_id": "third-party-source-main",
+                "allowed_database_source_ids": ["hy-sql-report"]
+            }),
+        };
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_database_source_scope(
+            &state,
+            &connection,
+            &message,
+            "生成一张经营分析可视化报表页，给可访问链接",
+            &mut selected_scope,
+        )
+        .await
+        .expect("database scope should enrich");
+
+        assert_eq!(
+            selected_scope["database_source_ids"],
+            json!(["hy-sql-report"])
+        );
+        assert_eq!(selected_scope["datasets"][0]["id"], json!(dataset.id));
+        assert_eq!(
+            selected_scope["database_source_scope"]["default_dataset_bindings"][0]["source_id"],
+            json!("hy-sql-report")
+        );
     }
 
     #[test]
@@ -78076,6 +79677,140 @@ mod tests {
         assert_eq!(
             followup_scope["dataset_document_scope"]["source"],
             json!("dataset_external_ids_and_available_document_external_ids")
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_dataset_external_ids_accept_v3_dataset_uuids() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external v3 dataset uuid scope test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-v3-dataset-scope-test-{}", Uuid::new_v4()),
+                "External V3 Dataset Scope Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create_with_metadata(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-v3-dataset-scope-{}", Uuid::new_v4()),
+                    title: "External V3 Dataset Scope".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": DatasetVisibility::Public.as_str(),
+                    "default_secret_binding_ids": [],
+                }),
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Xinbai operating facts".to_string(),
+                    object_key: "external-v3-dataset-scope/xinbai.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-v3-dataset-scope-0001".to_string();
+        message.available_document_source_id = Some("src-docs".to_string());
+        message.available_document_external_ids.clear();
+        message.dataset_external_id = None;
+        message.dataset_external_ids = vec![dataset.id.to_string()];
+        let mut selected_scope = json!({"type": "external_channel"});
+
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("v3 dataset UUID should authorize a temporary dataset scope");
+
+        assert_eq!(
+            selected_scope["external_document_scope_status"],
+            json!("v3_dataset_resolved")
+        );
+        assert_eq!(
+            selected_scope["canonical_datasets"][0]["id"],
+            json!(dataset.id)
+        );
+        assert_eq!(
+            selected_scope["documents"][0]["document_external_id"],
+            json!(document.id.to_string())
+        );
+        assert_eq!(
+            selected_scope["temporary_dataset"]["source"],
+            json!("v3_dataset_external_id")
+        );
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
+        );
+        assert_ne!(selected_scope["datasets"][0]["id"], json!(dataset.id));
+
+        let mut followup_message = sample_external_bot_message();
+        followup_message.conversation_external_id = "conv-v3-dataset-scope-0001".to_string();
+        followup_message.available_document_source_id = Some("src-docs".to_string());
+        followup_message.available_document_external_ids.clear();
+        followup_message.dataset_external_id = None;
+        followup_message.dataset_external_ids.clear();
+        let mut followup_scope = json!({"type": "external_channel"});
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &followup_message,
+            &mut followup_scope,
+        )
+        .await
+        .expect("same conversation should restore v3 dataset UUID temporary scope");
+
+        assert_eq!(
+            followup_scope["external_document_scope_restored"],
+            json!(true)
+        );
+        assert_eq!(
+            followup_scope["temporary_dataset"]["id"],
+            selected_scope["temporary_dataset"]["id"]
+        );
+        assert_eq!(
+            followup_scope["documents"][0]["document_external_id"],
+            json!(document.id.to_string())
         );
     }
 

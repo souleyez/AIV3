@@ -107,6 +107,20 @@
       color: var(--ink);
       background: rgba(15, 118, 110, 0.09);
     }
+    nav .nav-depth-3 {
+      margin-left: 12px;
+      padding-top: 6px;
+      padding-bottom: 6px;
+      font-size: 13px;
+      color: #51605b;
+    }
+    nav .nav-depth-4 {
+      margin-left: 24px;
+      padding-top: 5px;
+      padding-bottom: 5px;
+      font-size: 12px;
+      color: #73807c;
+    }
 
     main {
       min-width: 0;
@@ -358,10 +372,24 @@
         <small>自建页面、文档库、用户 ID、会话 ID、skill、模板、产物与业务动作的接口说明。</small>
       </div>
       <nav aria-label="文档目录">
-        <a href="#section-01">文档解析</a>
-<a href="#section-06">聊天同步</a>
-<a href="#section-10">生成产物（报表）</a>
-<a href="#section-15">枚举与错误</a>
+        <a class="nav-depth-2" href="#section-01">1. 文档解析</a>
+<a class="nav-depth-3" href="#section-02">1.1 发起解析</a>
+<a class="nav-depth-3" href="#section-03">1.2 查询解析结果</a>
+<a class="nav-depth-3" href="#section-04">1.3 移动文档分组</a>
+<a class="nav-depth-3" href="#section-05">1.4 查询数据库源状态</a>
+<a class="nav-depth-2" href="#section-06">2. 聊天同步</a>
+<a class="nav-depth-3" href="#section-07">2.1 普通聊天</a>
+<a class="nav-depth-3" href="#section-08">2.2 流式聊天</a>
+<a class="nav-depth-3" href="#section-09">2.3 数据接入/入库分析请求</a>
+<a class="nav-depth-2" href="#section-10">3. 生成产物（报表）</a>
+<a class="nav-depth-3" href="#section-11">3.1 模板列表字段</a>
+<a class="nav-depth-3" href="#section-12">3.2 模板解析</a>
+<a class="nav-depth-3" href="#section-13">3.3 按模板生成静态页/报表</a>
+<a class="nav-depth-3" href="#section-14">3.4 查询、预览、下载产物</a>
+<a class="nav-depth-2" href="#section-15">4. 枚举与错误</a>
+<a class="nav-depth-3" href="#section-16">4.1 `output_format`</a>
+<a class="nav-depth-3" href="#section-17">4.2 `render_mode`</a>
+<a class="nav-depth-3" href="#section-18">4.3 错误格式</a>
       </nav>
     </aside>
     <main>
@@ -384,7 +412,7 @@
 <li>聊天同步：传用户 ID、会话 ID、文档范围、默认提示词和输出格式；文档范围首次传入后同一会话持续有效。</li>
 <li>生成产物：从模板列表选择模板，解析模板，按模板生成报表/HTML 产物。</li>
 </ol>
-<p>可选补充：数据库源由 V3 先配置和同步，第三方只查状态并在聊天时传对应数据集范围。</p>
+<p>可选补充：数据库源由 V3 先配置和同步，第三方只查状态并在聊天时传对应数据集范围。数据库对接细节已合并进完整 API 文档的 <code>11.6 第三方数据库对接</code>。</p>
 <h2 id="section-01">1. 文档解析</h2>
 <h3 id="section-02">1.1 发起解析</h3>
 <figure class="code-card">

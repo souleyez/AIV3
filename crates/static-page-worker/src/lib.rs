@@ -14,7 +14,7 @@ pub const STATIC_PAGE_ORCHESTRATOR_USER_AGENT: &str = "AIDataPlatformV3StaticPag
 pub const DEFAULT_STATIC_PAGE_IMAGE_MODEL: &str = "gpt-image-2";
 pub const DEFAULT_STATIC_PAGE_IMAGE_SIZE: &str = "1536x1024";
 pub const DEFAULT_STATIC_PAGE_IMAGE_QUALITY: &str = "high";
-pub const DEFAULT_STATIC_PAGE_VISUAL_CONTEXT_LIMIT_CHARS: usize = 5_000;
+pub const DEFAULT_STATIC_PAGE_VISUAL_CONTEXT_LIMIT_CHARS: usize = 3_000;
 pub const DEFAULT_DIRECT_IMAGE_BASE_URL: &str = "https://www.right.codes/draw";
 pub const DEFAULT_DIRECT_IMAGE_API_PATH: &str = "/v1/images/generations";
 pub const DEFAULT_DIRECT_IMAGE_RESPONSE_FORMAT: &str = "url";
@@ -70,6 +70,7 @@ pub struct DirectImageGenerationConfig {
     pub access_key: String,
     pub image_model: String,
     pub image_size: String,
+    pub image_quality: String,
     pub response_format: String,
 }
 
@@ -107,6 +108,10 @@ impl DirectImageGenerationConfig {
                 .or_else(|_| std::env::var("RIGHTCODE_IMAGE_SIZE"))
                 .or_else(|_| std::env::var("CODEX_ORCHESTRATOR_IMAGE_SIZE"))
                 .unwrap_or_else(|_| DEFAULT_STATIC_PAGE_IMAGE_SIZE.to_string()),
+            image_quality: std::env::var("STATIC_PAGE_IMAGE_QUALITY")
+                .or_else(|_| std::env::var("RIGHTCODE_IMAGE_QUALITY"))
+                .or_else(|_| std::env::var("CODEX_ORCHESTRATOR_IMAGE_QUALITY"))
+                .unwrap_or_else(|_| DEFAULT_STATIC_PAGE_IMAGE_QUALITY.to_string()),
             response_format: std::env::var("STATIC_PAGE_IMAGE_RESPONSE_FORMAT")
                 .or_else(|_| std::env::var("RIGHTCODE_IMAGE_RESPONSE_FORMAT"))
                 .unwrap_or_else(|_| DEFAULT_DIRECT_IMAGE_RESPONSE_FORMAT.to_string()),
@@ -285,7 +290,7 @@ pub fn build_static_page_visual_prompt(image_prompt_payload: &Value) -> String {
     let payload = bounded_static_page_visual_context(image_prompt_payload);
     if let Some(prompt_text) = static_page_visual_prompt_text(image_prompt_payload) {
         return format!(
-            "请用 GPT Image 2 生成一张 1536x1024 的中文企业静态页视觉草稿图。\n\
+            "请用 GPT Image 2 生成一张中文企业静态页宽屏视觉草稿图。\n\
              要求：画面像客户汇报页或经营分析页，不要浏览器边框，不要后台管理系统，不要出现可编辑控件。\n\
              重点：以用户确认的生图文案为准；这一步只做视觉效果图，不要把结构化 JSON 当成固定模块规划。后续系统会读图并接入真实数据制作 HTML。完成后必须返回一张图片 artifact。\n\
              用户确认的生图文案：\n{prompt_text}\n\n\
@@ -293,7 +298,7 @@ pub fn build_static_page_visual_prompt(image_prompt_payload: &Value) -> String {
         );
     }
     format!(
-        "请用 GPT Image 2 生成一张 1536x1024 的中文企业静态页视觉草稿图。\n\
+        "请用 GPT Image 2 生成一张中文企业静态页宽屏视觉草稿图。\n\
          要求：画面像客户汇报页或经营分析页，不要浏览器边框，不要后台管理系统，不要出现可编辑控件。\n\
          重点：保留模块层级、中文标题、图表类型、数据关系和商务汇报质感。完成后必须返回一张图片 artifact。\n\
          静态页规划 JSON：\n```json\n{payload}\n```"
@@ -353,6 +358,7 @@ pub fn build_direct_static_page_image_request(
         "prompt": build_static_page_visual_prompt(image_prompt_payload),
         "image": [],
         "size": config.image_size,
+        "quality": config.image_quality,
         "response_format": config.response_format,
     })
 }
@@ -731,6 +737,7 @@ mod tests {
         let _key = EnvRestore::set("OPENAI_API_KEY", "rightcode-secret");
         let _model = EnvRestore::set("STATIC_PAGE_IMAGE_MODEL", "gpt-image-2");
         let _size = EnvRestore::set("STATIC_PAGE_IMAGE_SIZE", "1536x1024");
+        let _quality = EnvRestore::set("STATIC_PAGE_IMAGE_QUALITY", "high");
 
         let config = DirectImageGenerationConfig::from_env()
             .expect("direct image config should parse")
@@ -738,6 +745,7 @@ mod tests {
 
         assert_eq!(config.provider, "rightcode_direct");
         assert_eq!(config.access_key, "rightcode-secret");
+        assert_eq!(config.image_quality, "high");
         assert_eq!(
             config.endpoint(),
             "https://www.right.codes/draw/v1/images/generations"
@@ -753,6 +761,7 @@ mod tests {
             access_key: "secret".to_string(),
             image_model: "gpt-image-2".to_string(),
             image_size: "1536x1024".to_string(),
+            image_quality: "high".to_string(),
             response_format: "url".to_string(),
         };
 
@@ -764,6 +773,7 @@ mod tests {
         assert_eq!(body["model"], json!("gpt-image-2"));
         assert_eq!(body["image"], json!([]));
         assert_eq!(body["size"], json!("1536x1024"));
+        assert_eq!(body["quality"], json!("high"));
         assert_eq!(body["response_format"], json!("url"));
         assert!(body["prompt"]
             .as_str()

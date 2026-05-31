@@ -107,6 +107,20 @@
       color: var(--ink);
       background: rgba(15, 118, 110, 0.09);
     }
+    nav .nav-depth-3 {
+      margin-left: 12px;
+      padding-top: 6px;
+      padding-bottom: 6px;
+      font-size: 13px;
+      color: #51605b;
+    }
+    nav .nav-depth-4 {
+      margin-left: 24px;
+      padding-top: 5px;
+      padding-bottom: 5px;
+      font-size: 12px;
+      color: #73807c;
+    }
 
     main {
       min-width: 0;
@@ -358,29 +372,58 @@
         <small>标准机器人、纯第三方、文档、用户标识、产物、动作、观测和交接清单的完整接口说明。</small>
       </div>
       <nav aria-label="文档目录">
-        <a href="#section-01">接入目标</a>
-<a href="#section-02">接入模式</a>
-<a href="#section-06">总体流程</a>
-<a href="#section-07">双方职责边界</a>
-<a href="#section-10">核心原则</a>
-<a href="#section-11">回答能力与状态返回</a>
-<a href="#section-12">连接与凭证</a>
-<a href="#section-13">鉴权与签名建议</a>
-<a href="#section-14">幂等规则</a>
-<a href="#section-15">聊天通道接口</a>
-<a href="#section-20">第三方文档库接口</a>
-<a href="#section-27">用户与组织接口</a>
-<a href="#section-28">产物发布接口</a>
-<a href="#section-29">业务动作接口</a>
-<a href="#section-30">回复格式</a>
-<a href="#section-31">管理观测接口</a>
-<a href="#section-32">错误格式</a>
-<a href="#section-33">数据安全要求</a>
-<a href="#section-34">部署方式</a>
-<a href="#section-38">飞书、Lark、企业微信说明</a>
-<a href="#section-39">第三方联调准备清单</a>
-<a href="#section-41">版本与变更</a>
-<a href="#section-42">推荐联调顺序</a>
+        <a class="nav-depth-2" href="#section-01">1. 接入目标</a>
+<a class="nav-depth-2" href="#section-02">2. 接入模式</a>
+<a class="nav-depth-3" href="#section-03">2.1 标准机器人模式</a>
+<a class="nav-depth-3" href="#section-04">2.2 纯第三方模式</a>
+<a class="nav-depth-3" href="#section-05">2.3 混合模式</a>
+<a class="nav-depth-2" href="#section-06">3. 总体流程</a>
+<a class="nav-depth-2" href="#section-07">4. 双方职责边界</a>
+<a class="nav-depth-3" href="#section-08">V3 负责</a>
+<a class="nav-depth-3" href="#section-09">第三方负责</a>
+<a class="nav-depth-2" href="#section-10">5. 核心原则</a>
+<a class="nav-depth-2" href="#section-11">6. 回答能力与状态返回</a>
+<a class="nav-depth-2" href="#section-12">7. 连接与凭证</a>
+<a class="nav-depth-2" href="#section-13">8. 鉴权与签名建议</a>
+<a class="nav-depth-2" href="#section-14">9. 幂等规则</a>
+<a class="nav-depth-2" href="#section-15">10. 聊天通道接口</a>
+<a class="nav-depth-3" href="#section-16">10.1 提交用户消息</a>
+<a class="nav-depth-3" href="#section-17">10.2 流式提交用户消息（SSE）</a>
+<a class="nav-depth-3" href="#section-18">10.3 查询任务状态</a>
+<a class="nav-depth-3" href="#section-19">10.4 提交用户确认</a>
+<a class="nav-depth-2" href="#section-20">11. 第三方文档库接口</a>
+<a class="nav-depth-3" href="#section-21">11.1 文档列表</a>
+<a class="nav-depth-3" href="#section-22">11.2 文档正文</a>
+<a class="nav-depth-3" href="#section-23">11.3 文档访问范围</a>
+<a class="nav-depth-3" href="#section-24">11.4 第三方触发 V3 文档解析</a>
+<a class="nav-depth-3" href="#section-25">11.5 第三方移动文档分组</a>
+<a class="nav-depth-3" href="#section-26">11.6 第三方数据库对接</a>
+<a class="nav-depth-4" href="#section-27">11.6.1 连接测试</a>
+<a class="nav-depth-4" href="#section-28">11.6.2 扫描库表结构</a>
+<a class="nav-depth-4" href="#section-29">11.6.3 表预览</a>
+<a class="nav-depth-4" href="#section-30">11.6.4 数据库语义画像</a>
+<a class="nav-depth-4" href="#section-31">11.6.5 应用画像为表映射</a>
+<a class="nav-depth-4" href="#section-32">11.6.6 聚合查询</a>
+<a class="nav-depth-4" href="#section-33">11.6.7 同步数据库到 V3 数据集</a>
+<a class="nav-depth-4" href="#section-34">11.6.8 查询数据库源状态</a>
+<a class="nav-depth-4" href="#section-35">11.6.9 聊天和报表使用数据库数据</a>
+<a class="nav-depth-4" href="#section-36">11.6.10 状态判断</a>
+<a class="nav-depth-2" href="#section-37">12. 用户与组织接口</a>
+<a class="nav-depth-2" href="#section-38">13. 产物发布接口</a>
+<a class="nav-depth-2" href="#section-39">14. 业务动作接口</a>
+<a class="nav-depth-2" href="#section-40">15. 回复格式</a>
+<a class="nav-depth-2" href="#section-41">16. 管理观测接口</a>
+<a class="nav-depth-2" href="#section-42">17. 错误格式</a>
+<a class="nav-depth-2" href="#section-43">18. 数据安全要求</a>
+<a class="nav-depth-2" href="#section-44">19. 部署方式</a>
+<a class="nav-depth-3" href="#section-45">19.1 V3 托管接入</a>
+<a class="nav-depth-3" href="#section-46">19.2 第三方网关接入</a>
+<a class="nav-depth-3" href="#section-47">19.3 私有化或混合部署</a>
+<a class="nav-depth-2" href="#section-48">20. 飞书、Lark、企业微信说明</a>
+<a class="nav-depth-2" href="#section-49">21. 第三方联调准备清单</a>
+<a class="nav-depth-3" href="#section-50">21.1 文档入口与版本规则</a>
+<a class="nav-depth-2" href="#section-51">22. 版本与变更</a>
+<a class="nav-depth-2" href="#section-52">23. 推荐联调顺序</a>
       </nav>
     </aside>
     <main>
@@ -397,7 +440,7 @@
       <article>
         <h1>V3 第三方接入说明书</h1>
 <p><strong>文档状态：</strong> 对外草案 v0.1 <strong>最后更新：</strong> 2026-05-25 <strong>适用对象：</strong> 第三方系统负责人、客户 IT 团队、渠道/文档/权限/业务系统对接开发人员 <strong>默认对外域名：</strong> <code>https://v3.elepcloud.com</code> <strong>说明：</strong> 本文可作为第三方联调前的接口说明材料，只说明 V3 对外开放的能力、接口、字段和使用方式，不展开具体实现细节。默认第三方接口使用 <code>https://v3.elepcloud.com/v1/...</code>；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。</p>
-<p>如果第三方采用自建聊天页面、自建文档库、自建用户 ID、会话 ID、skill、模板、产物或业务接口的“纯第三方模式”，可优先阅读独立对接文档：<code>docs/integrations/pure-third-party-integration-guide.zh-CN.md</code>。需要发给业务/技术评审时，可直接打开同目录 HTML 阅读版：<code>docs/integrations/pure-third-party-integration-guide.zh-CN.html</code>。</p>
+<p>如果第三方采用自建聊天页面、自建文档库、自建用户 ID、会话 ID、skill、模板、产物或业务接口的“纯第三方模式”，可优先阅读独立对接文档：<code>docs/integrations/pure-third-party-integration-guide.zh-CN.md</code>。如果第三方要接入类似 8 服务器现有数据库源的 MySQL/经营库，数据库接口已合并在本文 <code>11.6 第三方数据库对接</code>。需要发给业务/技术评审时，可直接打开同目录 HTML 阅读版。</p>
 <p>V3 外部集成观测页提供两类公开文档入口：</p>
 <ul>
 <li>完整对接文档 HTML：<code>/external-integrations/third-party-integration-api.zh-CN.html</code></li>
@@ -932,8 +975,255 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 <p>移动目标说明：<code>dataset_external_id</code> 仍应传业务稳定分组。若第三方使用 UUID 作为稳定分组 ID，V3 会按该 UUID 建立或复用对应资料库；响应中的 <code>dataset_id</code> 会回显实际归属的数据集。</p>
 <p>响应字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>是否完成移动</td></tr><tr><td><code>source_id</code></td><td>V3 回显的资料源 ID</td></tr><tr><td><code>document_external_id</code></td><td>V3 回显的第三方文档 ID</td></tr><tr><td><code>revision_external_id</code></td><td>本次限定的第三方版本 ID；未限定时为空</td></tr><tr><td><code>dataset_id</code></td><td>移动后的 V3 数据集 UUID</td></tr><tr><td><code>dataset_external_id</code></td><td>移动后的第三方数据集或资料库稳定 ID</td></tr><tr><td><code>moved_count</code></td><td>实际移动的 V3 文档记录数量</td></tr><tr><td><code>previous_dataset_ids</code></td><td>移动前的 V3 数据集 UUID 列表</td></tr><tr><td><code>documents</code></td><td>移动后的 V3 文档摘要列表</td></tr></tbody></table></div>
-<h3 id="section-26">11.6 第三方查询数据库源状态</h3>
-<p>数据库源由 V3 侧先完成连接、表映射、画像和同步配置。第三方通道只能查询通道配置中允许的数据库源状态：<code>default_source_id</code> / <code>defaultSourceId</code>，或 <code>allowed_database_source_ids</code> / <code>allowedDatabaseSourceIds</code> / <code>database_source_ids</code> / <code>databaseSourceIds</code> / <code>allowed_source_ids</code> / <code>allowedSourceIds</code> / <code>database_sources</code>。该接口只读，不接收数据库密码，不执行 SQL，不返回原始连接串、密码、token 或原始同步游标。</p>
+<h3 id="section-26">11.6 第三方数据库对接</h3>
+<p>数据库源由 V3 侧先完成连接、表映射、画像和同步配置。典型方式和 8 服务器现有 <code>hy-sql-traffic-area</code> 类似：V3 托管数据库密钥和表白名单，第三方或联调方通过 API 查看状态、触发同步；同步后的数据进入 V3 数据集，再用于问答、分析和静态页报表。</p>
+<p>数据库密码不出现在公开请求体里。生产建议由 V3 侧把连接串保存为服务端环境变量或密钥绑定，接口里只出现 <code>connection_env</code> 这类密钥引用。第三方通道只能查询通道配置中允许的数据库源状态：<code>default_source_id</code> / <code>defaultSourceId</code>，或 <code>allowed_database_source_ids</code> / <code>allowedDatabaseSourceIds</code> / <code>database_source_ids</code> / <code>databaseSourceIds</code> / <code>allowed_source_ids</code> / <code>allowedSourceIds</code> / <code>database_sources</code>。</p>
+<p>最小接入顺序：</p>
+<ol>
+<li>V3 配置数据库源：配置 <code>source_id</code>、数据库类型、密钥引用、库名、表映射。</li>
+<li>联调验证：调用连接测试、库表扫描、表预览、语义画像。</li>
+<li>同步入库：把数据库行清洗成 V3 文档/数据集。</li>
+<li>状态查询：第三方通道查询数据库源和同步结果。</li>
+<li>聊天/报表：在聊天事件里传同步后的数据集范围，生成问答或静态页报表。</li>
+</ol>
+<p>数据库源配置摘要示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;source_id&quot;: &quot;hy-sql-traffic-area&quot;,
+  &quot;connector_kind&quot;: &quot;mysql&quot;,
+  &quot;display_name&quot;: &quot;hy_sql 区域经营库&quot;,
+  &quot;database_source&quot;: {
+    &quot;kind&quot;: &quot;mysql&quot;,
+    &quot;database&quot;: &quot;hy_sql&quot;,
+    &quot;connection_env&quot;: &quot;THIRD_PARTY_HY_SQL_DATABASE_URL&quot;,
+    &quot;default_dataset_id&quot;: &quot;31588c60-0885-47c4-81fe-4ff5c27de8e7&quot;,
+    &quot;row_limit&quot;: 5000,
+    &quot;tables&quot;: [{
+      &quot;table&quot;: &quot;bi_contract_warning&quot;,
+      &quot;id_column&quot;: &quot;parentcode&quot;,
+      &quot;id_columns&quot;: [&quot;parentcode&quot;, &quot;storecode&quot;, &quot;txdate&quot;],
+      &quot;title_column&quot;: &quot;dist_name&quot;,
+      &quot;content_columns&quot;: [&quot;shopdesc&quot;, &quot;catgldesc&quot;, &quot;dist_name&quot;],
+      &quot;metadata_columns&quot;: [&quot;storecode&quot;, &quot;brandcode&quot;, &quot;txdate&quot;],
+      &quot;updated_at_column&quot;: &quot;txdate&quot;,
+      &quot;object_type&quot;: &quot;document&quot;,
+      &quot;content_type&quot;: &quot;text/markdown&quot;
+    }]
+  }
+}</code></pre>
+  </figure>
+<h4 id="section-27">11.6.1 连接测试</h4>
+<p>用于确认 V3 能访问数据库，但不返回密码。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/database/test
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;database_source&quot;: {}
+}</code></pre>
+  </figure>
+<p>字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>是</td><td>路径参数；V3 数据库源 ID，例如 <code>hy-sql-traffic-area</code></td></tr><tr><td><code>database_source</code></td><td>否</td><td>临时覆盖配置；生产通常传空对象，使用 V3 已保存的服务端配置；不能传密码、token、原始连接串等敏感字段</td></tr></tbody></table></div>
+<h4 id="section-28">11.6.2 扫描库表结构</h4>
+<p>用于拿到库、表、字段、类型和估算行数。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/database/schema
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;database_source&quot;: {}
+}</code></pre>
+  </figure>
+<p>响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;source_id&quot;: &quot;hy-sql-traffic-area&quot;,
+  &quot;connector_kind&quot;: &quot;mysql&quot;,
+  &quot;redacted_summary&quot;: {},
+  &quot;schema&quot;: {
+    &quot;database&quot;: &quot;hy_sql&quot;,
+    &quot;table_count&quot;: 2,
+    &quot;tables&quot;: [{
+      &quot;table&quot;: &quot;bi_contract_warning&quot;,
+      &quot;column_count&quot;: 18,
+      &quot;approximate_row_count&quot;: 12000,
+      &quot;columns&quot;: [{
+        &quot;name&quot;: &quot;storecode&quot;,
+        &quot;data_type&quot;: &quot;varchar&quot;,
+        &quot;nullable&quot;: true
+      }]
+    }]
+  }
+}</code></pre>
+  </figure>
+<h4 id="section-29">11.6.3 表预览</h4>
+<p>用于抽样查看表数据，辅助确认字段含义。不要用于导出完整数据。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/database/preview
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;table&quot;: &quot;bi_contract_warning&quot;,
+  &quot;limit&quot;: 20,
+  &quot;database_source&quot;: {}
+}</code></pre>
+  </figure>
+<p>字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>table</code></td><td>是</td><td>表名；必须在该数据库源允许访问的表范围内</td></tr><tr><td><code>limit</code></td><td>否</td><td>预览行数；建议 20 以内</td></tr><tr><td><code>database_source</code></td><td>否</td><td>临时覆盖配置；生产通常传空对象</td></tr></tbody></table></div>
+<h4 id="section-30">11.6.4 数据库语义画像</h4>
+<p>用于让 V3 判断哪些字段像时间、指标、维度、实体或文本，为后续问答和报表做准备。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/database/profile
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;sample_limit&quot;: 100,
+  &quot;database_source&quot;: {}
+}</code></pre>
+  </figure>
+<p>响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;source_id&quot;: &quot;hy-sql-traffic-area&quot;,
+  &quot;connector_kind&quot;: &quot;mysql&quot;,
+  &quot;redacted_summary&quot;: {},
+  &quot;profile&quot;: {
+    &quot;database&quot;: &quot;hy_sql&quot;,
+    &quot;table_count&quot;: 2,
+    &quot;metric_count&quot;: 12,
+    &quot;dimension_count&quot;: 18,
+    &quot;tables&quot;: [{
+      &quot;table&quot;: &quot;bi_contract_warning&quot;,
+      &quot;approximate_row_count&quot;: 12000,
+      &quot;metric_count&quot;: 8,
+      &quot;dimension_count&quot;: 10,
+      &quot;time_dimension_count&quot;: 1,
+      &quot;entity_column_count&quot;: 4,
+      &quot;text_column_count&quot;: 3,
+      &quot;mapping_confidence&quot;: 0.86
+    }]
+  }
+}</code></pre>
+  </figure>
+<h4 id="section-31">11.6.5 应用画像为表映射</h4>
+<p>用于把画像结果写回数据库源配置。建议先 <code>dry_run=true</code> 看结果，确认后再正式写入。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/database/apply-profile
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;sample_limit&quot;: 100,
+  &quot;tables&quot;: [&quot;bi_contract_warning&quot;],
+  &quot;dry_run&quot;: true,
+  &quot;database_source&quot;: {}
+}</code></pre>
+  </figure>
+<p>响应字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>请求是否被接受</td></tr><tr><td><code>source_id</code></td><td>数据库源 ID</td></tr><tr><td><code>connector_kind</code></td><td>数据库类型</td></tr><tr><td><code>dry_run</code></td><td>是否只是预览</td></tr><tr><td><code>redacted_summary</code></td><td>新配置的脱敏摘要</td></tr><tr><td><code>database_source</code></td><td>新表映射配置；不含明文密码</td></tr><tr><td><code>profile</code></td><td>本次画像结果</td></tr><tr><td><code>updated_at</code></td><td>写回配置时间；<code>dry_run=true</code> 时为空</td></tr></tbody></table></div>
+<h4 id="section-32">11.6.6 聚合查询</h4>
+<p>用于小范围统计验证，例如按门店、品牌、日期做 <code>count</code>、<code>sum</code>、<code>avg</code>。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/database/aggregate
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;table&quot;: &quot;bi_contract_warning&quot;,
+  &quot;dimensions&quot;: [&quot;dist_name&quot;, &quot;txdate&quot;],
+  &quot;metric&quot;: &quot;quekou&quot;,
+  &quot;aggregation&quot;: &quot;sum&quot;,
+  &quot;limit&quot;: 50,
+  &quot;scan_limit&quot;: 5000,
+  &quot;database_source&quot;: {}
+}</code></pre>
+  </figure>
+<h4 id="section-33">11.6.7 同步数据库到 V3 数据集</h4>
+<p>把数据库行清洗为 V3 文档/证据，后续问答和报表都走数据集链路。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/sources/{source_id}/sync
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;sync_kind&quot;: &quot;incremental&quot;,
+  &quot;dataset_id&quot;: &quot;31588c60-0885-47c4-81fe-4ff5c27de8e7&quot;,
+  &quot;dataset_external_id&quot;: &quot;xinbai-operating-analysis&quot;,
+  &quot;dataset_title&quot;: &quot;新百经营分析&quot;,
+  &quot;checkpoint&quot;: {
+    &quot;txdate_after&quot;: &quot;2026-05-01&quot;
+  },
+  &quot;connector_context&quot;: {
+    &quot;database_source&quot;: {
+      &quot;tables&quot;: [{
+        &quot;table&quot;: &quot;bi_contract_warning&quot;
+      }]
+    }
+  }
+}</code></pre>
+  </figure>
+<p>字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>sync_kind</code></td><td>否</td><td><code>incremental</code> 增量同步；<code>full</code> 全量同步</td></tr><tr><td><code>dataset_id</code></td><td>条件必填</td><td>目标 V3 数据集 UUID；和 <code>dataset_external_id</code> 至少传一个，或数据库源已配置 <code>default_dataset_id</code></td></tr><tr><td><code>dataset_external_id</code></td><td>条件必填</td><td>第三方稳定数据集 ID；V3 可自动创建或复用</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>自动创建数据集时使用</td></tr><tr><td><code>checkpoint</code></td><td>否</td><td>增量同步游标；结构由具体表和业务约定决定</td></tr><tr><td><code>connector_context.database_source</code></td><td>否</td><td>本次同步的数据库源覆盖项；生产只允许安全字段</td></tr></tbody></table></div>
+<p>响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;accepted&quot;: true,
+  &quot;source_id&quot;: &quot;hy-sql-traffic-area&quot;,
+  &quot;sync_run_id&quot;: &quot;sync-20260531-0001&quot;,
+  &quot;sync_kind&quot;: &quot;incremental&quot;,
+  &quot;status&quot;: &quot;queued&quot;,
+  &quot;workflow_execution&quot;: {
+    &quot;id&quot;: &quot;workflow-execution-id&quot;,
+    &quot;status&quot;: &quot;running&quot;
+  },
+  &quot;enqueued_tasks&quot;: []
+}</code></pre>
+  </figure>
+<h4 id="section-34">11.6.8 查询数据库源状态</h4>
+<p>该接口只读，不接收数据库密码，不执行 SQL，不返回原始连接串、密码、token 或原始同步游标。</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/database-sources/{source_external_id}/status
@@ -1005,7 +1295,52 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>响应字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>V3 数据库源 ID</td></tr><tr><td><code>connector_kind</code></td><td>数据源类型；当前主要为 <code>mysql</code></td></tr><tr><td><code>redacted_summary</code></td><td>脱敏连接摘要，只包含数据库名、服务端密钥引用、映射表数量和表名</td></tr><tr><td><code>status.config_valid</code></td><td>数据库源脱敏配置是否可解析</td></tr><tr><td><code>status.dataset</code></td><td>当前默认或显式目标数据集摘要</td></tr><tr><td><code>status.datasets</code></td><td>该数据库源已发现的目标数据集列表；每项包含该源在该目标数据集下的安全计数和 readiness</td></tr><tr><td><code>status.datasets[].readiness.signal</code></td><td>单个目标数据集的可问状态；用于区分默认数据集为空、但历史显式目标数据集已可问的情况</td></tr><tr><td><code>status.datasets[].retrieval_evidence_count</code></td><td>该目标数据集中来自此数据库源的检索证据数</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>数据集问答可用状态；<code>ready</code> 表示可用于问答/报表</td></tr><tr><td><code>status.table_readiness</code></td><td>各映射表的文档、索引、分块状态</td></tr><tr><td><code>status.recent_sync_runs</code></td><td>最近同步任务摘要；checkpoint 只返回安全摘要，不返回原始游标</td></tr><tr><td><code>status.recent_sync_runs[].row_failure_groups</code></td><td>最近同步任务中的行转换失败分组，按表和原因聚合</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>综合同步状态；常见值：<code>ready</code>、<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code>、<code>indexing</code></td></tr><tr><td><code>status.sync_readiness.row_failure_groups</code></td><td>当前同步可用状态中的行转换失败分组；包含表、原因、失败行数和少量主键样例</td></tr><tr><td><code>status.semantic_profile</code></td><td>表字段、指标、维度、时间字段、实体字段等语义摘要</td></tr><tr><td><code>status.health_findings</code></td><td>配置、同步、索引、行转换失败等问题摘要</td></tr></tbody></table></div>
-<h2 id="section-27">12. 用户与组织接口</h2>
+<h4 id="section-35">11.6.9 聊天和报表使用数据库数据</h4>
+<p>数据库同步完成后，不在聊天里传 SQL，也不传数据库密码。聊天只传同步后的数据集范围。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/channels/{connection_id}/events
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+  </figure>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;platform&quot;: &quot;generic_chat&quot;,
+  &quot;tenant_external_id&quot;: &quot;tenant-ext-001&quot;,
+  &quot;bot_external_id&quot;: &quot;bot-v3&quot;,
+  &quot;conversation_external_id&quot;: &quot;conv-db-001&quot;,
+  &quot;sender_external_id&quot;: &quot;user-10001&quot;,
+  &quot;message_external_id&quot;: &quot;msg-db-001&quot;,
+  &quot;message_type&quot;: &quot;text&quot;,
+  &quot;text&quot;: &quot;按门店和品牌生成本月经营风险报表。&quot;,
+  &quot;default_prompt&quot;: &quot;优先基于已同步数据库数据回答。&quot;,
+  &quot;output_format&quot;: &quot;rich_text&quot;,
+  &quot;render_mode&quot;: &quot;artifact&quot;,
+  &quot;artifact_type&quot;: &quot;static_page&quot;,
+  &quot;dataset_external_ids&quot;: [
+    &quot;xinbai-operating-analysis&quot;
+  ],
+  &quot;requested_skills&quot;: [],
+  &quot;idempotency_key&quot;: &quot;third-party:tenant-ext-001:msg-db-001&quot;,
+  &quot;received_at&quot;: &quot;2026-05-31T10:00:00Z&quot;
+}</code></pre>
+  </figure>
+<p>如果进入静态页链路，重点看：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>reply.task_status</code></td><td>任务状态；如 <code>static_page_image2_auto_publish_pending</code>、<code>completed</code>、<code>failed</code></td></tr><tr><td><code>reply.card.public_url</code></td><td>最终公开页面 URL；为空表示还在生成或发布失败</td></tr><tr><td><code>reply.card.image_job_status</code></td><td>Image2 效果图状态</td></tr><tr><td><code>reply.card.codex_auto_publish_ready</code></td><td>是否满足自动发布条件</td></tr><tr><td><code>reply.card.generated_artifact_url</code></td><td>已生成产物 URL</td></tr><tr><td><code>artifact_links</code></td><td>产物链接数组；第三方页面可直接展示</td></tr></tbody></table></div>
+<h4 id="section-36">11.6.10 状态判断</h4>
+<div class="table-shell"><table><thead><tr><th>场景</th><th>判断方式</th><th>第三方动作</th></tr></thead><tbody><tr><td>连接失败</td><td><code>database/test</code> 返回错误</td><td>检查网络、白名单、账号权限和 V3 密钥配置</td></tr><tr><td>schema 为空</td><td><code>schema.table_count=0</code></td><td>检查库名、账号权限、表过滤</td></tr><tr><td>同步中</td><td><code>sync_readiness.signal=sync_running</code></td><td>页面提示处理中，稍后重查</td></tr><tr><td>数据集不可问</td><td><code>dataset_readiness.signal</code> 不是 <code>ready</code></td><td>等待同步/索引，或让 V3 重跑同步</td></tr><tr><td>行转换失败</td><td><code>row_failure_groups</code> 非空</td><td>根据表名、原因和主键样本修正字段映射</td></tr><tr><td>报表缺样本行</td><td>静态页返回 <code>needs_human</code> 或 <code>missing sample rows</code></td><td>让 V3 补充样本行和指标映射后重新生成</td></tr></tbody></table></div>
+<p>生产注意：</p>
+<ul>
+<li>第三方不要在公开接口里传数据库密码、连接串、token。</li>
+<li>V3 只按配置白名单访问表，不执行第三方传入的任意 SQL。</li>
+<li>数据库同步后的问答/报表使用 V3 数据集范围，不直接把原始表 dump 给模型。</li>
+<li>同一个数据库源可以同步到不同 V3 数据集，用于不同客户、工作区或权限范围。</li>
+<li>数据库字段画像和表映射是报表质量关键；正式接入前至少跑一次 schema、profile、preview 和小范围 sync。</li>
+</ul>
+<h2 id="section-37">12. 用户与组织接口</h2>
 <p>第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些组织和角色。</p>
 <p>建议提供以下接口：</p>
 <figure class="code-card">
@@ -1049,7 +1384,7 @@ GET /users/{user_external_id}/memberships</code></pre>
 <li>用户是否已停用；</li>
 <li>文档版本和访问范围时间。</li>
 </ul>
-<h2 id="section-28">13. 产物发布接口</h2>
+<h2 id="section-38">13. 产物发布接口</h2>
 <p>当 V3 生成报告、页面、文档、表格、图片或其他产物时，可按项目配置发布到第三方系统。</p>
 <p>V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，必须先完成用户确认；确认后或无需确认的动作，会由 V3 发送到第三方配置的产物 endpoint。观测接口会返回 <code>artifact_summary</code>，用于查看发布、撤销、失败和待确认数量。</p>
 <p>页面类产物支持快速 HTML 交付模式：V3 可以按模板和聊天要求生成可浏览器打开的 HTML，并返回预览和下载地址。</p>
@@ -1181,7 +1516,7 @@ POST /artifacts/{artifact_external_id}/revoke</code></pre>
 <li>发布、查看、下载、撤销都应可追溯。</li>
 <li>观测接口会展示发布、撤销、阻断、失败和待确认数量，但不会展示原始产物正文、原始下载地址或密钥。</li>
 </ul>
-<h2 id="section-29">14. 业务动作接口</h2>
+<h2 id="section-39">14. 业务动作接口</h2>
 <p>V3 可以在用户授权和系统校验后调用第三方业务接口，例如：</p>
 <ul>
 <li>创建或更新工单；</li>
@@ -1273,7 +1608,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <p>出站请求头字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>请求头</th><th>说明</th></tr></thead><tbody><tr><td><code>Authorization</code></td><td>V3 派发动作时使用的专用 Bearer Token；只在配置了派发 token 时发送</td></tr><tr><td><code>X-V3-Connection-Id</code></td><td>V3 外部连接 ID</td></tr><tr><td><code>X-V3-Timestamp</code></td><td>V3 发起请求时间，第三方应校验时间窗口</td></tr><tr><td><code>X-V3-Nonce</code></td><td>一次性随机值，第三方应防重放</td></tr><tr><td><code>X-V3-Content-SHA256</code></td><td>JSON 原始请求体的 SHA-256 摘要</td></tr><tr><td><code>X-V3-Signature</code></td><td>基于签名原文和派发签名密钥生成的 HMAC-SHA256</td></tr></tbody></table></div>
 <p>只有配置派发 Bearer Token 时才会发送 <code>Authorization</code>。只有配置派发签名密钥时才会发送 <code>X-V3-Signature</code>。两者都配置时，V3 会同时发送。</p>
-<h2 id="section-30">15. 回复格式</h2>
+<h2 id="section-40">15. 回复格式</h2>
 <p>V3 返回给第三方通道的内容会统一封装为回复对象。</p>
 <p>常见回复类型：</p>
 <ul>
@@ -1308,7 +1643,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
   </figure>
 <p>确认回复字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>reply_type</code></td><td>当前为 <code>requires_confirmation</code>，表示需要用户确认</td></tr><tr><td><code>confirmation_id</code></td><td>确认请求 ID</td></tr><tr><td><code>title</code></td><td>给用户展示的确认标题</td></tr><tr><td><code>summary</code></td><td>给用户展示的确认摘要</td></tr><tr><td><code>risk_level</code></td><td>动作风险等级</td></tr><tr><td><code>actions</code></td><td>第三方页面可展示的操作按钮，例如 <code>approve</code> 和 <code>reject</code></td></tr></tbody></table></div>
-<h2 id="section-31">16. 管理观测接口</h2>
+<h2 id="section-41">16. 管理观测接口</h2>
 <p>V3 提供观测优先的管理接口，供运营人员和 V3 控制台使用。这些接口不是第三方聊天页面，也不会暴露原始凭证、原始 provider payload 或文档正文。</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -1366,7 +1701,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
     <pre><code>POST /v1/external/integrations/{integration_id}/rotate-secret</code></pre>
   </figure>
 <p>记录一次密钥轮换请求标记。该接口不会在公开响应、观测页面或配置摘要中返回原始密钥材料。</p>
-<h2 id="section-32">17. 错误格式</h2>
+<h2 id="section-42">17. 错误格式</h2>
 <p>错误响应统一使用：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -1382,7 +1717,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>code</code></td><td>稳定错误码，第三方应优先按该字段做分支处理</td></tr><tr><td><code>message</code></td><td>面向调试或展示的错误说明，不包含密钥和敏感正文</td></tr><tr><td><code>details</code></td><td>可选结构化错误详情，例如字段名、约束或安全错误码</td></tr><tr><td><code>details.field</code></td><td>出错字段名；仅在字段级错误时返回</td></tr></tbody></table></div>
 <p>常见错误码：</p>
 <div class="table-shell"><table><thead><tr><th>错误码</th><th>含义</th></tr></thead><tbody><tr><td><code>bad_request</code></td><td>请求格式或必填字段错误</td></tr><tr><td><code>unauthorized</code></td><td>鉴权失败</td></tr><tr><td><code>signature_invalid</code></td><td>签名错误</td></tr><tr><td><code>replay_rejected</code></td><td>重放请求被拒绝</td></tr><tr><td><code>external_channel_connection_not_found</code></td><td>未找到聊天通道连接</td></tr><tr><td><code>external_channel_disabled</code></td><td>连接已停用</td></tr><tr><td><code>external_channel_platform_mismatch</code></td><td>请求平台与连接配置不一致</td></tr><tr><td><code>permission_denied</code></td><td>当前用户无权访问相关资源</td></tr><tr><td><code>conflict</code></td><td>幂等键或唯一约束冲突</td></tr><tr><td><code>rate_limited</code></td><td>请求过于频繁</td></tr><tr><td><code>storage_error</code></td><td>服务端存储错误</td></tr></tbody></table></div>
-<h2 id="section-33">18. 数据安全要求</h2>
+<h2 id="section-43">18. 数据安全要求</h2>
 <p>第三方和 V3 联调时，应共同遵守：</p>
 <ul>
 <li>不在 URL 中传递长期有效密钥；</li>
@@ -1395,19 +1730,19 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>跨租户数据必须物理或逻辑隔离；</li>
 <li>错误信息只返回排查所需内容，不返回服务端堆栈和密钥细节。</li>
 </ul>
-<h2 id="section-34">19. 部署方式</h2>
-<h3 id="section-35">19.1 V3 托管接入</h3>
+<h2 id="section-44">19. 部署方式</h2>
+<h3 id="section-45">19.1 V3 托管接入</h3>
 <p>第三方系统通过公网或专线访问 V3 接口。适用于标准 SaaS 或托管交付。</p>
-<h3 id="section-36">19.2 第三方网关接入</h3>
+<h3 id="section-46">19.2 第三方网关接入</h3>
 <p>第三方在自己的网络中部署网关：</p>
 <ul>
 <li>网关连接文档库、用户系统和业务系统；</li>
 <li>网关与 V3 通过 HTTPS 通信；</li>
 <li>源系统无需直接暴露给 V3。</li>
 </ul>
-<h3 id="section-37">19.3 私有化或混合部署</h3>
+<h3 id="section-47">19.3 私有化或混合部署</h3>
 <p>V3、文档源、聊天通道和业务系统可以部署在同一内网或多个网络区域。具体网络、密钥、证书、回调和留痕策略在项目实施阶段确认。</p>
-<h2 id="section-38">20. 飞书、Lark、企业微信说明</h2>
+<h2 id="section-48">20. 飞书、Lark、企业微信说明</h2>
 <p>标准平台机器人接入时，第三方通常需要提供：</p>
 <ul>
 <li>应用或机器人 ID；</li>
@@ -1419,7 +1754,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>平台侧可访问范围和安全策略。</li>
 </ul>
 <p>V3 会优先按平台官方规则完成验签、事件解析、消息发送和回调处理，再转换成统一的 V3 事件与回复格式。</p>
-<h2 id="section-39">21. 第三方联调准备清单</h2>
+<h2 id="section-49">21. 第三方联调准备清单</h2>
 <p>正式联调前，请第三方准备：</p>
 <ul>
 <li>测试环境 API 域名；</li>
@@ -1437,7 +1772,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>业务动作接口和确认规则，如需要；</li>
 <li>联调负责人和故障联系渠道。</li>
 </ul>
-<h3 id="section-40">21.1 文档入口与版本规则</h3>
+<h3 id="section-50">21.1 文档入口与版本规则</h3>
 <p>联调文档只以 V3 外部集成观测页的“对接方式与文档”区域为准。HTML 用于直接打开评审，Markdown 用于下载留档；旧的第一阶段文档、交接包说明、历史计划和历史验证收据不再作为对外材料维护。</p>
 <p>当前保留的公开入口：</p>
 <ul>
@@ -1447,7 +1782,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>纯第三方简单版 MD：<code>/external-integrations/pure-third-party-integration-guide.zh-CN.md</code></li>
 </ul>
 <p>后续新增或变更对接文档时，先更新仓库内对应 Markdown 源文件，再通过生成脚本同步 HTML 和 Web public 发布文件，最后在观测页保持同一组最新入口。</p>
-<h2 id="section-41">22. 版本与变更</h2>
+<h2 id="section-51">22. 版本与变更</h2>
 <p>本文为 v0.1 对外草案。后续如接口路径、字段、鉴权、幂等、权限模型、回复格式或部署方式发生变化，应同步更新文档版本。</p>
 <p>建议版本策略：</p>
 <ul>
@@ -1457,7 +1792,7 @@ X-V3-Signature: sha256=&lt;HMAC-SHA256 hex&gt;</code></pre>
 <li>安全策略变化：需要重新联调；</li>
 <li>平台官方接口变化：以平台官方最新规则和双方联调结果为准。</li>
 </ul>
-<h2 id="section-42">23. 推荐联调顺序</h2>
+<h2 id="section-52">23. 推荐联调顺序</h2>
 <p>建议按以下顺序推进：</p>
 <ol>
 <li>确认接入模式和部署方式；</li>

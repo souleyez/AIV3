@@ -25,6 +25,8 @@ const DEFAULT_HEARTBEAT_MS: u64 = 15_000;
 const DEFAULT_STDOUT_LIMIT_BYTES: usize = 200_000;
 const DEFAULT_STDERR_LIMIT_BYTES: usize = 100_000;
 const DEFAULT_TASK_WORKSPACE_RETENTION_HOURS: u64 = 168;
+const DEFAULT_GENERATED_ARTIFACTS_ROOT: &str = "/srv/aiv3/shared/objects/generated-artifacts";
+const V3_GENERATED_ARTIFACTS_URL_PREFIX: &str = "https://v3.elepcloud.com/generated-artifacts/";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexHostTaskContext {
@@ -1013,7 +1015,7 @@ fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>)
     );
     if template_id == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
         prompt.push_str(
-            "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Write a complete artifact directory under the task workspace, normally `generated-artifacts/<artifact-id>/`, containing `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json`.\n- `index.html` must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Bind real V3 dataset/database/document evidence from `task.json`; if the selected data is unavailable or insufficient for the requested report, return `needs_human` or `failed` instead of publishing a fallback page.",
+            "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `task.json.image2.local_preview_path` or `visual_contract_local_path` is present, use that local preview file as the visual contract before writing HTML.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Write a complete artifact directory under the task workspace, normally `generated-artifacts/<artifact-id>/`, containing `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json`.\n- `index.html` must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Bind real V3 dataset/database/document evidence from `task.json`; if the selected data is unavailable or insufficient for the requested report, return `needs_human` or `failed` instead of publishing a fallback page.",
         );
     }
     Ok(prompt)
@@ -1108,7 +1110,9 @@ pub fn materialize_fixed_task_bundle(
         )
     })?;
 
-    write_json_file(&workspace_path.join("task.json"), &json!(fixed_task))?;
+    let mut task_json = json!(fixed_task);
+    materialize_static_page_image2_preview_asset(workspace_path, &mut task_json)?;
+    write_json_file(&workspace_path.join("task.json"), &task_json)?;
     let schema: Value = serde_json::from_str(fixed_task_output_schema_hint(
         fixed_task.template_id.as_str(),
     ))
@@ -1159,6 +1163,118 @@ fn write_json_file(path: &Path, value: &Value) -> Result<()> {
     let content = serde_json::to_string_pretty(value)
         .map_err(|error| anyhow!("failed to serialize {}: {error}", path.display()))?;
     fs::write(path, content).map_err(|error| anyhow!("failed to write {}: {error}", path.display()))
+}
+
+fn materialize_static_page_image2_preview_asset(
+    workspace_path: &Path,
+    task_json: &mut Value,
+) -> Result<()> {
+    if task_json.get("template_id").and_then(Value::as_str) != Some(STATIC_PAGE_IMAGE2_DATA_PUBLISH)
+    {
+        return Ok(());
+    }
+    let Some(preview_url) = static_page_image2_preview_url(task_json) else {
+        return Ok(());
+    };
+    let preview_url = preview_url.to_string();
+    let Some(relative_asset_path) = v3_generated_artifact_relative_path(&preview_url) else {
+        return Ok(());
+    };
+    let source_path = generated_artifacts_root().join(&relative_asset_path);
+    if !source_path.is_file() {
+        return Ok(());
+    }
+
+    let preview_dir = workspace_path.join("image2");
+    fs::create_dir_all(&preview_dir).map_err(|error| {
+        anyhow!(
+            "failed to create static page image2 directory {}: {error}",
+            preview_dir.display()
+        )
+    })?;
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("png");
+    let local_name = format!("preview.{extension}");
+    let local_path = preview_dir.join(&local_name);
+    fs::copy(&source_path, &local_path).map_err(|error| {
+        anyhow!(
+            "failed to copy static page image2 preview {} to {}: {error}",
+            source_path.display(),
+            local_path.display()
+        )
+    })?;
+
+    let local_rel = format!("image2/{local_name}");
+    if let Some(image2) = task_json.get_mut("image2").and_then(Value::as_object_mut) {
+        image2.insert(
+            "local_preview_path".to_string(),
+            Value::String(local_rel.clone()),
+        );
+        image2.insert(
+            "visual_contract_local_path".to_string(),
+            Value::String(local_rel.clone()),
+        );
+        image2.insert(
+            "visual_contract_materialized".to_string(),
+            Value::Bool(true),
+        );
+    }
+    write_json_file(
+        &preview_dir.join("manifest.json"),
+        &json!({
+            "kind": "static_page_image2_preview_asset",
+            "source_url": preview_url,
+            "source_path": source_path.display().to_string(),
+            "local_preview_path": local_rel,
+            "materialized": true,
+        }),
+    )?;
+    Ok(())
+}
+
+fn static_page_image2_preview_url(task_json: &Value) -> Option<&str> {
+    let image2 = task_json.get("image2")?;
+    [
+        "/preview_asset_key",
+        "/render_asset_url",
+        "/asset_provenance/persistedPreviewAssetKey",
+        "/asset_provenance/renderAssetUrl",
+    ]
+    .into_iter()
+    .filter_map(|pointer| image2.pointer(pointer).and_then(Value::as_str))
+    .map(str::trim)
+    .find(|value| value.starts_with(V3_GENERATED_ARTIFACTS_URL_PREFIX))
+}
+
+fn v3_generated_artifact_relative_path(url: &str) -> Option<PathBuf> {
+    let raw = url
+        .strip_prefix(V3_GENERATED_ARTIFACTS_URL_PREFIX)?
+        .split(['?', '#'])
+        .next()?
+        .trim_matches('/');
+    if raw.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some(path)
+}
+
+fn generated_artifacts_root() -> PathBuf {
+    std::env::var("CODEX_HOST_AGENT_GENERATED_ARTIFACTS_ROOT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_GENERATED_ARTIFACTS_ROOT))
 }
 
 fn fixed_task_bundle_readme(template_id: &str) -> String {
@@ -2102,6 +2218,59 @@ summary text before final output
         assert!(runtime.contains("Safe-RemoveToBackup.ps1"));
         assert!(!runtime.contains("api_key"));
         assert!(!readme.contains("DATABASE_URL"));
+    }
+
+    #[test]
+    fn fixed_task_bundle_materializes_static_page_image2_preview_file() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let root = std::env::temp_dir().join(format!("v3-codex-host-artifacts-{}", Uuid::new_v4()));
+        let source = root.join("static-page-previews/job-1/preview.png");
+        fs::create_dir_all(source.parent().expect("source parent")).expect("source dir");
+        fs::write(&source, b"fake image bytes").expect("source image");
+        let _root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_GENERATED_ARTIFACTS_ROOT",
+            root.to_str().expect("utf-8 temp root"),
+        );
+
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.image2["preview_asset_key"] = json!(
+            "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job-1/preview.png"
+        );
+        fixed_task.image2["render_asset_url"] = fixed_task.image2["preview_asset_key"].clone();
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+        let decision = policy.prepare(&context).expect("decision");
+        let workspace =
+            std::env::temp_dir().join(format!("v3-codex-host-bundle-test-{}", Uuid::new_v4()));
+
+        materialize_fixed_task_bundle(
+            &workspace,
+            &context,
+            &decision,
+            &CodexHostWorkspaceRetentionPolicy::new(336),
+        )
+        .expect("bundle should materialize");
+
+        let local_preview = workspace.join("image2/preview.png");
+        let task = fs::read_to_string(workspace.join("task.json")).expect("task.json");
+        let manifest =
+            fs::read_to_string(workspace.join("image2/manifest.json")).expect("manifest");
+
+        assert_eq!(
+            fs::read(&local_preview).expect("local preview"),
+            b"fake image bytes"
+        );
+        assert!(task.contains("\"local_preview_path\": \"image2/preview.png\""));
+        assert!(task.contains("\"visual_contract_materialized\": true"));
+        assert!(manifest.contains("\"materialized\": true"));
     }
 
     #[test]

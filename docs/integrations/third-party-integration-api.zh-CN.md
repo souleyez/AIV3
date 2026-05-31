@@ -6,7 +6,7 @@
 **默认对外域名：** `https://v3.elepcloud.com`
 **说明：** 本文可作为第三方联调前的接口说明材料，只说明 V3 对外开放的能力、接口、字段和使用方式，不展开具体实现细节。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
 
-如果第三方采用自建聊天页面、自建文档库、自建用户 ID、会话 ID、skill、模板、产物或业务接口的“纯第三方模式”，可优先阅读独立对接文档：`docs/integrations/pure-third-party-integration-guide.zh-CN.md`。需要发给业务/技术评审时，可直接打开同目录 HTML 阅读版：`docs/integrations/pure-third-party-integration-guide.zh-CN.html`。
+如果第三方采用自建聊天页面、自建文档库、自建用户 ID、会话 ID、skill、模板、产物或业务接口的“纯第三方模式”，可优先阅读独立对接文档：`docs/integrations/pure-third-party-integration-guide.zh-CN.md`。如果第三方要接入类似 8 服务器现有数据库源的 MySQL/经营库，数据库接口已合并在本文 `11.6 第三方数据库对接`。需要发给业务/技术评审时，可直接打开同目录 HTML 阅读版。
 
 V3 外部集成观测页提供两类公开文档入口：
 
@@ -825,9 +825,315 @@ Authorization: Bearer <V3 inbound token>
 | `previous_dataset_ids` | 移动前的 V3 数据集 UUID 列表 |
 | `documents` | 移动后的 V3 文档摘要列表 |
 
-### 11.6 第三方查询数据库源状态
+### 11.6 第三方数据库对接
 
-数据库源由 V3 侧先完成连接、表映射、画像和同步配置。第三方通道只能查询通道配置中允许的数据库源状态：`default_source_id` / `defaultSourceId`，或 `allowed_database_source_ids` / `allowedDatabaseSourceIds` / `database_source_ids` / `databaseSourceIds` / `allowed_source_ids` / `allowedSourceIds` / `database_sources`。该接口只读，不接收数据库密码，不执行 SQL，不返回原始连接串、密码、token 或原始同步游标。
+数据库源由 V3 侧先完成连接、表映射、画像和同步配置。典型方式和 8 服务器现有 `hy-sql-traffic-area` 类似：V3 托管数据库密钥和表白名单，第三方或联调方通过 API 查看状态、触发同步；同步后的数据进入 V3 数据集，再用于问答、分析和静态页报表。
+
+数据库密码不出现在公开请求体里。生产建议由 V3 侧把连接串保存为服务端环境变量或密钥绑定，接口里只出现 `connection_env` 这类密钥引用。第三方通道只能查询通道配置中允许的数据库源状态：`default_source_id` / `defaultSourceId`，或 `allowed_database_source_ids` / `allowedDatabaseSourceIds` / `database_source_ids` / `databaseSourceIds` / `allowed_source_ids` / `allowedSourceIds` / `database_sources`。
+
+最小接入顺序：
+
+1. V3 配置数据库源：配置 `source_id`、数据库类型、密钥引用、库名、表映射。
+2. 联调验证：调用连接测试、库表扫描、表预览、语义画像。
+3. 同步入库：把数据库行清洗成 V3 文档/数据集。
+4. 状态查询：第三方通道查询数据库源和同步结果。
+5. 聊天/报表：在聊天事件里传同步后的数据集范围，生成问答或静态页报表。
+
+数据库源配置摘要示例：
+
+```json
+{
+  "source_id": "hy-sql-traffic-area",
+  "connector_kind": "mysql",
+  "display_name": "hy_sql 区域经营库",
+  "database_source": {
+    "kind": "mysql",
+    "database": "hy_sql",
+    "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+    "default_dataset_id": "31588c60-0885-47c4-81fe-4ff5c27de8e7",
+    "row_limit": 5000,
+    "tables": [{
+      "table": "bi_contract_warning",
+      "id_column": "parentcode",
+      "id_columns": ["parentcode", "storecode", "txdate"],
+      "title_column": "dist_name",
+      "content_columns": ["shopdesc", "catgldesc", "dist_name"],
+      "metadata_columns": ["storecode", "brandcode", "txdate"],
+      "updated_at_column": "txdate",
+      "object_type": "document",
+      "content_type": "text/markdown"
+    }]
+  }
+}
+```
+
+#### 11.6.1 连接测试
+
+用于确认 V3 能访问数据库，但不返回密码。
+
+```http
+POST /v1/external/sources/{source_id}/database/test
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "database_source": {}
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `source_id` | 是 | 路径参数；V3 数据库源 ID，例如 `hy-sql-traffic-area` |
+| `database_source` | 否 | 临时覆盖配置；生产通常传空对象，使用 V3 已保存的服务端配置；不能传密码、token、原始连接串等敏感字段 |
+
+#### 11.6.2 扫描库表结构
+
+用于拿到库、表、字段、类型和估算行数。
+
+```http
+POST /v1/external/sources/{source_id}/database/schema
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "database_source": {}
+}
+```
+
+响应示例：
+
+```json
+{
+  "source_id": "hy-sql-traffic-area",
+  "connector_kind": "mysql",
+  "redacted_summary": {},
+  "schema": {
+    "database": "hy_sql",
+    "table_count": 2,
+    "tables": [{
+      "table": "bi_contract_warning",
+      "column_count": 18,
+      "approximate_row_count": 12000,
+      "columns": [{
+        "name": "storecode",
+        "data_type": "varchar",
+        "nullable": true
+      }]
+    }]
+  }
+}
+```
+
+#### 11.6.3 表预览
+
+用于抽样查看表数据，辅助确认字段含义。不要用于导出完整数据。
+
+```http
+POST /v1/external/sources/{source_id}/database/preview
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "table": "bi_contract_warning",
+  "limit": 20,
+  "database_source": {}
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `table` | 是 | 表名；必须在该数据库源允许访问的表范围内 |
+| `limit` | 否 | 预览行数；建议 20 以内 |
+| `database_source` | 否 | 临时覆盖配置；生产通常传空对象 |
+
+#### 11.6.4 数据库语义画像
+
+用于让 V3 判断哪些字段像时间、指标、维度、实体或文本，为后续问答和报表做准备。
+
+```http
+POST /v1/external/sources/{source_id}/database/profile
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "sample_limit": 100,
+  "database_source": {}
+}
+```
+
+响应示例：
+
+```json
+{
+  "source_id": "hy-sql-traffic-area",
+  "connector_kind": "mysql",
+  "redacted_summary": {},
+  "profile": {
+    "database": "hy_sql",
+    "table_count": 2,
+    "metric_count": 12,
+    "dimension_count": 18,
+    "tables": [{
+      "table": "bi_contract_warning",
+      "approximate_row_count": 12000,
+      "metric_count": 8,
+      "dimension_count": 10,
+      "time_dimension_count": 1,
+      "entity_column_count": 4,
+      "text_column_count": 3,
+      "mapping_confidence": 0.86
+    }]
+  }
+}
+```
+
+#### 11.6.5 应用画像为表映射
+
+用于把画像结果写回数据库源配置。建议先 `dry_run=true` 看结果，确认后再正式写入。
+
+```http
+POST /v1/external/sources/{source_id}/database/apply-profile
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "sample_limit": 100,
+  "tables": ["bi_contract_warning"],
+  "dry_run": true,
+  "database_source": {}
+}
+```
+
+响应字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `accepted` | 请求是否被接受 |
+| `source_id` | 数据库源 ID |
+| `connector_kind` | 数据库类型 |
+| `dry_run` | 是否只是预览 |
+| `redacted_summary` | 新配置的脱敏摘要 |
+| `database_source` | 新表映射配置；不含明文密码 |
+| `profile` | 本次画像结果 |
+| `updated_at` | 写回配置时间；`dry_run=true` 时为空 |
+
+#### 11.6.6 聚合查询
+
+用于小范围统计验证，例如按门店、品牌、日期做 `count`、`sum`、`avg`。
+
+```http
+POST /v1/external/sources/{source_id}/database/aggregate
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "table": "bi_contract_warning",
+  "dimensions": ["dist_name", "txdate"],
+  "metric": "quekou",
+  "aggregation": "sum",
+  "limit": 50,
+  "scan_limit": 5000,
+  "database_source": {}
+}
+```
+
+#### 11.6.7 同步数据库到 V3 数据集
+
+把数据库行清洗为 V3 文档/证据，后续问答和报表都走数据集链路。
+
+```http
+POST /v1/external/sources/{source_id}/sync
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "sync_kind": "incremental",
+  "dataset_id": "31588c60-0885-47c4-81fe-4ff5c27de8e7",
+  "dataset_external_id": "xinbai-operating-analysis",
+  "dataset_title": "新百经营分析",
+  "checkpoint": {
+    "txdate_after": "2026-05-01"
+  },
+  "connector_context": {
+    "database_source": {
+      "tables": [{
+        "table": "bi_contract_warning"
+      }]
+    }
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `sync_kind` | 否 | `incremental` 增量同步；`full` 全量同步 |
+| `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 至少传一个，或数据库源已配置 `default_dataset_id` |
+| `dataset_external_id` | 条件必填 | 第三方稳定数据集 ID；V3 可自动创建或复用 |
+| `dataset_title` | 否 | 自动创建数据集时使用 |
+| `checkpoint` | 否 | 增量同步游标；结构由具体表和业务约定决定 |
+| `connector_context.database_source` | 否 | 本次同步的数据库源覆盖项；生产只允许安全字段 |
+
+响应示例：
+
+```json
+{
+  "accepted": true,
+  "source_id": "hy-sql-traffic-area",
+  "sync_run_id": "sync-20260531-0001",
+  "sync_kind": "incremental",
+  "status": "queued",
+  "workflow_execution": {
+    "id": "workflow-execution-id",
+    "status": "running"
+  },
+  "enqueued_tasks": []
+}
+```
+
+#### 11.6.8 查询数据库源状态
+
+该接口只读，不接收数据库密码，不执行 SQL，不返回原始连接串、密码、token 或原始同步游标。
 
 ```http
 GET /v1/external/channels/{connection_id}/database-sources/{source_external_id}/status
@@ -924,6 +1230,72 @@ Authorization: Bearer <V3 inbound token>
 | `status.sync_readiness.row_failure_groups` | 当前同步可用状态中的行转换失败分组；包含表、原因、失败行数和少量主键样例 |
 | `status.semantic_profile` | 表字段、指标、维度、时间字段、实体字段等语义摘要 |
 | `status.health_findings` | 配置、同步、索引、行转换失败等问题摘要 |
+
+#### 11.6.9 聊天和报表使用数据库数据
+
+数据库同步完成后，不在聊天里传 SQL，也不传数据库密码。聊天只传同步后的数据集范围。
+
+```http
+POST /v1/external/channels/{connection_id}/events
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "platform": "generic_chat",
+  "tenant_external_id": "tenant-ext-001",
+  "bot_external_id": "bot-v3",
+  "conversation_external_id": "conv-db-001",
+  "sender_external_id": "user-10001",
+  "message_external_id": "msg-db-001",
+  "message_type": "text",
+  "text": "按门店和品牌生成本月经营风险报表。",
+  "default_prompt": "优先基于已同步数据库数据回答。",
+  "output_format": "rich_text",
+  "render_mode": "artifact",
+  "artifact_type": "static_page",
+  "dataset_external_ids": [
+    "xinbai-operating-analysis"
+  ],
+  "requested_skills": [],
+  "idempotency_key": "third-party:tenant-ext-001:msg-db-001",
+  "received_at": "2026-05-31T10:00:00Z"
+}
+```
+
+如果进入静态页链路，重点看：
+
+| 字段 | 说明 |
+| --- | --- |
+| `reply.task_status` | 任务状态；如 `static_page_image2_auto_publish_pending`、`completed`、`failed` |
+| `reply.card.public_url` | 最终公开页面 URL；为空表示还在生成或发布失败 |
+| `reply.card.image_job_status` | Image2 效果图状态 |
+| `reply.card.codex_auto_publish_ready` | 是否满足自动发布条件 |
+| `reply.card.generated_artifact_url` | 已生成产物 URL |
+| `artifact_links` | 产物链接数组；第三方页面可直接展示 |
+
+#### 11.6.10 状态判断
+
+| 场景 | 判断方式 | 第三方动作 |
+| --- | --- | --- |
+| 连接失败 | `database/test` 返回错误 | 检查网络、白名单、账号权限和 V3 密钥配置 |
+| schema 为空 | `schema.table_count=0` | 检查库名、账号权限、表过滤 |
+| 同步中 | `sync_readiness.signal=sync_running` | 页面提示处理中，稍后重查 |
+| 数据集不可问 | `dataset_readiness.signal` 不是 `ready` | 等待同步/索引，或让 V3 重跑同步 |
+| 行转换失败 | `row_failure_groups` 非空 | 根据表名、原因和主键样本修正字段映射 |
+| 报表缺样本行 | 静态页返回 `needs_human` 或 `missing sample rows` | 让 V3 补充样本行和指标映射后重新生成 |
+
+生产注意：
+
+- 第三方不要在公开接口里传数据库密码、连接串、token。
+- V3 只按配置白名单访问表，不执行第三方传入的任意 SQL。
+- 数据库同步后的问答/报表使用 V3 数据集范围，不直接把原始表 dump 给模型。
+- 同一个数据库源可以同步到不同 V3 数据集，用于不同客户、工作区或权限范围。
+- 数据库字段画像和表映射是报表质量关键；正式接入前至少跑一次 schema、profile、preview 和小范围 sync。
 
 ## 12. 用户与组织接口
 
