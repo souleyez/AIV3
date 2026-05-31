@@ -25158,7 +25158,7 @@ fn assistant_run_model_is_gpt_55(model: &str) -> bool {
     normalized.contains("gpt55")
 }
 
-fn assistant_run_uses_gpt_55_primary_model(run: &AssistantRun) -> bool {
+fn assistant_run_primary_model_names(run: &AssistantRun) -> Vec<&str> {
     [
         run.runtime_manifest.pointer("/model"),
         run.runtime_manifest.pointer("/runtime/model"),
@@ -25173,7 +25173,43 @@ fn assistant_run_uses_gpt_55_primary_model(run: &AssistantRun) -> bool {
     .into_iter()
     .flatten()
     .filter_map(Value::as_str)
-    .any(assistant_run_model_is_gpt_55)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .collect()
+}
+
+fn assistant_run_uses_gpt_55_primary_model(run: &AssistantRun) -> bool {
+    assistant_run_primary_model_names(run)
+        .into_iter()
+        .any(assistant_run_model_is_gpt_55)
+}
+
+fn assistant_run_primary_model_unresolved_for_static_page(run: &AssistantRun) -> bool {
+    let names = assistant_run_primary_model_names(run);
+    names.is_empty()
+        || names.iter().all(|model| {
+            let normalized = model.trim().to_ascii_lowercase();
+            normalized.is_empty()
+                || normalized.contains("pending")
+                || normalized.contains("unknown")
+                || normalized.contains("unresolved")
+        })
+}
+
+fn assistant_chat_runtime_uses_gpt_55_primary_model() -> bool {
+    let runtime = resolve_runtime_selection_from_env(
+        "ASSISTANT_RUN",
+        MODEL_LANE_ASSISTANT_CHAT,
+        DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL,
+    );
+    assistant_run_model_is_gpt_55(&runtime.model)
+}
+
+fn assistant_run_static_page_should_use_gpt_55_local_route(run: &AssistantRun) -> bool {
+    assistant_run_uses_gpt_55_primary_model(run)
+        || (run.service_lane == "external_channel"
+            && assistant_run_primary_model_unresolved_for_static_page(run)
+            && assistant_chat_runtime_uses_gpt_55_primary_model())
 }
 
 async fn external_channel_static_page_image2_enqueue_if_enabled(
@@ -25567,6 +25603,33 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
             &connection,
             &run,
         );
+        if assistant_run_static_page_should_use_gpt_55_local_route(&run) {
+            let (_draft, render_output) = create_static_page_render_output_inline(
+                &state,
+                draft.clone(),
+                Some(image_job_for_render),
+                false,
+            )
+            .await?;
+            maybe_publish_external_static_page_render_view_as_generated_artifact_with_options(
+                storage,
+                tenant_id,
+                &draft,
+                &render_output,
+                Some(image_job_view.id.to_string()),
+                ExternalStaticPageGeneratedArtifactPublishOptions {
+                    reason: "gpt_5_5_after_image2_preview_ready",
+                    publish_mode: "gpt_5_5_local_static_page_renderer",
+                    validation_warning: Some("gpt_5_5_local_static_page_renderer"),
+                    direct_html: false,
+                    model_route: Some("gpt_5_5_local_static_page_renderer"),
+                    provisional_direct_html: false,
+                    cloudflare_codex_used: false,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         let codex_execution_id = external_channel_static_page_image2_enqueue_if_enabled(
             &state,
             &connection_id,
@@ -25659,7 +25722,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         return Ok(());
     }
 
-    if assistant_run_uses_gpt_55_primary_model(&run) {
+    if assistant_run_static_page_should_use_gpt_55_local_route(&run) {
         let (_draft, render_output) = create_static_page_render_output_inline(
             &state,
             draft.clone(),
@@ -25825,8 +25888,20 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     )
     .await?;
     let codex_auto_publish_readiness = external_channel_static_page_codex_auto_publish_readiness();
-    let codex_auto_publish_enabled = codex_auto_publish_readiness.ready;
-    let create_direct_render_now = !codex_auto_publish_enabled
+    let gpt55_local_publish_after_preview =
+        assistant_run_static_page_should_use_gpt_55_local_route(run);
+    let codex_auto_publish_enabled =
+        codex_auto_publish_readiness.ready && !gpt55_local_publish_after_preview;
+    let auto_publish_after_preview =
+        codex_auto_publish_enabled || gpt55_local_publish_after_preview;
+    let final_publish_route = if gpt55_local_publish_after_preview {
+        "gpt_5_5_local_static_page_renderer"
+    } else if codex_auto_publish_enabled {
+        "cloudflare_codex"
+    } else {
+        "manual_or_direct_html"
+    };
+    let create_direct_render_now = !auto_publish_after_preview
         || external_channel_static_page_demo_generated_artifact_enabled();
     let direct_render_result = if create_direct_render_now {
         let result =
@@ -25857,7 +25932,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .and_then(Value::as_str)
         .map(str::to_string);
     let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
-    let poll_after_seconds = if codex_auto_publish_enabled
+    let poll_after_seconds = if auto_publish_after_preview
         && (generated_artifact_url.is_some() || direct_render_output.is_some())
     {
         Value::from(15)
@@ -25915,10 +25990,14 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     "codex_host_workflow_execution_id": Value::Null,
                     "template_id": if codex_auto_publish_enabled {
                         Value::String("static_page_image2_data_publish".to_string())
+                    } else if gpt55_local_publish_after_preview {
+                        Value::String("platform_api_static_page_renderer".to_string())
                     } else {
                         Value::Null
                     },
-                    "auto_publish_after_preview": codex_auto_publish_enabled,
+                    "auto_publish_after_preview": auto_publish_after_preview,
+                    "final_publish_route": final_publish_route,
+                    "gpt_5_5_local_publish_after_preview": gpt55_local_publish_after_preview,
                     "codex_auto_publish_ready": codex_auto_publish_enabled,
                     "codex_auto_publish_disabled_reason": if codex_auto_publish_enabled {
                         Value::Null
@@ -25926,10 +26005,12 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         Value::String(codex_auto_publish_readiness.reason.to_string())
                     },
                     "direct_html_fallback": direct_render_output.is_some(),
-                    "provisional_direct_html": codex_auto_publish_enabled && direct_render_output.is_some(),
+                    "provisional_direct_html": auto_publish_after_preview && direct_render_output.is_some(),
                     "demo_generated_artifact_publish": generated_artifact_url.is_some(),
                     "codex_final_status": if codex_auto_publish_enabled {
                         Value::String("static_page_image2_auto_publish_pending".to_string())
+                    } else if gpt55_local_publish_after_preview {
+                        Value::String("static_page_image2_local_publish_pending".to_string())
                     } else {
                         Value::Null
                     },
@@ -25945,26 +26026,36 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         "static_page_published"
     } else if direct_render_output.is_some() {
         "static_page_rendered"
+    } else if gpt55_local_publish_after_preview {
+        "static_page_image2_local_publish_pending"
     } else if codex_auto_publish_enabled {
         "static_page_image2_auto_publish_pending"
     } else {
         "static_page_image_preview_queued"
     };
-    let text = if generated_artifact_url.is_some() && codex_auto_publish_enabled {
+    let text = if generated_artifact_url.is_some() && gpt55_local_publish_after_preview {
+        "V3 已先生成可发送的静态页链接；效果图完成后会继续由 GPT-5.5 主链路生成最终页面，用户可在页面生成后继续提出调整。".to_string()
+    } else if generated_artifact_url.is_some() && codex_auto_publish_enabled {
         "V3 已先生成可发送的静态页链接；效果图完成后会继续进入 Cloudflare Codex 发布链路，用户可在页面生成后继续提出调整。".to_string()
     } else if generated_artifact_url.is_some() {
         "V3 静态页已生成并发布，可通过 artifact_links[0] 打开页面。".to_string()
     } else if direct_render_output.is_some() {
-        if codex_auto_publish_enabled {
+        if gpt55_local_publish_after_preview {
+            "V3 已先生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物；效果图完成后会继续由 GPT-5.5 主链路生成最终页面。".to_string()
+        } else if codex_auto_publish_enabled {
             "V3 已先生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物；效果图完成后会继续自动发布最终页面。".to_string()
         } else {
             "V3 已生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物。".to_string()
         }
     } else {
-        external_channel_static_page_pipeline_reply_text(
-            codex_auto_publish_enabled,
-            draft_outcome.template_reference.as_ref(),
-        )
+        if gpt55_local_publish_after_preview {
+            "已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会继续由 GPT-5.5 主链路生成最终页面。".to_string()
+        } else {
+            external_channel_static_page_pipeline_reply_text(
+                codex_auto_publish_enabled,
+                draft_outcome.template_reference.as_ref(),
+            )
+        }
     };
     Ok(Some(ExternalBotReplyView {
         target_conversation_external_id: message.conversation_external_id.clone(),
@@ -26021,10 +26112,14 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             "codex_host_workflow_execution_id": Value::Null,
             "fixed_task_template_id": if codex_auto_publish_enabled {
                 Value::String("static_page_image2_data_publish".to_string())
+            } else if gpt55_local_publish_after_preview {
+                Value::String("platform_api_static_page_renderer".to_string())
             } else {
                 Value::Null
             },
-            "auto_publish_after_preview": codex_auto_publish_enabled,
+            "auto_publish_after_preview": auto_publish_after_preview,
+            "final_publish_route": final_publish_route,
+            "gpt_5_5_local_publish_after_preview": gpt55_local_publish_after_preview,
             "codex_auto_publish_ready": codex_auto_publish_enabled,
             "codex_auto_publish_disabled_reason": if codex_auto_publish_enabled {
                 Value::Null
@@ -26032,10 +26127,12 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 Value::String(codex_auto_publish_readiness.reason.to_string())
             },
             "direct_html_fallback": direct_render_output.is_some(),
-            "provisional_direct_html": codex_auto_publish_enabled && direct_render_output.is_some(),
+            "provisional_direct_html": auto_publish_after_preview && direct_render_output.is_some(),
             "demo_generated_artifact_publish": generated_artifact_url.is_some(),
             "codex_final_status": if codex_auto_publish_enabled {
                 Value::String("static_page_image2_auto_publish_pending".to_string())
+            } else if gpt55_local_publish_after_preview {
+                Value::String("static_page_image2_local_publish_pending".to_string())
             } else {
                 Value::Null
             },
@@ -26136,6 +26233,17 @@ fn external_channel_assistant_run_reply_status_url_str(
     )
 }
 
+#[derive(Clone, Copy)]
+struct ExternalStaticPageGeneratedArtifactPublishOptions<'a> {
+    reason: &'a str,
+    publish_mode: &'a str,
+    validation_warning: Option<&'a str>,
+    direct_html: bool,
+    model_route: Option<&'a str>,
+    provisional_direct_html: bool,
+    cloudflare_codex_used: bool,
+}
+
 async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -26143,6 +26251,33 @@ async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
     render_output: &StaticPageRenderOutputView,
     image_job_id: Option<String>,
     reason: &str,
+) -> std::result::Result<Option<Value>, ApiError> {
+    maybe_publish_external_static_page_render_view_as_generated_artifact_with_options(
+        storage,
+        tenant_id,
+        draft,
+        render_output,
+        image_job_id,
+        ExternalStaticPageGeneratedArtifactPublishOptions {
+            reason,
+            publish_mode: "demo_direct_generated_artifact",
+            validation_warning: Some("demo_generated_artifact_from_v3_static_page_renderer"),
+            direct_html: true,
+            model_route: Some("v3_static_page_renderer"),
+            provisional_direct_html: true,
+            cloudflare_codex_used: false,
+        },
+    )
+    .await
+}
+
+async fn maybe_publish_external_static_page_render_view_as_generated_artifact_with_options(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutputView,
+    image_job_id: Option<String>,
+    options: ExternalStaticPageGeneratedArtifactPublishOptions<'_>,
 ) -> std::result::Result<Option<Value>, ApiError> {
     if render_output.status != contracts::StaticPageRenderOutputStatusView::Rendered
         || render_output.html.trim().is_empty()
@@ -26244,7 +26379,12 @@ async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
         "data_snapshot_url": data_url.as_ref().map(|_| external_channel_generated_artifact_public_file_url(&relative_dir, "data-snapshot.json")),
         "dynamic_page_contract": build_static_page_dynamic_page_contract(),
         "source_refs": source_refs.clone(),
-        "reason": codex_host_fixed_task_safe_text(reason),
+        "reason": codex_host_fixed_task_safe_text(options.reason),
+        "publish_mode": options.publish_mode,
+        "model_route": options.model_route,
+        "direct_html": options.direct_html,
+        "provisional_direct_html": options.provisional_direct_html,
+        "cloudflare_codex_used": options.cloudflare_codex_used,
         "created_at": Utc::now(),
     });
     fs::write(
@@ -26263,17 +26403,21 @@ async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
         )
     })?;
 
+    let validation_warnings = options
+        .validation_warning
+        .map(|warning| json!([warning]))
+        .unwrap_or_else(|| json!([]));
     let validation_summary = json!({
         "status": "success",
-        "reason": codex_host_fixed_task_safe_text(reason),
-        "direct_html": true,
+        "reason": codex_host_fixed_task_safe_text(options.reason),
+        "direct_html": options.direct_html,
         "render_output_id": render_output.id.to_string(),
         "latest_snapshot": Value::Null,
         "source_row_count": Value::Null,
         "current_state_row_count": Value::Null,
         "detail_row_count": Value::Null,
         "unit_policy": "v3_static_page_renderer",
-        "warnings": ["demo_generated_artifact_from_v3_static_page_renderer"],
+        "warnings": validation_warnings,
     });
     let completed_payload = json!({
         "channel_connection_id": channel_connection_id,
@@ -26285,7 +26429,12 @@ async fn maybe_publish_external_static_page_render_view_as_generated_artifact(
         "render_output_id": render_output.id.to_string(),
         "codex_host_workflow_execution_id": Value::Null,
         "template_id": "static_page_image2_data_publish",
-        "publish_mode": "demo_direct_generated_artifact",
+        "publish_mode": options.publish_mode,
+        "model_route": options.model_route,
+        "cloudflare_codex_used": options.cloudflare_codex_used,
+        "direct_html_fallback": options.direct_html,
+        "provisional_direct_html": options.provisional_direct_html,
+        "demo_generated_artifact_publish": options.publish_mode == "demo_direct_generated_artifact",
         "public_url": public_url.clone(),
         "artifact_links": [public_url],
         "local_path": index_path.display().to_string(),
@@ -37483,6 +37632,23 @@ fn external_channel_static_page_published_reply(
                 .unwrap_or(Value::Null),
             "codex_auto_publish_disabled_reason": payload
                 .get("codex_auto_publish_disabled_reason")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "final_publish_route": payload
+                .get("final_publish_route")
+                .cloned()
+                .or_else(|| payload.get("model_route").cloned())
+                .unwrap_or(Value::Null),
+            "model_route": payload
+                .get("model_route")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "gpt_5_5_local_publish_after_preview": payload
+                .get("gpt_5_5_local_publish_after_preview")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "cloudflare_codex_used": payload
+                .get("cloudflare_codex_used")
                 .cloned()
                 .unwrap_or(Value::Null),
             "direct_html_fallback": payload
@@ -73503,6 +73669,11 @@ mod tests {
             "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
             "/srv/aiv3/codex-workspaces",
         );
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "MiniMax-M2.7");
+        let _demo_publish = TestEnvVarRestore::set(
+            "EXTERNAL_CHANNEL_STATIC_PAGE_DEMO_GENERATED_ARTIFACT_ENABLED",
+            "false",
+        );
 
         let tenant = storage
             .ensure_tenant(
@@ -73665,6 +73836,11 @@ mod tests {
             TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
         let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
         let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "MiniMax-M2.7");
+        let _demo_publish = TestEnvVarRestore::set(
+            "EXTERNAL_CHANNEL_STATIC_PAGE_DEMO_GENERATED_ARTIFACT_ENABLED",
+            "true",
+        );
         let artifact_root = std::env::temp_dir()
             .join("ai-data-platform-v3-tests")
             .join(format!("generated-artifacts-{}", Uuid::new_v4()));
@@ -74728,6 +74904,11 @@ mod tests {
             "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
             "/srv/aiv3/codex-workspaces",
         );
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "MiniMax-M2.7");
+        let _demo_publish = TestEnvVarRestore::set(
+            "EXTERNAL_CHANNEL_STATIC_PAGE_DEMO_GENERATED_ARTIFACT_ENABLED",
+            "false",
+        );
 
         let tenant = storage
             .ensure_tenant(
@@ -74807,6 +74988,132 @@ mod tests {
             publish_events[0].payload["preview_asset_key"],
             json!(preview_asset_key)
         );
+    }
+
+    #[tokio::test]
+    async fn external_channel_gpt_55_static_page_image_success_publishes_locally_once() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external GPT-5.5 static-page local publish test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _runtime_mode = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        let _runtime_provider =
+            TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_PROVIDER", "rightcode");
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "gpt-5.5");
+        let artifact_root = std::env::temp_dir()
+            .join("ai-data-platform-v3-tests")
+            .join(format!("generated-artifacts-{}", Uuid::new_v4()));
+        let artifact_root = artifact_root.display().to_string();
+        let _artifact_root = TestEnvVarRestore::set("V3_GENERATED_ARTIFACT_ROOT", &artifact_root);
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-gpt55-static-page-preview-{}", Uuid::new_v4()),
+                "External GPT-5.5 Static Page Preview Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "default_source_id": "hy-sql"
+            }),
+        )
+        .await;
+        let preview_asset_key = "static-page-previews/xinbai-external-gpt55-auto.png";
+        let (run, draft, job, execution) =
+            create_external_static_page_auto_publish_fixture_with_runtime_manifest(
+                &state,
+                Some(preview_asset_key),
+                json!({
+                    "mode": "accepted",
+                    "lane": "external_channel",
+                    "model": "pending-assistant-run-executor",
+                    "provider": "v3-control-plane"
+                }),
+            )
+            .await;
+
+        for _ in 0..2 {
+            maybe_enqueue_external_static_page_publish_after_image_ready(
+                &state.storage,
+                &state.workflow_catalog,
+                &state.event_bus,
+                state.tenant_id,
+                &execution,
+            )
+            .await
+            .expect("external GPT-5.5 preview completion should publish locally");
+        }
+
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        assert_eq!(
+            workflows
+                .iter()
+                .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
+                .count(),
+            0
+        );
+
+        let render_outputs = state
+            .storage
+            .static_page_render_outputs()
+            .list_by_draft(state.tenant_id, draft.id)
+            .await
+            .expect("render outputs should list");
+        assert_eq!(render_outputs.len(), 1);
+        assert_eq!(render_outputs[0].image_job_id, Some(job.id));
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let completed_events = events
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed_events.len(), 1);
+        let payload = &completed_events[0].payload;
+        assert_eq!(
+            payload["publish_mode"],
+            json!("gpt_5_5_local_static_page_renderer")
+        );
+        assert_eq!(
+            payload["model_route"],
+            json!("gpt_5_5_local_static_page_renderer")
+        );
+        assert_eq!(payload["cloudflare_codex_used"], json!(false));
+        assert_eq!(payload["direct_html_fallback"], json!(false));
+        assert_eq!(
+            payload["render_output_id"],
+            json!(render_outputs[0].id.to_string())
+        );
+        assert!(payload["public_url"].as_str().is_some_and(
+            |url| url.contains("/generated-artifacts/database-static-pages/external-channel/")
+        ));
     }
 
     #[tokio::test]
@@ -74979,6 +75286,47 @@ mod tests {
             "model": "MiniMax-M2.7"
         });
         assert!(!assistant_run_uses_gpt_55_primary_model(&other_run));
+    }
+
+    #[test]
+    fn external_static_page_pending_model_uses_assistant_runtime_gpt_55_route() {
+        let _lock = codex_model_gateway_env_lock().lock().expect("env lock");
+        let _mode = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        let _provider = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_PROVIDER", "rightcode");
+        let _model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "gpt-5.5");
+        let now = Utc::now();
+        let external_run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: None,
+            user_prompt: "生成静态页".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({}),
+            service_lane: "external_channel".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({
+                "mode": "accepted",
+                "lane": "external_channel",
+                "model": "pending-assistant-run-executor",
+                "provider": "v3-control-plane"
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(assistant_run_static_page_should_use_gpt_55_local_route(
+            &external_run
+        ));
+
+        let mut main_run = external_run;
+        main_run.service_lane = "ordinary_chat".to_string();
+        assert!(!assistant_run_static_page_should_use_gpt_55_local_route(
+            &main_run
+        ));
     }
 
     #[tokio::test]
