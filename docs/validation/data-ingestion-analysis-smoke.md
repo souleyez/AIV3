@@ -52,9 +52,11 @@ Read-only deployment readiness:
 
 - Environment: `8服务器` public V3 endpoint, plan-only, no mutation
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case data-ingestion-analysis -Json`
-- Result: passed health check; mutation skipped by guard
-- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T040340Z.json`
-- Health URL: `https://v3.elepcloud.com/healthz`
+- Result: passed read-only readiness checks; mutation skipped by guard
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T021620Z.json`
+- Checked public guide: `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html`
+- Checked external events auth guard: no-token `POST /v1/external/channels/generic-chat-main/events` returned `external_channel_auth_failed`
+- Checked workflow queue diagnostics: `GET /v1/workflow-tasks/queue-stats` returned JSON
 - Expected output statuses after reviewed mutation smoke: `analysis_ready`, `staging_spec_ready`, `needs_human`, or `failed`
 - Production writes allowed: false
 

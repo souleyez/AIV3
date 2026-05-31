@@ -138,6 +138,12 @@
   - Embedded `data:image` payloads and signed remote query strings are redacted from manifests, so final HTML generation can rely on V3-owned preview assets without leaking upstream temporary URLs.
   - The third-party Image2 fixed task now passes `render_asset_url` plus the safe provenance summary into Codex Host, and `prompt_text` no longer serializes the raw image payload where signed source URLs can appear.
   - Verified with `cargo fmt --package static-page-worker --check`, `cargo test -p static-page-worker`, `cargo test -p platform-api external_channel_static_page_fixed_task_packages_scope_and_policy --lib`, and `cargo test -p codex-host-agent cloudflare_orchestrator_fixed_task_prompt_is_hard_bounded -- --nocapture`.
+- Continued deployment readiness smoke cleanup on 2026-05-31:
+  - `run-cloudflare-codex-fixed-task-smoke.ps1` remote mode no longer treats `/healthz` frontend redirects or HTML as backend health.
+  - The guarded 8-server readiness check now verifies the public third-party guide, the external events auth guard, and workflow queue JSON diagnostics without server mutation.
+  - Verified with `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm,data-ingestion-analysis -Json`.
+- Continued workflow queue diagnostics on 2026-05-31:
+  - Queue stats now expose finished-task duration P50/P95 by logical queue and task key, giving the observability page/API enough data to separate queue depth from actual runtime.
 
 ## Immediate Execution Queue
 

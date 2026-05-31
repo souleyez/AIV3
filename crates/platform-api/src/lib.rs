@@ -64111,6 +64111,7 @@ struct WorkflowTaskQueueStatsAccumulator {
     cancelled: u64,
     dead_lettered: u64,
     next_available_at: Option<DateTime<Utc>>,
+    finished_duration_samples_ms: Vec<u64>,
     task_keys: BTreeMap<String, WorkflowTaskKeyStatsAccumulator>,
 }
 
@@ -64126,6 +64127,7 @@ struct WorkflowTaskKeyStatsAccumulator {
     cancelled: u64,
     dead_lettered: u64,
     next_available_at: Option<DateTime<Utc>>,
+    finished_duration_samples_ms: Vec<u64>,
 }
 
 fn summarize_workflow_task_queue_stats(
@@ -64157,8 +64159,10 @@ fn summarize_workflow_task_queue_stats(
         task_count: tasks.len() as u64,
         queues: queues
             .into_iter()
-            .map(
-                |(logical_queue, accumulator)| contracts::WorkflowTaskQueueSummaryView {
+            .map(|(logical_queue, accumulator)| {
+                let (finished_duration_p50_ms, finished_duration_p95_ms) =
+                    workflow_task_duration_percentiles(&accumulator.finished_duration_samples_ms);
+                contracts::WorkflowTaskQueueSummaryView {
                     logical_queue,
                     physical_queues: accumulator.physical_queues.into_iter().collect(),
                     task_count: accumulator.task_count,
@@ -64170,11 +64174,17 @@ fn summarize_workflow_task_queue_stats(
                     cancelled: accumulator.cancelled,
                     dead_lettered: accumulator.dead_lettered,
                     next_available_at: accumulator.next_available_at,
+                    finished_duration_p50_ms,
+                    finished_duration_p95_ms,
                     task_keys: accumulator
                         .task_keys
                         .into_iter()
-                        .map(
-                            |(logical_task_key, task_key)| contracts::WorkflowTaskKeySummaryView {
+                        .map(|(logical_task_key, task_key)| {
+                            let (finished_duration_p50_ms, finished_duration_p95_ms) =
+                                workflow_task_duration_percentiles(
+                                    &task_key.finished_duration_samples_ms,
+                                );
+                            contracts::WorkflowTaskKeySummaryView {
                                 logical_task_key,
                                 physical_task_keys: task_key
                                     .physical_task_keys
@@ -64189,11 +64199,13 @@ fn summarize_workflow_task_queue_stats(
                                 cancelled: task_key.cancelled,
                                 dead_lettered: task_key.dead_lettered,
                                 next_available_at: task_key.next_available_at,
-                            },
-                        )
+                                finished_duration_p50_ms,
+                                finished_duration_p95_ms,
+                            }
+                        })
                         .collect(),
-                },
-            )
+                }
+            })
             .collect(),
     }
 }
@@ -64218,6 +64230,9 @@ fn record_workflow_task_queue_stats(
     if workflow_task_view_is_retrying(task) {
         accumulator.retrying += 1;
     }
+    if let Some(duration_ms) = workflow_task_finished_duration_ms(task) {
+        accumulator.finished_duration_samples_ms.push(duration_ms);
+    }
 }
 
 fn record_workflow_task_key_stats(
@@ -64240,11 +64255,30 @@ fn record_workflow_task_key_stats(
     if workflow_task_view_is_retrying(task) {
         accumulator.retrying += 1;
     }
+    if let Some(duration_ms) = workflow_task_finished_duration_ms(task) {
+        accumulator.finished_duration_samples_ms.push(duration_ms);
+    }
 }
 
 fn workflow_task_view_is_retrying(task: &WorkflowTaskView) -> bool {
     matches!(task.status, domain_model::WorkflowTaskStatus::Queued)
         && (task.attempt > 0 || task.error.is_some() || task.next_poll_at.is_some())
+}
+
+fn workflow_task_finished_duration_ms(task: &WorkflowTaskView) -> Option<u64> {
+    let finished_at = task.finished_at?;
+    let started_at = task.claimed_at.unwrap_or(task.available_at);
+    let duration_ms = (finished_at - started_at).num_milliseconds();
+    (duration_ms >= 0).then_some(duration_ms as u64)
+}
+
+fn workflow_task_duration_percentiles(samples: &[u64]) -> (Option<u64>, Option<u64>) {
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    (
+        percentile_latency(&sorted, 50),
+        percentile_latency(&sorted, 95),
+    )
 }
 
 fn earliest_optional_datetime(
@@ -105706,14 +105740,40 @@ retrieve_evidence:
             created_at: now,
             updated_at: now,
         });
+        let completed_publish_task = to_workflow_task_view(WorkflowTask {
+            id: domain_model::WorkflowTaskId::new(),
+            tenant_id: TenantId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            queue: "codex_host".to_string(),
+            task_key: "run_codex_host_task".to_string(),
+            payload: json!({
+                "template_id": "static_page_image2_data_publish",
+                "cloudflare_orchestrator": {
+                    "task_id": "codex-task-2"
+                }
+            }),
+            status: domain_model::WorkflowTaskStatus::Succeeded,
+            attempt: 1,
+            max_attempts: 3,
+            available_at: now,
+            claimed_at: Some(now + Duration::seconds(2)),
+            finished_at: Some(now + Duration::seconds(44)),
+            error: None,
+            created_at: now,
+            updated_at: now + Duration::seconds(44),
+        });
         let stats = summarize_workflow_task_queue_stats(
             now,
-            2,
-            &[image_task.clone(), publish_task.clone()],
+            3,
+            &[
+                image_task.clone(),
+                publish_task.clone(),
+                completed_publish_task.clone(),
+            ],
         );
 
-        assert_eq!(stats.execution_count, 2);
-        assert_eq!(stats.task_count, 2);
+        assert_eq!(stats.execution_count, 3);
+        assert_eq!(stats.task_count, 3);
         let image_queue = stats
             .queues
             .iter()
@@ -105736,12 +105796,19 @@ retrieve_evidence:
         );
         assert_eq!(publish_queue.queued, 1);
         assert_eq!(publish_queue.retrying, 1);
+        assert_eq!(publish_queue.succeeded, 1);
         assert_eq!(publish_queue.next_available_at, Some(next_poll_at));
+        assert_eq!(publish_queue.finished_duration_p50_ms, Some(42_000));
+        assert_eq!(publish_queue.finished_duration_p95_ms, Some(42_000));
         assert_eq!(
             publish_queue.task_keys[0].logical_task_key,
             "poll_static_page_publish"
         );
         assert_eq!(publish_queue.task_keys[0].retrying, 1);
+        assert_eq!(
+            publish_queue.task_keys[0].finished_duration_p50_ms,
+            Some(42_000)
+        );
     }
 
     #[test]

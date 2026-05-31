@@ -27,6 +27,10 @@
 
 **Progress update 2026-05-30 P3 service-call slice:** Codex Host orchestrator submit/poll requests now use a shared service-header helper that sends `Authorization`, `X-Client-Name`, and explicit `User-Agent` headers, with optional JSON and idempotency headers for submit. Static-page and Codex Host retry classification now treats HTTP 500/502/503/504 as transient, while 401/403 auth failures and Cloudflare 1010/browser-signature blocks are surfaced as operator-visible infrastructure/configuration errors instead of endless user-facing retries.
 
+**Progress update 2026-05-31 smoke-readiness slice:** The Cloudflare Codex fixed-task smoke remote mode now checks real public/read-only surfaces instead of following `/healthz` frontend redirects. The guarded readiness check validates the public third-party guide, missing-token external events auth guard, and workflow queue JSON diagnostics before marking 8-server readiness as passed.
+
+**Progress update 2026-05-31 P2 latency slice:** Workflow queue stats now include finished-task duration P50/P95 at both logical queue and logical task-key level, so operators can distinguish count/backlog from actual completed runtime when comparing effect-image preview, final static-page publish, and other workflow queues.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection

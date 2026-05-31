@@ -42,7 +42,7 @@ For the advanced static-page chain specifically:
 
 This case asserts that customers can see the Image2 effect card while V3 continues to publish the generated page, with `effect_image_confirmation_required=false`, no public API field additions, and the final result delivered as the existing `artifact_link` reply shape.
 
-Remote mode is guarded. Use `-BaseUrl https://v3.elepcloud.com -PlanOnly` for a health/readiness check. Server mutation cases require deployment review plus `-AllowServerMutation`; they must still create only new generated artifacts and must not deploy answer-quality patches automatically.
+Remote mode is guarded. Use `-BaseUrl https://v3.elepcloud.com -PlanOnly` for a read-only readiness check covering the public guide, external API auth guard, and workflow queue diagnostics. Server mutation cases require deployment review plus `-AllowServerMutation`; they must still create only new generated artifacts and must not deploy answer-quality patches automatically.
 
 ## 2026-05-25 Fixed Task No-Confirm Evidence
 
@@ -61,8 +61,9 @@ Read-only deployment readiness:
 
 - Environment: `8服务器` public V3 endpoint, plan-only
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm -Json`
-- Result: passed health check; mutation skipped by guard
-- Health URL: `https://v3.elepcloud.com/healthz`
+- Result: passed read-only readiness checks; mutation skipped by guard
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T021620Z.json`
+- Checked public guide, external events auth guard, and workflow queue diagnostics.
 
 ## 2026-05-17 Deployment Target Evidence
 

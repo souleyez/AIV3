@@ -98,6 +98,97 @@ function New-CommandDetail {
     }
 }
 
+function Invoke-SmokeHttpRequest {
+    param(
+        [string] $Method,
+        [string] $Uri,
+        [string] $Body = "",
+        [string] $ContentType = ""
+    )
+
+    $params = @{
+        Method = $Method
+        Uri = $Uri
+        TimeoutSec = 20
+        UseBasicParsing = $true
+        MaximumRedirection = 0
+    }
+    if ((Get-Command Invoke-WebRequest).Parameters.ContainsKey("SkipHttpErrorCheck")) {
+        $params.SkipHttpErrorCheck = $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Body)) {
+        $params.Body = $Body
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ContentType)) {
+        $params.ContentType = $ContentType
+    }
+
+    try {
+        $response = Invoke-WebRequest @params
+        $content = if ($null -eq $response.Content) { "" } else { $response.Content.ToString() }
+        return [ordered]@{
+            ok = $true
+            status_code = [int]$response.StatusCode
+            content = $content
+            error = $null
+        }
+    } catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response) {
+            return [ordered]@{
+                ok = $false
+                status_code = $null
+                content = ""
+                error = $_.Exception.Message
+            }
+        }
+
+        $content = ""
+        if ($response -is [System.Net.HttpWebResponse]) {
+            try {
+                $stream = $response.GetResponseStream()
+                if ($null -ne $stream) {
+                    $reader = [System.IO.StreamReader]::new($stream)
+                    try {
+                        $content = $reader.ReadToEnd()
+                    } finally {
+                        $reader.Dispose()
+                    }
+                }
+            } catch {
+                $content = ""
+            }
+        } elseif ($response.PSObject.Properties.Name -contains "Content") {
+            try {
+                if ($null -eq $response.Content) {
+                    $content = ""
+                } elseif ($response.Content.PSObject.Methods.Name -contains "ReadAsStringAsync") {
+                    $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                } else {
+                    $content = $response.Content.ToString()
+                }
+            } catch {
+                $content = ""
+            }
+        }
+
+        return [ordered]@{
+            ok = $true
+            status_code = [int]$response.StatusCode
+            content = $content
+            error = $_.Exception.Message
+        }
+    }
+}
+
+function New-ContentExcerpt {
+    param([string] $Content)
+    if ([string]::IsNullOrWhiteSpace($Content)) {
+        return ""
+    }
+    return $Content.Substring(0, [Math]::Min(240, $Content.Length))
+}
+
 function Invoke-LocalCaseSmoke {
     param(
         [string] $CaseId,
@@ -218,14 +309,58 @@ if ($mode -eq "local_plan_only") {
     }
 } else {
     $base = $BaseUrl.TrimEnd("/")
-    $healthUrl = "$base/healthz"
-    try {
-        $health = Invoke-WebRequest -Method Get -Uri $healthUrl -TimeoutSec 20 -UseBasicParsing
-        $contentExcerpt = if ($null -eq $health.Content) { "" } else { $health.Content.ToString().Substring(0, [Math]::Min(160, $health.Content.ToString().Length)) }
-        $results.Add((New-SmokeResult -CaseId "server_health" -Status "passed" -Message "Server health endpoint responded." -Details @{ url = $healthUrl; status_code = [int]$health.StatusCode; content_excerpt = $contentExcerpt }))
-    } catch {
-        $results.Add((New-SmokeResult -CaseId "server_health" -Status "failed" -Message "Server health endpoint failed: $($_.Exception.Message)" -Details @{ url = $healthUrl }))
+
+    $docsUrl = "$base/external-integrations/pure-third-party-integration-guide.zh-CN.html"
+    $docs = Invoke-SmokeHttpRequest -Method "GET" -Uri $docsUrl
+    $docsPassed = $docs.ok -and $docs.status_code -eq 200 -and $docs.content.Contains("第三方")
+    $results.Add((New-SmokeResult `
+        -CaseId "server_docs" `
+        -Status $(if ($docsPassed) { "passed" } else { "failed" }) `
+        -Message $(if ($docsPassed) { "Public third-party integration guide responded." } else { "Public third-party integration guide did not return the expected HTML content." }) `
+        -Details @{
+            url = $docsUrl
+            status_code = $docs.status_code
+            content_excerpt = New-ContentExcerpt -Content $docs.content
+            error = $docs.error
+        }))
+
+    $authGuardUrl = "$base/v1/external/channels/generic-chat-main/events"
+    $authGuard = Invoke-SmokeHttpRequest -Method "POST" -Uri $authGuardUrl -Body "{}" -ContentType "application/json"
+    $authGuardPassed = $authGuard.ok -and $authGuard.status_code -eq 401 -and $authGuard.content.Contains("external_channel_auth_failed")
+    $results.Add((New-SmokeResult `
+        -CaseId "server_external_api_auth_guard" `
+        -Status $(if ($authGuardPassed) { "passed" } else { "failed" }) `
+        -Message $(if ($authGuardPassed) { "External events API reached platform-api and rejected missing bearer token without mutation." } else { "External events API did not return the expected missing-token guard." }) `
+        -Details @{
+            url = $authGuardUrl
+            status_code = $authGuard.status_code
+            content_excerpt = New-ContentExcerpt -Content $authGuard.content
+            error = $authGuard.error
+        }))
+
+    $queueStatsUrl = "$base/v1/workflow-tasks/queue-stats"
+    $queueStats = Invoke-SmokeHttpRequest -Method "GET" -Uri $queueStatsUrl
+    $queueStatsParsed = $null
+    if ($queueStats.ok -and $queueStats.status_code -eq 200) {
+        try {
+            $queueStatsParsed = $queueStats.content | ConvertFrom-Json
+        } catch {
+            $queueStatsParsed = $null
+        }
     }
+    $queueStatsPassed = $null -ne $queueStatsParsed -and -not [string]::IsNullOrWhiteSpace($queueStatsParsed.generated_at) -and $null -ne $queueStatsParsed.queues
+    $results.Add((New-SmokeResult `
+        -CaseId "server_queue_stats" `
+        -Status $(if ($queueStatsPassed) { "passed" } else { "failed" }) `
+        -Message $(if ($queueStatsPassed) { "Workflow queue stats endpoint returned JSON diagnostics." } else { "Workflow queue stats endpoint did not return the expected JSON diagnostics." }) `
+        -Details @{
+            url = $queueStatsUrl
+            status_code = $queueStats.status_code
+            queue_count = if ($queueStatsPassed) { @($queueStatsParsed.queues).Count } else { $null }
+            task_count = if ($queueStatsPassed) { $queueStatsParsed.task_count } else { $null }
+            content_excerpt = New-ContentExcerpt -Content $queueStats.content
+            error = $queueStats.error
+        }))
 
     if ($PlanOnly -or -not $AllowServerMutation) {
         foreach ($caseId in $selectedCases) {

@@ -62,9 +62,11 @@ Read-only deployment readiness:
 
 - Environment: `8服务器` public V3 endpoint, plan-only, no mutation
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm -Json`
-- Result: passed health check; static-page mutation case skipped by guard
-- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T034451Z.json`
-- Health URL: `https://v3.elepcloud.com/healthz`
+- Result: passed read-only readiness checks; static-page mutation case skipped by guard
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T021620Z.json`
+- Checked public guide: `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html`
+- Checked external events auth guard: no-token `POST /v1/external/channels/generic-chat-main/events` returned `external_channel_auth_failed`
+- Checked workflow queue diagnostics: `GET /v1/workflow-tasks/queue-stats` returned JSON
 - Expected artifact URL prefix for reviewed mutation smoke: `https://v3.elepcloud.com/generated-artifacts/`
 
 ## 2026-05-17 Deployment Target Evidence
