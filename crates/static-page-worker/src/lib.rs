@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use domain_model::StaticPageImageJobId;
 use reqwest::blocking::Client;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -14,6 +15,9 @@ pub const DEFAULT_STATIC_PAGE_IMAGE_MODEL: &str = "gpt-image-2";
 pub const DEFAULT_STATIC_PAGE_IMAGE_SIZE: &str = "1536x1024";
 pub const DEFAULT_STATIC_PAGE_IMAGE_QUALITY: &str = "high";
 pub const DEFAULT_STATIC_PAGE_VISUAL_CONTEXT_LIMIT_CHARS: usize = 5_000;
+pub const DEFAULT_DIRECT_IMAGE_BASE_URL: &str = "https://www.right.codes/draw";
+pub const DEFAULT_DIRECT_IMAGE_API_PATH: &str = "/v1/images/generations";
+pub const DEFAULT_DIRECT_IMAGE_RESPONSE_FORMAT: &str = "url";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexOrchestratorConfig {
@@ -56,6 +60,95 @@ impl CodexOrchestratorConfig {
             path
         )
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectImageGenerationConfig {
+    pub provider: String,
+    pub base_url: String,
+    pub api_path: String,
+    pub access_key: String,
+    pub image_model: String,
+    pub image_size: String,
+    pub response_format: String,
+}
+
+impl DirectImageGenerationConfig {
+    pub fn from_env() -> Result<Option<Self>> {
+        let provider = optional_env("STATIC_PAGE_IMAGE_PROVIDER")
+            .or_else(|| optional_env("STATIC_PAGE_IMAGE2_PROVIDER"))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !matches!(
+            provider.as_str(),
+            "rightcode_direct" | "rightcode" | "direct" | "gpt_image2" | "gpt-image-2"
+        ) {
+            return Ok(None);
+        }
+        let access_key = direct_image_access_key_from_env()?;
+        Ok(Some(Self {
+            provider: if provider.is_empty() {
+                "rightcode_direct".to_string()
+            } else {
+                provider
+            },
+            base_url: std::env::var("STATIC_PAGE_IMAGE_BASE_URL")
+                .or_else(|_| std::env::var("RIGHTCODE_IMAGE_BASE_URL"))
+                .unwrap_or_else(|_| DEFAULT_DIRECT_IMAGE_BASE_URL.to_string()),
+            api_path: std::env::var("STATIC_PAGE_IMAGE_API_PATH")
+                .or_else(|_| std::env::var("RIGHTCODE_IMAGE_API_PATH"))
+                .unwrap_or_else(|_| DEFAULT_DIRECT_IMAGE_API_PATH.to_string()),
+            access_key,
+            image_model: std::env::var("STATIC_PAGE_IMAGE_MODEL")
+                .or_else(|_| std::env::var("RIGHTCODE_IMAGE_MODEL"))
+                .or_else(|_| std::env::var("CODEX_ORCHESTRATOR_IMAGE_MODEL"))
+                .unwrap_or_else(|_| DEFAULT_STATIC_PAGE_IMAGE_MODEL.to_string()),
+            image_size: std::env::var("STATIC_PAGE_IMAGE_SIZE")
+                .or_else(|_| std::env::var("RIGHTCODE_IMAGE_SIZE"))
+                .or_else(|_| std::env::var("CODEX_ORCHESTRATOR_IMAGE_SIZE"))
+                .unwrap_or_else(|_| DEFAULT_STATIC_PAGE_IMAGE_SIZE.to_string()),
+            response_format: std::env::var("STATIC_PAGE_IMAGE_RESPONSE_FORMAT")
+                .or_else(|_| std::env::var("RIGHTCODE_IMAGE_RESPONSE_FORMAT"))
+                .unwrap_or_else(|_| DEFAULT_DIRECT_IMAGE_RESPONSE_FORMAT.to_string()),
+        }))
+    }
+
+    pub fn endpoint(&self) -> String {
+        format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            self.api_path.trim_start_matches('/')
+        )
+    }
+}
+
+fn direct_image_access_key_from_env() -> Result<String> {
+    for key in [
+        "STATIC_PAGE_IMAGE_API_KEY",
+        "RIGHTCODE_IMAGE_API_KEY",
+        "OPENAI_API_KEY",
+        "ASSISTANT_RUN_RUNTIME_API_KEY",
+    ] {
+        if let Some(value) = optional_env(key) {
+            return Ok(value);
+        }
+    }
+    read_direct_image_key_file()?.ok_or_else(|| {
+        anyhow!(
+            "STATIC_PAGE_IMAGE_API_KEY, RIGHTCODE_IMAGE_API_KEY, OPENAI_API_KEY, ASSISTANT_RUN_RUNTIME_API_KEY, or STATIC_PAGE_IMAGE_KEY_FILE is required"
+        )
+    })
+}
+
+fn read_direct_image_key_file() -> Result<Option<String>> {
+    let Some(path) = optional_env("STATIC_PAGE_IMAGE_KEY_FILE")
+        .or_else(|| optional_env("RIGHTCODE_IMAGE_KEY_FILE"))
+    else {
+        return Ok(None);
+    };
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| anyhow!("failed to read STATIC_PAGE_IMAGE_KEY_FILE: {error}"))?;
+    Ok(orchestrator_access_key_from_file_text(&raw))
 }
 
 fn orchestrator_access_key_from_env() -> Result<String> {
@@ -249,6 +342,110 @@ pub fn submit_static_page_visual_task(
         .json(&body)
         .send()?;
     parse_orchestrator_response(response)
+}
+
+pub fn build_direct_static_page_image_request(
+    config: &DirectImageGenerationConfig,
+    image_prompt_payload: &Value,
+) -> Value {
+    json!({
+        "model": config.image_model,
+        "prompt": build_static_page_visual_prompt(image_prompt_payload),
+        "image": [],
+        "size": config.image_size,
+        "response_format": config.response_format,
+    })
+}
+
+pub fn generate_static_page_visual_direct(
+    client: &Client,
+    config: &DirectImageGenerationConfig,
+    job_id: StaticPageImageJobId,
+    image_prompt_payload: &Value,
+) -> Result<StaticPageVisualArtifact> {
+    let body = build_direct_static_page_image_request(config, image_prompt_payload);
+    let response = client
+        .post(config.endpoint())
+        .bearer_auth(&config.access_key)
+        .header("Idempotency-Key", format!("static-page-image-{job_id}"))
+        .header("X-Client-Name", STATIC_PAGE_ORCHESTRATOR_SOURCE)
+        .header("User-Agent", STATIC_PAGE_ORCHESTRATOR_USER_AGENT)
+        .json(&body)
+        .send()?;
+    let status = response.status();
+    let body = response.text()?;
+    parse_direct_image_generation_response(status, &body)
+}
+
+pub fn parse_direct_image_generation_response(
+    status: StatusCode,
+    body: &str,
+) -> Result<StaticPageVisualArtifact> {
+    if !status.is_success() {
+        return Err(anyhow!(
+            "direct image generation failed: status={} body_chars={} body_excerpt=\"{}\"",
+            status,
+            body.chars().count(),
+            orchestrator_response_excerpt(body, 300)
+        ));
+    }
+    let value = serde_json::from_str::<Value>(body).map_err(|error| {
+        anyhow!(
+            "direct image generation response JSON decode failed: status={} body_chars={} body_excerpt=\"{}\": {}",
+            status,
+            body.chars().count(),
+            orchestrator_response_excerpt(body, 300),
+            error
+        )
+    })?;
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("direct image generation response has no data array"))?;
+    let item = data
+        .first()
+        .ok_or_else(|| anyhow!("direct image generation response data array is empty"))?;
+    let mime_type = item
+        .get("mime_type")
+        .or_else(|| item.get("mimeType"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| Some("image/png".to_string()));
+    let asset_key = item
+        .get("url")
+        .and_then(Value::as_str)
+        .or_else(|| item.get("download_url").and_then(Value::as_str))
+        .or_else(|| item.get("downloadUrl").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            item.get("b64_json")
+                .or_else(|| item.get("b64Json"))
+                .or_else(|| item.get("base64"))
+                .and_then(Value::as_str)
+                .map(|base64| {
+                    format!(
+                        "data:{};base64,{base64}",
+                        mime_type.as_deref().unwrap_or("image/png")
+                    )
+                })
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "direct image generation item does not include url, downloadUrl, or base64 data"
+            )
+        })?;
+
+    Ok(StaticPageVisualArtifact {
+        asset_key,
+        name: item
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("rightcode-gpt-image-2-preview.png".to_string())),
+        mime_type,
+        width: item.get("width").and_then(Value::as_i64),
+        height: item.get("height").and_then(Value::as_i64),
+    })
 }
 
 pub fn poll_static_page_visual_task(
@@ -518,6 +715,67 @@ mod tests {
             orchestrator_access_key_from_file_text("# comment\n plain-secret \n"),
             Some("plain-secret".to_string())
         );
+    }
+
+    #[test]
+    fn direct_image_config_is_opt_in_and_reads_openai_key() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        let _provider = EnvRestore::set("STATIC_PAGE_IMAGE_PROVIDER", "rightcode_direct");
+        let _key = EnvRestore::set("OPENAI_API_KEY", "rightcode-secret");
+        let _model = EnvRestore::set("STATIC_PAGE_IMAGE_MODEL", "gpt-image-2");
+        let _size = EnvRestore::set("STATIC_PAGE_IMAGE_SIZE", "1536x1024");
+
+        let config = DirectImageGenerationConfig::from_env()
+            .expect("direct image config should parse")
+            .expect("direct image config should be enabled");
+
+        assert_eq!(config.provider, "rightcode_direct");
+        assert_eq!(config.access_key, "rightcode-secret");
+        assert_eq!(
+            config.endpoint(),
+            "https://www.right.codes/draw/v1/images/generations"
+        );
+    }
+
+    #[test]
+    fn builds_direct_static_page_image_request_for_rightcode() {
+        let config = DirectImageGenerationConfig {
+            provider: "rightcode_direct".to_string(),
+            base_url: "https://www.right.codes/draw".to_string(),
+            api_path: "/v1/images/generations".to_string(),
+            access_key: "secret".to_string(),
+            image_model: "gpt-image-2".to_string(),
+            image_size: "1536x1024".to_string(),
+            response_format: "url".to_string(),
+        };
+
+        let body = build_direct_static_page_image_request(
+            &config,
+            &json!({"promptText": "生成候选人对比静态页"}),
+        );
+
+        assert_eq!(body["model"], json!("gpt-image-2"));
+        assert_eq!(body["image"], json!([]));
+        assert_eq!(body["size"], json!("1536x1024"));
+        assert_eq!(body["response_format"], json!("url"));
+        assert!(body["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("生成候选人对比静态页"));
+    }
+
+    #[test]
+    fn parses_direct_image_generation_url_response() {
+        let artifact = parse_direct_image_generation_response(
+            StatusCode::OK,
+            r#"{"data":[{"url":"https://img.example/preview.png","width":1536,"height":1024}]}"#,
+        )
+        .expect("direct image response should parse");
+
+        assert_eq!(artifact.asset_key, "https://img.example/preview.png");
+        assert_eq!(artifact.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(artifact.width, Some(1536));
+        assert_eq!(artifact.height, Some(1024));
     }
 
     #[test]

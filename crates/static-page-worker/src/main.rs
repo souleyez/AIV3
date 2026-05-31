@@ -11,9 +11,10 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use static_page_renderer::{render_static_page, StaticPageRenderRequest};
 use static_page_worker::{
-    context_uuid, extract_first_image_artifact, merge_orchestrator_state,
-    normalize_artifact_asset_key, poll_static_page_visual_task, submit_static_page_visual_task,
-    task_failure_message, CodexOrchestratorConfig, StaticPageVisualArtifact,
+    context_uuid, extract_first_image_artifact, generate_static_page_visual_direct,
+    merge_orchestrator_state, normalize_artifact_asset_key, poll_static_page_visual_task,
+    submit_static_page_visual_task, task_failure_message, CodexOrchestratorConfig,
+    DirectImageGenerationConfig, StaticPageVisualArtifact,
 };
 use std::path::{Path, PathBuf};
 use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
@@ -58,6 +59,44 @@ struct StaticPagePreviewAssetMaterialization {
     error: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+enum StaticPageImageProviderConfig {
+    Direct(DirectImageGenerationConfig),
+    Orchestrator(CodexOrchestratorConfig),
+}
+
+impl StaticPageImageProviderConfig {
+    fn from_env() -> Result<Option<Self>> {
+        if let Some(config) = DirectImageGenerationConfig::from_env()? {
+            return Ok(Some(Self::Direct(config)));
+        }
+        CodexOrchestratorConfig::from_env()
+            .map(Self::Orchestrator)
+            .map(Some)
+    }
+
+    fn provider_name(&self) -> &str {
+        match self {
+            Self::Direct(config) => config.provider.as_str(),
+            Self::Orchestrator(_) => "cloudflare_orchestrator",
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        match self {
+            Self::Direct(config) => config.base_url.as_str(),
+            Self::Orchestrator(config) => config.base_url.as_str(),
+        }
+    }
+
+    fn runtime_target(&self) -> &str {
+        match self {
+            Self::Direct(_) => "local_direct",
+            Self::Orchestrator(config) => config.runtime_target_id.as_str(),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     observability::install("static_page_worker")?;
@@ -99,12 +138,12 @@ async fn main() -> Result<()> {
             Some(&format!("static_page_worker.{queue}.{wake_task_key}")),
         )
         .await;
-    let orchestrator_config = match CodexOrchestratorConfig::from_env() {
-        Ok(config) => Some(config),
+    let image_provider_config = match StaticPageImageProviderConfig::from_env() {
+        Ok(config) => config,
         Err(error) => {
             tracing::warn!(
                 error = ?error,
-                "static-page image generation is disabled until Codex orchestrator config is provided"
+                "static-page image generation is disabled until Image2 provider config is provided"
             );
             None
         }
@@ -121,9 +160,10 @@ async fn main() -> Result<()> {
         stale_claim_after_ms,
         stale_sweep_interval_ms,
         stale_sweep_limit,
-        orchestrator_configured = orchestrator_config.is_some(),
-        orchestrator_base_url = orchestrator_config.as_ref().map(|config| config.base_url.as_str()).unwrap_or("not-configured"),
-        orchestrator_runtime_target = orchestrator_config.as_ref().map(|config| config.runtime_target_id.as_str()).unwrap_or("not-configured"),
+        image_provider_configured = image_provider_config.is_some(),
+        image_provider = image_provider_config.as_ref().map(|config| config.provider_name()).unwrap_or("not-configured"),
+        image_provider_base_url = image_provider_config.as_ref().map(|config| config.base_url()).unwrap_or("not-configured"),
+        image_provider_runtime_target = image_provider_config.as_ref().map(|config| config.runtime_target()).unwrap_or("not-configured"),
         "static-page-worker polling started"
     );
 
@@ -171,7 +211,7 @@ async fn main() -> Result<()> {
                     &workflow_catalog,
                     &event_bus,
                     &http_client,
-                    orchestrator_config.as_ref(),
+                    image_provider_config.as_ref(),
                     orchestrator_poll_interval,
                     task,
                 )
@@ -301,7 +341,7 @@ async fn process_task(
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
     http_client: &Client,
-    orchestrator_config: Option<&CodexOrchestratorConfig>,
+    image_provider_config: Option<&StaticPageImageProviderConfig>,
     orchestrator_poll_interval_ms: u64,
     task: domain_model::WorkflowTask,
 ) -> Result<()> {
@@ -312,9 +352,9 @@ async fn process_task(
         .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
     match &execution.kind {
         WorkflowKind::StaticPageImageGeneration => {
-            let orchestrator_config = orchestrator_config.ok_or_else(|| {
+            let image_provider_config = image_provider_config.ok_or_else(|| {
                 anyhow!(
-                    "CODEX_ORCHESTRATOR_ACCESS_KEY or CODEX_ORCHESTRATOR_KEY_FILE is required for static page image generation"
+                    "STATIC_PAGE_IMAGE_PROVIDER direct config or CODEX_ORCHESTRATOR_ACCESS_KEY/CODEX_ORCHESTRATOR_KEY_FILE is required for static page image generation"
                 )
             })?;
             process_static_page_image_task(
@@ -322,7 +362,7 @@ async fn process_task(
                 workflow_catalog,
                 event_bus,
                 http_client,
-                orchestrator_config,
+                image_provider_config,
                 orchestrator_poll_interval_ms,
                 &execution,
                 &task,
@@ -346,7 +386,7 @@ async fn process_static_page_image_task(
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
     http_client: &Client,
-    orchestrator_config: &CodexOrchestratorConfig,
+    image_provider_config: &StaticPageImageProviderConfig,
     orchestrator_poll_interval_ms: u64,
     execution: &domain_model::WorkflowExecution,
     task: &domain_model::WorkflowTask,
@@ -361,6 +401,114 @@ async fn process_static_page_image_task(
             .get_by_id(task.tenant_id, job_id)
             .await?
             .ok_or_else(|| anyhow!("static page image job {job_id} not found"))?;
+        if let StaticPageImageProviderConfig::Direct(direct_config) = image_provider_config {
+            mark_job_running(storage, &mut job).await?;
+            let direct_task_id = format!("direct-image2-{}", job.id);
+            let submitted_at = Utc::now();
+            job.image_prompt_payload = merge_orchestrator_state(
+                &job.image_prompt_payload,
+                json!({
+                    "provider": direct_config.provider,
+                    "status": "running",
+                    "taskId": direct_task_id,
+                    "submittedAt": submitted_at,
+                    "model": direct_config.image_model,
+                    "size": direct_config.image_size,
+                    "baseUrlConfigured": true,
+                }),
+            );
+            job.queue_position = None;
+            storage
+                .static_page_image_jobs()
+                .update(task.tenant_id, &job)
+                .await?;
+            append_assistant_event(
+                storage,
+                job.tenant_id,
+                job.assistant_run_id,
+                "static_page_image_job.submitted",
+                json!({
+                    "draft_id": job.draft_id,
+                    "image_job_id": job.id,
+                    "orchestrator_task_id": direct_task_id,
+                    "provider": direct_config.provider,
+                    "status": "running",
+                    "model": direct_config.image_model,
+                    "size": direct_config.image_size,
+                    "queue_position": Value::Null,
+                    "poll_after_seconds": 0,
+                }),
+            )
+            .await?;
+
+            let mut artifact = generate_static_page_visual_direct(
+                http_client,
+                direct_config,
+                job.id,
+                &job.image_prompt_payload,
+            )?;
+            let materialization = materialize_preview_asset(http_client, None, job.id, &artifact);
+            if let Some(materialized_asset_key) = materialization
+                .as_ref()
+                .and_then(|materialization| materialization.persisted_asset_key.as_deref())
+            {
+                artifact.asset_key = materialized_asset_key.to_string();
+            }
+            let asset_provenance =
+                static_page_image_preview_asset_provenance(&artifact, materialization.as_ref());
+            mark_job_preview_ready(storage, &job, &artifact.asset_key, &asset_provenance).await?;
+            append_assistant_event(
+                storage,
+                job.tenant_id,
+                job.assistant_run_id,
+                "static_page_image_job.preview_ready",
+                json!({
+                    "draft_id": job.draft_id,
+                    "image_job_id": job.id,
+                    "orchestrator_task_id": direct_task_id,
+                    "provider": direct_config.provider,
+                    "preview_asset_key": artifact.asset_key,
+                    "artifact": {
+                        "name": artifact.name,
+                        "mime_type": artifact.mime_type,
+                        "width": artifact.width,
+                        "height": artifact.height,
+                    },
+                    "asset_provenance": asset_provenance,
+                    "artifact_manifest": static_page_image_preview_artifact_manifest(
+                        &job,
+                        &artifact,
+                        &direct_task_id,
+                        &asset_provenance,
+                    ),
+                }),
+            )
+            .await?;
+
+            platform_api::apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepCompleted {
+                    task_key: task.task_key.clone(),
+                    output: Some(json!({
+                        "static_page_image_job_id": job.id,
+                        "preview_asset_key": artifact.asset_key,
+                        "orchestrator_task_id": direct_task_id,
+                        "image_provider": direct_config.provider,
+                    })),
+                },
+            )
+            .await?;
+
+            return Ok(StaticPageImageTaskOutcome::Completed);
+        }
+        let StaticPageImageProviderConfig::Orchestrator(orchestrator_config) = image_provider_config
+        else {
+            unreachable!("direct image provider returned before orchestrator path")
+        };
         let orchestrator_task_id =
             if let Some(task_id) = static_page_image_orchestrator_task_id(&job.image_prompt_payload)
             {
@@ -556,12 +704,16 @@ async fn process_static_page_image_task(
                     return Ok(StaticPageImageTaskOutcome::Requeued);
                 }
                 Err(error) => return Err(error),
-            };
+        };
         let mut artifact = extract_first_image_artifact(&completed_task)?;
         artifact.asset_key =
             normalize_artifact_asset_key(&artifact.asset_key, &orchestrator_config.base_url);
-        let materialization =
-            materialize_preview_asset(http_client, orchestrator_config, job.id, &artifact);
+        let materialization = materialize_preview_asset(
+            http_client,
+            Some(orchestrator_config.access_key.as_str()),
+            job.id,
+            &artifact,
+        );
         if let Some(materialized_asset_key) = materialization
             .as_ref()
             .and_then(|materialization| materialization.persisted_asset_key.as_deref())
@@ -1653,7 +1805,7 @@ async fn append_assistant_event(
 
 fn materialize_preview_asset(
     http_client: &Client,
-    orchestrator_config: &CodexOrchestratorConfig,
+    download_bearer_token: Option<&str>,
     job_id: domain_model::StaticPageImageJobId,
     artifact: &StaticPageVisualArtifact,
 ) -> Option<StaticPagePreviewAssetMaterialization> {
@@ -1663,7 +1815,7 @@ fn materialize_preview_asset(
     } else if artifact.asset_key.starts_with("http://")
         || artifact.asset_key.starts_with("https://")
     {
-        download_orchestrator_preview_asset(http_client, orchestrator_config, &artifact.asset_key)
+        download_preview_asset(http_client, download_bearer_token, &artifact.asset_key)
     } else {
         None
     }?;
@@ -1699,14 +1851,13 @@ fn decode_data_url_image(asset_key: &str) -> Option<Vec<u8>> {
     general_purpose::STANDARD.decode(base64_payload).ok()
 }
 
-fn download_orchestrator_preview_asset(
+fn download_preview_asset(
     http_client: &Client,
-    orchestrator_config: &CodexOrchestratorConfig,
+    bearer_token: Option<&str>,
     asset_url: &str,
 ) -> Option<Vec<u8>> {
-    let response = http_client
+    let mut request = http_client
         .get(asset_url)
-        .bearer_auth(&orchestrator_config.access_key)
         .header(
             "X-Client-Name",
             static_page_worker::STATIC_PAGE_ORCHESTRATOR_SOURCE,
@@ -1714,9 +1865,14 @@ fn download_orchestrator_preview_asset(
         .header(
             "User-Agent",
             static_page_worker::STATIC_PAGE_ORCHESTRATOR_USER_AGENT,
-        )
-        .send()
-        .ok()?;
+        );
+    if let Some(token) = bearer_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request = request.bearer_auth(token);
+    }
+    let response = request.send().ok()?;
     if !response.status().is_success() {
         tracing::warn!(
             status = %response.status(),
