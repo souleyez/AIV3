@@ -82,4 +82,16 @@ Guarded mutation dry runs:
 - Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=true`, `source_configured=false`
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043901Z.json`
 
+Reviewed real mutation smoke:
+
+- Environment: `8服务器` public V3 endpoint, bearer loaded from the active `local-dev` external-channel connection without printing it
+- Config: private ignored case file with one `dataset_external_ids` entry and no credentials
+- Before config fix: the first run reached V3 and was rejected by preflight with `codex_host_task_not_allowlisted`
+- Config fix: added `data_ingestion_analysis` to `CODEX_HOST_TASK_ALLOWLIST` and `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES`, then restarted `aiv3-platform-api.service` and `aiv3-codex-host-agent.service`
+- Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case data-ingestion-analysis -ServerCaseConfigPath target\private-smoke\data-ingestion-smoke.case.json -ServerPollTimeoutSec 90 -ServerPollIntervalSec 10 -Json`
+- Result: passed as accepted processing; initial status `data_ingestion_analysis_queued`, later status `data_ingestion_analysis_running` / `data_ingestion_analysis_retrying`, no terminal failure/source-required state
+- Assistant run: `eac46e93-7011-42ce-bd50-829de60240d6`
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T045815Z.json`
+- Follow-up: continue polling this run until `data_ingestion_analysis_completed`, `data_ingestion_analysis_needs_human`, or `data_ingestion_analysis_failed` to validate the terminal result quality.
+
 Do not record credentials, database URLs, raw customer data dumps, SSH details, or unrestricted filesystem paths in this validation note.

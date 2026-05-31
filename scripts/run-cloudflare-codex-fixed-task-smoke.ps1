@@ -271,9 +271,14 @@ function New-ExternalStaticPageSmokeBody {
     $conversationExternalId = [string](Get-ConfigValue -Config $Config -Name "conversation_external_id" -Default "smoke-static-page-$RunId")
     $senderExternalId = [string](Get-ConfigValue -Config $Config -Name "sender_external_id" -Default "operator-smoke")
     $sourceId = [string](Get-ConfigValue -Config $Config -Name "available_document_source_id" -Default "")
-    $documentExternalIds = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids")
-    $datasetExternalIds = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "dataset_external_ids")
+    $documentExternalIds = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids"))
+    $datasetExternalIds = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "dataset_external_ids"))
     $requestedSkills = Get-ConfigValue -Config $Config -Name "requested_skills" -Default @()
+    if ($null -eq $requestedSkills) {
+        $requestedSkills = @()
+    } elseif (-not ($requestedSkills -is [array])) {
+        $requestedSkills = @($requestedSkills)
+    }
     $template = Get-ConfigValue -Config $Config -Name "template" -Default $null
 
     $body = [ordered]@{
@@ -317,7 +322,7 @@ function Test-ConfigHasDataSourceScope {
             if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
                 return $true
             }
-        } elseif ((Convert-ToStringArray $value).Count -gt 0) {
+        } elseif (@(Convert-ToStringArray $value).Count -gt 0) {
             return $true
         }
     }
@@ -346,8 +351,8 @@ function New-ExternalDataIngestionSmokeBody {
         default_prompt = [string](Get-ConfigValue -Config $Config -Name "default_prompt" -Default "请面向业务用户，优先基于本轮文档和数据源回答。")
         output_format = [string](Get-ConfigValue -Config $Config -Name "output_format" -Default "rich_text")
         available_document_source_id = if ([string]::IsNullOrWhiteSpace($sourceId)) { $null } else { $sourceId }
-        available_document_external_ids = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids")
-        dataset_external_ids = Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "dataset_external_ids")
+        available_document_external_ids = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids"))
+        dataset_external_ids = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "dataset_external_ids"))
         mention_external_user_ids = @()
         attachment_refs = @()
         idempotency_key = "cloudflare-codex-smoke:data-ingestion:$RunId"

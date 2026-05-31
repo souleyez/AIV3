@@ -154,6 +154,10 @@
   - The real smoke builds a third-party static-page event, polls the returned status URL when present, and reports redacted status/artifact fields without printing credentials.
   - Missing-bearer guard was verified: `-AllowServerMutation` fails before sending the mutation request with `mutation_attempted=false`.
   - The same guarded pattern now covers `data-ingestion-analysis`; it also requires a private source selector before mutation and reports `source_configured=false` when the case config is incomplete.
+- Continued real 8-server mutation smoke on 2026-05-31:
+  - Static-page no-confirm passed end-to-end through the real third-party `/events` endpoint and returned a generated-artifact URL immediately.
+  - Data-ingestion analysis initially exposed a production config gap: `data_ingestion_analysis` was missing from both platform and Codex Host agent fixed-task allowlists. The 8-server env was backed up, the capability was added to both allowlists, and `aiv3-platform-api.service` / `aiv3-codex-host-agent.service` were restarted.
+  - After the config fix, data-ingestion analysis accepted the request and moved through `queued` to `running/retrying` with no source-required or allowlist rejection; terminal result still needs follow-up polling.
 
 ## Immediate Execution Queue
 

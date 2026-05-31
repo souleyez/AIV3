@@ -76,6 +76,11 @@ Guarded mutation dry run:
 - Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=false`
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043121Z.json`
 
+Reviewed real mutation smoke:
+
+- Static-page no-confirm passed on 8服务器 with active external-channel bearer: `reply.reply_type=artifact_link`, `reply.task_status=static_page_published`, assistant run `e2d3c77f-f59c-46d0-90b7-2d1c979a42b0`.
+- Data-ingestion analysis passed the accepted-processing contract after enabling `data_ingestion_analysis` in platform and agent allowlists: assistant run `eac46e93-7011-42ce-bd50-829de60240d6`, status moved from queued to running/retrying without source-required or allowlist rejection.
+
 ## 2026-05-17 Deployment Target Evidence
 
 - Host: `8服务器`

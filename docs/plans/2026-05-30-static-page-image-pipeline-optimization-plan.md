@@ -41,6 +41,8 @@
 
 **Progress update 2026-05-31 data-ingestion smoke-readiness slice:** The same fixed-task smoke now supports reviewed real `data-ingestion-analysis` mutation checks. It requires both a private bearer and a private source selector before mutation, then polls the assistant-run reply status URL for queued/running/completed/needs-human states without exposing credentials or source dumps.
 
+**Progress update 2026-05-31 real smoke slice:** The real 8-server third-party static-page mutation smoke passed and returned a generated-artifact URL immediately. The data-ingestion mutation smoke reached real execution after adding `data_ingestion_analysis` to the platform and Codex Host agent allowlists; it now reports queued/running/retrying instead of auth/source/allowlist failure, with terminal polling still outstanding.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection
