@@ -25542,6 +25542,8 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
     };
     let image_job_id = job.id.to_string();
     let gpt55_local_route = assistant_run_static_page_should_use_gpt_55_local_route(&run);
+    let codex_visual_contract_publish_ready =
+        external_channel_static_page_codex_auto_publish_readiness().ready;
     let already_queued = storage
         .assistant_runs()
         .list_events(tenant_id, run.id)
@@ -25625,7 +25627,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
             &connection,
             &run,
         );
-        if gpt55_local_route {
+        if gpt55_local_route && !codex_visual_contract_publish_ready {
             let (_draft, render_output) = create_static_page_render_output_inline(
                 &state,
                 draft.clone(),
@@ -25640,11 +25642,13 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                 &render_output,
                 Some(image_job_view.id.to_string()),
                 ExternalStaticPageGeneratedArtifactPublishOptions {
-                    reason: "gpt_5_5_after_image2_preview_ready",
-                    publish_mode: "gpt_5_5_local_static_page_renderer",
-                    validation_warning: Some("gpt_5_5_local_static_page_renderer"),
+                    reason: "gpt_5_5_after_image2_preview_ready_local_fallback",
+                    publish_mode: "gpt_5_5_local_static_page_renderer_fallback",
+                    validation_warning: Some(
+                        "gpt_5_5_local_static_page_renderer_fallback_preview_reference_only",
+                    ),
                     direct_html: false,
-                    model_route: Some("gpt_5_5_local_static_page_renderer"),
+                    model_route: Some("gpt_5_5_local_static_page_renderer_fallback"),
                     provisional_direct_html: false,
                     cloudflare_codex_used: false,
                 },
@@ -25683,6 +25687,14 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                             "codex_host_workflow_execution_id": codex_execution_id,
                             "template_id": "static_page_image2_data_publish",
                             "publish_mode": "new_generated_artifact_only",
+                            "final_publish_route": if gpt55_local_route {
+                                "gpt_5_5_image2_codex_publish"
+                            } else {
+                                "cloudflare_codex"
+                            },
+                            "gpt_5_5_main_model_preferred": gpt55_local_route,
+                            "gpt_5_5_local_publish_after_preview": false,
+                            "cloudflare_codex_used": true,
                             "effect_image_confirmation_required": false,
                             "recipient_delivery": recipient_delivery.clone(),
                             "permission_review_status": recipient_delivery
@@ -25744,7 +25756,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         return Ok(());
     }
 
-    if gpt55_local_route {
+    if gpt55_local_route && !codex_visual_contract_publish_ready {
         let (_draft, render_output) = create_static_page_render_output_inline(
             &state,
             draft.clone(),
@@ -25774,7 +25786,8 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                         "html_download_url": render_output.html_download_url,
                         "download_url": render_output.download_url,
                         "template_id": "platform_api_static_page_renderer",
-                        "publish_mode": "main_station_local_priority",
+                        "publish_mode": "main_station_local_fallback",
+                        "fallback_reason": "static_page_image2_data_publish_unavailable",
                         "effect_image_confirmation_required": false,
                     }),
                     created_at: Utc::now(),
@@ -25821,6 +25834,14 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                         "codex_host_workflow_execution_id": codex_execution_id,
                         "template_id": "static_page_image2_data_publish",
                         "publish_mode": "new_generated_artifact_only",
+                        "final_publish_route": if gpt55_local_route {
+                            "gpt_5_5_image2_codex_publish"
+                        } else {
+                            "cloudflare_codex"
+                        },
+                        "gpt_5_5_main_model_preferred": gpt55_local_route,
+                        "gpt_5_5_local_publish_after_preview": false,
+                        "cloudflare_codex_used": true,
                         "effect_image_confirmation_required": false,
                         "status_method": "GET",
                         "poll_after_seconds": 15,
@@ -25910,16 +25931,18 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     )
     .await?;
     let codex_auto_publish_readiness = external_channel_static_page_codex_auto_publish_readiness();
+    let gpt55_main_model_preferred = assistant_run_static_page_should_use_gpt_55_local_route(run);
+    let codex_auto_publish_enabled = codex_auto_publish_readiness.ready;
     let gpt55_local_publish_after_preview =
-        assistant_run_static_page_should_use_gpt_55_local_route(run);
-    let codex_auto_publish_enabled =
-        codex_auto_publish_readiness.ready && !gpt55_local_publish_after_preview;
+        gpt55_main_model_preferred && !codex_auto_publish_enabled;
     let auto_publish_after_preview =
         codex_auto_publish_enabled || gpt55_local_publish_after_preview;
-    let final_publish_route = if gpt55_local_publish_after_preview {
-        "gpt_5_5_local_static_page_renderer"
+    let final_publish_route = if codex_auto_publish_enabled && gpt55_main_model_preferred {
+        "gpt_5_5_image2_codex_publish"
     } else if codex_auto_publish_enabled {
         "cloudflare_codex"
+    } else if gpt55_local_publish_after_preview {
+        "gpt_5_5_local_static_page_renderer_fallback"
     } else {
         "manual_or_direct_html"
     };
@@ -26019,6 +26042,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     },
                     "auto_publish_after_preview": auto_publish_after_preview,
                     "final_publish_route": final_publish_route,
+                    "gpt_5_5_main_model_preferred": gpt55_main_model_preferred,
                     "gpt_5_5_local_publish_after_preview": gpt55_local_publish_after_preview,
                     "codex_auto_publish_ready": codex_auto_publish_enabled,
                     "codex_auto_publish_disabled_reason": if codex_auto_publish_enabled {
@@ -26055,15 +26079,20 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     } else {
         "static_page_image_preview_queued"
     };
-    let text = if generated_artifact_url.is_some() && gpt55_local_publish_after_preview {
-        "V3 已先生成可发送的静态页链接；效果图完成后会继续由 GPT-5.5 主链路生成最终页面，用户可在页面生成后继续提出调整。".to_string()
+    let text = if generated_artifact_url.is_some()
+        && codex_auto_publish_enabled
+        && gpt55_main_model_preferred
+    {
+        "V3 已先生成可发送的静态页链接；效果图完成后会继续进入 Image2 视觉合同发布链路生成最终页面，用户可在页面生成后继续提出调整。".to_string()
+    } else if generated_artifact_url.is_some() && gpt55_local_publish_after_preview {
+        "V3 已先生成可发送的静态页链接；效果图完成后会在 Codex 发布不可用时由本地渲染兜底生成页面，用户可在页面生成后继续提出调整。".to_string()
     } else if generated_artifact_url.is_some() && codex_auto_publish_enabled {
         "V3 已先生成可发送的静态页链接；效果图完成后会继续进入 Cloudflare Codex 发布链路，用户可在页面生成后继续提出调整。".to_string()
     } else if generated_artifact_url.is_some() {
         "V3 静态页已生成并发布，可通过 artifact_links[0] 打开页面。".to_string()
     } else if direct_render_output.is_some() {
         if gpt55_local_publish_after_preview {
-            "V3 已先生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物；效果图完成后会继续由 GPT-5.5 主链路生成最终页面。".to_string()
+            "V3 已先生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物；效果图完成后会在 Codex 发布不可用时由本地渲染兜底生成页面。".to_string()
         } else if codex_auto_publish_enabled {
             "V3 已先生成静态页 HTML，可通过 card.render_output_id 或下载链接获取产物；效果图完成后会继续自动发布最终页面。".to_string()
         } else {
@@ -26071,7 +26100,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         }
     } else {
         if gpt55_local_publish_after_preview {
-            "已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会继续由 GPT-5.5 主链路生成最终页面。".to_string()
+            "已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会在 Codex 发布不可用时由本地渲染兜底生成页面。".to_string()
+        } else if codex_auto_publish_enabled && gpt55_main_model_preferred {
+            "已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会继续进入 Image2 视觉合同发布链路生成最终页面。".to_string()
         } else {
             external_channel_static_page_pipeline_reply_text(
                 codex_auto_publish_enabled,
@@ -26141,6 +26172,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             },
             "auto_publish_after_preview": auto_publish_after_preview,
             "final_publish_route": final_publish_route,
+            "gpt_5_5_main_model_preferred": gpt55_main_model_preferred,
             "gpt_5_5_local_publish_after_preview": gpt55_local_publish_after_preview,
             "codex_auto_publish_ready": codex_auto_publish_enabled,
             "codex_auto_publish_disabled_reason": if codex_auto_publish_enabled {
@@ -75144,17 +75176,17 @@ mod tests {
             .iter()
             .find(|event| {
                 event.payload.get("publish_mode").and_then(Value::as_str)
-                    == Some("gpt_5_5_local_static_page_renderer")
+                    == Some("gpt_5_5_local_static_page_renderer_fallback")
             })
             .map(|event| &event.payload)
             .expect("GPT-5.5 local publish completion should be recorded");
         assert_eq!(
             payload["publish_mode"],
-            json!("gpt_5_5_local_static_page_renderer")
+            json!("gpt_5_5_local_static_page_renderer_fallback")
         );
         assert_eq!(
             payload["model_route"],
-            json!("gpt_5_5_local_static_page_renderer")
+            json!("gpt_5_5_local_static_page_renderer_fallback")
         );
         assert_eq!(payload["cloudflare_codex_used"], json!(false));
         assert_eq!(payload["direct_html_fallback"], json!(false));
@@ -75165,6 +75197,162 @@ mod tests {
         assert!(payload["public_url"].as_str().is_some_and(
             |url| url.contains("/generated-artifacts/database-static-pages/external-channel/")
         ));
+    }
+
+    #[tokio::test]
+    async fn external_channel_gpt_55_static_page_image_prefers_visual_contract_codex_when_ready() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external GPT-5.5 visual-contract publish test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _runtime_mode = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        let _runtime_provider =
+            TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_PROVIDER", "rightcode");
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "gpt-5.5");
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+        let artifact_root = std::env::temp_dir()
+            .join("ai-data-platform-v3-tests")
+            .join(format!("generated-artifacts-{}", Uuid::new_v4()));
+        let artifact_root = artifact_root.display().to_string();
+        let _artifact_root = TestEnvVarRestore::set("V3_GENERATED_ARTIFACT_ROOT", &artifact_root);
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-gpt55-image2-codex-{}", Uuid::new_v4()),
+                "External GPT-5.5 Image2 Codex Publish Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "default_source_id": "hy-sql",
+                "allowed_database_source_ids": ["hy-sql-public"]
+            }),
+        )
+        .await;
+        let preview_asset_key = "static-page-previews/xinbai-external-gpt55-visual.png";
+        let (run, draft, job, execution) =
+            create_external_static_page_auto_publish_fixture_with_runtime_manifest(
+                &state,
+                Some(preview_asset_key),
+                json!({
+                    "mode": "accepted",
+                    "lane": "external_channel",
+                    "model": "pending-assistant-run-executor",
+                    "provider": "v3-control-plane"
+                }),
+            )
+            .await;
+        let (_demo_draft, demo_render_output) =
+            create_static_page_render_output_inline(&state, draft.clone(), None, true)
+                .await
+                .expect("demo direct render should be created");
+        maybe_publish_external_static_page_render_view_as_generated_artifact(
+            &state.storage,
+            state.tenant_id,
+            &draft,
+            &demo_render_output,
+            Some(job.id.to_string()),
+            "demo_initial_direct_html_publish",
+        )
+        .await
+        .expect("demo generated artifact publish should complete")
+        .expect("demo generated artifact payload should be returned");
+
+        for _ in 0..2 {
+            maybe_enqueue_external_static_page_publish_after_image_ready(
+                &state.storage,
+                &state.workflow_catalog,
+                &state.event_bus,
+                state.tenant_id,
+                &execution,
+            )
+            .await
+            .expect("GPT-5.5 preview completion should enqueue visual-contract publish");
+        }
+
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        let codex_workflows = workflows
+            .iter()
+            .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
+            .collect::<Vec<_>>();
+        assert_eq!(codex_workflows.len(), 1);
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["image2"]["preview_asset_key"],
+            json!(preview_asset_key)
+        );
+
+        let render_outputs = state
+            .storage
+            .static_page_render_outputs()
+            .list_by_draft(state.tenant_id, draft.id)
+            .await
+            .expect("render outputs should list");
+        assert_eq!(
+            render_outputs
+                .iter()
+                .filter(|output| output.image_job_id == Some(job.id))
+                .count(),
+            0
+        );
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let publish_events = events
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(publish_events.len(), 1);
+        assert_eq!(
+            publish_events[0].payload["final_publish_route"],
+            json!("gpt_5_5_image2_codex_publish")
+        );
+        assert_eq!(
+            publish_events[0].payload["gpt_5_5_main_model_preferred"],
+            json!(true)
+        );
+        assert_eq!(
+            publish_events[0].payload["cloudflare_codex_used"],
+            json!(true)
+        );
     }
 
     #[tokio::test]
