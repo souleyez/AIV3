@@ -114,6 +114,15 @@ function dormantReasonLabel(reason) {
 function ModelPoolRuntimeSummary({ status, loading }) {
   const lane = (status.lanes || []).find((item) => item.lane === 'assistant_chat') || (status.lanes || [])[0] || {};
   const providers = status.providers || [];
+  const workerPools = status.runtime?.workerPools || [];
+  const databasePools = status.runtime?.databasePools || [];
+  const findWorker = (service) => workerPools.find((pool) => pool.service === service) || {};
+  const findDatabasePool = (service) => databasePools.find((pool) => pool.service === service) || {};
+  const chatWorker = findWorker('chat-session-worker');
+  const staticPageWorker = findWorker('static-page-worker');
+  const codexHostWorker = findWorker('codex-host-agent');
+  const apiDbPool = findDatabasePool('platform-api');
+  const externalChannel = status.runtime?.externalChannel || {};
   const openCircuitCount = providers.filter((provider) => provider.circuitOpen || provider.circuitState === 'open').length;
   const activeCount = providers.reduce((total, provider) => total + (provider.activeCount || 0), 0);
   const queuedCount = providers.reduce((total, provider) => total + (provider.queuedCount || 0), 0);
@@ -131,6 +140,12 @@ function ModelPoolRuntimeSummary({ status, loading }) {
       <MetricPill label="队列" value={`${lane.queuedCount || queuedCount}/${lane.queueLimit ?? '-'}`} />
       <MetricPill label="熔断" value={openCircuitCount} />
       <MetricPill label="P95" value={formatLatency(maxP95)} />
+      <MetricPill label="主站问答" value={chatWorker.concurrency} />
+      <MetricPill label="静态页" value={staticPageWorker.concurrency} />
+      <MetricPill label="Codex" value={codexHostWorker.concurrency} />
+      <MetricPill label="API DB池" value={apiDbPool.maxConnections} />
+      <MetricPill label="第三方活跃" value={externalChannel.activeConversations} />
+      <MetricPill label="幂等挂起" value={externalChannel.pendingIdempotencyClaimsRecent} />
     </div>
   );
 }

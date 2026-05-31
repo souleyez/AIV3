@@ -92,6 +92,46 @@ pub struct ModelGatewayStatusView {
     pub generated_at: DateTime<Utc>,
     pub lanes: Vec<ModelGatewayLaneStatusView>,
     pub providers: Vec<ModelGatewayProviderStatusView>,
+    #[serde(default)]
+    pub runtime: ModelGatewayRuntimeStatusView,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayRuntimeStatusView {
+    #[serde(default)]
+    pub worker_pools: Vec<ModelGatewayRuntimeWorkerPoolStatusView>,
+    #[serde(default)]
+    pub database_pools: Vec<ModelGatewayRuntimeDatabasePoolStatusView>,
+    #[serde(default)]
+    pub external_channel: ModelGatewayExternalChannelRuntimeStatusView,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayExternalChannelRuntimeStatusView {
+    pub active_conversations: usize,
+    pub pending_idempotency_claims_recent: u64,
+    pub direct_reply_total_budget_ms: u64,
+    pub direct_reply_attempt_timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayRuntimeWorkerPoolStatusView {
+    pub service: String,
+    pub label: String,
+    pub concurrency: usize,
+    pub default_concurrency: usize,
+    pub max_concurrency: usize,
+    #[serde(default)]
+    pub env_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelGatewayRuntimeDatabasePoolStatusView {
+    pub service: String,
+    pub label: String,
+    pub max_connections: u32,
+    pub env_key: String,
+    pub global_env_key: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5679,6 +5719,29 @@ mod tests {
                 last_failure_at: None,
                 last_failure_reason: None,
             }],
+            runtime: ModelGatewayRuntimeStatusView {
+                worker_pools: vec![ModelGatewayRuntimeWorkerPoolStatusView {
+                    service: "chat-session-worker".to_string(),
+                    label: "主站问答".to_string(),
+                    concurrency: 20,
+                    default_concurrency: 1,
+                    max_concurrency: 64,
+                    env_keys: vec!["CHAT_SESSION_WORKER_CONCURRENCY".to_string()],
+                }],
+                database_pools: vec![ModelGatewayRuntimeDatabasePoolStatusView {
+                    service: "platform-api".to_string(),
+                    label: "API".to_string(),
+                    max_connections: 20,
+                    env_key: "PLATFORM_API_DATABASE_MAX_CONNECTIONS".to_string(),
+                    global_env_key: "PLATFORM_DATABASE_MAX_CONNECTIONS".to_string(),
+                }],
+                external_channel: ModelGatewayExternalChannelRuntimeStatusView {
+                    active_conversations: 3,
+                    pending_idempotency_claims_recent: 1,
+                    direct_reply_total_budget_ms: 60_000,
+                    direct_reply_attempt_timeout_ms: 20_000,
+                },
+            },
         };
 
         let serialized = serde_json::to_string(&status).expect("status should serialize");
@@ -5688,6 +5751,9 @@ mod tests {
         assert!(serialized.contains("canary_percent"));
         assert!(serialized.contains("would_throttle_count"));
         assert!(serialized.contains("shadow_eval_pass_count"));
+        assert!(serialized.contains("chat-session-worker"));
+        assert!(serialized.contains("PLATFORM_API_DATABASE_MAX_CONNECTIONS"));
+        assert!(serialized.contains("pending_idempotency_claims_recent"));
         assert!(!serialized.contains("base_url"));
         assert!(!serialized.contains("auth_env_key"));
         assert!(!serialized.contains("sk-"));

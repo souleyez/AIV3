@@ -17,9 +17,10 @@ use static_page_worker::{
     DirectImageGenerationConfig, StaticPageVisualArtifact,
 };
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
-use tokio::time::Duration;
+use tokio::{sync::Semaphore, time::Duration};
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
 const DEFAULT_QUEUE: &str = "static_page";
@@ -31,6 +32,8 @@ const DEFAULT_STALE_SWEEP_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_STALE_SWEEP_LIMIT: u32 = 25;
 const DEFAULT_IMAGE_HTTP_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
 const DEFAULT_IMAGE_HTTP_CONNECT_TIMEOUT_MS: u64 = 30 * 1_000;
+const DEFAULT_STATIC_PAGE_WORKER_CONCURRENCY: usize = 1;
+const MAX_STATIC_PAGE_WORKER_CONCURRENCY: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StaticPageRenderTaskOutcome {
@@ -139,8 +142,17 @@ async fn main() -> Result<()> {
         DEFAULT_IMAGE_HTTP_CONNECT_TIMEOUT_MS,
     )
     .max(1_000);
+    let worker_concurrency = parse_static_page_worker_concurrency(
+        optional_env("STATIC_PAGE_IMAGE2_HTML_CONCURRENCY")
+            .or_else(|| optional_env("STATIC_PAGE_WORKER_CONCURRENCY"))
+            .as_deref(),
+    );
 
-    let storage = PgStorage::connect(&database_url).await?;
+    let storage = PgStorage::connect_with_configured_max_connections(
+        &database_url,
+        "STATIC_PAGE_DATABASE_MAX_CONNECTIONS",
+    )
+    .await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let wake_task_key = task_key.as_deref().unwrap_or(DEFAULT_IMAGE_TASK_KEY);
@@ -175,6 +187,7 @@ async fn main() -> Result<()> {
         orchestrator_poll_interval_ms = orchestrator_poll_interval,
         image_http_timeout_ms,
         image_http_connect_timeout_ms,
+        worker_concurrency,
         stale_claim_after_ms,
         stale_sweep_interval_ms,
         stale_sweep_limit,
@@ -185,6 +198,7 @@ async fn main() -> Result<()> {
         "static-page-worker polling started"
     );
 
+    let task_permits = Arc::new(Semaphore::new(worker_concurrency));
     let mut next_stale_sweep_at = Utc::now();
     loop {
         let now = Utc::now();
@@ -218,30 +232,49 @@ async fn main() -> Result<()> {
             next_stale_sweep_at = stale_sweep_next_at(now, stale_sweep_interval_ms);
         }
 
+        let permit = match Arc::clone(&task_permits).acquire_owned().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                tracing::error!(error = ?error, "static page worker semaphore closed");
+                wait_for_next_task_signal(&mut task_waker, poll_interval).await;
+                continue;
+            }
+        };
+
         match storage
             .workflow_tasks()
             .claim_next_available(&queue, task_key.as_deref(), Utc::now())
             .await
         {
             Ok(Some(task)) => {
-                if let Err(error) = process_task(
-                    &storage,
-                    &workflow_catalog,
-                    &event_bus,
-                    &http_client,
-                    image_provider_config.as_ref(),
-                    orchestrator_poll_interval,
-                    task,
-                )
-                .await
-                {
-                    tracing::error!(error = ?error, "static page image task processing failed");
-                }
+                let storage = storage.clone();
+                let workflow_catalog = workflow_catalog.clone();
+                let event_bus = event_bus.clone();
+                let http_client = http_client.clone();
+                let image_provider_config = image_provider_config.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = process_task(
+                        &storage,
+                        &workflow_catalog,
+                        &event_bus,
+                        &http_client,
+                        image_provider_config.as_ref(),
+                        orchestrator_poll_interval,
+                        task,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = ?error, "static page image task processing failed");
+                    }
+                });
             }
             Ok(None) => {
+                drop(permit);
                 wait_for_next_task_signal(&mut task_waker, poll_interval).await;
             }
             Err(error) => {
+                drop(permit);
                 tracing::error!(error = ?error, "static page image failed to claim task");
                 wait_for_next_task_signal(&mut task_waker, poll_interval).await;
             }
@@ -2148,6 +2181,14 @@ fn env_u32(key: &str, default_value: u32) -> u32 {
         .unwrap_or(default_value)
 }
 
+fn parse_static_page_worker_concurrency(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_STATIC_PAGE_WORKER_CONCURRENCY)
+        .min(MAX_STATIC_PAGE_WORKER_CONCURRENCY)
+}
+
 fn optional_env(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
@@ -2165,6 +2206,15 @@ mod tests {
     use test_fixtures::{
         local_postgres_storage, reset_local_postgres_storage, shared_local_postgres_test_lock,
     };
+
+    #[test]
+    fn parse_static_page_worker_concurrency_defaults_and_clamps() {
+        assert_eq!(parse_static_page_worker_concurrency(None), 1);
+        assert_eq!(parse_static_page_worker_concurrency(Some("")), 1);
+        assert_eq!(parse_static_page_worker_concurrency(Some("0")), 1);
+        assert_eq!(parse_static_page_worker_concurrency(Some("5")), 5);
+        assert_eq!(parse_static_page_worker_concurrency(Some("99")), 16);
+    }
 
     #[test]
     fn orchestrator_retry_wait_is_treated_as_pending_status() {

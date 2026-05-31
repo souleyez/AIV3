@@ -119,6 +119,29 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
       circuit_open: true,
       api_key: 'sk-hidden',
     }],
+    runtime: {
+      worker_pools: [{
+        service: 'chat-session-worker',
+        label: '主站问答',
+        concurrency: 20,
+        default_concurrency: 1,
+        max_concurrency: 64,
+        env_keys: ['CHAT_SESSION_WORKER_CONCURRENCY'],
+      }],
+      database_pools: [{
+        service: 'platform-api',
+        label: 'API',
+        max_connections: 20,
+        env_key: 'PLATFORM_API_DATABASE_MAX_CONNECTIONS',
+        global_env_key: 'PLATFORM_DATABASE_MAX_CONNECTIONS',
+      }],
+      external_channel: {
+        active_conversations: 3,
+        pending_idempotency_claims_recent: 1,
+        direct_reply_total_budget_ms: 60000,
+        direct_reply_attempt_timeout_ms: 20000,
+      },
+    },
   });
 
   assert.equal(status.generatedAt, '2026-05-21T08:00:00Z');
@@ -147,6 +170,13 @@ test('normalizeModelGatewayStatus hides secrets and keeps lane counts readable',
   assert.equal(status.providers[0].lastProfileTestStatus, 'ok');
   assert.equal(status.providers[0].lastProfileTestAt, '2026-05-21T08:02:00Z');
   assert.equal(status.providers[0].circuitState, 'open');
+  assert.equal(status.runtime.workerPools[0].service, 'chat-session-worker');
+  assert.equal(status.runtime.workerPools[0].concurrency, 20);
+  assert.equal(status.runtime.workerPools[0].maxConcurrency, 64);
+  assert.equal(status.runtime.databasePools[0].maxConnections, 20);
+  assert.equal(status.runtime.externalChannel.activeConversations, 3);
+  assert.equal(status.runtime.externalChannel.pendingIdempotencyClaimsRecent, 1);
+  assert.equal(status.runtime.externalChannel.directReplyAttemptTimeoutMs, 20000);
   assert.equal(JSON.stringify(status).includes('sk-hidden'), false);
 });
 

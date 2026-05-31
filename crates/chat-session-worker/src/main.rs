@@ -13,17 +13,19 @@ use domain_model::{
 };
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use llm_gateway::{
-    build_provider_from_env, render_runtime_manifest, LlmFinishReason, LlmProviderError,
-    LlmProviderFailure, LlmProviderFailureKind, LlmRuntimeMetadata, LlmRuntimeMode, LlmTokenUsage,
-    LlmToolCall, LlmToolCallStatus,
+    build_provider_from_env, build_provider_from_profile_env, render_runtime_manifest,
+    LlmFinishReason, LlmProvider, LlmProviderError, LlmProviderFailure, LlmProviderFailureKind,
+    LlmRuntimeMetadata, LlmRuntimeMode, LlmTokenUsage, LlmToolCall, LlmToolCallStatus,
+    ModelCapabilityManifest, ModelGatewayPoolConfig, ModelProfileWireApi, ModelProviderProfile,
+    MODEL_LANE_ASSISTANT_CHAT,
 };
-use prompt_registry::bootstrap_default_prompt_registry;
-use std::collections::HashSet;
+use prompt_registry::{bootstrap_default_prompt_registry, InMemoryPromptRegistry};
+use std::{collections::HashSet, sync::Arc};
 use storage::{
-    LlmInvocationRecordInput, NewChatMessage, PgStorage, ToolExecutionRecordInput,
-    DEFAULT_LOCAL_DATABASE_URL,
+    LlmInvocationRecordInput, ModelGatewayProfile, NewChatMessage, PgStorage,
+    ToolExecutionRecordInput, DEFAULT_LOCAL_DATABASE_URL,
 };
-use tokio::time::Duration;
+use tokio::{sync::Semaphore, time::Duration};
 use tool_registry::find_default_tool_snapshot_value;
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -35,6 +37,8 @@ const DEFAULT_RUNTIME_MODE: &str = "placeholder";
 const DEFAULT_RUNTIME_PROVIDER: &str = "placeholder";
 const DEFAULT_RUNTIME_MODEL: &str = "placeholder-chat-session-v1";
 const DEFAULT_RUNTIME_STREAM_MODE: &str = "buffered";
+const DEFAULT_WORKER_CONCURRENCY: usize = 1;
+const MAX_WORKER_CONCURRENCY: usize = 64;
 const CHAT_TURN_RECOVERY_PAYLOAD_KEY: &str = "_chat_turn_recovery";
 const CHAT_TURN_RECOVERY_EVENT_NAME: &str = "chat_turn_recovery_checkpoint";
 const RETRIEVAL_SEARCH_LIMIT: usize = 8;
@@ -72,6 +76,164 @@ impl ArtifactCommitFailureSource {
             Self::SessionContextUpdate => "session_context_update",
         }
     }
+}
+
+#[derive(Clone)]
+struct ChatSessionRuntimeResolver {
+    prompt_registry: InMemoryPromptRegistry,
+    legacy_orchestrator: PlaceholderChatSessionOrchestrator,
+}
+
+#[derive(Clone)]
+struct ChatSessionResolvedOrchestrator {
+    attempts: Vec<ChatSessionRuntimeAttempt>,
+}
+
+#[derive(Clone)]
+enum ChatSessionRuntimeAttempt {
+    ModelProfile {
+        label: String,
+        provider: Arc<dyn LlmProvider>,
+        model: String,
+    },
+    Legacy(PlaceholderChatSessionOrchestrator),
+}
+
+impl ChatSessionRuntimeResolver {
+    fn new(
+        prompt_registry: InMemoryPromptRegistry,
+        legacy_orchestrator: PlaceholderChatSessionOrchestrator,
+    ) -> Self {
+        Self {
+            prompt_registry,
+            legacy_orchestrator,
+        }
+    }
+
+    async fn resolve(
+        &self,
+        storage: &PgStorage,
+        tenant_id: domain_model::TenantId,
+    ) -> Result<ChatSessionResolvedOrchestrator> {
+        let db_profiles = storage
+            .model_gateway_profiles()
+            .list_enabled_by_lane(tenant_id, MODEL_LANE_ASSISTANT_CHAT)
+            .await?;
+        if !db_profiles.is_empty() {
+            return Ok(ChatSessionResolvedOrchestrator {
+                attempts: db_profiles
+                    .into_iter()
+                    .map(chat_session_runtime_attempt_from_db_profile)
+                    .map(|profile| self.profile_attempt(profile))
+                    .collect::<Result<Vec<_>>>()?,
+            });
+        }
+
+        if let Some(env_pool) = ModelGatewayPoolConfig::from_env(MODEL_LANE_ASSISTANT_CHAT)? {
+            return Ok(ChatSessionResolvedOrchestrator {
+                attempts: env_pool
+                    .active_profiles_by_priority()
+                    .into_iter()
+                    .map(|profile| self.profile_attempt(profile))
+                    .collect::<Result<Vec<_>>>()?,
+            });
+        }
+
+        Ok(ChatSessionResolvedOrchestrator {
+            attempts: vec![ChatSessionRuntimeAttempt::Legacy(
+                self.legacy_orchestrator.clone(),
+            )],
+        })
+    }
+
+    fn profile_attempt(&self, profile: ModelProviderProfile) -> Result<ChatSessionRuntimeAttempt> {
+        let label = format!("profile:{}", profile.profile_id);
+        let model = profile.model_id.clone();
+        let env_prefix = llm_gateway::model_gateway_profile_env_prefix(&profile.profile_id);
+        let provider =
+            build_provider_from_profile_env(&env_prefix, &profile, self.prompt_registry.clone())?;
+        Ok(ChatSessionRuntimeAttempt::ModelProfile {
+            label,
+            provider,
+            model,
+        })
+    }
+}
+
+impl ChatSessionOrchestrator for ChatSessionResolvedOrchestrator {
+    fn generate(
+        &self,
+        job: &ChatSessionJob,
+        requested_at: chrono::DateTime<Utc>,
+    ) -> Result<chat_session_worker::ChatSessionOutcome> {
+        let mut last_error = None;
+        for attempt in &self.attempts {
+            let result = match attempt {
+                ChatSessionRuntimeAttempt::ModelProfile {
+                    label,
+                    provider,
+                    model,
+                } => {
+                    tracing::debug!(%label, "chat session model profile attempt started");
+                    PlaceholderChatSessionOrchestrator::new_with_lane(
+                        Arc::clone(provider),
+                        model.clone(),
+                        MODEL_LANE_ASSISTANT_CHAT,
+                    )
+                    .generate(job, requested_at)
+                }
+                ChatSessionRuntimeAttempt::Legacy(orchestrator) => {
+                    tracing::debug!("chat session legacy runtime attempt started");
+                    orchestrator.generate(job, requested_at)
+                }
+            };
+            match result {
+                Ok(outcome) => return Ok(outcome),
+                Err(error) => {
+                    tracing::warn!(error = ?error, "chat session runtime attempt failed");
+                    last_error = Some(error);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("no chat session runtime attempts configured")))
+    }
+}
+
+fn chat_session_runtime_attempt_from_db_profile(
+    profile: ModelGatewayProfile,
+) -> ModelProviderProfile {
+    let mut provider_profile =
+        ModelProviderProfile::new(profile.profile_id, profile.provider_id, profile.model_id);
+    provider_profile.priority = profile.priority;
+    provider_profile.base_url = profile.base_url;
+    provider_profile.api_path = profile.api_path;
+    provider_profile.wire_api = ModelProfileWireApi::from_env_value(&profile.wire_api)
+        .unwrap_or(ModelProfileWireApi::ChatCompletions);
+    provider_profile.auth_env_key_name = profile.auth_env_key_name;
+    provider_profile.timeout_ms = profile.timeout_ms.map(|value| value as u64);
+    provider_profile.rate_limit.concurrent_requests =
+        profile.max_concurrency.map(|value| value as u32);
+    provider_profile.rate_limit.requests_per_minute = profile.rpm_limit.map(|value| value as u32);
+    provider_profile.rate_limit.tokens_per_minute = profile.tpm_limit.map(|value| value as u32);
+    provider_profile.capabilities =
+        ModelCapabilityManifest::from_names(&model_gateway_capability_names(&profile.capabilities));
+    provider_profile
+}
+
+fn model_gateway_capability_names(capabilities: &serde_json::Value) -> Vec<String> {
+    capabilities
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug)]
@@ -176,8 +338,14 @@ async fn main() -> Result<()> {
         &std::env::var("CHAT_SESSION_RUNTIME_STREAM_MODE")
             .unwrap_or_else(|_| DEFAULT_RUNTIME_STREAM_MODE.to_string()),
     )?;
+    let worker_concurrency_env = std::env::var("CHAT_SESSION_WORKER_CONCURRENCY").ok();
+    let worker_concurrency = parse_worker_concurrency(worker_concurrency_env.as_deref());
 
-    let storage = PgStorage::connect(&database_url).await?;
+    let storage = PgStorage::connect_with_configured_max_connections(
+        &database_url,
+        "CHAT_SESSION_DATABASE_MAX_CONNECTIONS",
+    )
+    .await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let prompt_registry = bootstrap_default_prompt_registry();
@@ -185,9 +353,10 @@ async fn main() -> Result<()> {
         "CHAT_SESSION",
         &runtime_mode,
         runtime_provider,
-        prompt_registry,
+        prompt_registry.clone(),
     )?;
     let orchestrator = PlaceholderChatSessionOrchestrator::new(provider, runtime_model);
+    let runtime_resolver = ChatSessionRuntimeResolver::new(prompt_registry, orchestrator);
     let wake_subject = workflow_task_enqueued_subject(&queue, &task_key);
     let mut task_waker = event_bus
         .subscribe_queue_or_disabled(
@@ -202,36 +371,56 @@ async fn main() -> Result<()> {
         %wake_subject,
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
+        worker_concurrency,
         %runtime_mode,
         %runtime_stream_mode,
         %database_url,
         "chat-session-worker polling started"
     );
 
+    let task_permits = Arc::new(Semaphore::new(worker_concurrency));
     loop {
+        let permit = match Arc::clone(&task_permits).acquire_owned().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                tracing::error!(error = ?error, "chat session worker semaphore closed");
+                wait_for_next_task_signal(&mut task_waker, poll_interval).await;
+                continue;
+            }
+        };
         match storage
             .workflow_tasks()
             .claim_next_available(&queue, Some(&task_key), Utc::now())
             .await
         {
             Ok(Some(task)) => {
-                if let Err(error) = process_task(
-                    &storage,
-                    &workflow_catalog,
-                    &event_bus,
-                    &orchestrator,
-                    &runtime_stream_mode,
-                    task,
-                )
-                .await
-                {
-                    tracing::error!(error = ?error, "chat session task processing failed");
-                }
+                let storage = storage.clone();
+                let workflow_catalog = workflow_catalog.clone();
+                let event_bus = event_bus.clone();
+                let runtime_resolver = runtime_resolver.clone();
+                let runtime_stream_mode = runtime_stream_mode.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = process_task(
+                        &storage,
+                        &workflow_catalog,
+                        &event_bus,
+                        &runtime_resolver,
+                        &runtime_stream_mode,
+                        task,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = ?error, "chat session task processing failed");
+                    }
+                });
             }
             Ok(None) => {
+                drop(permit);
                 wait_for_next_task_signal(&mut task_waker, poll_interval).await;
             }
             Err(error) => {
+                drop(permit);
                 tracing::error!(error = ?error, "chat session worker failed to claim task");
                 wait_for_next_task_signal(&mut task_waker, poll_interval).await;
             }
@@ -243,7 +432,7 @@ async fn process_task(
     storage: &PgStorage,
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
-    orchestrator: &impl ChatSessionOrchestrator,
+    runtime_resolver: &ChatSessionRuntimeResolver,
     runtime_stream_mode: &str,
     task: domain_model::WorkflowTask,
 ) -> Result<()> {
@@ -423,6 +612,10 @@ async fn process_task(
     let requested_at = Utc::now();
 
     let process_result: std::result::Result<(), ChatSessionTaskError> = async {
+        let orchestrator = runtime_resolver
+            .resolve(storage, task.tenant_id)
+            .await
+            .map_err(ChatSessionTaskError::from)?;
         let recovered_assistant =
             find_recoverable_assistant_message(&existing_messages, &job.turn_id)
                 .map_err(ChatSessionTaskError::from)?;
@@ -1657,13 +1850,22 @@ fn parse_turn_stream_mode(value: &str) -> Result<String> {
     }
 }
 
+fn parse_worker_concurrency(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_WORKER_CONCURRENCY)
+        .min(MAX_WORKER_CONCURRENCY)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_task_error_with_tool_calls, find_recoverable_assistant_message,
-        find_recoverable_event_turn, find_recoverable_session_turn, find_recoverable_task_turn,
-        next_chat_message_turn_index, payload_with_turn_recovery, payload_without_turn_recovery,
-        render_turn_recovery_payload, retrieval_search_tool_call,
+        chat_session_runtime_attempt_from_db_profile, chat_task_error_with_tool_calls,
+        find_recoverable_assistant_message, find_recoverable_event_turn,
+        find_recoverable_session_turn, find_recoverable_task_turn, model_gateway_capability_names,
+        next_chat_message_turn_index, parse_worker_concurrency, payload_with_turn_recovery,
+        payload_without_turn_recovery, render_turn_recovery_payload, retrieval_search_tool_call,
         service_handoff_from_session_manifest,
     };
     use chrono::Utc;
@@ -1676,6 +1878,61 @@ mod tests {
         LlmToolCallStatus,
     };
     use serde_json::json;
+
+    #[test]
+    fn parse_worker_concurrency_defaults_and_clamps() {
+        assert_eq!(parse_worker_concurrency(None), 1);
+        assert_eq!(parse_worker_concurrency(Some("")), 1);
+        assert_eq!(parse_worker_concurrency(Some("0")), 1);
+        assert_eq!(parse_worker_concurrency(Some("20")), 20);
+        assert_eq!(parse_worker_concurrency(Some("999")), 64);
+    }
+
+    #[test]
+    fn chat_session_model_gateway_profile_conversion_preserves_rightcode_runtime() {
+        let profile = storage::ModelGatewayProfile {
+            id: uuid::Uuid::new_v4(),
+            tenant_id: TenantId::new(),
+            profile_id: "rightcode-gpt-5-5-default".to_string(),
+            display_name: "Right Code GPT-5.5".to_string(),
+            lane: llm_gateway::MODEL_LANE_ASSISTANT_CHAT.to_string(),
+            provider_id: "rightcode".to_string(),
+            model_id: "gpt-5.5".to_string(),
+            base_url: Some("https://right.codes/codex/v1".to_string()),
+            api_path: Some("/chat/completions".to_string()),
+            wire_api: "chat_completions".to_string(),
+            auth_mode: "env_key".to_string(),
+            auth_env_key_name: Some("RIGHTCODE_API_KEY_MAIN".to_string()),
+            recommended_preset: Some("rightcode/gpt-5.5".to_string()),
+            max_concurrency: Some(20),
+            rpm_limit: Some(120),
+            tpm_limit: None,
+            timeout_ms: Some(20_000),
+            priority: 100,
+            enabled: true,
+            capabilities: json!(["chat", "reasoning", "json_mode"]),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let runtime_profile = chat_session_runtime_attempt_from_db_profile(profile);
+        assert_eq!(runtime_profile.profile_id, "rightcode-gpt-5-5-default");
+        assert_eq!(runtime_profile.provider_id, "rightcode");
+        assert_eq!(runtime_profile.model_id, "gpt-5.5");
+        assert_eq!(runtime_profile.rate_limit.concurrent_requests, Some(20));
+        assert_eq!(runtime_profile.rate_limit.requests_per_minute, Some(120));
+        assert_eq!(runtime_profile.timeout_ms, Some(20_000));
+        assert!(runtime_profile.capabilities.chat);
+        assert!(runtime_profile.capabilities.json_mode);
+    }
+
+    #[test]
+    fn model_gateway_capability_names_ignores_non_string_items() {
+        assert_eq!(
+            model_gateway_capability_names(&json!(["chat", "", 3, "json_mode"])),
+            vec!["chat".to_string(), "json_mode".to_string()]
+        );
+    }
 
     #[test]
     fn service_handoff_from_session_manifest_captures_confirmed_report_entry() {

@@ -42,7 +42,11 @@ async fn main() -> Result<()> {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_POLL_INTERVAL_MS);
 
-    let storage = PgStorage::connect(&database_url).await?;
+    let storage = PgStorage::connect_with_configured_max_connections(
+        &database_url,
+        "MEDIA_WORKER_DATABASE_MAX_CONNECTIONS",
+    )
+    .await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let frame_extraction_config = frame_extraction_config_from_env();

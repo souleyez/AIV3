@@ -81,7 +81,11 @@ async fn main() -> Result<()> {
     let runtime_model = std::env::var("DATASET_OUTPUT_RUNTIME_MODEL")
         .unwrap_or_else(|_| DEFAULT_RUNTIME_MODEL.to_string());
 
-    let storage = PgStorage::connect(&database_url).await?;
+    let storage = PgStorage::connect_with_configured_max_connections(
+        &database_url,
+        "DATASET_OUTPUT_DATABASE_MAX_CONNECTIONS",
+    )
+    .await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let prompt_registry = bootstrap_default_prompt_registry();

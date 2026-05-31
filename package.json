@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "smoke:external-channel-20way": "node scripts/smoke/external-channel-20way.mjs",
+    "smoke:main-chat-20way": "node scripts/smoke/main-chat-20way.mjs",
+    "smoke:static-page-5way": "node scripts/smoke/static-page-5way.mjs",
+    "smoke:heavy-static-page-5way": "node scripts/smoke/heavy-static-page-5way.mjs",
+    "smoke:cloudflare-fallback-2way": "node scripts/smoke/cloudflare-fallback-2way.mjs",
     "test:pure-third-party-guide-html": "node --test tools/render-pure-third-party-guide-html.test.mjs",
     "test:static-page-planning-smoke-html": "node --test tools/render-static-page-planning-smoke-html.test.mjs",
     "test:static-page-export-artifact": "node --test tools/validate-static-page-export-artifact.test.mjs",

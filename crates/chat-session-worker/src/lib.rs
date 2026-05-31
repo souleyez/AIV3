@@ -51,13 +51,23 @@ pub trait ChatSessionOrchestrator {
 pub struct PlaceholderChatSessionOrchestrator {
     provider: Arc<dyn LlmProvider>,
     model: String,
+    lane: String,
 }
 
 impl PlaceholderChatSessionOrchestrator {
     pub fn new(provider: Arc<dyn LlmProvider>, model: impl Into<String>) -> Self {
+        Self::new_with_lane(provider, model, MODEL_LANE_CHAT_SESSION)
+    }
+
+    pub fn new_with_lane(
+        provider: Arc<dyn LlmProvider>,
+        model: impl Into<String>,
+        lane: impl Into<String>,
+    ) -> Self {
         Self {
             provider,
             model: model.into(),
+            lane: lane.into(),
         }
     }
 }
@@ -798,7 +808,7 @@ impl ChatSessionOrchestrator for PlaceholderChatSessionOrchestrator {
         );
         let response = self.provider.complete(&LlmRequest {
             model: self.model.clone(),
-            lane: Some(MODEL_LANE_CHAT_SESSION.to_string()),
+            lane: Some(self.lane.clone()),
             system_prompt_key: Some(CHAT_SESSION_PLACEHOLDER_PROMPT_KEY.to_string()),
             input: placeholder_message,
         })?;

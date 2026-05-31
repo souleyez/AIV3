@@ -16,9 +16,11 @@ use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use storage::{NewAssistantRunEvent, NewWorkflowTask, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
@@ -35,6 +37,8 @@ const DEFAULT_ORCHESTRATOR_KIND: &str = "code-task";
 const DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS: u64 = 15_000;
 const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 6_500;
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
+const DEFAULT_CODEX_HOST_CONCURRENCY: usize = 1;
+const MAX_CODEX_HOST_CONCURRENCY: usize = 8;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -49,10 +53,20 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_POLL_INTERVAL_MS);
+    let worker_concurrency = parse_codex_host_concurrency(
+        std::env::var("CODEX_HOST_CLOUDFLARE_CONCURRENCY")
+            .ok()
+            .or_else(|| std::env::var("CODEX_HOST_AGENT_CONCURRENCY").ok())
+            .as_deref(),
+    );
     let execution_policy = CodexHostAgentPolicy::from_env()?;
     let runtime_config = CodexHostRuntimeConfig::from_env();
 
-    let storage = PgStorage::connect(&database_url).await?;
+    let storage = PgStorage::connect_with_configured_max_connections(
+        &database_url,
+        "CODEX_HOST_DATABASE_MAX_CONNECTIONS",
+    )
+    .await?;
     let workflow_catalog = workflow_definitions::catalog();
     let event_bus = EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     let wake_subject = workflow_task_enqueued_subject(&queue, &task_key);
@@ -69,6 +83,7 @@ async fn main() -> Result<()> {
         %wake_subject,
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
+        worker_concurrency,
         execution_mode = %execution_policy.mode.as_str(),
         profile_id = %execution_policy.profile.id,
         profile_kind = %execution_policy.profile.kind,
@@ -81,30 +96,49 @@ async fn main() -> Result<()> {
         "codex-host-agent polling started"
     );
 
+    let task_permits = Arc::new(Semaphore::new(worker_concurrency));
     loop {
+        let permit = match Arc::clone(&task_permits).acquire_owned().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                tracing::error!(error = ?error, "codex host agent semaphore closed");
+                wait_for_next_task_signal(&mut task_waker, poll_interval).await;
+                continue;
+            }
+        };
         match storage
             .workflow_tasks()
             .claim_next_available(&queue, Some(&task_key), Utc::now())
             .await
         {
             Ok(Some(task)) => {
-                if let Err(error) = process_task(
-                    &storage,
-                    &workflow_catalog,
-                    &event_bus,
-                    &execution_policy,
-                    &runtime_config,
-                    task,
-                )
-                .await
-                {
-                    tracing::error!(error = ?error, "codex host task processing failed");
-                }
+                let storage = storage.clone();
+                let workflow_catalog = workflow_catalog.clone();
+                let event_bus = event_bus.clone();
+                let execution_policy = execution_policy.clone();
+                let runtime_config = runtime_config.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(error) = process_task(
+                        &storage,
+                        &workflow_catalog,
+                        &event_bus,
+                        &execution_policy,
+                        &runtime_config,
+                        task,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = ?error, "codex host task processing failed");
+                    }
+                });
             }
             Ok(None) => {
+                drop(permit);
                 wait_for_next_task_signal(&mut task_waker, poll_interval).await;
             }
             Err(error) => {
+                drop(permit);
                 tracing::error!(error = ?error, "codex host agent failed to claim task");
                 wait_for_next_task_signal(&mut task_waker, poll_interval).await;
             }
@@ -329,78 +363,6 @@ async fn process_task(
                 "Cloudflare Codex task requeued for non-blocking continued polling"
             );
             return Ok(());
-        }
-        if task_context.capability == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
-            if let Some((mut fallback_output, fallback_html, fallback_data)) =
-                static_page_visual_contract_fallback_output(
-                    &json!({
-                        "codex_error": safe_public_text(&error_message, 360),
-                    }),
-                    &task_context,
-                )
-            {
-                if let Some(object) = fallback_output.as_object_mut() {
-                    object.insert("mode".to_string(), Value::String("codex_exec".to_string()));
-                    object.insert(
-                        "fallback_reason".to_string(),
-                        Value::String("codex_exec_failed_after_image2_preview_ready".to_string()),
-                    );
-                    object.insert(
-                        "human_review_reason".to_string(),
-                        Value::String(
-                            "真实 Codex 执行未完成，V3 已发布 Image2 视觉合同兜底页。".to_string(),
-                        ),
-                    );
-                }
-                let output = publish_cloudflare_static_page_html(
-                    fallback_output,
-                    &fallback_html,
-                    Some(fallback_data),
-                    &task_context,
-                    task.execution_id,
-                    &format!("task_{}", task.id),
-                )?;
-                let event_name = codex_host_task_event_name(&output);
-                apply_workflow_signal_with_dependencies(
-                    storage,
-                    workflow_catalog,
-                    event_bus,
-                    task.tenant_id,
-                    task.execution_id,
-                    WorkflowSignal::StepCompleted {
-                        task_key: task.task_key.clone(),
-                        output: Some(output.clone()),
-                    },
-                )
-                .await?;
-                append_assistant_event(
-                    storage,
-                    task.tenant_id,
-                    task_context.assistant_run_id,
-                    event_name,
-                    output.clone(),
-                )
-                .await?;
-                maybe_record_external_static_page_publish_completed_from_task_output(
-                    storage,
-                    task.tenant_id,
-                    task_context.assistant_run_id,
-                    task.execution_id,
-                    &task_context,
-                    &output,
-                )
-                .await?;
-                storage
-                    .workflow_tasks()
-                    .mark_succeeded(task.id, Utc::now())
-                    .await?;
-                tracing::warn!(
-                    task_id = %task.id,
-                    execution_id = %task.execution_id,
-                    "codex host task published Image2 visual fallback after codex_exec failure"
-                );
-                return Ok(());
-            }
         }
         if let Err(signal_error) = apply_workflow_signal_with_dependencies(
             storage,
@@ -1045,7 +1007,13 @@ async fn run_codex_exec_with_heartbeat(
     let mut heartbeat_interval =
         tokio::time::interval(Duration::from_millis(runtime_config.heartbeat_ms()));
     let mut heartbeat_count = 0usize;
-    let exec = run_codex_exec(command_plan, task_context, decision, runtime_config);
+    let exec = run_codex_exec(
+        execution_id,
+        command_plan,
+        task_context,
+        decision,
+        runtime_config,
+    );
     tokio::pin!(exec);
 
     loop {
@@ -1634,7 +1602,7 @@ fn build_cloudflare_orchestrator_prompt(task_context: &CodexHostTaskContext) -> 
         );
         if fixed_task.template_id.as_str() == "static_page_image2_data_publish" {
             prompt.push_str(
-                "\n\nCloudflare runtime cannot write V3 server files directly. For this template, if you cannot produce an approved V3 `artifact.public_url`, return `artifact.html` as a complete standalone HTML document. The V3 host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.",
+                "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Cloudflare runtime cannot write V3 server files directly. If you cannot produce an approved V3 `artifact.public_url`, return `artifact.html` as a complete standalone HTML document plus `artifact.data_json`; the V3 host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.\n- The final HTML must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Bind real V3 dataset/database/document evidence from the task package; if selected data is unavailable or insufficient, return `needs_human` or `failed` instead of publishing a fallback page.",
             );
         }
         return Ok(prompt);
@@ -2218,18 +2186,9 @@ fn normalize_cloudflare_fixed_task_output(
                 orchestrator_task_id,
             );
         }
-    }
-    if let Some((fallback_output, fallback_html, fallback_data)) =
-        static_page_visual_contract_fallback_output(&output, task_context)
-    {
-        return publish_cloudflare_static_page_html(
-            fallback_output,
-            &fallback_html,
-            Some(fallback_data),
-            task_context,
-            execution_id,
-            orchestrator_task_id,
-        );
+        return Err(anyhow!(
+            "static_page_image2_data_publish success output did not include a host-published artifact, task-workspace artifact, or complete artifact.html"
+        ));
     }
     Ok(output)
 }
@@ -2289,174 +2248,6 @@ fn normalize_static_page_data_json(value: &Value) -> Option<Value> {
     }
 }
 
-fn static_page_visual_contract_fallback_output(
-    output: &Value,
-    task_context: &CodexHostTaskContext,
-) -> Option<(Value, String, Value)> {
-    let fixed_task = task_context.fixed_task.as_ref()?;
-    let preview_url = first_non_empty_string([
-        output.get("render_asset_url"),
-        output.pointer("/image2/render_asset_url"),
-        output.pointer("/artifact/render_asset_url"),
-        fixed_task.image2.get("render_asset_url"),
-        fixed_task.image2.get("visual_contract_url"),
-        fixed_task.image2.get("preview_asset_key"),
-    ])?;
-    let title = first_non_empty_string([
-        output.get("report_title"),
-        fixed_task.requirements.get("project_name"),
-        fixed_task.requirements.get("user_goal"),
-    ])
-    .unwrap_or_else(|| "Image2 视觉合同静态页".to_string());
-    let user_goal = first_non_empty_string([
-        fixed_task.requirements.get("user_goal"),
-        output.get("user_goal"),
-        output.get("prompt_text"),
-    ])
-    .unwrap_or_else(|| title.clone());
-    let evidence_status = first_non_empty_string([
-        output.get("evidence_status"),
-        fixed_task.requirements.pointer("/evidence_summary/status"),
-    ])
-    .unwrap_or_else(|| "unknown".to_string());
-    let focus = output
-        .get("focus")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec!["视觉合同预览".to_string(), "资料证据待增强".to_string()]);
-    let warnings = vec![
-        "Cloudflare Codex 未返回完整 artifact.html，V3 已发布 Image2 视觉合同兜底页。".to_string(),
-        "该页面用于确认效果图与任务方向，不代表最终候选人精排结论。".to_string(),
-        "后续需要把检索证据/样本行补进固定任务包，再生成正式可交付报表。".to_string(),
-    ];
-    let data_json = json!({
-        "source": "v3_visual_contract_fallback",
-        "assistantRunId": task_context.assistant_run_id.to_string(),
-        "draftId": fixed_task.draft_id.clone(),
-        "previewUrl": preview_url,
-        "title": title,
-        "userGoal": user_goal,
-        "focus": focus.clone(),
-        "evidenceStatus": evidence_status,
-        "warnings": warnings.clone(),
-    });
-    let html = render_static_page_visual_contract_fallback_html(
-        &title,
-        &user_goal,
-        &preview_url,
-        &focus,
-        &evidence_status,
-        &warnings,
-    );
-    let output = json!({
-        "template_id": "static_page_image2_data_publish",
-        "status": "success",
-        "artifact": {
-            "html": html,
-            "data_json": data_json.clone(),
-        },
-        "source_summary": [
-            "Published by V3 host-agent because Cloudflare returned a visual-contract result without artifact.html.",
-            "The page embeds the persisted Image2 preview asset and preserves warnings for follow-up generation."
-        ],
-        "validation_report": {
-            "snapshot_policy": "visual_contract_fallback_no_structured_snapshot",
-            "latest_snapshot": null,
-            "source_row_count": 0,
-            "current_state_row_count": 0,
-            "detail_row_count": 0,
-            "unit_policy": "not_applicable_for_visual_contract_fallback",
-            "warnings": warnings
-        },
-        "human_review_reason": null
-    });
-    Some((output, html, data_json))
-}
-
-fn first_non_empty_string<'a>(
-    values: impl IntoIterator<Item = Option<&'a Value>>,
-) -> Option<String> {
-    values.into_iter().flatten().find_map(|value| {
-        value
-            .as_str()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
-fn render_static_page_visual_contract_fallback_html(
-    title: &str,
-    user_goal: &str,
-    preview_url: &str,
-    focus: &[String],
-    evidence_status: &str,
-    warnings: &[String],
-) -> String {
-    let focus_items = focus
-        .iter()
-        .map(|item| format!("<li>{}</li>", escape_html(item)))
-        .collect::<Vec<_>>()
-        .join("");
-    let warning_items = warnings
-        .iter()
-        .map(|item| format!("<li>{}</li>", escape_html(item)))
-        .collect::<Vec<_>>()
-        .join("");
-    format!(
-        concat!(
-            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
-            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
-            "<title>{}</title><style>",
-            "body{{margin:0;background:#0f172a;color:#e5eefb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}",
-            ".shell{{max-width:1180px;margin:0 auto;padding:40px 24px 56px;}}",
-            ".eyebrow{{color:#7dd3fc;font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:12px;}}",
-            "h1{{font-size:34px;line-height:1.16;margin:12px 0 12px;}}",
-            ".goal{{color:#bfdbfe;font-size:16px;line-height:1.7;max-width:920px;}}",
-            ".preview{{margin:28px 0;border:1px solid rgba(148,163,184,.35);background:#111827;border-radius:14px;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.35);}}",
-            ".preview img{{display:block;width:100%;height:auto;}}",
-            ".grid{{display:grid;grid-template-columns:1fr 1fr;gap:18px;}}",
-            ".panel{{background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.24);border-radius:12px;padding:18px;}}",
-            ".panel h2{{font-size:18px;margin:0 0 12px;}}",
-            "li{{margin:8px 0;color:#dbeafe;line-height:1.55;}}",
-            ".status{{display:inline-flex;padding:6px 10px;border-radius:999px;background:#164e63;color:#cffafe;font-size:13px;}}",
-            "@media(max-width:760px){{.grid{{grid-template-columns:1fr;}}h1{{font-size:26px;}}.shell{{padding:28px 16px;}}}}",
-            "</style></head><body><main class=\"shell\">",
-            "<div class=\"eyebrow\">Image2 Visual Contract</div>",
-            "<h1>{}</h1><p class=\"goal\">{}</p>",
-            "<section class=\"preview\"><img src=\"{}\" alt=\"Image2 生成的静态页效果图\"></section>",
-            "<section class=\"grid\"><div class=\"panel\"><h2>本轮重点</h2><ul>{}</ul></div>",
-            "<div class=\"panel\"><h2>发布状态</h2><p class=\"status\">evidence: {}</p><ul>{}</ul></div></section>",
-            "</main></body></html>"
-        ),
-        escape_html(title),
-        escape_html(title),
-        escape_html(user_goal),
-        escape_html(preview_url),
-        focus_items,
-        escape_html(evidence_status),
-        warning_items,
-    )
-}
-
-fn escape_html(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
 fn standalone_html_document(html: &str) -> String {
     let trimmed = html.trim();
     let lower = trimmed
@@ -2492,9 +2283,7 @@ fn publish_workspace_static_page_artifact_if_available(
     let Some(source_index_path) = output
         .pointer("/artifact/local_path")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+        .and_then(|value| resolve_task_workspace_artifact_path(value, task_context))
     else {
         return Ok(None);
     };
@@ -2528,6 +2317,7 @@ fn publish_workspace_static_page_artifact_if_available(
             index_path.display()
         ));
     }
+    validate_static_page_image2_dynamic_artifact(&index_path, &artifact_dir)?;
 
     let mut republished = output.clone();
     let object = republished
@@ -2567,7 +2357,10 @@ fn publish_workspace_static_page_artifact_if_available(
             );
             artifact_object.insert(
                 "data_url".to_string(),
-                Value::String(generated_artifact_public_file_url(&relative_dir, "data.json")),
+                Value::String(generated_artifact_public_file_url(
+                    &relative_dir,
+                    "data.json",
+                )),
             );
         }
         let data_snapshot_path = artifact_dir.join("data-snapshot.json");
@@ -2587,6 +2380,63 @@ fn publish_workspace_static_page_artifact_if_available(
     }
     strip_static_page_inline_artifact_payload(&mut republished)?;
     Ok(Some(republished))
+}
+
+fn resolve_task_workspace_artifact_path(
+    raw_path: &str,
+    task_context: &CodexHostTaskContext,
+) -> Option<PathBuf> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(relative) = trimmed.strip_prefix("/workspace/") {
+        return task_workspace_path(task_context).map(|workspace| workspace.join(relative));
+    }
+    if let Some(relative) = trimmed.strip_prefix("workspace/") {
+        return task_workspace_path(task_context).map(|workspace| workspace.join(relative));
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        return Some(path);
+    }
+    task_workspace_path(task_context).map(|workspace| workspace.join(path))
+}
+
+fn task_workspace_path(task_context: &CodexHostTaskContext) -> Option<PathBuf> {
+    let root = std::env::var("CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT")
+        .ok()
+        .map(|value| PathBuf::from(value.trim()))
+        .filter(|value| value.is_absolute())?;
+    Some(root.join(task_workspace_label(task_context)))
+}
+
+fn task_workspace_label(task_context: &CodexHostTaskContext) -> String {
+    let source = task_context
+        .task_memory_space_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("codex-host-task-{}", task_context.assistant_run_id));
+    let safe = source
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .chars()
+        .take(96)
+        .collect::<String>();
+    if safe.is_empty() {
+        "codex-host-task".to_string()
+    } else {
+        safe
+    }
 }
 
 fn local_artifact_path_is_under_task_workspace(path: &Path) -> Result<bool> {
@@ -2649,6 +2499,52 @@ fn copy_generated_artifact_dir(source_dir: &Path, target_dir: &Path) -> Result<(
     Ok(())
 }
 
+fn validate_static_page_image2_dynamic_artifact(
+    index_path: &Path,
+    artifact_dir: &Path,
+) -> Result<()> {
+    if !artifact_dir.join("data.json").is_file() {
+        return Err(anyhow!(
+            "static_page_image2_data_publish artifact must include data.json for dynamic database-backed refresh"
+        ));
+    }
+    if !artifact_dir.join("data-snapshot.json").is_file() {
+        return Err(anyhow!(
+            "static_page_image2_data_publish artifact must include data-snapshot.json for time/snapshot refresh"
+        ));
+    }
+    let html = fs::read_to_string(index_path).map_err(|error| {
+        anyhow!(
+            "failed to read generated static-page HTML {}: {error}",
+            index_path.display()
+        )
+    })?;
+    let html_lower = html.to_ascii_lowercase();
+    if !html_lower.contains("data.json") {
+        return Err(anyhow!(
+            "static_page_image2_data_publish HTML must load local data.json"
+        ));
+    }
+    let has_time_or_snapshot_signal = [
+        "snapshotversion",
+        "updatedat",
+        "time",
+        "date",
+        "txdate",
+        "时间",
+        "日期",
+        "快照",
+    ]
+    .iter()
+    .any(|term| html_lower.contains(term));
+    if !has_time_or_snapshot_signal {
+        return Err(anyhow!(
+            "static_page_image2_data_publish HTML must expose time or snapshot controls/signals"
+        ));
+    }
+    Ok(())
+}
+
 fn publish_cloudflare_static_page_html(
     mut output: Value,
     html: &str,
@@ -2657,6 +2553,11 @@ fn publish_cloudflare_static_page_html(
     execution_id: domain_model::WorkflowExecutionId,
     orchestrator_task_id: &str,
 ) -> Result<Value> {
+    if data_json.is_none() {
+        return Err(anyhow!(
+            "static_page_image2_data_publish artifact.html success requires artifact.data_json for dynamic database-backed refresh"
+        ));
+    }
     let run_segment = safe_path_segment(&task_context.assistant_run_id.to_string());
     let execution_segment = safe_path_segment(&execution_id.to_string());
     let task_segment = safe_path_segment(orchestrator_task_id);
@@ -2709,6 +2610,7 @@ fn publish_cloudflare_static_page_html(
     } else {
         (None, None, None)
     };
+    validate_static_page_image2_dynamic_artifact(&index_path, &artifact_dir)?;
     let manifest = json!({
         "kind": "v3_codex_host_generated_static_page",
         "version": 1,
@@ -2760,6 +2662,12 @@ fn publish_cloudflare_static_page_html(
                 Value::String(data_path.display().to_string()),
             );
             artifact_object.insert("data_url".to_string(), Value::String(data_url.clone()));
+        }
+        if let Some(data_snapshot_url) = data_snapshot_url.as_ref() {
+            artifact_object.insert(
+                "data_snapshot_url".to_string(),
+                Value::String(data_snapshot_url.clone()),
+            );
         }
     }
     strip_static_page_inline_artifact_payload(&mut output)?;
@@ -2923,6 +2831,14 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+fn parse_codex_host_concurrency(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_CODEX_HOST_CONCURRENCY)
+        .min(MAX_CODEX_HOST_CONCURRENCY)
+}
+
 fn cloudflare_orchestrator_output(
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
@@ -2971,6 +2887,7 @@ fn cloudflare_orchestrator_output(
 }
 
 async fn run_codex_exec(
+    execution_id: domain_model::WorkflowExecutionId,
     command_plan: &CodexCommandPlan,
     task_context: &CodexHostTaskContext,
     decision: &CodexHostExecutionDecision,
@@ -3027,7 +2944,19 @@ async fn run_codex_exec(
         .fixed_task
         .as_ref()
         .map(|fixed_task| {
-            extract_fixed_task_output_from_stdout(&output.stdout, fixed_task.template_id.as_str())
+            let output = extract_fixed_task_output_from_stdout(
+                &output.stdout,
+                fixed_task.template_id.as_str(),
+            )?;
+            normalize_cloudflare_fixed_task_output(
+                output,
+                task_context,
+                execution_id,
+                command_plan
+                    .workspace_label
+                    .as_deref()
+                    .unwrap_or("codex_exec_workspace"),
+            )
         })
         .transpose()?;
 
@@ -3273,6 +3202,15 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn parse_codex_host_concurrency_defaults_and_clamps() {
+        assert_eq!(parse_codex_host_concurrency(None), 1);
+        assert_eq!(parse_codex_host_concurrency(Some("")), 1);
+        assert_eq!(parse_codex_host_concurrency(Some("0")), 1);
+        assert_eq!(parse_codex_host_concurrency(Some("2")), 2);
+        assert_eq!(parse_codex_host_concurrency(Some("99")), 8);
+    }
+
+    #[test]
     fn codex_exec_output_uses_shared_contract_shape() {
         let task_context = CodexHostTaskContext {
             assistant_run_id: AssistantRunId::new(),
@@ -3438,9 +3376,15 @@ mod tests {
             task_workspace_retention_hours: 168,
         };
 
-        let error = run_codex_exec(&command_plan, &task_context, &decision, &runtime_config)
-            .await
-            .expect_err("non-zero command should fail");
+        let error = run_codex_exec(
+            domain_model::WorkflowExecutionId::new(),
+            &command_plan,
+            &task_context,
+            &decision,
+            &runtime_config,
+        )
+        .await
+        .expect_err("non-zero command should fail");
         let message = error.to_string();
 
         assert!(message.contains("kind=non_zero_exit"));
@@ -3461,9 +3405,15 @@ mod tests {
             task_workspace_retention_hours: 168,
         };
 
-        let error = run_codex_exec(&command_plan, &task_context, &decision, &runtime_config)
-            .await
-            .expect_err("timeout command should fail");
+        let error = run_codex_exec(
+            domain_model::WorkflowExecutionId::new(),
+            &command_plan,
+            &task_context,
+            &decision,
+            &runtime_config,
+        )
+        .await
+        .expect_err("timeout command should fail");
         let message = error.to_string();
 
         assert!(message.contains("timed out"));
@@ -3519,7 +3469,7 @@ mod tests {
             "status": "success",
             "artifact": {
                 "public_url": "https://v3.elepcloud.com/generated-artifacts/pending-host-publication",
-                "html": "<main><h1>经营分析</h1><script type=\"application/json\" id=\"v3-data-source\">data.json</script></main>",
+                "html": "<!doctype html><html><body><main><h1>经营分析</h1><label>时间</label><button data-time=\"latest\">最新快照</button><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.snapshotVersion=data.snapshotVersion||data.updatedAt||'';});</script></main></body></html>",
                 "data_json": {
                     "source": "unit-test",
                     "snapshotVersion": "snapshot-1",
@@ -3669,7 +3619,7 @@ mod tests {
                     "https://v3.elepcloud.com/generated-artifacts/{draft_id}/index.html"
                 ),
                 "local_path": format!("/workspace/generated-artifacts/{draft_id}/index.html"),
-                "html": "<main><h1>Image2 视觉合同页面</h1></main>",
+                "html": "<!doctype html><html><body><main><h1>Image2 视觉合同页面</h1><label>时间</label><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.updatedAt=data.updatedAt||data.snapshotVersion||'';});</script></main></body></html>",
                 "data_json": {"source": "cloudflare-inline"}
             },
             "validation_report": {
@@ -3711,17 +3661,29 @@ mod tests {
         let workspace_root = std::env::temp_dir()
             .join("v3-codex-host-test-workspaces")
             .join(Uuid::new_v4().to_string());
-        let workspace_artifact_dir = workspace_root.join("task/generated-artifacts/static-page-demo");
+        let workspace_artifact_dir =
+            workspace_root.join("task/generated-artifacts/static-page-demo");
         std::fs::create_dir_all(&workspace_artifact_dir).expect("workspace artifact dir");
         std::fs::write(
             workspace_artifact_dir.join("index.html"),
-            "<!doctype html><html><body><h1>Codex workspace page</h1></body></html>",
+            "<!doctype html><html><body><h1>Codex workspace page</h1><label>时间</label><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.snapshotVersion=data.snapshotVersion||data.updatedAt||'';});</script></body></html>",
         )
         .expect("workspace html");
-        std::fs::write(workspace_artifact_dir.join("data.json"), "{\"ok\":true}")
-            .expect("workspace data");
-        std::fs::write(workspace_artifact_dir.join("manifest.json"), "{\"kind\":\"test\"}")
-            .expect("workspace manifest");
+        std::fs::write(
+            workspace_artifact_dir.join("data.json"),
+            "{\"ok\":true,\"snapshotVersion\":\"snapshot-1\"}",
+        )
+        .expect("workspace data");
+        std::fs::write(
+            workspace_artifact_dir.join("data-snapshot.json"),
+            "{\"ok\":true,\"snapshotVersion\":\"snapshot-1\"}",
+        )
+        .expect("workspace data snapshot");
+        std::fs::write(
+            workspace_artifact_dir.join("manifest.json"),
+            "{\"kind\":\"test\"}",
+        )
+        .expect("workspace manifest");
         let _root = TestEnvVarRestore::set(
             "V3_GENERATED_ARTIFACT_ROOT",
             artifact_root.display().to_string(),
@@ -3785,7 +3747,94 @@ mod tests {
     }
 
     #[test]
-    fn cloudflare_static_page_partial_visual_result_publishes_contract_fallback() {
+    fn codex_exec_relative_workspace_static_page_dir_is_republished_by_host_agent() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let workspace_root = std::env::temp_dir()
+            .join("v3-codex-host-test-workspaces")
+            .join(Uuid::new_v4().to_string());
+        let workspace_label = "codex-host-task-relative-static-page";
+        let workspace_artifact_dir = workspace_root
+            .join(workspace_label)
+            .join("generated-artifacts/static-page-demo");
+        std::fs::create_dir_all(&workspace_artifact_dir).expect("workspace artifact dir");
+        std::fs::write(
+            workspace_artifact_dir.join("index.html"),
+            "<!doctype html><html><body><h1>Relative workspace page</h1><label>时间</label><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.updatedAt=data.updatedAt||data.snapshotVersion||'';});</script></body></html>",
+        )
+        .expect("workspace html");
+        std::fs::write(
+            workspace_artifact_dir.join("data.json"),
+            "{\"ok\":true,\"updatedAt\":\"2026-05-31T00:00:00Z\"}",
+        )
+        .expect("workspace data");
+        std::fs::write(
+            workspace_artifact_dir.join("data-snapshot.json"),
+            "{\"ok\":true,\"updatedAt\":\"2026-05-31T00:00:00Z\"}",
+        )
+        .expect("workspace data snapshot");
+        let _root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.display().to_string(),
+        );
+        let _workspace_root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            workspace_root.display().to_string(),
+        );
+        let _base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:relative-static-page".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+        };
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "status": "success",
+            "artifact": {
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/static-page-demo/index.html",
+                "local_path": "generated-artifacts/static-page-demo/index.html"
+            },
+            "validation_report": {
+                "source_row_count": 1
+            }
+        });
+
+        let normalized = normalize_cloudflare_fixed_task_output(
+            output,
+            &task_context,
+            domain_model::WorkflowExecutionId::new(),
+            "task_workspace_relative_path",
+        )
+        .expect("output should normalize");
+
+        let public_url = normalized
+            .pointer("/artifact/public_url")
+            .and_then(Value::as_str)
+            .expect("public url");
+        assert!(public_url.contains("/generated-artifacts/database-static-pages/codex-host/"));
+        let local_path = normalized
+            .pointer("/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        assert!(std::path::Path::new(local_path).starts_with(&artifact_root));
+        let html = std::fs::read_to_string(local_path).expect("html should be readable");
+        assert!(html.contains("Relative workspace page"));
+        assert!(normalized.pointer("/artifact/data_url").is_some());
+    }
+
+    #[test]
+    fn cloudflare_static_page_partial_visual_result_does_not_publish_contract_fallback() {
         let _lock = test_env_lock().lock().expect("env lock");
         let artifact_root = std::env::temp_dir()
             .join("v3-codex-host-test-artifacts")
@@ -3826,20 +3875,12 @@ mod tests {
         )
         .expect("partial visual result should normalize");
 
-        assert_eq!(normalized["status"], json!("success"));
-        let public_url = normalized
-            .pointer("/artifact/public_url")
-            .and_then(Value::as_str)
-            .expect("public url");
-        assert!(public_url.contains("/generated-artifacts/database-static-pages/codex-host/"));
-        let local_path = normalized
-            .pointer("/artifact/local_path")
-            .and_then(Value::as_str)
-            .expect("local path");
-        let html = std::fs::read_to_string(local_path).expect("html should be readable");
-        assert!(html.contains("Image2 Visual Contract"));
-        assert!(html.contains("static-page-previews/image-job/preview.png"));
-        assert!(html.contains("物联网经验"));
+        assert!(normalized.pointer("/artifact/public_url").is_none());
+        assert!(normalized.pointer("/artifact/local_path").is_none());
+        assert_eq!(
+            normalized["evidence_status"],
+            json!("referenced_but_not_available_in_task_payload")
+        );
     }
 
     #[test]

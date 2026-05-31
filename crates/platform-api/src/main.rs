@@ -5,7 +5,11 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("PLATFORM_DATABASE_URL")
         .unwrap_or_else(|_| storage::DEFAULT_LOCAL_DATABASE_URL.to_string());
     let workflow_catalog = workflow_definitions::catalog();
-    let storage = storage::PgStorage::connect(&database_url).await?;
+    let storage = storage::PgStorage::connect_with_configured_max_connections(
+        &database_url,
+        "PLATFORM_API_DATABASE_MAX_CONNECTIONS",
+    )
+    .await?;
     let event_bus = event_bus::EventBus::connect_from_env_or_disabled("PLATFORM_NATS_URL").await;
     storage.migrate().await?;
     storage

@@ -175,6 +175,8 @@ pub const DEFAULT_LOCAL_DATABASE_URL: &str =
     "postgres://ai_platform:ai_platform@127.0.0.1:5432/ai_data_platform_v3";
 pub const DEFAULT_LOCAL_TENANT_KEY: &str = "local-dev";
 pub const DEFAULT_LOCAL_TENANT_NAME: &str = "Local Development";
+pub const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 10;
+pub const CONFIGURED_DATABASE_MAX_CONNECTIONS_LIMIT: u32 = 100;
 
 #[derive(Clone, Debug)]
 pub struct NewDataset {
@@ -695,7 +697,23 @@ pub struct PgStorage {
 
 impl PgStorage {
     pub async fn connect(database_url: &str) -> Result<Self> {
-        Self::connect_with_settings(database_url, 10, Duration::from_secs(30)).await
+        Self::connect_with_settings(
+            database_url,
+            DEFAULT_DATABASE_MAX_CONNECTIONS,
+            Duration::from_secs(30),
+        )
+        .await
+    }
+
+    pub async fn connect_with_configured_max_connections(
+        database_url: &str,
+        service_env_key: &str,
+    ) -> Result<Self> {
+        Self::connect_with_max_connections(
+            database_url,
+            configured_database_max_connections(service_env_key),
+        )
+        .await
     }
 
     pub async fn connect_with_max_connections(
@@ -1000,6 +1018,31 @@ impl PgStorage {
             pool: self.pool.clone(),
         }
     }
+}
+
+pub fn configured_database_max_connections(service_env_key: &str) -> u32 {
+    let service_value = std::env::var(service_env_key).ok();
+    let global_value = std::env::var("PLATFORM_DATABASE_MAX_CONNECTIONS").ok();
+    parse_configured_database_max_connections(service_value.as_deref(), global_value.as_deref())
+}
+
+pub fn parse_configured_database_max_connections(
+    service_value: Option<&str>,
+    global_value: Option<&str>,
+) -> u32 {
+    service_value
+        .and_then(parse_positive_database_max_connections)
+        .or_else(|| global_value.and_then(parse_positive_database_max_connections))
+        .unwrap_or(DEFAULT_DATABASE_MAX_CONNECTIONS)
+}
+
+fn parse_positive_database_max_connections(value: &str) -> Option<u32> {
+    value
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)
+        .map(|value| value.min(CONFIGURED_DATABASE_MAX_CONNECTIONS_LIMIT))
 }
 
 #[derive(Clone)]
@@ -4103,10 +4146,16 @@ impl PgAssistantRunRepository {
     ) -> Result<AssistantRunEvent> {
         let row = sqlx::query(
             r#"
-            with next_sequence as (
-                select coalesce(max(sequence_no), 0) + 1 as sequence_no
-                from assistant_run_events
-                where tenant_id = $1 and run_id = $2
+            with run_event_lock as (
+                select pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))
+            ),
+            next_sequence as (
+                select coalesce((
+                    select max(sequence_no)
+                    from assistant_run_events
+                    where tenant_id = $1 and run_id = $2
+                ), 0) + 1 as sequence_no
+                from run_event_lock
             )
             insert into assistant_run_events (
                 tenant_id,
@@ -7566,6 +7615,27 @@ fn external_integration_config_key_is_sensitive(key: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::{json, Map};
+
+    #[test]
+    fn configured_database_max_connections_prefers_service_then_global() {
+        assert_eq!(parse_configured_database_max_connections(None, None), 10);
+        assert_eq!(
+            parse_configured_database_max_connections(Some("20"), Some("30")),
+            20
+        );
+        assert_eq!(
+            parse_configured_database_max_connections(Some("0"), Some("30")),
+            30
+        );
+        assert_eq!(
+            parse_configured_database_max_connections(Some("bad"), Some("8")),
+            8
+        );
+        assert_eq!(
+            parse_configured_database_max_connections(Some("150"), None),
+            100
+        );
+    }
 
     #[test]
     fn initial_schema_mentions_primary_tables() {

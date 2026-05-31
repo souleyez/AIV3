@@ -109,6 +109,13 @@ export function normalizeModelGatewayProfiles(payload) {
 export function normalizeModelGatewayStatus(raw = {}) {
   const lanes = Array.isArray(raw.lanes) ? raw.lanes : [];
   const providers = Array.isArray(raw.providers) ? raw.providers : [];
+  const runtime = isPlainObject(raw.runtime) ? raw.runtime : {};
+  const workerPools = Array.isArray(runtime.worker_pools || runtime.workerPools)
+    ? (runtime.worker_pools || runtime.workerPools)
+    : [];
+  const databasePools = Array.isArray(runtime.database_pools || runtime.databasePools)
+    ? (runtime.database_pools || runtime.databasePools)
+    : [];
   return {
     generatedAt: raw.generated_at || raw.generatedAt || null,
     lanes: lanes.map((lane) => ({
@@ -186,6 +193,35 @@ export function normalizeModelGatewayStatus(raw = {}) {
       lastFailureReason: stringOrEmpty(provider.last_failure_reason || provider.lastFailureReason),
       enabled: provider.enabled !== false,
     })),
+    runtime: {
+      workerPools: workerPools.map((pool) => ({
+        service: stringOrEmpty(pool.service),
+        label: stringOrEmpty(pool.label || pool.service),
+        concurrency: numberOrNull(pool.concurrency),
+        defaultConcurrency: numberOrNull(pool.default_concurrency ?? pool.defaultConcurrency),
+        maxConcurrency: numberOrNull(pool.max_concurrency ?? pool.maxConcurrency),
+        envKeys: Array.isArray(pool.env_keys || pool.envKeys)
+          ? (pool.env_keys || pool.envKeys).map(stringOrEmpty).filter(Boolean)
+          : [],
+      })),
+      databasePools: databasePools.map((pool) => ({
+        service: stringOrEmpty(pool.service),
+        label: stringOrEmpty(pool.label || pool.service),
+        maxConnections: numberOrNull(pool.max_connections ?? pool.maxConnections),
+        envKey: stringOrEmpty(pool.env_key || pool.envKey),
+        globalEnvKey: stringOrEmpty(pool.global_env_key || pool.globalEnvKey),
+      })),
+      externalChannel: {
+        activeConversations: numberOrNull(runtime.external_channel?.active_conversations
+          ?? runtime.externalChannel?.activeConversations) ?? 0,
+        pendingIdempotencyClaimsRecent: numberOrNull(runtime.external_channel?.pending_idempotency_claims_recent
+          ?? runtime.externalChannel?.pendingIdempotencyClaimsRecent) ?? 0,
+        directReplyTotalBudgetMs: numberOrNull(runtime.external_channel?.direct_reply_total_budget_ms
+          ?? runtime.externalChannel?.directReplyTotalBudgetMs),
+        directReplyAttemptTimeoutMs: numberOrNull(runtime.external_channel?.direct_reply_attempt_timeout_ms
+          ?? runtime.externalChannel?.directReplyAttemptTimeoutMs),
+      },
+    },
   };
 }
 

@@ -1005,17 +1005,24 @@ fn build_codex_command_plan(
 
 fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>) -> Result<String> {
     let fixed_task = fixed_task.ok_or_else(|| anyhow!("fixed task package missing"))?;
-    Ok(format!(
+    let template_id = fixed_task.template_id.as_str();
+    let mut prompt = format!(
         "Run the V3 fixed Cloudflare Codex task template `{}`. Use the files in the current task workspace. Read `task.json` and `schemas/output.schema.json`. Return exactly one final JSON object matching the configured output schema. Do not wrap the final JSON in Markdown fences. Do not modify files outside the workspace except through explicitly allowed generated-artifacts paths or allowlisted patch files. If the task cannot satisfy the no-confirm policy, return status `needs_human` with a bounded human_review_reason.\n\nExpected output schema:\n{}",
-        fixed_task.template_id.as_str(),
-        fixed_task_output_schema_hint(fixed_task.template_id.as_str()),
-    ))
+        template_id,
+        fixed_task_output_schema_hint(template_id),
+    );
+    if template_id == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        prompt.push_str(
+            "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Write a complete artifact directory under the task workspace, normally `generated-artifacts/<artifact-id>/`, containing `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json`.\n- `index.html` must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Bind real V3 dataset/database/document evidence from `task.json`; if the selected data is unavailable or insufficient for the requested report, return `needs_human` or `failed` instead of publishing a fallback page.",
+        );
+    }
+    Ok(prompt)
 }
 
 pub fn fixed_task_output_schema_hint(template_id: &str) -> &'static str {
     match template_id {
         STATIC_PAGE_IMAGE2_DATA_PUBLISH => {
-            r#"{"template_id":"static_page_image2_data_publish","status":"success|needs_human|failed","artifact":{"local_path":"string","public_url":"https://v3.elepcloud.com/generated-artifacts/...","manifest_path":"string","data_url":"https://v3.elepcloud.com/generated-artifacts/.../data.json|null","data_json":{},"html":"string|null"},"validation_report":{"snapshot_policy":"string","latest_snapshot":"string|null","source_row_count":0,"current_state_row_count":0,"detail_row_count":0,"unit_policy":"string","warnings":["string"]},"source_summary":["string"],"human_review_reason":"string|null"}"#
+            r#"{"template_id":"static_page_image2_data_publish","status":"success|needs_human|failed","artifact":{"local_path":"string","public_url":"https://v3.elepcloud.com/generated-artifacts/...","manifest_path":"string","data_url":"https://v3.elepcloud.com/generated-artifacts/.../data.json|null","data_snapshot_url":"https://v3.elepcloud.com/generated-artifacts/.../data-snapshot.json|null","data_json":{},"html":"string|null"},"dynamic_page_contract":{"data_file":"data.json","source_snapshot_file":"data-snapshot.json","time_selector":true,"primary_partition_selector":true,"manual_refresh":true,"auto_refresh":true,"database_refresh_ready":true},"validation_report":{"visual_contract_used":true,"snapshot_policy":"string","latest_snapshot":"string|null","source_row_count":0,"current_state_row_count":0,"detail_row_count":0,"unit_policy":"string","warnings":["string"]},"source_summary":["string"],"human_review_reason":"string|null"}"#
         }
         ANSWER_QUALITY_AUTOFIX => {
             r#"{"template_id":"answer_quality_autofix","status":"patch_ready|needs_human|not_system_defect|failed","failure_type":"missing_source|parse_quality|retrieval_supply|answer_policy|not_reproducible|unsafe_or_out_of_scope","root_cause":"string","changed_files":["string"],"tests_added":["string"],"test_commands":["string"],"risk_level":"low|medium|high","rollback_notes":"string","human_review_reason":"string|null"}"#
