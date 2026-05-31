@@ -330,6 +330,78 @@ async fn process_task(
             );
             return Ok(());
         }
+        if task_context.capability == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+            if let Some((mut fallback_output, fallback_html, fallback_data)) =
+                static_page_visual_contract_fallback_output(
+                    &json!({
+                        "codex_error": safe_public_text(&error_message, 360),
+                    }),
+                    &task_context,
+                )
+            {
+                if let Some(object) = fallback_output.as_object_mut() {
+                    object.insert("mode".to_string(), Value::String("codex_exec".to_string()));
+                    object.insert(
+                        "fallback_reason".to_string(),
+                        Value::String("codex_exec_failed_after_image2_preview_ready".to_string()),
+                    );
+                    object.insert(
+                        "human_review_reason".to_string(),
+                        Value::String(
+                            "真实 Codex 执行未完成，V3 已发布 Image2 视觉合同兜底页。".to_string(),
+                        ),
+                    );
+                }
+                let output = publish_cloudflare_static_page_html(
+                    fallback_output,
+                    &fallback_html,
+                    Some(fallback_data),
+                    &task_context,
+                    task.execution_id,
+                    &format!("task_{}", task.id),
+                )?;
+                let event_name = codex_host_task_event_name(&output);
+                apply_workflow_signal_with_dependencies(
+                    storage,
+                    workflow_catalog,
+                    event_bus,
+                    task.tenant_id,
+                    task.execution_id,
+                    WorkflowSignal::StepCompleted {
+                        task_key: task.task_key.clone(),
+                        output: Some(output.clone()),
+                    },
+                )
+                .await?;
+                append_assistant_event(
+                    storage,
+                    task.tenant_id,
+                    task_context.assistant_run_id,
+                    event_name,
+                    output.clone(),
+                )
+                .await?;
+                maybe_record_external_static_page_publish_completed_from_task_output(
+                    storage,
+                    task.tenant_id,
+                    task_context.assistant_run_id,
+                    task.execution_id,
+                    &task_context,
+                    &output,
+                )
+                .await?;
+                storage
+                    .workflow_tasks()
+                    .mark_succeeded(task.id, Utc::now())
+                    .await?;
+                tracing::warn!(
+                    task_id = %task.id,
+                    execution_id = %task.execution_id,
+                    "codex host task published Image2 visual fallback after codex_exec failure"
+                );
+                return Ok(());
+            }
+        }
         if let Err(signal_error) = apply_workflow_signal_with_dependencies(
             storage,
             workflow_catalog,
