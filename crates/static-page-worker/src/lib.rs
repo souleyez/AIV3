@@ -371,7 +371,14 @@ pub fn generate_static_page_visual_direct(
         .header("X-Client-Name", STATIC_PAGE_ORCHESTRATOR_SOURCE)
         .header("User-Agent", STATIC_PAGE_ORCHESTRATOR_USER_AGENT)
         .json(&body)
-        .send()?;
+        .send()
+        .map_err(|error| {
+            let mut message = format!("direct image generation request failed: {error}");
+            if error.is_timeout() {
+                message.push_str("; timeout=true");
+            }
+            anyhow!(message)
+        })?;
     let status = response.status();
     let body = response.text()?;
     parse_direct_image_generation_response(status, &body)

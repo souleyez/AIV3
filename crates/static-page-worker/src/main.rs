@@ -17,6 +17,7 @@ use static_page_worker::{
     DirectImageGenerationConfig, StaticPageVisualArtifact,
 };
 use std::path::{Path, PathBuf};
+use std::time::Duration as StdDuration;
 use storage::{NewAssistantRunEvent, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
@@ -28,6 +29,8 @@ const DEFAULT_ORCHESTRATOR_POLL_INTERVAL_MS: u64 = 5_000;
 const DEFAULT_STALE_CLAIM_AFTER_MS: u64 = 2 * 60 * 60 * 1_000;
 const DEFAULT_STALE_SWEEP_INTERVAL_MS: u64 = 60_000;
 const DEFAULT_STALE_SWEEP_LIMIT: u32 = 25;
+const DEFAULT_IMAGE_HTTP_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+const DEFAULT_IMAGE_HTTP_CONNECT_TIMEOUT_MS: u64 = 30 * 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StaticPageRenderTaskOutcome {
@@ -126,6 +129,16 @@ async fn main() -> Result<()> {
         "STATIC_PAGE_WORKER_STALE_SWEEP_LIMIT",
         DEFAULT_STALE_SWEEP_LIMIT,
     );
+    let image_http_timeout_ms = env_u64(
+        "STATIC_PAGE_IMAGE_HTTP_TIMEOUT_MS",
+        DEFAULT_IMAGE_HTTP_TIMEOUT_MS,
+    )
+    .max(1_000);
+    let image_http_connect_timeout_ms = env_u64(
+        "STATIC_PAGE_IMAGE_HTTP_CONNECT_TIMEOUT_MS",
+        DEFAULT_IMAGE_HTTP_CONNECT_TIMEOUT_MS,
+    )
+    .max(1_000);
 
     let storage = PgStorage::connect(&database_url).await?;
     let workflow_catalog = workflow_definitions::catalog();
@@ -148,7 +161,10 @@ async fn main() -> Result<()> {
             None
         }
     };
-    let http_client = Client::builder().build()?;
+    let http_client = Client::builder()
+        .timeout(StdDuration::from_millis(image_http_timeout_ms))
+        .connect_timeout(StdDuration::from_millis(image_http_connect_timeout_ms))
+        .build()?;
 
     tracing::info!(
         %queue,
@@ -157,6 +173,8 @@ async fn main() -> Result<()> {
         event_bus_enabled = event_bus.is_enabled(),
         poll_interval_ms = poll_interval,
         orchestrator_poll_interval_ms = orchestrator_poll_interval,
+        image_http_timeout_ms,
+        image_http_connect_timeout_ms,
         stale_claim_after_ms,
         stale_sweep_interval_ms,
         stale_sweep_limit,
