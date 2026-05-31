@@ -149,7 +149,7 @@ assistant chat / static-page action -> V3 AssistantRun context package
 
 ```text
 CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true
-CODEX_HOST_AGENT_HOST_KIND=windows_jump|mac_host
+CODEX_HOST_AGENT_HOST_KIND=windows_jump|mac_host|linux_host|aiv3_server
 CODEX_HOST_AGENT_PROFILE_KIND=codex-native|codex-compatible-shim
 CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT=<host-local task workspace root>
 profile capability allowlist contains the requested capability

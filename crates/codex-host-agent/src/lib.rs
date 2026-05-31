@@ -584,7 +584,7 @@ impl CodexHostAgentPolicy {
             && !approved_remote_host_kind(&self.host_kind)
         {
             return Err(anyhow!(
-                "fixed template {} is blocked on host kind {}; use windows_jump, mac_host, or cloudflare_codex",
+                "fixed template {} is blocked on host kind {}; use windows_jump, mac_host, linux_host, aiv3_server, or cloudflare_codex",
                 fixed_task.template_id.as_str(),
                 self.host_kind
             ));
@@ -635,7 +635,7 @@ impl CodexHostAgentPolicy {
         } else {
             let other = self.host_kind.as_str();
             return Err(anyhow!(
-                "codex_exec mode is blocked on host kind {other}; use windows_jump, mac_host, or cloudflare_codex"
+                "codex_exec mode is blocked on host kind {other}; use windows_jump, mac_host, linux_host, aiv3_server, or cloudflare_codex"
             ));
         }
         match self.profile.kind.as_str() {
@@ -679,7 +679,10 @@ fn fixed_template_capability(capability: &str) -> Option<CodexHostFixedTaskTempl
 }
 
 fn approved_remote_host_kind(host_kind: &str) -> bool {
-    matches!(host_kind, "windows_jump" | "mac_host" | "cloudflare_codex")
+    matches!(
+        host_kind,
+        "windows_jump" | "mac_host" | "linux_host" | "aiv3_server" | "cloudflare_codex"
+    )
 }
 
 fn validate_static_page_fixed_task(
