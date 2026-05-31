@@ -25212,6 +25212,25 @@ fn assistant_run_static_page_should_use_gpt_55_local_route(run: &AssistantRun) -
             && assistant_chat_runtime_uses_gpt_55_primary_model())
 }
 
+fn external_channel_static_page_publish_completed_event_is_final(
+    event: &AssistantRunEvent,
+) -> bool {
+    if event.event_name != "assistant_run.external_channel_static_page_publish_completed" {
+        return false;
+    }
+    let publish_mode = event
+        .payload
+        .get("publish_mode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let provisional_direct_html = event
+        .payload
+        .get("provisional_direct_html")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    publish_mode != "demo_direct_generated_artifact" && !provisional_direct_html
+}
+
 async fn external_channel_static_page_image2_enqueue_if_enabled(
     state: &AppState,
     connection_id: &str,
@@ -25522,6 +25541,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         return Ok(());
     };
     let image_job_id = job.id.to_string();
+    let gpt55_local_route = assistant_run_static_page_should_use_gpt_55_local_route(&run);
     let already_queued = storage
         .assistant_runs()
         .list_events(tenant_id, run.id)
@@ -25535,7 +25555,9 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                 || (event.event_name
                     == "assistant_run.external_channel_static_page_publish_completed"
                     && event.payload.get("image_job_id").and_then(Value::as_str)
-                        == Some(image_job_id.as_str()))
+                        == Some(image_job_id.as_str())
+                    && (!gpt55_local_route
+                        || external_channel_static_page_publish_completed_event_is_final(event)))
                 || (event.event_name == "assistant_run.main_static_page_local_render_created"
                     && event.payload.get("image_job_id").and_then(Value::as_str)
                         == Some(image_job_id.as_str()))
@@ -25603,7 +25625,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
             &connection,
             &run,
         );
-        if assistant_run_static_page_should_use_gpt_55_local_route(&run) {
+        if gpt55_local_route {
             let (_draft, render_output) = create_static_page_render_output_inline(
                 &state,
                 draft.clone(),
@@ -25722,7 +25744,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         return Ok(());
     }
 
-    if assistant_run_static_page_should_use_gpt_55_local_route(&run) {
+    if gpt55_local_route {
         let (_draft, render_output) = create_static_page_render_output_inline(
             &state,
             draft.clone(),
@@ -75047,6 +75069,25 @@ mod tests {
                 }),
             )
             .await;
+        let (_demo_draft, demo_render_output) =
+            create_static_page_render_output_inline(&state, draft.clone(), None, true)
+                .await
+                .expect("demo direct render should be created");
+        let demo_payload = maybe_publish_external_static_page_render_view_as_generated_artifact(
+            &state.storage,
+            state.tenant_id,
+            &draft,
+            &demo_render_output,
+            Some(job.id.to_string()),
+            "demo_initial_direct_html_publish",
+        )
+        .await
+        .expect("demo generated artifact publish should complete")
+        .expect("demo generated artifact payload should be returned");
+        assert_eq!(
+            demo_payload["publish_mode"],
+            json!("demo_direct_generated_artifact")
+        );
 
         for _ in 0..2 {
             maybe_enqueue_external_static_page_publish_after_image_ready(
@@ -75080,8 +75121,11 @@ mod tests {
             .list_by_draft(state.tenant_id, draft.id)
             .await
             .expect("render outputs should list");
-        assert_eq!(render_outputs.len(), 1);
-        assert_eq!(render_outputs[0].image_job_id, Some(job.id));
+        assert_eq!(render_outputs.len(), 2);
+        let final_render_output = render_outputs
+            .iter()
+            .find(|output| output.image_job_id == Some(job.id))
+            .expect("final render output should be tied to the image job");
 
         let events = state
             .storage
@@ -75095,8 +75139,15 @@ mod tests {
                 event.event_name == "assistant_run.external_channel_static_page_publish_completed"
             })
             .collect::<Vec<_>>();
-        assert_eq!(completed_events.len(), 1);
-        let payload = &completed_events[0].payload;
+        assert_eq!(completed_events.len(), 2);
+        let payload = completed_events
+            .iter()
+            .find(|event| {
+                event.payload.get("publish_mode").and_then(Value::as_str)
+                    == Some("gpt_5_5_local_static_page_renderer")
+            })
+            .map(|event| &event.payload)
+            .expect("GPT-5.5 local publish completion should be recorded");
         assert_eq!(
             payload["publish_mode"],
             json!("gpt_5_5_local_static_page_renderer")
@@ -75109,7 +75160,7 @@ mod tests {
         assert_eq!(payload["direct_html_fallback"], json!(false));
         assert_eq!(
             payload["render_output_id"],
-            json!(render_outputs[0].id.to_string())
+            json!(final_render_output.id.to_string())
         );
         assert!(payload["public_url"].as_str().is_some_and(
             |url| url.contains("/generated-artifacts/database-static-pages/external-channel/")
