@@ -26600,7 +26600,7 @@ fn external_channel_static_page_codex_auto_publish_readiness() -> StaticPageCode
         .to_ascii_lowercase();
     if !matches!(
         host_kind.as_str(),
-        "windows_jump" | "mac_host" | "cloudflare_codex"
+        "windows_jump" | "mac_host" | "linux_host" | "aiv3_server" | "cloudflare_codex"
     ) {
         return StaticPageCodexAutoPublishReadiness {
             ready: false,
@@ -74048,7 +74048,7 @@ mod tests {
             CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
         );
         let _agent_mode = TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "codex_exec");
-        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "aiv3_server");
         let _agent_real = TestEnvVarRestore::set("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", "true");
         let _agent_workspace = TestEnvVarRestore::set(
             "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
