@@ -1028,30 +1028,39 @@ export default function ExternalIntegrationsPageClient() {
               </div>
               {codexExecutorQueueSummaries.length ? (
                 <div className="external-executor-queue-grid">
-                  {codexExecutorQueueSummaries.map((queue) => (
-                    <article key={queue.logicalQueue || queue.physicalQueues.join(':')}>
-                      <div>
-                        <strong>{workflowQueueLabel(queue.logicalQueue)}</strong>
-                        <span>{queue.logicalQueue || queue.physicalQueues.join(' / ') || '-'}</span>
-                      </div>
-                      <div className="external-executor-queue-counts">
-                        <span>排队 {queue.queued}</span>
-                        <span>运行 {queue.running}</span>
-                        <span>重试 {queue.retrying}</span>
-                        <span>失败 {queue.failed}</span>
-                      </div>
-                      <div className="external-executor-queue-latency">
-                        <span>P50 {formatWorkflowDuration(queue.finishedDurationP50Ms)}</span>
-                        <span>P95 {formatWorkflowDuration(queue.finishedDurationP95Ms)}</span>
-                      </div>
-                      <small>
-                        {queue.nextAvailableAt ? `下次 ${formatObservationTime(queue.nextAvailableAt)} · ` : ''}
-                        {queue.taskKeys.slice(0, 2).map((taskKey) => (
-                          `${workflowTaskKeyLabel(taskKey.logicalTaskKey)} ${taskKey.queued + taskKey.running + taskKey.retrying} · P95 ${formatWorkflowDuration(taskKey.finishedDurationP95Ms)}`
-                        )).join(' · ') || '暂无活跃任务键'}
-                      </small>
-                    </article>
-                  ))}
+                  {codexExecutorQueueSummaries.map((queue) => {
+                    const queueDurationP50 = queue.succeededDurationP50Ms ?? queue.finishedDurationP50Ms;
+                    const queueDurationP95 = queue.succeededDurationP95Ms ?? queue.finishedDurationP95Ms;
+                    const queueDurationLabel = queue.succeededDurationP50Ms !== null || queue.succeededDurationP95Ms !== null
+                      ? '成功'
+                      : '终态';
+                    return (
+                      <article key={queue.logicalQueue || queue.physicalQueues.join(':')}>
+                        <div>
+                          <strong>{workflowQueueLabel(queue.logicalQueue)}</strong>
+                          <span>{queue.logicalQueue || queue.physicalQueues.join(' / ') || '-'}</span>
+                        </div>
+                        <div className="external-executor-queue-counts">
+                          <span>排队 {queue.queued}</span>
+                          <span>运行 {queue.running}</span>
+                          <span>重试 {queue.retrying}</span>
+                          <span>失败 {queue.failed}</span>
+                        </div>
+                        <div className="external-executor-queue-latency">
+                          <span>{queueDurationLabel} P50 {formatWorkflowDuration(queueDurationP50)}</span>
+                          <span>{queueDurationLabel} P95 {formatWorkflowDuration(queueDurationP95)}</span>
+                        </div>
+                        <small>
+                          {queue.nextAvailableAt ? `下次 ${formatObservationTime(queue.nextAvailableAt)} · ` : ''}
+                          {queue.taskKeys.slice(0, 2).map((taskKey) => {
+                            const taskKeyDurationP95 = taskKey.succeededDurationP95Ms ?? taskKey.finishedDurationP95Ms;
+                            const taskKeyDurationLabel = taskKey.succeededDurationP95Ms !== null ? '成功P95' : '终态P95';
+                            return `${workflowTaskKeyLabel(taskKey.logicalTaskKey)} ${taskKey.queued + taskKey.running + taskKey.retrying} · ${taskKeyDurationLabel} ${formatWorkflowDuration(taskKeyDurationP95)}`;
+                          }).join(' · ') || '暂无活跃任务键'}
+                        </small>
+                      </article>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="external-empty-state">

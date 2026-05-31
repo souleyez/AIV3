@@ -145,6 +145,10 @@
 - Continued workflow queue diagnostics on 2026-05-31:
   - Queue stats now expose finished-task duration P50/P95 by logical queue and task key, giving the observability page/API enough data to separate queue depth from actual runtime.
   - The external integrations Codex executor panel now displays those P50/P95 runtime metrics in the lazy-loaded queue snapshot.
+  - Queue stats now also expose success-only duration P50/P95, and the observation UI prefers those values when available so old failed/stale workflow tasks do not distort the normal successful-runtime signal.
+- Continued static-page data repair on 2026-05-31:
+  - Static-page生图和最终渲染入口会先刷新 V3 数据合同，第三方传来的旧 image prompt payload 也会用草稿里的最新供料上下文重建快照。
+  - 数据库聚合行现在会随字段候选携带为 sampleData；`chartOptions.dataKey` / `bindingQuality.fieldPath` 被识别为可修复绑定，避免把可先生成再调整的图表误判成阻断。
 
 ## Immediate Execution Queue
 

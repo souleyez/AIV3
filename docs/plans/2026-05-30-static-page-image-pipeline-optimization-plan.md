@@ -33,6 +33,10 @@
 
 **Progress update 2026-05-31 P2 UI latency slice:** The external integrations Codex executor panel now normalizes and displays the queue/task-key P50/P95 runtime metrics from workflow queue stats, so the lazy-loaded observability view shows both active backlog and recent completed runtime without opening individual task details.
 
+**Progress update 2026-05-31 P2 success-latency slice:** Workflow queue stats now also expose success-only P50/P95 runtime metrics, and the observability page prefers those values when present. This keeps old failed/stale tasks from making the normal Image2/Codex runtime look worse than successful jobs.
+
+**Progress update 2026-05-31 P0 auto-repair slice:** Static-page preview/final-render entry points now refresh the V3 data contract before gating or rendering, including third-party supplied image prompt payloads. Database aggregate rows are carried into field-candidate sample data, and chart `dataKey` / binding-quality field paths are treated as repairable bindings so V3 can generate a page first and keep data warnings/adjustment paths visible instead of stopping on `needs_sample_rows`.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection

@@ -1038,6 +1038,12 @@ function normalizeWorkflowQueueSummary(item = {}) {
     finishedDurationP95Ms: normalizeConversationDuration(
       item.finished_duration_p95_ms ?? item.finishedDurationP95Ms,
     ),
+    succeededDurationP50Ms: normalizeConversationDuration(
+      item.succeeded_duration_p50_ms ?? item.succeededDurationP50Ms,
+    ),
+    succeededDurationP95Ms: normalizeConversationDuration(
+      item.succeeded_duration_p95_ms ?? item.succeededDurationP95Ms,
+    ),
     taskKeys: taskKeys.map((taskKey) => ({
       logicalTaskKey: taskKey.logical_task_key || taskKey.logicalTaskKey || '',
       physicalTaskKeys: Array.isArray(taskKey.physical_task_keys)
@@ -1059,6 +1065,12 @@ function normalizeWorkflowQueueSummary(item = {}) {
       ),
       finishedDurationP95Ms: normalizeConversationDuration(
         taskKey.finished_duration_p95_ms ?? taskKey.finishedDurationP95Ms,
+      ),
+      succeededDurationP50Ms: normalizeConversationDuration(
+        taskKey.succeeded_duration_p50_ms ?? taskKey.succeededDurationP50Ms,
+      ),
+      succeededDurationP95Ms: normalizeConversationDuration(
+        taskKey.succeeded_duration_p95_ms ?? taskKey.succeededDurationP95Ms,
       ),
     })),
   };

@@ -1403,6 +1403,10 @@ pub struct WorkflowTaskQueueSummaryView {
     pub finished_duration_p50_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_duration_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub succeeded_duration_p50_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub succeeded_duration_p95_ms: Option<u64>,
     pub task_keys: Vec<WorkflowTaskKeySummaryView>,
 }
 
@@ -1424,6 +1428,10 @@ pub struct WorkflowTaskKeySummaryView {
     pub finished_duration_p50_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_duration_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub succeeded_duration_p50_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub succeeded_duration_p95_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

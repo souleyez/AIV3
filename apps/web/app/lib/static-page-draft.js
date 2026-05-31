@@ -1616,7 +1616,22 @@ function bindingNeedsPreviewAttention(binding = {}) {
 
 function bindingHasSource(binding = {}) {
   const source = binding.binding || binding.dataBinding || binding.data_binding || {};
-  return Boolean(source.sourceId || source.source_id || source.fieldPath || source.field_path || source.label);
+  const quality = binding.bindingQuality || binding.binding_quality || {};
+  return Boolean(
+    binding.sourceId
+      || binding.source_id
+      || binding.fieldPath
+      || binding.field_path
+      || source.sourceId
+      || source.source_id
+      || source.fieldPath
+      || source.field_path
+      || source.label
+      || quality.sourceId
+      || quality.source_id
+      || quality.fieldPath
+      || quality.field_path,
+  );
 }
 
 function bindingNeedsFinalAttention(binding = {}) {

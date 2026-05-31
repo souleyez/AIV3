@@ -28691,9 +28691,16 @@ async fn create_static_page_image_job_for_draft(
     mut draft: StaticPageDraft,
     request: CreateStaticPageImageJobRequest,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
+    let mut request_image_prompt_payload = request.image_prompt_payload;
     let prompt_only_preview =
-        static_page_image_prompt_payload_is_prompt_only(&request.image_prompt_payload);
+        static_page_image_prompt_payload_is_prompt_only(&request_image_prompt_payload);
     if !prompt_only_preview {
+        draft = refresh_static_page_draft_data_contract_for_action(
+            state,
+            draft,
+            "submit_static_page_image_preview",
+        )
+        .await?;
         if let Some((reason, details)) = static_page_preview_data_quality_gate_for_draft(&draft) {
             return Err(ApiError::bad_request_with_details(
                 "static_page_preview_data_quality_gate",
@@ -28701,9 +28708,13 @@ async fn create_static_page_image_job_for_draft(
                 details,
             ));
         }
-        if !request.image_prompt_payload.is_null() {
+        if !request_image_prompt_payload.is_null() {
+            refresh_static_page_payload_with_draft_context(
+                &mut request_image_prompt_payload,
+                &draft,
+            );
             if let Some((reason, details)) =
-                static_page_preview_data_quality_gate_for_payload(&request.image_prompt_payload)
+                static_page_preview_data_quality_gate_for_payload(&request_image_prompt_payload)
             {
                 return Err(ApiError::bad_request_with_details(
                     "static_page_preview_data_quality_gate",
@@ -28714,10 +28725,10 @@ async fn create_static_page_image_job_for_draft(
         }
     }
 
-    let image_prompt_payload = if request.image_prompt_payload.is_null() {
+    let image_prompt_payload = if request_image_prompt_payload.is_null() {
         build_static_page_image_prompt_payload(&draft, request.prompt.as_deref())
     } else {
-        request.image_prompt_payload
+        request_image_prompt_payload
     };
     let job = state
         .storage
@@ -28915,6 +28926,8 @@ async fn create_static_page_render_for_draft(
     mut draft: StaticPageDraft,
     request: CreateStaticPageRenderRequest,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageRenderResponse>), ApiError> {
+    draft = refresh_static_page_draft_data_contract_for_action(state, draft, "render_static_page")
+        .await?;
     let image_job = if request.direct_html {
         None
     } else {
@@ -29210,6 +29223,98 @@ async fn create_static_page_render_output_inline(
         draft,
         to_static_page_render_output_view(render_output, Some(&selected_scope)),
     ))
+}
+
+async fn refresh_static_page_draft_data_contract_for_action(
+    state: &AppState,
+    mut draft: StaticPageDraft,
+    action: &str,
+) -> std::result::Result<StaticPageDraft, ApiError> {
+    let previous_validation_summary =
+        static_page_payload_data_snapshot_validation_summary(&draft.draft_payload);
+    let mut refreshed_payload = draft.draft_payload.clone();
+    refresh_static_page_payload_with_draft_context(&mut refreshed_payload, &draft);
+    if refreshed_payload == draft.draft_payload {
+        return Ok(draft);
+    }
+
+    let next_validation_summary =
+        static_page_payload_data_snapshot_validation_summary(&refreshed_payload);
+    draft.status = status_from_static_page_payload(&refreshed_payload).unwrap_or(draft.status);
+    draft.draft_payload = refreshed_payload;
+    let updated = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        state,
+        &updated,
+        "static_page_draft.data_contract_auto_refreshed",
+        json!({
+            "draft_id": updated.id,
+            "action": action,
+            "previous_validation_summary": previous_validation_summary,
+            "next_validation_summary": next_validation_summary,
+        }),
+    )
+    .await?;
+    Ok(updated)
+}
+
+fn refresh_static_page_payload_with_draft_context(payload: &mut Value, draft: &StaticPageDraft) {
+    ensure_json_object(payload);
+    let draft_context = draft.draft_payload.get("assistant_context").cloned();
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("selected_scope".to_string())
+            .or_insert_with(|| draft.selected_scope.clone());
+        match object.get_mut("assistant_context") {
+            Some(context) => {
+                ensure_json_object(context);
+                if let Some(context_object) = context.as_object_mut() {
+                    context_object
+                        .entry("selected_scope".to_string())
+                        .or_insert_with(|| draft.selected_scope.clone());
+                    if let Some(draft_context) = draft_context.as_ref() {
+                        if let Some(evidence_state) = draft_context.get("evidence_state") {
+                            context_object
+                                .entry("evidence_state".to_string())
+                                .or_insert_with(|| evidence_state.clone());
+                        }
+                        if let Some(assistant_run_id) = draft_context.get("assistant_run_id") {
+                            context_object
+                                .entry("assistant_run_id".to_string())
+                                .or_insert_with(|| assistant_run_id.clone());
+                        }
+                    }
+                }
+            }
+            None => {
+                let mut context = draft_context.unwrap_or_else(|| json!({}));
+                ensure_json_object(&mut context);
+                if let Some(context_object) = context.as_object_mut() {
+                    context_object
+                        .entry("selected_scope".to_string())
+                        .or_insert_with(|| draft.selected_scope.clone());
+                }
+                object.insert("assistant_context".to_string(), context);
+            }
+        }
+    }
+    refresh_static_page_payload_design_contract(payload);
+}
+
+fn static_page_payload_data_snapshot_validation_summary(payload: &Value) -> Value {
+    static_page_payload_value(payload, &["dataSnapshot", "data_snapshot"])
+        .and_then(|snapshot| {
+            snapshot
+                .get("validation_summary")
+                .or_else(|| snapshot.get("validationSummary"))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
 }
 
 async fn list_static_page_render_outputs(
@@ -50864,8 +50969,12 @@ fn assistant_run_static_page_binding_quality_module_brief(binding: &Value) -> Va
                     .map(|items| items.len() as u64)
             })
             .unwrap_or(0),
-        "sourceId": static_page_artifact_string(data_binding, &["sourceId", "source_id"]).unwrap_or_default(),
-        "fieldPath": static_page_artifact_string(data_binding, &["fieldPath", "field_path", "field"]).unwrap_or_default(),
+        "sourceId": static_page_artifact_string(data_binding, &["sourceId", "source_id"])
+            .or_else(|| static_page_artifact_string(binding_quality, &["sourceId", "source_id"]))
+            .unwrap_or_default(),
+        "fieldPath": static_page_artifact_string(data_binding, &["fieldPath", "field_path", "field"])
+            .or_else(|| static_page_artifact_string(binding_quality, &["fieldPath", "field_path", "field"]))
+            .unwrap_or_default(),
     })
 }
 
@@ -64112,6 +64221,7 @@ struct WorkflowTaskQueueStatsAccumulator {
     dead_lettered: u64,
     next_available_at: Option<DateTime<Utc>>,
     finished_duration_samples_ms: Vec<u64>,
+    succeeded_duration_samples_ms: Vec<u64>,
     task_keys: BTreeMap<String, WorkflowTaskKeyStatsAccumulator>,
 }
 
@@ -64128,6 +64238,7 @@ struct WorkflowTaskKeyStatsAccumulator {
     dead_lettered: u64,
     next_available_at: Option<DateTime<Utc>>,
     finished_duration_samples_ms: Vec<u64>,
+    succeeded_duration_samples_ms: Vec<u64>,
 }
 
 fn summarize_workflow_task_queue_stats(
@@ -64162,6 +64273,8 @@ fn summarize_workflow_task_queue_stats(
             .map(|(logical_queue, accumulator)| {
                 let (finished_duration_p50_ms, finished_duration_p95_ms) =
                     workflow_task_duration_percentiles(&accumulator.finished_duration_samples_ms);
+                let (succeeded_duration_p50_ms, succeeded_duration_p95_ms) =
+                    workflow_task_duration_percentiles(&accumulator.succeeded_duration_samples_ms);
                 contracts::WorkflowTaskQueueSummaryView {
                     logical_queue,
                     physical_queues: accumulator.physical_queues.into_iter().collect(),
@@ -64176,6 +64289,8 @@ fn summarize_workflow_task_queue_stats(
                     next_available_at: accumulator.next_available_at,
                     finished_duration_p50_ms,
                     finished_duration_p95_ms,
+                    succeeded_duration_p50_ms,
+                    succeeded_duration_p95_ms,
                     task_keys: accumulator
                         .task_keys
                         .into_iter()
@@ -64183,6 +64298,10 @@ fn summarize_workflow_task_queue_stats(
                             let (finished_duration_p50_ms, finished_duration_p95_ms) =
                                 workflow_task_duration_percentiles(
                                     &task_key.finished_duration_samples_ms,
+                                );
+                            let (succeeded_duration_p50_ms, succeeded_duration_p95_ms) =
+                                workflow_task_duration_percentiles(
+                                    &task_key.succeeded_duration_samples_ms,
                                 );
                             contracts::WorkflowTaskKeySummaryView {
                                 logical_task_key,
@@ -64201,6 +64320,8 @@ fn summarize_workflow_task_queue_stats(
                                 next_available_at: task_key.next_available_at,
                                 finished_duration_p50_ms,
                                 finished_duration_p95_ms,
+                                succeeded_duration_p50_ms,
+                                succeeded_duration_p95_ms,
                             }
                         })
                         .collect(),
@@ -64232,6 +64353,9 @@ fn record_workflow_task_queue_stats(
     }
     if let Some(duration_ms) = workflow_task_finished_duration_ms(task) {
         accumulator.finished_duration_samples_ms.push(duration_ms);
+        if matches!(task.status, domain_model::WorkflowTaskStatus::Succeeded) {
+            accumulator.succeeded_duration_samples_ms.push(duration_ms);
+        }
     }
 }
 
@@ -64257,6 +64381,9 @@ fn record_workflow_task_key_stats(
     }
     if let Some(duration_ms) = workflow_task_finished_duration_ms(task) {
         accumulator.finished_duration_samples_ms.push(duration_ms);
+        if matches!(task.status, domain_model::WorkflowTaskStatus::Succeeded) {
+            accumulator.succeeded_duration_samples_ms.push(duration_ms);
+        }
     }
 }
 
@@ -66346,7 +66473,8 @@ fn build_static_page_data_snapshot_with_evidence(
         .unwrap_or_default()
         .into_iter()
         .map(|mut module| {
-            let sample_data = build_static_page_module_sample_data(&module, evidence_state);
+            let sample_data =
+                build_static_page_module_sample_data(&module, evidence_state, &field_candidates);
             let data_quality = static_page_sample_data_quality(&sample_data);
             let mut binding = module
                 .get("dataBinding")
@@ -67248,6 +67376,8 @@ fn push_static_page_database_aggregate_field_candidates(
         .unwrap_or_else(|| "record_count".into());
     let field_path = static_page_database_aggregate_field_path(item);
     let label = format!("数据库聚合：{table} {aggregation}({metric})");
+    let aggregate_sample_data =
+        static_page_database_aggregate_sample_points_from_item(item, Some(&field_path));
 
     push_static_page_field_candidate(
         candidates,
@@ -67267,12 +67397,17 @@ fn push_static_page_database_aggregate_field_candidates(
             "unit": item.get("unit").cloned().unwrap_or(Value::Null),
             "columns": item.get("columns").cloned().unwrap_or_else(|| json!([])),
             "sampleRows": rows,
+            "sampleData": aggregate_sample_data,
             "scanLimit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
             "rowLimit": item.get("row_limit").cloned().unwrap_or(Value::Null),
         }),
         limit,
     );
 
+    let dataset_sample_data = static_page_database_aggregate_sample_points_from_item(
+        item,
+        Some("dataset.metrics_summary"),
+    );
     push_static_page_field_candidate(
         candidates,
         seen,
@@ -67290,6 +67425,7 @@ fn push_static_page_database_aggregate_field_candidates(
             "metric": metric,
             "unit": item.get("unit").cloned().unwrap_or(Value::Null),
             "sampleRows": rows,
+            "sampleData": dataset_sample_data,
             "scanLimit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
         }),
         limit,
@@ -67532,38 +67668,51 @@ fn push_static_page_media_field_candidates(
     }
 }
 
-fn build_static_page_module_sample_data(module: &Value, evidence_state: Option<&Value>) -> Value {
+fn build_static_page_module_sample_data(
+    module: &Value,
+    evidence_state: Option<&Value>,
+    field_candidates: &Value,
+) -> Value {
     let field_path = static_page_module_field_path(module);
     let explicit_points = build_static_page_module_explicit_points(module, field_path);
     if !explicit_points.is_empty() {
         return Value::Array(explicit_points);
     }
-    let Some(evidence_items) = evidence_state
+    let evidence_items = evidence_state
         .and_then(|state| state.get("supplied_items"))
-        .and_then(Value::as_array)
-    else {
-        return json!([]);
-    };
-    if let Some(field_path) = field_path.filter(|field_path| field_path.starts_with("media.")) {
-        let media_points = build_static_page_media_sample_points(evidence_items, field_path);
-        if !media_points.is_empty() {
-            return Value::Array(media_points);
+        .and_then(Value::as_array);
+    if let Some(evidence_items) = evidence_items {
+        if let Some(field_path) = field_path.filter(|field_path| field_path.starts_with("media.")) {
+            let media_points = build_static_page_media_sample_points(evidence_items, field_path);
+            if !media_points.is_empty() {
+                return Value::Array(media_points);
+            }
+        }
+
+        let schema_points =
+            build_static_page_database_schema_sample_points(evidence_items, module, field_path);
+        if !schema_points.is_empty() {
+            return Value::Array(schema_points);
+        }
+
+        let database_points =
+            build_static_page_database_aggregate_sample_points(evidence_items, module, field_path);
+        if !database_points.is_empty() {
+            return Value::Array(database_points);
         }
     }
 
-    let schema_points =
-        build_static_page_database_schema_sample_points(evidence_items, module, field_path);
-    if !schema_points.is_empty() {
-        return Value::Array(schema_points);
-    }
-
-    let database_points =
-        build_static_page_database_aggregate_sample_points(evidence_items, module, field_path);
-    if !database_points.is_empty() {
-        return Value::Array(database_points);
-    }
-
     let Some(field_path) = field_path else {
+        return json!([]);
+    };
+
+    let candidate_points =
+        build_static_page_field_candidate_sample_points(field_candidates, module, field_path);
+    if !candidate_points.is_empty() {
+        return Value::Array(candidate_points);
+    }
+
+    let Some(evidence_items) = evidence_items else {
         return json!([]);
     };
 
@@ -67626,6 +67775,89 @@ fn static_page_module_field_path(module: &Value) -> Option<&str> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn static_page_module_source_id(module: &Value) -> String {
+    module
+        .get("dataBinding")
+        .or_else(|| module.get("data_binding"))
+        .and_then(|binding| {
+            binding
+                .get("sourceId")
+                .or_else(|| binding.get("source_id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn build_static_page_field_candidate_sample_points(
+    field_candidates: &Value,
+    module: &Value,
+    field_path: &str,
+) -> Vec<Value> {
+    let source_id = static_page_module_source_id(module);
+    let Some(candidate) =
+        static_page_matching_field_candidate(field_candidates, &source_id, field_path)
+    else {
+        return Vec::new();
+    };
+    static_page_field_candidate_sample_points(candidate, field_path)
+}
+
+fn static_page_field_candidate_sample_points(candidate: &Value, field_path: &str) -> Vec<Value> {
+    for key in [
+        "sampleData",
+        "sample_data",
+        "rows",
+        "items",
+        "values",
+        "data",
+        "sampleRows",
+        "sample_rows",
+    ] {
+        let Some(array) = candidate.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        let points = array
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                static_page_field_candidate_sample_point(item, index, field_path)
+            })
+            .take(12)
+            .collect::<Vec<_>>();
+        if !points.is_empty() {
+            return points;
+        }
+    }
+    Vec::new()
+}
+
+fn static_page_field_candidate_sample_point(
+    item: &Value,
+    index: usize,
+    field_path: &str,
+) -> Option<Value> {
+    let value = static_page_explicit_point_value(item)?;
+    let label = static_page_explicit_point_label(item, index);
+    let mut point = item.as_object().cloned().unwrap_or_default();
+    point
+        .entry("label".to_string())
+        .or_insert_with(|| json!(label));
+    point.insert("value".to_string(), json!(value));
+    point
+        .entry("kind".to_string())
+        .or_insert_with(|| json!("field_candidate_sample"));
+    point
+        .entry("source".to_string())
+        .or_insert_with(|| json!("field_candidate"));
+    point
+        .entry("fieldPath".to_string())
+        .or_insert_with(|| json!(field_path));
+    Some(Value::Object(point))
 }
 
 fn build_static_page_media_sample_points(evidence_items: &[Value], field_path: &str) -> Vec<Value> {
@@ -67888,6 +68120,13 @@ fn build_static_page_database_aggregate_sample_points(
     ) else {
         return Vec::new();
     };
+    static_page_database_aggregate_sample_points_from_item(item, field_path)
+}
+
+fn static_page_database_aggregate_sample_points_from_item(
+    item: &Value,
+    field_path: Option<&str>,
+) -> Vec<Value> {
     let Some(rows) = item.get("rows").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -68455,6 +68694,12 @@ fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
     if items
         .iter()
         .any(|item| item.get("kind").and_then(Value::as_str) == Some("database_aggregate"))
+    {
+        return "evidence_value";
+    }
+    if items
+        .iter()
+        .any(|item| item.get("kind").and_then(Value::as_str) == Some("field_candidate_sample"))
     {
         return "evidence_value";
     }
@@ -92717,6 +92962,111 @@ retrieve_evidence:
     }
 
     #[test]
+    fn static_page_image_payload_refreshes_missing_rows_from_draft_context() {
+        let now = Utc::now();
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "database_aggregate",
+                "dataset_id": dataset_id.to_string(),
+                "source_id": "hy-sql-traffic-area",
+                "table": "bi_traffic_area",
+                "aggregate_role": "trend",
+                "aggregate_intent": "time_series",
+                "dimensions": ["txdate"],
+                "metric": "up",
+                "aggregation": "sum",
+                "value_label": "up",
+                "unit": "MB",
+                "rows": [
+                    {"txdate": "2026-05-01", "value": "1200"},
+                    {"txdate": "2026-05-02", "value": "1380"}
+                ],
+                "scan_limit": 5000
+            }]
+        });
+        let stale_payload = json!({
+            "version": 1,
+            "status": "planning",
+            "modules": [{
+                "id": "trend",
+                "title": "趋势变化",
+                "dataBinding": {
+                    "sourceId": "dataset",
+                    "fieldPath": "dataset.metrics_summary"
+                },
+                "visualization": {"type": "line-chart"}
+            }],
+            "dataSnapshot": {
+                "moduleBindings": [{
+                    "moduleId": "trend",
+                    "title": "趋势变化",
+                    "binding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "dataset.metrics_summary"
+                    },
+                    "visualizationType": "line-chart",
+                    "sampleData": [],
+                    "bindingQualityStatus": "partial",
+                    "chartDataFit": "needs_sample_rows",
+                    "bindingQuality": {
+                        "status": "partial",
+                        "chartDataFit": "needs_sample_rows",
+                        "sampleRows": 0
+                    }
+                }]
+            }
+        });
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "流量趋势静态页".to_string(),
+            status: StaticPageDraftStatus::Planned,
+            selected_scope: selected_scope.clone(),
+            visibility_snapshot: json!({"policy": "test"}),
+            source_refs: Value::Null,
+            draft_payload: json!({
+                "assistant_context": {
+                    "selected_scope": selected_scope,
+                    "evidence_state": evidence_state
+                }
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut request_payload = stale_payload;
+        refresh_static_page_payload_with_draft_context(&mut request_payload, &draft);
+
+        assert_eq!(
+            request_payload["dataSnapshot"]["validation_summary"]["status"],
+            json!("ready")
+        );
+        assert_eq!(
+            request_payload["dataSnapshot"]["validation_summary"]["needsSampleRowsCount"],
+            json!(0)
+        );
+        assert_eq!(
+            request_payload["dataSnapshot"]["module_bindings"][0]["chartDataFit"],
+            json!("ready")
+        );
+        assert_eq!(
+            request_payload["dataSnapshot"]["module_bindings"][0]["sampleData"][0]["label"],
+            json!("2026-05-01")
+        );
+        assert_eq!(
+            request_payload["dataSnapshot"]["module_bindings"][0]["sampleData"][0]["value"],
+            json!(1200.0)
+        );
+    }
+
+    #[test]
     fn static_page_data_snapshot_matches_database_aggregate_to_module_intent() {
         let dataset_id = DatasetId::new();
         let selected_scope = json!({
@@ -93248,10 +93598,7 @@ retrieve_evidence:
                         "fieldPath": "orders.amount"
                     },
                     "visualization": {
-                        "type": "line-chart",
-                        "chartOptions": {
-                            "dataKey": "orders.amount"
-                        }
+                        "type": "line-chart"
                     }
                 }]
             }),
@@ -93903,10 +94250,7 @@ retrieve_evidence:
                         "sampleRows": 0
                     },
                     "visualization": {
-                        "type": "line-chart",
-                        "chartOptions": {
-                            "dataKey": "orders.amount"
-                        }
+                        "type": "line-chart"
                     }
                 }]
             }),
@@ -93952,6 +94296,57 @@ retrieve_evidence:
     }
 
     #[test]
+    fn static_page_final_render_gate_treats_chart_datakey_as_repairable_binding() {
+        let now = Utc::now();
+        let confirmed_payload = apply_static_page_operations_to_payload(
+            json!({
+                "version": 1,
+                "status": "planning",
+                "styleDirection": "client-delivery",
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "dataBinding": {},
+                    "visualization": {
+                        "type": "line-chart",
+                        "chartOptions": {
+                            "dataKey": "orders.amount"
+                        }
+                    }
+                }]
+            }),
+            &[json!({
+                "type": "confirm_preview",
+                "previewImage": {
+                    "kind": "static-page-effect-preview",
+                    "assetKey": "static-page-previews/trend.png",
+                    "imageJobId": StaticPageImageJobId::new(),
+                }
+            })],
+            Some("效果图已确认。"),
+        );
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营趋势静态页".to_string(),
+            status: StaticPageDraftStatus::Confirmed,
+            selected_scope: json!({"mode": "user_selected"}),
+            visibility_snapshot: Value::Null,
+            source_refs: Value::Null,
+            draft_payload: confirmed_payload,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(
+            static_page_final_render_data_quality_gate_for_draft(&draft).is_none(),
+            "chartOptions.dataKey is a repairable binding signal, so V3 should render first and keep warnings in the page data"
+        );
+    }
+
+    #[test]
     fn static_page_final_render_gate_is_nonblocking_for_auto_continue_drafts() {
         let now = Utc::now();
         let preview_ready_payload = apply_static_page_operations_to_payload(
@@ -93970,10 +94365,7 @@ retrieve_evidence:
                         "sampleRows": 0
                     },
                     "visualization": {
-                        "type": "line-chart",
-                        "chartOptions": {
-                            "dataKey": "orders.amount"
-                        }
+                        "type": "line-chart"
                     }
                 }]
             }),
@@ -105762,18 +106154,41 @@ retrieve_evidence:
             created_at: now,
             updated_at: now + Duration::seconds(44),
         });
+        let old_failed_publish_task = to_workflow_task_view(WorkflowTask {
+            id: domain_model::WorkflowTaskId::new(),
+            tenant_id: TenantId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            queue: "codex_host".to_string(),
+            task_key: "run_codex_host_task".to_string(),
+            payload: json!({
+                "template_id": "static_page_image2_data_publish",
+                "cloudflare_orchestrator": {
+                    "task_id": "codex-task-old"
+                }
+            }),
+            status: domain_model::WorkflowTaskStatus::Failed,
+            attempt: 3,
+            max_attempts: 3,
+            available_at: now - Duration::minutes(20),
+            claimed_at: Some(now - Duration::minutes(20)),
+            finished_at: Some(now - Duration::minutes(5)),
+            error: Some("old stale task timeout".to_string()),
+            created_at: now - Duration::minutes(20),
+            updated_at: now - Duration::minutes(5),
+        });
         let stats = summarize_workflow_task_queue_stats(
             now,
-            3,
+            4,
             &[
                 image_task.clone(),
                 publish_task.clone(),
                 completed_publish_task.clone(),
+                old_failed_publish_task.clone(),
             ],
         );
 
-        assert_eq!(stats.execution_count, 3);
-        assert_eq!(stats.task_count, 3);
+        assert_eq!(stats.execution_count, 4);
+        assert_eq!(stats.task_count, 4);
         let image_queue = stats
             .queues
             .iter()
@@ -105797,9 +106212,12 @@ retrieve_evidence:
         assert_eq!(publish_queue.queued, 1);
         assert_eq!(publish_queue.retrying, 1);
         assert_eq!(publish_queue.succeeded, 1);
+        assert_eq!(publish_queue.failed, 1);
         assert_eq!(publish_queue.next_available_at, Some(next_poll_at));
-        assert_eq!(publish_queue.finished_duration_p50_ms, Some(42_000));
-        assert_eq!(publish_queue.finished_duration_p95_ms, Some(42_000));
+        assert_eq!(publish_queue.finished_duration_p50_ms, Some(900_000));
+        assert_eq!(publish_queue.finished_duration_p95_ms, Some(900_000));
+        assert_eq!(publish_queue.succeeded_duration_p50_ms, Some(42_000));
+        assert_eq!(publish_queue.succeeded_duration_p95_ms, Some(42_000));
         assert_eq!(
             publish_queue.task_keys[0].logical_task_key,
             "poll_static_page_publish"
@@ -105807,6 +106225,10 @@ retrieve_evidence:
         assert_eq!(publish_queue.task_keys[0].retrying, 1);
         assert_eq!(
             publish_queue.task_keys[0].finished_duration_p50_ms,
+            Some(900_000)
+        );
+        assert_eq!(
+            publish_queue.task_keys[0].succeeded_duration_p50_ms,
             Some(42_000)
         );
     }

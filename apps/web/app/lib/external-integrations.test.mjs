@@ -923,6 +923,8 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
         next_available_at: '2026-05-30T12:00:30Z',
         finished_duration_p50_ms: 42_000,
         finished_duration_p95_ms: 180_000,
+        succeeded_duration_p50_ms: 40_000,
+        succeeded_duration_p95_ms: 120_000,
         task_keys: [
           {
             logical_task_key: 'poll_static_page_publish',
@@ -931,6 +933,7 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
             queued: 2,
             retrying: 2,
             finished_duration_p95_ms: 180_000,
+            succeeded_duration_p95_ms: 120_000,
           },
         ],
       },
@@ -943,8 +946,11 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
   assert.equal(stats.queues[0].retrying, 2);
   assert.equal(stats.queues[0].finishedDurationP50Ms, 42_000);
   assert.equal(stats.queues[0].finishedDurationP95Ms, 180_000);
+  assert.equal(stats.queues[0].succeededDurationP50Ms, 40_000);
+  assert.equal(stats.queues[0].succeededDurationP95Ms, 120_000);
   assert.equal(stats.queues[0].taskKeys[0].logicalTaskKey, 'poll_static_page_publish');
   assert.equal(stats.queues[0].taskKeys[0].finishedDurationP95Ms, 180_000);
+  assert.equal(stats.queues[0].taskKeys[0].succeededDurationP95Ms, 120_000);
   assert.equal(formatWorkflowDuration(stats.queues[0].finishedDurationP50Ms), '42s');
   assert.equal(formatWorkflowDuration(null), '无完成样本');
   assert.equal(workflowQueueLabel('static_page_publish'), '页面发布');

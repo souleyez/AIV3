@@ -308,6 +308,40 @@ test('preview queue gate allows planned chart modules without renderable sample 
   assert.equal(staticPagePreviewBlockReason(ready), '');
 });
 
+test('final render gate treats binding quality field path as a repairable source', () => {
+  const draft = buildInitialStaticPageDraft({
+    datasetId: 'dataset-1',
+    sessionId: 'session-1',
+  });
+  const confirmed = applyStaticPageOperation(draft, {
+    type: 'confirm_preview',
+    previewImage: { assetKey: 'preview-with-binding-quality-field.png' },
+  });
+  const weakButRepairable = {
+    ...confirmed,
+    dataSnapshot: {
+      ...confirmed.dataSnapshot,
+      moduleBindings: [{
+        moduleId: 'trend',
+        title: '趋势变化',
+        binding: {},
+        visualizationType: 'line-chart',
+        sampleData: [],
+        bindingQualityStatus: 'partial',
+        chartDataFit: 'needs_sample_rows',
+        bindingQuality: {
+          status: 'partial',
+          chartDataFit: 'needs_sample_rows',
+          sampleRows: 0,
+          fieldPath: 'dataset.metrics_summary',
+        },
+      }],
+    },
+  };
+
+  assert.equal(staticPageFinalRenderBlockReason(weakButRepairable), '');
+});
+
 test('preview queue gate still blocks modules without any content source', () => {
   const draft = buildInitialStaticPageDraft();
   const weak = {
