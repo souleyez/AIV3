@@ -2109,32 +2109,49 @@ fn normalize_cloudflare_fixed_task_output(
     execution_id: domain_model::WorkflowExecutionId,
     orchestrator_task_id: &str,
 ) -> Result<Value> {
-    if output.get("template_id").and_then(Value::as_str) != Some("static_page_image2_data_publish")
-        || output.get("status").and_then(Value::as_str) != Some("success")
+    let static_page_image2_task = task_context.fixed_task.as_ref().is_some_and(|fixed_task| {
+        fixed_task.template_id.as_str() == "static_page_image2_data_publish"
+    });
+    if !static_page_image2_task {
+        return Ok(output);
+    }
+    if output.get("template_id").and_then(Value::as_str) == Some("static_page_image2_data_publish")
+        && output.get("status").and_then(Value::as_str) == Some("success")
     {
-        return Ok(output);
+        let public_url = output
+            .pointer("/artifact/public_url")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if generated_static_page_public_url_claim_is_host_published(&output, public_url) {
+            let mut output = output;
+            strip_static_page_inline_artifact_payload(&mut output)?;
+            return Ok(output);
+        }
+        if let Some(html) = extract_static_page_html_from_fixed_output(&output) {
+            let data_json = extract_static_page_data_json_from_fixed_output(&output);
+            return publish_cloudflare_static_page_html(
+                output,
+                &html,
+                data_json,
+                task_context,
+                execution_id,
+                orchestrator_task_id,
+            );
+        }
     }
-    let public_url = output
-        .pointer("/artifact/public_url")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if generated_static_page_public_url_claim_is_host_published(&output, public_url) {
-        let mut output = output;
-        strip_static_page_inline_artifact_payload(&mut output)?;
-        return Ok(output);
+    if let Some((fallback_output, fallback_html, fallback_data)) =
+        static_page_visual_contract_fallback_output(&output, task_context)
+    {
+        return publish_cloudflare_static_page_html(
+            fallback_output,
+            &fallback_html,
+            Some(fallback_data),
+            task_context,
+            execution_id,
+            orchestrator_task_id,
+        );
     }
-    let Some(html) = extract_static_page_html_from_fixed_output(&output) else {
-        return Ok(output);
-    };
-    let data_json = extract_static_page_data_json_from_fixed_output(&output);
-    publish_cloudflare_static_page_html(
-        output,
-        &html,
-        data_json,
-        task_context,
-        execution_id,
-        orchestrator_task_id,
-    )
+    Ok(output)
 }
 
 fn extract_static_page_html_from_fixed_output(output: &Value) -> Option<String> {
@@ -2190,6 +2207,174 @@ fn normalize_static_page_data_json(value: &Value) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+fn static_page_visual_contract_fallback_output(
+    output: &Value,
+    task_context: &CodexHostTaskContext,
+) -> Option<(Value, String, Value)> {
+    let fixed_task = task_context.fixed_task.as_ref()?;
+    let preview_url = first_non_empty_string([
+        output.get("render_asset_url"),
+        output.pointer("/image2/render_asset_url"),
+        output.pointer("/artifact/render_asset_url"),
+        fixed_task.image2.get("render_asset_url"),
+        fixed_task.image2.get("visual_contract_url"),
+        fixed_task.image2.get("preview_asset_key"),
+    ])?;
+    let title = first_non_empty_string([
+        output.get("report_title"),
+        fixed_task.requirements.get("project_name"),
+        fixed_task.requirements.get("user_goal"),
+    ])
+    .unwrap_or_else(|| "Image2 视觉合同静态页".to_string());
+    let user_goal = first_non_empty_string([
+        fixed_task.requirements.get("user_goal"),
+        output.get("user_goal"),
+        output.get("prompt_text"),
+    ])
+    .unwrap_or_else(|| title.clone());
+    let evidence_status = first_non_empty_string([
+        output.get("evidence_status"),
+        fixed_task.requirements.pointer("/evidence_summary/status"),
+    ])
+    .unwrap_or_else(|| "unknown".to_string());
+    let focus = output
+        .get("focus")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| vec!["视觉合同预览".to_string(), "资料证据待增强".to_string()]);
+    let warnings = vec![
+        "Cloudflare Codex 未返回完整 artifact.html，V3 已发布 Image2 视觉合同兜底页。".to_string(),
+        "该页面用于确认效果图与任务方向，不代表最终候选人精排结论。".to_string(),
+        "后续需要把检索证据/样本行补进固定任务包，再生成正式可交付报表。".to_string(),
+    ];
+    let data_json = json!({
+        "source": "v3_visual_contract_fallback",
+        "assistantRunId": task_context.assistant_run_id.to_string(),
+        "draftId": fixed_task.draft_id.clone(),
+        "previewUrl": preview_url,
+        "title": title,
+        "userGoal": user_goal,
+        "focus": focus.clone(),
+        "evidenceStatus": evidence_status,
+        "warnings": warnings.clone(),
+    });
+    let html = render_static_page_visual_contract_fallback_html(
+        &title,
+        &user_goal,
+        &preview_url,
+        &focus,
+        &evidence_status,
+        &warnings,
+    );
+    let output = json!({
+        "template_id": "static_page_image2_data_publish",
+        "status": "success",
+        "artifact": {
+            "html": html,
+            "data_json": data_json.clone(),
+        },
+        "source_summary": [
+            "Published by V3 host-agent because Cloudflare returned a visual-contract result without artifact.html.",
+            "The page embeds the persisted Image2 preview asset and preserves warnings for follow-up generation."
+        ],
+        "validation_report": {
+            "snapshot_policy": "visual_contract_fallback_no_structured_snapshot",
+            "latest_snapshot": null,
+            "source_row_count": 0,
+            "current_state_row_count": 0,
+            "detail_row_count": 0,
+            "unit_policy": "not_applicable_for_visual_contract_fallback",
+            "warnings": warnings
+        },
+        "human_review_reason": null
+    });
+    Some((output, html, data_json))
+}
+
+fn first_non_empty_string<'a>(
+    values: impl IntoIterator<Item = Option<&'a Value>>,
+) -> Option<String> {
+    values.into_iter().flatten().find_map(|value| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn render_static_page_visual_contract_fallback_html(
+    title: &str,
+    user_goal: &str,
+    preview_url: &str,
+    focus: &[String],
+    evidence_status: &str,
+    warnings: &[String],
+) -> String {
+    let focus_items = focus
+        .iter()
+        .map(|item| format!("<li>{}</li>", escape_html(item)))
+        .collect::<Vec<_>>()
+        .join("");
+    let warning_items = warnings
+        .iter()
+        .map(|item| format!("<li>{}</li>", escape_html(item)))
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        concat!(
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
+            "<title>{}</title><style>",
+            "body{{margin:0;background:#0f172a;color:#e5eefb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}",
+            ".shell{{max-width:1180px;margin:0 auto;padding:40px 24px 56px;}}",
+            ".eyebrow{{color:#7dd3fc;font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:12px;}}",
+            "h1{{font-size:34px;line-height:1.16;margin:12px 0 12px;}}",
+            ".goal{{color:#bfdbfe;font-size:16px;line-height:1.7;max-width:920px;}}",
+            ".preview{{margin:28px 0;border:1px solid rgba(148,163,184,.35);background:#111827;border-radius:14px;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.35);}}",
+            ".preview img{{display:block;width:100%;height:auto;}}",
+            ".grid{{display:grid;grid-template-columns:1fr 1fr;gap:18px;}}",
+            ".panel{{background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.24);border-radius:12px;padding:18px;}}",
+            ".panel h2{{font-size:18px;margin:0 0 12px;}}",
+            "li{{margin:8px 0;color:#dbeafe;line-height:1.55;}}",
+            ".status{{display:inline-flex;padding:6px 10px;border-radius:999px;background:#164e63;color:#cffafe;font-size:13px;}}",
+            "@media(max-width:760px){{.grid{{grid-template-columns:1fr;}}h1{{font-size:26px;}}.shell{{padding:28px 16px;}}}}",
+            "</style></head><body><main class=\"shell\">",
+            "<div class=\"eyebrow\">Image2 Visual Contract</div>",
+            "<h1>{}</h1><p class=\"goal\">{}</p>",
+            "<section class=\"preview\"><img src=\"{}\" alt=\"Image2 生成的静态页效果图\"></section>",
+            "<section class=\"grid\"><div class=\"panel\"><h2>本轮重点</h2><ul>{}</ul></div>",
+            "<div class=\"panel\"><h2>发布状态</h2><p class=\"status\">evidence: {}</p><ul>{}</ul></div></section>",
+            "</main></body></html>"
+        ),
+        escape_html(title),
+        escape_html(title),
+        escape_html(user_goal),
+        escape_html(preview_url),
+        focus_items,
+        escape_html(evidence_status),
+        warning_items,
+    )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn standalone_html_document(html: &str) -> String {
@@ -3260,6 +3445,64 @@ mod tests {
         assert!(std::path::Path::new(local_path).exists());
         let html = std::fs::read_to_string(local_path).expect("html should be readable");
         assert!(html.contains("Image2 视觉合同页面"));
+    }
+
+    #[test]
+    fn cloudflare_static_page_partial_visual_result_publishes_contract_fallback() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let _root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.display().to_string(),
+        );
+        let _base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:static-page".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
+            ),
+        };
+        let output = json!({
+            "template_id": "static_page_image2_data_publish",
+            "report_title": "候选人对比分析报表",
+            "publish_ready": false,
+            "evidence_status": "referenced_but_not_available_in_task_payload",
+            "render_asset_url": "https://v3.elepcloud.com/generated-artifacts/static-page-previews/image-job/preview.png",
+            "focus": ["物联网经验", "技术管理", "项目经历", "匹配建议"]
+        });
+
+        let normalized = normalize_cloudflare_fixed_task_output(
+            output,
+            &task_context,
+            domain_model::WorkflowExecutionId::new(),
+            "task_partial_visual",
+        )
+        .expect("partial visual result should normalize");
+
+        assert_eq!(normalized["status"], json!("success"));
+        let public_url = normalized
+            .pointer("/artifact/public_url")
+            .and_then(Value::as_str)
+            .expect("public url");
+        assert!(public_url.contains("/generated-artifacts/database-static-pages/codex-host/"));
+        let local_path = normalized
+            .pointer("/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        let html = std::fs::read_to_string(local_path).expect("html should be readable");
+        assert!(html.contains("Image2 Visual Contract"));
+        assert!(html.contains("static-page-previews/image-job/preview.png"));
+        assert!(html.contains("物联网经验"));
     }
 
     #[test]
