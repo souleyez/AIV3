@@ -25,6 +25,7 @@ import {
   databaseSourceStatusExportFilename,
   formatExternalConversationDuration,
   formatObservationTime,
+  formatWorkflowDuration,
   latestIntegrationActivity,
   normalizeControlResult,
   normalizeDatabaseSourceStatus,
@@ -1039,10 +1040,14 @@ export default function ExternalIntegrationsPageClient() {
                         <span>重试 {queue.retrying}</span>
                         <span>失败 {queue.failed}</span>
                       </div>
+                      <div className="external-executor-queue-latency">
+                        <span>P50 {formatWorkflowDuration(queue.finishedDurationP50Ms)}</span>
+                        <span>P95 {formatWorkflowDuration(queue.finishedDurationP95Ms)}</span>
+                      </div>
                       <small>
                         {queue.nextAvailableAt ? `下次 ${formatObservationTime(queue.nextAvailableAt)} · ` : ''}
                         {queue.taskKeys.slice(0, 2).map((taskKey) => (
-                          `${workflowTaskKeyLabel(taskKey.logicalTaskKey)} ${taskKey.queued + taskKey.running + taskKey.retrying}`
+                          `${workflowTaskKeyLabel(taskKey.logicalTaskKey)} ${taskKey.queued + taskKey.running + taskKey.retrying} · P95 ${formatWorkflowDuration(taskKey.finishedDurationP95Ms)}`
                         )).join(' · ') || '暂无活跃任务键'}
                       </small>
                     </article>

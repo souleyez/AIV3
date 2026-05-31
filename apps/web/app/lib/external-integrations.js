@@ -946,6 +946,14 @@ export function formatExternalConversationDuration(value) {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
+export function formatWorkflowDuration(value) {
+  const ms = normalizeConversationDuration(value);
+  if (ms === null) {
+    return '无完成样本';
+  }
+  return formatExternalConversationDuration(ms);
+}
+
 export function normalizeWorkflowStatusKey(status) {
   return String(status || '')
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
@@ -1024,6 +1032,12 @@ function normalizeWorkflowQueueSummary(item = {}) {
     cancelled: numberOrZero(item.cancelled),
     deadLettered: numberOrZero(item.dead_lettered ?? item.deadLettered),
     nextAvailableAt: item.next_available_at || item.nextAvailableAt || null,
+    finishedDurationP50Ms: normalizeConversationDuration(
+      item.finished_duration_p50_ms ?? item.finishedDurationP50Ms,
+    ),
+    finishedDurationP95Ms: normalizeConversationDuration(
+      item.finished_duration_p95_ms ?? item.finishedDurationP95Ms,
+    ),
     taskKeys: taskKeys.map((taskKey) => ({
       logicalTaskKey: taskKey.logical_task_key || taskKey.logicalTaskKey || '',
       physicalTaskKeys: Array.isArray(taskKey.physical_task_keys)
@@ -1040,6 +1054,12 @@ function normalizeWorkflowQueueSummary(item = {}) {
       cancelled: numberOrZero(taskKey.cancelled),
       deadLettered: numberOrZero(taskKey.dead_lettered ?? taskKey.deadLettered),
       nextAvailableAt: taskKey.next_available_at || taskKey.nextAvailableAt || null,
+      finishedDurationP50Ms: normalizeConversationDuration(
+        taskKey.finished_duration_p50_ms ?? taskKey.finishedDurationP50Ms,
+      ),
+      finishedDurationP95Ms: normalizeConversationDuration(
+        taskKey.finished_duration_p95_ms ?? taskKey.finishedDurationP95Ms,
+      ),
     })),
   };
 }

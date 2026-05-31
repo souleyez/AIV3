@@ -6795,6 +6795,21 @@ body {
   font-weight: 800;
 }
 
+.external-executor-queue-latency {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.external-executor-queue-latency span {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: #ecfdf5;
+  color: #065f46;
+  text-align: center;
+  font-weight: 800;
+}
+
 .external-executor-layout {
   display: grid;
   grid-template-columns: minmax(320px, 0.78fr) minmax(420px, 1.22fr);

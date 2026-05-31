@@ -25,6 +25,7 @@ import {
   externalActionTraceFilename,
   databaseSourceStatusExportFilename,
   formatExternalConversationDuration,
+  formatWorkflowDuration,
   formatObservationTime,
   latestIntegrationActivity,
   normalizeControlResult,
@@ -920,6 +921,8 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
         retrying: 2,
         failed: 0,
         next_available_at: '2026-05-30T12:00:30Z',
+        finished_duration_p50_ms: 42_000,
+        finished_duration_p95_ms: 180_000,
         task_keys: [
           {
             logical_task_key: 'poll_static_page_publish',
@@ -927,6 +930,7 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
             task_count: 2,
             queued: 2,
             retrying: 2,
+            finished_duration_p95_ms: 180_000,
           },
         ],
       },
@@ -937,7 +941,12 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
   assert.equal(stats.taskCount, 8);
   assert.equal(stats.queues[0].logicalQueue, 'static_page_publish');
   assert.equal(stats.queues[0].retrying, 2);
+  assert.equal(stats.queues[0].finishedDurationP50Ms, 42_000);
+  assert.equal(stats.queues[0].finishedDurationP95Ms, 180_000);
   assert.equal(stats.queues[0].taskKeys[0].logicalTaskKey, 'poll_static_page_publish');
+  assert.equal(stats.queues[0].taskKeys[0].finishedDurationP95Ms, 180_000);
+  assert.equal(formatWorkflowDuration(stats.queues[0].finishedDurationP50Ms), '42s');
+  assert.equal(formatWorkflowDuration(null), '无完成样本');
   assert.equal(workflowQueueLabel('static_page_publish'), '页面发布');
   assert.equal(workflowTaskKeyLabel('poll_static_page_publish'), '轮询页面发布');
 });

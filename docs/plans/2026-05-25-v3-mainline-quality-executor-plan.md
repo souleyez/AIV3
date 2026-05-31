@@ -144,6 +144,7 @@
   - Verified with `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm,data-ingestion-analysis -Json`.
 - Continued workflow queue diagnostics on 2026-05-31:
   - Queue stats now expose finished-task duration P50/P95 by logical queue and task key, giving the observability page/API enough data to separate queue depth from actual runtime.
+  - The external integrations Codex executor panel now displays those P50/P95 runtime metrics in the lazy-loaded queue snapshot.
 
 ## Immediate Execution Queue
 
