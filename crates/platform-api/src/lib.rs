@@ -24161,6 +24161,91 @@ fn external_channel_static_page_dataset_scope(
     })
 }
 
+fn collect_static_page_database_source_ids_from_value(value: &Value, ids: &mut BTreeSet<String>) {
+    for key in [
+        "database_source_id",
+        "databaseSourceId",
+        "source_database_id",
+        "sourceDatabaseId",
+    ] {
+        if let Some(value) = value
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(non_empty_trimmed_string)
+        {
+            ids.insert(value);
+        }
+    }
+    for key in [
+        "database_source_ids",
+        "databaseSourceIds",
+        "source_database_ids",
+        "sourceDatabaseIds",
+        "allowed_database_source_ids",
+        "allowedDatabaseSourceIds",
+    ] {
+        collect_external_config_string_values(value.get(key), ids);
+    }
+}
+
+fn collect_static_page_database_source_ids_from_evidence(
+    evidence_state: &Value,
+    ids: &mut BTreeSet<String>,
+) {
+    for item in evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("database_schema_context" | "database_aggregate")
+        ) {
+            if let Some(value) = item
+                .get("source_id")
+                .and_then(Value::as_str)
+                .and_then(non_empty_trimmed_string)
+            {
+                ids.insert(value);
+            }
+        }
+    }
+}
+
+fn assistant_run_static_page_database_source_ids(
+    run: &AssistantRun,
+    draft: &StaticPageDraft,
+) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+    collect_static_page_database_source_ids_from_value(&run.selected_scope, &mut ids);
+    collect_static_page_database_source_ids_from_value(&draft.selected_scope, &mut ids);
+    collect_static_page_database_source_ids_from_value(&draft.source_refs, &mut ids);
+    collect_static_page_database_source_ids_from_evidence(&run.evidence_state, &mut ids);
+    ids.into_iter().collect()
+}
+
+fn assistant_run_static_page_dataset_scope(
+    tenant_id: TenantId,
+    run: &AssistantRun,
+    draft: &StaticPageDraft,
+) -> Value {
+    json!({
+        "tenant_id": tenant_id.to_string(),
+        "dataset_ids": selected_dataset_ids_from_scope(&run.selected_scope)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        "database_source_ids": assistant_run_static_page_database_source_ids(run, draft),
+        "selected_document_ids": selected_document_ids_from_scope(&run.selected_scope)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        "local_thread_id": run.local_thread_id,
+        "scope_source": "v3_main_assistant_selected_scope",
+    })
+}
+
 fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bool {
     let compact = prompt
         .chars()
@@ -24687,6 +24772,110 @@ fn external_channel_static_page_image2_fixed_task(
     }
 }
 
+fn assistant_run_static_page_image2_fixed_task(
+    tenant_id: TenantId,
+    run: &AssistantRun,
+    draft: &StaticPageDraft,
+    image_job: &StaticPageImageJobView,
+    prompt: &str,
+    template_reference: Option<&Value>,
+    evidence_summary: &Value,
+    missing_evidence: &Value,
+) -> CodexHostFixedTaskTemplateContextView {
+    let image_prompt_payload = &image_job.image_prompt_payload;
+    let image_prompt_payload_summary =
+        external_static_page_image_prompt_payload_summary(image_prompt_payload);
+    let prompt_text = external_static_page_image_prompt_text(&image_prompt_payload_summary, prompt);
+    CodexHostFixedTaskTemplateContextView {
+        template_id: CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish,
+        version: 1,
+        assistant_run_id: Some(run.id.to_string()),
+        draft_id: Some(draft.id.to_string()),
+        case_id: None,
+        dataset_scope: assistant_run_static_page_dataset_scope(tenant_id, run, draft),
+        requirements: json!({
+            "user_goal": truncate_assistant_supply_text(prompt, 1200),
+            "project_name": external_channel_static_page_project_name(prompt),
+            "workflow": "requirements_to_image2_then_image_to_html",
+            "source": "main_assistant_static_page_image2_pipeline",
+            "local_thread_id": run.local_thread_id,
+            "template_reference": template_reference.cloned().unwrap_or(Value::Null),
+            "evidence_summary": evidence_summary,
+            "missing_evidence": missing_evidence,
+            "time_dimension_required": external_static_page_prompt_contains_any(prompt, &[
+                "时间", "日期", "周期", "今天", "昨日", "本周", "本月", "time", "date", "period",
+            ]),
+            "primary_partition_required": external_static_page_prompt_contains_any(prompt, &[
+                "分区", "分店", "门店", "区域", "品牌", "客户", "项目", "store", "brand", "region",
+            ]),
+            "detail_table_required": external_static_page_prompt_contains_any(prompt, &[
+                "明细", "名单", "列表", "表格", "建表", "detail", "table", "list",
+            ]),
+            "dynamic_page_contract": {
+                "required": true,
+                "data_file": "data.json",
+                "source_snapshot_file": "data-snapshot.json",
+                "time_selector_required": true,
+                "primary_partition_selector_required": true,
+                "manual_refresh_required": true,
+                "auto_refresh_required": true,
+                "refresh_interval_seconds": 60,
+                "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
+                "static_html_must_render_from_data_json": true
+            },
+        }),
+        image2: json!({
+            "prompt_text": prompt_text,
+            "image_job_id": image_job.id.to_string(),
+            "image_job_status": image_job.status,
+            "visual_contract_status": if image_job.preview_asset_key.is_some() {
+                "preview_ready"
+            } else {
+                "queued"
+            },
+            "visual_contract_url": image_job
+                .preview_asset_key
+                .as_ref()
+                .map(|value| json!(value))
+                .unwrap_or(Value::Null),
+            "preview_asset_key": image_job.preview_asset_key.clone(),
+            "render_asset_url": image_job.preview_asset_key.clone(),
+            "asset_provenance": external_static_page_image_asset_provenance_summary(image_job),
+            "customer_preview_delivery": "main_assistant_progress_message_or_result_shelf",
+            "human_confirmation_required": false,
+            "image_prompt_payload": image_prompt_payload_summary,
+        }),
+        policies: json!({
+            "snapshot_aggregation": "latest_snapshot_for_state_modules",
+            "trend_aggregation": "date_series_only_for_trends",
+            "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
+            "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
+            "dynamic_data_contract": "final HTML must load local data.json when present and support time/primary partition controls plus manual/auto refresh",
+            "publish_mode": "new_generated_artifact_only",
+            "effect_image_confirmation_required": false,
+            "continue_to_publish_after_effect_image": true,
+            "public_api_change_allowed": false,
+            "auth_change_allowed": false,
+            "schema_change_allowed": false,
+        }),
+        low_quality_signals: Vec::new(),
+        user_question: None,
+        customer_answer: None,
+        evidence_summary: evidence_summary.clone(),
+        trace_summary: json!({
+            "main_assistant": {
+                "local_thread_id": run.local_thread_id,
+                "service_lane": run.service_lane,
+            },
+            "draft_id": draft.id.to_string(),
+            "image_job_id": image_job.id.to_string(),
+            "execution_trail": run.execution_trail,
+        }),
+        allowed_write_scope: None,
+        human_review_policy: CodexHostFixedTaskHumanReviewPolicyView::AutoForNewGeneratedArtifact,
+    }
+}
+
 fn external_static_page_image_asset_provenance_summary(
     image_job: &StaticPageImageJobView,
 ) -> Value {
@@ -25033,6 +25222,73 @@ async fn external_channel_static_page_image2_enqueue_if_enabled(
     Ok(Some(execution_id))
 }
 
+async fn assistant_run_static_page_image2_enqueue_if_enabled(
+    state: &AppState,
+    run: &AssistantRun,
+    draft: &StaticPageDraft,
+    image_job: &StaticPageImageJobView,
+    template_reference: Option<&Value>,
+    evidence_summary: &Value,
+    missing_evidence: &Value,
+) -> std::result::Result<Option<WorkflowExecutionId>, ApiError> {
+    let fixed_task = assistant_run_static_page_image2_fixed_task(
+        state.tenant_id,
+        run,
+        draft,
+        image_job,
+        &run.user_prompt,
+        template_reference,
+        evidence_summary,
+        missing_evidence,
+    );
+    let capability = fixed_task.template_id.as_str();
+    let readiness = external_channel_static_page_codex_auto_publish_readiness();
+    if !readiness.ready {
+        record_codex_host_fixed_task_preflight_rejected(
+            state,
+            run.id,
+            Some(capability),
+            &fixed_task,
+            readiness.reason,
+        )
+        .await;
+        return Ok(None);
+    }
+    if !external_channel_static_page_image_job_preview_ready(image_job) {
+        record_codex_host_fixed_task_preflight_rejected(
+            state,
+            run.id,
+            Some(capability),
+            &fixed_task,
+            "static_page_image2_preview_not_ready",
+        )
+        .await;
+        return Ok(None);
+    }
+
+    let (execution, initial_event) = external_channel_static_page_image2_codex_execution(
+        state.tenant_id,
+        &state.workflow_catalog,
+        run.id,
+        run.local_thread_id.clone(),
+        fixed_task,
+    )?;
+    let execution_id = execution.id;
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Box::pin(apply_workflow_signal(
+        state,
+        execution_id,
+        WorkflowSignal::Start,
+    ))
+    .await?;
+    Ok(Some(execution_id))
+}
+
 fn external_channel_static_page_source_ref_string(
     source_refs: &Value,
     key: &str,
@@ -25178,14 +25434,20 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
     else {
         return Ok(());
     };
-    if draft.source_refs.get("source").and_then(Value::as_str)
-        != Some("external_channel_static_page_artifact_request")
-        || !draft
-            .source_refs
-            .get("auto_publish_generated_artifact")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+    let source_kind = draft.source_refs.get("source").and_then(Value::as_str);
+    if !draft
+        .source_refs
+        .get("auto_publish_generated_artifact")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
     {
+        return Ok(());
+    }
+    if !matches!(
+        source_kind,
+        Some("external_channel_static_page_artifact_request")
+            | Some("local_chat_static_page_image2_pipeline")
+    ) {
         return Ok(());
     }
     let Some(run) = storage
@@ -25215,41 +25477,11 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
     if already_queued {
         return Ok(());
     }
-    let Some(connection_id) =
-        external_channel_static_page_source_ref_string(&draft.source_refs, "channel_connection_id")
-    else {
-        return Ok(());
-    };
-
     let state = AppState::new(
         storage.clone(),
         workflow_catalog.clone(),
         tenant_id,
         event_bus.clone(),
-    );
-    let connection = match load_external_channel_connection(&state, &connection_id).await {
-        Ok(connection) => connection,
-        Err(error) => {
-            tracing::warn!(
-                code = %error.payload.code,
-                connection_id,
-                "external static-page auto-publish skipped because channel connection was unavailable"
-            );
-            return Ok(());
-        }
-    };
-    if connection.status != "enabled" {
-        return Ok(());
-    }
-    let recipient_delivery = draft
-        .source_refs
-        .get("recipient_delivery")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let message = external_channel_static_page_message_from_source_refs(
-        &draft.source_refs,
-        &connection,
-        &run,
     );
     let image_job_for_render = job.clone();
     let image_job_view = to_static_page_image_job_view(job);
@@ -25273,20 +25505,149 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         .or_else(|| draft.draft_payload.pointer("/source/missingEvidence"))
         .cloned()
         .unwrap_or_else(|| json!({"status": "unknown"}));
-    let codex_execution_id = external_channel_static_page_image2_enqueue_if_enabled(
+
+    if source_kind == Some("external_channel_static_page_artifact_request") {
+        let Some(connection_id) = external_channel_static_page_source_ref_string(
+            &draft.source_refs,
+            "channel_connection_id",
+        ) else {
+            return Ok(());
+        };
+        let connection = match load_external_channel_connection(&state, &connection_id).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::warn!(
+                    code = %error.payload.code,
+                    connection_id,
+                    "external static-page auto-publish skipped because channel connection was unavailable"
+                );
+                return Ok(());
+            }
+        };
+        if connection.status != "enabled" {
+            return Ok(());
+        }
+        let recipient_delivery = draft
+            .source_refs
+            .get("recipient_delivery")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let message = external_channel_static_page_message_from_source_refs(
+            &draft.source_refs,
+            &connection,
+            &run,
+        );
+        let codex_execution_id = external_channel_static_page_image2_enqueue_if_enabled(
+            &state,
+            &connection_id,
+            &connection,
+            &run,
+            &draft,
+            &image_job_view,
+            &message,
+            template_reference,
+            &evidence_summary,
+            &missing_evidence,
+        )
+        .await?;
+        if let Some(codex_execution_id) = codex_execution_id {
+            storage
+                .assistant_runs()
+                .append_event(
+                    tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_static_page_publish_queued"
+                            .to_string(),
+                        payload: json!({
+                            "source": source_kind,
+                            "channel_connection_id": connection_id,
+                            "draft_id": draft.id,
+                            "image_job_id": image_job_view.id,
+                            "preview_asset_key": image_job_view.preview_asset_key,
+                            "codex_host_workflow_execution_id": codex_execution_id,
+                            "template_id": "static_page_image2_data_publish",
+                            "publish_mode": "new_generated_artifact_only",
+                            "effect_image_confirmation_required": false,
+                            "recipient_delivery": recipient_delivery.clone(),
+                            "permission_review_status": recipient_delivery
+                                .get("permission_review_status")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "editable_after_publish": recipient_delivery
+                                .get("editable_after_publish")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "status_url": external_channel_assistant_run_reply_status_url(
+                                &connection_id,
+                                run.id,
+                            ),
+                            "status_method": "GET",
+                            "poll_after_seconds": 15,
+                        }),
+                        created_at: Utc::now(),
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+        } else if external_channel_static_page_demo_generated_artifact_enabled() {
+            let (_draft, render_output) = create_static_page_render_output_inline(
+                &state,
+                draft.clone(),
+                Some(image_job_for_render),
+                false,
+            )
+            .await?;
+            if let Some(payload) =
+                maybe_publish_external_static_page_render_view_as_generated_artifact(
+                    storage,
+                    tenant_id,
+                    &draft,
+                    &render_output,
+                    Some(image_job_view.id.to_string()),
+                    "demo_after_image2_preview_ready",
+                )
+                .await?
+            {
+                storage
+                    .assistant_runs()
+                    .append_event(
+                        tenant_id,
+                        run.id,
+                        &NewAssistantRunEvent {
+                            event_name:
+                                "assistant_run.external_channel_static_page_demo_publish_completed"
+                                    .to_string(),
+                            payload,
+                            created_at: Utc::now(),
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+            }
+        }
+        return Ok(());
+    }
+
+    let codex_execution_id = assistant_run_static_page_image2_enqueue_if_enabled(
         &state,
-        &connection_id,
-        &connection,
         &run,
         &draft,
         &image_job_view,
-        &message,
         template_reference,
         &evidence_summary,
         &missing_evidence,
     )
     .await?;
     if let Some(codex_execution_id) = codex_execution_id {
+        mark_static_page_draft_generated_artifact_publish_queued(
+            storage,
+            tenant_id,
+            &draft,
+            Some(image_job_id.as_str()),
+            codex_execution_id,
+        )
+        .await?;
         storage
             .assistant_runs()
             .append_event(
@@ -25296,7 +25657,8 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                     event_name: "assistant_run.external_channel_static_page_publish_queued"
                         .to_string(),
                     payload: json!({
-                        "channel_connection_id": connection_id,
+                        "source": source_kind,
+                        "local_thread_id": run.local_thread_id,
                         "draft_id": draft.id,
                         "image_job_id": image_job_view.id,
                         "preview_asset_key": image_job_view.preview_asset_key,
@@ -25304,19 +25666,6 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                         "template_id": "static_page_image2_data_publish",
                         "publish_mode": "new_generated_artifact_only",
                         "effect_image_confirmation_required": false,
-                        "recipient_delivery": recipient_delivery.clone(),
-                        "permission_review_status": recipient_delivery
-                            .get("permission_review_status")
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                        "editable_after_publish": recipient_delivery
-                            .get("editable_after_publish")
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                        "status_url": external_channel_assistant_run_reply_status_url(
-                            &connection_id,
-                            run.id,
-                        ),
                         "status_method": "GET",
                         "poll_after_seconds": 15,
                     }),
@@ -25325,40 +25674,6 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
             )
             .await
             .map_err(ApiError::from_storage)?;
-    } else if external_channel_static_page_demo_generated_artifact_enabled() {
-        let (_draft, render_output) = create_static_page_render_output_inline(
-            &state,
-            draft.clone(),
-            Some(image_job_for_render),
-            false,
-        )
-        .await?;
-        if let Some(payload) = maybe_publish_external_static_page_render_view_as_generated_artifact(
-            storage,
-            tenant_id,
-            &draft,
-            &render_output,
-            Some(image_job_view.id.to_string()),
-            "demo_after_image2_preview_ready",
-        )
-        .await?
-        {
-            storage
-                .assistant_runs()
-                .append_event(
-                    tenant_id,
-                    run.id,
-                    &NewAssistantRunEvent {
-                        event_name:
-                            "assistant_run.external_channel_static_page_demo_publish_completed"
-                                .to_string(),
-                        payload,
-                        created_at: Utc::now(),
-                    },
-                )
-                .await
-                .map_err(ApiError::from_storage)?;
-        }
     }
 
     Ok(())
@@ -36376,6 +36691,8 @@ async fn maybe_record_external_static_page_publish_failed(
         "source_refs": source_refs,
     });
 
+    mark_static_page_draft_generated_artifact_publish_failed(storage, tenant_id, &failed_payload)
+        .await?;
     storage
         .assistant_runs()
         .append_event(
@@ -36548,6 +36865,311 @@ async fn maybe_record_external_static_page_publish_completed(
     Ok(())
 }
 
+async fn mark_static_page_draft_generated_artifact_publish_queued(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    draft: &StaticPageDraft,
+    image_job_id: Option<&str>,
+    workflow_execution_id: WorkflowExecutionId,
+) -> std::result::Result<(), ApiError> {
+    let now = Utc::now();
+    let mut next = draft.clone();
+    let mut payload = next.draft_payload.as_object().cloned().unwrap_or_default();
+    let mut final_page = payload
+        .get("finalPage")
+        .or_else(|| payload.get("final_page"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut asset_manifest = final_page
+        .get("assetManifest")
+        .or_else(|| final_page.get("asset_manifest"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    asset_manifest.insert("status".to_string(), json!("queued"));
+    asset_manifest.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    asset_manifest.insert(
+        "publish_mode".to_string(),
+        json!("new_generated_artifact_only"),
+    );
+    asset_manifest.insert(
+        "codex_host_workflow_execution_id".to_string(),
+        json!(workflow_execution_id.to_string()),
+    );
+    asset_manifest.insert(
+        "workflow".to_string(),
+        json!({
+            "status": "queued",
+            "executionId": workflow_execution_id.to_string(),
+            "updatedAt": now,
+        }),
+    );
+
+    final_page.insert("status".to_string(), json!("queued"));
+    final_page.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    final_page.insert("renderOutputId".to_string(), json!(Value::Null));
+    final_page.insert(
+        "codexHostWorkflowExecutionId".to_string(),
+        json!(workflow_execution_id.to_string()),
+    );
+    final_page.insert(
+        "imageJobId".to_string(),
+        image_job_id
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    final_page.insert("directHtml".to_string(), json!(false));
+    final_page.insert("assetManifest".to_string(), Value::Object(asset_manifest));
+
+    payload.insert("status".to_string(), json!("rendering"));
+    payload.insert(
+        "modelSummary".to_string(),
+        json!("效果图已生成，Cloudflare Codex 正在制作最终静态页。"),
+    );
+    payload.insert("finalPage".to_string(), Value::Object(final_page));
+    payload.insert("updatedAt".to_string(), json!(now));
+    next.draft_payload = Value::Object(payload);
+    storage
+        .static_page_drafts()
+        .update(tenant_id, &next)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
+async fn mark_static_page_draft_generated_artifact_published(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    completed_payload: &Value,
+) -> std::result::Result<(), ApiError> {
+    let Some(public_url) = completed_payload
+        .get("public_url")
+        .and_then(Value::as_str)
+        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+    else {
+        return Ok(());
+    };
+    let Some(draft_id) = completed_payload
+        .get("draft_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(StaticPageDraftId)
+    else {
+        return Ok(());
+    };
+    let Some(mut draft) = storage
+        .static_page_drafts()
+        .get_by_id(tenant_id, draft_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(());
+    };
+    let now = Utc::now();
+    let mut payload = draft.draft_payload.as_object().cloned().unwrap_or_default();
+    let mut final_page = payload
+        .get("finalPage")
+        .or_else(|| payload.get("final_page"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut asset_manifest = final_page
+        .get("assetManifest")
+        .or_else(|| final_page.get("asset_manifest"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let image_job_id = completed_payload
+        .get("image_job_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let workflow_execution_id = completed_payload
+        .get("codex_host_workflow_execution_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let data_url = completed_payload
+        .get("data_url")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let data_snapshot_url = completed_payload
+        .get("data_snapshot_url")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    asset_manifest.insert("status".to_string(), json!("rendered"));
+    asset_manifest.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    asset_manifest.insert(
+        "publish_mode".to_string(),
+        completed_payload
+            .get("publish_mode")
+            .cloned()
+            .unwrap_or_else(|| json!("new_generated_artifact_only")),
+    );
+    asset_manifest.insert("public_url".to_string(), json!(public_url));
+    asset_manifest.insert("generated_artifact_url".to_string(), json!(public_url));
+    asset_manifest.insert("data_url".to_string(), data_url.clone());
+    asset_manifest.insert("data_snapshot_url".to_string(), data_snapshot_url.clone());
+    asset_manifest.insert(
+        "dynamic_page_contract".to_string(),
+        completed_payload
+            .get("dynamic_page_contract")
+            .cloned()
+            .unwrap_or_else(build_static_page_dynamic_page_contract),
+    );
+    asset_manifest.insert(
+        "validation_summary".to_string(),
+        completed_payload
+            .get("validation_summary")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    asset_manifest.insert(
+        "codex_host_workflow_execution_id".to_string(),
+        workflow_execution_id.clone(),
+    );
+    asset_manifest.insert(
+        "workflow".to_string(),
+        json!({
+            "status": "succeeded",
+            "executionId": workflow_execution_id,
+            "updatedAt": now,
+        }),
+    );
+
+    final_page.insert("status".to_string(), json!("rendered"));
+    final_page.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    final_page.insert("publicUrl".to_string(), json!(public_url));
+    final_page.insert("public_url".to_string(), json!(public_url));
+    final_page.insert("generatedArtifactUrl".to_string(), json!(public_url));
+    final_page.insert("generated_artifact_url".to_string(), json!(public_url));
+    final_page.insert("htmlPreviewUrl".to_string(), json!(public_url));
+    final_page.insert("html_preview_url".to_string(), json!(public_url));
+    final_page.insert("htmlDownloadUrl".to_string(), json!(public_url));
+    final_page.insert("html_download_url".to_string(), json!(public_url));
+    final_page.insert("downloadUrl".to_string(), json!(public_url));
+    final_page.insert("download_url".to_string(), json!(public_url));
+    final_page.insert("imageJobId".to_string(), image_job_id);
+    final_page.insert("directHtml".to_string(), json!(false));
+    final_page.insert("assetManifest".to_string(), Value::Object(asset_manifest));
+
+    payload.insert("status".to_string(), json!("rendered"));
+    payload.insert(
+        "modelSummary".to_string(),
+        json!("Cloudflare Codex 已生成最终静态页，可直接打开链接查看。"),
+    );
+    payload.insert("finalPage".to_string(), Value::Object(final_page));
+    payload.insert("updatedAt".to_string(), json!(now));
+    draft.status = StaticPageDraftStatus::Rendered;
+    draft.draft_payload = Value::Object(payload);
+    storage
+        .static_page_drafts()
+        .update(tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
+async fn mark_static_page_draft_generated_artifact_publish_failed(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    failed_payload: &Value,
+) -> std::result::Result<(), ApiError> {
+    let Some(draft_id) = failed_payload
+        .get("draft_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(StaticPageDraftId)
+    else {
+        return Ok(());
+    };
+    let Some(mut draft) = storage
+        .static_page_drafts()
+        .get_by_id(tenant_id, draft_id)
+        .await
+        .map_err(ApiError::from_storage)?
+    else {
+        return Ok(());
+    };
+    let now = Utc::now();
+    let mut payload = draft.draft_payload.as_object().cloned().unwrap_or_default();
+    let mut final_page = payload
+        .get("finalPage")
+        .or_else(|| payload.get("final_page"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut asset_manifest = final_page
+        .get("assetManifest")
+        .or_else(|| final_page.get("asset_manifest"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let error = failed_payload
+        .get("error")
+        .cloned()
+        .unwrap_or_else(|| json!({"code": "static_page_publish_failed"}));
+    let workflow_execution_id = failed_payload
+        .get("codex_host_workflow_execution_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    asset_manifest.insert("status".to_string(), json!("failed"));
+    asset_manifest.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    asset_manifest.insert("error".to_string(), error.clone());
+    asset_manifest.insert(
+        "codex_host_workflow_execution_id".to_string(),
+        workflow_execution_id.clone(),
+    );
+    asset_manifest.insert(
+        "workflow".to_string(),
+        json!({
+            "status": "failed",
+            "executionId": workflow_execution_id,
+            "updatedAt": now,
+        }),
+    );
+
+    final_page.insert("status".to_string(), json!("failed"));
+    final_page.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    final_page.insert("error".to_string(), error);
+    final_page.insert("assetManifest".to_string(), Value::Object(asset_manifest));
+    payload.insert("status".to_string(), json!("preview_ready"));
+    payload.insert(
+        "modelSummary".to_string(),
+        json!("Cloudflare Codex 静态页发布失败，可重试或使用本地渲染兜底。"),
+    );
+    payload.insert("finalPage".to_string(), Value::Object(final_page));
+    payload.insert("updatedAt".to_string(), json!(now));
+    draft.status = StaticPageDraftStatus::Previewed;
+    draft.draft_payload = Value::Object(payload);
+    storage
+        .static_page_drafts()
+        .update(tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(())
+}
+
 async fn maybe_attach_external_static_page_artifact_to_run(
     storage: &PgStorage,
     tenant_id: TenantId,
@@ -36569,6 +37191,8 @@ async fn maybe_attach_external_static_page_artifact_to_run(
     else {
         return Ok(());
     };
+    mark_static_page_draft_generated_artifact_published(storage, tenant_id, completed_payload)
+        .await?;
     let mut output_artifacts = value_array(run.output_artifacts);
     if output_artifacts.iter().any(|artifact| {
         artifact.get("type").and_then(Value::as_str)
@@ -36645,6 +37269,9 @@ async fn maybe_attach_external_static_page_artifact_to_run(
 fn external_channel_static_page_status_source_refs(source_refs: &Value) -> Value {
     let mut output = Map::new();
     for key in [
+        "source",
+        "local_thread_id",
+        "local_draft_id",
         "channel_connection_id",
         "platform",
         "tenant_external_id",
@@ -73666,6 +74293,126 @@ mod tests {
         );
     }
 
+    #[test]
+    fn assistant_run_static_page_fixed_task_packages_main_scope_and_policy() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: run_id,
+            tenant_id,
+            user_id: None,
+            local_thread_id: Some("main-thread-1".to_string()),
+            user_prompt: "新百项目生成静态页，按时间和门店展示经营报表明细".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({
+                "datasets": [{"type": "dataset", "id": dataset_id}],
+                "documents": [{"type": "document", "id": document_id}],
+                "database_source_ids": ["xinbai-db"]
+            }),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({
+                "status": "supplied",
+                "supplied_items": [{
+                    "type": "database_schema_context",
+                    "source_id": "xinbai-db-profiled"
+                }]
+            }),
+            service_lane: "assistant".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let draft = StaticPageDraft {
+            id: draft_id,
+            tenant_id,
+            assistant_run_id: run_id,
+            owner_user_id: None,
+            title: "静态页：新百".to_string(),
+            status: StaticPageDraftStatus::Previewed,
+            selected_scope: run.selected_scope.clone(),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "source": "local_chat_static_page_image2_pipeline",
+                "database_source_ids": ["xinbai-source-ref"],
+                "auto_publish_generated_artifact": true,
+                "effect_image_confirmation_required": false,
+                "continue_to_publish_after_effect_image": true
+            }),
+            draft_payload: json!({"modules": []}),
+            created_at: now,
+            updated_at: now,
+        };
+        let image_job = StaticPageImageJobView {
+            id: StaticPageImageJobId::new(),
+            draft_id,
+            assistant_run_id: run_id,
+            status: contracts::StaticPageImageJobStatusView::PreviewReady,
+            queue_position: None,
+            image_prompt_payload: json!({"prompt_text": "Image2 visual brief"}),
+            preview_asset_key: Some("static-page-previews/xinbai-main.png".to_string()),
+            failure_reason: None,
+            confirmed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let fixed_task = assistant_run_static_page_image2_fixed_task(
+            tenant_id,
+            &run,
+            &draft,
+            &image_job,
+            &run.user_prompt,
+            Some(&json!({"templateId": "html-anything"})),
+            &json!({"status": "ready"}),
+            &json!({"status": "ready"}),
+        );
+        let encoded = serde_json::to_value(&fixed_task).expect("fixed task encodes");
+
+        assert_eq!(
+            encoded["template_id"],
+            json!("static_page_image2_data_publish")
+        );
+        assert_eq!(
+            encoded["requirements"]["source"],
+            json!("main_assistant_static_page_image2_pipeline")
+        );
+        assert_eq!(
+            encoded["dataset_scope"]["scope_source"],
+            json!("v3_main_assistant_selected_scope")
+        );
+        assert_eq!(
+            encoded["dataset_scope"]["dataset_ids"],
+            json!([dataset_id.to_string()])
+        );
+        assert_eq!(
+            encoded["dataset_scope"]["selected_document_ids"],
+            json!([document_id.to_string()])
+        );
+        assert_eq!(
+            encoded["dataset_scope"]["database_source_ids"],
+            json!(["xinbai-db", "xinbai-db-profiled", "xinbai-source-ref"])
+        );
+        assert_eq!(
+            encoded["image2"]["preview_asset_key"],
+            json!("static-page-previews/xinbai-main.png")
+        );
+        assert_eq!(
+            encoded["policies"]["continue_to_publish_after_effect_image"],
+            json!(true)
+        );
+        assert_eq!(
+            encoded["human_review_policy"],
+            json!("auto_for_new_generated_artifact")
+        );
+    }
+
     async fn create_external_static_page_auto_publish_fixture(
         state: &AppState,
         preview_asset_key: Option<&str>,
@@ -73970,6 +74717,131 @@ mod tests {
         assert_eq!(
             publish_events[0].payload["preview_asset_key"],
             json!(preview_asset_key)
+        );
+    }
+
+    #[tokio::test]
+    async fn main_assistant_static_page_image_success_enqueues_codex_and_marks_draft_rendering() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping main static-page auto publish preview test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode = TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "codex_exec");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _agent_real = TestEnvVarRestore::set("CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC", "true");
+        let _agent_workspace = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            "/srv/aiv3/codex-workspaces",
+        );
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("main-static-page-preview-{}", Uuid::new_v4()),
+                "Main Static Page Preview Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let preview_asset_key = "static-page-previews/xinbai-main-auto.png";
+        let (run, mut draft, _, execution) =
+            create_external_static_page_auto_publish_fixture(&state, Some(preview_asset_key)).await;
+        draft.source_refs = json!({
+            "source": "local_chat_static_page_image2_pipeline",
+            "auto_publish_generated_artifact": true,
+            "effect_image_confirmation_required": false,
+            "continue_to_publish_after_effect_image": true,
+            "fixed_task_template_id": "static_page_image2_data_publish",
+            "local_thread_id": "main-thread-1"
+        });
+        state
+            .storage
+            .static_page_drafts()
+            .update(state.tenant_id, &draft)
+            .await
+            .expect("draft source refs should update");
+
+        maybe_enqueue_external_static_page_publish_after_image_ready(
+            &state.storage,
+            &state.workflow_catalog,
+            &state.event_bus,
+            state.tenant_id,
+            &execution,
+        )
+        .await
+        .expect("main preview image completion should enqueue codex");
+
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        let codex_workflows = workflows
+            .iter()
+            .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
+            .collect::<Vec<_>>();
+        assert_eq!(codex_workflows.len(), 1);
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["requirements"]["source"],
+            json!("main_assistant_static_page_image2_pipeline")
+        );
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["image2"]["preview_asset_key"],
+            json!(preview_asset_key)
+        );
+
+        let updated_draft = state
+            .storage
+            .static_page_drafts()
+            .get_by_id(state.tenant_id, draft.id)
+            .await
+            .expect("draft loads")
+            .expect("draft exists");
+        assert_eq!(updated_draft.draft_payload["status"], json!("rendering"));
+        assert_eq!(
+            updated_draft.draft_payload["finalPage"]["status"],
+            json!("queued")
+        );
+        assert_eq!(
+            updated_draft.draft_payload["finalPage"]["codexHostWorkflowExecutionId"],
+            json!(codex_workflows[0].id.to_string())
+        );
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let publish_events = events
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(publish_events.len(), 1);
+        assert_eq!(
+            publish_events[0].payload["source"],
+            json!("local_chat_static_page_image2_pipeline")
         );
     }
 
