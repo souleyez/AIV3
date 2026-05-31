@@ -25149,6 +25149,33 @@ fn external_channel_static_page_image_job_preview_ready(
         )
 }
 
+fn assistant_run_model_is_gpt_55(model: &str) -> bool {
+    let normalized = model
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect::<String>();
+    normalized.contains("gpt55")
+}
+
+fn assistant_run_uses_gpt_55_primary_model(run: &AssistantRun) -> bool {
+    [
+        run.runtime_manifest.pointer("/model"),
+        run.runtime_manifest.pointer("/runtime/model"),
+        run.runtime_manifest.pointer("/selected_model/model"),
+        run.runtime_manifest
+            .pointer("/model_gateway/selected_model/model"),
+        run.runtime_manifest
+            .pointer("/runtime/selected_model/model"),
+        run.runtime_manifest
+            .pointer("/runtime/model_gateway/selected_model/model"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .any(assistant_run_model_is_gpt_55)
+}
+
 async fn external_channel_static_page_image2_enqueue_if_enabled(
     state: &AppState,
     connection_id: &str,
@@ -25473,6 +25500,9 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                     == "assistant_run.external_channel_static_page_publish_completed"
                     && event.payload.get("image_job_id").and_then(Value::as_str)
                         == Some(image_job_id.as_str()))
+                || (event.event_name == "assistant_run.main_static_page_local_render_created"
+                    && event.payload.get("image_job_id").and_then(Value::as_str)
+                        == Some(image_job_id.as_str()))
         });
     if already_queued {
         return Ok(());
@@ -25626,6 +25656,47 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
                     .map_err(ApiError::from_storage)?;
             }
         }
+        return Ok(());
+    }
+
+    if assistant_run_uses_gpt_55_primary_model(&run) {
+        let (_draft, render_output) = create_static_page_render_output_inline(
+            &state,
+            draft.clone(),
+            Some(image_job_for_render),
+            false,
+        )
+        .await?;
+        storage
+            .assistant_runs()
+            .append_event(
+                tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.main_static_page_local_render_created".to_string(),
+                    payload: json!({
+                        "source": source_kind,
+                        "model_route": "gpt_5_5_main_local_render",
+                        "cloudflare_codex_used": false,
+                        "fallback_available": true,
+                        "local_thread_id": run.local_thread_id,
+                        "draft_id": draft.id,
+                        "image_job_id": image_job_view.id,
+                        "preview_asset_key": image_job_view.preview_asset_key,
+                        "render_output_id": render_output.id,
+                        "render_output_status": render_output.status,
+                        "html_preview_url": render_output.html_preview_url,
+                        "html_download_url": render_output.html_download_url,
+                        "download_url": render_output.download_url,
+                        "template_id": "platform_api_static_page_renderer",
+                        "publish_mode": "main_station_local_priority",
+                        "effect_image_confirmation_required": false,
+                    }),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
         return Ok(());
     }
 
@@ -74422,6 +74493,24 @@ mod tests {
         StaticPageImageJob,
         WorkflowExecution,
     ) {
+        create_external_static_page_auto_publish_fixture_with_runtime_manifest(
+            state,
+            preview_asset_key,
+            json!({}),
+        )
+        .await
+    }
+
+    async fn create_external_static_page_auto_publish_fixture_with_runtime_manifest(
+        state: &AppState,
+        preview_asset_key: Option<&str>,
+        runtime_manifest: Value,
+    ) -> (
+        AssistantRun,
+        StaticPageDraft,
+        StaticPageImageJob,
+        WorkflowExecution,
+    ) {
         let now = Utc::now();
         let dataset_id = DatasetId::new();
         let run = state
@@ -74455,7 +74544,7 @@ mod tests {
                     service_lane: "external_channel".to_string(),
                     execution_trail: json!([]),
                     output_artifacts: json!([]),
-                    runtime_manifest: json!({}),
+                    runtime_manifest,
                     created_at: now,
                 },
             )
@@ -74842,6 +74931,188 @@ mod tests {
         assert_eq!(
             publish_events[0].payload["source"],
             json!("local_chat_static_page_image2_pipeline")
+        );
+    }
+
+    #[test]
+    fn assistant_run_gpt_55_model_detection_handles_runtime_variants() {
+        let now = Utc::now();
+        let run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: None,
+            user_prompt: "生成静态页".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({}),
+            service_lane: "ordinary_chat".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({
+                "mode": "provider",
+                "provider": "openai",
+                "model": "GPT-5.5"
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(assistant_run_uses_gpt_55_primary_model(&run));
+
+        let mut gateway_run = run.clone();
+        gateway_run.runtime_manifest = json!({
+            "model_gateway": {
+                "selected_model": {
+                    "provider": "openai",
+                    "model": "openai/gpt-5.5"
+                }
+            }
+        });
+        assert!(assistant_run_uses_gpt_55_primary_model(&gateway_run));
+
+        let mut other_run = run;
+        other_run.runtime_manifest = json!({
+            "mode": "provider",
+            "provider": "minimax",
+            "model": "MiniMax-M2.7"
+        });
+        assert!(!assistant_run_uses_gpt_55_primary_model(&other_run));
+    }
+
+    #[tokio::test]
+    async fn main_assistant_gpt_55_static_page_image_success_renders_locally_once() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping main GPT-5.5 static-page local render test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("main-gpt55-static-page-preview-{}", Uuid::new_v4()),
+                "Main GPT-5.5 Static Page Preview Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let preview_asset_key = "static-page-previews/xinbai-main-gpt55-auto.png";
+        let (run, mut draft, job, execution) =
+            create_external_static_page_auto_publish_fixture_with_runtime_manifest(
+                &state,
+                Some(preview_asset_key),
+                json!({
+                    "mode": "provider",
+                    "provider": "openai",
+                    "model": "GPT-5.5"
+                }),
+            )
+            .await;
+        draft.source_refs = json!({
+            "source": "local_chat_static_page_image2_pipeline",
+            "auto_publish_generated_artifact": true,
+            "effect_image_confirmation_required": false,
+            "continue_to_publish_after_effect_image": true,
+            "fixed_task_template_id": "static_page_image2_data_publish",
+            "local_thread_id": "main-thread-gpt55"
+        });
+        state
+            .storage
+            .static_page_drafts()
+            .update(state.tenant_id, &draft)
+            .await
+            .expect("draft source refs should update");
+
+        for _ in 0..2 {
+            maybe_enqueue_external_static_page_publish_after_image_ready(
+                &state.storage,
+                &state.workflow_catalog,
+                &state.event_bus,
+                state.tenant_id,
+                &execution,
+            )
+            .await
+            .expect("main GPT-5.5 preview image completion should render locally");
+        }
+
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        assert_eq!(
+            workflows
+                .iter()
+                .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
+                .count(),
+            0
+        );
+
+        let render_outputs = state
+            .storage
+            .static_page_render_outputs()
+            .list_by_draft(state.tenant_id, draft.id)
+            .await
+            .expect("render outputs should list");
+        assert_eq!(render_outputs.len(), 1);
+        assert_eq!(render_outputs[0].image_job_id, Some(job.id));
+        assert_eq!(
+            render_outputs[0].status,
+            StaticPageRenderOutputStatus::Rendered
+        );
+
+        let updated_draft = state
+            .storage
+            .static_page_drafts()
+            .get_by_id(state.tenant_id, draft.id)
+            .await
+            .expect("draft loads")
+            .expect("draft exists");
+        assert_eq!(updated_draft.status, StaticPageDraftStatus::Rendered);
+        assert_eq!(
+            updated_draft.draft_payload["finalPage"]["status"],
+            json!("rendered")
+        );
+        assert_eq!(
+            updated_draft.draft_payload["finalPage"]["renderOutputId"],
+            json!(render_outputs[0].id)
+        );
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let local_events = events
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.main_static_page_local_render_created"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(local_events.len(), 1);
+        assert_eq!(
+            local_events[0].payload["model_route"],
+            json!("gpt_5_5_main_local_render")
+        );
+        assert_eq!(
+            local_events[0].payload["cloudflare_codex_used"],
+            json!(false)
+        );
+        assert_eq!(
+            local_events[0].payload["render_output_id"],
+            json!(render_outputs[0].id)
         );
     }
 
