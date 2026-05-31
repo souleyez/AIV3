@@ -94,4 +94,15 @@ Reviewed real mutation smoke:
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T045815Z.json`
 - Follow-up: continue polling this run until `data_ingestion_analysis_completed`, `data_ingestion_analysis_needs_human`, or `data_ingestion_analysis_failed` to validate the terminal result quality.
 
+Post-fix terminal smoke:
+
+- Fix: host-agent now preserves the Cloudflare orchestrator `task_id` across retry payload updates, so one V3 workflow polls one remote Codex task instead of submitting a new task on every retry.
+- Fix: host-agent now records external data-ingestion terminal events directly from fixed-task output, so `/assistant-runs/{id}/reply` can return `data_ingestion_analysis_completed`, `data_ingestion_analysis_needs_human`, or `data_ingestion_analysis_failed`.
+- Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case data-ingestion-analysis -ServerCaseConfigPath target\private-smoke\data-ingestion-smoke.case.json -ServerPollTimeoutSec 240 -ServerPollIntervalSec 10 -Json`
+- Result: passed terminal smoke with `data_ingestion_analysis_needs_human` after six polls; no terminal failure.
+- Assistant run: `b72db616-4561-4810-af51-6d2b69c5f6d9`
+- Workflow task: `c73ebb0a-870a-4c5c-b50e-9421b462c397`
+- Remote Cloudflare task: `task_6761204b-3d17-4dbf-a94d-91daee4dfaad`; all three `codex_host_task.poll_retry` events used this same task id.
+- JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T055420Z.json`
+
 Do not record credentials, database URLs, raw customer data dumps, SSH details, or unrestricted filesystem paths in this validation note.
