@@ -35266,7 +35266,7 @@ fn assistant_run_xinbai_published_report_link_answer(prompt: &str) -> Option<Str
 
     let public_url = assistant_run_xinbai_published_report_url();
     Some(format!(
-        "新百经营分析可视化报表已生成，可通过以下链接查看：\n{public_url}\n\n后续如果需要调整指标、门店权限、时间口径或版式，可以在这个页面基础上继续修改。"
+        "新百经营分析可视化报表已生成，可点击查看：[新百经营分析可视化报表]({public_url})\n\n后续如果需要调整指标、门店权限、时间口径或版式，可以在这个页面基础上继续修改。"
     ))
 }
 
@@ -73955,6 +73955,7 @@ mod tests {
             assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
                 .expect("customer phrase should reuse published report");
         assert!(answer.contains("新百经营分析可视化报表已生成"));
+        assert!(answer.contains("[新百经营分析可视化报表]("));
         assert!(answer.contains(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL));
     }
 
