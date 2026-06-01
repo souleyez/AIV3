@@ -398,7 +398,14 @@ SSE 事件：
 | --- | --- |
 | `external_channel.started` | V3 已通过鉴权和入参解析，开始处理本轮消息；这不是助手回复 |
 | `external_channel.delta` | 文本增量，字段为 `delta`；第三方可逐段追加到聊天气泡 |
-| `external_channel.static_page_effect_image_queued` | 静态页/Image2 链路的效果图预览事件；用于客户侧展示过程进度，不需要第三方确认 |
+| `external_channel.static_page_image2_prompt` | 静态页/Image2 链路即将使用的生图提示词、设计方向、模块摘要和数据快照摘要 |
+| `external_channel.static_page_effect_image_queued` | 静态页/Image2 链路已提交效果图队列；用于客户侧展示过程进度，不需要第三方确认 |
+| `external_channel.static_page_effect_image_ready` | Image2 效果图已生成，`card.preview_asset_key`/`card.preview_url` 可用于展示过程预览 |
+| `external_channel.static_page_publish_progress` | 效果图完成后的静态页发布进度，例如 queued/running/retrying |
+| `external_channel.static_page_published` | 最终静态页已发布，`artifact_links[0]` 或 `card.public_url` 是页面链接 |
+| `external_channel.static_page_issue` | 发布链路遇到问题，事件会带 `card.error`/`runtime_event` 说明原因；V3 会尽量重试或保留可接管状态 |
+| `external_channel.static_page_continue_polling` | 本次 SSE 等待到达上限但后台任务仍继续，第三方按 `card.status_url` 继续轮询 |
+| `external_channel.heartbeat` | 长任务心跳，表示 SSE 连接仍在等待后续状态 |
 | `external_channel.completed` | 完整 `ExternalChannelEventResponse`，结构与 `/events` JSON 响应一致 |
 | `error` | 本轮处理失败，包含 `status` 和 `error.code/message` |
 | `done` | 流结束标记，`ok=true/false` |
@@ -427,7 +434,14 @@ SSE data 字段说明：
 | `external_channel.started.data` | `idempotency_key` | 本轮消息幂等键 |
 | `external_channel.delta.data` | `index` | 增量片段序号，从 0 开始 |
 | `external_channel.delta.data` | `delta` | 本次追加的文本片段 |
+| `external_channel.static_page_image2_prompt.data` | `prompt_text` | V3 准备提交给 GPT-Image-2 的生图提示词；第三方可展示给操作人员 |
+| `external_channel.static_page_image2_prompt.data` | `next_step` | 下一步通常为 `submit_gpt_image_2_preview` |
 | `external_channel.static_page_effect_image_queued.data` | `card` | 静态页任务卡片，通常包含 `draft_id`、`image_job_id`、`auto_publish_after_preview`、`codex_auto_publish_ready`、`effect_image_confirmation_required=false`；若已走 V3 内置 HTML 直出，还会包含 `render_output_id`、`html_preview_url`、`html_download_url`、`direct_html_fallback=true`；若已先生成可发送页面链接，还会包含 `public_url`、`provisional_direct_html=true`、`codex_final_status` 和 `poll_after_seconds` |
+| `external_channel.static_page_effect_image_ready.data` | `card.preview_asset_key` | V3 持久化后的效果图 URL；第三方可作为过程预览展示 |
+| `external_channel.static_page_publish_progress.data` | `card.status` | 发布阶段细分状态，例如 `static_page_publish_queued`、`static_page_publish_running`、`static_page_publish_retrying` |
+| `external_channel.static_page_published.data` | `artifact_links` | 最终页面链接数组 |
+| `external_channel.static_page_issue.data` | `card.error` | 失败、需人工或重试原因；不要直接把它展示成最终失败，可提示 V3 正在重试或等待接管 |
+| `external_channel.static_page_continue_polling.data` | `card.status_url` | 后续状态查询地址 |
 | `external_channel.completed.data` | `assistant_run_id` | 本轮 V3 任务 ID |
 | `external_channel.completed.data` | `response` | 与 `/events` JSON 响应同结构的最终响应 |
 | `done.data` | `ok` | SSE 流是否正常结束 |
@@ -435,7 +449,7 @@ SSE data 字段说明：
 | `error.data` | `error.code` | 稳定错误码 |
 | `error.data` | `error.message` | 错误说明，不包含密钥和敏感正文 |
 
-说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回最终响应；第三方页面不要把 `started` 渲染为助手消息。静态页生成时，Image2 效果图会通过 SSE/卡片作为过程预览出现；如果 `completed.response.reply.card.public_url` 或 `completed.response.reply.artifact_links[0]` 已存在，第三方可先展示或转存该页面链接；如果同时有 `provisional_direct_html=true`，表示最终 Codex 页面仍会后台发布，可继续按 `status_url` 轮询。若只返回 `render_output_id`，第三方可按静态页渲染产物接口查询、预览或下载 HTML；若只返回效果图队列信息，则继续等待状态事件里的 `public_url`。第三方不需要为效果图单独做确认、下载或二次提交。
+说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回本轮初始响应；第三方页面不要把 `started` 渲染为助手消息。静态页生成时，V3 会继续在同一条 SSE 连接里输出生图提示词、Image2 效果图、后续发布动作、最终页面链接或问题原因；如果第三方连接较短，仍可按 `status_url` 轮询。若 `completed.response.reply.card.public_url` 或 `completed.response.reply.artifact_links[0]` 已存在，第三方可先展示或转存该页面链接；如果同时有 `provisional_direct_html=true`，表示最终 Codex 页面仍会后台发布，可继续按 `status_url` 轮询。若只返回 `render_output_id`，第三方可按静态页渲染产物接口查询、预览或下载 HTML；若只返回效果图队列信息，则继续等待状态事件里的 `public_url`。第三方不需要为效果图单独做确认、下载或二次提交。
 
 任务状态响应示例：
 
@@ -1288,7 +1302,7 @@ Authorization: Bearer <V3 inbound token>
 | 同步中 | `sync_readiness.signal=sync_running` | 页面提示处理中，稍后重查 |
 | 数据集不可问 | `dataset_readiness.signal` 不是 `ready` | 等待同步/索引，或让 V3 重跑同步 |
 | 行转换失败 | `row_failure_groups` 非空 | 根据表名、原因和主键样本修正字段映射 |
-| 报表缺样本行 | 静态页返回 `needs_human` 或 `missing sample rows` | 让 V3 补充样本行和指标映射后重新生成 |
+| 报表缺样本行 | `validation_summary.warnings`、`card.missing_evidence` 或页面缺口说明 | V3 会先扩大供料并补充样本；仍不足时按已有数据先出页面，第三方可继续追问要求补充或调整 |
 
 生产注意：
 

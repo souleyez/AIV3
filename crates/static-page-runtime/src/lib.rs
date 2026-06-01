@@ -832,8 +832,8 @@ fn build_provider_input(request: &StaticPageIntentRequest) -> String {
             "Prefer fieldPath values from draft_payload.dataSnapshot.field_candidates or draft_payload.data_snapshot.field_candidates when they exist.",
             "When assistant_context.structure_signals.sectionTitleHints exists, use those values as source structure clues for docs-page modules; preserve them as supplied headings and never invent headings.",
             "Read assistant_context.static_page_binding_quality before changing dataBinding or chart type.",
-            "Do not treat a matched field candidate as renderable chart data. If chartDataFit is needs_sample_rows or missing_binding, add/suggest module sample rows only from visible evidence, switch to a non-chart visualization, or keep the module pending; do not queue image/final render unless the user explicitly accepts partial data.",
-            "If assistant_context.missing_evidence.status is needs_evidence, keep the gap visible in module content or dataBinding and avoid request_final_render unless the user explicitly asks for a partial draft.",
+            "Do not treat a matched field candidate as renderable chart data. If chartDataFit is needs_sample_rows or missing_binding, first add/suggest module sample rows only from visible evidence, repair the binding, or switch to a non-chart visualization; if still incomplete, keep the gap visible and continue queue_image_job/request_final_render when the user asked to generate or publish.",
+            "If assistant_context.missing_evidence.status is needs_evidence, keep the gap visible in module content or dataBinding, do not invent facts, and continue best-effort generation when the user asked for a page/report.",
             "Use only visible selected_scope and supplied evidence. Never invent private data."
         ],
         "output_contract": static_page_provider_output_contract(),
@@ -1101,7 +1101,7 @@ fn static_page_provider_binding_quality_summary(draft_payload: &Value) -> Value 
         "policy": [
             "confirmed/ready modules can proceed to preview.",
             "partial inferred_signal modules are evidence-backed but not exact data; ask for extraction or confirmation before final delivery.",
-            "needs_sample_rows or missing_binding chart modules must receive sample rows, change visualization, or stay pending before preview/final render."
+            "needs_sample_rows or missing_binding chart modules should first trigger evidence expansion or binding repair; if still incomplete, publish a best-effort page with visible warnings instead of stopping."
         ],
     })
 }

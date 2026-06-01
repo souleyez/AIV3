@@ -9301,6 +9301,13 @@ fn continue_assistant_run_sse_completion(response: ContinueAssistantRunResponse)
 }
 
 fn external_channel_sse_completion(response: ExternalChannelEventResponse) -> String {
+    external_channel_sse_completion_with_done(response, true)
+}
+
+fn external_channel_sse_completion_with_done(
+    response: ExternalChannelEventResponse,
+    include_done: bool,
+) -> String {
     let text = response.reply.text.clone().unwrap_or_default();
     let assistant_run_id = response.assistant_run_id;
     let idempotency_key = response.idempotency_key.clone();
@@ -9322,16 +9329,517 @@ fn external_channel_sse_completion(response: ExternalChannelEventResponse) -> St
             }),
         ));
     }
+    encoded.push_str(&sse_json_event(
+        "external_channel.completed",
+        json!({
+            "assistant_run_id": assistant_run_id,
+            "idempotency_key": idempotency_key,
+            "response": response,
+        }),
+    ));
+    if include_done {
+        encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+    }
     encoded
-        + &sse_json_event(
-            "external_channel.completed",
-            json!({
-                "assistant_run_id": assistant_run_id,
-                "idempotency_key": idempotency_key,
-                "response": response,
-            }),
-        )
-        + &sse_json_event("done", json!({"ok": true}))
+}
+
+fn external_channel_response_is_static_page_pipeline(
+    response: &ExternalChannelEventResponse,
+) -> bool {
+    response
+        .reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("type"))
+        .and_then(Value::as_str)
+        .map(|card_type| {
+            card_type.starts_with("v3_static_page_image2")
+                || card_type == "v3_static_page_image2_pipeline"
+        })
+        .unwrap_or(false)
+}
+
+fn external_channel_static_page_sse_status(response: &ExternalChannelEventResponse) -> String {
+    response
+        .reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("status"))
+        .and_then(Value::as_str)
+        .or(response.reply.task_status.as_deref())
+        .unwrap_or("processing")
+        .to_string()
+}
+
+fn external_channel_static_page_sse_progress_key(
+    response: &ExternalChannelEventResponse,
+) -> String {
+    let status = external_channel_static_page_sse_status(response);
+    let card = response.reply.card.as_ref();
+    let public_url = card
+        .and_then(|card| {
+            card.get("public_url")
+                .or_else(|| card.get("generated_artifact_url"))
+                .or_else(|| card.get("artifact_public_url"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let preview = card
+        .and_then(|card| {
+            card.get("preview_asset_key")
+                .or_else(|| card.get("preview_url"))
+                .or_else(|| card.get("render_asset_url"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let runtime = card
+        .and_then(|card| card.get("runtime_event"))
+        .and_then(|event| {
+            event
+                .get("heartbeat_count")
+                .or_else(|| event.get("elapsed_ms"))
+                .or_else(|| event.get("reason"))
+        })
+        .map(Value::to_string)
+        .unwrap_or_default();
+    format!("{status}|{public_url}|{preview}|{runtime}")
+}
+
+fn external_channel_static_page_sse_is_terminal(response: &ExternalChannelEventResponse) -> bool {
+    let status = external_channel_static_page_sse_status(response);
+    matches!(
+        status.as_str(),
+        "static_page_published"
+            | "static_page_stable_artifact_reused"
+            | "static_page_publish_cancelled"
+            | "static_page_publish_failed"
+            | "static_page_publish_needs_human"
+    )
+}
+
+fn external_channel_static_page_sse_event_name(status: &str) -> &'static str {
+    match status {
+        "static_page_effect_image_ready" => "external_channel.static_page_effect_image_ready",
+        "static_page_published" | "static_page_stable_artifact_reused" => {
+            "external_channel.static_page_published"
+        }
+        "static_page_publish_failed"
+        | "static_page_publish_cancelled"
+        | "static_page_publish_needs_human" => "external_channel.static_page_issue",
+        "static_page_publish_queued"
+        | "static_page_publish_running"
+        | "static_page_publish_retrying" => "external_channel.static_page_publish_progress",
+        _ => "external_channel.static_page_progress",
+    }
+}
+
+fn external_channel_static_page_sse_progress_text(
+    response: &ExternalChannelEventResponse,
+) -> String {
+    let status = external_channel_static_page_sse_status(response);
+    if let Some(text) = response
+        .reply
+        .text
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return text.to_string();
+    }
+    match status.as_str() {
+        "static_page_effect_image_ready" => {
+            "Image2 效果图已生成，V3 将按这张图继续生成最终静态页。".to_string()
+        }
+        "static_page_publish_queued" => {
+            "下一步：V3 正在把效果图和数据证据交给 Codex 生成最终静态页。".to_string()
+        }
+        "static_page_publish_running" => {
+            "下一步：Codex 正在按效果图生成可访问的静态页。".to_string()
+        }
+        "static_page_publish_retrying" => {
+            "静态页发布遇到临时波动，V3 会继续重试或切换兜底链路。".to_string()
+        }
+        "static_page_published" => "静态页已生成并发布，可以把链接返回给用户。".to_string(),
+        "static_page_publish_failed" => {
+            "静态页最终发布暂未完成，V3 已记录原因，可继续重试或人工接管。".to_string()
+        }
+        "static_page_publish_needs_human" => {
+            "静态页发布需要人工处理，V3 已保留当前中间产物和原因。".to_string()
+        }
+        "static_page_publish_cancelled" => {
+            "静态页发布任务已取消，V3 已保留当前中间状态。".to_string()
+        }
+        _ => "V3 静态页任务仍在处理中。".to_string(),
+    }
+}
+
+fn external_channel_static_page_sse_progress_events(
+    response: ExternalChannelEventResponse,
+) -> String {
+    let status = external_channel_static_page_sse_status(&response);
+    let text = external_channel_static_page_sse_progress_text(&response);
+    let event_name = external_channel_static_page_sse_event_name(&status);
+    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
+    encoded.push_str(&sse_json_event(
+        event_name,
+        json!({
+            "assistant_run_id": response.assistant_run_id,
+            "idempotency_key": response.idempotency_key,
+            "status": status,
+            "card": response.reply.card,
+            "artifact_links": response.reply.artifact_links,
+            "text": text,
+        }),
+    ));
+    encoded
+}
+
+enum ExternalChannelEventSseState {
+    Process {
+        state: AppState,
+        connection_id: String,
+        connection: ExternalChannelConnectionSummary,
+        message: ExternalBotMessageView,
+    },
+    FollowStaticPage {
+        state: AppState,
+        connection_id: String,
+        run_id: AssistantRunId,
+        idempotency_key: String,
+        started_at: Instant,
+        last_key: String,
+        preview_emitted: bool,
+    },
+    End,
+}
+
+fn external_channel_static_page_sse_poll_interval() -> StdDuration {
+    StdDuration::from_millis(
+        std::env::var("EXTERNAL_CHANNEL_STATIC_PAGE_SSE_POLL_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(5_000),
+    )
+}
+
+fn external_channel_static_page_sse_timeout() -> StdDuration {
+    StdDuration::from_millis(
+        std::env::var("EXTERNAL_CHANNEL_STATIC_PAGE_SSE_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(300_000),
+    )
+}
+
+async fn external_channel_event_sse_next(
+    state: ExternalChannelEventSseState,
+) -> Option<(
+    std::result::Result<Bytes, Infallible>,
+    ExternalChannelEventSseState,
+)> {
+    match state {
+        ExternalChannelEventSseState::Process {
+            state,
+            connection_id,
+            connection,
+            message,
+        } => {
+            let body = match ingest_external_channel_message_with_connection(
+                &state,
+                &connection_id,
+                &connection,
+                message,
+            )
+            .await
+            {
+                Ok((_, response)) => {
+                    let should_follow = response.assistant_run_id.is_some()
+                        && external_channel_response_is_static_page_pipeline(&response);
+                    let mut encoded = if should_follow {
+                        external_channel_static_page_sse_prompt_events(&state, &response).await
+                    } else {
+                        String::new()
+                    };
+                    let run_id = response.assistant_run_id;
+                    let idempotency_key = response.idempotency_key.clone();
+                    let last_key = external_channel_static_page_sse_progress_key(&response);
+                    encoded.push_str(&external_channel_sse_completion_with_done(
+                        response,
+                        !should_follow,
+                    ));
+                    let next_state = if should_follow {
+                        run_id
+                            .map(|run_id| ExternalChannelEventSseState::FollowStaticPage {
+                                state,
+                                connection_id,
+                                run_id,
+                                idempotency_key,
+                                started_at: Instant::now(),
+                                last_key,
+                                preview_emitted: false,
+                            })
+                            .unwrap_or(ExternalChannelEventSseState::End)
+                    } else {
+                        ExternalChannelEventSseState::End
+                    };
+                    return Some((Ok(Bytes::from(encoded)), next_state));
+                }
+                Err(error) => sse_error_event(error),
+            };
+            Some((Ok(Bytes::from(body)), ExternalChannelEventSseState::End))
+        }
+        ExternalChannelEventSseState::FollowStaticPage {
+            state,
+            connection_id,
+            run_id,
+            idempotency_key,
+            started_at,
+            last_key,
+            preview_emitted,
+        } => {
+            tokio::time::sleep(external_channel_static_page_sse_poll_interval()).await;
+            let response = match load_external_channel_assistant_run_reply_response(
+                &state,
+                &connection_id,
+                run_id,
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    return Some((
+                        Ok(Bytes::from(sse_error_event(error))),
+                        ExternalChannelEventSseState::End,
+                    ));
+                }
+            };
+            let key = external_channel_static_page_sse_progress_key(&response);
+            let terminal = external_channel_static_page_sse_is_terminal(&response);
+            let timed_out = started_at.elapsed() >= external_channel_static_page_sse_timeout();
+            let changed = key != last_key;
+            let mut encoded = String::new();
+            let mut next_preview_emitted = preview_emitted;
+            if !preview_emitted {
+                if let Some(preview_events) = external_channel_static_page_sse_preview_ready_events(
+                    &state,
+                    run_id,
+                    &idempotency_key,
+                )
+                .await
+                {
+                    encoded.push_str(&preview_events);
+                    next_preview_emitted = true;
+                }
+            }
+            if changed || terminal {
+                encoded.push_str(&external_channel_static_page_sse_progress_events(
+                    response.clone(),
+                ));
+            } else {
+                encoded.push_str(&sse_json_event(
+                    "external_channel.heartbeat",
+                    json!({
+                        "assistant_run_id": run_id,
+                        "idempotency_key": idempotency_key,
+                        "status": "processing",
+                    }),
+                ));
+            }
+            if terminal {
+                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
+            }
+            if timed_out {
+                encoded.push_str(&external_channel_static_page_sse_continue_polling_event(
+                    response,
+                ));
+                encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+                return Some((Ok(Bytes::from(encoded)), ExternalChannelEventSseState::End));
+            }
+            Some((
+                Ok(Bytes::from(encoded)),
+                ExternalChannelEventSseState::FollowStaticPage {
+                    state,
+                    connection_id,
+                    run_id,
+                    idempotency_key,
+                    started_at,
+                    last_key: key,
+                    preview_emitted: next_preview_emitted,
+                },
+            ))
+        }
+        ExternalChannelEventSseState::End => None,
+    }
+}
+
+async fn external_channel_static_page_sse_preview_ready_events(
+    state: &AppState,
+    run_id: AssistantRunId,
+    idempotency_key: &str,
+) -> Option<String> {
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .ok()?;
+    let event = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "static_page_image_job.preview_ready")?;
+    let preview_asset_key = event
+        .payload
+        .get("preview_asset_key")
+        .or_else(|| {
+            event
+                .payload
+                .pointer("/asset_provenance/persistedPreviewAssetKey")
+        })
+        .or_else(|| {
+            event
+                .payload
+                .pointer("/artifact_manifest/refs/preview_asset_key")
+        })
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let preview_url = preview_asset_key
+        .as_deref()
+        .and_then(external_channel_static_page_preview_public_url);
+    let text = if let Some(preview_url) = preview_url.as_deref() {
+        format!("Image2 效果图已生成：{preview_url}。下一步会按这张图继续生成最终静态页。")
+    } else {
+        "Image2 效果图已生成。下一步会按这张图继续生成最终静态页。".to_string()
+    };
+    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
+    encoded.push_str(&sse_json_event(
+        "external_channel.static_page_effect_image_ready",
+        json!({
+            "assistant_run_id": run_id,
+            "idempotency_key": idempotency_key,
+            "status": "static_page_effect_image_ready",
+            "draft_id": event.payload.get("draft_id").cloned().unwrap_or(Value::Null),
+            "image_job_id": event.payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "preview_asset_key": preview_asset_key.clone(),
+            "preview_url": preview_url.clone(),
+            "card": {
+                "type": "v3_static_page_image2_effect_image_ready",
+                "status": "static_page_effect_image_ready",
+                "draft_id": event.payload.get("draft_id").cloned().unwrap_or(Value::Null),
+                "image_job_id": event.payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+                "preview_asset_key": preview_asset_key,
+                "preview_url": preview_url,
+                "asset_provenance": event.payload.get("asset_provenance").cloned().unwrap_or(Value::Null),
+            },
+            "text": text,
+        }),
+    ));
+    Some(encoded)
+}
+
+fn external_channel_static_page_preview_public_url(asset_ref: &str) -> Option<String> {
+    let trimmed = asset_ref.trim();
+    if trimmed.is_empty() || trimmed.starts_with("data:image/") || trimmed.starts_with("blob:") {
+        return None;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        if let Ok(mut url) = reqwest::Url::parse(trimmed) {
+            url.set_query(None);
+            url.set_fragment(None);
+            return Some(truncate_assistant_supply_text(url.as_str(), 500));
+        }
+        return None;
+    }
+    if trimmed.starts_with("/generated-artifacts/") {
+        return Some(format!(
+            "{}{}",
+            external_channel_api_public_base_url(),
+            truncate_assistant_supply_text(trimmed, 500)
+        ));
+    }
+    if trimmed.starts_with("generated-artifacts/") {
+        return Some(format!(
+            "{}/{}",
+            external_channel_api_public_base_url(),
+            truncate_assistant_supply_text(trimmed, 500)
+        ));
+    }
+    if trimmed.starts_with("static-page-previews/") {
+        return Some(format!(
+            "{}/{}",
+            external_channel_generated_artifact_public_base_url(),
+            truncate_assistant_supply_text(trimmed, 500)
+        ));
+    }
+    Some(truncate_assistant_supply_text(trimmed, 500))
+}
+
+async fn external_channel_static_page_sse_prompt_events(
+    state: &AppState,
+    response: &ExternalChannelEventResponse,
+) -> String {
+    let Some(job_id) = response
+        .reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("image_job_id"))
+        .and_then(Value::as_str)
+        .and_then(|raw| parse_static_page_image_job_id(raw).ok())
+    else {
+        return String::new();
+    };
+    let Ok(Some(job)) = state
+        .storage
+        .static_page_image_jobs()
+        .get_by_id(state.tenant_id, job_id)
+        .await
+        .map_err(ApiError::from_storage)
+    else {
+        return String::new();
+    };
+    let summary = external_static_page_image_prompt_payload_summary(&job.image_prompt_payload);
+    let prompt_text = external_static_page_image_prompt_text(&summary, "");
+    if prompt_text.trim().is_empty() {
+        return String::new();
+    }
+    let display_prompt = truncate_assistant_supply_text(&prompt_text, 360);
+    let mut encoded = sse_text_delta_events(
+        "external_channel.delta",
+        &format!("准备按这个 Image2 提示词生图：{display_prompt}"),
+    );
+    encoded.push_str(&sse_json_event(
+        "external_channel.static_page_image2_prompt",
+        json!({
+            "assistant_run_id": response.assistant_run_id,
+            "idempotency_key": response.idempotency_key,
+            "draft_id": job.draft_id,
+            "image_job_id": job.id,
+            "prompt_text": prompt_text,
+            "style_direction": summary.get("style_direction").cloned().unwrap_or(Value::Null),
+            "modules": summary.get("modules").cloned().unwrap_or_else(|| json!([])),
+            "data_snapshot": summary.get("data_snapshot").cloned().unwrap_or(Value::Null),
+            "next_step": "submit_gpt_image_2_preview",
+        }),
+    ));
+    encoded
+}
+
+fn external_channel_static_page_sse_continue_polling_event(
+    response: ExternalChannelEventResponse,
+) -> String {
+    let status = external_channel_static_page_sse_status(&response);
+    let text = "本次流式连接已达到等待上限，V3 会继续后台生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。";
+    let mut encoded = sse_text_delta_events("external_channel.delta", text);
+    encoded.push_str(&sse_json_event(
+        "external_channel.static_page_continue_polling",
+        json!({
+            "assistant_run_id": response.assistant_run_id,
+            "idempotency_key": response.idempotency_key,
+            "status": status,
+            "card": response.reply.card,
+            "text": text,
+        }),
+    ));
+    encoded
 }
 
 async fn create_assistant_run_stream(
@@ -15146,20 +15654,15 @@ async fn ingest_external_channel_event_stream(
             "status": "started",
         }),
     );
-    let stream = stream::iter(vec![Ok(Bytes::from(started))]).chain(stream::once(async move {
-        let body = match ingest_external_channel_message_with_connection(
-            &state,
-            &connection_id,
-            &connection,
+    let stream = stream::iter(vec![Ok(Bytes::from(started))]).chain(stream::unfold(
+        ExternalChannelEventSseState::Process {
+            state,
+            connection_id,
+            connection,
             message,
-        )
-        .await
-        {
-            Ok((_, response)) => external_channel_sse_completion(response),
-            Err(error) => sse_error_event(error),
-        };
-        Ok(Bytes::from(body))
-    }));
+        },
+        external_channel_event_sse_next,
+    ));
     Ok(sse_stream_response(stream))
 }
 
@@ -15173,6 +15676,19 @@ async fn get_external_channel_assistant_run_reply(
     let connection = load_external_channel_connection(&state, &connection_id).await?;
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     ensure_external_channel_enabled(&connection_id, &connection)?;
+    Ok(Json(
+        load_external_channel_assistant_run_reply_response(&state, &connection_id, run_id).await?,
+    ))
+}
+
+async fn load_external_channel_assistant_run_reply_response(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+) -> std::result::Result<ExternalChannelEventResponse, ApiError> {
+    validate_required("connection_id", connection_id)?;
+    let connection = load_external_channel_connection(state, connection_id).await?;
+    ensure_external_channel_enabled(connection_id, &connection)?;
     let mut run = state
         .storage
         .assistant_runs()
@@ -15185,8 +15701,8 @@ async fn get_external_channel_assistant_run_reply(
                 format!("assistant run {run_id} was not found"),
             )
         })?;
-    ensure_assistant_run_belongs_to_external_channel(&connection_id, &run)?;
-    let lookup = load_external_message_event_lookup_for_run(&state, &connection_id, run.id).await?;
+    ensure_assistant_run_belongs_to_external_channel(connection_id, &run)?;
+    let lookup = load_external_message_event_lookup_for_run(state, connection_id, run.id).await?;
     let conversation_external_id = lookup
         .conversation_external_id
         .or_else(|| external_channel_conversation_external_id_from_run(&run))
@@ -15236,12 +15752,12 @@ async fn get_external_channel_assistant_run_reply(
                 )
             });
 
-    Ok(Json(ExternalChannelEventResponse {
+    Ok(ExternalChannelEventResponse {
         accepted: true,
         assistant_run_id: Some(run.id),
         idempotency_key: lookup.idempotency_key.unwrap_or_else(|| run.id.to_string()),
         reply,
-    }))
+    })
 }
 
 async fn ingest_external_channel_message(
@@ -26132,6 +26648,7 @@ fn external_channel_static_page_image2_fixed_task(
             "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
             "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
             "dynamic_data_contract": "final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh",
+            "data_insufficiency_policy": "expand_supplied_evidence_first_then_publish_best_effort_with_visible_gap_notes",
             "publish_mode": "new_generated_artifact_only",
             "effect_image_confirmation_required": false,
             "continue_to_publish_after_effect_image": true,
@@ -26237,6 +26754,7 @@ fn assistant_run_static_page_image2_fixed_task(
             "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
             "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
             "dynamic_data_contract": "final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh",
+            "data_insufficiency_policy": "expand_supplied_evidence_first_then_publish_best_effort_with_visible_gap_notes",
             "publish_mode": "new_generated_artifact_only",
             "effect_image_confirmation_required": false,
             "continue_to_publish_after_effect_image": true,
@@ -30562,26 +31080,33 @@ async fn create_static_page_image_job_for_draft(
             "submit_static_page_image_preview",
         )
         .await?;
-        if let Some((reason, details)) = static_page_preview_data_quality_gate_for_draft(&draft) {
-            return Err(ApiError::bad_request_with_details(
-                "static_page_preview_data_quality_gate",
-                reason,
-                details,
-            ));
-        }
-        if !request_image_prompt_payload.is_null() {
-            refresh_static_page_payload_with_draft_context(
-                &mut request_image_prompt_payload,
-                &draft,
-            );
-            if let Some((reason, details)) =
-                static_page_preview_data_quality_gate_for_payload(&request_image_prompt_payload)
+        let enforce_preview_data_quality_gate =
+            static_page_draft_requires_preview_data_quality_gate(&draft);
+        if enforce_preview_data_quality_gate {
+            if let Some((reason, details)) = static_page_preview_data_quality_gate_for_draft(&draft)
             {
                 return Err(ApiError::bad_request_with_details(
                     "static_page_preview_data_quality_gate",
                     reason,
                     details,
                 ));
+            }
+        }
+        if !request_image_prompt_payload.is_null() {
+            refresh_static_page_payload_with_draft_context(
+                &mut request_image_prompt_payload,
+                &draft,
+            );
+            if enforce_preview_data_quality_gate {
+                if let Some((reason, details)) =
+                    static_page_preview_data_quality_gate_for_payload(&request_image_prompt_payload)
+                {
+                    return Err(ApiError::bad_request_with_details(
+                        "static_page_preview_data_quality_gate",
+                        reason,
+                        details,
+                    ));
+                }
             }
         }
     }
@@ -71759,6 +72284,30 @@ fn static_page_draft_allows_preview_ready_render(draft: &StaticPageDraft) -> boo
         != Some(true)
 }
 
+fn static_page_draft_requires_preview_data_quality_gate(draft: &StaticPageDraft) -> bool {
+    if draft
+        .source_refs
+        .get("preview_data_quality_gate_required")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return true;
+    }
+    if draft
+        .source_refs
+        .get("continue_to_publish_after_effect_image")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return false;
+    }
+    draft
+        .source_refs
+        .get("effect_image_confirmation_required")
+        .and_then(Value::as_bool)
+        != Some(false)
+}
+
 fn static_page_draft_requires_final_render_data_quality_gate(draft: &StaticPageDraft) -> bool {
     if draft
         .source_refs
@@ -74835,6 +75384,122 @@ mod tests {
         assert!(body.contains("\"effect_image_confirmation_required\":false"));
         assert!(body.contains("event: external_channel.completed"));
         assert!(body.contains("event: done"));
+    }
+
+    #[test]
+    fn external_channel_static_page_sse_progress_emits_preview_and_publish_events() {
+        let assistant_run_id = AssistantRunId::new();
+        let preview_response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(assistant_run_id),
+            idempotency_key: "generic:tenant:static-page-progress-001".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "room-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: Some("Image2 效果图已生成，正在准备发布最终静态页。".to_string()),
+                card: Some(json!({
+                    "type": "v3_static_page_image2_effect_image_ready",
+                    "status": "static_page_effect_image_ready",
+                    "image_job_id": "image-job-001",
+                    "preview_asset_key": "https://v3.elepcloud.com/generated-artifacts/static-page-previews/image-job-001/preview.png",
+                })),
+                artifact_links: Vec::new(),
+                task_status: Some("processing".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        let preview_body = external_channel_static_page_sse_progress_events(preview_response);
+
+        assert!(preview_body.contains("event: external_channel.static_page_effect_image_ready"));
+        assert!(preview_body.contains("preview.png"));
+        assert!(preview_body.contains("Image2"));
+
+        let published_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/demo/index.html";
+        let published_response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(assistant_run_id),
+            idempotency_key: "generic:tenant:static-page-progress-001".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "room-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::ArtifactLink,
+                text: Some("V3 静态页已生成并发布。".to_string()),
+                card: Some(json!({
+                    "type": "v3_static_page_image2_publish_completed",
+                    "status": "static_page_published",
+                    "public_url": published_url,
+                })),
+                artifact_links: vec![published_url.to_string()],
+                task_status: Some("static_page_published".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        let published_body = external_channel_static_page_sse_progress_events(published_response);
+
+        assert!(published_body.contains("event: external_channel.static_page_published"));
+        assert!(published_body.contains(published_url));
+        assert!(published_body.contains("V3 静态页已生成并发布"));
+    }
+
+    #[test]
+    fn external_channel_static_page_sse_progress_explains_publish_issue() {
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(AssistantRunId::new()),
+            idempotency_key: "generic:tenant:static-page-progress-failed".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "room-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: Some("V3 已生成效果图，但最终静态页暂未完成，系统已记录原因。".to_string()),
+                card: Some(json!({
+                    "type": "v3_static_page_image2_publish_status",
+                    "status": "static_page_publish_failed",
+                    "error": {
+                        "code": "provider_timeout",
+                        "message": "上游生成超时"
+                    },
+                    "retryable": true,
+                })),
+                artifact_links: Vec::new(),
+                task_status: Some("processing".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        let body = external_channel_static_page_sse_progress_events(response);
+
+        assert!(body.contains("event: external_channel.static_page_issue"));
+        assert!(body.contains("provider_timeout"));
+        assert!(body.contains("最终静态页暂未完成"));
+    }
+
+    #[test]
+    fn external_channel_static_page_preview_public_url_normalizes_relative_preview_keys() {
+        assert_eq!(
+            external_channel_static_page_preview_public_url("static-page-previews/job/preview.png")
+                .as_deref(),
+            Some(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png"
+            )
+        );
+        assert_eq!(
+            external_channel_static_page_preview_public_url(
+                "https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png?token=secret#frag"
+            )
+            .as_deref(),
+            Some("https://v3.elepcloud.com/generated-artifacts/static-page-previews/job/preview.png")
+        );
+        assert!(
+            external_channel_static_page_preview_public_url("data:image/png;base64,abc").is_none()
+        );
     }
 
     fn static_page_reply_test_event(
@@ -97651,6 +98316,56 @@ retrieve_evidence:
             &weak_payload
         ));
         assert!(static_page_preview_data_quality_gate_for_payload(&weak_payload).is_some());
+    }
+
+    #[test]
+    fn static_page_preview_gate_is_nonblocking_for_auto_publish_drafts() {
+        let now = Utc::now();
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "经营趋势静态页".to_string(),
+            status: StaticPageDraftStatus::Planned,
+            selected_scope: json!({"mode": "user_selected"}),
+            visibility_snapshot: Value::Null,
+            source_refs: json!({
+                "effect_image_confirmation_required": false,
+                "continue_to_publish_after_effect_image": true,
+                "auto_publish_generated_artifact": true
+            }),
+            draft_payload: json!({
+                "version": 1,
+                "status": "planning",
+                "modules": [{
+                    "id": "trend",
+                    "title": "订单趋势",
+                    "visualization": { "type": "line-chart" }
+                }],
+                "dataSnapshot": {
+                    "moduleBindings": [{
+                        "moduleId": "trend",
+                        "title": "订单趋势",
+                        "visualizationType": "line-chart",
+                        "bindingQualityStatus": "missing_source",
+                        "chartDataFit": "missing_binding",
+                        "sampleRows": 0
+                    }]
+                }
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(
+            static_page_preview_data_quality_gate_for_draft(&draft).is_some(),
+            "weak data quality remains visible for diagnostics"
+        );
+        assert!(
+            !static_page_draft_requires_preview_data_quality_gate(&draft),
+            "auto-publish drafts should continue to Image2 and carry warnings instead of failing early"
+        );
     }
 
     #[test]
