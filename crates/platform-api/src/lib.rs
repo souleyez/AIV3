@@ -46620,6 +46620,10 @@ fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
             "机会",
             "销售额",
             "租金",
+            "经营",
+            "健康度",
+            "总览",
+            "数据",
         ],
     )
 }
@@ -73735,6 +73739,16 @@ mod tests {
             assistant_run_database_aggregate_order_direction(prompt, Some("xuzengxiaoshou")),
             "asc"
         );
+    }
+
+    #[test]
+    fn database_aggregate_heuristics_treat_operating_health_as_data_question() {
+        assert!(assistant_run_database_schema_context_requested(
+            "经营健康度总览"
+        ));
+        assert!(assistant_run_database_schema_context_requested(
+            "我这里有哪些数据可以用么"
+        ));
     }
 
     #[test]
