@@ -9313,20 +9313,21 @@ fn external_channel_sse_completion_with_done(
     response: ExternalChannelEventResponse,
     include_done: bool,
 ) -> String {
-    let text = response.reply.text.clone().unwrap_or_default();
-    let assistant_run_id = response.assistant_run_id;
-    let idempotency_key = response.idempotency_key.clone();
-    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
-    if response
+    let emit_static_page_queued_event = response
         .reply
         .card
         .as_ref()
         .and_then(|card| card.get("type"))
         .and_then(Value::as_str)
-        == Some("v3_static_page_image2_pipeline")
-    {
+        == Some("v3_static_page_image2_pipeline");
+    let response = external_channel_public_response(response);
+    let text = response.reply.text.clone().unwrap_or_default();
+    let assistant_run_id = response.assistant_run_id;
+    let idempotency_key = response.idempotency_key.clone();
+    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
+    if emit_static_page_queued_event {
         encoded.push_str(&sse_json_event(
-            "external_channel.static_page_effect_image_queued",
+            "external_channel.static_page_queued",
             json!({
                 "assistant_run_id": assistant_run_id,
                 "idempotency_key": idempotency_key,
@@ -9346,6 +9347,146 @@ fn external_channel_sse_completion_with_done(
         encoded.push_str(&sse_json_event("done", json!({"ok": true})));
     }
     encoded
+}
+
+fn external_channel_public_response(
+    mut response: ExternalChannelEventResponse,
+) -> ExternalChannelEventResponse {
+    response.reply = external_channel_public_reply(response.reply);
+    response
+}
+
+fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBotReplyView {
+    reply.text = reply
+        .text
+        .take()
+        .map(|text| external_channel_public_text(&text));
+    reply.task_status = reply
+        .task_status
+        .take()
+        .map(|status| external_channel_public_status(&status));
+    reply.card = reply.card.take().map(external_channel_public_card_value);
+    reply
+}
+
+fn external_channel_public_status(status: &str) -> String {
+    match status.trim() {
+        "static_page_image_preview_queued" => "static_page_generation_queued".to_string(),
+        "static_page_effect_image_ready" => "static_page_preview_ready".to_string(),
+        "static_page_image2_auto_publish_pending" => "static_page_generation_pending".to_string(),
+        "static_page_image2_auto_publish_running" => "static_page_generation_running".to_string(),
+        "static_page_image2_auto_publish_retrying" => "static_page_generation_retrying".to_string(),
+        "static_page_image2_auto_publish_failed" => "static_page_generation_failed".to_string(),
+        other => external_channel_public_text(other),
+    }
+}
+
+fn external_channel_public_text(text: &str) -> String {
+    let trimmed = text.trim_start();
+    if trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("/generated-artifacts/")
+        || trimmed.starts_with("generated-artifacts/")
+    {
+        return text.to_string();
+    }
+    let mut value = text.to_string();
+    for (raw, replacement) in [
+        (
+            "已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会继续进入固定 Cloudflare Codex 发布链路。",
+            "已创建报表页面草稿并进入生成队列；无需客户确认，生成后会自动发布页面链接。",
+        ),
+        (
+            "已创建静态页草稿并提交 Image2 效果图队列；固定发布链路当前未启用或未加入 allowlist。",
+            "已创建报表页面草稿并进入生成队列；当前会按可用发布链路生成页面。",
+        ),
+        (
+            "已创建静态页草稿并提交 GPT-Image-2 效果图队列；效果图无需客户确认，生成后会继续进入 Image2 视觉合同发布链路，由 GPT-5.5/Codex 依据效果图生成最终动态网站。",
+            "已创建报表页面草稿并进入生成队列；无需客户确认，生成后会自动发布最终动态页面。",
+        ),
+        (
+            "已创建静态页草稿并提交 GPT-Image-2 效果图队列；效果图无需客户确认，生成后会继续进入 Image2 视觉合同发布链路生成最终动态网站。",
+            "已创建报表页面草稿并进入生成队列；无需客户确认，生成后会自动发布最终动态页面。",
+        ),
+        (
+            "V3 已先生成可发送的静态页链接；最终 Codex 页面仍在后台继续发布。",
+            "V3 已先生成可发送的静态页链接；最终页面仍在后台继续优化发布。",
+        ),
+    ] {
+        value = value.replace(raw, replacement);
+    }
+    for (raw, replacement) in [
+        ("GPT-Image-2", "页面生成"),
+        ("Image2", "页面生成"),
+        ("Cloudflare Codex", "V3 后台"),
+        ("Cloudflare", "V3 后台"),
+        ("Codex", "V3"),
+        ("效果图", "过程预览"),
+        ("生图", "页面生成"),
+        ("视觉合同", "页面生成"),
+    ] {
+        value = value.replace(raw, replacement);
+    }
+    value
+}
+
+fn external_channel_public_card_value(value: Value) -> Value {
+    match value {
+        Value::Object(mut map) => {
+            if !map.contains_key("preview_url") {
+                if let Some(preview_url) = map
+                    .get("preview_asset_key")
+                    .and_then(Value::as_str)
+                    .and_then(external_channel_static_page_preview_public_url)
+                {
+                    map.insert("preview_url".to_string(), Value::String(preview_url));
+                }
+            }
+            let mut output = serde_json::Map::new();
+            for (key, value) in map {
+                let key_lc = key.to_ascii_lowercase();
+                if key_lc.contains("codex")
+                    || key_lc.contains("image_job")
+                    || key_lc.contains("effect_image")
+                    || key_lc.contains("fixed_task")
+                    || key_lc.contains("preview_asset")
+                    || key_lc == "auto_publish_after_preview"
+                    || key_lc == "asset_provenance"
+                {
+                    continue;
+                }
+                let sanitized = if key == "status" {
+                    value
+                        .as_str()
+                        .map(|status| Value::String(external_channel_public_status(status)))
+                        .unwrap_or_else(|| external_channel_public_card_value(value))
+                } else if key == "type" {
+                    value
+                        .as_str()
+                        .map(|kind| {
+                            if kind.contains("static_page") {
+                                Value::String("v3_static_page_pipeline".to_string())
+                            } else {
+                                Value::String(external_channel_public_text(kind))
+                            }
+                        })
+                        .unwrap_or_else(|| external_channel_public_card_value(value))
+                } else {
+                    external_channel_public_card_value(value)
+                };
+                output.insert(key, sanitized);
+            }
+            Value::Object(output)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(external_channel_public_card_value)
+                .collect(),
+        ),
+        Value::String(value) => Value::String(external_channel_public_text(&value)),
+        other => other,
+    }
 }
 
 fn external_channel_response_is_static_page_pipeline(
@@ -9424,7 +9565,7 @@ fn external_channel_static_page_sse_is_terminal(response: &ExternalChannelEventR
 
 fn external_channel_static_page_sse_event_name(status: &str) -> &'static str {
     match status {
-        "static_page_effect_image_ready" => "external_channel.static_page_effect_image_ready",
+        "static_page_effect_image_ready" => "external_channel.static_page_preview_ready",
         "static_page_published" | "static_page_stable_artifact_reused" => {
             "external_channel.static_page_published"
         }
@@ -9448,20 +9589,16 @@ fn external_channel_static_page_sse_progress_text(
         .as_deref()
         .filter(|value| !value.is_empty())
     {
-        return text.to_string();
+        return external_channel_public_text(text);
     }
     match status.as_str() {
         "static_page_effect_image_ready" => {
-            "Image2 效果图已生成，V3 将按这张图继续生成最终静态页。".to_string()
+            "页面过程预览已生成，V3 将继续生成最终静态页。".to_string()
         }
-        "static_page_publish_queued" => {
-            "下一步：V3 正在把效果图和数据证据交给 Codex 生成最终静态页。".to_string()
-        }
-        "static_page_publish_running" => {
-            "下一步：Codex 正在按效果图生成可访问的静态页。".to_string()
-        }
+        "static_page_publish_queued" => "下一步：V3 正在整理数据证据并生成最终静态页。".to_string(),
+        "static_page_publish_running" => "下一步：V3 正在生成可访问的静态页。".to_string(),
         "static_page_publish_retrying" => {
-            "静态页发布遇到临时波动，V3 会继续重试或切换兜底链路。".to_string()
+            "静态页发布遇到临时波动，V3 会继续重试或切换可用发布链路。".to_string()
         }
         "static_page_published" => "静态页已生成并发布，可以把链接返回给用户。".to_string(),
         "static_page_publish_failed" => {
@@ -9483,15 +9620,17 @@ fn external_channel_static_page_sse_progress_events(
     let status = external_channel_static_page_sse_status(&response);
     let text = external_channel_static_page_sse_progress_text(&response);
     let event_name = external_channel_static_page_sse_event_name(&status);
+    let public_response = external_channel_public_response(response);
+    let public_status = external_channel_public_status(&status);
     let mut encoded = sse_text_delta_events("external_channel.delta", &text);
     encoded.push_str(&sse_json_event(
         event_name,
         json!({
-            "assistant_run_id": response.assistant_run_id,
-            "idempotency_key": response.idempotency_key,
-            "status": status,
-            "card": response.reply.card,
-            "artifact_links": response.reply.artifact_links,
+            "assistant_run_id": public_response.assistant_run_id,
+            "idempotency_key": public_response.idempotency_key,
+            "status": public_status,
+            "card": public_response.reply.card,
+            "artifact_links": public_response.reply.artifact_links,
             "text": text,
         }),
     ));
@@ -9711,29 +9850,24 @@ async fn external_channel_static_page_sse_preview_ready_events(
         .as_deref()
         .and_then(external_channel_static_page_preview_public_url);
     let text = if let Some(preview_url) = preview_url.as_deref() {
-        format!("Image2 效果图已生成：{preview_url}。下一步会按这张图继续生成最终静态页。")
+        format!("页面过程预览已生成：{preview_url}。下一步会继续生成最终静态页。")
     } else {
-        "Image2 效果图已生成。下一步会按这张图继续生成最终静态页。".to_string()
+        "页面过程预览已生成。下一步会继续生成最终静态页。".to_string()
     };
     let mut encoded = sse_text_delta_events("external_channel.delta", &text);
     encoded.push_str(&sse_json_event(
-        "external_channel.static_page_effect_image_ready",
+        "external_channel.static_page_preview_ready",
         json!({
             "assistant_run_id": run_id,
             "idempotency_key": idempotency_key,
-            "status": "static_page_effect_image_ready",
+            "status": "static_page_preview_ready",
             "draft_id": event.payload.get("draft_id").cloned().unwrap_or(Value::Null),
-            "image_job_id": event.payload.get("image_job_id").cloned().unwrap_or(Value::Null),
-            "preview_asset_key": preview_asset_key.clone(),
             "preview_url": preview_url.clone(),
             "card": {
-                "type": "v3_static_page_image2_effect_image_ready",
-                "status": "static_page_effect_image_ready",
+                "type": "v3_static_page_pipeline",
+                "status": "static_page_preview_ready",
                 "draft_id": event.payload.get("draft_id").cloned().unwrap_or(Value::Null),
-                "image_job_id": event.payload.get("image_job_id").cloned().unwrap_or(Value::Null),
-                "preview_asset_key": preview_asset_key,
                 "preview_url": preview_url,
-                "asset_provenance": event.payload.get("asset_provenance").cloned().unwrap_or(Value::Null),
             },
             "text": text,
         }),
@@ -9809,20 +9943,19 @@ async fn external_channel_static_page_sse_prompt_events(
     let display_prompt = truncate_assistant_supply_text(&prompt_text, 360);
     let mut encoded = sse_text_delta_events(
         "external_channel.delta",
-        &format!("准备按这个 Image2 提示词生图：{display_prompt}"),
+        "V3 正在生成页面方案，并会自动继续发布最终页面。",
     );
     encoded.push_str(&sse_json_event(
-        "external_channel.static_page_image2_prompt",
+        "external_channel.static_page_planning",
         json!({
             "assistant_run_id": response.assistant_run_id,
             "idempotency_key": response.idempotency_key,
             "draft_id": job.draft_id,
-            "image_job_id": job.id,
-            "prompt_text": prompt_text,
+            "summary": display_prompt,
             "style_direction": summary.get("style_direction").cloned().unwrap_or(Value::Null),
             "modules": summary.get("modules").cloned().unwrap_or_else(|| json!([])),
             "data_snapshot": summary.get("data_snapshot").cloned().unwrap_or(Value::Null),
-            "next_step": "submit_gpt_image_2_preview",
+            "next_step": "generate_and_publish_static_page",
         }),
     ));
     encoded
@@ -9832,15 +9965,16 @@ fn external_channel_static_page_sse_continue_polling_event(
     response: ExternalChannelEventResponse,
 ) -> String {
     let status = external_channel_static_page_sse_status(&response);
+    let public_response = external_channel_public_response(response);
     let text = "本次流式连接已达到等待上限，V3 会继续后台生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。";
     let mut encoded = sse_text_delta_events("external_channel.delta", text);
     encoded.push_str(&sse_json_event(
         "external_channel.static_page_continue_polling",
         json!({
-            "assistant_run_id": response.assistant_run_id,
-            "idempotency_key": response.idempotency_key,
-            "status": status,
-            "card": response.reply.card,
+            "assistant_run_id": public_response.assistant_run_id,
+            "idempotency_key": public_response.idempotency_key,
+            "status": external_channel_public_status(&status),
+            "card": public_response.reply.card,
             "text": text,
         }),
     ));
@@ -16350,7 +16484,7 @@ async fn ingest_external_channel_event(
         message,
     )
     .await?;
-    Ok((status, Json(response)))
+    Ok((status, Json(external_channel_public_response(response))))
 }
 
 async fn ingest_external_channel_event_stream(
@@ -16396,9 +16530,9 @@ async fn get_external_channel_assistant_run_reply(
     let connection = load_external_channel_connection(&state, &connection_id).await?;
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     ensure_external_channel_enabled(&connection_id, &connection)?;
-    Ok(Json(
+    Ok(Json(external_channel_public_response(
         load_external_channel_assistant_run_reply_response(&state, &connection_id, run_id).await?,
-    ))
+    )))
 }
 
 async fn load_external_channel_assistant_run_reply_response(
@@ -76908,10 +77042,12 @@ mod tests {
 
         let body = external_channel_sse_completion(response);
 
-        assert!(body.contains("event: external_channel.static_page_effect_image_queued"));
-        assert!(body.contains("static_page_image2_auto_publish_pending"));
-        assert!(body.contains("\"auto_publish_after_preview\":true"));
-        assert!(body.contains("\"effect_image_confirmation_required\":false"));
+        assert!(body.contains("event: external_channel.static_page_queued"));
+        assert!(body.contains("static_page_generation_pending"));
+        assert!(!body.contains("Image2"));
+        assert!(!body.contains("Codex"));
+        assert!(!body.contains("auto_publish_after_preview"));
+        assert!(!body.contains("effect_image_confirmation_required"));
         assert!(body.contains("event: external_channel.completed"));
         assert!(body.contains("event: done"));
     }
@@ -76943,9 +77079,11 @@ mod tests {
 
         let preview_body = external_channel_static_page_sse_progress_events(preview_response);
 
-        assert!(preview_body.contains("event: external_channel.static_page_effect_image_ready"));
+        assert!(preview_body.contains("event: external_channel.static_page_preview_ready"));
         assert!(preview_body.contains("preview.png"));
-        assert!(preview_body.contains("Image2"));
+        assert!(preview_body.contains("过程预览已生成"));
+        assert!(!preview_body.contains("Image2"));
+        assert!(!preview_body.contains("image_job_id"));
 
         let published_url =
             "https://v3.elepcloud.com/generated-artifacts/database-static-pages/demo/index.html";
