@@ -377,19 +377,20 @@
 <a class="nav-depth-3" href="#section-03">1.2 查询解析结果</a>
 <a class="nav-depth-3" href="#section-04">1.3 移动文档分组</a>
 <a class="nav-depth-3" href="#section-05">1.4 查询数据库源状态</a>
-<a class="nav-depth-2" href="#section-06">2. 聊天同步</a>
-<a class="nav-depth-3" href="#section-07">2.1 普通聊天</a>
-<a class="nav-depth-3" href="#section-08">2.2 流式聊天</a>
-<a class="nav-depth-3" href="#section-09">2.3 数据接入/入库分析请求</a>
-<a class="nav-depth-2" href="#section-10">3. 生成产物（报表）</a>
-<a class="nav-depth-3" href="#section-11">3.1 模板列表字段</a>
-<a class="nav-depth-3" href="#section-12">3.2 模板解析</a>
-<a class="nav-depth-3" href="#section-13">3.3 按模板生成静态页/报表</a>
-<a class="nav-depth-3" href="#section-14">3.4 查询、预览、下载产物</a>
-<a class="nav-depth-2" href="#section-15">4. 枚举与错误</a>
-<a class="nav-depth-3" href="#section-16">4.1 `output_format`</a>
-<a class="nav-depth-3" href="#section-17">4.2 `render_mode`</a>
-<a class="nav-depth-3" href="#section-18">4.3 错误格式</a>
+<a class="nav-depth-3" href="#section-06">1.5 创建/更新数据库源</a>
+<a class="nav-depth-2" href="#section-07">2. 聊天同步</a>
+<a class="nav-depth-3" href="#section-08">2.1 普通聊天</a>
+<a class="nav-depth-3" href="#section-09">2.2 流式聊天</a>
+<a class="nav-depth-3" href="#section-10">2.3 数据接入/入库分析请求</a>
+<a class="nav-depth-2" href="#section-11">3. 生成产物（报表）</a>
+<a class="nav-depth-3" href="#section-12">3.1 模板列表字段</a>
+<a class="nav-depth-3" href="#section-13">3.2 模板解析</a>
+<a class="nav-depth-3" href="#section-14">3.3 按模板生成静态页/报表</a>
+<a class="nav-depth-3" href="#section-15">3.4 查询、预览、下载产物</a>
+<a class="nav-depth-2" href="#section-16">4. 枚举与错误</a>
+<a class="nav-depth-3" href="#section-17">4.1 `output_format`</a>
+<a class="nav-depth-3" href="#section-18">4.2 `render_mode`</a>
+<a class="nav-depth-3" href="#section-19">4.3 错误格式</a>
       </nav>
     </aside>
     <main>
@@ -405,14 +406,14 @@
       </section>
       <article>
         <h1>V3 纯第三方简单版接口文档</h1>
-<p><strong>版本：</strong> 2026-05-25 <strong>Base URL：</strong> <code>https://v3.elepcloud.com</code> <strong>鉴权：</strong> <code>Authorization: Bearer &lt;V3 inbound token&gt;</code> <strong>请求格式：</strong> <code>Content-Type: application/json</code></p>
+<p><strong>版本：</strong> 2026-06-01 <strong>Base URL：</strong> <code>https://v3.elepcloud.com</code> <strong>鉴权：</strong> <code>Authorization: Bearer &lt;V3 inbound token&gt;</code> <strong>请求格式：</strong> <code>Content-Type: application/json</code></p>
 <p>最小顺序：</p>
 <ol>
 <li>文档解析：把普通文档和模板文档解析入 V3。</li>
 <li>聊天同步：传用户 ID、会话 ID、文档范围、默认提示词和输出格式；文档范围首次传入后同一会话持续有效。</li>
 <li>生成产物：从模板列表选择模板，解析模板，按模板生成报表/HTML 产物。</li>
 </ol>
-<p>可选补充：数据库源由 V3 先配置和同步，第三方只查状态并在聊天时传对应数据集范围。数据库对接细节已合并进完整 API 文档的 <code>11.6 第三方数据库对接</code>。</p>
+<p>可选补充：第三方可通过数据库源接口登记业务库。第一版外部自助接口只支持 MySQL；已配置服务端 <code>connection_env</code> 的业务库可直接进入 V3 数据集同步链路，只传原始连接串/账号/密码时 V3 不明文落库，会先创建待密钥绑定的业务库记录。数据库对接细节已合并进完整 API 文档的 <code>11.6 第三方数据库对接</code>。</p>
 <h2 id="section-01">1. 文档解析</h2>
 <h3 id="section-02">1.1 发起解析</h3>
 <figure class="code-card">
@@ -568,8 +569,59 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>source_external_id</code></td><td>是</td><td>V3 已授权给该通道的数据库源 ID</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示数据库同步数据可用于问答/报表；<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code> 表示仍需等待或排查</td></tr><tr><td><code>status.sync_readiness.row_failure_groups</code></td><td>否</td><td>数据库行转换失败分组；包含 <code>table</code>、<code>reason</code>、<code>reported_failed_row_count</code>、<code>sample_count</code>、<code>sample_source_primary_keys</code></td></tr><tr><td><code>status.recent_sync_runs[].row_failure_groups</code></td><td>否</td><td>最近同步任务中的失败行分组，便于判断本次同步哪个表/原因失败较多</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示目标数据集已具备可检索证据</td></tr><tr><td><code>status.datasets[].readiness.signal</code></td><td>否</td><td>单个目标数据集的可问状态；用于区分默认数据集为空、但历史显式目标数据集已可问的情况</td></tr><tr><td><code>status.datasets[].indexed_document_count</code></td><td>否</td><td>该目标数据集中来自此数据库源的已索引文档数</td></tr><tr><td><code>status.datasets[].retrieval_evidence_count</code></td><td>否</td><td>该目标数据集中来自此数据库源的检索证据数</td></tr><tr><td><code>status.health_findings.items</code></td><td>否</td><td>配置、同步、索引、行转换失败等问题列表</td></tr></tbody></table></div>
-<h2 id="section-06">2. 聊天同步</h2>
-<h3 id="section-07">2.1 普通聊天</h3>
+<h3 id="section-06">1.5 创建/更新数据库源</h3>
+<p>第三方在本地创建或更新业务库时，同步到 V3。第一版仅支持 <code>mysql</code>。推荐优先传 <code>connection_env</code>：即 V3 服务器上已经配置好的数据库连接串环境变量名。若只传 <code>connection_url</code> / <code>username</code> / <code>password</code>，V3 不会把明文凭据写入 PostgreSQL、日志或模型上下文，只会创建 <code>pending_secret_binding</code> 状态的业务库记录，后续由 V3 侧绑定服务端密钥后再同步。</p>
+<figure class="code-card">
+    <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>POST /v1/external/channels/{connection_id}/database-sources
+Authorization: Bearer &lt;V3 inbound token&gt;
+Content-Type: application/json</code></pre>
+  </figure>
+<figure class="code-card">
+    <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;source_external_id&quot;: &quot;db-20260601-0001&quot;,      // 第三方业务库 ID；用于幂等创建/更新
+  &quot;name&quot;: &quot;生产经营库&quot;,                           // 业务库展示名
+  &quot;connector_kind&quot;: &quot;mysql&quot;,                      // 第一版只支持 mysql
+  &quot;connection_env&quot;: &quot;THIRD_PARTY_DB_MAIN_URL&quot;,    // 推荐：V3 服务器环境变量名；不会返回真实连接串
+  &quot;connection_url&quot;: null,                         // 可选：原始连接串；若未配置 connection_env，本版只登记为待密钥绑定
+  &quot;username&quot;: null,                               // 可选：数据库用户名；不会明文落库
+  &quot;password&quot;: null,                               // 可选：数据库密码；不会明文落库
+  &quot;database&quot;: &quot;hy_sql&quot;,                           // 数据库名；connection_env 模式必填
+  &quot;tables&quot;: [&quot;bi_traffic_area&quot;],                  // 业务表名白名单；后续画像/同步使用
+  &quot;dataset_external_id&quot;: &quot;xinbai-operating-analysis&quot;, // 可选：同步目标稳定数据集/资料库 ID
+  &quot;dataset_title&quot;: &quot;新百经营分析数据集&quot;,            // 可选：自动创建数据集时使用
+  &quot;idempotency_key&quot;: &quot;datasource:db-20260601-0001&quot; // 幂等键；建议包含 source_external_id
+}</code></pre>
+  </figure>
+<p>字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>source_external_id</code></td><td>是</td><td>第三方稳定业务库 ID；后续聊天可放入 <code>business_datasource_ids</code></td></tr><tr><td><code>name</code></td><td>否</td><td>展示名；不传时使用业务库 ID</td></tr><tr><td><code>connector_kind</code></td><td>否</td><td>第一版只支持 <code>mysql</code>；其他类型会返回 <code>unsupported_connector_kind</code></td></tr><tr><td><code>connection_env</code></td><td>可用库建议必填</td><td>V3 服务器环境变量名；有它时业务库可进入连接测试、画像和同步链路</td></tr><tr><td><code>connection_url</code></td><td>否</td><td>原始连接串；未同时传 <code>connection_env</code> 时只创建待密钥绑定记录，不明文落库</td></tr><tr><td><code>username</code> / <code>password</code></td><td>否</td><td>原始账号密码；不明文落库，不进入模型上下文</td></tr><tr><td><code>database</code></td><td><code>connection_env</code> 模式必填</td><td>MySQL 数据库名</td></tr><tr><td><code>tables</code></td><td>否</td><td>表名白名单；为空表示后续由 V3 画像/配置决定</td></tr><tr><td><code>dataset_external_id</code></td><td>否</td><td>同步目标稳定数据集/资料库 ID</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>自动创建数据集时使用</td></tr><tr><td><code>idempotency_key</code></td><td>否</td><td>幂等键</td></tr></tbody></table></div>
+<p>响应：</p>
+<figure class="code-card">
+    <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;accepted&quot;: true,                              // 是否已接收创建/更新
+  &quot;source_external_id&quot;: &quot;db-20260601-0001&quot;,      // 第三方业务库 ID
+  &quot;source_id&quot;: &quot;db-20260601-0001&quot;,               // V3 数据库源 ID；当前与 source_external_id 保持一致
+  &quot;source&quot;: {
+    &quot;id&quot;: &quot;db-20260601-0001&quot;,                   // V3 数据库源 ID
+    &quot;name&quot;: &quot;生产经营库&quot;,                         // 展示名
+    &quot;connector_kind&quot;: &quot;mysql&quot;,                    // 连接类型
+    &quot;status&quot;: &quot;ready&quot;                            // ready 或 pending_secret_binding
+  },
+  &quot;redacted_summary&quot;: {                          // 脱敏摘要；不含密码或原始连接串
+    &quot;kind&quot;: &quot;mysql&quot;,
+    &quot;database&quot;: &quot;hy_sql&quot;,
+    &quot;connection_env&quot;: &quot;THIRD_PARTY_DB_MAIN_URL&quot;,
+    &quot;table_count&quot;: 0,
+    &quot;tables&quot;: []
+  },
+  &quot;credential_status&quot;: &quot;ready&quot;,                  // ready 或 pending_secret_binding
+  &quot;warnings&quot;: []                                 // 非阻断提醒
+}</code></pre>
+  </figure>
+<h2 id="section-07">2. 聊天同步</h2>
+<h3 id="section-08">2.1 普通聊天</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
@@ -600,17 +652,31 @@ Content-Type: application/json</code></pre>
   ],
   &quot;dataset_external_id&quot;: null,                     // 可选：授权单个稳定业务分组；传入后同一会话持续有效
   &quot;dataset_external_ids&quot;: [],                      // 可选：授权多个稳定业务分组；有多个分组时用数组
+  &quot;business_datasource_ids&quot;: [],                   // 可选：本轮指定业务库 ID；对应 database-sources 的 source_external_id
   &quot;documentExternalId&quot;: &quot;doc-20260520-0001&quot;,        // 可选兼容写法：单文档 ID；有数组时不用传
   &quot;requested_skills&quot;: [],                          // 本轮指定 skill；没有传空数组或省略
   &quot;mention_external_user_ids&quot;: [],                 // 本条消息 @ 的用户 ID；没有传空数组或省略
-  &quot;attachment_refs&quot;: [],                           // 附件引用；没有传空数组或省略
+  &quot;attachment_refs&quot;: [],                           // 附件引用；可传对象数组，也兼容字符串 URL 数组
   &quot;idempotency_key&quot;: &quot;chat:tenant-ext-001:msg-20260520-0001&quot;, // 幂等键
   &quot;received_at&quot;: &quot;2026-05-20T10:00:00Z&quot;            // 第三方收到消息的时间
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>artifact_type</code></td><td>产物生成建议填</td><td>推荐产物语义字段；静态页传 <code>static_page</code> 后，V3 会自动补齐产物模式和图文链路</td></tr><tr><td><code>template</code></td><td>使用模板时填</td><td>产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 V3 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>artifact_type</code></td><td>产物生成建议填</td><td>推荐产物语义字段；静态页传 <code>static_page</code> 后，V3 会自动补齐产物模式和图文链路</td></tr><tr><td><code>template</code></td><td>使用模板时填</td><td>产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 V3 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>business_datasource_ids</code></td><td>业务库问答/报表建议填</td><td>本轮指定业务库 ID 数组；值来自 1.5 的 <code>source_external_id</code>。兼容别名：<code>businessDatasourceIds</code>、<code>businessDataSourceIds</code>、<code>databaseSourceIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表；推荐对象数组，也兼容 <code>[&quot;https://example.com/a.docx&quot;]</code> 字符串 URL 数组</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
 <p><code>dataset_external_id</code> / <code>dataset_external_ids</code> 可以和 <code>available_document_external_ids</code> 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 <code>available_document_external_ids</code> 或 <code>documentExternalId</code>，不传分组字段。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会因为只传 <code>available_document_source_id</code> 自动扩大到整源文档。</p>
+<p><code>attachment_refs</code> 推荐对象格式：</p>
+<figure class="code-card">
+    <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>[
+  {
+    &quot;attachment_external_id&quot;: &quot;att-001&quot;,
+    &quot;filename&quot;: &quot;资料.docx&quot;,
+    &quot;content_type&quot;: &quot;application/vnd.openxmlformats-officedocument.wordprocessingml.document&quot;,
+    &quot;download_url_redacted&quot;: &quot;https://example.com/a.docx&quot;
+  }
+]</code></pre>
+  </figure>
+<p>若第三方暂时只能传字符串 URL 数组，V3 会兼容为附件引用对象；后续若要 V3 主动下载附件，仍建议先走 1.1 文档解析接口。</p>
 <p>响应：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -631,7 +697,7 @@ Content-Type: application/json</code></pre>
   }
 }</code></pre>
   </figure>
-<h3 id="section-08">2.2 流式聊天</h3>
+<h3 id="section-09">2.2 流式聊天</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events/stream
@@ -639,7 +705,7 @@ Authorization: Bearer &lt;V3 inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <p>请求体与 <code>POST /events</code> 相同。</p>
-<h3 id="section-09">2.3 数据接入/入库分析请求</h3>
+<h3 id="section-10">2.3 数据接入/入库分析请求</h3>
 <p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出数据接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求，例如：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -663,8 +729,8 @@ Content-Type: application/json</code></pre>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_retrying</code>、<code>data_ingestion_analysis_completed</code>、<code>data_ingestion_analysis_needs_human</code>、<code>data_ingestion_analysis_failed</code>、<code>data_ingestion_analysis_cancelled</code>、人工确认后的 <code>data_ingestion_staging_dataset_ready</code>，以及同步阶段的 <code>data_ingestion_staging_sync_started</code>、<code>data_ingestion_staging_sync_running</code>、<code>data_ingestion_staging_sync_completed</code>、<code>data_ingestion_staging_sync_failed</code></td></tr><tr><td><code>reply.card.type</code></td><td>排队时为 <code>v3_data_ingestion_analysis</code>；完成后为 <code>v3_data_ingestion_analysis_result</code>；确认创建/复用 staging 数据集后为 <code>v3_data_ingestion_staging_plan_execution</code>；同步启动后为 <code>v3_data_ingestion_staging_sync</code></td></tr><tr><td><code>reply.card.codex_host_workflow_execution_id</code></td><td>固定分析任务 ID</td></tr><tr><td><code>reply.card.result_summary</code></td><td>完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作</td></tr><tr><td><code>reply.card.staging_plan</code></td><td>完成后可返回 <code>v3_data_ingestion_staging_plan</code>，用于人工确认后的数据集/数据源导入草稿；固定 <code>production_write_allowed=false</code></td></tr><tr><td><code>reply.card.dataset_id</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 V3 创建或复用的 staging 数据集 ID</td></tr><tr><td><code>reply.card.dataset_key</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 staging 数据集 key</td></tr><tr><td><code>reply.card.source_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回本次使用的数据库源 ID</td></tr><tr><td><code>reply.card.sync_run_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回 V3 内部同步任务 ID</td></tr><tr><td><code>reply.card.runtime_event.retryable</code></td><td>固定任务取消时为 <code>false</code>；第三方不需要自动重试取消态</td></tr><tr><td><code>reply.card.workflow_status</code></td><td>同步阶段返回 V3 内部工作流状态，例如 <code>running</code>、<code>succeeded</code>、<code>failed</code></td></tr><tr><td><code>reply.card.workflow_stage</code></td><td>同步阶段返回当前阶段，例如 <code>sync_users</code>、<code>fetch_content</code>、<code>ingest</code>、<code>index</code>、<code>completed</code></td></tr><tr><td><code>reply.card.imported_row_count</code></td><td>当前确认步骤不自动导入原始行，固定为 <code>0</code>；后续导入/数据库同步需走人工确认执行</td></tr></tbody></table></div>
 <p>当 <code>reply.task_status=data_ingestion_staging_sync_completed</code> 后，同一个 <code>conversation_external_id</code> 的后续问题会自动复用该 staging 数据集作为可见数据范围；第三方不必每轮重复传内部 <code>dataset_id</code>。如果第三方更换会话 ID，或希望切换数据范围，应重新传稳定 <code>dataset_external_id</code>、具体文档范围，或由 V3 侧重新确认新的 staging 数据集。</p>
 <p>若没有选中或上传可分析的数据源/表格/文档，V3 会返回 <code>data_ingestion_analysis_source_required</code>，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。</p>
-<h2 id="section-10">3. 生成产物（报表）</h2>
-<h3 id="section-11">3.1 模板列表字段</h3>
+<h2 id="section-11">3. 生成产物（报表）</h2>
+<h3 id="section-12">3.1 模板列表字段</h3>
 <p>第三方页面或第三方 AI 只需要保留下面这些模板字段；生成时把选中的模板带入 3.3。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -682,7 +748,7 @@ Content-Type: application/json</code></pre>
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template_document_external_id</code></td><td>是</td><td>模板文档 ID；必须先按 1.1 解析</td></tr><tr><td><code>source_id</code></td><td>是</td><td>模板所属文档源 ID</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>title</code></td><td>是</td><td>模板展示名</td></tr><tr><td><code>output_type</code></td><td>是</td><td><code>static_page</code>、<code>html</code>、<code>report</code> 或 <code>any</code></td></tr><tr><td><code>description</code></td><td>否</td><td>模板说明</td></tr><tr><td><code>tags</code></td><td>否</td><td>模板标签</td></tr></tbody></table></div>
-<h3 id="section-12">3.2 模板解析</h3>
+<h3 id="section-13">3.2 模板解析</h3>
 <p>模板也是文档，用 1.1 的解析接口。建议在 <code>metadata</code> 标记模板用途。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -703,7 +769,7 @@ Content-Type: application/json</code></pre>
   &quot;idempotency_key&quot;: &quot;parse-template:tpl-weekly-report-001:rev-template-01&quot; // 幂等键
 }</code></pre>
   </figure>
-<h3 id="section-13">3.3 按模板生成静态页/报表</h3>
+<h3 id="section-14">3.3 按模板生成静态页/报表</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
@@ -755,7 +821,7 @@ Content-Type: application/json</code></pre>
 <p>如果第三方使用 <code>assistant_run_id</code> 做轮询，推荐直接调用 3.4 的运行结果查询接口；返回仍是 2.1 的 <code>reply</code> 对象。固定发布完成后，<code>reply.task_status=static_page_published</code>，<code>reply.artifact_links[0]</code> 就是最终页面链接。第三方不需要再针对 Image2 效果图做确认、下载或二次提交。</p>
 <p>若已生成静态页/报表/HTML 产物，重点读取：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code>、<code>text</code> 或 <code>task_status</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的说明</td></tr><tr><td><code>reply.artifact_links</code></td><td>产物链接数组；静态页优先返回 generated-artifact 页面 URL，兼容返回 HTML 下载地址；模板 HTML 产物会返回 <code>/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0</code></td></tr><tr><td><code>reply.card</code></td><td>可能包含 <code>render_output_id</code>、<code>html_preview_url</code>、<code>html_download_url</code>、<code>generated_artifact_url</code>、<code>data_url</code>、<code>dynamic_page_contract</code>、<code>draft_id</code>、<code>image_job_id</code>、产物状态或结构化卡片</td></tr><tr><td><code>assistant_run_id</code></td><td>本次生成运行 ID</td></tr></tbody></table></div>
-<h3 id="section-14">3.4 查询、预览、下载产物</h3>
+<h3 id="section-15">3.4 查询、预览、下载产物</h3>
 <p>查询本次运行的最新第三方回复：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -787,13 +853,13 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>运行结果查询必填</td><td>2.1 响应返回的 V3 本次运行 ID</td></tr><tr><td><code>artifact_id</code></td><td>HTML 产物下载必填</td><td><code>reply.artifact_links</code> 中的 HTML artifact ID</td></tr><tr><td><code>file_index</code></td><td>HTML 产物下载必填</td><td>文件序号；当前模板 HTML 产物固定传 <code>0</code></td></tr><tr><td><code>render_output_id</code></td><td>静态页/报表必填</td><td>V3 生成的静态页/报表渲染 ID</td></tr></tbody></table></div>
-<h2 id="section-15">4. 枚举与错误</h2>
-<h3 id="section-16">4.1 <code>output_format</code></h3>
+<h2 id="section-16">4. 枚举与错误</h2>
+<h3 id="section-17">4.1 <code>output_format</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>rich_text</code></td><td>富文本回答</td></tr><tr><td><code>image_text</code></td><td>图文排版回答</td></tr><tr><td><code>markdown_table</code></td><td>MD 表格回答</td></tr><tr><td><code>json</code></td><td>JSON 回答</td></tr></tbody></table></div>
 <p>中文值也可传：<code>富文本</code>、<code>图文排版</code>、<code>MD表格</code>、<code>JSON</code>。</p>
-<h3 id="section-17">4.2 <code>render_mode</code></h3>
+<h3 id="section-18">4.2 <code>render_mode</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>normal</code></td><td>普通聊天回答</td></tr><tr><td><code>artifact</code></td><td>生成可预览/下载产物</td></tr></tbody></table></div>
-<h3 id="section-18">4.3 错误格式</h3>
+<h3 id="section-19">4.3 错误格式</h3>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{

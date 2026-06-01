@@ -1,6 +1,6 @@
 # V3 纯第三方简单版接口文档
 
-**版本：** 2026-05-25  
+**版本：** 2026-06-01
 **Base URL：** `https://v3.elepcloud.com`  
 **鉴权：** `Authorization: Bearer <V3 inbound token>`  
 **请求格式：** `Content-Type: application/json`
@@ -11,7 +11,7 @@
 2. 聊天同步：传用户 ID、会话 ID、文档范围、默认提示词和输出格式；文档范围首次传入后同一会话持续有效。
 3. 生成产物：从模板列表选择模板，解析模板，按模板生成报表/HTML 产物。
 
-可选补充：数据库源由 V3 先配置和同步，第三方只查状态并在聊天时传对应数据集范围。数据库对接细节已合并进完整 API 文档的 `11.6 第三方数据库对接`。
+可选补充：第三方可通过数据库源接口登记业务库。第一版外部自助接口只支持 MySQL；已配置服务端 `connection_env` 的业务库可直接进入 V3 数据集同步链路，只传原始连接串/账号/密码时 V3 不明文落库，会先创建待密钥绑定的业务库记录。数据库对接细节已合并进完整 API 文档的 `11.6 第三方数据库对接`。
 
 ## 1. 文档解析
 
@@ -223,6 +223,74 @@ Authorization: Bearer <V3 inbound token>
 | `status.datasets[].retrieval_evidence_count` | 否 | 该目标数据集中来自此数据库源的检索证据数 |
 | `status.health_findings.items` | 否 | 配置、同步、索引、行转换失败等问题列表 |
 
+### 1.5 创建/更新数据库源
+
+第三方在本地创建或更新业务库时，同步到 V3。第一版仅支持 `mysql`。推荐优先传 `connection_env`：即 V3 服务器上已经配置好的数据库连接串环境变量名。若只传 `connection_url` / `username` / `password`，V3 不会把明文凭据写入 PostgreSQL、日志或模型上下文，只会创建 `pending_secret_binding` 状态的业务库记录，后续由 V3 侧绑定服务端密钥后再同步。
+
+```http
+POST /v1/external/channels/{connection_id}/database-sources
+Authorization: Bearer <V3 inbound token>
+Content-Type: application/json
+```
+
+```jsonc
+{
+  "source_external_id": "db-20260601-0001",      // 第三方业务库 ID；用于幂等创建/更新
+  "name": "生产经营库",                           // 业务库展示名
+  "connector_kind": "mysql",                      // 第一版只支持 mysql
+  "connection_env": "THIRD_PARTY_DB_MAIN_URL",    // 推荐：V3 服务器环境变量名；不会返回真实连接串
+  "connection_url": null,                         // 可选：原始连接串；若未配置 connection_env，本版只登记为待密钥绑定
+  "username": null,                               // 可选：数据库用户名；不会明文落库
+  "password": null,                               // 可选：数据库密码；不会明文落库
+  "database": "hy_sql",                           // 数据库名；connection_env 模式必填
+  "tables": ["bi_traffic_area"],                  // 业务表名白名单；后续画像/同步使用
+  "dataset_external_id": "xinbai-operating-analysis", // 可选：同步目标稳定数据集/资料库 ID
+  "dataset_title": "新百经营分析数据集",            // 可选：自动创建数据集时使用
+  "idempotency_key": "datasource:db-20260601-0001" // 幂等键；建议包含 source_external_id
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 注释 |
+| --- | --- | --- |
+| `source_external_id` | 是 | 第三方稳定业务库 ID；后续聊天可放入 `business_datasource_ids` |
+| `name` | 否 | 展示名；不传时使用业务库 ID |
+| `connector_kind` | 否 | 第一版只支持 `mysql`；其他类型会返回 `unsupported_connector_kind` |
+| `connection_env` | 可用库建议必填 | V3 服务器环境变量名；有它时业务库可进入连接测试、画像和同步链路 |
+| `connection_url` | 否 | 原始连接串；未同时传 `connection_env` 时只创建待密钥绑定记录，不明文落库 |
+| `username` / `password` | 否 | 原始账号密码；不明文落库，不进入模型上下文 |
+| `database` | `connection_env` 模式必填 | MySQL 数据库名 |
+| `tables` | 否 | 表名白名单；为空表示后续由 V3 画像/配置决定 |
+| `dataset_external_id` | 否 | 同步目标稳定数据集/资料库 ID |
+| `dataset_title` | 否 | 自动创建数据集时使用 |
+| `idempotency_key` | 否 | 幂等键 |
+
+响应：
+
+```jsonc
+{
+  "accepted": true,                              // 是否已接收创建/更新
+  "source_external_id": "db-20260601-0001",      // 第三方业务库 ID
+  "source_id": "db-20260601-0001",               // V3 数据库源 ID；当前与 source_external_id 保持一致
+  "source": {
+    "id": "db-20260601-0001",                   // V3 数据库源 ID
+    "name": "生产经营库",                         // 展示名
+    "connector_kind": "mysql",                    // 连接类型
+    "status": "ready"                            // ready 或 pending_secret_binding
+  },
+  "redacted_summary": {                          // 脱敏摘要；不含密码或原始连接串
+    "kind": "mysql",
+    "database": "hy_sql",
+    "connection_env": "THIRD_PARTY_DB_MAIN_URL",
+    "table_count": 0,
+    "tables": []
+  },
+  "credential_status": "ready",                  // ready 或 pending_secret_binding
+  "warnings": []                                 // 非阻断提醒
+}
+```
+
 ## 2. 聊天同步
 
 ### 2.1 普通聊天
@@ -256,10 +324,11 @@ Content-Type: application/json
   ],
   "dataset_external_id": null,                     // 可选：授权单个稳定业务分组；传入后同一会话持续有效
   "dataset_external_ids": [],                      // 可选：授权多个稳定业务分组；有多个分组时用数组
+  "business_datasource_ids": [],                   // 可选：本轮指定业务库 ID；对应 database-sources 的 source_external_id
   "documentExternalId": "doc-20260520-0001",        // 可选兼容写法：单文档 ID；有数组时不用传
   "requested_skills": [],                          // 本轮指定 skill；没有传空数组或省略
   "mention_external_user_ids": [],                 // 本条消息 @ 的用户 ID；没有传空数组或省略
-  "attachment_refs": [],                           // 附件引用；没有传空数组或省略
+  "attachment_refs": [],                           // 附件引用；可传对象数组，也兼容字符串 URL 数组
   "idempotency_key": "chat:tenant-ext-001:msg-20260520-0001", // 幂等键
   "received_at": "2026-05-20T10:00:00Z"            // 第三方收到消息的时间
 }
@@ -288,13 +357,29 @@ Content-Type: application/json
 | `available_document_external_ids` | 文档问答建议填 | 允许 V3 使用的文档 ID；也可用 `documentExternalId` 传单个文档；首次传入后同一 `conversation_external_id` 后续有效 |
 | `dataset_external_id` | 分组文档问答建议填 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID |
 | `dataset_external_ids` | 多分组文档问答建议填 | 第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：`datasetExternalIds`、`availableDatasetExternalIds` |
+| `business_datasource_ids` | 业务库问答/报表建议填 | 本轮指定业务库 ID 数组；值来自 1.5 的 `source_external_id`。兼容别名：`businessDatasourceIds`、`businessDataSourceIds`、`databaseSourceIds` |
 | `requested_skills` | 否 | 本轮 skill 列表 |
 | `mention_external_user_ids` | 否 | 被 @ 的第三方用户 ID |
-| `attachment_refs` | 否 | 附件引用列表 |
+| `attachment_refs` | 否 | 附件引用列表；推荐对象数组，也兼容 `["https://example.com/a.docx"]` 字符串 URL 数组 |
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | ISO 8601 时间 |
 
 `dataset_external_id` / `dataset_external_ids` 可以和 `available_document_external_ids` 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 `available_document_external_ids` 或 `documentExternalId`，不传分组字段。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会因为只传 `available_document_source_id` 自动扩大到整源文档。
+
+`attachment_refs` 推荐对象格式：
+
+```jsonc
+[
+  {
+    "attachment_external_id": "att-001",
+    "filename": "资料.docx",
+    "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "download_url_redacted": "https://example.com/a.docx"
+  }
+]
+```
+
+若第三方暂时只能传字符串 URL 数组，V3 会兼容为附件引用对象；后续若要 V3 主动下载附件，仍建议先走 1.1 文档解析接口。
 
 响应：
 

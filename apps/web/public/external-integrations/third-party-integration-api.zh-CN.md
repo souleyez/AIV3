@@ -256,6 +256,7 @@ Authorization: Bearer <V3 inbound token>
   "text": "请基于我有权限查看的制度文档，说明本周采购审批需要注意什么。",
   "available_document_source_id": "src-docs",
   "available_document_external_ids": ["doc-001"],
+  "business_datasource_ids": [],
   "requested_skills": [
     {
       "skill_id": "policy_risk_review",
@@ -290,6 +291,7 @@ Authorization: Bearer <V3 inbound token>
 | `available_document_external_ids` | 文档问答建议传 | 允许 V3 使用的第三方文档 ID 列表；首次传入后同一 `conversation_external_id` 后续有效；单文档可用 `documentExternalId` |
 | `dataset_external_id` | 文档分组问答建议传 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
 | `dataset_external_ids` | 多分组文档问答建议传 | 第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：`datasetExternalIds`、`availableDatasetExternalIds` |
+| `business_datasource_ids` | 业务库问答/报表建议传 | 本轮指定业务库 ID 数组；值来自 `11.6.1 创建/更新数据库源` 的 `source_external_id`。兼容别名：`businessDatasourceIds`、`businessDataSourceIds`、`databaseSourceIds` |
 | `artifact_type` | 产物生成建议传 | 推荐产物语义字段；静态页传 `static_page` 后，V3 会自动进入产物模式和 Image2/Codex 静态页链路。兼容别名：`artifactType` |
 | `template` | 使用模板时传 | 产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围 |
 | `template.source_id` | 模板建议传 | 模板所属文档源 ID |
@@ -304,7 +306,7 @@ Authorization: Bearer <V3 inbound token>
 | `requested_skills[].mode` | 否 | `required`、`preferred` 或 `disabled`；不传默认按 `preferred` |
 | `requested_skills[].arguments` | 否 | 本轮 skill 参数对象，只放非敏感参数 |
 | `mention_external_user_ids` | 否 | 被提及的第三方用户 ID 列表 |
-| `attachment_refs` | 否 | 附件引用列表；文件下载方式按项目配置 |
+| `attachment_refs` | 否 | 附件引用列表；推荐对象数组，也兼容 `["https://example.com/a.docx"]` 字符串 URL 数组。后续若要 V3 主动下载附件，建议优先走文档解析接口 |
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | 第三方收到或生成该消息的时间 |
 
@@ -841,17 +843,17 @@ Authorization: Bearer <V3 inbound token>
 
 ### 11.6 第三方数据库对接
 
-数据库源由 V3 侧先完成连接、表映射、画像和同步配置。典型方式和 8 服务器现有 `hy-sql-traffic-area` 类似：V3 托管数据库密钥和表白名单，第三方或联调方通过 API 查看状态、触发同步；同步后的数据进入 V3 数据集，再用于问答、分析和静态页报表。
+数据库源可以由 V3 侧先完成连接、表映射、画像和同步配置，也可以由第三方通道先登记业务库。典型方式和 8 服务器现有 `hy-sql-traffic-area` 类似：V3 托管数据库密钥和表白名单，第三方或联调方通过 API 查看状态、触发同步；同步后的数据进入 V3 数据集，再用于问答、分析和静态页报表。
 
-数据库密码不出现在公开请求体里。生产建议由 V3 侧把连接串保存为服务端环境变量或密钥绑定，接口里只出现 `connection_env` 这类密钥引用。第三方通道只能查询通道配置中允许的数据库源状态：`default_source_id` / `defaultSourceId`，或 `allowed_database_source_ids` / `allowedDatabaseSourceIds` / `database_source_ids` / `databaseSourceIds` / `allowed_source_ids` / `allowedSourceIds` / `database_sources`。
+生产建议由 V3 侧把连接串保存为服务端环境变量或密钥绑定，接口里只出现 `connection_env` 这类密钥引用。第三方若只能先传 `connection_url`、`username`、`password`，V3 第一版不会把明文凭据写入 PostgreSQL、日志或模型上下文，只创建 `pending_secret_binding` 状态的业务库记录，后续绑定服务端密钥后再同步。第三方通道只能查询或使用通道配置中允许的数据库源状态：`default_source_id` / `defaultSourceId`，或 `allowed_database_source_ids` / `allowedDatabaseSourceIds` / `database_source_ids` / `databaseSourceIds` / `allowed_source_ids` / `allowedSourceIds` / `database_sources`。
 
 最小接入顺序：
 
-1. V3 配置数据库源：配置 `source_id`、数据库类型、密钥引用、库名、表映射。
+1. 创建/配置数据库源：第三方调用通道接口登记 `source_external_id`，或由 V3 运维预先配置 `source_id`、数据库类型、密钥引用、库名、表映射。
 2. 联调验证：调用连接测试、库表扫描、表预览、语义画像。
 3. 同步入库：把数据库行清洗成 V3 文档/数据集。
 4. 状态查询：第三方通道查询数据库源和同步结果。
-5. 聊天/报表：在聊天事件里传同步后的数据集范围，生成问答或静态页报表。
+5. 聊天/报表：在聊天事件里传 `business_datasource_ids` 或同步后的数据集范围，生成问答或静态页报表。
 
 数据库源配置摘要示例：
 
@@ -881,7 +883,81 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-#### 11.6.1 连接测试
+#### 11.6.1 创建/更新数据库源（第三方通道）
+
+第三方创建或更新业务库时调用。第一版外部自助接口只支持 MySQL。若传 `connection_env`，表示 V3 服务器已配置同名数据库连接串环境变量；若只传原始 `connection_url` / `username` / `password`，V3 只登记为 `pending_secret_binding`，不会明文落库。
+
+```http
+POST /v1/external/channels/{connection_id}/database-sources
+Host: v3.elepcloud.com
+Content-Type: application/json
+Authorization: Bearer <V3 inbound token>
+```
+
+请求示例：
+
+```json
+{
+  "source_external_id": "db-20260601-0001",
+  "name": "生产经营库",
+  "connector_kind": "mysql",
+  "connection_env": "THIRD_PARTY_DB_MAIN_URL",
+  "connection_url": null,
+  "username": null,
+  "password": null,
+  "database": "hy_sql",
+  "tables": ["bi_traffic_area"],
+  "dataset_external_id": "xinbai-operating-analysis",
+  "dataset_title": "新百经营分析数据集",
+  "idempotency_key": "datasource:db-20260601-0001"
+}
+```
+
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `connection_id` | 是 | 路径参数；V3 分配的第三方通道 ID |
+| `source_external_id` | 是 | 第三方稳定业务库 ID；后续聊天可放入 `business_datasource_ids` |
+| `name` | 否 | 业务库展示名 |
+| `connector_kind` | 否 | 第一版只支持 `mysql`；其他类型返回 `unsupported_connector_kind` |
+| `connection_env` | 可用库建议必填 | V3 服务器环境变量名；有它时可进入连接测试、画像和同步链路 |
+| `connection_url` | 否 | 原始连接串；未同时传 `connection_env` 时只创建待密钥绑定记录，不明文落库 |
+| `username` / `password` | 否 | 原始账号密码；不明文落库，不进入模型上下文 |
+| `database` | `connection_env` 模式必填 | MySQL 数据库名 |
+| `tables` | 否 | 表名白名单；为空表示后续由 V3 画像/配置决定 |
+| `dataset_external_id` | 否 | 目标稳定数据集/资料库 ID |
+| `dataset_title` | 否 | 自动创建数据集时使用 |
+| `idempotency_key` | 否 | 幂等键 |
+
+响应示例：
+
+```json
+{
+  "accepted": true,
+  "source_external_id": "db-20260601-0001",
+  "source_id": "db-20260601-0001",
+  "source": {
+    "id": "db-20260601-0001",
+    "name": "生产经营库",
+    "connector_kind": "mysql",
+    "status": "ready"
+  },
+  "redacted_summary": {
+    "kind": "mysql",
+    "database": "hy_sql",
+    "connection_env": "THIRD_PARTY_DB_MAIN_URL",
+    "table_count": 0,
+    "tables": []
+  },
+  "credential_status": "ready",
+  "warnings": []
+}
+```
+
+若未提供 `connection_env` 但提供了原始连接信息，`credential_status` 返回 `pending_secret_binding`。第三方可以先保存 `source_id`，后续由 V3 侧完成密钥绑定后再查询状态或触发同步。
+
+#### 11.6.2 连接测试
 
 用于确认 V3 能访问数据库，但不返回密码。
 
@@ -907,7 +983,7 @@ Authorization: Bearer <V3 inbound token>
 | `source_id` | 是 | 路径参数；V3 数据库源 ID，例如 `hy-sql-traffic-area` |
 | `database_source` | 否 | 临时覆盖配置；生产通常传空对象，使用 V3 已保存的服务端配置；不能传密码、token、原始连接串等敏感字段 |
 
-#### 11.6.2 扫描库表结构
+#### 11.6.3 扫描库表结构
 
 用于拿到库、表、字段、类型和估算行数。
 
@@ -950,7 +1026,7 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-#### 11.6.3 表预览
+#### 11.6.4 表预览
 
 用于抽样查看表数据，辅助确认字段含义。不要用于导出完整数据。
 
@@ -979,7 +1055,7 @@ Authorization: Bearer <V3 inbound token>
 | `limit` | 否 | 预览行数；建议 20 以内 |
 | `database_source` | 否 | 临时覆盖配置；生产通常传空对象 |
 
-#### 11.6.4 数据库语义画像
+#### 11.6.5 数据库语义画像
 
 用于让 V3 判断哪些字段像时间、指标、维度、实体或文本，为后续问答和报表做准备。
 
@@ -1025,7 +1101,7 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-#### 11.6.5 应用画像为表映射
+#### 11.6.6 应用画像为表映射
 
 用于把画像结果写回数据库源配置。建议先 `dry_run=true` 看结果，确认后再正式写入。
 
@@ -1060,7 +1136,7 @@ Authorization: Bearer <V3 inbound token>
 | `profile` | 本次画像结果 |
 | `updated_at` | 写回配置时间；`dry_run=true` 时为空 |
 
-#### 11.6.6 聚合查询
+#### 11.6.7 聚合查询
 
 用于小范围统计验证，例如按门店、品牌、日期做 `count`、`sum`、`avg`。
 
@@ -1085,7 +1161,7 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-#### 11.6.7 同步数据库到 V3 数据集
+#### 11.6.8 同步数据库到 V3 数据集
 
 把数据库行清洗为 V3 文档/证据，后续问答和报表都走数据集链路。
 
@@ -1145,7 +1221,7 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-#### 11.6.8 查询数据库源状态
+#### 11.6.9 查询数据库源状态
 
 该接口只读，不接收数据库密码，不执行 SQL，不返回原始连接串、密码、token 或原始同步游标。
 
@@ -1245,9 +1321,9 @@ Authorization: Bearer <V3 inbound token>
 | `status.semantic_profile` | 表字段、指标、维度、时间字段、实体字段等语义摘要 |
 | `status.health_findings` | 配置、同步、索引、行转换失败等问题摘要 |
 
-#### 11.6.9 聊天和报表使用数据库数据
+#### 11.6.10 聊天和报表使用数据库数据
 
-数据库同步完成后，不在聊天里传 SQL，也不传数据库密码。聊天只传同步后的数据集范围。
+数据库同步完成后，不在聊天里传 SQL，也不传数据库密码。聊天可传 `business_datasource_ids` 指定本轮业务库范围，也可传同步后的 `dataset_external_ids` 指定数据集范围。若两者同时传，V3 会按已授权业务库和数据集范围供料，不会因为只传通道默认源而自动扩大到所有库。
 
 ```http
 POST /v1/external/channels/{connection_id}/events
@@ -1272,6 +1348,9 @@ Authorization: Bearer <V3 inbound token>
   "output_format": "rich_text",
   "render_mode": "artifact",
   "artifact_type": "static_page",
+  "business_datasource_ids": [
+    "db-20260601-0001"
+  ],
   "dataset_external_ids": [
     "xinbai-operating-analysis"
   ],
@@ -1280,6 +1359,13 @@ Authorization: Bearer <V3 inbound token>
   "received_at": "2026-05-31T10:00:00Z"
 }
 ```
+
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `business_datasource_ids` | 业务库问答/报表建议填 | 第三方业务库 ID 数组；值来自 11.6.1 的 `source_external_id`。兼容别名：`businessDatasourceIds`、`businessDataSourceIds`、`databaseSourceIds` |
+| `dataset_external_ids` | 否 | 已同步数据集范围；用于只授权具体稳定数据集 |
 
 如果进入静态页链路，重点看：
 
@@ -1293,7 +1379,7 @@ Authorization: Bearer <V3 inbound token>
 | `reply.card.generated_artifact_url` | 已生成产物 URL |
 | `artifact_links` | 产物链接数组；第三方页面可直接展示 |
 
-#### 11.6.10 状态判断
+#### 11.6.11 状态判断
 
 | 场景 | 判断方式 | 第三方动作 |
 | --- | --- | --- |

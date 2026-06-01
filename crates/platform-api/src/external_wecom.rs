@@ -408,6 +408,7 @@ fn wecom_message_from_fields(
         template: None,
         mention_external_user_ids: Vec::new(),
         attachment_refs: wecom_attachment_refs(fields),
+        business_datasource_ids: Vec::new(),
         available_document_external_ids: Vec::new(),
         available_document_source_id: None,
         dataset_external_id: None,

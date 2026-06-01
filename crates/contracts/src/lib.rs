@@ -475,6 +475,18 @@ pub struct ExternalBotMessageView {
     pub mention_external_user_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_refs: Vec<ExternalAttachmentRefView>,
+    #[serde(
+        default,
+        alias = "businessDatasourceIds",
+        alias = "business_data_source_ids",
+        alias = "businessDataSourceIds",
+        alias = "business_database_source_ids",
+        alias = "businessDatabaseSourceIds",
+        alias = "databaseSourceIds",
+        alias = "database_source_ids",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub business_datasource_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub available_document_external_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1050,6 +1062,72 @@ pub struct GetDatabaseSourceStatusResponse {
     pub connector_kind: String,
     pub redacted_summary: Value,
     pub status: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateExternalDatabaseSourceRequest {
+    #[serde(alias = "sourceExternalId")]
+    pub source_external_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, alias = "connectorKind")]
+    pub connector_kind: String,
+    #[serde(
+        default,
+        alias = "connectionEnv",
+        alias = "databaseUrlEnv",
+        alias = "database_url_env",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub connection_env: Option<String>,
+    #[serde(
+        default,
+        alias = "connectionUrl",
+        alias = "databaseUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub connection_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    #[serde(default)]
+    pub tables: Vec<String>,
+    #[serde(
+        default,
+        alias = "datasetExternalId",
+        alias = "datasetKey",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_external_id: Option<String>,
+    #[serde(
+        default,
+        alias = "datasetTitle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub dataset_title: Option<String>,
+    #[serde(default)]
+    pub database_source: Value,
+    #[serde(
+        default,
+        alias = "idempotencyKey",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateExternalDatabaseSourceResponse {
+    pub accepted: bool,
+    pub source_external_id: String,
+    pub source_id: String,
+    pub source: Value,
+    pub redacted_summary: Value,
+    pub credential_status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 fn default_database_aggregation() -> String {
@@ -4848,6 +4926,7 @@ mod tests {
                     "download_url_redacted": "https://wecom.example/download/[redacted]"
                 }
             ],
+            "business_datasource_ids": ["db-main"],
             "idempotency_key": "wecom:corp-001:msg-001",
             "received_at": received_at
         }))
@@ -4879,6 +4958,7 @@ mod tests {
             message.attachment_refs[0].filename.as_deref(),
             Some("orders.xlsx")
         );
+        assert_eq!(message.business_datasource_ids, vec!["db-main"]);
 
         let encoded = serde_json::to_value(&message).expect("message should serialize");
         assert_eq!(encoded["platform"], json!("we_com"));
@@ -4887,6 +4967,7 @@ mod tests {
             encoded["attachment_refs"][0]["download_url_redacted"],
             json!("https://wecom.example/download/[redacted]")
         );
+        assert_eq!(encoded["business_datasource_ids"], json!(["db-main"]));
         assert_eq!(
             encoded["requested_skills"][0]["skill_id"],
             json!("contract_review")

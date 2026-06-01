@@ -422,6 +422,7 @@ fn feishu_message_from_payload(
         template: None,
         mention_external_user_ids: feishu_mentions(message, &content),
         attachment_refs: feishu_attachment_refs(&content),
+        business_datasource_ids: Vec::new(),
         available_document_external_ids: Vec::new(),
         available_document_source_id: None,
         dataset_external_id: None,

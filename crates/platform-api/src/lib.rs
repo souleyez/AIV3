@@ -44,6 +44,7 @@ use contracts::{
     CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
     CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
     CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
+    CreateExternalDatabaseSourceRequest, CreateExternalDatabaseSourceResponse,
     CreateExternalDocumentParseRequest, CreateExternalDocumentParseResponse,
     CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
     CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
@@ -1374,6 +1375,10 @@ pub fn router(
         .route(
             "/v1/external/channels/{connection_id}/database-sources/{source_external_id}/status",
             get(get_external_channel_database_source_status),
+        )
+        .route(
+            "/v1/external/channels/{connection_id}/database-sources",
+            axum::routing::post(create_external_channel_database_source),
         )
         .route(
             "/v1/external/channels/{connection_id}/static-page-renders/{render_output_id}",
@@ -12511,6 +12516,17 @@ fn external_integration_config_summary(config: &Value) -> Value {
 
 fn external_database_source_config_summary(config: &Value) -> Value {
     let Some(database_source) = source_database_config_fragment(config) else {
+        if let Some(pending) = config
+            .get("database_source_pending")
+            .or_else(|| config.get("databaseSourcePending"))
+            .cloned()
+        {
+            return json!({
+                "configured": false,
+                "credential_status": "pending_secret_binding",
+                "pending": external_integration_redacted_summary(pending),
+            });
+        }
         return json!({ "configured": false });
     };
     match MySqlSourceConfig::from_value(&database_source) {
@@ -13052,6 +13068,484 @@ async fn get_external_channel_database_source_status(
         redacted_summary,
         status,
     }))
+}
+
+async fn create_external_channel_database_source(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(connection_id): Path<String>,
+    Json(request): Json<CreateExternalDatabaseSourceRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateExternalDatabaseSourceResponse>), ApiError> {
+    validate_required("connection_id", &connection_id)?;
+    let connection = load_external_channel_connection(&state, &connection_id).await?;
+    ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
+    ensure_external_channel_enabled(&connection_id, &connection)?;
+
+    let prepared = prepare_external_channel_database_source_config(&connection_id, &request)?;
+    let source = upsert_external_channel_database_source_connection(
+        &state,
+        &prepared.source_id,
+        &prepared.source_key,
+        &prepared.display_name,
+        &prepared.base_url_redacted,
+        &prepared.config_redacted,
+        &prepared.health_status,
+    )
+    .await?;
+    allow_external_channel_database_source(
+        &state,
+        &connection_id,
+        &source.source_id,
+        &source.display_name,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CreateExternalDatabaseSourceResponse {
+            accepted: true,
+            source_external_id: prepared.source_id.clone(),
+            source_id: source.source_id.clone(),
+            source: json!({
+                "id": source.source_id,
+                "name": source.display_name,
+                "connector_kind": source.connector_kind,
+                "status": prepared.credential_status,
+            }),
+            redacted_summary: prepared.redacted_summary,
+            credential_status: prepared.credential_status,
+            warnings: prepared.warnings,
+        }),
+    ))
+}
+
+#[derive(Clone, Debug)]
+struct PreparedExternalChannelDatabaseSource {
+    source_id: String,
+    source_key: String,
+    display_name: String,
+    base_url_redacted: String,
+    config_redacted: Value,
+    redacted_summary: Value,
+    credential_status: String,
+    health_status: String,
+    warnings: Vec<String>,
+}
+
+fn prepare_external_channel_database_source_config(
+    connection_id: &str,
+    request: &CreateExternalDatabaseSourceRequest,
+) -> std::result::Result<PreparedExternalChannelDatabaseSource, ApiError> {
+    let source_id = validate_external_database_source_id(&request.source_external_id)?;
+    let connector_kind = normalize_external_database_connector_kind(&request.connector_kind)?;
+    let display_name =
+        trim_optional(request.name.clone()).unwrap_or_else(|| format!("业务库 {source_id}"));
+    let requested_tables = normalize_external_database_source_table_names(&request.tables)?;
+    let connection_env = request
+        .connection_env
+        .as_deref()
+        .and_then(non_empty_trimmed_string)
+        .or_else(|| {
+            request
+                .database_source
+                .get("connection_env")
+                .or_else(|| request.database_source.get("connectionEnv"))
+                .and_then(Value::as_str)
+                .and_then(non_empty_trimmed_string)
+        });
+    let raw_connection_url = request
+        .connection_url
+        .as_deref()
+        .and_then(non_empty_trimmed_string);
+    let database = request
+        .database
+        .as_deref()
+        .and_then(non_empty_trimmed_string)
+        .or_else(|| {
+            request
+                .database_source
+                .get("database")
+                .and_then(Value::as_str)
+                .and_then(non_empty_trimmed_string)
+        })
+        .or_else(|| {
+            raw_connection_url
+                .as_deref()
+                .and_then(infer_database_name_from_connection_url)
+        });
+    let raw_credential_supplied = raw_connection_url.is_some()
+        || request
+            .username
+            .as_deref()
+            .and_then(non_empty_trimmed_string)
+            .is_some()
+        || request
+            .password
+            .as_deref()
+            .and_then(non_empty_trimmed_string)
+            .is_some();
+    let mut warnings = Vec::new();
+    let (config_redacted, redacted_summary, credential_status, health_status, base_url_redacted) =
+        if let Some(connection_env) = connection_env {
+            let database = database.ok_or_else(|| {
+                ApiError::bad_request(
+                    "external_database_source_database_required",
+                    "database is required when connection_env is supplied".to_string(),
+                )
+            })?;
+            let mut database_source = match request.database_source.clone() {
+                Value::Object(map) => Value::Object(map),
+                Value::Null => json!({}),
+                _ => {
+                    return Err(ApiError::bad_request(
+                        "external_database_source_invalid",
+                        "database_source must be an object when supplied".to_string(),
+                    ))
+                }
+            };
+            set_payload_value(
+                &mut database_source,
+                "connection_env",
+                json!(connection_env),
+            );
+            set_payload_value(&mut database_source, "database", json!(database));
+            if let Some(dataset_external_id) = request
+                .dataset_external_id
+                .as_deref()
+                .and_then(non_empty_trimmed_string)
+            {
+                set_payload_value(
+                    &mut database_source,
+                    "requested_dataset_external_id",
+                    json!(dataset_external_id),
+                );
+            }
+            let config = MySqlSourceConfig::from_value(&database_source)
+                .map_err(database_source_error_to_api)?;
+            if raw_credential_supplied {
+                warnings.push(
+                    "connection_url/username/password were received but not stored because connection_env was supplied"
+                        .to_string(),
+                );
+            }
+            (
+                json!({
+                    "database_source": database_source,
+                    "external_channel": {
+                        "connection_id": connection_id,
+                        "source_external_id": source_id,
+                        "requested_tables": requested_tables,
+                        "dataset_external_id": request.dataset_external_id,
+                        "dataset_title": request.dataset_title,
+                    },
+                    "credential_status": "ready",
+                    "raw_credentials_stored": false,
+                }),
+                serde_json::to_value(config.redacted_summary()).unwrap_or_else(|_| json!({})),
+                "ready".to_string(),
+                "unknown".to_string(),
+                format!("env:{connection_env}"),
+            )
+        } else {
+            if !raw_credential_supplied {
+                return Err(ApiError::bad_request(
+                    "external_database_source_credential_required",
+                    "connection_env is required for an immediately usable database source; raw credentials are accepted only as a pending secret-binding request"
+                        .to_string(),
+                ));
+            }
+            let database = database.unwrap_or_else(|| "unknown".to_string());
+            let redacted_url = raw_connection_url
+                .as_deref()
+                .map(redact_database_connection_url)
+                .unwrap_or_else(|| "[not supplied]".to_string());
+            warnings.push(
+                "raw database credentials were not stored; bind a server-side connection_env to make this source usable"
+                    .to_string(),
+            );
+            (
+                json!({
+                    "database_source_pending": {
+                        "kind": connector_kind,
+                        "database": database,
+                        "connection_url_redacted": redacted_url,
+                        "username_supplied": request.username.as_ref().is_some_and(|value| !value.trim().is_empty()),
+                        "password_supplied": request.password.as_ref().is_some_and(|value| !value.trim().is_empty()),
+                        "requested_tables": requested_tables,
+                        "dataset_external_id": request.dataset_external_id,
+                        "dataset_title": request.dataset_title,
+                    },
+                    "external_channel": {
+                        "connection_id": connection_id,
+                        "source_external_id": source_id,
+                    },
+                    "credential_status": "pending_secret_binding",
+                    "raw_credentials_stored": false,
+                }),
+                json!({
+                    "configured": false,
+                    "kind": connector_kind,
+                    "database": database,
+                    "connection_url_redacted": redacted_url,
+                    "requested_tables": requested_tables,
+                    "credential_status": "pending_secret_binding",
+                }),
+                "pending_secret_binding".to_string(),
+                "pending_secret_binding".to_string(),
+                redacted_url,
+            )
+        };
+
+    Ok(PreparedExternalChannelDatabaseSource {
+        source_key: format!("external-channel:{connection_id}:database:{source_id}"),
+        source_id,
+        display_name,
+        base_url_redacted,
+        config_redacted,
+        redacted_summary,
+        credential_status,
+        health_status,
+        warnings,
+    })
+}
+
+fn normalize_external_database_connector_kind(kind: &str) -> std::result::Result<String, ApiError> {
+    let normalized = kind
+        .trim()
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '\t' | '\n' | '\r'))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
+    match normalized.as_str() {
+        "" | "mysql" | "mysqlsource" | "databasesource" => Ok("mysql".to_string()),
+        "postgresql" | "postgres" | "sqlserver" | "oracle" | "mongodb" | "restapi" => {
+            Err(ApiError::bad_request_with_details(
+                "unsupported_connector_kind",
+                "the first external database-source API version only supports mysql".to_string(),
+                json!({
+                    "requested_connector_kind": kind,
+                    "supported_connector_kinds": ["mysql"],
+                }),
+            ))
+        }
+        _ => Err(ApiError::bad_request_with_details(
+            "unsupported_connector_kind",
+            "connector_kind must be mysql for this endpoint".to_string(),
+            json!({
+                "requested_connector_kind": kind,
+                "supported_connector_kinds": ["mysql"],
+            }),
+        )),
+    }
+}
+
+fn validate_external_database_source_id(value: &str) -> std::result::Result<String, ApiError> {
+    let value = non_empty_trimmed_string(value).ok_or_else(|| {
+        ApiError::bad_request(
+            "validation_error",
+            "source_external_id must not be empty".to_string(),
+        )
+    })?;
+    if value.chars().count() > 128
+        || value
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | '?' | '#'))
+    {
+        return Err(ApiError::bad_request(
+            "validation_error",
+            "source_external_id must be printable text within 128 characters and must not contain path separators".to_string(),
+        ));
+    }
+    Ok(value)
+}
+
+fn normalize_external_database_source_table_names(
+    tables: &[String],
+) -> std::result::Result<Vec<String>, ApiError> {
+    let mut output = Vec::new();
+    for table in tables {
+        let Some(table) = non_empty_trimmed_string(table) else {
+            continue;
+        };
+        if table.chars().count() > 128 || table.chars().any(char::is_control) {
+            return Err(ApiError::bad_request(
+                "validation_error",
+                "tables must contain printable table names within 128 characters".to_string(),
+            ));
+        }
+        if !output.contains(&table) {
+            output.push(table);
+        }
+    }
+    Ok(output)
+}
+
+fn infer_database_name_from_connection_url(url: &str) -> Option<String> {
+    let without_query = url.split(['?', '#']).next().unwrap_or(url);
+    let after_scheme = without_query
+        .strip_prefix("jdbc:mysql://")
+        .or_else(|| without_query.strip_prefix("mysql://"))
+        .unwrap_or(without_query);
+    after_scheme
+        .rsplit('/')
+        .next()
+        .and_then(non_empty_trimmed_string)
+        .and_then(|value| value.split(';').next().and_then(non_empty_trimmed_string))
+}
+
+fn redact_database_connection_url(url: &str) -> String {
+    let without_query = url.split(['?', '#']).next().unwrap_or(url.trim());
+    let Some((scheme, rest)) = without_query.split_once("://") else {
+        return "[redacted-database-url]".to_string();
+    };
+    let rest = rest.rsplit_once('@').map(|(_, host)| host).unwrap_or(rest);
+    format!("{scheme}://{rest}")
+}
+
+async fn upsert_external_channel_database_source_connection(
+    state: &AppState,
+    source_id: &str,
+    source_key: &str,
+    display_name: &str,
+    base_url_redacted: &str,
+    config_redacted: &Value,
+    health_status: &str,
+) -> std::result::Result<ExternalSourceConnectionSummary, ApiError> {
+    let now = Utc::now();
+    let row = sqlx::query(
+        r#"
+        insert into external_source_connections (
+            id,
+            tenant_id,
+            connector_kind,
+            source_key,
+            display_name,
+            base_url_redacted,
+            config_redacted,
+            status,
+            sync_mode,
+            permission_mode,
+            health_status,
+            created_at,
+            updated_at
+        )
+        values ($1, $2, 'mysql', $3, $4, $5, $6, 'enabled', 'pull', 'source_acl_snapshot', $7, $8, $8)
+        on conflict (tenant_id, id) do update
+        set connector_kind = 'mysql',
+            display_name = excluded.display_name,
+            base_url_redacted = excluded.base_url_redacted,
+            config_redacted = external_source_connections.config_redacted || excluded.config_redacted,
+            status = 'enabled',
+            sync_mode = 'pull',
+            permission_mode = 'source_acl_snapshot',
+            health_status = excluded.health_status,
+            disabled_at = null,
+            updated_at = excluded.updated_at
+        returning id,
+                  connector_kind,
+                  display_name,
+                  sync_mode,
+                  permission_mode,
+                  health_status,
+                  config_redacted,
+                  disabled_at
+        "#,
+    )
+    .bind(source_id)
+    .bind(state.tenant_id.0)
+    .bind(source_key)
+    .bind(display_name)
+    .bind(base_url_redacted)
+    .bind(config_redacted)
+    .bind(health_status)
+    .bind(now)
+    .fetch_one(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(ExternalSourceConnectionSummary {
+        source_id: row.get("id"),
+        connector_kind: row.get("connector_kind"),
+        display_name: row.get("display_name"),
+        sync_mode: row.get("sync_mode"),
+        permission_mode: row.get("permission_mode"),
+        health_status: row.get("health_status"),
+        config_redacted: row.get("config_redacted"),
+        disabled_at: row.get("disabled_at"),
+    })
+}
+
+async fn allow_external_channel_database_source(
+    state: &AppState,
+    connection_id: &str,
+    source_id: &str,
+    display_name: &str,
+) -> std::result::Result<(), ApiError> {
+    let row = sqlx::query(
+        r#"
+        select config_redacted
+        from external_channel_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(connection_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    let Some(row) = row else {
+        return Err(ApiError::not_found(
+            "external_channel_connection_not_found",
+            format!("external channel connection {connection_id} was not found"),
+        ));
+    };
+    let mut config: Value = row.get("config_redacted");
+    ensure_json_object(&mut config);
+    let mut allowed = external_channel_allowed_database_source_ids(&config)
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !allowed.iter().any(|existing| existing == source_id) {
+        allowed.push(source_id.to_string());
+    }
+    set_payload_value(&mut config, "allowed_database_source_ids", json!(allowed));
+    let mut sources = config
+        .get("database_sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !sources.iter().any(|source| {
+        source
+            .get("source_id")
+            .or_else(|| source.get("source_external_id"))
+            .and_then(Value::as_str)
+            == Some(source_id)
+            || source.as_str() == Some(source_id)
+    }) {
+        sources.push(json!({
+            "source_id": source_id,
+            "source_external_id": source_id,
+            "display_name": display_name,
+            "connector_kind": "mysql",
+            "created_by": "external_channel_database_source_api",
+            "created_at": Utc::now(),
+        }));
+    }
+    set_payload_value(&mut config, "database_sources", Value::Array(sources));
+    sqlx::query(
+        r#"
+        update external_channel_connections
+        set config_redacted = $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(connection_id)
+    .bind(config)
+    .bind(Utc::now())
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(())
 }
 
 async fn enqueue_external_source_sync(
@@ -14908,6 +15402,7 @@ fn parse_external_bot_message_payload(
                         "template",
                         "mention_external_user_ids",
                         "attachment_refs",
+                        "business_datasource_ids",
                         "available_document_source_id",
                         "available_document_external_ids",
                         "dataset_external_id",
@@ -14935,6 +15430,12 @@ fn parse_external_bot_message_payload(
                         "templateRef",
                         "mentionExternalUserIds",
                         "attachmentRefs",
+                        "businessDatasourceIds",
+                        "businessDataSourceIds",
+                        "business_database_source_ids",
+                        "businessDatabaseSourceIds",
+                        "databaseSourceIds",
+                        "database_source_ids",
                         "availableDocumentSourceId",
                         "availableDocumentExternalIds",
                         "availableDocumentExternalId",
@@ -14994,6 +15495,13 @@ fn normalize_external_bot_message_payload(
             ("template_ref", "template"),
             ("mentionExternalUserIds", "mention_external_user_ids"),
             ("attachmentRefs", "attachment_refs"),
+            ("businessDatasourceIds", "business_datasource_ids"),
+            ("businessDataSourceIds", "business_datasource_ids"),
+            ("business_data_source_ids", "business_datasource_ids"),
+            ("businessDatabaseSourceIds", "business_datasource_ids"),
+            ("business_database_source_ids", "business_datasource_ids"),
+            ("databaseSourceIds", "business_datasource_ids"),
+            ("database_source_ids", "business_datasource_ids"),
             (
                 "availableDocumentExternalIds",
                 "available_document_external_ids",
@@ -15071,6 +15579,7 @@ fn normalize_external_bot_message_payload(
         }
     }
     normalize_external_document_scope_payload(&mut payload);
+    normalize_external_attachment_refs_payload(&mut payload);
     payload
 }
 
@@ -15128,6 +15637,115 @@ fn normalize_external_document_scope_payload(payload: &mut Value) {
             Value::Array(dataset_ids.into_iter().map(Value::String).collect()),
         );
     }
+
+    let mut business_datasource_ids = Vec::new();
+    for key in [
+        "business_datasource_ids",
+        "business_data_source_ids",
+        "business_database_source_ids",
+        "database_source_ids",
+    ] {
+        if let Some(value) = object.remove(key) {
+            business_datasource_ids.extend(external_string_ids_from_payload_value(value));
+        }
+    }
+    if !business_datasource_ids.is_empty() {
+        object.insert(
+            "business_datasource_ids".to_string(),
+            Value::Array(
+                business_datasource_ids
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+    }
+}
+
+fn normalize_external_attachment_refs_payload(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(value) = object.get_mut("attachment_refs") else {
+        return;
+    };
+    let items = match value {
+        Value::Array(items) => items,
+        Value::String(_) => {
+            let raw = std::mem::take(value);
+            *value = Value::Array(vec![raw]);
+            value
+                .as_array_mut()
+                .expect("attachment_refs just became array")
+        }
+        _ => return,
+    };
+    let mut normalized = Vec::new();
+    for item in std::mem::take(items) {
+        match item {
+            Value::String(text) => {
+                let Some(url) = non_empty_trimmed_string(&text) else {
+                    continue;
+                };
+                let filename = external_attachment_filename_from_url(&url);
+                normalized.push(json!({
+                    "attachment_external_id": external_attachment_id_from_url(&url),
+                    "filename": filename,
+                    "download_url_redacted": url,
+                }));
+            }
+            Value::Object(mut object) => {
+                if !object.contains_key("attachment_external_id") {
+                    if let Some(value) = object
+                        .get("attachmentExternalId")
+                        .and_then(Value::as_str)
+                        .and_then(non_empty_trimmed_string)
+                    {
+                        object.insert("attachment_external_id".to_string(), json!(value));
+                    }
+                }
+                if !object.contains_key("download_url_redacted") {
+                    if let Some(value) = object
+                        .get("downloadUrl")
+                        .or_else(|| object.get("download_url"))
+                        .or_else(|| object.get("url"))
+                        .and_then(Value::as_str)
+                        .and_then(non_empty_trimmed_string)
+                    {
+                        object.insert("download_url_redacted".to_string(), json!(value));
+                    }
+                }
+                if !object.contains_key("attachment_external_id") {
+                    if let Some(value) = object
+                        .get("download_url_redacted")
+                        .and_then(Value::as_str)
+                        .and_then(non_empty_trimmed_string)
+                    {
+                        object.insert(
+                            "attachment_external_id".to_string(),
+                            json!(external_attachment_id_from_url(&value)),
+                        );
+                    }
+                }
+                normalized.push(Value::Object(object));
+            }
+            other => normalized.push(other),
+        }
+    }
+    *value = Value::Array(normalized);
+}
+
+fn external_attachment_id_from_url(url: &str) -> String {
+    let hash = sha256_hex([url.as_bytes()]);
+    format!("url-{}", &hash[..16])
+}
+
+fn external_attachment_filename_from_url(url: &str) -> Option<String> {
+    let without_query = url.split(['?', '#']).next().unwrap_or(url);
+    without_query
+        .rsplit('/')
+        .next()
+        .and_then(non_empty_trimmed_string)
 }
 
 fn external_string_ids_from_payload_value(value: Value) -> Vec<String> {
@@ -22778,6 +23396,7 @@ fn external_bot_message_to_assistant_run_request(
         "available_document_source_id": message.available_document_source_id,
         "available_document_external_ids": message.available_document_external_ids,
         "dataset_external_id": message.dataset_external_id,
+        "business_datasource_ids": message.business_datasource_ids,
         "artifact_type": message.artifact_type,
         "artifact_template": message.template.as_ref().map(external_artifact_template_summary),
     });
@@ -22791,6 +23410,7 @@ fn external_bot_message_to_assistant_run_request(
             "tenant_external_id": message.tenant_external_id,
             "conversation_external_id": message.conversation_external_id,
             "sender_external_id": message.sender_external_id,
+            "business_datasource_ids": message.business_datasource_ids,
             "permission_filtering": "before_model_context",
             "hidden_documents_supplied": false
         },
@@ -25516,19 +26136,32 @@ async fn enrich_external_channel_database_source_scope(
     prompt: &str,
     selected_scope: &mut Value,
 ) -> std::result::Result<(), ApiError> {
-    if !external_channel_message_requests_static_page_artifact(message, prompt)
+    let explicit_business_source_ids = message
+        .business_datasource_ids
+        .iter()
+        .filter_map(|value| non_empty_trimmed_string(value))
+        .collect::<BTreeSet<_>>();
+    if explicit_business_source_ids.is_empty()
+        && !external_channel_message_requests_static_page_artifact(message, prompt)
         && !assistant_run_database_schema_context_requested(prompt)
     {
         return Ok(());
     }
 
-    let mut requested_source_ids =
-        external_channel_allowed_database_source_ids(&connection.config_redacted);
-    if let Some(default_source_id) =
-        external_channel_default_source_id_from_config(&connection.config_redacted)
-    {
-        requested_source_ids.insert(default_source_id);
-    }
+    let requested_source_ids = if explicit_business_source_ids.is_empty() {
+        let mut allowed = external_channel_allowed_database_source_ids(&connection.config_redacted);
+        if let Some(default_source_id) =
+            external_channel_default_source_id_from_config(&connection.config_redacted)
+        {
+            allowed.insert(default_source_id);
+        }
+        allowed
+    } else {
+        for source_id in &explicit_business_source_ids {
+            ensure_external_channel_database_source_allowed(connection, source_id)?;
+        }
+        explicit_business_source_ids
+    };
     if requested_source_ids.is_empty() {
         return Ok(());
     }
@@ -25571,6 +26204,7 @@ async fn enrich_external_channel_database_source_scope(
         json!({
             "source": "external_channel_allowed_database_sources",
             "source_ids": database_source_ids.iter().cloned().collect::<Vec<_>>(),
+            "requested_business_datasource_ids": message.business_datasource_ids,
             "default_dataset_bindings": database_dataset_bindings
                 .iter()
                 .map(|(source_id, dataset_id)| json!({
@@ -25578,7 +26212,11 @@ async fn enrich_external_channel_database_source_scope(
                     "dataset_id": dataset_id,
                 }))
                 .collect::<Vec<_>>(),
-            "policy": "connection_allowed_database_sources_for_report_workflow",
+            "policy": if message.business_datasource_ids.is_empty() {
+                "connection_allowed_database_sources_for_report_workflow"
+            } else {
+                "explicit_business_datasource_ids"
+            },
         }),
     );
     Ok(())
@@ -27659,6 +28297,7 @@ fn external_channel_static_page_message_from_source_refs(
         template: external_channel_static_page_template_from_source_refs(source_refs),
         mention_external_user_ids: Vec::new(),
         attachment_refs: Vec::new(),
+        business_datasource_ids: Vec::new(),
         available_document_external_ids: Vec::new(),
         available_document_source_id: external_channel_static_page_source_ref_string(
             source_refs,
@@ -75840,6 +76479,120 @@ mod tests {
             ]
         );
         assert_eq!(message.dataset_external_id, None);
+    }
+
+    #[test]
+    fn external_bot_message_payload_accepts_business_datasource_ids_and_url_attachments() {
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let message = parse_external_bot_message_payload(
+            json!({
+                "tenantExternalId": "tenant-ext-001",
+                "botExternalId": "bot-v3",
+                "conversationExternalId": "chat-db-room",
+                "senderExternalId": "user-ext-001",
+                "messageExternalId": "msg-db-001",
+                "text": "查一下业务库趋势",
+                "business_datasource_ids": ["db-main", "db-main"],
+                "attachment_refs": ["https://third.example.com/files/a.docx"]
+            }),
+            &connection,
+        )
+        .expect("business datasource ids and string attachments should parse");
+
+        assert_eq!(message.business_datasource_ids, vec!["db-main".to_string()]);
+        assert_eq!(message.attachment_refs.len(), 1);
+        assert!(message.attachment_refs[0]
+            .attachment_external_id
+            .starts_with("url-"));
+        assert_eq!(
+            message.attachment_refs[0].filename.as_deref(),
+            Some("a.docx")
+        );
+        assert_eq!(
+            message.attachment_refs[0].download_url_redacted.as_deref(),
+            Some("https://third.example.com/files/a.docx")
+        );
+
+        let request = external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let selected_scope = request.selected_scope.expect("selected scope");
+        assert_eq!(
+            selected_scope["business_datasource_ids"],
+            json!(["db-main"])
+        );
+    }
+
+    #[test]
+    fn external_channel_database_source_prepare_uses_env_without_raw_secret_storage() {
+        let prepared = prepare_external_channel_database_source_config(
+            "generic-chat-main",
+            &CreateExternalDatabaseSourceRequest {
+                source_external_id: "db-main".to_string(),
+                name: Some("业务库".to_string()),
+                connector_kind: "mysql".to_string(),
+                connection_env: Some("THIRD_PARTY_DB_MAIN_URL".to_string()),
+                connection_url: Some(
+                    "jdbc:mysql://user:secret@db.example.com:3306/hy_sql".to_string(),
+                ),
+                username: Some("user".to_string()),
+                password: Some("secret".to_string()),
+                database: Some("hy_sql".to_string()),
+                tables: vec!["bi_traffic_area".to_string()],
+                dataset_external_id: Some("dataset-main".to_string()),
+                dataset_title: Some("业务库资料".to_string()),
+                database_source: json!({}),
+                idempotency_key: None,
+            },
+        )
+        .expect("env-backed source should prepare");
+
+        assert_eq!(prepared.source_id, "db-main");
+        assert_eq!(prepared.credential_status, "ready");
+        assert_eq!(
+            prepared.config_redacted["database_source"]["connection_env"],
+            json!("THIRD_PARTY_DB_MAIN_URL")
+        );
+        let serialized = serde_json::to_string(&prepared.config_redacted).expect("json");
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("db.example.com"));
+    }
+
+    #[test]
+    fn external_channel_database_source_prepare_keeps_raw_credentials_pending() {
+        let prepared = prepare_external_channel_database_source_config(
+            "generic-chat-main",
+            &CreateExternalDatabaseSourceRequest {
+                source_external_id: "db-pending".to_string(),
+                name: None,
+                connector_kind: "mysql".to_string(),
+                connection_env: None,
+                connection_url: Some(
+                    "jdbc:mysql://user:secret@db.example.com:3306/hy_sql?x=1".to_string(),
+                ),
+                username: Some("user".to_string()),
+                password: Some("secret".to_string()),
+                database: None,
+                tables: vec!["orders".to_string()],
+                dataset_external_id: None,
+                dataset_title: None,
+                database_source: json!({}),
+                idempotency_key: None,
+            },
+        )
+        .expect("raw-credential source should become pending");
+
+        assert_eq!(prepared.credential_status, "pending_secret_binding");
+        assert_eq!(
+            prepared.config_redacted["database_source_pending"]["connection_url_redacted"],
+            json!("jdbc:mysql://db.example.com:3306/hy_sql")
+        );
+        let serialized = serde_json::to_string(&prepared.config_redacted).expect("json");
+        assert!(!serialized.contains("user:secret"));
+        assert!(!serialized.contains("user:"));
+        assert!(!serialized.contains("?x=1"));
     }
 
     #[test]
