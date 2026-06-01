@@ -12890,6 +12890,7 @@ async fn aggregate_database_source(
         dimensions: request.dimensions,
         metric: request.metric,
         aggregation: request.aggregation,
+        order_direction: None,
         limit: request.limit,
         scan_limit: request.scan_limit,
     };
@@ -45651,11 +45652,14 @@ async fn build_assistant_run_database_aggregate_supply(
                     break 'metric_requests;
                 }
                 aggregate_request_count += 1;
+                let order_direction =
+                    assistant_run_database_aggregate_order_direction(prompt, metric.as_deref());
                 let request = MySqlAggregateRequest {
                     table: mapping.table.clone(),
                     dimensions: aggregate_plan.dimensions.clone(),
                     metric: metric.clone(),
                     aggregation: aggregation.clone(),
+                    order_direction: Some(order_direction.clone()),
                     limit: Some(ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT),
                     scan_limit: Some(scan_limit),
                 };
@@ -45674,6 +45678,7 @@ async fn build_assistant_run_database_aggregate_supply(
                         "dimensions": result.dimensions,
                         "metric": result.metric,
                         "aggregation": result.aggregation,
+                        "sort_direction": order_direction.clone(),
                         "value_label": metric.clone().unwrap_or_else(|| "record_count".to_string()),
                         "field_semantics": assistant_run_database_field_semantics_for_columns(mapping, &result.columns),
                         "summary": assistant_run_database_aggregate_summary(
@@ -45682,6 +45687,7 @@ async fn build_assistant_run_database_aggregate_supply(
                             &result.dimensions,
                             result.metric.as_deref().or_else(|| metric.as_deref()),
                             &result.aggregation,
+                            &order_direction,
                             result.rows.len(),
                             result.scan_limit,
                         ),
@@ -45868,6 +45874,9 @@ fn assistant_run_database_column_role(
     if assistant_run_database_metric_column_name(column) {
         return ("metric", 88);
     }
+    if assistant_run_database_entity_column_name(column) {
+        return ("entity", 84);
+    }
     if mapping
         .id_columns
         .iter()
@@ -45939,7 +45948,10 @@ fn assistant_run_database_entity_dimensions(mapping: &MySqlTableMapping) -> Vec<
     }
     for column in assistant_run_database_mapping_columns(mapping) {
         let lower = column.to_ascii_lowercase();
-        if lower.contains("name") || lower.ends_with("title") {
+        if lower.contains("name")
+            || lower.ends_with("title")
+            || assistant_run_database_entity_column_name(&column)
+        {
             push_unique_string(&mut dimensions, &column);
         }
         if dimensions.len() >= 4 {
@@ -46011,9 +46023,30 @@ fn assistant_run_database_metric_column_name(column: &str) -> bool {
             &lower,
             &[
                 "count", "num", "amount", "total", "sum", "rate", "ratio", "score", "value",
-                "price", "cost", "traffic", "flow", "volume", "qty", "avg", "duration",
+                "price", "cost", "traffic", "flow", "volume", "qty", "avg", "duration", "amt",
+                "sale", "sales", "sold", "rent", "fee", "zujin", "xiaoshou", "quekou", "jine",
+                "ticheng", "dayamt", "yuezu", "fdxshje", "yze", "rdj",
             ],
         )
+}
+
+fn assistant_run_database_entity_column_name(column: &str) -> bool {
+    let lower = column.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "shopdesc"
+            | "shopname"
+            | "shop_name"
+            | "storedesc"
+            | "store_desc"
+            | "storename"
+            | "store_name"
+            | "branddesc"
+            | "brand_name"
+            | "brandname"
+            | "leasename"
+            | "lease_name"
+    )
 }
 
 fn assistant_run_database_dimension_column_name(column: &str) -> bool {
@@ -46033,6 +46066,7 @@ fn assistant_run_database_aggregate_summary(
     dimensions: &[String],
     metric: Option<&str>,
     aggregation: &str,
+    order_direction: &str,
     row_count: usize,
     scan_limit: Option<u32>,
 ) -> String {
@@ -46042,13 +46076,19 @@ fn assistant_run_database_aggregate_summary(
         "comparison" => "分类对比",
         _ => "聚合分析",
     };
+    let order_label = if order_direction.eq_ignore_ascii_case("asc") {
+        "升序"
+    } else {
+        "降序"
+    };
     format!(
-        "{}：表 {} 按 {} 对 {} 做 {} 聚合，返回 {} 行样本，扫描上限 {}。",
+        "{}：表 {} 按 {} 对 {} 做 {} 聚合并按聚合值{}，返回 {} 行样本，扫描上限 {}。",
         role_label,
         mapping.table,
         assistant_run_database_join_or_dash(dimensions),
         metric.unwrap_or("record_count"),
         aggregation,
+        order_label,
         row_count,
         scan_limit
             .map(|value| value.to_string())
@@ -46538,9 +46578,48 @@ fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
     prompt_has_any(
         prompt,
         &[
-            "统计", "汇总", "合计", "排序", "排名", "排行", "前", "最高", "最大", "最低", "最小",
-            "平均", "趋势", "维度", "报表", "表格", "top", "rank", "sum", "avg", "max", "min",
-            "up", "down", "上行", "下行", "流量", "区域", "楼层",
+            "统计",
+            "汇总",
+            "合计",
+            "排序",
+            "排名",
+            "排行",
+            "前",
+            "最高",
+            "最大",
+            "最低",
+            "最小",
+            "平均",
+            "趋势",
+            "维度",
+            "报表",
+            "表格",
+            "top",
+            "rank",
+            "sum",
+            "avg",
+            "max",
+            "min",
+            "up",
+            "down",
+            "上行",
+            "下行",
+            "流量",
+            "区域",
+            "楼层",
+            "哪些",
+            "哪个",
+            "多少",
+            "店铺",
+            "门店",
+            "分店",
+            "品牌",
+            "取高",
+            "高分成",
+            "缺口",
+            "机会",
+            "销售额",
+            "租金",
         ],
     )
 }
@@ -46623,7 +46702,8 @@ fn assistant_run_database_aggregate_dimension_plans(
             prompt,
             &[
                 "区域", "位置", "楼层", "门", "梯", "点位", "areaname", "area", "top", "排名",
-                "排行", "排序", "前", "最高", "最大",
+                "排行", "排序", "前", "最高", "最大", "哪些", "哪个", "店铺", "门店", "分店",
+                "品牌",
             ],
         );
     let wants_trend = wants_report
@@ -46643,7 +46723,9 @@ fn assistant_run_database_aggregate_dimension_plans(
 
     let mut plans = Vec::new();
     if wants_rank {
-        if let Some(dimension) = assistant_run_database_entity_dimension(mapping) {
+        if let Some(dimension) = assistant_run_database_prompt_entity_dimension(mapping, prompt)
+            .or_else(|| assistant_run_database_entity_dimension(mapping))
+        {
             push_assistant_run_database_aggregate_plan(
                 &mut plans,
                 "ranking",
@@ -46730,6 +46812,62 @@ fn assistant_run_database_entity_dimension(mapping: &MySqlTableMapping) -> Optio
         .or_else(|| Some(mapping.id_column.clone()))
 }
 
+fn assistant_run_database_prompt_entity_dimension(
+    mapping: &MySqlTableMapping,
+    prompt: &str,
+) -> Option<String> {
+    let columns = assistant_run_database_mapping_columns(mapping);
+    let find_column = |patterns: &[&str]| {
+        patterns.iter().find_map(|pattern| {
+            columns
+                .iter()
+                .find(|column| column.to_ascii_lowercase().contains(pattern))
+                .cloned()
+        })
+    };
+    if prompt_has_any(
+        prompt,
+        &["店铺", "门店", "分店", "店名", "柜组", "专柜", "shop"],
+    ) {
+        return find_column(&[
+            "shopdesc",
+            "shop_name",
+            "shopname",
+            "storedesc",
+            "store_name",
+            "storename",
+            "store_init",
+        ]);
+    }
+    if prompt_has_any(prompt, &["品牌", "租户", "商户", "brand", "lease"]) {
+        return find_column(&[
+            "branddesc",
+            "brand_name",
+            "brandname",
+            "leasename",
+            "lease_name",
+        ]);
+    }
+    if prompt_has_any(prompt, &["品类", "业态", "类目", "category"]) {
+        return find_column(&["catgldesc", "catgmdesc", "catgsdesc", "category"]);
+    }
+    if prompt_has_any(prompt, &["大区", "区域", "小区", "片区", "region", "area"]) {
+        return find_column(&[
+            "dist_name",
+            "areaname",
+            "area_name",
+            "region",
+            "omdname",
+            "parentname",
+            "area",
+        ]);
+    }
+    if prompt_has_any(prompt, &["合同", "contract"]) {
+        return find_column(&["contract_no", "htbh"]);
+    }
+    None
+}
+
 fn assistant_run_database_category_dimension(mapping: &MySqlTableMapping) -> Option<String> {
     let columns = assistant_run_database_mapping_columns(mapping);
     columns
@@ -46757,6 +46895,36 @@ fn assistant_run_database_aggregate_metrics(
     prompt: &str,
 ) -> Vec<String> {
     let mut metrics = Vec::new();
+    if prompt_has_metric_terms(
+        prompt,
+        &[
+            "取高",
+            "高分成",
+            "分成线",
+            "缺口",
+            "差多少",
+            "还差",
+            "需增",
+            "机会",
+            "接近",
+            "就快",
+        ],
+    ) {
+        push_database_metric_if_present(mapping, &mut metrics, "xuzengxiaoshou");
+        push_database_metric_if_present(mapping, &mut metrics, "quekou");
+    }
+    if prompt_has_metric_terms(prompt, &["销售", "销售额", "成交", "sale", "sales", "sold"])
+    {
+        push_database_metric_if_present(mapping, &mut metrics, "amttotal");
+        push_database_metric_if_present(mapping, &mut metrics, "amtsold");
+        push_database_metric_if_present(mapping, &mut metrics, "sale_num");
+        push_database_metric_if_present(mapping, &mut metrics, "salenum");
+    }
+    if prompt_has_metric_terms(prompt, &["租金", "提成", "固定", "rent", "fee"]) {
+        push_database_metric_if_present(mapping, &mut metrics, "tichengzujin");
+        push_database_metric_if_present(mapping, &mut metrics, "yuezujin");
+        push_database_metric_if_present(mapping, &mut metrics, "htzj");
+    }
     if prompt_has_metric_terms(prompt, &["down", "下行", "离开", "离场", "出场", "出口"])
     {
         push_database_metric_if_present(mapping, &mut metrics, "down");
@@ -46767,6 +46935,14 @@ fn assistant_run_database_aggregate_metrics(
     if metrics.is_empty() && prompt_has_metric_terms(prompt, &["流量", "客流", "traffic"]) {
         push_database_metric_if_present(mapping, &mut metrics, "up");
         push_database_metric_if_present(mapping, &mut metrics, "down");
+    }
+    if metrics.is_empty() {
+        for column in assistant_run_database_metric_columns(mapping) {
+            push_unique_string(&mut metrics, &column);
+            if metrics.len() >= ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT {
+                break;
+            }
+        }
     }
     metrics.truncate(ASSISTANT_RUN_DATABASE_AGGREGATE_METRIC_LIMIT);
     metrics
@@ -46807,10 +46983,10 @@ fn assistant_run_database_aggregate_dimensions(
         ],
     );
     if wants_entity {
-        if let Some(title_column) = mapping.title_column.as_deref() {
-            push_unique_string(&mut dimensions, title_column);
-        } else {
-            push_unique_string(&mut dimensions, &mapping.id_column);
+        if let Some(dimension) = assistant_run_database_prompt_entity_dimension(mapping, prompt)
+            .or_else(|| assistant_run_database_entity_dimension(mapping))
+        {
+            push_unique_string(&mut dimensions, &dimension);
         }
     }
     if wants_time {
@@ -46857,6 +47033,36 @@ fn assistant_run_database_aggregation(prompt: &str, has_metric: bool) -> String 
     } else {
         "sum".to_string()
     }
+}
+
+fn assistant_run_database_aggregate_order_direction(prompt: &str, metric: Option<&str>) -> String {
+    if prompt_has_any(prompt, &["最低", "最小", "min", "升序"]) {
+        return "asc".to_string();
+    }
+    let metric = metric.unwrap_or("").to_ascii_lowercase();
+    let gap_metric = metric.contains("xuzeng")
+        || metric.contains("quekou")
+        || metric.contains("gap")
+        || metric.contains("shortfall");
+    if gap_metric
+        && prompt_has_any(
+            prompt,
+            &[
+                "取高机会",
+                "机会最大",
+                "最接近",
+                "接近",
+                "就快",
+                "差多少",
+                "还差",
+                "高分成线",
+            ],
+        )
+        && !prompt_has_any(prompt, &["缺口最大", "最大缺口", "差距最大"])
+    {
+        return "asc".to_string();
+    }
+    "desc".to_string()
 }
 
 fn assistant_run_database_mapping_columns(mapping: &MySqlTableMapping) -> Vec<String> {
@@ -73430,6 +73636,63 @@ mod tests {
         }
     }
 
+    fn xinbai_contract_warning_mapping_for_test() -> MySqlTableMapping {
+        MySqlTableMapping {
+            table: "bi_contract_warning".to_string(),
+            object_type: "document".to_string(),
+            id_column: "parentcode".to_string(),
+            id_columns: vec![
+                "parentcode".to_string(),
+                "storecode".to_string(),
+                "txdate".to_string(),
+            ],
+            title_column: Some("dist_name".to_string()),
+            content_columns: vec![
+                "shopdesc".to_string(),
+                "catgldesc".to_string(),
+                "yujingdengji_desc".to_string(),
+                "dist_name".to_string(),
+                "store_init".to_string(),
+                "storecode".to_string(),
+                "contract_no".to_string(),
+                "brandcode".to_string(),
+                "yuezujin".to_string(),
+                "tch".to_string(),
+                "amttotal".to_string(),
+                "tichengzujin".to_string(),
+                "xuzengxiaoshou".to_string(),
+                "quekou".to_string(),
+                "txdate".to_string(),
+                "daysnum".to_string(),
+                "actual_dayamt".to_string(),
+                "forecast_dayamt".to_string(),
+                "salenum".to_string(),
+            ],
+            content_type: "text/markdown".to_string(),
+            updated_at_column: Some("txdate".to_string()),
+            version_column: None,
+            metadata_columns: vec![
+                "dist_name".to_string(),
+                "store_init".to_string(),
+                "storecode".to_string(),
+                "contract_no".to_string(),
+                "brandcode".to_string(),
+                "yuezujin".to_string(),
+                "tch".to_string(),
+                "amttotal".to_string(),
+                "tichengzujin".to_string(),
+                "xuzengxiaoshou".to_string(),
+                "quekou".to_string(),
+                "txdate".to_string(),
+                "daysnum".to_string(),
+                "actual_dayamt".to_string(),
+                "forecast_dayamt".to_string(),
+                "salenum".to_string(),
+            ],
+            revision_strategy: external_source_connectors::MySqlRevisionStrategy::ContentHash,
+        }
+    }
+
     #[test]
     fn database_aggregate_heuristics_pick_traffic_metric_and_dimensions() {
         let mapping = traffic_area_mapping_for_test();
@@ -73452,6 +73715,45 @@ mod tests {
             assistant_run_database_aggregation("列出上行 up 最大的前5个区域", true),
             "sum"
         );
+    }
+
+    #[test]
+    fn database_aggregate_heuristics_pick_xinbai_shop_gap_for_take_high_question() {
+        let mapping = xinbai_contract_warning_mapping_for_test();
+        let prompt = "取高机会最大的店铺是哪几个，分别差多少";
+
+        assert!(assistant_run_database_aggregate_requested(prompt));
+        assert_eq!(
+            assistant_run_database_aggregate_metrics(&mapping, prompt),
+            vec!["xuzengxiaoshou".to_string(), "quekou".to_string()]
+        );
+        let plans = assistant_run_database_aggregate_dimension_plans(&mapping, prompt);
+        assert!(plans.iter().any(|plan| {
+            plan.role == "ranking" && plan.dimensions == vec!["shopdesc".to_string()]
+        }));
+        assert_eq!(
+            assistant_run_database_aggregate_order_direction(prompt, Some("xuzengxiaoshou")),
+            "asc"
+        );
+    }
+
+    #[test]
+    fn database_schema_context_marks_xinbai_business_fields_as_entity_and_metrics() {
+        let mapping = xinbai_contract_warning_mapping_for_test();
+        let roles = assistant_run_database_mapping_field_roles(&mapping);
+
+        assert!(roles
+            .iter()
+            .any(|role| { role["name"] == json!("shopdesc") && role["role"] == json!("entity") }));
+        assert!(roles.iter().any(|role| {
+            role["name"] == json!("xuzengxiaoshou") && role["role"] == json!("metric")
+        }));
+        assert!(roles
+            .iter()
+            .any(|role| { role["name"] == json!("quekou") && role["role"] == json!("metric") }));
+        assert!(roles.iter().any(|role| {
+            role["name"] == json!("tichengzujin") && role["role"] == json!("metric")
+        }));
     }
 
     #[test]

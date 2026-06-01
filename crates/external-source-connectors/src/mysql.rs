@@ -221,6 +221,8 @@ pub struct MySqlAggregateRequest {
     #[serde(default = "default_aggregate")]
     pub aggregation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_limit: Option<u32>,
@@ -1411,6 +1413,7 @@ pub fn build_mysql_aggregate_query(
     }
 
     let aggregation = normalize_aggregate(&request.aggregation)?;
+    let order_direction = normalize_aggregate_order_direction(request.order_direction.as_deref())?;
     let metric = request
         .metric
         .as_deref()
@@ -1456,8 +1459,9 @@ pub fn build_mysql_aggregate_query(
         String::new()
     } else {
         format!(
-            " order by {} desc",
-            aggregate_order_expression(&aggregation, metric.as_deref())?
+            " order by {} {}",
+            aggregate_order_expression(&aggregation, metric.as_deref())?,
+            order_direction
         )
     };
     let row_limit = request
@@ -1931,6 +1935,22 @@ fn normalize_aggregate(value: &str) -> Result<String, DatabaseSourceError> {
             field: "aggregation",
             reason: "must be one of count, sum, avg, min, or max".to_string(),
         })
+    }
+}
+
+fn normalize_aggregate_order_direction(
+    value: Option<&str>,
+) -> Result<&'static str, DatabaseSourceError> {
+    let Some(value) = value else {
+        return Ok("desc");
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "desc" => Ok("desc"),
+        "asc" => Ok("asc"),
+        _ => Err(DatabaseSourceError::InvalidField {
+            field: "order_direction",
+            reason: "must be asc or desc".to_string(),
+        }),
     }
 }
 
@@ -2846,6 +2866,7 @@ mod tests {
             dimensions: vec!["area_name".to_string()],
             metric: Some("traffic_count".to_string()),
             aggregation: "sum".to_string(),
+            order_direction: None,
             limit: Some(10),
             scan_limit: None,
         };
@@ -2880,6 +2901,7 @@ mod tests {
             dimensions: vec!["category".to_string()],
             metric: None,
             aggregation: "count".to_string(),
+            order_direction: None,
             limit: Some(5),
             scan_limit: None,
         };
@@ -2896,6 +2918,38 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_query_supports_ascending_order_for_gap_metrics() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_contract_warning",
+                "id_column": "parentcode",
+                "title_column": "dist_name",
+                "content_columns": ["shopdesc", "xuzengxiaoshou", "quekou", "txdate"],
+                "metadata_columns": ["shopdesc", "xuzengxiaoshou", "quekou", "txdate"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "bi_contract_warning".to_string(),
+            dimensions: vec!["shopdesc".to_string()],
+            metric: Some("xuzengxiaoshou".to_string()),
+            aggregation: "sum".to_string(),
+            order_direction: Some("asc".to_string()),
+            limit: Some(8),
+            scan_limit: Some(5000),
+        };
+
+        let plan = build_mysql_aggregate_query(&config, &request).expect("aggregate query builds");
+
+        assert!(plan.sql.contains(
+            "group by `shopdesc` order by coalesce(sum(cast(nullif(`xuzengxiaoshou`, '') as decimal(30,6))), 0) asc limit 8"
+        ));
+    }
+
+    #[test]
     fn aggregate_query_rejects_unmapped_columns() {
         let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
         let request = MySqlAggregateRequest {
@@ -2903,6 +2957,7 @@ mod tests {
             dimensions: vec!["not_mapped".to_string()],
             metric: None,
             aggregation: "count".to_string(),
+            order_direction: None,
             limit: Some(5),
             scan_limit: None,
         };
@@ -2923,6 +2978,7 @@ mod tests {
             dimensions: vec!["category".to_string()],
             metric: None,
             aggregation: "count".to_string(),
+            order_direction: None,
             limit: Some(5),
             scan_limit: Some(25),
         };
@@ -3332,6 +3388,7 @@ mod tests {
             dimensions: vec![dimension],
             metric,
             aggregation: "sum".to_string(),
+            order_direction: None,
             limit: Some(5),
             scan_limit: Some(50_000),
         };
