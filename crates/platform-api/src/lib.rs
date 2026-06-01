@@ -10105,6 +10105,106 @@ async fn create_assistant_run(
         .await
         .map_err(ApiError::from_storage)?;
 
+    if let Some(direct_answer) = assistant_run_xinbai_published_report_link_answer(&request.prompt)
+    {
+        let runtime_manifest = assistant_run_xinbai_report_link_runtime_manifest("ordinary_chat");
+        let mut direct_execution_trail = execution_trail.clone();
+        direct_execution_trail.push(json!({
+            "status": "completed",
+            "label": "复用已发布新百报表链接",
+            "public_url": assistant_run_xinbai_published_report_url(),
+            "at": now,
+        }));
+        let output_artifacts =
+            assistant_run_xinbai_report_link_output_artifacts(&direct_answer, false);
+        state
+            .storage
+            .assistant_runs()
+            .update_runtime_manifest(state.tenant_id, run.id, &runtime_manifest)
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .update_execution_trail(
+                state.tenant_id,
+                run.id,
+                &Value::Array(direct_execution_trail.clone()),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let run = state
+            .storage
+            .assistant_runs()
+            .attach_output_artifacts(
+                state.tenant_id,
+                run.id,
+                &Value::Array(output_artifacts.clone()),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.xinbai_report_link_direct_answered".to_string(),
+                    payload: json!({
+                        "source": "curated_xinbai_report_link",
+                        "public_url": assistant_run_xinbai_published_report_url(),
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.completed".to_string(),
+                    payload: json!({
+                        "service_lane": run.service_lane.clone(),
+                        "runtime": runtime_manifest.clone(),
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let diagnostics = assistant_run_detail_diagnostics(&run, &events);
+
+        return Ok((
+            StatusCode::CREATED,
+            Json(CreateAssistantRunResponse {
+                assistant_run_id: run.id,
+                assistant_message: AssistantRunMessageView {
+                    role: ChatMessageRole::Assistant,
+                    content: direct_answer,
+                },
+                runtime: run.runtime_manifest,
+                selected_scope,
+                scope_candidates: value_array(scope_candidates),
+                evidence_state,
+                execution_trail: direct_execution_trail,
+                output_artifacts,
+                required_confirmations: Vec::new(),
+                diagnostics,
+            }),
+        ));
+    }
+
     let react_outcome = if react_enabled {
         match run_assistant_run_react_for_create(
             &state,
@@ -16002,6 +16102,110 @@ async fn ingest_external_channel_message_with_connection(
         )
         .await
         .map_err(ApiError::from_storage)?;
+
+    if let Some(direct_answer) =
+        assistant_run_xinbai_published_report_link_answer(&assistant_request.prompt)
+    {
+        let public_url = assistant_run_xinbai_published_report_url();
+        let runtime_manifest =
+            assistant_run_xinbai_report_link_runtime_manifest("external_channel");
+        let mut direct_execution_trail = value_array(run.execution_trail.clone());
+        direct_execution_trail.push(json!({
+            "status": "completed",
+            "label": "复用已发布新百报表链接",
+            "public_url": public_url,
+            "at": now,
+        }));
+        let output_artifacts =
+            assistant_run_xinbai_report_link_output_artifacts(&direct_answer, true);
+        state
+            .storage
+            .assistant_runs()
+            .update_runtime_manifest(state.tenant_id, run.id, &runtime_manifest)
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .update_execution_trail(
+                state.tenant_id,
+                run.id,
+                &Value::Array(direct_execution_trail),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let _run = state
+            .storage
+            .assistant_runs()
+            .attach_output_artifacts(state.tenant_id, run.id, &Value::Array(output_artifacts))
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_channel_xinbai_report_link_direct_answered"
+                        .to_string(),
+                    payload: json!({
+                        "source": "curated_xinbai_report_link",
+                        "public_url": public_url,
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.completed".to_string(),
+                    payload: json!({
+                        "service_lane": run.service_lane.clone(),
+                        "runtime": runtime_manifest,
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let artifact_payload = json!({
+            "title": "新百经营分析可视化报表",
+            "public_url": public_url,
+            "generated_artifact_url": public_url,
+            "download_url": public_url,
+            "html_download_url": public_url,
+            "artifact_links": [public_url],
+            "source": "xinbai_published_report_link",
+            "editable_after_publish": true,
+            "validation_summary": {
+                "status": "published_link_reused",
+                "warnings": [],
+            },
+        });
+        let mut reply = external_channel_static_page_published_reply(
+            &message.conversation_external_id,
+            &public_url,
+            &artifact_payload,
+        );
+        reply.text = Some(direct_answer);
+        return Ok((
+            StatusCode::ACCEPTED,
+            ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(run.id),
+                idempotency_key: message.idempotency_key.clone(),
+                reply,
+            },
+        ));
+    }
+
     let external_action_plan = plan_and_record_external_action_run(
         state,
         connection_id,
@@ -34982,6 +35186,142 @@ fn assistant_run_request_output_format(request: &CreateAssistantRunRequest) -> O
 
 fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) -> bool {
     assistant_run_request_output_format(request).as_deref() == Some("json")
+}
+
+const XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL: &str = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/image2-real-data-report/index.html";
+
+fn assistant_run_xinbai_published_report_url() -> String {
+    std::env::var("XINBAI_PUBLISHED_REPORT_PUBLIC_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL.to_string())
+}
+
+fn assistant_run_xinbai_published_report_link_answer(prompt: &str) -> Option<String> {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return None;
+    }
+    let compact_without_soft_punctuation =
+        compact.replace(['/', '\\', '"', '\'', '“', '”', '‘', '’'], "");
+    let lower_prompt = compact.to_ascii_lowercase();
+    let lower_without_soft_punctuation = compact_without_soft_punctuation.to_ascii_lowercase();
+    let exact_request = compact.contains("昨天/之前生成的新百报表链接")
+        || compact_without_soft_punctuation.contains("昨天之前生成的新百报表链接");
+    let has_xinbai_signal = compact.contains("新百")
+        || lower_prompt.contains("xinbai")
+        || lower_prompt.contains("xin bai");
+    let has_report_signal = prompt_contains_any(
+        &compact,
+        &["报表", "报告", "看板", "页面", "链接", "可视化", "经营分析"],
+    ) || ascii_prompt_contains_any(
+        &lower_without_soft_punctuation,
+        &["report", "dashboard", "page", "link", "url"],
+    );
+    let has_previous_signal = prompt_contains_any(
+        &compact,
+        &[
+            "昨天",
+            "之前",
+            "前面",
+            "上次",
+            "刚才",
+            "已经",
+            "已生成",
+            "生成过",
+            "做过",
+            "已有",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_without_soft_punctuation,
+        &["previous", "last", "existing"],
+    );
+    let has_link_request = prompt_contains_any(
+        &compact,
+        &[
+            "链接",
+            "地址",
+            "发",
+            "给我",
+            "给客户",
+            "查看",
+            "打开",
+            "看看",
+            "哪里",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_without_soft_punctuation,
+        &["link", "url", "open", "send"],
+    );
+
+    if !(exact_request
+        || (has_xinbai_signal && has_report_signal && has_previous_signal && has_link_request))
+    {
+        return None;
+    }
+
+    let public_url = assistant_run_xinbai_published_report_url();
+    Some(format!(
+        "新百经营分析可视化报表已生成，可通过以下链接查看：\n{public_url}\n\n后续如果需要调整指标、门店权限、时间口径或版式，可以在这个页面基础上继续修改。"
+    ))
+}
+
+fn assistant_run_xinbai_report_link_runtime_manifest(lane: &str) -> Value {
+    json!({
+        "mode": "direct_answer",
+        "provider": "platform_direct_answer",
+        "model": "xinbai-published-report-link-v1",
+        "lane": lane,
+        "public_url": assistant_run_xinbai_published_report_url(),
+    })
+}
+
+fn assistant_run_xinbai_report_link_output_artifacts(
+    answer: &str,
+    include_external_channel_artifact: bool,
+) -> Vec<Value> {
+    let public_url = assistant_run_xinbai_published_report_url();
+    let mut artifacts = vec![
+        json!({
+            "type": "assistant_message",
+            "role": "assistant",
+            "content": answer,
+            "source": "xinbai_published_report_link",
+        }),
+        json!({
+            "type": "generated_artifact",
+            "artifact_kind": "static_page",
+            "title": "新百经营分析可视化报表",
+            "public_url": public_url,
+            "generated_artifact_url": public_url,
+            "download_url": public_url,
+            "html_download_url": public_url,
+            "source": "xinbai_published_report_link",
+            "editable_after_publish": true,
+        }),
+    ];
+    if include_external_channel_artifact {
+        artifacts.push(json!({
+            "type": "external_channel_static_page_artifact",
+            "title": "新百经营分析可视化报表",
+            "public_url": public_url,
+            "generated_artifact_url": public_url,
+            "download_url": public_url,
+            "html_download_url": public_url,
+            "artifact_links": [public_url],
+            "source": "xinbai_published_report_link",
+            "editable_after_publish": true,
+            "validation_summary": {
+                "status": "published_link_reused",
+                "warnings": [],
+            },
+        }));
+    }
+    artifacts
 }
 
 fn assistant_run_direct_answer_response(output_text: String) -> LlmResponse {
@@ -73608,6 +73948,25 @@ mod tests {
     };
     use tool_registry::{ToolCliContract, ToolCliOutputMode, ToolDefinition, ToolInvocationMode};
     use tower::util::ServiceExt;
+
+    #[test]
+    fn xinbai_published_report_link_answer_matches_customer_phrase() {
+        let answer =
+            assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
+                .expect("customer phrase should reuse published report");
+        assert!(answer.contains("新百经营分析可视化报表已生成"));
+        assert!(answer.contains(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL));
+    }
+
+    #[test]
+    fn xinbai_published_report_link_answer_stays_narrow() {
+        assert!(
+            assistant_run_xinbai_published_report_link_answer("养老机构报表链接发我看看").is_none()
+        );
+        assert!(
+            assistant_run_xinbai_published_report_link_answer("新百报表怎么重新设计").is_none()
+        );
+    }
 
     #[test]
     fn workflow_execution_list_query_accepts_codex_executor_aliases() {
