@@ -12891,6 +12891,7 @@ async fn aggregate_database_source(
         metric: request.metric,
         aggregation: request.aggregation,
         order_direction: None,
+        latest_time_column: None,
         limit: request.limit,
         scan_limit: request.scan_limit,
     };
@@ -45654,12 +45655,19 @@ async fn build_assistant_run_database_aggregate_supply(
                 aggregate_request_count += 1;
                 let order_direction =
                     assistant_run_database_aggregate_order_direction(prompt, metric.as_deref());
+                let latest_time_column = assistant_run_database_aggregate_latest_time_column(
+                    mapping,
+                    prompt,
+                    metric.as_deref(),
+                    aggregate_plan,
+                );
                 let request = MySqlAggregateRequest {
                     table: mapping.table.clone(),
                     dimensions: aggregate_plan.dimensions.clone(),
                     metric: metric.clone(),
                     aggregation: aggregation.clone(),
                     order_direction: Some(order_direction.clone()),
+                    latest_time_column: latest_time_column.clone(),
                     limit: Some(ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT),
                     scan_limit: Some(scan_limit),
                 };
@@ -45679,6 +45687,10 @@ async fn build_assistant_run_database_aggregate_supply(
                         "metric": result.metric,
                         "aggregation": result.aggregation,
                         "sort_direction": order_direction.clone(),
+                        "time_filter": latest_time_column.as_ref().map(|column| json!({
+                            "mode": "latest",
+                            "column": column,
+                        })),
                         "value_label": metric.clone().unwrap_or_else(|| "record_count".to_string()),
                         "field_semantics": assistant_run_database_field_semantics_for_columns(mapping, &result.columns),
                         "summary": assistant_run_database_aggregate_summary(
@@ -45688,6 +45700,7 @@ async fn build_assistant_run_database_aggregate_supply(
                             result.metric.as_deref().or_else(|| metric.as_deref()),
                             &result.aggregation,
                             &order_direction,
+                            latest_time_column.as_deref(),
                             result.rows.len(),
                             result.scan_limit,
                         ),
@@ -46067,6 +46080,7 @@ fn assistant_run_database_aggregate_summary(
     metric: Option<&str>,
     aggregation: &str,
     order_direction: &str,
+    latest_time_column: Option<&str>,
     row_count: usize,
     scan_limit: Option<u32>,
 ) -> String {
@@ -46081,14 +46095,18 @@ fn assistant_run_database_aggregate_summary(
     } else {
         "降序"
     };
+    let time_filter = latest_time_column
+        .map(|column| format!("；时间口径为最新 {column}"))
+        .unwrap_or_default();
     format!(
-        "{}：表 {} 按 {} 对 {} 做 {} 聚合并按聚合值{}，返回 {} 行样本，扫描上限 {}。",
+        "{}：表 {} 按 {} 对 {} 做 {} 聚合并按聚合值{}{}，返回 {} 行样本，扫描上限 {}。",
         role_label,
         mapping.table,
         assistant_run_database_join_or_dash(dimensions),
         metric.unwrap_or("record_count"),
         aggregation,
         order_label,
+        time_filter,
         row_count,
         scan_limit
             .map(|value| value.to_string())
@@ -47067,6 +47085,77 @@ fn assistant_run_database_aggregate_order_direction(prompt: &str, metric: Option
         return "asc".to_string();
     }
     "desc".to_string()
+}
+
+fn assistant_run_database_aggregate_latest_time_column(
+    mapping: &MySqlTableMapping,
+    prompt: &str,
+    metric: Option<&str>,
+    aggregate_plan: &AssistantRunDatabaseAggregatePlan,
+) -> Option<String> {
+    if aggregate_plan.intent == "time_series" {
+        return None;
+    }
+    let time_column = assistant_run_database_time_column(mapping)?;
+    if aggregate_plan
+        .dimensions
+        .iter()
+        .any(|dimension| dimension == &time_column)
+    {
+        return None;
+    }
+    if prompt_has_any(
+        prompt,
+        &[
+            "趋势",
+            "变化",
+            "按日",
+            "按天",
+            "按时间",
+            "历史",
+            "区间",
+            "同比",
+            "环比",
+            "trend",
+        ],
+    ) {
+        return None;
+    }
+    let metric = metric.unwrap_or("").to_ascii_lowercase();
+    let current_metric = metric.contains("yuezujin")
+        || metric.contains("zujin")
+        || metric.contains("rent")
+        || metric.contains("amttotal")
+        || metric.contains("ticheng")
+        || metric.contains("xuzeng")
+        || metric.contains("quekou")
+        || metric.contains("dayamt")
+        || metric.contains("salenum")
+        || metric.contains("sale");
+    let current_prompt = prompt_has_any(
+        prompt,
+        &[
+            "当前",
+            "现在",
+            "目前",
+            "本月",
+            "最新",
+            "经营健康度",
+            "总览",
+            "月租金",
+            "租金",
+            "取高",
+            "高分成",
+            "缺口",
+            "销售额",
+            "还差",
+            "最接近",
+        ],
+    );
+    if current_metric || current_prompt {
+        return Some(time_column);
+    }
+    None
 }
 
 fn assistant_run_database_mapping_columns(mapping: &MySqlTableMapping) -> Vec<String> {
@@ -73738,6 +73827,18 @@ mod tests {
         assert_eq!(
             assistant_run_database_aggregate_order_direction(prompt, Some("xuzengxiaoshou")),
             "asc"
+        );
+        assert_eq!(
+            assistant_run_database_aggregate_latest_time_column(
+                &mapping,
+                prompt,
+                Some("xuzengxiaoshou"),
+                plans
+                    .iter()
+                    .find(|plan| plan.role == "ranking")
+                    .expect("ranking plan exists")
+            ),
+            Some("txdate".to_string())
         );
     }
 

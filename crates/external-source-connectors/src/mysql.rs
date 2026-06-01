@@ -223,6 +223,8 @@ pub struct MySqlAggregateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_direction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_time_column: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_limit: Option<u32>,
@@ -1414,6 +1416,15 @@ pub fn build_mysql_aggregate_query(
 
     let aggregation = normalize_aggregate(&request.aggregation)?;
     let order_direction = normalize_aggregate_order_direction(request.order_direction.as_deref())?;
+    let latest_time_column = request
+        .latest_time_column
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(column) = latest_time_column.as_deref() {
+        validate_allowed_query_column("latest_time_column", column, &allowed_columns)?;
+    }
     let metric = request
         .metric
         .as_deref()
@@ -1471,13 +1482,16 @@ pub fn build_mysql_aggregate_query(
     let scan_limit = request
         .scan_limit
         .map(|limit| limit.clamp(1, MAX_ROW_LIMIT));
-    let table_source = if let Some(scan_limit) = scan_limit {
+    let table_source = if scan_limit.is_some() || latest_time_column.is_some() {
         let mut scan_columns = Vec::new();
         for dimension in &dimensions {
             push_unique_column(&mut scan_columns, dimension);
         }
         if let Some(metric) = metric.as_deref() {
             push_unique_column(&mut scan_columns, metric);
+        }
+        if let Some(column) = latest_time_column.as_deref() {
+            push_unique_column(&mut scan_columns, column);
         }
         let inner_projections = if scan_columns.is_empty() {
             "1 as `__v3_row`".to_string()
@@ -1488,8 +1502,20 @@ pub fn build_mysql_aggregate_query(
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", ")
         };
+        let latest_where = if let Some(column) = latest_time_column.as_deref() {
+            let quoted_column = quote_mysql_identifier(column)?;
+            format!(
+                " where {quoted_column} = (select max({quoted_column}) from {})",
+                quote_mysql_identifier(&mapping.table)?
+            )
+        } else {
+            String::new()
+        };
+        let scan_limit_clause = scan_limit
+            .map(|limit| format!(" limit {limit}"))
+            .unwrap_or_default();
         format!(
-            "(select {inner_projections} from {} limit {scan_limit}) as `__v3_scan`",
+            "(select {inner_projections} from {}{latest_where}{scan_limit_clause}) as `__v3_scan`",
             quote_mysql_identifier(&mapping.table)?
         )
     } else {
@@ -2867,6 +2893,7 @@ mod tests {
             metric: Some("traffic_count".to_string()),
             aggregation: "sum".to_string(),
             order_direction: None,
+            latest_time_column: None,
             limit: Some(10),
             scan_limit: None,
         };
@@ -2902,6 +2929,7 @@ mod tests {
             metric: None,
             aggregation: "count".to_string(),
             order_direction: None,
+            latest_time_column: None,
             limit: Some(5),
             scan_limit: None,
         };
@@ -2938,6 +2966,7 @@ mod tests {
             metric: Some("xuzengxiaoshou".to_string()),
             aggregation: "sum".to_string(),
             order_direction: Some("asc".to_string()),
+            latest_time_column: None,
             limit: Some(8),
             scan_limit: Some(5000),
         };
@@ -2950,6 +2979,39 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_query_supports_latest_time_filter_before_grouping() {
+        let raw = json!({
+            "connection_env": "THIRD_PARTY_HY_SQL_DATABASE_URL",
+            "database": "hy_sql",
+            "row_limit": 100,
+            "tables": [{
+                "table": "bi_contract_warning",
+                "id_column": "parentcode",
+                "title_column": "dist_name",
+                "content_columns": ["dist_name", "yuezujin", "txdate"],
+                "metadata_columns": ["dist_name", "yuezujin", "txdate"]
+            }]
+        });
+        let config = MySqlSourceConfig::from_value(&raw).expect("config parses");
+        let request = MySqlAggregateRequest {
+            table: "bi_contract_warning".to_string(),
+            dimensions: vec!["dist_name".to_string()],
+            metric: Some("yuezujin".to_string()),
+            aggregation: "sum".to_string(),
+            order_direction: None,
+            latest_time_column: Some("txdate".to_string()),
+            limit: Some(8),
+            scan_limit: Some(5000),
+        };
+
+        let plan = build_mysql_aggregate_query(&config, &request).expect("aggregate query builds");
+
+        assert!(plan.sql.contains(
+            "from (select `dist_name`, `yuezujin`, `txdate` from `bi_contract_warning` where `txdate` = (select max(`txdate`) from `bi_contract_warning`) limit 5000) as `__v3_scan`"
+        ));
+    }
+
+    #[test]
     fn aggregate_query_rejects_unmapped_columns() {
         let config = MySqlSourceConfig::from_value(&valid_config()).expect("config parses");
         let request = MySqlAggregateRequest {
@@ -2958,6 +3020,7 @@ mod tests {
             metric: None,
             aggregation: "count".to_string(),
             order_direction: None,
+            latest_time_column: None,
             limit: Some(5),
             scan_limit: None,
         };
@@ -2979,6 +3042,7 @@ mod tests {
             metric: None,
             aggregation: "count".to_string(),
             order_direction: None,
+            latest_time_column: None,
             limit: Some(5),
             scan_limit: Some(25),
         };
@@ -3389,6 +3453,7 @@ mod tests {
             metric,
             aggregation: "sum".to_string(),
             order_direction: None,
+            latest_time_column: None,
             limit: Some(5),
             scan_limit: Some(50_000),
         };
