@@ -757,6 +757,7 @@ fn validate_static_page_fixed_task(
             "static_page_image2_data_publish requires at least one selected dataset, document, or database source"
         ));
     }
+    validate_static_page_dynamic_page_contract(&fixed_task.requirements)?;
     for (key, description) in [
         ("snapshot_aggregation", "snapshot aggregation policy"),
         ("trend_aggregation", "trend aggregation policy"),
@@ -768,6 +769,48 @@ fn validate_static_page_fixed_task(
             key,
             &format!("static_page_image2_data_publish requires {description}"),
         )?;
+    }
+    Ok(())
+}
+
+fn validate_static_page_dynamic_page_contract(requirements: &Value) -> Result<()> {
+    let contract = requirements
+        .get("dynamic_page_contract")
+        .ok_or_else(|| anyhow!("static_page_image2_data_publish requires dynamic_page_contract"))?;
+    if contract
+        .get("time_selector_required")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires time_selector_required=true"
+        ));
+    }
+    if contract
+        .get("time_range_selector_required")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires time_range_selector_required=true"
+        ));
+    }
+    let report_time_range = contract
+        .get("report_time_range")
+        .ok_or_else(|| anyhow!("static_page_image2_data_publish requires report_time_range"))?;
+    if report_time_range.get("required").and_then(Value::as_bool) != Some(true) {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires report_time_range.required=true"
+        ));
+    }
+    if report_time_range
+        .get("default_granularity")
+        .and_then(Value::as_str)
+        != Some("month")
+    {
+        return Err(anyhow!(
+            "static_page_image2_data_publish requires report_time_range.default_granularity=month"
+        ));
     }
     Ok(())
 }
@@ -1015,7 +1058,7 @@ fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>)
     );
     if template_id == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
         prompt.push_str(
-            "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `task.json.image2.local_preview_path` or `visual_contract_local_path` is present, use that local preview file as the visual contract before writing HTML.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Write a complete artifact directory under the task workspace, normally `generated-artifacts/<artifact-id>/`, containing `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json`.\n- `index.html` must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Bind real V3 dataset/database/document evidence from `task.json`; if the selected data is unavailable or insufficient for the requested report, return `needs_human` or `failed` instead of publishing a fallback page.",
+            "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `task.json.image2.local_preview_path` or `visual_contract_local_path` is present, use that local preview file as the visual contract before writing HTML.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Write a complete artifact directory under the task workspace, normally `generated-artifacts/<artifact-id>/`, containing `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json`.\n- `index.html` must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Every report page must expose a time-range selector. Operating reports default to a monthly view; when the user does not specify a range, use the latest available month while keeping custom range/month controls.\n- Bind real V3 dataset/database/document evidence from `task.json`; if the selected data is unavailable or insufficient for the requested report, return `needs_human` or `failed` instead of publishing a fallback page.",
         );
     }
     Ok(prompt)
@@ -1869,6 +1912,29 @@ mod tests {
         assert!(error
             .to_string()
             .contains("selected dataset, document, or database source"));
+    }
+
+    #[test]
+    fn static_page_template_requires_monthly_time_range_contract() {
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.requirements["dynamic_page_contract"]["report_time_range"]
+            ["default_granularity"] = json!("day");
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+
+        let error = policy.prepare(&context).expect_err("should reject");
+
+        assert!(error
+            .to_string()
+            .contains("report_time_range.default_granularity=month"));
     }
 
     #[test]

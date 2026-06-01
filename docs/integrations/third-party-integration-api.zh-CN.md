@@ -1271,7 +1271,8 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 说明 |
 | --- | --- |
-| `reply.task_status` | 任务状态；如 `static_page_image2_auto_publish_pending`、`completed`、`failed` |
+| `reply.task_status` | 顶层兼容状态；生成中、可重试、待补数据或待人工处理统一为 `processing`，最终成功为 `static_page_published`，取消等不可继续状态才返回 `failed`。细分阶段看 `reply.card.status` |
+| `reply.card.status` | 静态页细分阶段；如 `static_page_image2_auto_publish_pending`、`static_page_image_preview_queued`、`static_page_publish_running`、`static_page_published`、`static_page_publish_failed` |
 | `reply.card.public_url` | 最终公开页面 URL；为空表示还在生成或发布失败 |
 | `reply.card.image_job_status` | Image2 效果图状态 |
 | `reply.card.codex_auto_publish_ready` | 是否满足自动发布条件 |
@@ -1389,7 +1390,7 @@ V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，�
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可继续在 `requested_skills[].arguments.output_type` 中传 `static_page`。若同时传 `template` 和旧 skill，V3 会按模板文档去重。
 
-V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点。若服务端已完整启用 `static_page_image2_data_publish` 固定发布能力，V3 会先生成一份可发送的 V3 直出 HTML/generated-artifact 链接，同时把固定任务投递到配置好的 Cloudflare Codex 执行器，在效果图完成后继续自动生成并发布最终 generated-artifact 静态页；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
+V3 会先提交 Image2 效果图任务并通过 SSE/状态卡片展示给客户，效果图只作为过程预览，不作为阻塞确认点。若服务端已完整启用 `static_page_image2_data_publish` 固定发布能力，V3 会先生成一份可发送的 V3 直出 HTML/generated-artifact 链接，同时把固定任务投递到配置好的 Cloudflare Codex 执行器，在效果图完成后继续自动生成并发布最终 generated-artifact 静态页；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。第三方不需要单独调用 Image2 接口，也不需要对效果图做确认、下载或二次提交。
 
 静态页状态卡和最终发布卡会带 `reply.card.recipient_delivery`、`reply.card.permission_review_status` 和 `reply.card.editable_after_publish`。第三方操作人员可以先发送基础页面链接；若需要给总部、分店店总或指定人员发送不同权限口径的页面，继续传用户-角色-门店/区域范围映射，V3 可基于已生成页面继续调整并产出新的单独链接。
 
@@ -1401,7 +1402,7 @@ Host: v3.elepcloud.com
 Authorization: Bearer <V3 inbound token>
 ```
 
-该接口返回与 `/events` 相同的 `ExternalChannelEventResponse`。如果仍在生成，`reply.reply_type=task_status`，常见状态包括 `static_page_image_preview_queued`、`static_page_effect_image_ready`、`static_page_publish_queued`、`static_page_publish_running` 和 `static_page_publish_retrying`，此时卡片会带 `reply.card.status_url` 和 `reply.card.poll_after_seconds`，第三方应按建议间隔继续轮询；如果已发布，`reply.reply_type=artifact_link`，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 为最终页面链接，动态页会额外带 `reply.card.data_url` / `reply.card.data_snapshot_url`；如果返回 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要把效果图当成最终产物展示，应提示重试或等待 V3 人工处理。第三方也可以用原 `/events` 请求体和同一 `idempotency_key` 重试，V3 会在最终产物发布后返回同一个 artifact link。
+该接口返回与 `/events` 相同的 `ExternalChannelEventResponse`。如果仍在生成，`reply.reply_type=task_status` 且顶层 `reply.task_status=processing`，细分阶段读取 `reply.card.status`，常见值包括 `static_page_image_preview_queued`、`static_page_effect_image_ready`、`static_page_publish_queued`、`static_page_publish_running`、`static_page_publish_retrying`、`static_page_publish_failed` 和 `static_page_publish_needs_human`，此时卡片会带 `reply.card.status_url` 和 `reply.card.poll_after_seconds`，第三方应按建议间隔继续轮询或提示 V3 正在补充处理；如果已发布，`reply.reply_type=artifact_link`，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 为最终页面链接，动态页会额外带 `reply.card.data_url` / `reply.card.data_snapshot_url`；如果顶层 `reply.task_status=failed` 或 `reply.card.status` 为 `static_page_publish_cancelled`，不要把效果图当成最终产物展示，应提示稍后重试或等待 V3 人工处理。第三方也可以用原 `/events` 请求体和同一 `idempotency_key` 重试，V3 会在最终产物发布后返回同一个 artifact link。
 
 `static_page_image2_data_publish` 只有在 V3 平台任务开关、平台 allowlist、Codex Host agent allowlist、执行模式和可信宿主就绪时才算已启用。当前推荐固定执行器为 `cloudflare_orchestrator + cloudflare_codex`，需要配置 Codex Web orchestrator 访问密钥；旧的本机 `codex_exec` 模式仍要求真实执行许可和任务工作区。响应卡片里的 `codex_auto_publish_ready=false` 表示本次已经走内置 HTML 兜底；`codex_auto_publish_ready=true` 且 `provisional_direct_html=true` 表示已经先返回可发送页面链接，最终 Codex 页面仍在后台；`codex_auto_publish_disabled_reason` 仅用于服务端日志和联调排查。
 

@@ -66,6 +66,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
     let visual_bridge_manifest =
         build_visual_bridge_manifest(request, &preview_contract, &style, &render_spec);
     let dynamic_page_contract = build_dynamic_page_contract();
+    let report_controls_html = render_report_controls_html(&dynamic_page_contract, &data_snapshot);
     let html = format!(
         concat!(
             "<!doctype html><html><head><meta charset=\"utf-8\">",
@@ -73,7 +74,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
             "<title>{}</title><style>{}</style></head>",
             "<body class=\"static-page style-{}\" data-preview=\"{}\" style=\"{}\">",
             "<main><header class=\"cover\"><span>{}</span><h1>{}</h1><p>{}</p></header>",
-            "<section class=\"module-grid\" aria-label=\"静态页模块\">{}</section></main>{}",
+            "{}<section class=\"module-grid\" aria-label=\"静态页模块\">{}</section></main>{}",
             "</body></html>"
         ),
         escape_html(&request.title),
@@ -87,6 +88,7 @@ pub fn render_static_page(request: &StaticPageRenderRequest) -> StaticPageRender
             &static_page_payload_string(&request.draft_payload, &["modelSummary", "model_summary"])
                 .unwrap_or_else(|| "按效果图和模块规划生成静态页。".to_string()),
         ),
+        report_controls_html,
         module_html,
         echarts_hydration_script,
     );
@@ -272,6 +274,43 @@ fn build_dynamic_page_contract() -> Value {
         },
         "rendering_policy": "final_html_should_render_stateful_business_modules_from_data_json_when_present"
     })
+}
+
+fn render_report_controls_html(dynamic_page_contract: &Value, data_snapshot: &Value) -> String {
+    let refresh_seconds = dynamic_page_contract
+        .pointer("/refresh_policy/interval_seconds")
+        .and_then(Value::as_i64)
+        .unwrap_or(60);
+    let snapshot_label = static_page_value_string(
+        data_snapshot,
+        &[
+            "snapshotLabel",
+            "snapshot_label",
+            "latestSnapshot",
+            "latest_snapshot",
+            "snapshotDate",
+            "snapshot_date",
+            "updatedAt",
+            "updated_at",
+        ],
+    )
+    .unwrap_or_else(|| "最新可用月份".to_string());
+    format!(
+        concat!(
+            "<section class=\"report-controls\" aria-label=\"报表筛选\" data-time-range-control=\"required\" data-default-granularity=\"month\">",
+            "<label><span>时间范围</span><select data-time-range=\"required\" data-default-preset=\"latest_available_month\">",
+            "<option value=\"latest_month\">本月 / 最新月份</option>",
+            "<option value=\"month\">按月选择</option>",
+            "<option value=\"custom_range\">自定义日期范围</option>",
+            "</select></label>",
+            "<label><span>主要分区</span><select data-primary-partition=\"required\"><option value=\"all\">全部分区</option></select></label>",
+            "<button type=\"button\" data-manual-refresh=\"true\">刷新</button>",
+            "<small data-auto-refresh=\"true\">自动刷新 {} 秒 · {}</small>",
+            "</section>"
+        ),
+        refresh_seconds,
+        escape_html(&snapshot_label),
+    )
 }
 
 fn build_visual_bridge_manifest(
@@ -1595,8 +1634,9 @@ const STATIC_PAGE_RENDER_CSS: &str = r#"
 *{box-sizing:border-box}body{margin:0;padding:28px;background:var(--static-page-bg,linear-gradient(135deg,#f7fbff,#fff7ed));color:var(--static-page-text,#101827)}
 body.style-decision-brief{background:linear-gradient(135deg,#0f172a,#1e293b);color:#f8fafc}
 body.style-data-command{background:linear-gradient(135deg,#064e3b,#0f172a);color:#ecfeff}
-main{max-width:1160px;margin:0 auto;display:grid;gap:18px}.module-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-auto-rows:minmax(68px,auto);grid-auto-flow:dense;gap:18px}.cover,.module{border-radius:var(--static-page-radius,26px);padding:24px;background:var(--static-page-surface,rgba(255,255,255,.72));box-shadow:0 20px 70px rgba(15,23,42,.12)}
-.style-decision-brief .cover,.style-decision-brief .module,.style-data-command .cover,.style-data-command .module{background:rgba(255,255,255,.08);box-shadow:0 20px 70px rgba(0,0,0,.22)}
+main{max-width:1160px;margin:0 auto;display:grid;gap:18px}.module-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-auto-rows:minmax(68px,auto);grid-auto-flow:dense;gap:18px}.cover,.module,.report-controls{border-radius:var(--static-page-radius,26px);padding:24px;background:var(--static-page-surface,rgba(255,255,255,.72));box-shadow:0 20px 70px rgba(15,23,42,.12)}
+.style-decision-brief .cover,.style-decision-brief .module,.style-decision-brief .report-controls,.style-data-command .cover,.style-data-command .module,.style-data-command .report-controls{background:rgba(255,255,255,.08);box-shadow:0 20px 70px rgba(0,0,0,.22)}
+.report-controls{display:grid;grid-template-columns:1.2fr 1fr auto auto;gap:12px;align-items:end;padding:16px 18px}.report-controls label{display:grid;gap:6px}.report-controls label span{font-size:12px;font-weight:800;color:var(--static-page-muted,#475569)}.report-controls select,.report-controls button{height:40px;border:1px solid rgba(100,116,139,.28);border-radius:12px;background:rgba(255,255,255,.72);color:var(--static-page-text,#101827);font-weight:800;padding:0 12px}.report-controls button{cursor:pointer;background:var(--static-page-accent,#2563eb);border-color:transparent;color:white}.report-controls small{align-self:center;text-transform:none;letter-spacing:0;color:var(--static-page-muted,#475569)}
 .cover span,.module span,small{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--static-page-accent,#2563eb)}
 .style-decision-brief .cover span,.style-decision-brief .module span,.style-data-command .cover span,.style-data-command .module span{color:#93c5fd}
 h1,h2,p,small,span,strong,b,em{overflow-wrap:anywhere}h1{font-size:clamp(32px,6vw,64px);line-height:.98;margin:10px 0 14px}h2{font-size:24px;margin:4px 0 0}p{line-height:1.7;margin:0;color:var(--static-page-muted,#475569)}
@@ -1605,7 +1645,7 @@ h1,h2,p,small,span,strong,b,em{overflow-wrap:anywhere}h1{font-size:clamp(32px,6v
 .style-decision-brief .chart,.style-data-command .chart{background:rgba(255,255,255,.1);color:#bfdbfe}
 .echarts-hydration-target{width:100%;min-height:190px}.chart-fallback{width:100%;display:grid;place-items:center}.static-page-echarts-option{display:none!important}
 .chart-svg{width:100%;height:100%;min-height:112px;overflow:visible}.chart-svg rect,.chart-svg .donut-value{fill:var(--static-page-chart,#0ea5e9)}.chart-svg text{font-size:10px;fill:var(--static-page-muted,#475569);font-weight:800}.style-decision-brief .chart-svg text,.style-data-command .chart-svg text{fill:#cbd5e1}.line-path{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}.line-area{fill:var(--static-page-chart,#0ea5e9);opacity:.13}.line-chart circle{fill:var(--static-page-surface,#fff);stroke:var(--static-page-chart,#0ea5e9);stroke-width:3}.donut-base{fill:none;stroke:rgba(100,116,139,.22);stroke-width:18}.donut-value{fill:none;stroke:var(--static-page-chart,#0ea5e9);stroke-width:18;transform:rotate(-90deg);transform-origin:70px 70px;stroke-linecap:round}.donut-number{font-size:24px!important;fill:var(--static-page-text,#101827)!important}.donut-label,.donut-side{font-size:11px!important}.donut-side.muted{opacity:.68}.kpi-grid{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kpi-card{display:grid;gap:2px;padding:12px;border-radius:16px;background:rgba(255,255,255,.42)}.style-decision-brief .kpi-card,.style-data-command .kpi-card{background:rgba(255,255,255,.1)}.kpi-card b{font-size:24px;color:var(--static-page-chart,#0ea5e9)}.kpi-card i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.data-missing{display:grid;gap:6px;text-align:center;color:var(--static-page-muted,#475569)}.data-missing b{font-size:18px;color:var(--static-page-text,#101827)}.data-missing span{font-size:12px}.evidence-table{width:100%;border-collapse:collapse;font-size:12px}.evidence-table td{padding:9px 10px;border-bottom:1px solid rgba(100,116,139,.2)}.timeline-chart{width:100%;margin:0;padding:0;display:grid;gap:9px;list-style:none}.timeline-chart li{display:flex;gap:10px;align-items:center}.timeline-chart b{min-width:56px;color:var(--static-page-chart,#0ea5e9)}.timeline-chart span{color:var(--static-page-muted,#475569);font-size:12px}.risk-matrix{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.risk-chip{display:grid;gap:4px;padding:11px;border-radius:16px;background:rgba(100,116,139,.16)}.risk-chip.high{background:rgba(239,68,68,.18)}.risk-chip.medium{background:rgba(245,158,11,.18)}.risk-chip.low{background:rgba(14,165,233,.16)}.risk-chip i{font-style:normal;font-size:11px;color:var(--static-page-muted,#475569)}.headline-visual{display:grid;gap:6px;text-align:center}.headline-visual b{font-size:28px;color:var(--static-page-text,#101827)}.headline-visual span{font-size:12px;color:var(--static-page-accent,#2563eb)}.insight-quote{margin:0;padding:0 0 0 14px;border-left:4px solid var(--static-page-chart,#0ea5e9);font-size:14px;line-height:1.6;color:var(--static-page-muted,#475569)}
-@media(max-width:720px){body{padding:14px}.module-grid{display:flex;flex-direction:column}.module{grid-column:1/-1!important;grid-row:auto!important;order:var(--mobile-order);min-height:auto!important}.cover,.module{padding:18px;border-radius:20px}h1{font-size:28px;line-height:1.12}p{font-size:15px}.kpi-grid,.risk-matrix{grid-template-columns:1fr}}
+@media(max-width:720px){body{padding:14px}.module-grid{display:flex;flex-direction:column}.module{grid-column:1/-1!important;grid-row:auto!important;order:var(--mobile-order);min-height:auto!important}.cover,.module,.report-controls{padding:18px;border-radius:20px}.report-controls{grid-template-columns:1fr;align-items:stretch}h1{font-size:28px;line-height:1.12}p{font-size:15px}.kpi-grid,.risk-matrix{grid-template-columns:1fr}}
 "#;
 
 #[cfg(test)]
@@ -1803,6 +1843,8 @@ mod tests {
             result.asset_manifest["dynamic_page_contract"]["data_file"],
             "data.json"
         );
+        assert!(result.html.contains("data-time-range=\"required\""));
+        assert!(result.html.contains("本月 / 最新月份"));
         assert_eq!(
             result.asset_manifest["export_package"]["browser_delivery_contract"]
                 ["dynamic_data_file"],

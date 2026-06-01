@@ -2542,6 +2542,34 @@ fn validate_static_page_image2_dynamic_artifact(
             "static_page_image2_data_publish HTML must expose time or snapshot controls/signals"
         ));
     }
+    let has_time_range_control_signal = [
+        "data-time-range",
+        "time-range",
+        "date-range",
+        "时间范围",
+        "日期范围",
+        "开始日期",
+        "结束日期",
+        "start_date",
+        "end_date",
+        "startdate",
+        "enddate",
+    ]
+    .iter()
+    .any(|term| html_lower.contains(term));
+    if !has_time_range_control_signal {
+        return Err(anyhow!(
+            "static_page_image2_data_publish HTML must expose a time-range selector"
+        ));
+    }
+    let has_monthly_report_signal = ["month", "月份", "月度", "按月", "本月"]
+        .iter()
+        .any(|term| html_lower.contains(term));
+    if !has_monthly_report_signal {
+        return Err(anyhow!(
+            "static_page_image2_data_publish HTML must support the monthly operating-report default"
+        ));
+    }
     Ok(())
 }
 
@@ -3474,7 +3502,7 @@ mod tests {
             "status": "success",
             "artifact": {
                 "public_url": "https://v3.elepcloud.com/generated-artifacts/pending-host-publication",
-                "html": "<!doctype html><html><body><main><h1>经营分析</h1><label>时间</label><button data-time=\"latest\">最新快照</button><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.snapshotVersion=data.snapshotVersion||data.updatedAt||'';});</script></main></body></html>",
+                "html": "<!doctype html><html><body><main><h1>经营分析</h1><label>时间范围</label><select data-time-range=\"required\"><option value=\"latest_month\">本月 / 最新月份</option><option value=\"custom\">自定义日期范围</option></select><button data-time=\"latest\">最新快照</button><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.snapshotVersion=data.snapshotVersion||data.updatedAt||'';});</script></main></body></html>",
                 "data_json": {
                     "source": "unit-test",
                     "snapshotVersion": "snapshot-1",
@@ -3624,7 +3652,7 @@ mod tests {
                     "https://v3.elepcloud.com/generated-artifacts/{draft_id}/index.html"
                 ),
                 "local_path": format!("/workspace/generated-artifacts/{draft_id}/index.html"),
-                "html": "<!doctype html><html><body><main><h1>Image2 视觉合同页面</h1><label>时间</label><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.updatedAt=data.updatedAt||data.snapshotVersion||'';});</script></main></body></html>",
+                "html": "<!doctype html><html><body><main><h1>Image2 视觉合同页面</h1><label>时间范围</label><select data-time-range=\"required\"><option value=\"latest_month\">本月 / 最新月份</option></select><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.updatedAt=data.updatedAt||data.snapshotVersion||'';});</script></main></body></html>",
                 "data_json": {"source": "cloudflare-inline"}
             },
             "validation_report": {
@@ -3671,7 +3699,7 @@ mod tests {
         std::fs::create_dir_all(&workspace_artifact_dir).expect("workspace artifact dir");
         std::fs::write(
             workspace_artifact_dir.join("index.html"),
-            "<!doctype html><html><body><h1>Codex workspace page</h1><label>时间</label><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.snapshotVersion=data.snapshotVersion||data.updatedAt||'';});</script></body></html>",
+            "<!doctype html><html><body><h1>Codex workspace page</h1><label>时间范围</label><select data-time-range=\"required\"><option value=\"latest_month\">本月 / 最新月份</option></select><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.snapshotVersion=data.snapshotVersion||data.updatedAt||'';});</script></body></html>",
         )
         .expect("workspace html");
         std::fs::write(
@@ -3767,7 +3795,7 @@ mod tests {
         std::fs::create_dir_all(&workspace_artifact_dir).expect("workspace artifact dir");
         std::fs::write(
             workspace_artifact_dir.join("index.html"),
-            "<!doctype html><html><body><h1>Relative workspace page</h1><label>时间</label><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.updatedAt=data.updatedAt||data.snapshotVersion||'';});</script></body></html>",
+            "<!doctype html><html><body><h1>Relative workspace page</h1><label>时间范围</label><select data-time-range=\"required\"><option value=\"latest_month\">本月 / 最新月份</option></select><script>fetch('data.json').then(r=>r.json()).then(data=>{document.body.dataset.updatedAt=data.updatedAt||data.snapshotVersion||'';});</script></body></html>",
         )
         .expect("workspace html");
         std::fs::write(

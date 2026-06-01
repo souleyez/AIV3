@@ -480,7 +480,7 @@ Content-Type: application/json
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，V3 会去重，不重复加载同一模板文档。
 
-V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会先生成一份可发送的 V3 直出 HTML/generated-artifact 链接，同时把固定任务投递到配置好的 Cloudflare Codex 执行器，效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。
+V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用于流式/状态卡片预览，不要求客户确认，也不要求第三方单独拉取图片。若服务端已完整启用 `static_page_image2_data_publish` 固定 Cloudflare Codex 能力，V3 会先生成一份可发送的 V3 直出 HTML/generated-artifact 链接，同时把固定任务投递到配置好的 Cloudflare Codex 执行器，效果图预览完成后自动续接生成并发布新的 generated-artifact 页面；若该能力未完整启用，V3 会同步生成一份内置 HTML 静态页并发布为 generated-artifact。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。
 
 第三方操作人员可以先把 `card.public_url` 或 `artifact_links[0]` 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；V3 会在静态页卡片返回 `recipient_delivery`，说明当前是否已具备自动配置条件，或还缺哪些权限映射。
 
@@ -491,7 +491,8 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `artifact_link` 或 `task_status` |
-| `reply.task_status` | 成功为 `static_page_published` 或 `static_page_rendered`；生成中常见为 `static_page_image_preview_queued`、`static_page_effect_image_ready`、`static_page_publish_queued`、`static_page_publish_running`、`static_page_publish_retrying`；异常为 `static_page_publish_needs_human`、`static_page_publish_failed` 或 `static_page_publish_cancelled` |
+| `reply.task_status` | 顶层兼容状态；生成中、可重试、待补数据或待人工处理统一为 `processing`，最终成功为 `static_page_published`，取消等不可继续状态才返回 `failed` |
+| `reply.card.status` | 静态页细分阶段；生成中常见为 `static_page_image_preview_queued`、`static_page_effect_image_ready`、`static_page_publish_queued`、`static_page_publish_running`、`static_page_publish_retrying`；异常为 `static_page_publish_needs_human`、`static_page_publish_failed` 或 `static_page_publish_cancelled` |
 | `reply.text` | 给用户展示的排队/处理说明；若已直接生成 HTML，会说明可通过 `card.render_output_id` 或下载链接获取产物 |
 | `reply.card.type` | `v3_static_page_image2_pipeline` |
 | `reply.card.draft_id` | V3 静态页草稿 ID |
@@ -502,7 +503,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.generated_artifact_url` / `reply.card.public_url` | 已发布 generated-artifact 时返回；第三方优先把这个链接展示或转存 |
 | `reply.card.data_url` | 已发布动态静态页且存在 `data.json` 时返回；用于第三方服务端转存页面数据快照 |
 | `reply.card.data_snapshot_url` | 已发布动态静态页且存在 `data-snapshot.json` 时返回；与 `data_url` 同源，保留为渲染/审计快照 |
-| `reply.card.dynamic_page_contract` | 动态静态页数据合同；说明 `data.json`、`data-snapshot.json`、刷新间隔和变更检测字段 |
+| `reply.card.dynamic_page_contract` | 动态静态页数据合同；说明 `data.json`、`data-snapshot.json`、刷新间隔、变更检测字段、默认时间范围控件和经营报表按月默认口径 |
 | `reply.card.recipient_delivery` | 静态页分发辅助信息；包含 `can_create_recipient_specific_links`、`operator_external_user_id`、`target_external_user_ids`、识别到的角色范围和补充映射提示 |
 | `reply.card.permission_review_status` | 权限/分发映射状态：`provided_for_auto_configuration` 表示已传映射可自动配置；`needs_user_role_scope_mapping` 表示需要补充用户-角色-门店/区域范围；`role_requirements_detected` 表示只识别到角色要求 |
 | `reply.card.editable_after_publish` | `true` 表示最终页面生成后仍可继续让 V3 按人员、角色或门店范围调整并产出新的单独链接 |
@@ -518,7 +519,7 @@ V3 会先创建静态页草稿并提交 Image2 效果图任务；效果图只用
 | `reply.card.effect_image_confirmation_required` | 固定为 `false`，效果图只作为客户可见预览，不作为阻塞确认点 |
 | `reply.card.codex_host_workflow_execution_id` | 初始响应通常为空；效果图预览完成并成功续接后，内部运行事件会记录固定发布任务 ID |
 
-若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.public_url` 或 `artifact_links[0]` 已存在，可先把该页面作为可发送链接；若同时有 `provisional_direct_html=true`，表示最终 Codex 页面仍在后台，第三方按 `poll_after_seconds` 轮询 `status_url` 获取后续状态。若只存在 `card.render_output_id`，可直接按 3.4 查询/预览/下载；若 `card.public_url` 为空但 `card.status_url` 存在，表示当前仍在效果图或自动发布阶段，第三方继续轮询，或用原 `/events` 请求体和同一 `idempotency_key` 重试。若状态进入 `static_page_publish_retrying`，第三方继续轮询；若进入 `static_page_publish_failed`、`static_page_publish_needs_human` 或 `static_page_publish_cancelled`，不要展示旧的效果图为最终产物，应提示稍后重试或由 V3 侧人工处理。效果图是过程预览，不是最终交付物。
+若调用流式接口，V3 会在文本 delta 后额外输出 `external_channel.static_page_effect_image_queued` 事件，事件里的 `card` 与上表一致。若 `card.public_url` 或 `artifact_links[0]` 已存在，可先把该页面作为可发送链接；若同时有 `provisional_direct_html=true`，表示最终 Codex 页面仍在后台，第三方按 `poll_after_seconds` 轮询 `status_url` 获取后续状态。若只存在 `card.render_output_id`，可直接按 3.4 查询/预览/下载；若 `card.public_url` 为空但 `card.status_url` 存在，表示当前仍在效果图或自动发布阶段，第三方继续轮询，或用原 `/events` 请求体和同一 `idempotency_key` 重试。若 `reply.card.status` 进入 `static_page_publish_retrying`、`static_page_publish_failed` 或 `static_page_publish_needs_human`，第三方继续轮询或提示 V3 正在补充处理；若顶层 `reply.task_status=failed`，或 `reply.card.status` 进入 `static_page_publish_cancelled`，不要展示旧的效果图为最终产物，应提示稍后重试或由 V3 侧人工处理。效果图是过程预览，不是最终交付物。
 
 固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
 
@@ -558,7 +559,7 @@ GET /v1/external/channels/{connection_id}/assistant-runs/{assistant_run_id}/repl
 Authorization: Bearer <V3 inbound token>
 ```
 
-返回字段同 2.1。若页面仍在生成，`reply.reply_type=task_status`；若已经发布，`reply.reply_type=artifact_link` 且 `reply.artifact_links[0]` 为最终页面链接。也可以用原 `POST /events` 的同一 `idempotency_key` 重试查询，V3 会在最终产物发布后返回相同的 artifact link。
+返回字段同 2.1。若页面仍在生成，`reply.reply_type=task_status` 且 `reply.task_status=processing`，细分阶段读取 `reply.card.status`；若已经发布，`reply.reply_type=artifact_link` 且 `reply.artifact_links[0]` 为最终页面链接。也可以用原 `POST /events` 的同一 `idempotency_key` 重试查询，V3 会在最终产物发布后返回相同的 artifact link。
 
 模板 HTML 产物直接下载：
 

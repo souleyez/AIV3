@@ -23405,7 +23405,7 @@ fn external_channel_task_status_reply(
         text: None,
         card: None,
         artifact_links: Vec::new(),
-        task_status: Some(task_status.to_string()),
+        task_status: Some(external_channel_public_task_status(task_status).to_string()),
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
@@ -23449,6 +23449,7 @@ fn external_channel_task_status_reply_for_conversation(
     card: Option<Value>,
     artifact_links: Vec<String>,
 ) -> ExternalBotReplyView {
+    let public_task_status = external_channel_public_task_status(task_status);
     ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: if artifact_links.is_empty() {
@@ -23459,10 +23460,24 @@ fn external_channel_task_status_reply_for_conversation(
         text,
         card,
         artifact_links,
-        task_status: Some(task_status.to_string()),
+        task_status: Some(public_task_status.to_string()),
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
+    }
+}
+
+fn external_channel_public_task_status(task_status: &str) -> &str {
+    if !task_status.starts_with("static_page_") {
+        return task_status;
+    }
+    match task_status {
+        "static_page_published" => "static_page_published",
+        "static_page_stable_artifact_reused" => "static_page_stable_artifact_reused",
+        "static_page_publish_failed" => "processing",
+        "static_page_publish_cancelled" => "failed",
+        "static_page_publish_needs_human" => "processing",
+        _ => "processing",
     }
 }
 
@@ -24661,7 +24676,7 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
     if !asks_for_report_artifact {
         return false;
     }
-    external_channel_text_has_any(
+    if external_channel_text_has_any(
         &compact,
         prompt,
         &[
@@ -24689,6 +24704,85 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
             "render",
             "publish",
             "make",
+        ],
+    ) {
+        return true;
+    }
+
+    external_channel_prompt_is_short_report_artifact_request(&compact, prompt)
+}
+
+fn external_channel_prompt_is_short_report_artifact_request(compact: &str, prompt: &str) -> bool {
+    let char_count = compact.chars().count();
+    if !(4..=32).contains(&char_count) {
+        return false;
+    }
+    if external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "什么",
+            "哪些",
+            "怎么",
+            "如何",
+            "为什么",
+            "是否",
+            "能不能",
+            "可不可以",
+            "吗",
+            "？",
+            "?",
+            "介绍",
+            "说明",
+            "含义",
+            "口径",
+            "问题",
+            "有哪些",
+        ],
+    ) {
+        return false;
+    }
+    if !external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "报表",
+            "月报",
+            "周报",
+            "日报",
+            "看板",
+            "大屏",
+            "静态页",
+            "页面",
+            "网页",
+            "网站",
+            "dashboard",
+            "webpage",
+            "htmlpage",
+        ],
+    ) {
+        return false;
+    }
+    external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "经营",
+            "健康度",
+            "固定提成",
+            "取高",
+            "门店",
+            "分店",
+            "品牌",
+            "分成",
+            "新百",
+            "新世界",
+            "总报表",
+            "月报",
+            "周报",
+            "日报",
+            "分析",
+            "汇总",
         ],
     )
 }
@@ -25956,6 +26050,12 @@ fn external_channel_static_page_image2_fixed_task(
     let image_prompt_payload_summary =
         external_static_page_image_prompt_payload_summary(image_prompt_payload);
     let prompt_text = external_static_page_image_prompt_text(&image_prompt_payload_summary, prompt);
+    let prompt_time_dimension_requested = external_static_page_prompt_contains_any(
+        prompt,
+        &[
+            "时间", "日期", "周期", "今天", "昨日", "本周", "本月", "time", "date", "period",
+        ],
+    );
     let recipient_delivery = draft
         .source_refs
         .get("recipient_delivery")
@@ -25983,6 +26083,10 @@ fn external_channel_static_page_image2_fixed_task(
             "render_mode": message.render_mode,
             "requested_skills": external_requested_skills_summary(&message.requested_skills),
             "template_reference": template_reference.cloned().unwrap_or(Value::Null),
+            "source_data_snapshot": image_prompt_payload_summary
+                .get("data_snapshot")
+                .cloned()
+                .unwrap_or(Value::Null),
             "recipient_delivery": recipient_delivery.clone(),
             "permission_review_status": recipient_delivery
                 .get("permission_review_status")
@@ -25990,27 +26094,16 @@ fn external_channel_static_page_image2_fixed_task(
                 .unwrap_or(Value::Null),
             "evidence_summary": evidence_summary,
             "missing_evidence": missing_evidence,
-            "time_dimension_required": external_static_page_prompt_contains_any(prompt, &[
-                "时间", "日期", "周期", "今天", "昨日", "本周", "本月", "time", "date", "period",
-            ]),
+            "time_dimension_required": true,
+            "prompt_time_dimension_requested": prompt_time_dimension_requested,
+            "operating_report_default_time_grain": "month",
             "primary_partition_required": external_static_page_prompt_contains_any(prompt, &[
                 "分区", "分店", "门店", "区域", "品牌", "客户", "项目", "store", "brand", "region",
             ]),
             "detail_table_required": external_static_page_prompt_contains_any(prompt, &[
                 "明细", "名单", "列表", "表格", "建表", "detail", "table", "list",
             ]),
-            "dynamic_page_contract": {
-                "required": true,
-                "data_file": "data.json",
-                "source_snapshot_file": "data-snapshot.json",
-                "time_selector_required": true,
-                "primary_partition_selector_required": true,
-                "manual_refresh_required": true,
-                "auto_refresh_required": true,
-                "refresh_interval_seconds": 60,
-                "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
-                "static_html_must_render_from_data_json": true
-            },
+            "dynamic_page_contract": build_static_page_fixed_task_dynamic_page_contract(),
         }),
         image2: json!({
             "prompt_text": prompt_text,
@@ -26038,7 +26131,7 @@ fn external_channel_static_page_image2_fixed_task(
             "trend_aggregation": "date_series_only_for_trends",
             "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
             "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
-            "dynamic_data_contract": "final HTML must load local data.json when present and support time/primary partition controls plus manual/auto refresh",
+            "dynamic_data_contract": "final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh",
             "publish_mode": "new_generated_artifact_only",
             "effect_image_confirmation_required": false,
             "continue_to_publish_after_effect_image": true,
@@ -26080,6 +26173,12 @@ fn assistant_run_static_page_image2_fixed_task(
     let image_prompt_payload_summary =
         external_static_page_image_prompt_payload_summary(image_prompt_payload);
     let prompt_text = external_static_page_image_prompt_text(&image_prompt_payload_summary, prompt);
+    let prompt_time_dimension_requested = external_static_page_prompt_contains_any(
+        prompt,
+        &[
+            "时间", "日期", "周期", "今天", "昨日", "本周", "本月", "time", "date", "period",
+        ],
+    );
     CodexHostFixedTaskTemplateContextView {
         template_id: CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish,
         version: 1,
@@ -26094,29 +26193,22 @@ fn assistant_run_static_page_image2_fixed_task(
             "source": "main_assistant_static_page_image2_pipeline",
             "local_thread_id": run.local_thread_id,
             "template_reference": template_reference.cloned().unwrap_or(Value::Null),
+            "source_data_snapshot": image_prompt_payload_summary
+                .get("data_snapshot")
+                .cloned()
+                .unwrap_or(Value::Null),
             "evidence_summary": evidence_summary,
             "missing_evidence": missing_evidence,
-            "time_dimension_required": external_static_page_prompt_contains_any(prompt, &[
-                "时间", "日期", "周期", "今天", "昨日", "本周", "本月", "time", "date", "period",
-            ]),
+            "time_dimension_required": true,
+            "prompt_time_dimension_requested": prompt_time_dimension_requested,
+            "operating_report_default_time_grain": "month",
             "primary_partition_required": external_static_page_prompt_contains_any(prompt, &[
                 "分区", "分店", "门店", "区域", "品牌", "客户", "项目", "store", "brand", "region",
             ]),
             "detail_table_required": external_static_page_prompt_contains_any(prompt, &[
                 "明细", "名单", "列表", "表格", "建表", "detail", "table", "list",
             ]),
-            "dynamic_page_contract": {
-                "required": true,
-                "data_file": "data.json",
-                "source_snapshot_file": "data-snapshot.json",
-                "time_selector_required": true,
-                "primary_partition_selector_required": true,
-                "manual_refresh_required": true,
-                "auto_refresh_required": true,
-                "refresh_interval_seconds": 60,
-                "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
-                "static_html_must_render_from_data_json": true
-            },
+            "dynamic_page_contract": build_static_page_fixed_task_dynamic_page_contract(),
         }),
         image2: json!({
             "prompt_text": prompt_text,
@@ -26144,7 +26236,7 @@ fn assistant_run_static_page_image2_fixed_task(
             "trend_aggregation": "date_series_only_for_trends",
             "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
             "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
-            "dynamic_data_contract": "final HTML must load local data.json when present and support time/primary partition controls plus manual/auto refresh",
+            "dynamic_data_contract": "final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh",
             "publish_mode": "new_generated_artifact_only",
             "effect_image_confirmation_required": false,
             "continue_to_publish_after_effect_image": true,
@@ -26305,7 +26397,101 @@ fn external_static_page_image_prompt_payload_summary(payload: &Value) -> Value {
                 .or_else(|| payload.get("dataSnapshot")),
             1000,
         ),
+        "data_snapshot": external_static_page_image_prompt_payload_data_snapshot(payload),
     })
+}
+
+fn external_static_page_image_prompt_payload_data_snapshot(payload: &Value) -> Value {
+    let snapshot = payload
+        .get("data_snapshot")
+        .or_else(|| payload.get("dataSnapshot"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    if snapshot.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "source": snapshot.get("source").cloned().unwrap_or(Value::Null),
+        "snapshotVersion": snapshot
+            .get("snapshotVersion")
+            .or_else(|| snapshot.get("snapshot_version"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "updatedAt": snapshot
+            .get("updatedAt")
+            .or_else(|| snapshot.get("updated_at"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "validation_summary": snapshot.get("validation_summary").cloned().unwrap_or(Value::Null),
+        "sampleRowCount": snapshot
+            .get("sampleRowCount")
+            .or_else(|| snapshot.pointer("/validation_summary/sampleRowCount"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "detailRowCount": snapshot
+            .get("detailRowCount")
+            .or_else(|| snapshot.pointer("/validation_summary/detailRowCount"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "unitHints": snapshot
+            .get("unitHints")
+            .or_else(|| snapshot.pointer("/validation_summary/unitHints"))
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "data_source_candidates": snapshot
+            .get("data_source_candidates")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "field_candidates": static_page_fixed_task_compact_array(
+            snapshot.get("field_candidates"),
+            12,
+        ),
+        "module_bindings": static_page_fixed_task_compact_module_bindings(
+            snapshot.get("module_bindings"),
+        ),
+        "structure_signals": snapshot.get("structure_signals").cloned().unwrap_or(Value::Null),
+        "refresh_policy": snapshot
+            .get("refresh_policy")
+            .or_else(|| snapshot.get("refresh"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    })
+}
+
+fn static_page_fixed_task_compact_array(value: Option<&Value>, limit: usize) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .map(|items| items.iter().take(limit).cloned().collect::<Vec<_>>())
+            .unwrap_or_default(),
+    )
+}
+
+fn static_page_fixed_task_compact_module_bindings(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .take(12)
+                    .map(|item| {
+                        let mut compact = item.clone();
+                        if let Some(object) = compact.as_object_mut() {
+                            object.insert(
+                                "sampleData".to_string(),
+                                static_page_fixed_task_compact_array(
+                                    item.get("sampleData").or_else(|| item.get("sample_data")),
+                                    12,
+                                ),
+                            );
+                        }
+                        compact
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    )
 }
 
 fn external_static_page_image_module_summary(module: &Value) -> Value {
@@ -27504,7 +27690,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             "publish_mode": "new_generated_artifact_only",
         })),
         artifact_links: generated_artifact_url.clone().into_iter().collect(),
-        task_status: Some(task_status.to_string()),
+        task_status: Some(external_channel_public_task_status(task_status).to_string()),
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
@@ -36548,11 +36734,7 @@ async fn maybe_recover_external_static_page_publish_completed_from_exec_event(
         fixed_task_output,
         "dynamic_page_contract",
     );
-    let dynamic_page_contract = if dynamic_page_contract.is_null() {
-        build_static_page_dynamic_page_contract()
-    } else {
-        dynamic_page_contract
-    };
+    let dynamic_page_contract = normalize_static_page_dynamic_page_contract(dynamic_page_contract);
     let completed_payload = json!({
         "channel_connection_id": source_refs
             .get("channel_connection_id")
@@ -38176,11 +38358,7 @@ async fn maybe_record_external_static_page_publish_completed(
         &event.payload,
         "dynamic_page_contract",
     );
-    let dynamic_page_contract = if dynamic_page_contract.is_null() {
-        build_static_page_dynamic_page_contract()
-    } else {
-        dynamic_page_contract
-    };
+    let dynamic_page_contract = normalize_static_page_dynamic_page_contract(dynamic_page_contract);
     let dataset_artifact_key = static_page_dataset_artifact_key_from_source_refs(&source_refs)
         .or_else(|| {
             draft
@@ -38413,10 +38591,12 @@ async fn mark_static_page_draft_generated_artifact_published(
     asset_manifest.insert("data_snapshot_url".to_string(), data_snapshot_url.clone());
     asset_manifest.insert(
         "dynamic_page_contract".to_string(),
-        completed_payload
-            .get("dynamic_page_contract")
-            .cloned()
-            .unwrap_or_else(build_static_page_dynamic_page_contract),
+        normalize_static_page_dynamic_page_contract(
+            completed_payload
+                .get("dynamic_page_contract")
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
     );
     asset_manifest.insert(
         "validation_summary".to_string(),
@@ -38647,6 +38827,7 @@ async fn maybe_attach_external_static_page_artifact_to_run(
         "dynamic_page_contract": completed_payload
             .get("dynamic_page_contract")
             .cloned()
+            .map(normalize_static_page_dynamic_page_contract)
             .unwrap_or_else(build_static_page_dynamic_page_contract),
         "draft_id": completed_payload.get("draft_id").cloned().unwrap_or(Value::Null),
         "image_job_id": completed_payload.get("image_job_id").cloned().unwrap_or(Value::Null),
@@ -38771,11 +38952,7 @@ fn external_channel_static_page_published_reply(
 ) -> ExternalBotReplyView {
     let dynamic_page_contract =
         external_channel_static_page_artifact_payload_value(payload, "dynamic_page_contract");
-    let dynamic_page_contract = if dynamic_page_contract.is_null() {
-        build_static_page_dynamic_page_contract()
-    } else {
-        dynamic_page_contract
-    };
+    let dynamic_page_contract = normalize_static_page_dynamic_page_contract(dynamic_page_contract);
     let provisional_direct_html = payload
         .get("provisional_direct_html")
         .and_then(Value::as_bool)
@@ -39007,7 +39184,7 @@ fn external_channel_static_page_publish_failed_reply_from_event_payload(
         conversation_external_id,
         "static_page_publish_failed",
         Some(
-            "V3 已生成效果图，但最终静态页发布失败，已记录失败原因，可稍后重试或人工处理。"
+            "V3 已生成效果图，但最终静态页暂未完成，系统已记录原因，可继续补充数据、重试或转人工处理。"
                 .to_string(),
         ),
         Some(json!({
@@ -56405,6 +56582,19 @@ fn build_initial_report_plan_execution(
         "retries_remaining".to_string(),
         Value::Number(runtime_state.retries_remaining.into()),
     );
+    context.insert(
+        "report_time_range_contract".to_string(),
+        build_static_page_report_time_range_contract(),
+    );
+    context.insert(
+        "report_default_controls".to_string(),
+        json!([
+            "time_range",
+            "primary_partition",
+            "manual_refresh",
+            "auto_refresh"
+        ]),
+    );
     if let Some(service_handoff) = service_handoff {
         context.insert("service_handoff".to_string(), json!(service_handoff));
     }
@@ -56839,6 +57029,19 @@ fn build_initial_report_render_execution(
     context.insert(
         "retries_remaining".to_string(),
         Value::Number(runtime_state.retries_remaining.into()),
+    );
+    context.insert(
+        "report_time_range_contract".to_string(),
+        build_static_page_report_time_range_contract(),
+    );
+    context.insert(
+        "report_default_controls".to_string(),
+        json!([
+            "time_range",
+            "primary_partition",
+            "manual_refresh",
+            "auto_refresh"
+        ]),
     );
     context.insert(
         "surface".to_string(),
@@ -67385,11 +67588,13 @@ fn static_page_template_missing_evidence(
     if let Some(reference) = reference {
         match reference.id {
             "data-report" | "dashboard" => {
-                missing.push(json!({
-                    "code": "chart_sample_rows_required",
-                    "message": "图表模块需要来自可见数据集、检索证据或模型明确标注的样例行。",
-                    "recommended_action": "static_page.update_draft",
-                }));
+                if !static_page_evidence_state_has_chart_sample_rows(evidence_state) {
+                    missing.push(json!({
+                        "code": "chart_sample_rows_required",
+                        "message": "图表模块需要来自可见数据集、检索证据或模型明确标注的样例行。",
+                        "recommended_action": "static_page.update_draft",
+                    }));
+                }
             }
             "docs-page" => {
                 if !static_page_evidence_state_has_section_title_hints(evidence_state) {
@@ -67416,6 +67621,36 @@ fn static_page_template_missing_evidence(
         "status": if missing.is_empty() { "ready" } else { "needs_evidence" },
         "items": missing,
     })
+}
+
+fn static_page_evidence_state_has_chart_sample_rows(evidence_state: &Value) -> bool {
+    evidence_state
+        .get("supplied_items")
+        .or_else(|| evidence_state.get("suppliedItems"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| match item.get("type").and_then(Value::as_str) {
+                    Some("database_aggregate" | "spreadsheet_row_analysis") => item
+                        .get("rows")
+                        .or_else(|| item.get("analysis_rows"))
+                        .or_else(|| item.get("sample_rows"))
+                        .and_then(Value::as_array)
+                        .is_some_and(|rows| !rows.is_empty()),
+                    Some("dataset_fact_snapshot") => {
+                        item.get("row_count")
+                            .or_else(|| item.get("rowCount"))
+                            .and_then(Value::as_u64)
+                            .is_some_and(|count| count > 0)
+                            || item
+                                .get("rows")
+                                .and_then(Value::as_array)
+                                .is_some_and(|rows| !rows.is_empty())
+                    }
+                    _ => false,
+                })
+        })
 }
 
 fn static_page_evidence_state_has_section_title_hints(evidence_state: &Value) -> bool {
@@ -68471,6 +68706,64 @@ fn build_static_page_dynamic_page_contract() -> Value {
     })
 }
 
+fn build_static_page_fixed_task_dynamic_page_contract() -> Value {
+    json!({
+        "required": true,
+        "data_file": "data.json",
+        "source_snapshot_file": "data-snapshot.json",
+        "time_selector_required": true,
+        "time_range_selector_required": true,
+        "primary_partition_selector_required": true,
+        "manual_refresh_required": true,
+        "auto_refresh_required": true,
+        "refresh_interval_seconds": 60,
+        "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
+        "static_html_must_render_from_data_json": true,
+        "report_time_range": build_static_page_report_time_range_contract(),
+    })
+}
+
+fn build_static_page_report_time_range_contract() -> Value {
+    json!({
+        "required": true,
+        "selector": "time_range",
+        "default_granularity": "month",
+        "default_preset": "latest_available_month",
+        "operating_report_default": "month",
+        "supported_granularities": ["month", "quarter", "year", "custom_range"],
+        "field_hints": [
+            "month",
+            "stat_month",
+            "biz_month",
+            "period_month",
+            "date",
+            "stat_date",
+            "txdate",
+            "created_at",
+            "updated_at"
+        ],
+        "fallback_policy": "when only daily dates are available, aggregate or label operating reports by month while preserving custom range selection"
+    })
+}
+
+fn normalize_static_page_dynamic_page_contract(candidate: Value) -> Value {
+    if candidate.is_null() {
+        return build_static_page_dynamic_page_contract();
+    }
+    let mut normalized = build_static_page_dynamic_page_contract();
+    if let (Some(normalized_object), Some(candidate_object)) =
+        (normalized.as_object_mut(), candidate.as_object())
+    {
+        for (key, value) in candidate_object {
+            if key == "report_time_range" || key == "time_range_selector_required" {
+                continue;
+            }
+            normalized_object.insert(key.clone(), value.clone());
+        }
+    }
+    normalized
+}
+
 fn build_static_page_visual_spec(style_direction: &str) -> Value {
     match style_direction {
         "decision-brief" => json!({
@@ -68570,6 +68863,7 @@ fn build_static_page_render_spec() -> Value {
                 "changeDetectionFields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"]
             },
             "defaultControls": ["time_range", "primary_partition", "manual_refresh", "auto_refresh"],
+            "reportTimeRange": build_static_page_report_time_range_contract(),
             "updateContract": "When datasets or source documents change, regenerate or replace data.json and let the final HTML re-render from the latest snapshot."
         },
         "editableContent": ["title", "content", "dataBinding", "visualization", "chartRuntime", "chartOptions", "layout"],
@@ -74465,6 +74759,48 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_progress_reply_uses_processing_public_status() {
+        let reply = external_channel_task_status_reply_for_conversation(
+            "room-1",
+            "static_page_image2_auto_publish_pending",
+            Some("V3 正在生成静态页。".to_string()),
+            Some(json!({
+                "type": "v3_static_page_image2_pipeline",
+                "status": "static_page_image2_auto_publish_pending"
+            })),
+            Vec::new(),
+        );
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert_eq!(
+            reply.card.as_ref().expect("card")["status"],
+            json!("static_page_image2_auto_publish_pending")
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_failed_reply_keeps_processing_public_status() {
+        let reply = external_channel_task_status_reply_for_conversation(
+            "room-1",
+            "static_page_publish_failed",
+            Some("V3 静态页发布未完成。".to_string()),
+            Some(json!({
+                "type": "v3_static_page_image2_publish_status",
+                "status": "static_page_publish_failed"
+            })),
+            Vec::new(),
+        );
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert_eq!(
+            reply.card.as_ref().expect("card")["status"],
+            json!("static_page_publish_failed")
+        );
+    }
+
+    #[test]
     fn external_channel_static_page_pipeline_sse_emits_effect_image_status_card() {
         let assistant_run_id = AssistantRunId::new();
         let response = ExternalChannelEventResponse {
@@ -74556,10 +74892,7 @@ mod tests {
             .expect("progress reply");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_image_preview_queued")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("status card");
         assert_eq!(card["type"], json!("v3_static_page_image2_preview_queued"));
         assert_eq!(card["stage"], json!("image2_preview_generation"));
@@ -74608,10 +74941,7 @@ mod tests {
             .expect("retry progress reply");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_image_preview_retrying")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("status card");
         assert_eq!(
             card["type"],
@@ -74659,10 +74989,7 @@ mod tests {
         let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
             .expect("running progress reply");
 
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_image_preview_running")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("status card");
         assert_eq!(card["type"], json!("v3_static_page_image2_preview_running"));
         assert_eq!(card["orchestrator_task_id"], json!("task-image-1"));
@@ -74710,10 +75037,7 @@ mod tests {
             .expect("progress reply");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_publish_running")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("status card");
         assert_eq!(card["type"], json!("v3_static_page_image2_publish_running"));
         assert_eq!(card["stage"], json!("codex_static_page_publish"));
@@ -74774,10 +75098,7 @@ mod tests {
         let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
             .expect("retrying publish reply");
 
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_publish_retrying")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("status card");
         assert_eq!(card["type"], json!("v3_static_page_image2_publish_status"));
         assert_eq!(card["runtime_event"]["attempt"], json!(1));
@@ -74815,10 +75136,7 @@ mod tests {
         let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
             .expect("running publish reply");
 
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_publish_running")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("status card");
         assert_eq!(
             card["runtime_event"]["reason"],
@@ -74870,10 +75188,7 @@ mod tests {
             .expect("failed publish reply");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_publish_failed")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         assert!(reply.artifact_links.is_empty());
         let card = reply.card.expect("status card");
         assert_eq!(card["type"], json!("v3_static_page_image2_publish_status"));
@@ -74943,10 +75258,7 @@ mod tests {
         let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
             .expect("failed publish reply");
 
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_publish_failed")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("status card");
         assert_eq!(card["status"], json!("static_page_publish_failed"));
         assert_eq!(card["error"]["code"], json!("validation_report_required"));
@@ -75063,10 +75375,7 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_image_preview_queued")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("card should be returned");
         assert_eq!(card["status"], json!("static_page_image_preview_queued"));
         assert_eq!(card["direct_html_fallback"], json!(false));
@@ -75453,10 +75762,7 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_image2_auto_publish_pending")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         assert!(reply.artifact_links.is_empty());
         let card = reply.card.expect("card should be returned");
         assert!(card["public_url"].is_null());
@@ -75498,6 +75804,7 @@ mod tests {
         )
         .expect("status reply should restore pipeline status");
         assert_eq!(restored.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(restored.task_status.as_deref(), Some("processing"));
         let restored_card = restored.card.expect("restored card should be returned");
         assert!(restored_card["public_url"].is_null());
         assert_eq!(restored_card["provisional_direct_html"], json!(false));
@@ -75604,6 +75911,30 @@ mod tests {
 
         assert!(external_channel_message_requests_static_page_artifact(
             &message, prompt
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_detects_short_report_title_without_artifact_mode() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        assert!(external_channel_message_requests_static_page_artifact(
+            &message,
+            "经营健康度报表"
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_ignores_short_report_question() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        assert!(!external_channel_message_requests_static_page_artifact(
+            &message,
+            "经营健康度报表口径有哪些问题"
         ));
     }
 
@@ -89046,10 +89377,7 @@ retrieve_evidence:
 
         let reply = external_channel_static_page_reply_from_events(&events, "chat-static-page")
             .expect("failed status reply");
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_publish_failed")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
         let card = reply.card.expect("failed card");
         assert_eq!(
             card["error"]["message"],
@@ -96664,6 +96992,87 @@ retrieve_evidence:
     }
 
     #[test]
+    fn static_page_template_missing_evidence_accepts_database_aggregate_rows() {
+        let dataset_id = DatasetId::new();
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "database_aggregate",
+                "dataset_id": dataset_id.to_string(),
+                "source_id": "hy-sql-traffic-area",
+                "table": "bi_contract_warning",
+                "dimensions": ["dist_name"],
+                "aggregation": "count",
+                "value_label": "record_count",
+                "rows": [
+                    {"dist_name": "华东一区", "value": "1718"}
+                ]
+            }]
+        });
+        let missing = static_page_template_missing_evidence(
+            resolve_static_page_template_reference(Some("data-report"))
+                .expect("reference should resolve"),
+            &evidence_state,
+        );
+
+        assert_eq!(missing["status"], json!("ready"));
+        assert_eq!(
+            value_array(missing["items"].clone())
+                .iter()
+                .filter(|item| item["code"] == json!("chart_sample_rows_required"))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn static_page_image_prompt_summary_carries_structured_data_snapshot() {
+        let payload = json!({
+            "title": "新百经营总报表",
+            "modules": [{
+                "id": "ranking",
+                "title": "区域排行",
+                "visualization": {"type": "bar-chart"}
+            }],
+            "data_snapshot": {
+                "source": "assistant_run",
+                "snapshotVersion": "static-page-data-v1-test",
+                "validation_summary": {
+                    "status": "ready",
+                    "sampleRowCount": 2,
+                    "detailRowCount": 2,
+                    "unitHints": ["record_count"]
+                },
+                "field_candidates": [{
+                    "sourceId": "database_aggregate",
+                    "fieldPath": "database.aggregate.record_count",
+                    "sampleRows": 2
+                }],
+                "module_bindings": [{
+                    "moduleId": "ranking",
+                    "sampleData": [
+                        {"label": "华东一区", "value": 1718, "kind": "database_aggregate"},
+                        {"label": "华东二区", "value": 1240, "kind": "database_aggregate"}
+                    ],
+                    "bindingQualityStatus": "confirmed"
+                }]
+            }
+        });
+
+        let summary = external_static_page_image_prompt_payload_summary(&payload);
+
+        assert_eq!(summary["data_snapshot"]["sampleRowCount"], json!(2));
+        assert_eq!(
+            summary["data_snapshot"]["module_bindings"][0]["sampleData"][0]["label"],
+            json!("华东一区")
+        );
+        assert_eq!(
+            summary["data_snapshot"]["field_candidates"][0]["sourceId"],
+            json!("database_aggregate")
+        );
+    }
+
+    #[test]
     fn static_page_image_payload_refreshes_missing_rows_from_draft_context() {
         let now = Utc::now();
         let dataset_id = DatasetId::new();
@@ -98197,6 +98606,11 @@ retrieve_evidence:
         assert_eq!(
             image_prompt_payload["render_spec"]["dynamicData"]["dataFile"],
             json!("data.json")
+        );
+        assert_eq!(
+            image_prompt_payload["render_spec"]["dynamicData"]["reportTimeRange"]
+                ["default_granularity"],
+            json!("month")
         );
 
         let rendered = render_static_page(&StaticPageRenderRequest {
@@ -107984,6 +108398,10 @@ retrieve_evidence:
             json!(ast_version.id)
         );
         assert_eq!(persisted_execution.context["surface"], json!("pc"));
+        assert_eq!(
+            persisted_execution.context["report_time_range_contract"]["default_granularity"],
+            json!("month")
+        );
     }
 
     #[tokio::test]
@@ -108060,6 +108478,10 @@ retrieve_evidence:
             .expect("workflow execution should exist");
         assert_eq!(persisted_execution.report_plan_id, Some(plan.id));
         assert_eq!(persisted_execution.kind, WorkflowKind::ReportPlan);
+        assert_eq!(
+            persisted_execution.context["report_time_range_contract"]["default_preset"],
+            json!("latest_available_month")
+        );
     }
 
     #[tokio::test]

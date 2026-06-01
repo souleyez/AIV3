@@ -1640,6 +1640,8 @@ impl CodexHostFixedTaskTemplateContextView {
                 "user_goal": "生成新世界经营分析静态页",
                 "project_name": "新世界",
                 "time_dimension_required": true,
+                "prompt_time_dimension_requested": false,
+                "operating_report_default_time_grain": "month",
                 "primary_partition_required": true,
                 "detail_table_required": true,
                 "dynamic_page_contract": {
@@ -1647,12 +1649,23 @@ impl CodexHostFixedTaskTemplateContextView {
                     "data_file": "data.json",
                     "source_snapshot_file": "data-snapshot.json",
                     "time_selector_required": true,
+                    "time_range_selector_required": true,
                     "primary_partition_selector_required": true,
                     "manual_refresh_required": true,
                     "auto_refresh_required": true,
                     "refresh_interval_seconds": 60,
                     "change_detection_fields": ["snapshotVersion", "updatedAt", "snapshot_version", "updated_at"],
-                    "static_html_must_render_from_data_json": true
+                    "static_html_must_render_from_data_json": true,
+                    "report_time_range": {
+                        "required": true,
+                        "selector": "time_range",
+                        "default_granularity": "month",
+                        "default_preset": "latest_available_month",
+                        "operating_report_default": "month",
+                        "supported_granularities": ["month", "quarter", "year", "custom_range"],
+                        "field_hints": ["month", "stat_month", "biz_month", "period_month", "date", "stat_date", "txdate", "created_at", "updated_at"],
+                        "fallback_policy": "when only daily dates are available, aggregate or label operating reports by month while preserving custom range selection"
+                    }
                 }
             }),
             image2: json!({
@@ -1683,7 +1696,7 @@ impl CodexHostFixedTaskTemplateContextView {
                 "trend_aggregation": "date_series_only_for_trends",
                 "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
                 "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
-                "dynamic_data_contract": "final HTML must load local data.json when present and support time/primary partition controls plus manual/auto refresh",
+                "dynamic_data_contract": "final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh",
                 "publish_mode": "new_generated_artifact_only",
                 "effect_image_confirmation_required": false,
                 "continue_to_publish_after_effect_image": true,
@@ -5824,8 +5837,13 @@ mod tests {
             json!("data.json")
         );
         assert_eq!(
+            encoded["requirements"]["dynamic_page_contract"]["report_time_range"]
+                ["default_granularity"],
+            json!("month")
+        );
+        assert_eq!(
             encoded["policies"]["dynamic_data_contract"],
-            json!("final HTML must load local data.json when present and support time/primary partition controls plus manual/auto refresh")
+            json!("final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh")
         );
         assert_eq!(
             encoded["human_review_policy"],
