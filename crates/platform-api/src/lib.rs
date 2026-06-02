@@ -18399,9 +18399,14 @@ async fn ingest_external_channel_event_stream(
         let is_static_page = external_channel_response_is_static_page_pipeline(&response);
         let terminal_static_page =
             is_static_page && external_channel_static_page_sse_is_terminal(&response);
+        let public_completed_emitted =
+            external_channel_public_stream_has_event(&events, "external_channel.completed");
         let mut initial = started;
         initial.push_str(&replay);
-        if replay_empty && resume_since_sequence.is_none() {
+        if replay_empty
+            && (!public_completed_emitted || resume_since_sequence.is_none())
+            && (!is_static_page || terminal_static_page)
+        {
             initial.push_str(
                 &external_channel_sse_completion_with_done_persisted(
                     &state,
@@ -80814,7 +80819,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generic_chat_page_event_stream_replays_existing_run_public_events() {
+    async fn generic_chat_page_event_stream_replays_or_recovers_existing_run_completion() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
@@ -80870,6 +80875,24 @@ mod tests {
         let first_body = String::from_utf8(first_body.to_vec()).expect("SSE should be utf8");
         assert!(first_body.contains("event: external_channel.completed"));
         assert!(first_body.contains("续传模型直答。"));
+        let run_id = load_external_message_event_run_id(&state, &message.idempotency_key)
+            .await
+            .expect("message event lookup should load")
+            .expect("run id should be recorded");
+        sqlx::query(
+            r#"
+            delete from assistant_run_events
+            where tenant_id = $1
+              and run_id = $2
+              and payload->>'schema' = $3
+            "#,
+        )
+        .bind(tenant.id.0)
+        .bind(run_id.0)
+        .bind(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+        .execute(storage.pool())
+        .await
+        .expect("public stream events should be removable for recovery test");
 
         let run_count_before: i64 = sqlx::query_scalar(
             r#"
