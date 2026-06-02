@@ -28778,6 +28778,61 @@ fn static_page_template_token_is_material_scope(token: &str) -> bool {
         || token.starts_with("dataset_id:")
 }
 
+fn static_page_default_prompt_from_answer_policy(answer_policy: &Value) -> Option<&str> {
+    answer_policy
+        .get("default_prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn static_page_default_prompt_from_scope_or_refs<'a>(
+    selected_scope: &'a Value,
+    source_refs: &'a Value,
+) -> Option<&'a str> {
+    source_refs
+        .get("answer_policy")
+        .and_then(static_page_default_prompt_from_answer_policy)
+        .or_else(|| {
+            selected_scope
+                .get("answer_policy")
+                .and_then(static_page_default_prompt_from_answer_policy)
+        })
+}
+
+fn static_page_default_prompt_stability_token_from_scope_or_refs(
+    selected_scope: &Value,
+    source_refs: &Value,
+) -> Option<String> {
+    static_page_default_prompt_from_scope_or_refs(selected_scope, source_refs)
+        .and_then(static_page_stable_key_token)
+}
+
+fn static_page_template_stability_key_with_default_prompt(
+    template_stability_key: impl Into<String>,
+    default_prompt: Option<&str>,
+) -> String {
+    let mut key = template_stability_key.into();
+    if let Some(token) = default_prompt.and_then(static_page_stable_key_token) {
+        key.push_str("|default-prompt:");
+        key.push_str(&token);
+    }
+    key
+}
+
+fn static_page_default_prompt_tokens_match(
+    selected_scope: &Value,
+    source_refs: &Value,
+    baseline_selected_scope: &Value,
+    baseline_source_refs: &Value,
+) -> bool {
+    static_page_default_prompt_stability_token_from_scope_or_refs(selected_scope, source_refs)
+        == static_page_default_prompt_stability_token_from_scope_or_refs(
+            baseline_selected_scope,
+            baseline_source_refs,
+        )
+}
+
 async fn find_static_page_template_baseline_by_dataset_overlap(
     state: &AppState,
     selected_scope: &Value,
@@ -28818,6 +28873,12 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
         let baseline_tokens =
             static_page_template_match_tokens(&draft.selected_scope, &draft.source_refs);
         static_page_template_tokens_intersect(&current_tokens, &baseline_tokens)
+            && static_page_default_prompt_tokens_match(
+                selected_scope,
+                source_refs,
+                &draft.selected_scope,
+                &draft.source_refs,
+            )
     }))
 }
 
@@ -28962,11 +29023,15 @@ fn external_channel_static_page_template_stability_key(
     message: &ExternalBotMessageView,
     prompt: &str,
 ) -> String {
+    let default_prompt = message.default_prompt.as_deref();
     if let Some(template_reference_id) =
         external_channel_static_page_template_reference_id(message, prompt)
     {
         if let Some(token) = static_page_stable_key_token(&template_reference_id) {
-            return format!("template:{token}");
+            return static_page_template_stability_key_with_default_prompt(
+                format!("template:{token}"),
+                default_prompt,
+            );
         }
     }
     for skill in message
@@ -28989,10 +29054,13 @@ fn external_channel_static_page_template_stability_key(
             .and_then(|value| static_page_stable_key_token(&value))
             .unwrap_or_else(|| "latest".to_string());
         if let Some(document_external_id) = document_external_id {
-            return format!("document-template:{source_id}:{document_external_id}:{revision}");
+            return static_page_template_stability_key_with_default_prompt(
+                format!("document-template:{source_id}:{document_external_id}:{revision}"),
+                default_prompt,
+            );
         }
     }
-    "template:default".to_string()
+    static_page_template_stability_key_with_default_prompt("template:default", default_prompt)
 }
 
 fn static_page_dataset_artifact_key(
@@ -29153,11 +29221,18 @@ fn static_page_dataset_artifact_key_from_source_refs(source_refs: &Value) -> Opt
 
 fn static_page_dataset_artifact_key_from_draft_context(draft: &StaticPageDraft) -> Option<String> {
     static_page_dataset_artifact_key_from_source_refs(&draft.source_refs).or_else(|| {
-        let template_stability_key =
+        let base_template_stability_key =
             static_page_template_reference_id_from_source_refs(&draft.source_refs)
                 .and_then(static_page_stable_key_token)
                 .map(|value| format!("template:{value}"))
                 .unwrap_or_else(|| "template:default".to_string());
+        let template_stability_key = static_page_template_stability_key_with_default_prompt(
+            base_template_stability_key,
+            static_page_default_prompt_from_scope_or_refs(
+                &draft.selected_scope,
+                &draft.source_refs,
+            ),
+        );
         static_page_dataset_artifact_key(
             &draft.selected_scope,
             &draft.source_refs,
@@ -35224,7 +35299,7 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
     } else {
         source_refs
     };
-    let template_stability_key = custom_template_reference_payload
+    let base_template_stability_key = custom_template_reference_payload
         .as_ref()
         .and_then(|reference| {
             reference
@@ -35242,12 +35317,22 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
         .and_then(static_page_stable_key_token)
         .map(|value| format!("template:{value}"))
         .unwrap_or_else(|| "template:default".to_string());
+    let template_stability_key = static_page_template_stability_key_with_default_prompt(
+        base_template_stability_key,
+        static_page_default_prompt_from_scope_or_refs(&selected_scope, &source_refs),
+    );
     let legacy_inferred_template_stability_key = if explicit_template_reference_id.is_none()
         && custom_template_reference_payload.is_none()
     {
         inferred_template_reference_id
             .and_then(static_page_stable_key_token)
             .map(|value| format!("template:{value}"))
+            .map(|value| {
+                static_page_template_stability_key_with_default_prompt(
+                    value,
+                    static_page_default_prompt_from_scope_or_refs(&selected_scope, &source_refs),
+                )
+            })
     } else {
         None
     };
@@ -80992,6 +81077,15 @@ mod tests {
         assert!(key.contains("dataset_external_id:xinbai-main"));
         assert!(key.contains("channel:generic-chat-main"));
         assert!(!key.contains(&temporary_dataset_id.to_string()));
+        let mut message = sample_external_bot_message();
+        message.default_prompt = Some("请面向业务用户，按经营月报口径输出。".to_string());
+        let monthly_template_key =
+            external_channel_static_page_template_stability_key(&message, "生成经营月报");
+        message.default_prompt = Some("请面向招聘业务用户，按候选人对比口径输出。".to_string());
+        let resume_template_key =
+            external_channel_static_page_template_stability_key(&message, "生成经营月报");
+        assert!(monthly_template_key.contains("default-prompt:"));
+        assert_ne!(monthly_template_key, resume_template_key);
         assert!(!static_page_prompt_requests_explicit_redesign(
             "把标题改一下"
         ));
@@ -81176,6 +81270,57 @@ mod tests {
         assert!(!static_page_template_tokens_intersect(
             &baseline_tokens,
             &unrelated_tokens
+        ));
+    }
+
+    #[test]
+    fn static_page_template_match_requires_same_default_prompt_for_overlap() {
+        let selected_scope = json!({
+            "requested_dataset_external_ids": ["dataset-b"]
+        });
+        let baseline_scope = json!({
+            "dataset_external_ids": ["dataset-a", "dataset-b"]
+        });
+        let request_source_refs = json!({
+            "answer_policy": {
+                "default_prompt": "请面向业务用户，按经营月报口径输出。"
+            }
+        });
+        let same_prompt_baseline_refs = json!({
+            "answer_policy": {
+                "default_prompt": " 请面向业务用户，按经营月报口径输出。 "
+            }
+        });
+        let different_prompt_baseline_refs = json!({
+            "answer_policy": {
+                "default_prompt": "请面向业务用户，按招聘简历对比口径输出。"
+            }
+        });
+
+        let request_tokens = static_page_template_match_tokens(&selected_scope, &json!({}));
+        let baseline_tokens = static_page_template_match_tokens(&baseline_scope, &json!({}));
+
+        assert!(static_page_template_tokens_intersect(
+            &request_tokens,
+            &baseline_tokens
+        ));
+        assert!(static_page_default_prompt_tokens_match(
+            &selected_scope,
+            &request_source_refs,
+            &baseline_scope,
+            &same_prompt_baseline_refs,
+        ));
+        assert!(!static_page_default_prompt_tokens_match(
+            &selected_scope,
+            &request_source_refs,
+            &baseline_scope,
+            &different_prompt_baseline_refs,
+        ));
+        assert!(!static_page_default_prompt_tokens_match(
+            &selected_scope,
+            &request_source_refs,
+            &baseline_scope,
+            &json!({}),
         ));
     }
 
@@ -82934,6 +83079,7 @@ mod tests {
         message.output_format = Some("rich_text".to_string());
         message.render_mode = Some("artifact".to_string());
         message.artifact_type = Some("static_page".to_string());
+        message.default_prompt = Some("请面向业务用户，按经营月报口径输出。".to_string());
         message.dataset_external_ids = vec!["xinbai-project-dataset".to_string()];
         let mut assistant_request =
             external_bot_message_to_assistant_run_request("generic-chat-main", &message);
@@ -82967,6 +83113,7 @@ mod tests {
             Some("generic-chat-main"),
         )
         .expect("stable dataset artifact key");
+        assert!(dataset_artifact_key.contains("default-prompt:"));
         let public_url =
             "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai/index.html";
         let baseline_source_refs = apply_static_page_artifact_stability_to_source_refs(
@@ -83176,6 +83323,7 @@ mod tests {
         message.output_format = Some("rich_text".to_string());
         message.render_mode = Some("artifact".to_string());
         message.artifact_type = Some("static_page".to_string());
+        message.default_prompt = Some("请面向业务用户，按经营月报口径输出。".to_string());
         message.dataset_external_ids = vec!["xinbai-project-dataset".to_string()];
         let mut assistant_request =
             external_bot_message_to_assistant_run_request("generic-chat-main", &message);
@@ -83198,7 +83346,8 @@ mod tests {
                 "conversation_external_id": "conv-static-template-overlap",
                 "message_external_id": "msg-static-template-baseline-001",
                 "artifact_type": "static_page",
-                "dataset_external_ids": ["xinbai-project-dataset"]
+                "dataset_external_ids": ["xinbai-project-dataset"],
+                "answer_policy": external_answer_policy_value(&message)
             }),
             None,
             "accepted",
