@@ -125,9 +125,9 @@ use llm_gateway::{
     model_gateway_profile_env_prefix, render_runtime_manifest, resolve_runtime_selection_from_env,
     LlmFinishReason, LlmProviderError, LlmProviderFailureKind, LlmRequest, LlmResponse,
     LlmRuntimeMetadata, LlmRuntimeMode, LlmRuntimeSelection, LlmStreamDelta,
-    ModelCapabilityManifest,
-    ModelGatewayLaneLimits, ModelGatewayPoolConfig, ModelProfileWireApi, ModelProviderProfile,
-    MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON, MODEL_LANE_CODEX_CONVERSATION,
+    ModelCapabilityManifest, ModelGatewayLaneLimits, ModelGatewayPoolConfig, ModelProfileWireApi,
+    ModelProviderProfile, MODEL_LANE_ASSISTANT_CHAT, MODEL_LANE_ASSISTANT_REACT_JSON,
+    MODEL_LANE_CODEX_CONVERSATION,
 };
 use prompt_registry::bootstrap_default_prompt_registry;
 use serde::{Deserialize, Serialize};
@@ -9939,6 +9939,21 @@ async fn external_channel_sse_completion_with_done_persisted(
     response: ExternalChannelEventResponse,
     include_done: bool,
 ) -> String {
+    external_channel_sse_completion_with_done_persisted_and_delta(
+        state,
+        response,
+        include_done,
+        true,
+    )
+    .await
+}
+
+async fn external_channel_sse_completion_with_done_persisted_and_delta(
+    state: &AppState,
+    response: ExternalChannelEventResponse,
+    include_done: bool,
+    emit_text_deltas: bool,
+) -> String {
     let emit_static_page_queued_event = response
         .reply
         .card
@@ -9951,7 +9966,11 @@ async fn external_channel_sse_completion_with_done_persisted(
     let assistant_run_id = response.assistant_run_id;
     let idempotency_key = response.idempotency_key.clone();
     let conversation_external_id = response.reply.target_conversation_external_id.clone();
-    let mut encoded = sse_text_delta_events("external_channel.delta", &text);
+    let mut encoded = if emit_text_deltas {
+        sse_text_delta_events("external_channel.delta", &text)
+    } else {
+        String::new()
+    };
     if emit_static_page_queued_event {
         let card = response.reply.card.clone();
         let status = card
@@ -10661,9 +10680,11 @@ impl ExternalChannelAnswerDeltaSink {
         if delta.delta.is_empty() {
             return;
         }
-        let _ = self.sender.send(ExternalChannelEventSseWorkerMessage::AnswerDelta(
-            sse_text_delta_event("external_channel.delta", delta.index, &delta.delta),
-        ));
+        let _ = self
+            .sender
+            .send(ExternalChannelEventSseWorkerMessage::AnswerDelta(
+                sse_text_delta_event("external_channel.delta", delta.index, &delta.delta),
+            ));
     }
 }
 
@@ -10810,6 +10831,78 @@ async fn external_channel_event_sse_next(
             };
             Some((Ok(Bytes::from(body)), ExternalChannelEventSseState::End))
         }
+        ExternalChannelEventSseState::ProcessLive {
+            state,
+            connection_id,
+            mut receiver,
+            answer_delta_emitted,
+        } => match receiver.recv().await {
+            Some(ExternalChannelEventSseWorkerMessage::AnswerDelta(body)) => Some((
+                Ok(Bytes::from(body)),
+                ExternalChannelEventSseState::ProcessLive {
+                    state,
+                    connection_id,
+                    receiver,
+                    answer_delta_emitted: true,
+                },
+            )),
+            Some(ExternalChannelEventSseWorkerMessage::Finished(result)) => {
+                let body = match result {
+                    Ok((_, response)) => {
+                        let should_follow = response.assistant_run_id.is_some()
+                            && external_channel_response_is_static_page_pipeline(&response);
+                        let terminal_static_page = should_follow
+                            && external_channel_static_page_sse_is_terminal(&response);
+                        let mut encoded = if should_follow {
+                            external_channel_static_page_sse_prompt_events(&state, &response).await
+                        } else {
+                            String::new()
+                        };
+                        let run_id = response.assistant_run_id;
+                        let idempotency_key = response.idempotency_key.clone();
+                        let conversation_external_id =
+                            response.reply.target_conversation_external_id.clone();
+                        let last_key = external_channel_static_page_sse_progress_key(&response);
+                        encoded.push_str(
+                            &external_channel_sse_completion_with_done_persisted_and_delta(
+                                &state,
+                                response,
+                                !should_follow || terminal_static_page,
+                                !answer_delta_emitted,
+                            )
+                            .await,
+                        );
+                        let next_state = if should_follow && !terminal_static_page {
+                            run_id
+                                .map(|run_id| ExternalChannelEventSseState::FollowStaticPage {
+                                    state,
+                                    connection_id,
+                                    run_id,
+                                    idempotency_key,
+                                    conversation_external_id,
+                                    started_at: Instant::now(),
+                                    last_key,
+                                    preview_emitted: false,
+                                })
+                                .unwrap_or(ExternalChannelEventSseState::End)
+                        } else {
+                            ExternalChannelEventSseState::End
+                        };
+                        return Some((Ok(Bytes::from(encoded)), next_state));
+                    }
+                    Err(error) => sse_error_event(error),
+                };
+                Some((Ok(Bytes::from(body)), ExternalChannelEventSseState::End))
+            }
+            None => Some((
+                Ok(Bytes::from(sse_error_event(ApiError::internal(
+                    "external_channel_live_stream_closed",
+                    "external channel live stream worker closed before returning a result"
+                        .to_string(),
+                )))),
+                ExternalChannelEventSseState::End,
+            )),
+        },
         ExternalChannelEventSseState::FollowStaticPage {
             state,
             connection_id,
@@ -18329,6 +18422,23 @@ async fn ingest_external_channel_message_with_connection(
     connection: &ExternalChannelConnectionSummary,
     message: ExternalBotMessageView,
 ) -> std::result::Result<(StatusCode, ExternalChannelEventResponse), ApiError> {
+    ingest_external_channel_message_with_connection_inner(
+        state,
+        connection_id,
+        connection,
+        message,
+        None,
+    )
+    .await
+}
+
+async fn ingest_external_channel_message_with_connection_inner(
+    state: &AppState,
+    connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
+    message: ExternalBotMessageView,
+    answer_delta_sink: Option<ExternalChannelAnswerDeltaSink>,
+) -> std::result::Result<(StatusCode, ExternalChannelEventResponse), ApiError> {
     validate_required("connection_id", connection_id)?;
     validate_external_bot_message(&message)?;
 
@@ -18710,6 +18820,7 @@ async fn ingest_external_channel_message_with_connection(
                     &run.execution_trail,
                     &message,
                     now,
+                    answer_delta_sink,
                 )
                 .await?
             }
@@ -31835,6 +31946,7 @@ async fn external_channel_chat_model_or_acceptance_reply(
     current_execution_trail: &Value,
     message: &ExternalBotMessageView,
     now: DateTime<Utc>,
+    answer_delta_sink: Option<ExternalChannelAnswerDeltaSink>,
 ) -> std::result::Result<ExternalBotReplyView, ApiError> {
     if external_channel_document_scope_guard_should_block(assistant_request, evidence_state) {
         let reply = "当前没有收到本轮可用的文档 ID，无法基于第三方文档确认这个问题。请在请求中传入对应的 available_document_external_ids 或 documentExternalId 后再问。";
@@ -32028,29 +32140,59 @@ async fn external_channel_chat_model_or_acceptance_reply(
         let attempt_timeout = external_channel_direct_reply_attempt_timeout(remaining_budget);
         let attempt_started_at = Instant::now();
         let response_result = if let Some(profile) = attempt.profile.clone() {
-            tokio::time::timeout(
-                attempt_timeout,
-                complete_assistant_run_provider_with_profile(
-                    attempt.env_prefix.clone(),
-                    MODEL_LANE_ASSISTANT_CHAT,
-                    profile,
-                    provider_input.clone(),
-                ),
-            )
-            .await
+            if let Some(sink) = answer_delta_sink.clone() {
+                tokio::time::timeout(
+                    attempt_timeout,
+                    complete_assistant_run_provider_with_profile_streaming(
+                        attempt.env_prefix.clone(),
+                        MODEL_LANE_ASSISTANT_CHAT,
+                        profile,
+                        provider_input.clone(),
+                        sink,
+                    ),
+                )
+                .await
+            } else {
+                tokio::time::timeout(
+                    attempt_timeout,
+                    complete_assistant_run_provider_with_profile(
+                        attempt.env_prefix.clone(),
+                        MODEL_LANE_ASSISTANT_CHAT,
+                        profile,
+                        provider_input.clone(),
+                    ),
+                )
+                .await
+            }
         } else {
-            tokio::time::timeout(
-                attempt_timeout,
-                complete_assistant_run_provider_with_env_prefix(
-                    attempt.env_prefix.clone(),
-                    MODEL_LANE_ASSISTANT_CHAT,
-                    attempt.runtime.mode.clone(),
-                    attempt.runtime.provider.clone(),
-                    attempt.runtime.model.clone(),
-                    provider_input.clone(),
-                ),
-            )
-            .await
+            if let Some(sink) = answer_delta_sink.clone() {
+                tokio::time::timeout(
+                    attempt_timeout,
+                    complete_assistant_run_provider_with_env_prefix_streaming(
+                        attempt.env_prefix.clone(),
+                        MODEL_LANE_ASSISTANT_CHAT,
+                        attempt.runtime.mode.clone(),
+                        attempt.runtime.provider.clone(),
+                        attempt.runtime.model.clone(),
+                        provider_input.clone(),
+                        sink,
+                    ),
+                )
+                .await
+            } else {
+                tokio::time::timeout(
+                    attempt_timeout,
+                    complete_assistant_run_provider_with_env_prefix(
+                        attempt.env_prefix.clone(),
+                        MODEL_LANE_ASSISTANT_CHAT,
+                        attempt.runtime.mode.clone(),
+                        attempt.runtime.provider.clone(),
+                        attempt.runtime.model.clone(),
+                        provider_input.clone(),
+                    ),
+                )
+                .await
+            }
         };
         let response = match response_result {
             Ok(Ok(response)) => response,
@@ -38799,6 +38941,62 @@ async fn complete_assistant_run_provider_with_env_prefix(
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
 }
 
+async fn complete_assistant_run_provider_with_env_prefix_streaming(
+    env_prefix: String,
+    model_lane: &'static str,
+    runtime_mode: String,
+    runtime_provider: String,
+    runtime_model: String,
+    provider_input: String,
+    answer_delta_sink: ExternalChannelAnswerDeltaSink,
+) -> std::result::Result<LlmResponse, ApiError> {
+    let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
+    let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
+    tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_env(
+            &env_prefix,
+            &runtime_mode,
+            runtime_provider,
+            bootstrap_default_prompt_registry(),
+        )?;
+        let request = LlmRequest {
+            model: runtime_model,
+            lane: Some(model_lane.to_string()),
+            system_prompt_key: None,
+            input: provider_input,
+        };
+        for attempt_index in 0..retry_attempts {
+            let sink = answer_delta_sink.clone();
+            let mut on_delta = move |delta: LlmStreamDelta| {
+                sink.emit(delta);
+                Ok(())
+            };
+            match provider.complete_streaming(&request, &mut on_delta) {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let can_retry = assistant_run_provider_error_is_retryable(&error);
+                    if !can_retry || attempt_index + 1 >= retry_attempts {
+                        return Err(error);
+                    }
+                    std::thread::sleep(assistant_run_runtime_retry_delay(
+                        retry_backoff,
+                        attempt_index,
+                    ));
+                }
+            }
+        }
+        unreachable!("retry_attempts is always at least one")
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "assistant_run_join_failed",
+            format!("assistant run streaming worker join failed: {error}"),
+        )
+    })?
+    .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
+}
+
 async fn complete_assistant_run_provider_with_profile(
     env_prefix: String,
     model_lane: &'static str,
@@ -38841,6 +39039,59 @@ async fn complete_assistant_run_provider_with_profile(
         ApiError::internal(
             "assistant_run_join_failed",
             format!("assistant run worker join failed: {error}"),
+        )
+    })?
+    .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
+}
+
+async fn complete_assistant_run_provider_with_profile_streaming(
+    env_prefix: String,
+    model_lane: &'static str,
+    profile: ModelProviderProfile,
+    provider_input: String,
+    answer_delta_sink: ExternalChannelAnswerDeltaSink,
+) -> std::result::Result<LlmResponse, ApiError> {
+    let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
+    let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
+    tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_profile_env(
+            &env_prefix,
+            &profile,
+            bootstrap_default_prompt_registry(),
+        )?;
+        let request = LlmRequest {
+            model: profile.model_id,
+            lane: Some(model_lane.to_string()),
+            system_prompt_key: None,
+            input: provider_input,
+        };
+        for attempt_index in 0..retry_attempts {
+            let sink = answer_delta_sink.clone();
+            let mut on_delta = move |delta: LlmStreamDelta| {
+                sink.emit(delta);
+                Ok(())
+            };
+            match provider.complete_streaming(&request, &mut on_delta) {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let can_retry = assistant_run_provider_error_is_retryable(&error);
+                    if !can_retry || attempt_index + 1 >= retry_attempts {
+                        return Err(error);
+                    }
+                    std::thread::sleep(assistant_run_runtime_retry_delay(
+                        retry_backoff,
+                        attempt_index,
+                    ));
+                }
+            }
+        }
+        unreachable!("retry_attempts is always at least one")
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "assistant_run_join_failed",
+            format!("assistant run streaming worker join failed: {error}"),
         )
     })?
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
