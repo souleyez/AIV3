@@ -10821,7 +10821,7 @@ fn external_channel_static_page_sse_timeout() -> StdDuration {
         std::env::var("EXTERNAL_CHANNEL_STATIC_PAGE_SSE_TIMEOUT_MS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(300_000),
+            .unwrap_or(120_000),
     )
 }
 
@@ -81196,6 +81196,20 @@ mod tests {
         assert!(body.contains("\"poll_after_seconds\":15"));
         assert!(body.contains("\"status_url\":\"https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply\""));
         assert!(!body.contains("codex_host_workflow_execution_id"));
+    }
+
+    #[tokio::test]
+    async fn external_channel_static_page_sse_timeout_defaults_to_short_polling_window() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let _timeout = TestEnvVarRestore::set(
+            "EXTERNAL_CHANNEL_STATIC_PAGE_SSE_TIMEOUT_MS",
+            "not-a-number",
+        );
+
+        assert_eq!(
+            external_channel_static_page_sse_timeout(),
+            std::time::Duration::from_millis(120_000)
+        );
     }
 
     #[test]
