@@ -473,6 +473,7 @@ async function runReconnectTask(args, index, runId) {
     lastEventId: first.lastEventId,
   });
   const secondSequences = second.events
+    .filter((frame) => frame.event !== 'external_channel.started')
     .map((frame) => sequenceFromFrame(frame))
     .filter((sequence) => Number.isInteger(sequence));
   const replayedOnlyAfterLastSequence = secondSequences.every((sequence) => sequence > first.lastSequence);
@@ -526,6 +527,9 @@ function hasTerminalFrame(events) {
 
 function sequenceFromFrame(frame) {
   const value = valueAtAnyPath(frame.data, ['sequence']);
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
   const number = Number(value);
   return Number.isInteger(number) ? number : null;
 }
