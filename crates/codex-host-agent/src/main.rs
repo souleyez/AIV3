@@ -495,6 +495,69 @@ async fn process_task(
             );
             return Ok(());
         }
+        if let Some(output) = publish_static_page_template_fallback_if_available(
+            &task_context,
+            task.execution_id,
+            &format!("{}-template-fallback", task.id),
+            &codex_host_failure_reason(&error_message),
+        )? {
+            apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepCompleted {
+                    task_key: task.task_key.clone(),
+                    output: Some(output.clone()),
+                },
+            )
+            .await?;
+            append_assistant_event(
+                storage,
+                task.tenant_id,
+                task_context.assistant_run_id,
+                "codex_host_task.static_page_template_fallback_completed",
+                json!({
+                    "mode": "static_page_template_fallback",
+                    "status": "completed",
+                    "reason": codex_host_failure_reason(&error_message),
+                    "assistant_run_id": task_context.assistant_run_id.to_string(),
+                    "capability": task_context.capability.clone(),
+                    "workflow_execution_id": task.execution_id.to_string(),
+                    "workflow_task_id": task.id.to_string(),
+                    "public_url": output
+                        .pointer("/fixed_task_output/artifact/public_url")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "raw_prompt_exposed": false,
+                    "stdout_exposed": false,
+                    "stderr_exposed": false,
+                    "secrets_exposed": false,
+                }),
+            )
+            .await?;
+            maybe_record_external_static_page_publish_completed_from_task_output(
+                storage,
+                task.tenant_id,
+                task_context.assistant_run_id,
+                task.execution_id,
+                &task_context,
+                &output,
+            )
+            .await?;
+            storage
+                .workflow_tasks()
+                .mark_succeeded(task.id, Utc::now())
+                .await?;
+            tracing::warn!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                reason = %codex_host_failure_reason(&error_message),
+                "static page template fallback completed after Codex failure"
+            );
+            return Ok(());
+        }
         if let Err(signal_error) = apply_workflow_signal_with_dependencies(
             storage,
             workflow_catalog,
@@ -3221,6 +3284,210 @@ fn publish_existing_static_page_repair_fallback_if_available(
     )))
 }
 
+fn publish_static_page_template_fallback_if_available(
+    task_context: &CodexHostTaskContext,
+    execution_id: domain_model::WorkflowExecutionId,
+    fallback_task_id: &str,
+    failure_reason: &str,
+) -> Result<Option<Value>> {
+    if !static_page_template_fallback_enabled() {
+        return Ok(None);
+    }
+    let Some(fixed_task) = task_context.fixed_task.as_ref() else {
+        return Ok(None);
+    };
+    if fixed_task.template_id.as_str() != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        return Ok(None);
+    }
+
+    let workspace_path = task_workspace_path(task_context).filter(|path| path.is_dir());
+    let task_json = workspace_path
+        .as_ref()
+        .and_then(|path| {
+            read_json_value_if_available(&path.join("task.json"))
+                .ok()
+                .flatten()
+        })
+        .unwrap_or_else(|| json!(fixed_task));
+    let evidence_file = workspace_path
+        .as_ref()
+        .and_then(|path| {
+            read_json_value_if_available(&path.join("evidence/summary.json"))
+                .ok()
+                .flatten()
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "dataset_scope": fixed_task.dataset_scope.clone(),
+                "evidence_summary": fixed_task.evidence_summary.clone(),
+                "trace_summary": fixed_task.trace_summary.clone(),
+            })
+        });
+
+    let run_segment = safe_path_segment(&task_context.assistant_run_id.to_string());
+    let execution_segment = safe_path_segment(&execution_id.to_string());
+    let task_segment = safe_path_segment(fallback_task_id);
+    let relative_dir = format!(
+        "database-static-pages/codex-host/{run_segment}/{execution_segment}-{task_segment}"
+    );
+    let artifact_dir = generated_artifact_root()?.join(&relative_dir);
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        anyhow!(
+            "failed to create static-page template fallback dir {}: {error}",
+            artifact_dir.display()
+        )
+    })?;
+
+    let preview_file = copy_static_page_template_fallback_preview(
+        workspace_path.as_deref(),
+        &artifact_dir,
+        &task_json,
+    )?;
+    let now = Utc::now();
+    let data_json = static_page_template_fallback_data(
+        fixed_task,
+        &task_json,
+        &evidence_file,
+        preview_file.as_deref(),
+        failure_reason,
+        now,
+    );
+    let snapshot_json = static_page_template_fallback_snapshot(
+        fixed_task,
+        &data_json,
+        &evidence_file,
+        failure_reason,
+        now,
+    );
+    let html = static_page_template_fallback_html();
+
+    let index_path = artifact_dir.join("index.html");
+    fs::write(&index_path, html.as_bytes()).map_err(|error| {
+        anyhow!(
+            "failed to write static-page template fallback HTML {}: {error}",
+            index_path.display()
+        )
+    })?;
+    let data_path = artifact_dir.join("data.json");
+    fs::write(
+        &data_path,
+        serde_json::to_vec_pretty(&data_json)
+            .map_err(|error| anyhow!("failed to serialize template fallback data: {error}"))?,
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write static-page template fallback data {}: {error}",
+            data_path.display()
+        )
+    })?;
+    let data_snapshot_path = artifact_dir.join("data-snapshot.json");
+    fs::write(
+        &data_snapshot_path,
+        serde_json::to_vec_pretty(&snapshot_json)
+            .map_err(|error| anyhow!("failed to serialize template fallback snapshot: {error}"))?,
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write static-page template fallback snapshot {}: {error}",
+            data_snapshot_path.display()
+        )
+    })?;
+    validate_static_page_image2_dynamic_artifact(&index_path, &artifact_dir)?;
+
+    let public_url = generated_artifact_public_url(&relative_dir);
+    let data_url = generated_artifact_public_file_url(&relative_dir, "data.json");
+    let data_snapshot_url = generated_artifact_public_file_url(&relative_dir, "data-snapshot.json");
+    let source_row_count = data_json
+        .get("sourceRowCount")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let detail_row_count = data_json
+        .get("sampleRows")
+        .and_then(Value::as_array)
+        .map(|items| Value::from(items.len() as u64))
+        .unwrap_or(Value::Null);
+    let manifest = json!({
+        "kind": "v3_codex_host_static_page_template_fallback",
+        "version": 1,
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "workflow_execution_id": execution_id.to_string(),
+        "fallback_task_id": fallback_task_id,
+        "capability": task_context.capability.clone(),
+        "public_url": public_url.clone(),
+        "data_url": data_url.clone(),
+        "data_snapshot_url": data_snapshot_url.clone(),
+        "dynamic_page_contract": static_page_dynamic_page_contract(),
+        "failure_reason": safe_response_excerpt(failure_reason, 300),
+        "created_at": now,
+    });
+    let manifest_path = artifact_dir.join("manifest.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).map_err(|error| {
+            anyhow!("failed to serialize static-page template fallback manifest: {error}")
+        })?,
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write static-page template fallback manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+
+    let fixed_task_output = json!({
+        "template_id": STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        "status": "success",
+        "artifact": {
+            "local_path": index_path.display().to_string(),
+            "public_url": public_url,
+            "manifest_path": manifest_path.display().to_string(),
+            "data_path": data_path.display().to_string(),
+            "data_url": data_url,
+            "data_snapshot_path": data_snapshot_path.display().to_string(),
+            "data_snapshot_url": data_snapshot_url,
+        },
+        "dynamic_page_contract": static_page_dynamic_page_contract(),
+        "validation_report": {
+            "visual_contract_used": preview_file.is_some()
+                || static_page_safe_generated_asset_url(fixed_task, &task_json).is_some(),
+            "snapshot_policy": "v3_local_template_fallback_after_publish_failure",
+            "latest_snapshot": data_json.get("snapshotVersion").cloned().unwrap_or(Value::Null),
+            "source_row_count": source_row_count,
+            "current_state_row_count": source_row_count,
+            "detail_row_count": detail_row_count,
+            "unit_policy": fixed_task
+                .policies
+                .get("unit_rendering")
+                .cloned()
+                .unwrap_or_else(|| json!("validate_raw_value_then_choose_wan_or_yi")),
+            "warnings": [
+                "Local GPT-5.5/Codex and Cloudflare publish path did not complete; V3 published a deterministic data-backed template page so the conversation still receives a URL.",
+                "This page preserves Image2/task evidence, dynamic data files, time controls, and refresh behavior; continue editing from this URL unless the user asks to redesign."
+            ]
+        },
+        "source_summary": data_json
+            .get("sourceSummary")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "human_review_reason": Value::Null
+    });
+
+    Ok(Some(static_page_template_fallback_output(
+        task_context,
+        fixed_task_output,
+    )))
+}
+
+fn static_page_template_fallback_enabled() -> bool {
+    std::env::var("CODEX_HOST_AGENT_STATIC_PAGE_TEMPLATE_FALLBACK_ENABLED")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(true)
+}
+
 fn static_page_existing_artifact_repair_fallback_enabled() -> bool {
     std::env::var("CODEX_HOST_AGENT_STATIC_PAGE_EXISTING_ARTIFACT_REPAIR_FALLBACK_ENABLED")
         .ok()
@@ -3284,6 +3551,658 @@ fn static_page_existing_artifact_filter_binding_repair_requested(
     .iter()
     .any(|signal| compact.contains(signal));
     has_filter_signal && has_repair_signal
+}
+
+fn copy_static_page_template_fallback_preview(
+    workspace_path: Option<&Path>,
+    artifact_dir: &Path,
+    task_json: &Value,
+) -> Result<Option<String>> {
+    let Some(workspace_path) = workspace_path else {
+        return Ok(None);
+    };
+    let canonical_workspace = match fs::canonicalize(workspace_path) {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+    for pointer in [
+        "/image2/local_preview_path",
+        "/image2/visual_contract_local_path",
+        "/image2/local_path",
+    ] {
+        let Some(raw_path) = task_json.pointer(pointer).and_then(Value::as_str) else {
+            continue;
+        };
+        let trimmed = raw_path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let source_path = if Path::new(trimmed).is_absolute() {
+            PathBuf::from(trimmed)
+        } else {
+            workspace_path.join(trimmed)
+        };
+        if !source_path.is_file() {
+            continue;
+        }
+        let canonical_source = match fs::canonicalize(&source_path) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        if !canonical_source.starts_with(&canonical_workspace) {
+            continue;
+        }
+        let extension = source_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("png");
+        let file_name = format!("visual-preview.{extension}");
+        let target_path = artifact_dir.join(&file_name);
+        fs::copy(&source_path, &target_path).map_err(|error| {
+            anyhow!(
+                "failed to copy static-page template fallback preview {} to {}: {error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+        return Ok(Some(file_name));
+    }
+    Ok(None)
+}
+
+fn static_page_template_fallback_data(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    task_json: &Value,
+    evidence_file: &Value,
+    preview_file: Option<&str>,
+    failure_reason: &str,
+    now: chrono::DateTime<Utc>,
+) -> Value {
+    let title = static_page_template_fallback_title(fixed_task, task_json);
+    let user_goal = static_page_string_from_values(
+        &[&fixed_task.requirements, task_json],
+        &[
+            "/user_goal",
+            "/requirements/user_goal",
+            "/goal",
+            "/requirements/report_goal",
+        ],
+    )
+    .unwrap_or_else(|| "按当前授权资料生成经营分析报表。".to_string());
+    let source_summary = static_page_template_source_summary(fixed_task, evidence_file);
+    let sample_rows = static_page_template_sample_rows(fixed_task, task_json, evidence_file);
+    let source_row_count = static_page_template_source_row_count(fixed_task, evidence_file)
+        .unwrap_or(sample_rows.len() as u64);
+    let dataset_count = json_array_len_at(&fixed_task.dataset_scope, "/dataset_ids")
+        + json_array_len_at(&fixed_task.dataset_scope, "/dataset_external_ids");
+    let database_count = json_array_len_at(&fixed_task.dataset_scope, "/database_source_ids")
+        + json_array_len_at(&fixed_task.dataset_scope, "/business_datasource_ids");
+    let document_count = json_array_len_at(&fixed_task.dataset_scope, "/selected_document_ids")
+        + json_array_len_at(&fixed_task.dataset_scope, "/document_external_ids");
+    let visual_preview_src = preview_file
+        .map(|value| Value::String(value.to_string()))
+        .or_else(|| static_page_safe_generated_asset_url(fixed_task, task_json).map(Value::String))
+        .unwrap_or(Value::Null);
+    let warnings = vec![
+        "本页为发布链路终端失败后的 V3 本地模板自救产物，可在此链接基础上继续调整。".to_string(),
+        "如果客户明确要求重新设计，再重新走 GPT-Image-2 设计链路；否则后续优先在该页面上修改。"
+            .to_string(),
+        format!("触发原因：{}", safe_response_excerpt(failure_reason, 180)),
+    ];
+    json!({
+        "snapshotVersion": now.to_rfc3339(),
+        "updatedAt": now.to_rfc3339(),
+        "title": title,
+        "subtitle": "V3 静态页发布自救版，保留时间筛选、分区筛选、手动刷新和自动刷新能力。",
+        "userGoal": safe_response_excerpt(&user_goal, 500),
+        "defaultMonth": "latest_available_month",
+        "timeControls": {
+            "defaultRange": "month",
+            "defaultLabel": "本月/月度",
+            "supports": ["month", "quarter", "year", "custom_range"],
+            "data-time-range": true
+        },
+        "datasetScope": static_page_public_value_excerpt(&fixed_task.dataset_scope, 2, 12, 160),
+        "sourceSummary": source_summary,
+        "sourceRowCount": source_row_count,
+        "kpis": [
+            {"label": "数据集", "value": dataset_count, "note": "本轮授权范围"},
+            {"label": "数据库源", "value": database_count, "note": "业务库/数据源"},
+            {"label": "文档", "value": document_count, "note": "文档范围"},
+            {"label": "样本行", "value": sample_rows.len(), "note": "用于页面初始呈现"}
+        ],
+        "modules": [
+            {
+                "id": "overview",
+                "title": "经营总览",
+                "body": "按当前授权的数据集、数据库和文档证据先形成可交付页面；数据不足的模块会在页面中保留缺口说明。"
+            },
+            {
+                "id": "trend",
+                "title": "趋势变化",
+                "body": "页面保留月度默认视角和自定义时间范围，后续替换 data.json 后可刷新呈现最新快照。"
+            },
+            {
+                "id": "compare",
+                "title": "分类对比",
+                "body": "优先使用样本行中的门店、区域、品类、指标字段；缺字段时展示证据摘要和待补项。"
+            },
+            {
+                "id": "permissions",
+                "title": "权限视角",
+                "body": "总部视角可看全局；店总视角应按门店或区域筛选。若对话里给出用户权限，可继续在该页基础上配置。"
+            }
+        ],
+        "sampleRows": sample_rows,
+        "warnings": warnings,
+        "visual": {
+            "previewSrc": visual_preview_src,
+            "imageJobId": fixed_task.image2.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "visualContractStatus": fixed_task.image2.get("visual_contract_status").cloned().unwrap_or(Value::Null)
+        }
+    })
+}
+
+fn static_page_template_fallback_snapshot(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    data_json: &Value,
+    evidence_file: &Value,
+    failure_reason: &str,
+    now: chrono::DateTime<Utc>,
+) -> Value {
+    json!({
+        "snapshotVersion": data_json.get("snapshotVersion").cloned().unwrap_or_else(|| json!(now.to_rfc3339())),
+        "updatedAt": now.to_rfc3339(),
+        "sourceRowCount": data_json.get("sourceRowCount").cloned().unwrap_or(Value::Null),
+        "datasetScope": static_page_public_value_excerpt(&fixed_task.dataset_scope, 2, 12, 160),
+        "evidenceSummary": static_page_public_value_excerpt(evidence_file, 2, 12, 220),
+        "fallback": {
+            "kind": "static_page_template_fallback",
+            "reason": safe_response_excerpt(failure_reason, 240),
+            "secrets_exposed": false,
+            "raw_prompt_exposed": false
+        }
+    })
+}
+
+fn static_page_template_fallback_title(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    task_json: &Value,
+) -> String {
+    let base = static_page_string_from_values(
+        &[&fixed_task.requirements, task_json],
+        &[
+            "/project_name",
+            "/requirements/project_name",
+            "/report_title",
+            "/requirements/report_title",
+            "/image2/image_prompt_payload/title",
+        ],
+    )
+    .unwrap_or_else(|| "V3 经营分析报表".to_string());
+    let trimmed = base.trim();
+    if trimmed.contains("报表") || trimmed.contains("分析") {
+        safe_response_excerpt(trimmed, 80)
+    } else {
+        safe_response_excerpt(&format!("{trimmed}经营分析报表"), 80)
+    }
+}
+
+fn static_page_template_source_summary(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    evidence_file: &Value,
+) -> Vec<String> {
+    let dataset_count = json_array_len_at(&fixed_task.dataset_scope, "/dataset_ids")
+        + json_array_len_at(&fixed_task.dataset_scope, "/dataset_external_ids");
+    let database_count = json_array_len_at(&fixed_task.dataset_scope, "/database_source_ids")
+        + json_array_len_at(&fixed_task.dataset_scope, "/business_datasource_ids");
+    let document_count = json_array_len_at(&fixed_task.dataset_scope, "/selected_document_ids")
+        + json_array_len_at(&fixed_task.dataset_scope, "/document_external_ids");
+    let mut summary = vec![format!(
+        "授权范围：数据集 {dataset_count} 个，数据库源 {database_count} 个，文档 {document_count} 份。"
+    )];
+    if let Some(keys) = evidence_file
+        .get("evidence_summary")
+        .and_then(Value::as_object)
+        .map(|object| {
+            object
+                .keys()
+                .take(6)
+                .cloned()
+                .collect::<Vec<String>>()
+                .join("、")
+        })
+        .filter(|value| !value.trim().is_empty())
+    {
+        summary.push(format!("证据摘要字段：{keys}。"));
+    }
+    if let Some(missing) = fixed_task
+        .requirements
+        .get("missing_evidence")
+        .or_else(|| evidence_file.pointer("/evidence_summary/missing_evidence"))
+    {
+        let excerpt = static_page_public_value_excerpt(missing, 1, 6, 120).to_string();
+        if excerpt != "null" {
+            summary.push(format!("待补证据：{excerpt}。"));
+        }
+    }
+    summary
+}
+
+fn static_page_template_sample_rows(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    task_json: &Value,
+    evidence_file: &Value,
+) -> Vec<Value> {
+    for source in [
+        &fixed_task.requirements,
+        &fixed_task.evidence_summary,
+        evidence_file,
+        task_json,
+    ] {
+        if let Some(rows) = static_page_find_public_object_rows(source, 0) {
+            return rows;
+        }
+    }
+    Vec::new()
+}
+
+fn static_page_find_public_object_rows(value: &Value, depth: usize) -> Option<Vec<Value>> {
+    if depth > 5 {
+        return None;
+    }
+    match value {
+        Value::Array(items) => {
+            if items.iter().any(Value::is_object) {
+                return Some(
+                    items
+                        .iter()
+                        .take(12)
+                        .map(|item| static_page_public_value_excerpt(item, 2, 10, 140))
+                        .collect(),
+                );
+            }
+            None
+        }
+        Value::Object(object) => {
+            for key in [
+                "sample_rows",
+                "sampleRows",
+                "rows",
+                "records",
+                "samples",
+                "data_samples",
+                "detail_rows",
+            ] {
+                if let Some(rows) = object
+                    .get(key)
+                    .and_then(|candidate| static_page_find_public_object_rows(candidate, depth + 1))
+                {
+                    return Some(rows);
+                }
+            }
+            for candidate in object.values() {
+                if let Some(rows) = static_page_find_public_object_rows(candidate, depth + 1) {
+                    return Some(rows);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn static_page_template_source_row_count(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    evidence_file: &Value,
+) -> Option<u64> {
+    for source in [
+        &fixed_task.requirements,
+        &fixed_task.evidence_summary,
+        evidence_file,
+    ] {
+        if let Some(count) = static_page_find_numeric_key(
+            source,
+            &[
+                "source_row_count",
+                "sourceRowCount",
+                "rows_total",
+                "rowsTotal",
+                "total_rows",
+                "totalRows",
+                "row_count",
+                "rowCount",
+            ],
+            0,
+        ) {
+            return Some(count);
+        }
+    }
+    None
+}
+
+fn static_page_find_numeric_key(value: &Value, keys: &[&str], depth: usize) -> Option<u64> {
+    if depth > 5 {
+        return None;
+    }
+    match value {
+        Value::Object(object) => {
+            for key in keys {
+                if let Some(number) = object.get(*key).and_then(json_value_as_u64) {
+                    return Some(number);
+                }
+            }
+            for candidate in object.values() {
+                if let Some(number) = static_page_find_numeric_key(candidate, keys, depth + 1) {
+                    return Some(number);
+                }
+            }
+            None
+        }
+        Value::Array(items) => items
+            .iter()
+            .find_map(|item| static_page_find_numeric_key(item, keys, depth + 1)),
+        _ => None,
+    }
+}
+
+fn json_value_as_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
+        .or_else(|| value.as_f64().map(|number| number.max(0.0).round() as u64))
+}
+
+fn json_array_len_at(value: &Value, pointer: &str) -> usize {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn static_page_string_from_values(values: &[&Value], pointers: &[&str]) -> Option<String> {
+    for value in values {
+        for pointer in pointers {
+            if let Some(text) = value
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Some(static_page_public_string(text, 600));
+            }
+        }
+    }
+    None
+}
+
+fn static_page_safe_generated_asset_url(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+    task_json: &Value,
+) -> Option<String> {
+    for value in [
+        &fixed_task.image2,
+        task_json.get("image2").unwrap_or(&Value::Null),
+    ] {
+        for pointer in [
+            "/render_asset_url",
+            "/visual_contract_url",
+            "/preview_asset_key",
+            "/asset_provenance/persistedPreviewAssetKey",
+            "/asset_provenance/renderAssetUrl",
+        ] {
+            let Some(raw) = value.pointer(pointer).and_then(Value::as_str) else {
+                continue;
+            };
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.contains('?') || trimmed.contains('#') {
+                continue;
+            }
+            if generated_artifact_url_allowed(trimmed) {
+                return Some(trimmed.to_string());
+            }
+            if !trimmed.starts_with("http://")
+                && !trimmed.starts_with("https://")
+                && !trimmed.starts_with('/')
+            {
+                return Some(format!(
+                    "{}/{}",
+                    generated_artifact_public_base_url(),
+                    trimmed.trim_matches('/')
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn static_page_public_value_excerpt(
+    value: &Value,
+    depth: usize,
+    item_limit: usize,
+    string_limit: usize,
+) -> Value {
+    match value {
+        Value::String(text) => Value::String(static_page_public_string(text, string_limit)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .take(item_limit)
+                .map(|item| {
+                    static_page_public_value_excerpt(
+                        item,
+                        depth.saturating_sub(1),
+                        item_limit,
+                        string_limit,
+                    )
+                })
+                .collect(),
+        ),
+        Value::Object(object) if depth > 0 => {
+            let mut public = Map::new();
+            for (key, item) in object.iter().take(item_limit) {
+                if static_page_public_redacted_key(key) {
+                    public.insert(key.clone(), json!("[redacted]"));
+                } else {
+                    public.insert(
+                        key.clone(),
+                        static_page_public_value_excerpt(item, depth - 1, item_limit, string_limit),
+                    );
+                }
+            }
+            Value::Object(public)
+        }
+        Value::Object(object) => {
+            let keys = object.keys().take(item_limit).cloned().collect::<Vec<_>>();
+            json!({"object_keys": keys})
+        }
+        _ => value.clone(),
+    }
+}
+
+fn static_page_public_redacted_key(key: &str) -> bool {
+    let normalized = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "apikey",
+        "accesskey",
+        "authorization",
+        "credential",
+        "databaseurl",
+        "dburl",
+        "jdbcurl",
+        "dsn",
+        "connectionstring",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn static_page_public_string(raw: &str, limit: usize) -> String {
+    let trimmed = safe_response_excerpt(raw, limit);
+    let lowered = trimmed.to_ascii_lowercase();
+    if [
+        "token=",
+        "access_token=",
+        "api_key=",
+        "secret=",
+        "password=",
+        "bearer ",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+    {
+        return "[redacted]".to_string();
+    }
+    trimmed
+}
+
+fn static_page_template_fallback_html() -> &'static str {
+    r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V3 经营分析报表</title>
+  <style>
+    :root{color-scheme:light;--ink:#17201d;--muted:#62706b;--line:#dfe7e3;--bg:#f7faf8;--panel:#ffffff;--green:#0d6b57;--gold:#c58b24;--red:#c44b4b;--blue:#2f6fb4}
+    *{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);letter-spacing:0}
+    .top{padding:28px 32px 20px;background:#ffffff;border-bottom:1px solid var(--line)}
+    .eyebrow{font-size:12px;color:var(--green);font-weight:700;text-transform:uppercase;letter-spacing:0}
+    h1{margin:8px 0 8px;font-size:30px;line-height:1.2}
+    .sub{margin:0;color:var(--muted);max-width:980px;line-height:1.65}
+    .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:14px 32px;background:#eef5f1;border-bottom:1px solid var(--line)}
+    .toolbar label{font-size:13px;color:#31403b;font-weight:650}
+    select,input,button{height:34px;border:1px solid #cbd8d3;background:#fff;color:#17201d;border-radius:6px;padding:0 10px;font:inherit}
+    button{cursor:pointer;background:#123d35;color:#fff;border-color:#123d35}
+    main{padding:24px 32px 36px;display:grid;gap:18px}
+    .grid{display:grid;gap:14px}.kpis{grid-template-columns:repeat(4,minmax(140px,1fr))}
+    .tile,.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}
+    .tile b{display:block;font-size:26px;margin:4px 0}.tile span,.note{color:var(--muted);font-size:13px;line-height:1.5}
+    .split{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(280px,.9fr);gap:18px}
+    h2{font-size:18px;margin:0 0 12px}.section p{line-height:1.7;margin:0 0 10px}
+    .visual{min-height:220px;background:#edf2ef;border:1px dashed #b9c8c1;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .visual img{max-width:100%;max-height:420px;display:block}
+    .module-list{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px}
+    .module{border:1px solid var(--line);border-radius:8px;padding:14px;background:#fbfdfc}.module h3{margin:0 0 8px;font-size:15px}
+    .warnings{border-left:4px solid var(--gold);background:#fff9ec}
+    table{width:100%;border-collapse:collapse;font-size:13px} th,td{border-bottom:1px solid var(--line);text-align:left;padding:9px 8px;vertical-align:top} th{color:#3a4a45;background:#f1f6f3}
+    .status{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:13px}.pill{border:1px solid #cbd8d3;border-radius:999px;padding:5px 10px;background:#fff}
+    @media (max-width:900px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.split,.module-list{grid-template-columns:1fr}.top,.toolbar,main{padding-left:16px;padding-right:16px}}
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="eyebrow">V3 static page · monthly operating report</div>
+    <h1 id="title">经营分析报表</h1>
+    <p class="sub" id="subtitle">加载 data.json 中...</p>
+    <div class="status">
+      <span class="pill">快照 <b id="snapshotVersion">-</b></span>
+      <span class="pill">更新时间 <b id="updatedAt">-</b></span>
+      <span class="pill">源行数 <b id="sourceRowCount">-</b></span>
+    </div>
+  </header>
+  <nav class="toolbar">
+    <label>时间范围</label>
+    <select id="timeRange" data-time-range="required">
+      <option value="month">本月/月度</option>
+      <option value="quarter">季度</option>
+      <option value="year">年度</option>
+      <option value="custom_range">自定义日期范围</option>
+    </select>
+    <label>月份</label><input id="monthControl" type="month">
+    <label>开始日期</label><input id="startDate" type="date">
+    <label>结束日期</label><input id="endDate" type="date">
+    <label>分区</label><select id="partition"><option>全部</option></select>
+    <button id="manualRefresh" type="button">刷新数据</button>
+    <label><input id="autoRefresh" type="checkbox" checked> 自动刷新</label>
+  </nav>
+  <main>
+    <section class="grid kpis" id="kpis"></section>
+    <section class="split">
+      <div class="section">
+        <h2>页面目标</h2>
+        <p id="goal"></p>
+        <div class="module-list" id="modules"></div>
+      </div>
+      <div class="section">
+        <h2>Image2 视觉参考</h2>
+        <div class="visual" id="visualBox"><span class="note">未找到本地预览图，先按数据模板呈现。</span></div>
+      </div>
+    </section>
+    <section class="section">
+      <h2>供料与数据范围</h2>
+      <div id="sourceSummary"></div>
+    </section>
+    <section class="section">
+      <h2>样本明细</h2>
+      <div id="tableBox" class="note">暂无样本行，后续可替换 data.json 后刷新。</div>
+    </section>
+    <section class="section warnings">
+      <h2>缺口与后续调整</h2>
+      <div id="warnings"></div>
+    </section>
+  </main>
+  <script>
+    let state = { data: null, timer: null };
+    const $ = id => document.getElementById(id);
+    const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const short = value => typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
+    async function loadData(){
+      const response = await fetch('data.json?ts=' + Date.now());
+      state.data = await response.json();
+      render();
+    }
+    function render(){
+      const data = state.data || {};
+      document.title = data.title || 'V3 经营分析报表';
+      $('title').textContent = data.title || '经营分析报表';
+      $('subtitle').textContent = data.subtitle || '';
+      $('snapshotVersion').textContent = data.snapshotVersion || '-';
+      $('updatedAt').textContent = data.updatedAt || '-';
+      $('sourceRowCount').textContent = data.sourceRowCount ?? '-';
+      $('goal').textContent = data.userGoal || '';
+      $('kpis').innerHTML = (data.kpis || []).map(item => `<div class="tile"><span>${esc(item.label)}</span><b>${esc(item.value)}</b><span>${esc(item.note)}</span></div>`).join('');
+      $('modules').innerHTML = (data.modules || []).map(item => `<article class="module"><h3>${esc(item.title)}</h3><p>${esc(item.body)}</p></article>`).join('');
+      $('sourceSummary').innerHTML = (data.sourceSummary || []).map(item => `<p>${esc(item)}</p>`).join('') || '<p class="note">暂无供料摘要。</p>';
+      $('warnings').innerHTML = (data.warnings || []).map(item => `<p>${esc(item)}</p>`).join('');
+      renderVisual(data.visual || {});
+      renderTable(data.sampleRows || []);
+    }
+    function renderVisual(visual){
+      const box = $('visualBox');
+      if (visual.previewSrc) {
+        box.innerHTML = `<img src="${esc(visual.previewSrc)}" alt="Image2 preview">`;
+      } else {
+        box.innerHTML = '<span class="note">未找到本地预览图，先按数据模板呈现。</span>';
+      }
+    }
+    function renderTable(rows){
+      if (!rows.length) return;
+      const columns = Array.from(new Set(rows.flatMap(row => Object.keys(row || {})))).slice(0, 8);
+      $('tableBox').innerHTML = `<table><thead><tr>${columns.map(col => `<th>${esc(col)}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, 12).map(row => `<tr>${columns.map(col => `<td>${esc(short(row[col]))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    }
+    $('manualRefresh').addEventListener('click', loadData);
+    $('autoRefresh').addEventListener('change', event => {
+      if (state.timer) clearInterval(state.timer);
+      state.timer = event.target.checked ? setInterval(loadData, 60000) : null;
+    });
+    state.timer = setInterval(loadData, 60000);
+    loadData().catch(error => {
+      $('subtitle').textContent = 'data.json 加载失败：' + error.message;
+    });
+  </script>
+</body>
+</html>"#
 }
 
 fn patch_existing_static_page_filter_binding_html(
@@ -3452,6 +4371,44 @@ fn existing_static_page_repair_fallback_output(
     )];
     json!(CodexHostTaskOutputView {
         mode: "existing_artifact_repair_fallback".to_string(),
+        codex_invoked: false,
+        status: "completed".to_string(),
+        host_kind: Some("aiv3_host_agent".to_string()),
+        assistant_run_id: task_context.assistant_run_id.to_string(),
+        capability: task_context.capability.clone(),
+        profile: None,
+        command_plan: None,
+        process: Some(process_output.safe_summary()),
+        task_chars: task_context
+            .task
+            .as_ref()
+            .map(|task| task.chars().count())
+            .unwrap_or(0),
+        local_thread_id: task_context.local_thread_id.clone(),
+        task_memory_isolated: task_context.task_memory_isolated,
+        task_memory_space_id: task_context.task_memory_space_id.clone(),
+        html_artifacts,
+        fixed_task_output: Some(fixed_task_output),
+    })
+}
+
+fn static_page_template_fallback_output(
+    task_context: &CodexHostTaskContext,
+    fixed_task_output: Value,
+) -> Value {
+    let process_output = CodexProcessOutput {
+        exit_code: Some(0),
+        stdout_excerpt: String::new(),
+        stderr_excerpt: String::new(),
+    };
+    let html_artifacts = vec![task_context.html_report_artifact(
+        "static_page_template_fallback",
+        "completed",
+        None,
+        Some(&process_output),
+    )];
+    json!(CodexHostTaskOutputView {
+        mode: "static_page_template_fallback".to_string(),
         codex_invoked: false,
         status: "completed".to_string(),
         host_kind: Some("aiv3_host_agent".to_string()),
@@ -5373,6 +6330,123 @@ function renderInsight(k){
             .pointer("/fixed_task_output/validation_report/warnings")
             .and_then(Value::as_array)
             .is_some_and(|warnings| !warnings.is_empty()));
+    }
+
+    #[test]
+    fn static_page_template_fallback_publishes_dynamic_artifact_from_task_bundle() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let workspace_root = std::env::temp_dir()
+            .join("v3-codex-host-test-workspaces")
+            .join(Uuid::new_v4().to_string());
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let _workspace_root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            workspace_root.to_str().expect("utf-8 workspace root"),
+        );
+        let _artifact_root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.to_str().expect("utf-8 artifact root"),
+        );
+        let _artifact_base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let _fallback_enabled = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_STATIC_PAGE_TEMPLATE_FALLBACK_ENABLED",
+            "true",
+        );
+        let mut task_context = test_static_page_task_context();
+        let (dataset_scope, evidence_summary, mut task_json) = {
+            let fixed_task = task_context
+                .fixed_task
+                .as_mut()
+                .expect("static page fixed task");
+            fixed_task.requirements["project_name"] = json!("新百项目");
+            fixed_task.requirements["user_goal"] =
+                json!("按数据库真实数据生成总部和店总都能看的经营分析报表。");
+            fixed_task.evidence_summary = json!({
+                "source_row_count": 88,
+                "sample_rows": [
+                    {"store": "新百门店A", "area": "高取区", "sales": 12345, "token": "should-not-leak"},
+                    {"store": "新百门店B", "area": "普通区", "sales": 6789}
+                ]
+            });
+            (
+                fixed_task.dataset_scope.clone(),
+                fixed_task.evidence_summary.clone(),
+                json!(fixed_task),
+            )
+        };
+        let workspace = task_workspace_path(&task_context).expect("workspace path");
+        fs::create_dir_all(workspace.join("image2")).expect("image2 dir");
+        fs::create_dir_all(workspace.join("evidence")).expect("evidence dir");
+        fs::write(workspace.join("image2/preview.png"), b"not-a-real-png").expect("preview");
+        task_json["image2"]["local_preview_path"] = json!("image2/preview.png");
+        fs::write(
+            workspace.join("task.json"),
+            serde_json::to_vec_pretty(&task_json).expect("task json"),
+        )
+        .expect("write task");
+        fs::write(
+            workspace.join("evidence/summary.json"),
+            serde_json::to_vec_pretty(&json!({
+                "dataset_scope": dataset_scope,
+                "evidence_summary": evidence_summary,
+                "trace_summary": {"message_external_id": "msg-1"}
+            }))
+            .expect("evidence json"),
+        )
+        .expect("write evidence");
+
+        let output = publish_static_page_template_fallback_if_available(
+            &task_context,
+            WorkflowExecutionId::new(),
+            "unit-template",
+            "Cloudflare Codex poll failed: status=503 Authorization: Bearer secret-token",
+        )
+        .expect("fallback should not error")
+        .expect("fallback should publish");
+
+        assert_eq!(output["mode"], json!("static_page_template_fallback"));
+        assert_eq!(
+            output.pointer("/fixed_task_output/status"),
+            Some(&json!("success"))
+        );
+        assert_eq!(
+            output.pointer("/fixed_task_output/validation_report/visual_contract_used"),
+            Some(&json!(true))
+        );
+        let local_path = output
+            .pointer("/fixed_task_output/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        let artifact_dir = PathBuf::from(local_path)
+            .parent()
+            .expect("artifact dir")
+            .to_path_buf();
+        let html = fs::read_to_string(local_path).expect("html");
+        assert!(html.contains("data.json"));
+        assert!(html.contains("data-time-range"));
+        assert!(html.contains("本月/月度"));
+        assert!(artifact_dir.join("visual-preview.png").is_file());
+        assert!(artifact_dir.join("data-snapshot.json").is_file());
+        validate_static_page_image2_dynamic_artifact(Path::new(local_path), &artifact_dir)
+            .expect("dynamic artifact");
+        let data: Value =
+            serde_json::from_slice(&fs::read(artifact_dir.join("data.json")).expect("data json"))
+                .expect("data parses");
+        assert_eq!(data["title"], json!("新百项目经营分析报表"));
+        assert_eq!(data["sourceRowCount"], json!(88));
+        assert_eq!(data["sampleRows"][0]["token"], json!("[redacted]"));
+        assert!(!data.to_string().contains("secret-token"));
+        assert!(output
+            .pointer("/fixed_task_output/artifact/public_url")
+            .and_then(Value::as_str)
+            .is_some_and(
+                |url| url.contains("/generated-artifacts/database-static-pages/codex-host/")
+            ));
     }
 
     #[test]
