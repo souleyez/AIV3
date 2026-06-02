@@ -85234,6 +85234,82 @@ mod tests {
         clear_assistant_openclaw_env();
     }
 
+    #[tokio::test]
+    async fn generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let _live_stream =
+            TestEnvVarRestore::set("EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED", "true");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "scripted");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-scripted-v1");
+        std::env::set_var(
+            "ASSISTANT_RUN_RUNTIME_OUTPUT_TEXT",
+            "这是一个用于验证实时流式通道的模型完整回复，长度超过二十四个字符。",
+        );
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat live stream endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-live-stream-test-{}", Uuid::new_v4()),
+                "Generic Chat Live Stream Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("请直接给出一段验证回复。".to_string());
+        message.message_external_id = "msg-live-stream-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-live-stream-001".to_string();
+        let response = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events/stream",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("SSE body should load");
+        let body = String::from_utf8(body.to_vec()).expect("SSE should be utf8");
+
+        assert!(body.contains("event: external_channel.started"));
+        assert!(body.contains("event: external_channel.retrieval_started"));
+        assert_eq!(body.matches("event: external_channel.delta").count(), 1);
+        let delta_index = body
+            .find("event: external_channel.delta")
+            .expect("live delta should be emitted");
+        let completed_index = body
+            .find("event: external_channel.completed")
+            .expect("completed should be emitted");
+        assert!(delta_index < completed_index);
+        assert!(body.contains("这是一个用于验证实时流式通道的模型完整回复"));
+        assert!(body.contains("event: done"));
+        clear_assistant_openclaw_env();
+    }
+
     #[test]
     fn external_channel_action_planning_gates_plain_questions() {
         assert!(!external_channel_prompt_may_need_planned_action(

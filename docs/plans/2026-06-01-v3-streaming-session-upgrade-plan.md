@@ -265,6 +265,8 @@ cargo test -p llm-gateway --lib
 
 **2026-06-02 status:** Gateway streaming contract completed locally. `llm-gateway::LlmProvider` now exposes `complete_streaming`, with a default buffered fallback for providers that do not support native streaming and an OpenAI-compatible SSE implementation that sends `stream=true`, parses `data:` chunks, returns usage/finish metadata, and calls back per delta. Platform live SSE wiring remains the next batch because the external ordinary-chat path still needs a background task/channel bridge to preserve model-pool retry, answer rejection, artifact persistence, and user-memory side effects. Verified with `cargo test -p llm-gateway --lib` and `cargo check -p platform-api`.
 
+**2026-06-02 status:** Platform live SSE wiring completed locally behind the default-off `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` flag. When enabled for `/v1/external/channels/{connection_id}/events/stream`, V3 runs the existing external ordinary-chat processing in a background task, passes provider deltas through an mpsc channel as `external_channel.delta`, and suppresses duplicate buffered final deltas before `external_channel.completed`. Static-page/report follow-up logic and JSON `/events` remain on the existing path. Verified with `cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib`, the existing stream endpoint test, `cargo check -p platform-api`, and `cargo test -p llm-gateway --lib`.
+
 ### Task 5: Unify Status Mapping Across Three Exits
 
 **Files:**

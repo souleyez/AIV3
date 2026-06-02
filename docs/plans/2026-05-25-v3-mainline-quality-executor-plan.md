@@ -158,6 +158,11 @@
   - Static-page no-confirm passed end-to-end through the real third-party `/events` endpoint and returned a generated-artifact URL immediately.
   - Data-ingestion analysis initially exposed a production config gap: `data_ingestion_analysis` was missing from both platform and Codex Host agent fixed-task allowlists. The 8-server env was backed up, the capability was added to both allowlists, and `aiv3-platform-api.service` / `aiv3-codex-host-agent.service` were restarted.
   - After the config fix, data-ingestion analysis accepted the request and moved through `queued` to `running/retrying` with no source-required or allowlist rejection; terminal result still needs follow-up polling.
+- Deployed 2026-06-02 external streaming/static-page template batch to 8 server:
+  - GitHub commits: `236ca1e` (`Improve external streaming and static page templates`) and `3980545` (`Fix external live stream completion path`).
+  - 8 server fast-forwarded `/srv/aiv3/repo` to `3980545`, built `platform-api` release with `CC=clang CXX=clang++`, built `apps/web` with `pnpm build`, and restarted `aiv3-platform-api.service` / `aiv3-web.service`.
+  - Services active after restart: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-static-page-worker.service`, and `aiv3-codex-host-agent.service`.
+  - Read-only smoke passed: public simple/full third-party docs returned HTTP 200 and include `template_match_policy`; `run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm,data-ingestion-analysis -Json` passed docs/auth-guard/queue-stats checks with mutation cases intentionally skipped.
 
 ## Immediate Execution Queue
 
