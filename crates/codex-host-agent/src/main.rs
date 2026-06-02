@@ -39,6 +39,7 @@ const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 6_500;
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 const DEFAULT_CODEX_HOST_CONCURRENCY: usize = 1;
 const MAX_CODEX_HOST_CONCURRENCY: usize = 8;
+const DEFAULT_STATIC_PAGE_CODEX_EXEC_TIMEOUT_MS: u64 = 900_000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -199,6 +200,8 @@ async fn process_task(
                     .command_plan
                     .as_ref()
                     .ok_or_else(|| anyhow!("codex_exec mode missing command plan"))?;
+                let codex_exec_runtime_config =
+                    codex_exec_runtime_config_for_task_context(&task_context, runtime_config);
                 match run_codex_exec_with_heartbeat(
                     storage,
                     task.tenant_id,
@@ -206,7 +209,7 @@ async fn process_task(
                     command_plan,
                     &task_context,
                     &decision,
-                    runtime_config,
+                    &codex_exec_runtime_config,
                 )
                 .await
                 {
@@ -525,6 +528,28 @@ fn codex_exec_cloudflare_fallback_enabled() -> bool {
             !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
         })
         .unwrap_or(true)
+}
+
+fn codex_exec_runtime_config_for_task_context(
+    task_context: &CodexHostTaskContext,
+    runtime_config: &CodexHostRuntimeConfig,
+) -> CodexHostRuntimeConfig {
+    if task_context.capability != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        return runtime_config.clone();
+    }
+
+    let mut adjusted = runtime_config.clone();
+    adjusted.task_timeout_ms = static_page_codex_exec_timeout_ms(runtime_config);
+    adjusted
+}
+
+fn static_page_codex_exec_timeout_ms(runtime_config: &CodexHostRuntimeConfig) -> u64 {
+    let configured = std::env::var("CODEX_HOST_AGENT_STATIC_PAGE_CODEX_EXEC_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_STATIC_PAGE_CODEX_EXEC_TIMEOUT_MS);
+    configured.min(runtime_config.task_timeout_ms())
 }
 
 fn cloudflare_fallback_decision_from_codex_exec(
@@ -4495,6 +4520,47 @@ mod tests {
             &task_context,
             &task
         ));
+    }
+
+    #[test]
+    fn static_page_codex_exec_uses_shorter_timeout_override() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _timeout = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_STATIC_PAGE_CODEX_EXEC_TIMEOUT_MS",
+            "600000",
+        );
+        let base = CodexHostRuntimeConfig {
+            task_timeout_ms: 1_800_000,
+            heartbeat_ms: 15_000,
+            stdout_limit_bytes: 1_000,
+            stderr_limit_bytes: 1_000,
+            task_workspace_retention_hours: 168,
+        };
+        let task_context = test_static_page_task_context();
+
+        let adjusted = codex_exec_runtime_config_for_task_context(&task_context, &base);
+
+        assert_eq!(adjusted.task_timeout_ms(), 600_000);
+        assert_eq!(adjusted.heartbeat_ms(), base.heartbeat_ms());
+
+        let capped_base = CodexHostRuntimeConfig {
+            task_timeout_ms: 300_000,
+            ..base.clone()
+        };
+        let capped = codex_exec_runtime_config_for_task_context(&task_context, &capped_base);
+        assert_eq!(capped.task_timeout_ms(), 300_000);
+
+        let non_static_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "inspect_project".to_string(),
+            task: Some("Inspect the repository".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
+        };
+        let unchanged = codex_exec_runtime_config_for_task_context(&non_static_context, &base);
+        assert_eq!(unchanged.task_timeout_ms(), 1_800_000);
     }
 
     #[test]
