@@ -190,8 +190,9 @@ async fn process_task(
         return Ok(());
     }
 
+    let decision = codex_host_execution_decision_for_task(execution_policy, &task_context, &task)?;
+    let decision_mode = decision.mode.clone();
     let process_result: Result<()> = async {
-        let decision = execution_policy.prepare(&task_context)?;
         let output = match decision.mode {
             CodexHostExecutionMode::DryRun => task_context.dry_run_output(),
             CodexHostExecutionMode::PlanOnly => task_context.planned_output(&decision),
@@ -323,7 +324,7 @@ async fn process_task(
                 task_context.assistant_run_id,
                 "codex_host_task.cancelled",
                 codex_host_task_cancelled_payload(
-                    execution_policy.mode.as_str(),
+                    decision_mode.as_str(),
                     &task_context,
                     &task,
                     cancel_reason,
@@ -344,7 +345,7 @@ async fn process_task(
             return Ok(());
         }
         if should_requeue_cloudflare_orchestrator_poll(
-            &execution_policy.mode,
+            &decision_mode,
             &error_message,
             &task_context,
             &task,
@@ -408,6 +409,68 @@ async fn process_task(
             );
             return Ok(());
         }
+        if let Some(output) = publish_existing_static_page_repair_fallback_if_available(
+            &task_context,
+            task.execution_id,
+            &format!("{}-fallback", task.id),
+        )? {
+            apply_workflow_signal_with_dependencies(
+                storage,
+                workflow_catalog,
+                event_bus,
+                task.tenant_id,
+                task.execution_id,
+                WorkflowSignal::StepCompleted {
+                    task_key: task.task_key.clone(),
+                    output: Some(output.clone()),
+                },
+            )
+            .await?;
+            append_assistant_event(
+                storage,
+                task.tenant_id,
+                task_context.assistant_run_id,
+                "codex_host_task.existing_artifact_repair_fallback_completed",
+                json!({
+                    "mode": "existing_artifact_repair_fallback",
+                    "status": "completed",
+                    "reason": codex_host_failure_reason(&error_message),
+                    "assistant_run_id": task_context.assistant_run_id.to_string(),
+                    "capability": task_context.capability.clone(),
+                    "workflow_execution_id": task.execution_id.to_string(),
+                    "workflow_task_id": task.id.to_string(),
+                    "public_url": output
+                        .pointer("/fixed_task_output/artifact/public_url")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "raw_prompt_exposed": false,
+                    "stdout_exposed": false,
+                    "stderr_exposed": false,
+                    "secrets_exposed": false,
+                }),
+            )
+            .await?;
+            maybe_record_external_static_page_publish_completed_from_task_output(
+                storage,
+                task.tenant_id,
+                task_context.assistant_run_id,
+                task.execution_id,
+                &task_context,
+                &output,
+            )
+            .await?;
+            storage
+                .workflow_tasks()
+                .mark_succeeded(task.id, Utc::now())
+                .await?;
+            tracing::warn!(
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                reason = %codex_host_failure_reason(&error_message),
+                "static page existing-artifact repair fallback completed after Codex failure"
+            );
+            return Ok(());
+        }
         if let Err(signal_error) = apply_workflow_signal_with_dependencies(
             storage,
             workflow_catalog,
@@ -437,7 +500,7 @@ async fn process_task(
             task_context.assistant_run_id,
             "codex_host_task.exec_failed",
             codex_host_task_failed_payload(
-                execution_policy.mode.as_str(),
+                decision_mode.as_str(),
                 &task_context,
                 &task,
                 &error_message,
@@ -459,7 +522,7 @@ async fn process_task(
         task_id = %task.id,
         execution_id = %task.execution_id,
         capability = %task_context.capability,
-        mode = %execution_policy.mode.as_str(),
+        mode = %decision_mode.as_str(),
         "codex host task completed"
     );
 
@@ -518,6 +581,20 @@ fn should_fallback_codex_exec_to_cloudflare(
         codex_host_failure_reason(&error_message),
         "timeout" | "non_zero_exit"
     )
+}
+
+fn codex_host_execution_decision_for_task(
+    execution_policy: &CodexHostAgentPolicy,
+    task_context: &CodexHostTaskContext,
+    task: &domain_model::WorkflowTask,
+) -> Result<CodexHostExecutionDecision> {
+    let decision = execution_policy.prepare(task_context)?;
+    if matches!(decision.mode, CodexHostExecutionMode::CodexExec)
+        && cloudflare_orchestrator_task_id_from_payload(&task.payload).is_some()
+    {
+        return Ok(cloudflare_fallback_decision_from_codex_exec(&decision));
+    }
+    Ok(decision)
 }
 
 fn codex_exec_cloudflare_fallback_enabled() -> bool {
@@ -2414,6 +2491,423 @@ fn normalize_cloudflare_fixed_task_output(
     Ok(output)
 }
 
+#[derive(Default)]
+struct StaticPageRepairPatchReport {
+    applied: bool,
+    patches: Vec<&'static str>,
+}
+
+fn publish_existing_static_page_repair_fallback_if_available(
+    task_context: &CodexHostTaskContext,
+    execution_id: domain_model::WorkflowExecutionId,
+    fallback_task_id: &str,
+) -> Result<Option<Value>> {
+    if !static_page_existing_artifact_repair_fallback_enabled() {
+        return Ok(None);
+    }
+    let Some(fixed_task) = task_context.fixed_task.as_ref() else {
+        return Ok(None);
+    };
+    if fixed_task.template_id.as_str() != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        return Ok(None);
+    }
+    if !static_page_existing_artifact_filter_binding_repair_requested(fixed_task) {
+        return Ok(None);
+    }
+    let Some(workspace_path) = task_workspace_path(task_context) else {
+        return Ok(None);
+    };
+    let existing_dir = workspace_path.join("existing-artifact");
+    let source_index_path = existing_dir.join("index.html");
+    if !source_index_path.is_file()
+        || !existing_dir.join("data.json").is_file()
+        || !existing_dir.join("data-snapshot.json").is_file()
+    {
+        return Ok(None);
+    }
+
+    let html = fs::read_to_string(&source_index_path).map_err(|error| {
+        anyhow!(
+            "failed to read existing static-page artifact {}: {error}",
+            source_index_path.display()
+        )
+    })?;
+    let (patched_html, patch_report) = patch_existing_static_page_filter_binding_html(&html);
+    if !patch_report.applied {
+        return Ok(None);
+    }
+
+    let run_segment = safe_path_segment(&task_context.assistant_run_id.to_string());
+    let execution_segment = safe_path_segment(&execution_id.to_string());
+    let task_segment = safe_path_segment(fallback_task_id);
+    let relative_dir = format!(
+        "database-static-pages/codex-host/{run_segment}/{execution_segment}-{task_segment}"
+    );
+    let artifact_dir = generated_artifact_root()?.join(&relative_dir);
+    copy_generated_artifact_dir(&existing_dir, &artifact_dir)?;
+    let index_path = artifact_dir.join("index.html");
+    fs::write(&index_path, patched_html.as_bytes()).map_err(|error| {
+        anyhow!(
+            "failed to write repaired existing static-page artifact {}: {error}",
+            index_path.display()
+        )
+    })?;
+    validate_static_page_image2_dynamic_artifact(&index_path, &artifact_dir)?;
+
+    let public_url = generated_artifact_public_url(&relative_dir);
+    let data_path = artifact_dir.join("data.json");
+    let data_snapshot_path = artifact_dir.join("data-snapshot.json");
+    let data_json = read_json_value_if_available(&data_path)?;
+    let latest_snapshot = data_json
+        .as_ref()
+        .and_then(|value| {
+            value
+                .pointer("/snapshots/salesDate")
+                .or_else(|| value.pointer("/snapshots/warningDate"))
+                .or_else(|| value.get("snapshotVersion"))
+                .or_else(|| value.get("snapshot_version"))
+                .or_else(|| value.get("updatedAt"))
+                .or_else(|| value.get("updated_at"))
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    let source_row_count = data_json
+        .as_ref()
+        .and_then(|value| {
+            value
+                .pointer("/snapshots/salesRowsTotal")
+                .or_else(|| value.pointer("/snapshots/warningRowsTotal"))
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    let manifest = json!({
+        "kind": "v3_codex_host_existing_static_page_repair_fallback",
+        "version": 1,
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "workflow_execution_id": execution_id.to_string(),
+        "fallback_task_id": fallback_task_id,
+        "capability": task_context.capability.clone(),
+        "source_public_url": fixed_task
+            .requirements
+            .pointer("/existing_artifact/public_url")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "public_url": public_url.clone(),
+        "data_url": generated_artifact_public_file_url(&relative_dir, "data.json"),
+        "data_snapshot_url": generated_artifact_public_file_url(&relative_dir, "data-snapshot.json"),
+        "dynamic_page_contract": static_page_dynamic_page_contract(),
+        "patches": patch_report.patches,
+        "created_at": Utc::now(),
+    });
+    let manifest_path = artifact_dir.join("manifest.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).map_err(|error| {
+            anyhow!("failed to serialize existing-artifact fallback manifest: {error}")
+        })?,
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write existing-artifact fallback manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+
+    let fixed_task_output = json!({
+        "template_id": STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        "status": "success",
+        "artifact": {
+            "local_path": index_path.display().to_string(),
+            "public_url": public_url,
+            "manifest_path": manifest_path.display().to_string(),
+            "data_path": data_path.display().to_string(),
+            "data_url": generated_artifact_public_file_url(&relative_dir, "data.json"),
+            "data_snapshot_path": data_snapshot_path.display().to_string(),
+            "data_snapshot_url": generated_artifact_public_file_url(&relative_dir, "data-snapshot.json"),
+        },
+        "dynamic_page_contract": static_page_dynamic_page_contract(),
+        "validation_report": {
+            "visual_contract_used": true,
+            "snapshot_policy": "existing_artifact_filter_binding_repair_fallback",
+            "latest_snapshot": latest_snapshot,
+            "source_row_count": source_row_count,
+            "current_state_row_count": source_row_count,
+            "detail_row_count": data_json
+                .as_ref()
+                .and_then(|value| value.get("opportunities").and_then(Value::as_array))
+                .map(|items| Value::from(items.len() as u64))
+                .unwrap_or(Value::Null),
+            "unit_policy": "preserve_existing_artifact_units",
+            "warnings": [
+                "Codex/Cloudflare publish path did not complete; V3 published a deterministic existing-artifact repair fallback.",
+                "Fallback is limited to known filter-linked KPI and insight rebinding; visual redesign was not attempted."
+            ]
+        },
+        "source_summary": [
+            "Existing V3 generated static page was materialized from the published artifact root.",
+            "The fallback copied the page assets and patched filter-bound KPI/trend/insight calculations to use scoped data where present."
+        ],
+        "human_review_reason": Value::Null
+    });
+
+    Ok(Some(existing_static_page_repair_fallback_output(
+        task_context,
+        fixed_task_output,
+    )))
+}
+
+fn static_page_existing_artifact_repair_fallback_enabled() -> bool {
+    std::env::var("CODEX_HOST_AGENT_STATIC_PAGE_EXISTING_ARTIFACT_REPAIR_FALLBACK_ENABLED")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(true)
+}
+
+fn static_page_existing_artifact_filter_binding_repair_requested(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> bool {
+    if fixed_task
+        .requirements
+        .pointer("/existing_artifact/revision_requested")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return false;
+    }
+    let goal = fixed_task
+        .requirements
+        .get("user_goal")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let compact = goal
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let has_filter_signal = [
+        "筛选",
+        "联动",
+        "切换",
+        "区域",
+        "门店",
+        "分店",
+        "时间范围",
+        "近7日",
+        "filter",
+        "binding",
+        "store",
+        "region",
+    ]
+    .iter()
+    .any(|signal| compact.contains(signal));
+    let has_repair_signal = [
+        "修复",
+        "更正",
+        "修改",
+        "bug",
+        "不变",
+        "不会变",
+        "无效",
+        "fix",
+        "repair",
+        "update",
+        "correct",
+    ]
+    .iter()
+    .any(|signal| compact.contains(signal));
+    has_filter_signal && has_repair_signal
+}
+
+fn patch_existing_static_page_filter_binding_html(
+    html: &str,
+) -> (String, StaticPageRepairPatchReport) {
+    let mut report = StaticPageRepairPatchReport::default();
+    if html.contains("function filteredSalesSeriesForCurrentScope(") {
+        return (html.to_string(), report);
+    }
+    let mut updated = html.to_string();
+    let helper = r#"function storeAllowedForCurrentScope(storecode){
+  const stores = state.data.storeList || [];
+  const store = stores.find(s => s.storecode === storecode);
+  if (state.store !== '全部' && storecode !== state.store && store?.store_name !== state.store) return false;
+  if (state.district !== '全部' && (store?.district || '未分区') !== state.district) return false;
+  return true;
+}
+function filteredSalesSeriesForCurrentScope(){
+  const byStore = state.data.salesSeriesByStore || {};
+  if (!Object.keys(byStore).length || (state.store === '全部' && state.district === '全部')) return state.data.salesSeries || [];
+  const grouped = new Map();
+  Object.entries(byStore).forEach(([storecode, rows]) => {
+    if (!storeAllowedForCurrentScope(storecode)) return;
+    (rows || []).forEach(row => {
+      const key = String(row.txdate || '').slice(0, 10);
+      if (!key) return;
+      const current = grouped.get(key) || { txdate: key, rows_count: 0, stores: 0, sales: 0, sale_num: 0 };
+      current.rows_count += Number(row.rows_count || 0);
+      current.stores += Number(row.stores || 1);
+      current.sales += Number(row.sales || 0);
+      current.sale_num += Number(row.sale_num || 0);
+      grouped.set(key, current);
+    });
+  });
+  return Array.from(grouped.values()).sort((a,b)=> String(a.txdate).localeCompare(String(b.txdate)));
+}
+function currentLast7Stats(){
+  const series = filteredSalesSeriesForCurrentScope().slice().sort((a,b)=> String(a.txdate).localeCompare(String(b.txdate)));
+  const monthRows = series.filter(r => state.month === '全部' || String(r.txdate || '').slice(0,7) === state.month);
+  const scoped = monthRows.length >= 7 ? monthRows : series;
+  const last7Rows = scoped.slice(-7);
+  const prev7Rows = scoped.slice(-14, -7);
+  const last7Sales = last7Rows.reduce((sum,row)=> sum + Number(row.sales || 0), 0);
+  const prev7Sales = prev7Rows.reduce((sum,row)=> sum + Number(row.sales || 0), 0);
+  return { last7Sales, prev7Sales, last7VsPrev7: prev7Sales > 0 ? (last7Sales - prev7Sales) / prev7Sales : 0 };
+}
+function currentCategoryRowsForScope(){
+  const byStore = state.data.categoryByStore || {};
+  if (!Object.keys(byStore).length || (state.store === '全部' && state.district === '全部')) return state.data.categoryLatest || [];
+  const grouped = new Map();
+  Object.entries(byStore).forEach(([storecode, rows]) => {
+    if (!storeAllowedForCurrentScope(storecode)) return;
+    (rows || []).forEach(row => {
+      const category = row.category || row.catgldesc || '未分类';
+      const current = grouped.get(category) || { category, rows_count: 0, sales: 0, sale_num: 0 };
+      current.rows_count += Number(row.rows_count || 0);
+      current.sales += Number(row.sales || 0);
+      current.sale_num += Number(row.sale_num || 0);
+      grouped.set(category, current);
+    });
+  });
+  return Array.from(grouped.values()).sort((a,b)=> Number(b.sales || 0) - Number(a.sales || 0));
+}
+"#;
+    if updated.contains("function currentKpi(){") {
+        updated = updated.replacen(
+            "function currentKpi(){",
+            &format!("{helper}function currentKpi(){{"),
+            1,
+        );
+        report.applied = true;
+        report.patches.push("insert_filter_binding_helpers");
+    }
+    if updated.contains("const last7 = d.kpi.last7VsPrev7;") {
+        updated = updated.replacen(
+            "const last7 = d.kpi.last7VsPrev7;",
+            "const last7Stats = currentLast7Stats();\n  const last7 = last7Stats.last7VsPrev7;",
+            1,
+        );
+        report.applied = true;
+        report.patches.push("scope_last7_delta");
+    }
+    if updated.contains("['↗','近7日销售', amount(d.kpi.last7Sales),") {
+        updated = updated.replacen(
+            "['↗','近7日销售', amount(d.kpi.last7Sales),",
+            "['↗','近7日销售', amount(last7Stats.last7Sales),",
+            1,
+        );
+        report.applied = true;
+        report.patches.push("scope_last7_kpi");
+    }
+    if updated.contains("const rows = state.data.salesSeries.filter(r => r.txdate.slice(0,7) === state.month || state.month === '全部');") {
+        updated = updated.replacen(
+            "const rows = state.data.salesSeries.filter(r => r.txdate.slice(0,7) === state.month || state.month === '全部');",
+            "const rows = filteredSalesSeriesForCurrentScope().filter(r => r.txdate.slice(0,7) === state.month || state.month === '全部');",
+            1,
+        );
+        report.applied = true;
+        report.patches.push("scope_trend_chart");
+    }
+    if updated.contains("const rows = state.data.categoryLatest.filter(filterCategory).slice(0,6);")
+    {
+        updated = updated.replacen(
+            "const rows = state.data.categoryLatest.filter(filterCategory).slice(0,6);",
+            "const rows = currentCategoryRowsForScope().filter(filterCategory).slice(0,6);",
+            1,
+        );
+        report.applied = true;
+        report.patches.push("scope_category_donut");
+    }
+    if updated.contains("function renderInsight(k){\n  const top = filteredOpportunities().filter(r => gap(r) > 0).slice().sort((a,b)=>gap(a)-gap(b))[0];") {
+        updated = updated.replacen(
+            "function renderInsight(k){\n  const top = filteredOpportunities().filter(r => gap(r) > 0).slice().sort((a,b)=>gap(a)-gap(b))[0];",
+            "function renderInsight(k){\n  const top = filteredOpportunities().filter(r => gap(r) > 0).slice().sort((a,b)=>gap(a)-gap(b))[0];\n  const last7Stats = currentLast7Stats();",
+            1,
+        );
+        report.applied = true;
+        report.patches.push("scope_ai_insight_stats");
+    }
+    if updated.contains("amount(state.data.kpi.last7Sales)") {
+        updated = updated.replacen(
+            "amount(state.data.kpi.last7Sales)",
+            "amount(last7Stats.last7Sales)",
+            1,
+        );
+        report.applied = true;
+        report.patches.push("scope_ai_insight_last7_sales");
+    }
+    if updated.contains("pct(state.data.kpi.last7VsPrev7)") {
+        updated = updated.replacen(
+            "pct(state.data.kpi.last7VsPrev7)",
+            "pct(last7Stats.last7VsPrev7)",
+            1,
+        );
+        report.applied = true;
+        report.patches.push("scope_ai_insight_last7_delta");
+    }
+    (updated, report)
+}
+
+fn read_json_value_if_available(path: &Path) -> Result<Option<Value>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(path)
+        .map_err(|error| anyhow!("failed to read JSON file {}: {error}", path.display()))?;
+    let value = serde_json::from_str(&raw)
+        .map_err(|error| anyhow!("failed to parse JSON file {}: {error}", path.display()))?;
+    Ok(Some(value))
+}
+
+fn existing_static_page_repair_fallback_output(
+    task_context: &CodexHostTaskContext,
+    fixed_task_output: Value,
+) -> Value {
+    let process_output = CodexProcessOutput {
+        exit_code: Some(0),
+        stdout_excerpt: String::new(),
+        stderr_excerpt: String::new(),
+    };
+    let html_artifacts = vec![task_context.html_report_artifact(
+        "existing_artifact_repair_fallback",
+        "completed",
+        None,
+        Some(&process_output),
+    )];
+    json!(CodexHostTaskOutputView {
+        mode: "existing_artifact_repair_fallback".to_string(),
+        codex_invoked: false,
+        status: "completed".to_string(),
+        host_kind: Some("aiv3_host_agent".to_string()),
+        assistant_run_id: task_context.assistant_run_id.to_string(),
+        capability: task_context.capability.clone(),
+        profile: None,
+        command_plan: None,
+        process: Some(process_output.safe_summary()),
+        task_chars: task_context
+            .task
+            .as_ref()
+            .map(|task| task.chars().count())
+            .unwrap_or(0),
+        local_thread_id: task_context.local_thread_id.clone(),
+        task_memory_isolated: task_context.task_memory_isolated,
+        task_memory_space_id: task_context.task_memory_space_id.clone(),
+        html_artifacts,
+        fixed_task_output: Some(fixed_task_output),
+    })
+}
+
 fn extract_static_page_html_from_fixed_output(output: &Value) -> Option<String> {
     for pointer in [
         "/artifact/html",
@@ -4140,6 +4634,183 @@ mod tests {
     }
 
     #[test]
+    fn existing_static_page_filter_binding_patch_scopes_kpis_and_insight() {
+        let html = r#"
+<html><body><script>
+function currentKpi(){
+  const salesRows = filteredSales();
+  return { sales: salesRows.reduce((s,r)=>s+Number(r.sales||0),0) };
+}
+function render(){
+  const d = state.data; const k = currentKpi(); initTabActive();
+  const last7 = d.kpi.last7VsPrev7;
+  $('kpiGrid').innerHTML = [
+    ['↗','近7日销售', amount(d.kpi.last7Sales), '环比 <span class="delta '+(last7 >= 0 ? 'good' : 'bad')+'">' + pct(last7) + '</span>'],
+  ].map(x => x.join('')).join('');
+  renderTrend(); renderCategory(); renderInsight(k);
+}
+function renderTrend(){
+  const rows = state.data.salesSeries.filter(r => r.txdate.slice(0,7) === state.month || state.month === '全部');
+  $('trendChart').innerHTML = rows.length;
+}
+function renderCategory(){
+  const rows = state.data.categoryLatest.filter(filterCategory).slice(0,6);
+  $('categoryLegend').innerHTML = rows.length;
+}
+function renderInsight(k){
+  const top = filteredOpportunities().filter(r => gap(r) > 0).slice().sort((a,b)=>gap(a)-gap(b))[0];
+  $('aiInsight').textContent = '近7日销售为 ' + amount(state.data.kpi.last7Sales) + '，环比 ' + pct(state.data.kpi.last7VsPrev7) + '。当前筛选下机会池约 ' + amount(k.need || state.data.kpi.requiredSales);
+}
+</script></body></html>
+"#;
+
+        let (patched, report) = patch_existing_static_page_filter_binding_html(html);
+
+        assert!(report.applied);
+        assert!(patched.contains("function filteredSalesSeriesForCurrentScope()"));
+        assert!(patched.contains("const last7Stats = currentLast7Stats();"));
+        assert!(patched.contains("amount(last7Stats.last7Sales)"));
+        assert!(patched.contains("pct(last7Stats.last7VsPrev7)"));
+        assert!(patched.contains("filteredSalesSeriesForCurrentScope().filter"));
+        assert!(patched.contains("currentCategoryRowsForScope().filter"));
+        assert!(!patched.contains("amount(d.kpi.last7Sales)"));
+        assert!(!patched.contains("amount(state.data.kpi.last7Sales)"));
+    }
+
+    #[test]
+    fn existing_static_page_repair_fallback_publishes_patched_artifact() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let workspace_root = std::env::temp_dir()
+            .join("v3-codex-host-test-workspaces")
+            .join(Uuid::new_v4().to_string());
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let _workspace_root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            workspace_root.to_str().expect("utf-8 workspace root"),
+        );
+        let _artifact_root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.to_str().expect("utf-8 artifact root"),
+        );
+        let _artifact_base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let _fallback_enabled = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_STATIC_PAGE_EXISTING_ARTIFACT_REPAIR_FALLBACK_ENABLED",
+            "true",
+        );
+        let mut task_context = test_static_page_task_context();
+        let assistant_run_id = task_context.assistant_run_id;
+        task_context.task_memory_space_id = Some(format!("codex-host-task:{assistant_run_id}"));
+        let fixed_task = task_context
+            .fixed_task
+            .as_mut()
+            .expect("static page fixed task");
+        fixed_task.requirements["user_goal"] =
+            json!("修复这个已有页面，切换区域和门店后近7日销售、趋势和AI洞察需要联动变化。");
+        fixed_task.requirements["existing_artifact"] = json!({
+            "kind": "v3_generated_static_page",
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
+            "revision_requested": true,
+            "publish_mode": "new_generated_artifact_only"
+        });
+        let workspace = task_workspace_path(&task_context).expect("workspace path");
+        let existing = workspace.join("existing-artifact");
+        fs::create_dir_all(&existing).expect("existing artifact dir");
+        let html = r#"
+<!doctype html><html><body>
+<label>月份</label><select data-time-range="required"><option>本月</option></select>
+<script>
+const state = { data: null, district: '全部', store: '全部', category: '全部', highOnly: false, month: '2026-05' };
+fetch('data.json').then(r=>r.json()).then(data=>{ state.data = data; document.body.dataset.snapshotVersion = data.snapshots?.salesDate || ''; });
+function amount(n){ return String(n); }
+function pct(n){ return String(n); }
+function currentKpi(){
+  const salesRows = filteredSales();
+  return { sales: salesRows.reduce((s,r)=>s+Number(r.sales||0),0) };
+}
+function render(){
+  const d = state.data; const k = currentKpi(); initTabActive();
+  const last7 = d.kpi.last7VsPrev7;
+  $('kpiGrid').innerHTML = [
+    ['↗','近7日销售', amount(d.kpi.last7Sales), '环比 <span class="delta '+(last7 >= 0 ? 'good' : 'bad')+'">' + pct(last7) + '</span>'],
+  ].map(x => x.join('')).join('');
+  renderTrend(); renderCategory(); renderInsight(k);
+}
+function renderTrend(){
+  const rows = state.data.salesSeries.filter(r => r.txdate.slice(0,7) === state.month || state.month === '全部');
+  $('trendChart').innerHTML = rows.length;
+}
+function renderCategory(){
+  const rows = state.data.categoryLatest.filter(filterCategory).slice(0,6);
+  $('categoryLegend').innerHTML = rows.length;
+}
+function renderInsight(k){
+  const top = filteredOpportunities().filter(r => gap(r) > 0).slice().sort((a,b)=>gap(a)-gap(b))[0];
+  $('aiInsight').textContent = '近7日销售为 ' + amount(state.data.kpi.last7Sales) + '，环比 ' + pct(state.data.kpi.last7VsPrev7) + '。当前筛选下机会池约 ' + amount(k.need || state.data.kpi.requiredSales);
+}
+</script></body></html>
+"#;
+        fs::write(existing.join("index.html"), html).expect("index");
+        fs::write(
+            existing.join("data.json"),
+            serde_json::to_vec_pretty(&json!({
+                "snapshots": {"salesDate": "2026-05-10", "salesRowsTotal": 30},
+                "kpi": {"last7Sales": 100, "last7VsPrev7": 0.1},
+                "salesSeries": [],
+                "salesSeriesByStore": {},
+                "categoryLatest": [],
+                "categoryByStore": {},
+                "opportunities": [{"id": 1}]
+            }))
+            .expect("data json"),
+        )
+        .expect("data");
+        fs::write(
+            existing.join("data-snapshot.json"),
+            br#"{"snapshots":{"salesDate":"2026-05-10"}}"#,
+        )
+        .expect("snapshot");
+
+        let output = publish_existing_static_page_repair_fallback_if_available(
+            &task_context,
+            WorkflowExecutionId::new(),
+            "unit-test",
+        )
+        .expect("fallback should not error")
+        .expect("fallback should publish");
+
+        let public_url = output
+            .pointer("/fixed_task_output/artifact/public_url")
+            .and_then(Value::as_str)
+            .expect("public url");
+        assert!(public_url.contains("/generated-artifacts/database-static-pages/codex-host/"));
+        assert_eq!(
+            output.pointer("/fixed_task_output/status"),
+            Some(&json!("success"))
+        );
+        let local_path = output
+            .pointer("/fixed_task_output/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        let patched = fs::read_to_string(local_path).expect("patched html");
+        assert!(patched.contains("function filteredSalesSeriesForCurrentScope()"));
+        assert!(patched.contains("amount(last7Stats.last7Sales)"));
+        assert!(PathBuf::from(local_path)
+            .parent()
+            .expect("artifact dir")
+            .join("data.json")
+            .is_file());
+        assert!(output
+            .pointer("/fixed_task_output/validation_report/warnings")
+            .and_then(Value::as_array)
+            .is_some_and(|warnings| !warnings.is_empty()));
+    }
+
+    #[test]
     fn generated_artifact_url_allowed_rejects_pending_placeholders() {
         assert!(!generated_artifact_url_allowed(
             "https://v3.elepcloud.com/generated-artifacts/pending/draft-1/"
@@ -4523,6 +5194,45 @@ mod tests {
     }
 
     #[test]
+    fn codex_exec_policy_resumes_existing_cloudflare_poll_task() {
+        let mut task = test_workflow_task(2, 3);
+        task.payload = workflow_task_payload_with_cloudflare_orchestrator_task(
+            &json!({"execution_id": "exec-1"}),
+            "task-cloudflare-1",
+            &json!({"status": "running", "runtimeTargetId": "cloudflare"}),
+            Utc::now(),
+            "static_page_publish",
+            "poll_static_page_publish",
+        );
+        let task_context = test_static_page_task_context();
+        let policy = test_codex_exec_policy();
+
+        let decision =
+            codex_host_execution_decision_for_task(&policy, &task_context, &task).unwrap();
+
+        assert_eq!(
+            decision.mode,
+            CodexHostExecutionMode::CloudflareOrchestrator
+        );
+        assert!(decision.command_plan.is_none());
+        assert_eq!(decision.profile.kind, "cloudflare_orchestrator");
+        assert_eq!(decision.profile.provider_id.as_deref(), Some("cloudflare"));
+    }
+
+    #[test]
+    fn codex_exec_policy_without_cloudflare_payload_stays_local() {
+        let task = test_workflow_task(1, 3);
+        let task_context = test_static_page_task_context();
+        let policy = test_codex_exec_policy();
+
+        let decision =
+            codex_host_execution_decision_for_task(&policy, &task_context, &task).unwrap();
+
+        assert_eq!(decision.mode, CodexHostExecutionMode::CodexExec);
+        assert!(decision.command_plan.is_some());
+    }
+
+    #[test]
     fn static_page_codex_exec_uses_shorter_timeout_override() {
         let _lock = test_env_lock().lock().expect("env lock");
         let _timeout = TestEnvVarRestore::set(
@@ -4832,6 +5542,25 @@ mod tests {
             task_memory_isolated: true,
             task_memory_space_id: Some(format!("codex-host-task:{assistant_run_id}")),
             fixed_task: Some(fixed_task),
+        }
+    }
+
+    fn test_codex_exec_policy() -> CodexHostAgentPolicy {
+        CodexHostAgentPolicy {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: codex_host_agent::CodexHostProfile {
+                id: "rightcode-gpt-5-5-high".to_string(),
+                kind: "codex-compatible-shim".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                provider_id: Some("rightcode".to_string()),
+                base_url: Some("https://right.codes/codex/v1".to_string()),
+                env_key: Some("OPENAI_API_KEY".to_string()),
+                wire_api: Some("responses".to_string()),
+                allowed_capabilities: vec![STATIC_PAGE_IMAGE2_DATA_PUBLISH.to_string()],
+            },
+            host_kind: "aiv3_server".to_string(),
+            allow_real_codex_exec: true,
+            task_workspace_root: Some(PathBuf::from("target/codex-host-test-workspaces")),
         }
     }
 
