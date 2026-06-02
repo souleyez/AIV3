@@ -9,6 +9,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt::{self, Debug, Display};
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -192,6 +193,12 @@ pub struct LlmResponse {
     pub output_text: String,
     pub runtime: LlmRuntimeMetadata,
     pub tool_calls: Vec<LlmToolCall>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LlmStreamDelta {
+    pub index: usize,
+    pub delta: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1254,6 +1261,21 @@ pub fn render_runtime_manifest(runtime: &LlmRuntimeMetadata) -> Value {
 pub trait LlmProvider: Debug + Send + Sync {
     fn name(&self) -> &str;
     fn complete(&self, request: &LlmRequest) -> Result<LlmResponse>;
+
+    fn complete_streaming(
+        &self,
+        request: &LlmRequest,
+        on_delta: &mut dyn FnMut(LlmStreamDelta) -> Result<()>,
+    ) -> Result<LlmResponse> {
+        let response = self.complete(request)?;
+        if !response.output_text.is_empty() {
+            on_delta(LlmStreamDelta {
+                index: 0,
+                delta: response.output_text.clone(),
+            })?;
+        }
+        Ok(response)
+    }
 }
 
 pub fn build_provider_from_env(
@@ -1757,6 +1779,182 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
             output_text,
             runtime,
             tool_calls,
+        })
+    }
+
+    fn complete_streaming(
+        &self,
+        request: &LlmRequest,
+        on_delta: &mut dyn FnMut(LlmStreamDelta) -> Result<()>,
+    ) -> Result<LlmResponse> {
+        let started_at = Instant::now();
+        let endpoint = join_url(&self.config.api_base_url, &self.config.api_path);
+        let system_prompt = request
+            .system_prompt_key
+            .as_deref()
+            .and_then(|key| self.prompt_registry.active(key))
+            .map(|prompt| prompt.body.clone());
+
+        let mut messages = Vec::new();
+        if let Some(system_prompt) = system_prompt {
+            messages.push(json!({
+                "role": "system",
+                "content": system_prompt,
+            }));
+        }
+        messages.push(json!({
+            "role": "user",
+            "content": request.input,
+        }));
+
+        let body = json!({
+            "model": request.model,
+            "messages": messages,
+            "stream": true,
+            "stream_options": {
+                "include_usage": true,
+            },
+        });
+
+        let mut http_request = self.client.post(&endpoint).json(&body);
+        if let Some(api_key) = self.config.api_key.as_deref() {
+            http_request = http_request.bearer_auth(api_key);
+        }
+
+        let response = match http_request.send() {
+            Ok(response) => response,
+            Err(error) => {
+                let kind = if error.is_timeout() {
+                    LlmProviderFailureKind::RequestTimeout
+                } else {
+                    LlmProviderFailureKind::RequestFailed
+                };
+                let message = format!(
+                    "{} streaming request to {endpoint} failed: {error}",
+                    self.provider_name
+                );
+                return Err(self
+                    .provider_error(request, kind, message, started_at)
+                    .into());
+            }
+        };
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response.text().unwrap_or_default();
+            let message = format!(
+                "{} returned HTTP {} with streaming body {}",
+                self.provider_name,
+                status.as_u16(),
+                response_body
+            );
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::HttpStatus,
+                    message,
+                    started_at,
+                )
+                .into());
+        }
+
+        let mut reader = BufReader::new(response);
+        let mut line = String::new();
+        let mut output_text = String::new();
+        let mut request_id = None;
+        let mut finish_reason = None;
+        let mut usage = None;
+        let mut chunk_index = 0;
+        loop {
+            line.clear();
+            let read = reader.read_line(&mut line).map_err(|error| {
+                self.provider_error(
+                    request,
+                    LlmProviderFailureKind::ResponseBodyReadFailed,
+                    format!("{} streaming body read failed: {error}", self.provider_name),
+                    started_at,
+                )
+            })?;
+            if read == 0 {
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() || !trimmed.starts_with("data:") {
+                continue;
+            }
+            let data = trimmed.trim_start_matches("data:").trim();
+            if data == "[DONE]" {
+                break;
+            }
+            let value = serde_json::from_str::<Value>(data).map_err(|error| {
+                self.provider_error(
+                    request,
+                    LlmProviderFailureKind::InvalidJson,
+                    format!(
+                        "{} returned invalid streaming JSON chunk {data}: {error}",
+                        self.provider_name
+                    ),
+                    started_at,
+                )
+            })?;
+            if request_id.is_none() {
+                request_id = value.get("id").and_then(Value::as_str).map(str::to_string);
+            }
+            if usage.is_none() {
+                usage = parse_usage(value.get("usage"));
+            }
+            if finish_reason.is_none() {
+                finish_reason = extract_chat_completion_stream_finish_reason(&value);
+            }
+            if let Some(delta) = extract_chat_completion_stream_delta(&value) {
+                if !delta.is_empty() {
+                    output_text.push_str(&delta);
+                    on_delta(LlmStreamDelta {
+                        index: chunk_index,
+                        delta,
+                    })?;
+                    chunk_index += 1;
+                }
+            }
+        }
+
+        let output_text = normalize_provider_output_text(&output_text);
+        if output_text.is_empty() {
+            let message = format!(
+                "{} streaming response missing assistant content",
+                self.provider_name
+            );
+            return Err(self
+                .provider_error(
+                    request,
+                    LlmProviderFailureKind::InvalidResponse,
+                    message,
+                    started_at,
+                )
+                .into());
+        }
+        let finish_reason = finish_reason.or(Some(LlmFinishReason::Stop));
+        let runtime = LlmRuntimeMetadata {
+            mode: LlmRuntimeMode::Provider,
+            provider: self.provider_name.clone(),
+            model: request.model.clone(),
+            lane: request.lane.clone(),
+            request_id,
+            finish_reason: finish_reason.clone(),
+            provider_failure: provider_failure_for_finish_reason(
+                &self.provider_name,
+                finish_reason.as_ref(),
+            ),
+            latency_ms: Some(started_at.elapsed().as_millis() as u64),
+            usage,
+            system_prompt_key: request.system_prompt_key.clone(),
+            system_prompt_version: resolve_prompt_version(&self.prompt_registry, request),
+            tool_trace_count: 0,
+        };
+
+        Ok(LlmResponse {
+            output_text,
+            runtime,
+            tool_calls: Vec::new(),
         })
     }
 }
@@ -2364,6 +2562,40 @@ fn extract_chat_completion_text(choice: &Value) -> Option<String> {
     } else {
         Some(parts.join("\n"))
     }
+}
+
+fn extract_chat_completion_stream_delta(value: &Value) -> Option<String> {
+    let delta = value.get("choices")?.as_array()?.first()?.get("delta")?;
+    let content = delta.get("content")?;
+
+    if let Some(value) = content.as_str() {
+        return Some(value.to_string());
+    }
+
+    let content = content.as_array()?;
+    let mut parts = Vec::new();
+    for item in content {
+        let item = item.as_object()?;
+        if item.get("type").and_then(Value::as_str) == Some("text") {
+            parts.push(item.get("text")?.as_str()?.to_string());
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(""))
+    }
+}
+
+fn extract_chat_completion_stream_finish_reason(value: &Value) -> Option<LlmFinishReason> {
+    value
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .map(LlmFinishReason::from_wire_value)
 }
 
 fn normalize_provider_output_text(value: &str) -> String {
@@ -3139,6 +3371,35 @@ mod tests {
     }
 
     #[test]
+    fn scripted_provider_streaming_falls_back_to_single_buffered_delta() {
+        let provider = ScriptedLlmProvider::new("scripted").with_response_text("完整回复");
+        let mut chunks = Vec::new();
+        let response = provider
+            .complete_streaming(
+                &LlmRequest {
+                    model: "scripted-model".to_string(),
+                    lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                    system_prompt_key: None,
+                    input: "hello".to_string(),
+                },
+                &mut |delta| {
+                    chunks.push(delta);
+                    Ok(())
+                },
+            )
+            .expect("fallback streaming should succeed");
+
+        assert_eq!(response.output_text, "完整回复");
+        assert_eq!(
+            chunks,
+            vec![LlmStreamDelta {
+                index: 0,
+                delta: "完整回复".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn openai_compatible_provider_parses_chat_completion_response() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let addr = listener.local_addr().expect("addr");
@@ -3260,6 +3521,92 @@ mod tests {
         assert_eq!(
             response.tool_calls[0].arguments,
             Some(json!({ "city": "Shanghai" }))
+        );
+    }
+
+    #[test]
+    fn openai_compatible_provider_streams_chat_completion_chunks() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("POST /v1/chat/completions HTTP/1.1"));
+            assert!(request.contains("\"stream\":true"));
+            assert!(request.contains("\"include_usage\":true"));
+            let body = [
+                r#"data: {"id":"chatcmpl_stream_123","choices":[{"delta":{"content":"流式"},"finish_reason":null}]}"#,
+                "",
+                r#"data: {"id":"chatcmpl_stream_123","choices":[{"delta":{"content":"回答"},"finish_reason":null}]}"#,
+                "",
+                r#"data: {"id":"chatcmpl_stream_123","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":7,"total_tokens":12}}"#,
+                "",
+                "data: [DONE]",
+                "",
+            ]
+            .join("\n");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+
+        let provider = OpenAiCompatibleLlmProvider::new(
+            "openai",
+            OpenAiCompatibleLlmProviderConfig {
+                api_base_url: format!("http://{addr}"),
+                api_path: "/v1/chat/completions".to_string(),
+                api_key: None,
+                timeout_ms: None,
+            },
+        )
+        .expect("provider");
+        let mut chunks = Vec::new();
+        let response = provider
+            .complete_streaming(
+                &LlmRequest {
+                    model: "gpt-5.4-mini".to_string(),
+                    lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                    system_prompt_key: None,
+                    input: "请流式回答。".to_string(),
+                },
+                &mut |delta| {
+                    chunks.push(delta);
+                    Ok(())
+                },
+            )
+            .expect("streaming provider should succeed");
+
+        server.join().expect("server join");
+
+        assert_eq!(
+            chunks,
+            vec![
+                LlmStreamDelta {
+                    index: 0,
+                    delta: "流式".to_string(),
+                },
+                LlmStreamDelta {
+                    index: 1,
+                    delta: "回答".to_string(),
+                },
+            ]
+        );
+        assert_eq!(response.output_text, "流式回答");
+        assert_eq!(
+            response.runtime.request_id.as_deref(),
+            Some("chatcmpl_stream_123")
+        );
+        assert_eq!(response.runtime.finish_reason, Some(LlmFinishReason::Stop));
+        assert_eq!(
+            response.runtime.usage,
+            Some(LlmTokenUsage {
+                input_tokens: 5,
+                output_tokens: 7,
+                total_tokens: 12,
+            })
         );
     }
 

@@ -415,6 +415,84 @@ async function fetchSseJson(url, options = {}, handlers = {}) {
   return completedPayload;
 }
 
+function ssePayloadObject(payload) {
+  return payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+}
+
+function sseNestedData(payload) {
+  const object = ssePayloadObject(payload);
+  return ssePayloadObject(object.data);
+}
+
+function assistantRunStreamDisplayText(eventName, payload) {
+  if (!String(eventName || '').startsWith('assistant_run.')) return '';
+  const normalizedEventName = String(eventName || '');
+  if (normalizedEventName.endsWith('.delta') || normalizedEventName.endsWith('.completed')) {
+    return '';
+  }
+  const object = ssePayloadObject(payload);
+  const nested = sseNestedData(payload);
+  return String(
+    object.display_text
+      || object.displayText
+      || nested.display_text
+      || nested.displayText
+      || '',
+  ).trim();
+}
+
+function firstGeneratedArtifactUrlFromPayload(payload) {
+  const candidates = [];
+  const visit = (value, depth = 0) => {
+    if (!value || depth > 4) return;
+    if (typeof value === 'string') {
+      if (
+        /^https?:\/\/[^ ]+\/generated-artifacts\//.test(value)
+        || value.startsWith('/generated-artifacts/')
+      ) {
+        candidates.push(value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, depth + 1));
+      return;
+    }
+    if (typeof value !== 'object') return;
+    [
+      'artifact_links',
+      'artifactLinks',
+      'public_url',
+      'publicUrl',
+      'generated_artifact_url',
+      'generatedArtifactUrl',
+      'html_preview_url',
+      'htmlPreviewUrl',
+    ].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        visit(value[key], depth + 1);
+      }
+    });
+    visit(value.card, depth + 1);
+    visit(value.reply, depth + 1);
+    visit(value.response, depth + 1);
+    visit(value.data, depth + 1);
+  };
+  visit(payload);
+  return candidates[0] || '';
+}
+
+function assistantRunStreamArtifactLink(eventName, payload) {
+  if (!String(eventName || '').startsWith('assistant_run.')) return '';
+  return firstGeneratedArtifactUrlFromPayload(payload);
+}
+
+function appendArtifactLinkText(content, artifactUrl) {
+  const url = String(artifactUrl || '').trim();
+  if (!url || String(content || '').includes(url)) return content || '';
+  return `${content || '页面已生成。'}\n\n[打开生成页面](${url})`;
+}
+
 function sortByDateDesc(items, fieldName) {
   return [...(Array.isArray(items) ? items : [])].sort((left, right) => {
     const leftValue = new Date(left?.[fieldName] || 0).getTime();
@@ -2490,6 +2568,7 @@ export default function HomePageClient() {
     continueRunId = '',
     selectedScope = null,
     onDelta = null,
+    onEvent = null,
   }) {
     const messages = visibleMessages
       .slice(-12)
@@ -2506,6 +2585,7 @@ export default function HomePageClient() {
           },
         }, {
           onDelta,
+          onEvent,
         });
         return {
           response: continued,
@@ -2531,6 +2611,7 @@ export default function HomePageClient() {
       },
     }, {
       onDelta,
+      onEvent,
     });
     return {
       response: created,
@@ -2834,10 +2915,21 @@ export default function HomePageClient() {
         });
         let assistantContent = '';
         let streamedAssistantContent = '';
+        let streamStatusText = '正在生成回复...';
+        let streamArtifactLink = '';
         let usedBackendAssistantRun = false;
         let assistantRunId = '';
         let usedAssistantRunContinue = false;
         const assistantMessage = createLocalMessage('assistant', '正在生成回复...');
+        const updateAssistantStreamMessage = () => {
+          const baseContent = streamedAssistantContent || streamStatusText || '正在生成回复...';
+          const nextContent = appendArtifactLinkText(baseContent, streamArtifactLink);
+          setLocalMessages((current) => current.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, content: nextContent }
+              : message,
+          ));
+        };
         setLocalMessages((current) => [
           ...current,
           assistantMessage,
@@ -2852,11 +2944,20 @@ export default function HomePageClient() {
             selectedScope: assistantSelectedScope,
             onDelta: (delta) => {
               streamedAssistantContent += delta;
-              setLocalMessages((current) => current.map((message) =>
-                message.id === assistantMessage.id
-                  ? { ...message, content: streamedAssistantContent || '正在生成回复...' }
-                  : message,
-              ));
+              updateAssistantStreamMessage();
+            },
+            onEvent: (eventName, payload) => {
+              const displayText = assistantRunStreamDisplayText(eventName, payload);
+              if (displayText && !streamedAssistantContent) {
+                streamStatusText = displayText;
+              }
+              const artifactLink = assistantRunStreamArtifactLink(eventName, payload);
+              if (artifactLink) {
+                streamArtifactLink = artifactLink;
+              }
+              if (displayText || artifactLink) {
+                updateAssistantStreamMessage();
+              }
             },
           });
           assistantRunId = assistantRun.assistantRunId || '';
@@ -2910,7 +3011,13 @@ export default function HomePageClient() {
 
         setLocalMessages((current) => current.map((message) =>
           message.id === assistantMessage.id
-            ? { ...message, content: assistantContent || '已完成，但本轮没有返回文本。' }
+            ? {
+                ...message,
+                content: appendArtifactLinkText(
+                  assistantContent || streamedAssistantContent || streamStatusText || '已完成，但本轮没有返回文本。',
+                  streamArtifactLink,
+                ),
+              }
             : message,
         ).slice(-40));
         rememberLocalUserStatement(userMessage, assistantRunId);

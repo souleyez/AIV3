@@ -716,13 +716,14 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>响应字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>V3 是否已接收本轮消息并完成接口层处理</td></tr><tr><td><code>assistant_run_id</code></td><td>本轮 V3 任务 ID，用于状态查询、确认动作和问题定位</td></tr><tr><td><code>idempotency_key</code></td><td>V3 回显的幂等键</td></tr><tr><td><code>reply</code></td><td>V3 返回给第三方页面展示或处理的回复对象</td></tr><tr><td><code>reply.target_conversation_external_id</code></td><td>应展示回复的第三方会话 ID</td></tr><tr><td><code>reply.reply_type</code></td><td>回复类型，例如 <code>text</code>、<code>task_status</code>、<code>card</code>、<code>artifact_link</code> 或 <code>requires_confirmation</code></td></tr><tr><td><code>reply.text</code></td><td>文本回复内容</td></tr><tr><td><code>reply.task_status</code></td><td>任务状态，例如 <code>answered</code>、<code>processing</code>、<code>failed</code>、<code>v3_search_evidence_required</code>、<code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_completed</code></td></tr><tr><td><code>reply.requires_confirmation</code></td><td>是否需要第三方继续展示用户确认</td></tr><tr><td><code>reply.action_id</code></td><td>待确认或待追踪的外部动作 ID</td></tr><tr><td><code>reply.confirmation_id</code></td><td>确认请求 ID</td></tr><tr><td><code>reply.card</code></td><td>结构化卡片对象</td></tr><tr><td><code>reply.artifact_links</code></td><td>产物链接列表</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>accepted</code></td><td>V3 是否已接收本轮消息并完成接口层处理</td></tr><tr><td><code>assistant_run_id</code></td><td>本轮 V3 任务 ID，用于状态查询、确认动作和问题定位</td></tr><tr><td><code>idempotency_key</code></td><td>V3 回显的幂等键</td></tr><tr><td><code>reply</code></td><td>V3 返回给第三方页面展示或处理的回复对象</td></tr><tr><td><code>reply.target_conversation_external_id</code></td><td>应展示回复的第三方会话 ID</td></tr><tr><td><code>reply.reply_type</code></td><td>回复类型，例如 <code>text</code>、<code>task_status</code>、<code>card</code>、<code>artifact_link</code> 或 <code>requires_confirmation</code></td></tr><tr><td><code>reply.text</code></td><td>文本回复内容</td></tr><tr><td><code>reply.task_status</code></td><td>任务状态，例如 <code>answered</code>、<code>processing</code>、<code>needs_input</code>、<code>failed</code>、<code>v3_search_evidence_required</code>、<code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_completed</code></td></tr><tr><td><code>reply.requires_confirmation</code></td><td>是否需要第三方继续展示用户确认</td></tr><tr><td><code>reply.action_id</code></td><td>待确认或待追踪的外部动作 ID</td></tr><tr><td><code>reply.confirmation_id</code></td><td>确认请求 ID</td></tr><tr><td><code>reply.card</code></td><td>结构化卡片对象</td></tr><tr><td><code>reply.artifact_links</code></td><td>产物链接列表</td></tr></tbody></table></div>
 <p>说明：</p>
 <ul>
 <li>该接口用于接收用户消息并创建或继续 V3 对话任务；</li>
 <li>同一个接口响应体中的 <code>reply</code> 即为 V3 返回给第三方页面的生成回复、任务状态或确认卡片；</li>
 <li>第三方页面按 <code>reply.target_conversation_external_id</code> 把回复展示回原会话；</li>
 <li>如果 V3 已接收但暂时无法立即给出最终文本，会返回 <code>reply_type=task_status</code>；</li>
+<li>如果当前资料不足但同会话可继续，会返回 <code>reply.task_status=needs_input</code> 和 <code>reply.card.type=v3_needs_input</code>，第三方把 <code>reply.text</code> 或 <code>reply.card.question</code> 展示给用户，用户补充后继续用同一个 <code>conversation_external_id</code> 发下一轮消息即可；</li>
 <li>如果需要用户确认动作，会返回 <code>reply_type=requires_confirmation</code>；</li>
 <li>第一阶段不要求第三方再调用单独的“取回复”接口。</li>
 </ul>
@@ -737,26 +738,154 @@ Accept: text/event-stream
 Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>用途：请求体与 <code>/events</code> 完全一致；第三方希望页面边等待边展示生成进度或最终文本时，使用 SSE 流式版本。</p>
+<p>结构化事件的 <code>data</code> 使用 <code>schema=v3.external_channel.sse.v1</code>。<code>external_channel.delta</code> 仍保持简单文本增量格式；<code>error</code> 和 <code>done</code> 保持原格式。为兼容旧接入，结构化事件会把常用旧字段在顶层平铺一份，同时完整内容放在 <code>data.data</code>。</p>
+<p>断线续传：第三方应记录最后一个结构化事件的 <code>event_id</code> 或 <code>sequence</code>。如果 SSE 中断，用同一个 <code>idempotency_key</code> 重新请求 <code>/events/stream</code>，并任选一种方式传入上次已消费到的序号：</p>
+<div class="table-shell"><table><thead><tr><th>方式</th><th>示例</th></tr></thead><tbody><tr><td>Header</td><td><code>Last-Event-ID: assistant-run-id:000012</code></td></tr><tr><td>Query</td><td><code>POST /events/stream?since_sequence=12</code></td></tr><tr><td>Body</td><td><code>&quot;stream_since_sequence&quot;: 12</code> 或 <code>&quot;streamSinceSequence&quot;: 12</code></td></tr></tbody></table></div>
+<p>V3 会回放该序号之后的公开事件；如果任务还在处理，会继续跟随原任务输出后续状态，不会因为重复 <code>idempotency_key</code> 重新创建运行。</p>
+<p>代码示例：</p>
+<figure class="code-card">
+    <figcaption><span>js</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>// 示例 A：fetch POST 直接消费 SSE，适合第三方服务端或受控前端代理。
+function parseSseFrames(chunkText, state) {
+  state.buffer += chunkText;
+  const frames = state.buffer.split('\n\n');
+  state.buffer = frames.pop() || '';
+  return frames.map((frame) =&gt; {
+    const event = frame.match(/^event: (.+)$/m)?.[1] || 'message';
+    const dataText = frame.match(/^data: (.+)$/m)?.[1] || '{}';
+    return { event, data: JSON.parse(dataText) };
+  });
+}
+
+async function streamExternalMessage({ url, token, requestBody, handlers }) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: 'text/event-stream',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`V3 stream failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const state = { buffer: '', lastSequence: 0, lastEventId: '' };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const frames = parseSseFrames(decoder.decode(value, { stream: true }), state);
+    for (const frame of frames) {
+      const { event, data } = frame;
+      if (data.sequence) state.lastSequence = data.sequence;
+      if (data.event_id) state.lastEventId = data.event_id;
+
+      if (event === 'external_channel.delta') {
+        handlers.onDelta?.(data.delta || '');
+      } else if (event === 'external_channel.completed') {
+        handlers.onCompleted?.(data.data?.response || data.response);
+      } else if (event === 'external_channel.needs_input') {
+        handlers.onNeedsInput?.(data.data?.card || data.card || data);
+      } else if (event === 'done') {
+        handlers.onDone?.(data);
+      } else if (event === 'error') {
+        handlers.onError?.(data.error || data);
+      } else {
+        handlers.onProgress?.({
+          event,
+          phase: data.phase,
+          status: data.status,
+          text: data.display_text,
+          statusUrl: data.status_url || data.data?.card?.status_url,
+          pollAfterSeconds: data.poll_after_seconds || data.data?.card?.poll_after_seconds,
+          artifactLink: data.artifact_links?.[0] || data.card?.public_url || data.data?.card?.public_url,
+        });
+      }
+    }
+  }
+  return state;
+}</code></pre>
+  </figure>
+<figure class="code-card">
+    <figcaption><span>js</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>// 示例 B：断线续传。保留原 requestBody 和 idempotency_key，只补 stream_since_sequence。
+async function reconnectExternalStream({ url, token, requestBody, lastSequence, handlers }) {
+  return streamExternalMessage({
+    url,
+    token,
+    requestBody: {
+      ...requestBody,
+      stream_since_sequence: lastSequence,
+    },
+    handlers,
+  });
+}</code></pre>
+  </figure>
+<figure class="code-card">
+    <figcaption><span>js</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>// 示例 C：status_url 轮询兜底。适合 SSE 超时、浏览器切后台、网关限制长连接。
+async function pollExternalStatus({ statusUrl, token, onProgress }) {
+  let pollAfterSeconds = 15;
+  while (statusUrl) {
+    await new Promise((resolve) =&gt; setTimeout(resolve, pollAfterSeconds * 1000));
+    const payload = await fetch(statusUrl, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    }).then((response) =&gt; response.json());
+
+    const reply = payload.reply || {};
+    onProgress?.(reply.text || reply.card?.status || reply.task_status || 'processing', payload);
+
+    if (reply.artifact_links?.[0] || reply.reply_type === 'artifact_link') return payload;
+    if (['failed', 'cancelled'].includes(reply.task_status)) return payload;
+
+    statusUrl = reply.card?.status_url || statusUrl;
+    pollAfterSeconds = reply.card?.poll_after_seconds || pollAfterSeconds;
+  }
+  return null;
+}</code></pre>
+  </figure>
+<figure class="code-card">
+    <figcaption><span>js</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>// 示例 D：浏览器 EventSource 只能 GET，推荐第三方服务端做一层代理。
+// 浏览器：
+const source = new EventSource(`/v3-stream-proxy?message_id=${encodeURIComponent(messageId)}`);
+source.addEventListener('external_channel.delta', (event) =&gt; appendText(JSON.parse(event.data).delta));
+source.addEventListener('external_channel.completed', (event) =&gt; renderFinal(JSON.parse(event.data)));
+source.addEventListener('done', () =&gt; source.close());
+
+// 第三方服务端代理逻辑：
+// 1. 根据 message_id 取出原 POST 请求体；
+// 2. 调用 V3 POST /events/stream；
+// 3. 把 V3 返回的 SSE 原样转发给浏览器；
+// 4. 浏览器重连时带上最后 event_id，服务端转成 Last-Event-ID 或 stream_since_sequence。</code></pre>
+  </figure>
+<p>生产建议：V3 inbound token 放在第三方服务端，不直接暴露给浏览器；浏览器页面连接第三方自己的代理接口即可。</p>
+<p>结构化事件通用字段：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>schema</code></td><td>固定为 <code>v3.external_channel.sse.v1</code></td></tr><tr><td><code>event_id</code></td><td>事件稳定 ID，可用于去重；格式为 <code>{assistant_run_id 或 pending}:{sequence}</code></td></tr><tr><td><code>sequence</code></td><td>本轮流内单调阶段序号；数值越大越靠后</td></tr><tr><td><code>assistant_run_id</code></td><td>本轮 V3 任务 ID；开始事件可能为空</td></tr><tr><td><code>idempotency_key</code></td><td>本轮消息幂等键</td></tr><tr><td><code>conversation_external_id</code></td><td>第三方会话 ID</td></tr><tr><td><code>phase</code></td><td>阶段，例如 <code>started</code>、<code>static_page</code>、<code>completed</code></td></tr><tr><td><code>status</code></td><td>公开状态；第三方可展示为任务状态</td></tr><tr><td><code>display_text</code></td><td>可直接展示给用户或操作人员的进度文案</td></tr><tr><td><code>status_url</code></td><td>后续状态查询地址；没有则为空</td></tr><tr><td><code>poll_after_seconds</code></td><td>建议轮询间隔；没有则为空</td></tr><tr><td><code>data</code></td><td>该事件的具体业务数据</td></tr></tbody></table></div>
 <p>SSE 事件：</p>
-<div class="table-shell"><table><thead><tr><th>event</th><th>data 说明</th></tr></thead><tbody><tr><td><code>external_channel.started</code></td><td>V3 已通过鉴权和入参解析，开始处理本轮消息；这不是助手回复</td></tr><tr><td><code>external_channel.delta</code></td><td>文本增量，字段为 <code>delta</code>；第三方可逐段追加到聊天气泡</td></tr><tr><td><code>external_channel.static_page_planning</code></td><td>静态页/报表页面正在规划；第三方可展示为“正在生成页面方案”</td></tr><tr><td><code>external_channel.static_page_queued</code></td><td>静态页/报表页面已进入生成队列；不需要第三方确认</td></tr><tr><td><code>external_channel.static_page_preview_ready</code></td><td>过程预览已生成；若返回 <code>card.preview_url</code>，可作为生成过程预览展示</td></tr><tr><td><code>external_channel.static_page_publish_progress</code></td><td>静态页发布进度，例如 queued/running/retrying</td></tr><tr><td><code>external_channel.static_page_published</code></td><td>最终静态页已发布，<code>artifact_links[0]</code> 或 <code>card.public_url</code> 是页面链接</td></tr><tr><td><code>external_channel.static_page_issue</code></td><td>发布链路遇到问题，事件会带 <code>card.error</code>/<code>runtime_event</code> 说明原因；V3 会尽量重试或保留可接管状态</td></tr><tr><td><code>external_channel.static_page_continue_polling</code></td><td>本次 SSE 等待到达上限但后台任务仍继续，第三方按 <code>card.status_url</code> 继续轮询</td></tr><tr><td><code>external_channel.heartbeat</code></td><td>长任务心跳，表示 SSE 连接仍在等待后续状态</td></tr><tr><td><code>external_channel.completed</code></td><td>完整 <code>ExternalChannelEventResponse</code>，结构与 <code>/events</code> JSON 响应一致</td></tr><tr><td><code>error</code></td><td>本轮处理失败，包含 <code>status</code> 和 <code>error.code/message</code></td></tr><tr><td><code>done</code></td><td>流结束标记，<code>ok=true/false</code></td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>event</th><th>data 说明</th></tr></thead><tbody><tr><td><code>external_channel.started</code></td><td>V3 已通过鉴权和入参解析，开始处理本轮消息；这不是助手回复</td></tr><tr><td><code>external_channel.retrieval_started</code></td><td>V3 正在检索可见文档、数据源和会话上下文；第三方可展示为处理中进度</td></tr><tr><td><code>external_channel.delta</code></td><td>文本增量，字段为 <code>delta</code>；第三方可逐段追加到聊天气泡</td></tr><tr><td><code>external_channel.static_page_planning</code></td><td>静态页/报表页面正在规划；第三方可展示为“正在生成页面方案”</td></tr><tr><td><code>external_channel.static_page_queued</code></td><td>静态页/报表页面已进入生成队列；不需要第三方确认</td></tr><tr><td><code>external_channel.static_page_preview_ready</code></td><td>过程预览已生成；若返回 <code>card.preview_url</code>，可作为生成过程预览展示</td></tr><tr><td><code>external_channel.static_page_publish_progress</code></td><td>静态页发布进度，例如 queued/running/retrying</td></tr><tr><td><code>external_channel.static_page_published</code></td><td>最终静态页已发布，<code>artifact_links[0]</code> 或 <code>card.public_url</code> 是页面链接</td></tr><tr><td><code>external_channel.static_page_issue</code></td><td>发布链路遇到问题，事件会带 <code>card.error</code> 说明原因；V3 会尽量重试或保留可接管状态</td></tr><tr><td><code>external_channel.static_page_continue_polling</code></td><td>本次 SSE 等待到达上限但后台任务仍继续，第三方按 <code>status_url</code> 或 <code>card.status_url</code> 继续轮询</td></tr><tr><td><code>external_channel.needs_input</code></td><td>当前可见资料不足以完成本轮；展示 <code>display_text</code> 或 <code>card.question</code>，用户补充后继续同一会话</td></tr><tr><td><code>external_channel.heartbeat</code></td><td>长任务心跳，表示 SSE 连接仍在等待后续状态</td></tr><tr><td><code>external_channel.completed</code></td><td>完整 <code>ExternalChannelEventResponse</code>，结构与 <code>/events</code> JSON 响应一致</td></tr><tr><td><code>error</code></td><td>本轮处理失败，包含 <code>status</code> 和 <code>error.code/message</code></td></tr><tr><td><code>done</code></td><td>流结束标记，<code>ok=true/false</code></td></tr></tbody></table></div>
 <p>响应片段示例：</p>
 <figure class="code-card">
     <figcaption><span>text</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>event: external_channel.started
-data: {&quot;status&quot;:&quot;started&quot;,&quot;idempotency_key&quot;:&quot;generic_chat:tenant-ext-001:msg-20260513-0001&quot;}
+data: {&quot;schema&quot;:&quot;v3.external_channel.sse.v1&quot;,&quot;event_id&quot;:&quot;pending:000000&quot;,&quot;sequence&quot;:0,&quot;phase&quot;:&quot;started&quot;,&quot;status&quot;:&quot;started&quot;,&quot;display_text&quot;:&quot;V3 已开始处理本轮消息。&quot;,&quot;idempotency_key&quot;:&quot;generic_chat:tenant-ext-001:msg-20260513-0001&quot;,&quot;conversation_external_id&quot;:&quot;chat-risk-room&quot;,&quot;data&quot;:{&quot;status&quot;:&quot;started&quot;,&quot;idempotency_key&quot;:&quot;generic_chat:tenant-ext-001:msg-20260513-0001&quot;}}
 
 event: external_channel.delta
 data: {&quot;index&quot;:0,&quot;delta&quot;:&quot;根据你当前权限可查看的制度文档，&quot;}
 
 event: external_channel.completed
-data: {&quot;assistant_run_id&quot;:&quot;arun_01HXEXAMPLE&quot;,&quot;response&quot;:{&quot;accepted&quot;:true,&quot;reply&quot;:{&quot;reply_type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;根据你当前权限可查看的制度文档...&quot;}}}
+data: {&quot;schema&quot;:&quot;v3.external_channel.sse.v1&quot;,&quot;event_id&quot;:&quot;arun_01HXEXAMPLE:000100&quot;,&quot;sequence&quot;:100,&quot;phase&quot;:&quot;completed&quot;,&quot;status&quot;:&quot;completed&quot;,&quot;display_text&quot;:&quot;本轮处理已返回当前结果。&quot;,&quot;assistant_run_id&quot;:&quot;arun_01HXEXAMPLE&quot;,&quot;idempotency_key&quot;:&quot;generic_chat:tenant-ext-001:msg-20260513-0001&quot;,&quot;conversation_external_id&quot;:&quot;chat-risk-room&quot;,&quot;data&quot;:{&quot;response&quot;:{&quot;accepted&quot;:true,&quot;reply&quot;:{&quot;reply_type&quot;:&quot;text&quot;,&quot;text&quot;:&quot;根据你当前权限可查看的制度文档...&quot;}}}}
 
 event: done
 data: {&quot;ok&quot;:true}</code></pre>
   </figure>
 <p>SSE data 字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>位置</th><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel.started.data</code></td><td><code>status</code></td><td>流已开始处理，通常为 <code>started</code></td></tr><tr><td><code>external_channel.started.data</code></td><td><code>idempotency_key</code></td><td>本轮消息幂等键</td></tr><tr><td><code>external_channel.delta.data</code></td><td><code>index</code></td><td>增量片段序号，从 0 开始</td></tr><tr><td><code>external_channel.delta.data</code></td><td><code>delta</code></td><td>本次追加的文本片段</td></tr><tr><td><code>external_channel.static_page_planning.data</code></td><td><code>summary</code></td><td>页面规划摘要；可展示给操作人员</td></tr><tr><td><code>external_channel.static_page_queued.data</code></td><td><code>card</code></td><td>静态页任务卡片，通常包含 <code>draft_id</code>、<code>status_url</code>、<code>poll_after_seconds</code>；若已生成可发送页面链接，还会包含 <code>public_url</code></td></tr><tr><td><code>external_channel.static_page_preview_ready.data</code></td><td><code>card.preview_url</code></td><td>过程预览 URL；最终交付仍以 <code>artifact_links[0]</code> 或 <code>card.public_url</code> 为准</td></tr><tr><td><code>external_channel.static_page_publish_progress.data</code></td><td><code>card.status</code></td><td>发布阶段细分状态，例如 <code>static_page_publish_queued</code>、<code>static_page_publish_running</code>、<code>static_page_publish_retrying</code></td></tr><tr><td><code>external_channel.static_page_published.data</code></td><td><code>artifact_links</code></td><td>最终页面链接数组</td></tr><tr><td><code>external_channel.static_page_issue.data</code></td><td><code>card.error</code></td><td>失败、需人工或重试原因；不要直接把它展示成最终失败，可提示 V3 正在重试或等待接管</td></tr><tr><td><code>external_channel.static_page_continue_polling.data</code></td><td><code>card.status_url</code></td><td>后续状态查询地址</td></tr><tr><td><code>external_channel.completed.data</code></td><td><code>assistant_run_id</code></td><td>本轮 V3 任务 ID</td></tr><tr><td><code>external_channel.completed.data</code></td><td><code>response</code></td><td>与 <code>/events</code> JSON 响应同结构的最终响应</td></tr><tr><td><code>done.data</code></td><td><code>ok</code></td><td>SSE 流是否正常结束</td></tr><tr><td><code>error.data</code></td><td><code>status</code></td><td>错误状态或 HTTP 状态</td></tr><tr><td><code>error.data</code></td><td><code>error.code</code></td><td>稳定错误码</td></tr><tr><td><code>error.data</code></td><td><code>error.message</code></td><td>错误说明，不包含密钥和敏感正文</td></tr></tbody></table></div>
-<p>说明：SSE 会先返回 <code>started</code> 作为传输态，随后按 <code>delta</code> 输出文本片段，并在 <code>completed</code> 中返回本轮初始响应；第三方页面不要把 <code>started</code> 渲染为助手消息。静态页生成时，V3 会继续在同一条 SSE 连接里输出页面规划、生成进度、发布进度、最终页面链接或问题原因；如果第三方连接较短，仍可按 <code>status_url</code> 轮询。若 <code>completed.response.reply.card.public_url</code> 或 <code>completed.response.reply.artifact_links[0]</code> 已存在，第三方可先展示或转存该页面链接。若只返回 <code>render_output_id</code>，第三方可按静态页渲染产物接口查询、预览或下载 HTML。第三方不需要为过程预览单独做确认、下载或二次提交。</p>
+<div class="table-shell"><table><thead><tr><th>位置</th><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>external_channel.started.data</code></td><td><code>display_text</code></td><td>可展示的开始处理文案；不要渲染成助手最终回复</td></tr><tr><td><code>external_channel.started.data.data</code></td><td><code>status</code></td><td>流已开始处理，通常为 <code>started</code></td></tr><tr><td><code>external_channel.retrieval_started.data</code></td><td><code>display_text</code></td><td>可展示的检索/上下文准备文案；不要渲染成助手最终回复</td></tr><tr><td><code>external_channel.delta.data</code></td><td><code>index</code></td><td>增量片段序号，从 0 开始</td></tr><tr><td><code>external_channel.delta.data</code></td><td><code>delta</code></td><td>本次追加的文本片段</td></tr><tr><td><code>external_channel.static_page_planning.data.data</code></td><td><code>summary</code></td><td>页面规划摘要；可展示给操作人员</td></tr><tr><td><code>external_channel.static_page_queued.data.data</code></td><td><code>card</code></td><td>静态页任务卡片，通常包含 <code>draft_id</code>、<code>status_url</code>、<code>poll_after_seconds</code>；若已生成可发送页面链接，还会包含 <code>public_url</code></td></tr><tr><td><code>external_channel.static_page_preview_ready.data.data</code></td><td><code>card.preview_url</code></td><td>过程预览 URL；最终交付仍以 <code>artifact_links[0]</code> 或 <code>card.public_url</code> 为准</td></tr><tr><td><code>external_channel.static_page_publish_progress.data.data</code></td><td><code>card.status</code></td><td>发布阶段细分状态，例如 <code>static_page_publish_queued</code>、<code>static_page_publish_running</code>、<code>static_page_publish_retrying</code></td></tr><tr><td><code>external_channel.static_page_published.data.data</code></td><td><code>artifact_links</code></td><td>最终页面链接数组</td></tr><tr><td><code>external_channel.static_page_issue.data.data</code></td><td><code>card.error</code></td><td>失败、需人工或重试原因；不要直接把它展示成最终失败，可提示 V3 正在重试或等待接管</td></tr><tr><td><code>external_channel.static_page_continue_polling.data</code></td><td><code>status_url</code></td><td>后续状态查询地址；也可能在 <code>data.card.status_url</code> 中出现</td></tr><tr><td><code>external_channel.needs_input.data.data</code></td><td><code>card.question</code></td><td>需要用户补充的问题；同一会话下一轮会沿用已有文档/数据范围继续</td></tr><tr><td><code>external_channel.completed.data</code></td><td><code>assistant_run_id</code></td><td>本轮 V3 任务 ID</td></tr><tr><td><code>external_channel.completed.data.data</code></td><td><code>response</code></td><td>与 <code>/events</code> JSON 响应同结构的最终响应</td></tr><tr><td><code>done.data</code></td><td><code>ok</code></td><td>SSE 流是否正常结束</td></tr><tr><td><code>error.data</code></td><td><code>status</code></td><td>错误状态或 HTTP 状态</td></tr><tr><td><code>error.data</code></td><td><code>error.code</code></td><td>稳定错误码</td></tr><tr><td><code>error.data</code></td><td><code>error.message</code></td><td>错误说明，不包含密钥和敏感正文</td></tr></tbody></table></div>
+<p>说明：SSE 会先返回 <code>started</code> 作为传输态，随后按 <code>delta</code> 输出文本片段，并在 <code>completed</code> 中返回本轮初始响应；第三方页面不要把 <code>started</code> 渲染为助手消息。若返回 <code>needs_input</code>，第三方展示问题并让用户补充，下一轮仍用同一个会话 ID。静态页生成时，V3 会继续在同一条 SSE 连接里输出页面规划、生成进度、发布进度、最终页面链接或问题原因；如果第三方连接较短，仍可按 <code>status_url</code> 轮询。若出现可继续的超时、重试或后台继续，顶层 <code>reply.task_status</code> 仍为 <code>processing</code>，可按 <code>poll_after_seconds</code> 继续查询；只有顶层 <code>reply.task_status=failed</code> 才表示不可继续失败/取消。若 <code>completed.data.data.response.reply.card.public_url</code>、<code>completed.data.data.response.reply.artifact_links[0]</code>、结构化事件顶层 <code>card.public_url</code> 或 <code>artifact_links[0]</code> 已存在，第三方可先展示或转存该页面链接。若只返回 <code>render_output_id</code>，第三方可按静态页渲染产物接口查询、预览或下载 HTML。第三方不需要为过程预览单独做确认、下载或二次提交。</p>
 <p>任务状态响应示例：</p>
 <figure class="code-card">
     <figcaption><span>json</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -1390,7 +1519,8 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>说明</th></tr></thead><tbody><tr><td><code>business_datasource_ids</code></td><td>业务库问答/报表建议填</td><td>第三方业务库 ID 数组；值来自 11.6.1 的 <code>source_external_id</code>。兼容别名：<code>businessDatasourceIds</code>、<code>businessDataSourceIds</code>、<code>databaseSourceIds</code></td></tr><tr><td><code>dataset_external_ids</code></td><td>否</td><td>已同步数据集范围；用于只授权具体稳定数据集</td></tr></tbody></table></div>
 <p>如果进入静态页/报表页面生成流程，重点看：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>reply.task_status</code></td><td>顶层兼容状态；生成中、可重试、待补数据或待人工处理统一为 <code>processing</code>，最终成功为 <code>static_page_published</code>，取消等不可继续状态才返回 <code>failed</code>。细分阶段看 <code>reply.card.status</code></td></tr><tr><td><code>reply.card.status</code></td><td>静态页细分阶段；如 <code>static_page_image2_auto_publish_pending</code>、<code>static_page_image_preview_queued</code>、<code>static_page_publish_running</code>、<code>static_page_published</code>、<code>static_page_publish_failed</code></td></tr><tr><td><code>reply.card.public_url</code></td><td>最终公开页面 URL；为空表示还在生成或发布失败</td></tr><tr><td><code>reply.card.status</code></td><td>页面生成/发布细分状态；第三方按不透明状态记录并结合 <code>status_url</code> 轮询</td></tr><tr><td><code>reply.card.generated_artifact_url</code></td><td>已生成产物 URL</td></tr><tr><td><code>artifact_links</code></td><td>产物链接数组；第三方页面可直接展示</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>reply.task_status</code></td><td>顶层兼容状态；生成中、可重试、后台继续、待补数据或待人工处理统一为 <code>processing</code>，最终成功为 <code>static_page_published</code>，只有不可继续的失败/取消才返回 <code>failed</code>。细分阶段看 <code>reply.card.status</code></td></tr><tr><td><code>reply.card.status</code></td><td>静态页细分阶段；如 <code>static_page_planning</code>、<code>static_page_generation_queued</code>、<code>static_page_publish_running</code>、<code>static_page_published</code>、<code>static_page_publish_failed</code></td></tr><tr><td><code>reply.card.public_url</code></td><td>最终公开页面 URL；为空表示还在生成或发布失败</td></tr><tr><td><code>reply.card.status</code></td><td>页面生成/发布细分状态；第三方按不透明状态记录并结合 <code>status_url</code> 轮询</td></tr><tr><td><code>reply.card.generated_artifact_url</code></td><td>已生成产物 URL</td></tr><tr><td><code>reply.card.template_reference_id</code></td><td>本次使用的静态页模板引用；若为 <code>generated-static-page:{draft_id}</code>，表示来自 V3 已发布页面模板库</td></tr><tr><td><code>reply.card.template_match_policy</code></td><td>模板命中策略：<code>exact_dataset_artifact_key</code> 表示相同数据集组合直接复用，<code>dataset_overlap</code> 表示按数据集交集套用模板，<code>explicit_or_inferred_template</code> 表示显式或意图推断模板</td></tr><tr><td><code>reply.card.relaxed_template_match</code></td><td>当 <code>template_match_policy=dataset_overlap</code> 时返回历史模板匹配摘要；第三方可记录但不需要参与计算</td></tr><tr><td><code>reply.card.style_reuse_policy</code> / <code>reply.card.data_refresh_policy</code></td><td>默认复用模板样式并按本轮授权数据集/业务库刷新数据；客户明确要求换风格时才重新进入新的 Image2 设计流程</td></tr><tr><td><code>artifact_links</code></td><td>产物链接数组；第三方页面可直接展示</td></tr></tbody></table></div>
+<p>已发布并被接受的 Image2 → Codex 静态页会进入 V3 模板库。后续同一数据集组合优先复用已有页面；若数据集组合不完全相同但存在交集，V3 可自动套用该模板的视觉风格、布局结构和组件组织，事实数据仍以当前会话授权范围为准。</p>
 <h4 id="section-37">11.6.11 状态判断</h4>
 <div class="table-shell"><table><thead><tr><th>场景</th><th>判断方式</th><th>第三方动作</th></tr></thead><tbody><tr><td>连接失败</td><td><code>database/test</code> 返回错误</td><td>检查网络、白名单、账号权限和 V3 密钥配置</td></tr><tr><td>schema 为空</td><td><code>schema.table_count=0</code></td><td>检查库名、账号权限、表过滤</td></tr><tr><td>同步中</td><td><code>sync_readiness.signal=sync_running</code></td><td>页面提示处理中，稍后重查</td></tr><tr><td>数据集不可问</td><td><code>dataset_readiness.signal</code> 不是 <code>ready</code></td><td>等待同步/索引，或让 V3 重跑同步</td></tr><tr><td>行转换失败</td><td><code>row_failure_groups</code> 非空</td><td>根据表名、原因和主键样本修正字段映射</td></tr><tr><td>报表缺样本行</td><td><code>validation_summary.warnings</code>、<code>card.missing_evidence</code> 或页面缺口说明</td><td>V3 会先扩大供料并补充样本；仍不足时按已有数据先出页面，第三方可继续追问要求补充或调整</td></tr></tbody></table></div>
 <p>生产注意：</p>
@@ -1477,7 +1607,7 @@ GET /users/{user_external_id}/memberships</code></pre>
 Host: v3.elepcloud.com
 Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
-<p>该接口返回与 <code>/events</code> 相同的 <code>ExternalChannelEventResponse</code>。如果仍在生成，<code>reply.reply_type=task_status</code> 且顶层 <code>reply.task_status=processing</code>，细分阶段读取 <code>reply.card.status</code>，此时卡片会带 <code>reply.card.status_url</code> 和 <code>reply.card.poll_after_seconds</code>，第三方应按建议间隔继续轮询或提示 V3 正在补充处理；如果已发布，<code>reply.reply_type=artifact_link</code>，<code>reply.task_status=static_page_published</code>，<code>reply.artifact_links[0]</code> 为最终页面链接，动态页会额外带 <code>reply.card.data_url</code> / <code>reply.card.data_snapshot_url</code>；如果顶层 <code>reply.task_status=failed</code> 或状态为取消，提示稍后重试或等待 V3 人工处理。第三方也可以用原 <code>/events</code> 请求体和同一 <code>idempotency_key</code> 重试，V3 会在最终产物发布后返回同一个 artifact link。</p>
+<p>该接口返回与 <code>/events</code> 相同的 <code>ExternalChannelEventResponse</code>。如果仍在生成、重试或后台继续，<code>reply.reply_type=task_status</code> 且顶层 <code>reply.task_status=processing</code>，细分阶段读取 <code>reply.card.status</code>，此时卡片会带 <code>reply.card.status_url</code> 和 <code>reply.card.poll_after_seconds</code>，第三方应按建议间隔继续轮询或提示 V3 正在补充处理；如果已发布，<code>reply.reply_type=artifact_link</code>，<code>reply.task_status=static_page_published</code>，<code>reply.artifact_links[0]</code> 为最终页面链接，动态页会额外带 <code>reply.card.data_url</code> / <code>reply.card.data_snapshot_url</code>；只有顶层 <code>reply.task_status=failed</code> 才表示不可继续失败/取消，此时提示稍后重试或等待 V3 人工处理。第三方也可以用原 <code>/events</code> 请求体和同一 <code>idempotency_key</code> 重试，V3 会在最终产物发布后返回同一个 artifact link。</p>
 <p>第三方不需要关心 V3 内部生成配置，只需按响应字段判断是否已拿到最终 HTML 页面，或仍在自动发布队列。</p>
 <p>快速 HTML 生成可使用以下选项：</p>
 <figure class="code-card">
@@ -1498,7 +1628,7 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>状态响应返回 <code>status</code>、<code>html_preview_url</code> / <code>htmlPreviewUrl</code>、<code>html_download_url</code> / <code>htmlDownloadUrl</code>、<code>download_url</code> / <code>downloadUrl</code>、<code>retryable_error_reason</code> / <code>retryableErrorReason</code>。<code>status=rendered</code> 且存在下载地址时可以下载；<code>status=queued|rendering</code> 时继续轮询；<code>status=failed</code> 时按 <code>retryable_error_reason</code> 决定重试或人工处理。</p>
 <p>渲染状态字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>id</code></td><td>V3 静态页渲染输出 ID，即路径中的 <code>render_output_id</code></td></tr><tr><td><code>draft_id</code></td><td>对应的静态页草稿 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>触发渲染的 V3 任务 ID</td></tr><tr><td><code>image_job_id</code></td><td>关联的图片任务 ID；快速 HTML 模式通常为空</td></tr><tr><td><code>status</code></td><td><code>queued</code>、<code>rendering</code>、<code>rendered</code>、<code>failed</code> 或 <code>cancelled</code></td></tr><tr><td><code>html</code></td><td>HTML 内容；第三方通常优先使用预览或下载 URL</td></tr><tr><td><code>html_preview_url</code> / <code>htmlPreviewUrl</code></td><td>浏览器 inline 预览地址</td></tr><tr><td><code>html_download_url</code> / <code>htmlDownloadUrl</code></td><td>HTML 附件下载地址</td></tr><tr><td><code>download_url</code> / <code>downloadUrl</code></td><td>兼容下载地址，通常与 <code>html_download_url</code> 等价</td></tr><tr><td><code>retryable_error_reason</code> / <code>retryableErrorReason</code></td><td>失败时是否可重试及原因</td></tr><tr><td><code>asset_manifest</code></td><td>渲染资产摘要</td></tr><tr><td><code>created_at</code></td><td>渲染输出创建时间</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>说明</th></tr></thead><tbody><tr><td><code>id</code></td><td>V3 静态页渲染输出 ID，即路径中的 <code>render_output_id</code></td></tr><tr><td><code>draft_id</code></td><td>对应的静态页草稿 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>触发渲染的 V3 任务 ID</td></tr><tr><td><code>status</code></td><td><code>queued</code>、<code>rendering</code>、<code>rendered</code>、<code>failed</code> 或 <code>cancelled</code></td></tr><tr><td><code>html</code></td><td>HTML 内容；第三方通常优先使用预览或下载 URL</td></tr><tr><td><code>html_preview_url</code> / <code>htmlPreviewUrl</code></td><td>浏览器 inline 预览地址</td></tr><tr><td><code>html_download_url</code> / <code>htmlDownloadUrl</code></td><td>HTML 附件下载地址</td></tr><tr><td><code>download_url</code> / <code>downloadUrl</code></td><td>兼容下载地址，通常与 <code>html_download_url</code> 等价</td></tr><tr><td><code>retryable_error_reason</code> / <code>retryableErrorReason</code></td><td>失败时是否可重试及原因</td></tr><tr><td><code>asset_manifest</code></td><td>渲染资产摘要</td></tr><tr><td><code>created_at</code></td><td>渲染输出创建时间</td></tr></tbody></table></div>
 <p>第三方预览 HTML：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>

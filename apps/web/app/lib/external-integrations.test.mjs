@@ -33,6 +33,7 @@ import {
   normalizeCodexExecutorTask,
   normalizeDatabaseSourceStatus,
   normalizeExternalConversationTest,
+  normalizeExternalConversationTimeline,
   normalizeIntegrationSummary,
   normalizeWorkflowQueueStats,
   normalizeWorkflowTask,
@@ -818,6 +819,39 @@ test('normalizeExternalConversationTest keeps conversation test fields readable'
   assert.equal(externalConversationStatusLabel(item.assistantStatus), '已回复');
   assert.equal(externalConversationStatusLabel('failed'), '失败');
   assert.equal(externalConversationStatusLabel('no_run'), '未建运行');
+});
+
+test('normalizeExternalConversationTimeline keeps event progress and artifact links readable', () => {
+  const timeline = normalizeExternalConversationTimeline({
+    event_id: 'evt-1',
+    integration_id: 'generic-chat-main',
+    integration_display_name: 'Generic Chat',
+    platform: 'generic_chat',
+    conversation_external_id: 'conv-001',
+    message_external_id: 'msg-001',
+    assistant_run_id: 'run-001',
+    events: [{
+      sequence_no: 20,
+      event_name: 'assistant_run.external_channel_static_page_queued',
+      phase: 'artifact',
+      status: 'queued',
+      display_text: '页面生成任务已进入队列。',
+      artifact_links: ['https://v3.elepcloud.com/generated-artifacts/demo/index.html', ''],
+      payload_summary: { schema: 'v3.external_channel.sse.v1' },
+      debug_payload: { status: 'queued' },
+      created_at: '2026-06-02T08:00:00Z',
+    }],
+  });
+
+  assert.equal(timeline.integrationDisplayName, 'Generic Chat');
+  assert.equal(timeline.assistantRunId, 'run-001');
+  assert.equal(timeline.events.length, 1);
+  assert.equal(timeline.events[0].sequenceNo, 20);
+  assert.equal(timeline.events[0].displayText, '页面生成任务已进入队列。');
+  assert.deepEqual(timeline.events[0].artifactLinks, [
+    'https://v3.elepcloud.com/generated-artifacts/demo/index.html',
+  ]);
+  assert.equal(timeline.events[0].debugPayload.status, 'queued');
 });
 
 test('auditItemTypeLabel covers search evidence items', () => {

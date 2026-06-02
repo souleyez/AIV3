@@ -4677,6 +4677,34 @@ impl PgStaticPageDraftRepository {
         row.as_ref().map(map_static_page_draft_row).transpose()
     }
 
+    pub async fn list_accepted_baselines(
+        &self,
+        tenant_id: TenantId,
+        limit: i64,
+    ) -> Result<Vec<StaticPageDraft>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, assistant_run_id, title, status, selected_scope,
+                   visibility_snapshot, source_refs, draft_payload, created_at, updated_at
+            from static_page_drafts
+            where tenant_id = $1
+              and (
+                    source_refs #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
+                 or draft_payload #>> '{artifactStability,baselineStatus}' in ('accepted', 'published_baseline')
+                 or draft_payload #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
+              )
+            order by updated_at desc, created_at desc
+            limit $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_static_page_draft_row).collect()
+    }
+
     pub async fn update(
         &self,
         tenant_id: TenantId,

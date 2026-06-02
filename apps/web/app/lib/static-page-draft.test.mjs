@@ -209,6 +209,11 @@ test('template design references flow into preview image and final render payloa
   assert.equal(imagePayload.designContract.templateReferences[0].source, 'html-anything');
   assert.equal(finalPayload.designReferences[0].templateId, 'dashboard');
   assert.doesNotMatch(JSON.stringify(imagePayload.designReferences), /<html|<script|https?:\/\//i);
+  assert.equal(imagePayload.productionRules.codexHostEscalation.defaultMode, 'fixed_template_exec_schema');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.templateId, 'static_page_image2_data_publish');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.publishMode, 'new_generated_artifact_only');
+  assert.equal(canRequestStaticPageDirectHtml(draft), false);
+  assert.match(staticPageDirectHtmlBlockReason(draft), /GPT-Image2/);
 });
 
 test('image prompt text can be confirmed and carried as prompt-only payload', () => {
@@ -239,6 +244,26 @@ test('image prompt text can be confirmed and carried as prompt-only payload', ()
   assert.equal(imagePayload.productionRules.codexHostEscalation.templateId, 'static_page_image2_data_publish');
   assert.equal(imagePayload.productionRules.codexHostEscalation.confirmationPolicy, 'auto_for_new_generated_artifact');
   assert.equal(Object.prototype.hasOwnProperty.call(imagePayload, 'modules'), false);
+});
+
+test('style guide references force Image2 before HTML production', () => {
+  const draft = buildInitialStaticPageDraft({
+    conversationSummary: '客户提供 Data Buddy 报表样式复用指南，要求按这个视觉规范生成经营分析报表。',
+  });
+  const promptText = buildStaticPageImagePromptText(draft);
+  const imagePayload = buildStaticPageImagePayload(draft, {
+    promptText,
+    promptOnly: true,
+  });
+
+  assert.match(promptText, /风格指南/);
+  assert.match(promptText, /GPT-Image2 出效果图/);
+  assert.match(promptText, /不要直接把风格指南翻译成低保真 HTML/);
+  assert.equal(imagePayload.productionRules.codexHostEscalation.defaultMode, 'fixed_template_exec_schema');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.templateId, 'static_page_image2_data_publish');
+  assert.equal(imagePayload.productionRules.codexHostEscalation.confirmationPolicy, 'auto_for_new_generated_artifact');
+  assert.equal(canRequestStaticPageDirectHtml(draft), false);
+  assert.match(staticPageDirectHtmlBlockReason(draft), /风格指南/);
 });
 
 test('image prompt text carries actual static page data requirements without fake brand rows', () => {

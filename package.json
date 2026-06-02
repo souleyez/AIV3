@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "smoke:external-channel-20way": "node scripts/smoke/external-channel-20way.mjs",
+    "smoke:external-channel-streaming-10way": "node scripts/smoke/external-channel-streaming-10way.mjs",
     "smoke:main-chat-20way": "node scripts/smoke/main-chat-20way.mjs",
     "smoke:static-page-5way": "node scripts/smoke/static-page-5way.mjs",
     "smoke:heavy-static-page-5way": "node scripts/smoke/heavy-static-page-5way.mjs",

@@ -883,6 +883,38 @@ pub struct ListExternalConversationTestsResponse {
     pub tests: Vec<ExternalConversationTestView>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExternalConversationTimelineEventView {
+    pub sequence_no: i32,
+    pub event_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_links: Vec<String>,
+    pub payload_summary: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_payload: Option<Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ExternalConversationTimelineResponse {
+    pub event_id: String,
+    pub integration_id: String,
+    pub integration_display_name: String,
+    pub platform: String,
+    pub conversation_external_id: String,
+    pub message_external_id: String,
+    pub direction: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_run_id: Option<AssistantRunId>,
+    pub events: Vec<ExternalConversationTimelineEventView>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalIntegrationControlRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4407,6 +4439,29 @@ pub struct StaticPageDraftView {
     pub draft_payload: Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StaticPageTemplateView {
+    pub id: String,
+    pub draft_id: StaticPageDraftId,
+    pub assistant_run_id: AssistantRunId,
+    pub title: String,
+    pub public_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dataset_artifact_key: Option<String>,
+    pub template_reference: Value,
+    pub selected_scope: Value,
+    pub source_refs: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ListStaticPageTemplatesResponse {
+    pub templates: Vec<StaticPageTemplateView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

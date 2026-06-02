@@ -1,7 +1,7 @@
 import {
   externalObservabilityProxyHeaderValue,
   hasExternalObservabilityAccessCookie,
-} from './external-observability-access';
+} from './external-observability-access.js';
 
 const DEFAULT_PLATFORM_API_BASE_URL = 'http://127.0.0.1:3000';
 
@@ -15,9 +15,10 @@ export function buildPlatformApiUrl(pathname, search = '') {
   return `${normalizeBaseUrl()}${normalizedPath}${search}`;
 }
 
-function isExternalObservabilityPath(pathSegments) {
+export function isExternalObservabilityPath(pathSegments) {
   const path = Array.isArray(pathSegments) ? pathSegments.join('/') : '';
-  return path === 'external/conversation-tests';
+  return path === 'external/conversation-tests'
+    || /^external\/conversation-tests\/[^/]+\/timeline$/.test(path);
 }
 
 export async function proxyPlatformApiRequest(request, pathSegments) {

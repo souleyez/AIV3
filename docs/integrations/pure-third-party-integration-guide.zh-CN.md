@@ -412,6 +412,111 @@ Content-Type: application/json
 
 请求体与 `POST /events` 相同。
 
+最小消费规则：
+
+| event | 第三方怎么处理 |
+| --- | --- |
+| `external_channel.started` | 只表示 V3 开始处理，不展示为助手回复 |
+| `external_channel.retrieval_started` | 展示为“正在检索资料/数据源”；不作为最终回复 |
+| `external_channel.delta` | 追加 `data.delta` 到聊天气泡 |
+| 其他 `external_channel.*` | 读取 `data.display_text` 展示进度；读取 `data.status` 判断状态；读取 `data.status_url` 和 `data.poll_after_seconds` 继续轮询 |
+| `external_channel.needs_input` | 展示 `data.display_text` 或 `data.data.card.question`，让用户补充后继续同一会话 |
+| `external_channel.completed` | 读取 `data.data.response.reply`；结构与 `POST /events` 的 `reply` 相同 |
+| `done` | `data.ok=true` 表示本次 SSE 正常结束 |
+| `error` | 展示 `data.error.message`，并保留 `idempotency_key` 便于排查 |
+
+除 `external_channel.delta`、`done`、`error` 外，结构化事件的 `data` 都带以下通用字段：
+
+```jsonc
+{
+  "schema": "v3.external_channel.sse.v1",          // SSE 结构版本
+  "event_id": "assistant-run-id:000020",           // 可用于去重
+  "sequence": 20,                                  // 本轮流内阶段序号
+  "assistant_run_id": "assistant-run-id",          // V3 本次运行 ID
+  "idempotency_key": "chat:tenant-ext-001:msg-1",  // 幂等键
+  "conversation_external_id": "conv-20260520-0001",// 第三方会话 ID
+  "phase": "static_page",                          // 阶段
+  "status": "processing",                          // 公开状态
+  "display_text": "V3 正在生成页面方案。",          // 可展示文案
+  "status_url": "https://v3.elepcloud.com/...",    // 后续状态查询地址；没有为 null
+  "poll_after_seconds": 15,                        // 建议轮询间隔；没有为 null
+  "data": {}                                       // 该事件的具体业务数据
+}
+```
+
+断线续传：记录最后一个结构化事件的 `sequence` 或 `event_id`。重连时使用同一个 `idempotency_key`，并传以下任一项：
+
+```jsonc
+{
+  "stream_since_sequence": 20 // 只回放 20 之后的公开事件
+}
+```
+
+也可以用 Query：`?since_sequence=20`，或 Header：`Last-Event-ID: assistant-run-id:000020`。V3 会回放未消费的公开事件；任务未完成时会继续输出后续状态。
+
+最小代码示例：
+
+```js
+// 1. 直接 POST 读取 SSE。浏览器和 Node 服务端都可以用 fetch。
+async function sendV3Stream({ url, token, body, onText, onProgress, onFinal }) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: 'text/event-stream',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let lastSequence = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop() || '';
+    for (const frame of frames) {
+      const event = frame.match(/^event: (.+)$/m)?.[1] || 'message';
+      const data = JSON.parse(frame.match(/^data: (.+)$/m)?.[1] || '{}');
+      if (data.sequence) lastSequence = data.sequence; // 断线续传用
+      if (event === 'external_channel.delta') onText?.(data.delta || '');
+      else if (event === 'external_channel.completed') onFinal?.(data.data?.response || data.response);
+      else if (event !== 'done') onProgress?.(data.display_text || data.status || event, data);
+    }
+  }
+  return { lastSequence };
+}
+```
+
+```js
+// 2. 断线后重连：同一个 idempotency_key + 上次 sequence。
+body.stream_since_sequence = lastSequence;
+await sendV3Stream({ url, token, body, onText, onProgress, onFinal });
+```
+
+```js
+// 3. 如果拿到 status_url，用服务端按建议间隔轮询。
+async function pollV3Status(statusUrl, token, seconds = 15) {
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+    const payload = await fetch(statusUrl, {
+      headers: { authorization: `Bearer ${token}` },
+    }).then((response) => response.json());
+    const reply = payload.reply || {};
+    if (reply.artifact_links?.[0] || reply.reply_type === 'artifact_link') return payload;
+    if (reply.task_status === 'failed' || reply.task_status === 'cancelled') return payload;
+    seconds = reply.card?.poll_after_seconds || seconds;
+  }
+}
+```
+
+如果前端只能使用原生 `EventSource`，请在第三方服务端做一个 GET 代理：服务端保存本轮请求体并调用 V3 的 POST `/events/stream`，浏览器只连接自己的 `GET /v3-stream-proxy?message_id=...`。浏览器重连时把最后的 `event_id` 传给服务端，服务端转成 `Last-Event-ID` 或 `stream_since_sequence`。
+
+如果 `reply.task_status=needs_input` 或收到 `external_channel.needs_input`，表示当前可见资料不足但可以继续。第三方只需要把 `reply.text` / `reply.card.question` 展示给用户；用户补充制度名称、页码、关键词、文档范围或统计口径后，继续用同一个 `conversation_external_id` 发下一轮消息。
+
 ### 2.3 数据接入/入库分析请求
 
 第三方接口无需新增字段。客户可以在普通聊天消息里直接提出数据接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求，例如：
@@ -442,7 +547,6 @@ V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、�
 | `reply.reply_type` | `task_status` |
 | `reply.task_status` | `data_ingestion_analysis_queued`、`data_ingestion_analysis_retrying`、`data_ingestion_analysis_completed`、`data_ingestion_analysis_needs_human`、`data_ingestion_analysis_failed`、`data_ingestion_analysis_cancelled`、人工确认后的 `data_ingestion_staging_dataset_ready`，以及同步阶段的 `data_ingestion_staging_sync_started`、`data_ingestion_staging_sync_running`、`data_ingestion_staging_sync_completed`、`data_ingestion_staging_sync_failed` |
 | `reply.card.type` | 排队时为 `v3_data_ingestion_analysis`；完成后为 `v3_data_ingestion_analysis_result`；确认创建/复用 staging 数据集后为 `v3_data_ingestion_staging_plan_execution`；同步启动后为 `v3_data_ingestion_staging_sync` |
-| `reply.card.codex_host_workflow_execution_id` | 固定分析任务 ID |
 | `reply.card.result_summary` | 完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作 |
 | `reply.card.staging_plan` | 完成后可返回 `v3_data_ingestion_staging_plan`，用于人工确认后的数据集/数据源导入草稿；固定 `production_write_allowed=false` |
 | `reply.card.dataset_id` | `data_ingestion_staging_dataset_ready` 时返回 V3 创建或复用的 staging 数据集 ID |
@@ -567,6 +671,8 @@ Content-Type: application/json
 
 V3 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。
 
+V3 会把已经通过 Image2 → Codex 流程发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，V3 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格或第三方显式传入新的样式模板时，才重新进入新的 Image2 设计流程。
+
 第三方操作人员可以先把 `card.public_url` 或 `artifact_links[0]` 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；V3 会在静态页卡片返回 `recipient_delivery`，说明当前是否已具备自动配置条件，或还缺哪些权限映射。
 
 第三方不需要关心 V3 内部生成配置，只需按响应字段判断是否已拿到最终 HTML 页面，或仍在自动发布队列。
@@ -576,7 +682,7 @@ V3 会创建报表页面草稿并自动完成页面生成与发布。生成过�
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `artifact_link` 或 `task_status` |
-| `reply.task_status` | 顶层兼容状态；生成中、可重试、待补数据或待人工处理统一为 `processing`，最终成功为 `static_page_published`，取消等不可继续状态才返回 `failed` |
+| `reply.task_status` | 顶层兼容状态；生成中、可重试、后台继续、待人工处理统一为 `processing`，需要用户补充为 `needs_input`，最终成功为 `static_page_published`，只有不可继续的失败/取消才返回 `failed` |
 | `reply.card.status` | 静态页细分阶段；第三方按生成中、发布中、重试中、需人工处理、失败或取消等状态处理即可 |
 | `reply.text` | 给用户展示的排队/处理说明；若已直接生成 HTML，会说明可通过 `card.render_output_id` 或下载链接获取产物 |
 | `reply.card.type` | 系统卡片类型；第三方按不透明字符串记录即可 |
@@ -588,16 +694,22 @@ V3 会创建报表页面草稿并自动完成页面生成与发布。生成过�
 | `reply.card.data_url` | 已发布动态静态页且存在 `data.json` 时返回；用于第三方服务端转存页面数据快照 |
 | `reply.card.data_snapshot_url` | 已发布动态静态页且存在 `data-snapshot.json` 时返回；与 `data_url` 同源，保留为渲染/审计快照 |
 | `reply.card.dynamic_page_contract` | 动态静态页数据合同；说明 `data.json`、`data-snapshot.json`、刷新间隔、变更检测字段、默认时间范围控件和经营报表按月默认口径 |
+| `reply.card.template_reference_id` | 本次使用的静态页模板引用；若为 `generated-static-page:{draft_id}`，表示来自 V3 已发布页面模板库 |
+| `reply.card.template_reference` | 模板摘要；只用于视觉风格、结构和字段组织，不扩大事实证据范围 |
+| `reply.card.template_match_policy` | 模板命中策略：`exact_dataset_artifact_key` 表示相同数据集组合直接复用，`dataset_overlap` 表示按数据集交集套用模板，`explicit_or_inferred_template` 表示显式或意图推断模板 |
+| `reply.card.relaxed_template_match` | 当 `template_match_policy=dataset_overlap` 时返回匹配到的历史模板摘要，便于第三方记录为什么可以快速套用 |
+| `reply.card.style_reuse_policy` | 默认 `reuse_style_unless_explicit_redesign`，表示除非明确要求换风格，否则复用模板样式 |
+| `reply.card.data_refresh_policy` | 默认 `refresh_data_files_from_dataset_sources`，表示页面数据按本轮数据集/业务库刷新 |
 | `reply.card.recipient_delivery` | 静态页分发辅助信息；包含 `can_create_recipient_specific_links`、`operator_external_user_id`、`target_external_user_ids`、识别到的角色范围和补充映射提示 |
 | `reply.card.permission_review_status` | 权限/分发映射状态：`provided_for_auto_configuration` 表示已传映射可自动配置；`needs_user_role_scope_mapping` 表示需要补充用户-角色-门店/区域范围；`role_requirements_detected` 表示只识别到角色要求 |
 | `reply.card.editable_after_publish` | `true` 表示最终页面生成后仍可继续让 V3 按人员、角色或门店范围调整并产出新的单独链接 |
-| `reply.card.status_url` | 生成中返回；第三方服务端用 `GET` 轮询该 URL，直到 `reply.reply_type=artifact_link` 或进入失败/取消状态 |
+| `reply.card.status_url` | 生成中返回；第三方服务端用 `GET` 轮询该 URL，直到 `reply.reply_type=artifact_link` 或顶层 `reply.task_status=failed` |
 | `reply.card.poll_after_seconds` | 建议轮询间隔；生成中通常为 `15`，重试中通常为 `30` |
 | `reply.card.preview_url` | 若返回过程预览链接，第三方可展示为生成进度预览；最终交付仍以 `public_url` 或 `artifact_links[0]` 为准 |
 
 若调用流式接口，V3 会持续输出静态页中间过程：包括页面规划、生成中、发布中、已发布或问题原因。若本次 SSE 等待到达上限但后台仍在继续，第三方按 `status_url` 继续轮询。
 
-静态页生成不应因为样本行、可选维度或局部模块数据不足就直接失败。V3 会先扩大供料并尽量补足；仍不足时，也会按已有数据先生成一版可用页面，并在页面或 `validation_summary.warnings` 中标出缺口。若 `card.public_url` 或 `artifact_links[0]` 已存在，可先把该页面作为可发送链接。若只存在 `card.render_output_id`，可直接按 3.4 查询/预览/下载；若 `card.public_url` 为空但 `card.status_url` 存在，表示当前仍在自动生成或发布阶段，第三方继续轮询，或用原 `/events` 请求体和同一 `idempotency_key` 重试。若 `reply.card.status` 进入重试、失败或需人工处理，第三方继续轮询或提示 V3 正在补充处理；若顶层 `reply.task_status=failed` 或状态进入取消，提示稍后重试或由 V3 侧人工处理。过程预览不是最终交付物。
+静态页生成不应因为样本行、可选维度或局部模块数据不足就直接失败。V3 会先扩大供料并尽量补足；仍不足时，也会按已有数据先生成一版可用页面，并在页面或 `validation_summary.warnings` 中标出缺口。若 `card.public_url` 或 `artifact_links[0]` 已存在，可先把该页面作为可发送链接。若只存在 `card.render_output_id`，可直接按 3.4 查询/预览/下载；若 `card.public_url` 为空但 `card.status_url` 存在，表示当前仍在自动生成、重试或后台继续阶段，第三方继续轮询，或用原 `/events` 请求体和同一 `idempotency_key` 重试。若 `reply.card.status` 进入重试、失败或需人工处理但顶层仍为 `processing`，第三方继续轮询或提示 V3 正在补充处理；只有顶层 `reply.task_status=failed` 时，才按不可继续失败/取消提示稍后重试或由 V3 侧人工处理。过程预览不是最终交付物。
 
 固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 `reply` 对象：
 
@@ -610,6 +722,9 @@ V3 会创建报表页面草稿并自动完成页面生成与发布。生成过�
 | `reply.card.data_url` | 若最终页面带动态数据文件，则为同目录 `data.json` 链接 |
 | `reply.card.data_snapshot_url` | 若最终页面带动态数据文件，则为同目录 `data-snapshot.json` 链接 |
 | `reply.card.dynamic_page_contract` | 动态页合同；第三方通常只需转存，页面会优先按本地 `data.json` 渲染 |
+| `reply.card.template_reference_id` | 最终采用的模板引用；第三方可以记录下来作为后续同类需求的展示或审计信息 |
+| `reply.card.template_match_policy` | 最终模板命中策略；用于区分新设计、相同数据集复用和数据集交集套模板 |
+| `reply.card.style_reuse_policy` / `reply.card.data_refresh_policy` | 表示页面样式复用和数据刷新策略；通常保持默认即可 |
 | `reply.card.recipient_delivery` | 与生成中卡片一致；第三方可据此判断是否直接发送基础链接，或提示操作人员补充用户-角色-范围映射后再生成分权限链接 |
 | `reply.card.permission_review_status` | 与生成中卡片一致 |
 | `reply.card.editable_after_publish` | 与生成中卡片一致 |

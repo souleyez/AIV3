@@ -30,11 +30,13 @@ import {
   normalizeControlResult,
   normalizeDatabaseSourceStatus,
   normalizeCodexExecutorTask,
+  normalizeExternalConversationTimeline,
   normalizeWorkflowQueueStats,
   normalizeAuditItem,
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
   numberOrZero,
+  externalConversationStatusLabel,
   searchEvidenceSignalLabel,
   signalLabel,
   thirdPartyApiBaseUrl,
@@ -141,6 +143,10 @@ function artifactClass(signal) {
   return `external-artifact-pill external-artifact-${signal || 'none'}`;
 }
 
+function conversationStatusClass(status) {
+  return `external-conversation-status external-conversation-status-${status || 'unknown'}`;
+}
+
 function governanceMetrics(integration) {
   const summary = integration?.driftSummary || {};
   if (integration?.kind === 'source') {
@@ -240,6 +246,11 @@ export default function ExternalIntegrationsPageClient() {
   const [conversationTests, setConversationTests] = useState([]);
   const [conversationTestsOpen, setConversationTestsOpen] = useState(false);
   const [conversationAccessRequired, setConversationAccessRequired] = useState(false);
+  const [selectedConversationEventId, setSelectedConversationEventId] = useState('');
+  const [conversationTimeline, setConversationTimeline] = useState(null);
+  const [conversationTimelineLoading, setConversationTimelineLoading] = useState(false);
+  const [conversationTimelineDebugOpen, setConversationTimelineDebugOpen] = useState(false);
+  const [conversationTimelineDebugLoaded, setConversationTimelineDebugLoaded] = useState(false);
   const [codexExecutorOpen, setCodexExecutorOpen] = useState(false);
   const [codexExecutorTasks, setCodexExecutorTasks] = useState([]);
   const [codexExecutorQueueStats, setCodexExecutorQueueStats] = useState(null);
@@ -335,9 +346,15 @@ export default function ExternalIntegrationsPageClient() {
   async function loadConversationTests(integrationId = selectedId) {
     if (!integrationId) {
       setConversationTests([]);
+      setSelectedConversationEventId('');
+      setConversationTimeline(null);
       return;
     }
     setConversationTestsLoading(true);
+    setSelectedConversationEventId('');
+    setConversationTimeline(null);
+    setConversationTimelineDebugOpen(false);
+    setConversationTimelineDebugLoaded(false);
     try {
       const payload = await fetchJson(
         `/api/v3/external/conversation-tests?limit=50&integration_id=${encodeURIComponent(integrationId)}`,
@@ -355,6 +372,32 @@ export default function ExternalIntegrationsPageClient() {
       setConversationTests([]);
     } finally {
       setConversationTestsLoading(false);
+    }
+  }
+
+  async function loadConversationTimeline(eventId, { debug = false } = {}) {
+    if (!eventId) {
+      setConversationTimeline(null);
+      return;
+    }
+    setConversationTimelineLoading(true);
+    try {
+      const payload = await fetchJson(
+        `/api/v3/external/conversation-tests/${encodeURIComponent(eventId)}/timeline${debug ? '?debug=1' : ''}`,
+      );
+      setConversationAccessRequired(false);
+      setConversationTimeline(normalizeExternalConversationTimeline(payload || {}));
+      setConversationTimelineDebugLoaded(debug);
+    } catch (loadError) {
+      if (loadError?.status === 401 || loadError?.code === 'external_observability_access_required') {
+        setConversationAccessRequired(true);
+        setConversationTimeline(null);
+        return;
+      }
+      setConversationTimeline(null);
+      setError(loadError instanceof Error ? loadError.message : '对话时间线读取失败');
+    } finally {
+      setConversationTimelineLoading(false);
     }
   }
 
@@ -439,9 +482,35 @@ export default function ExternalIntegrationsPageClient() {
       setConversationTestsOpen(false);
       setConversationTests([]);
       setConversationAccessRequired(false);
+      setSelectedConversationEventId('');
+      setConversationTimeline(null);
+      setConversationTimelineDebugOpen(false);
+      setConversationTimelineDebugLoaded(false);
       return;
     }
     setConversationTestsOpen(true);
+  }
+
+  function selectConversationTest(test) {
+    if (!test?.eventId) {
+      return;
+    }
+    setSelectedConversationEventId(test.eventId);
+    setConversationTimeline(null);
+    setConversationTimelineDebugOpen(false);
+    setConversationTimelineDebugLoaded(false);
+    loadConversationTimeline(test.eventId);
+  }
+
+  async function toggleConversationTimelineDebug() {
+    if (!conversationTimelineDebugOpen) {
+      setConversationTimelineDebugOpen(true);
+      if (selectedConversationEventId && !conversationTimelineDebugLoaded) {
+        await loadConversationTimeline(selectedConversationEventId, { debug: true });
+      }
+      return;
+    }
+    setConversationTimelineDebugOpen(false);
   }
 
   function toggleCodexExecutorPanel() {
@@ -522,6 +591,10 @@ export default function ExternalIntegrationsPageClient() {
     setActionDetail(null);
     setAuditItems([]);
     setDatabaseStatusError('');
+    setSelectedConversationEventId('');
+    setConversationTimeline(null);
+    setConversationTimelineDebugOpen(false);
+    setConversationTimelineDebugLoaded(false);
   }
 
   function selectAuditFilter(filterKey) {
@@ -936,34 +1009,106 @@ export default function ExternalIntegrationsPageClient() {
             <button type="submit">解锁对话测试</button>
           </form>
         ) : (
-          <div className="external-conversation-table">
-            <div className="external-conversation-row external-conversation-head">
-              <span>第三方</span>
-              <span>用户问了什么</span>
-              <span>系统回了什么</span>
-              <span>耗时</span>
+          <>
+            <div className="external-conversation-table">
+              <div className="external-conversation-row external-conversation-head">
+                <span>第三方</span>
+                <span>用户问了什么</span>
+                <span>系统回了什么</span>
+                <span>耗时</span>
+              </div>
+              {conversationTests.map((test) => (
+                <button
+                  type="button"
+                  className={`external-conversation-row external-conversation-button${selectedConversationEventId === test.eventId ? ' is-selected' : ''}`}
+                  key={test.eventId}
+                  onClick={() => selectConversationTest(test)}
+                >
+                  <span>
+                    <strong>{test.integrationDisplayName}</strong>
+                    <small>{test.platform}</small>
+                    <small className={conversationStatusClass(test.assistantStatus)}>
+                      {externalConversationStatusLabel(test.assistantStatus)}
+                    </small>
+                  </span>
+                  <span className="external-conversation-text">
+                    {test.questionText || '暂无提问内容'}
+                  </span>
+                  <span className="external-conversation-text external-conversation-answer">
+                    {test.answerText || '暂无回复'}
+                  </span>
+                  <span className="external-conversation-duration">
+                    {formatExternalConversationDuration(test.durationMs)}
+                  </span>
+                </button>
+              ))}
+              {!conversationTestsLoading && !conversationTests.length ? (
+                <div className="external-empty-state">暂无外部对话测试记录</div>
+              ) : null}
             </div>
-            {conversationTests.map((test) => (
-              <article className="external-conversation-row" key={test.eventId}>
-                <span>
-                  <strong>{test.integrationDisplayName}</strong>
-                  <small>{test.platform}</small>
-                </span>
-                <span className="external-conversation-text">
-                  {test.questionText || '暂无提问内容'}
-                </span>
-                <span className="external-conversation-text external-conversation-answer">
-                  {test.answerText || '暂无回复'}
-                </span>
-                <span className="external-conversation-duration">
-                  {formatExternalConversationDuration(test.durationMs)}
-                </span>
-              </article>
-            ))}
-            {!conversationTestsLoading && !conversationTests.length ? (
-              <div className="external-empty-state">暂无外部对话测试记录</div>
+            {selectedConversationEventId ? (
+              <div className="external-conversation-timeline" aria-label="对话流式时间线">
+                <div className="external-conversation-timeline-head">
+                  <div>
+                    <strong>流式时间线</strong>
+                    <span>
+                      {conversationTimelineLoading
+                        ? '读取中'
+                        : conversationTimeline
+                          ? `${conversationTimeline.events.length} 个事件 · ${conversationTimeline.assistantRunId || '未建运行'}`
+                          : '未读取到时间线'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="external-refresh-button"
+                    disabled={conversationTimelineLoading}
+                    onClick={toggleConversationTimelineDebug}
+                  >
+                    {conversationTimelineDebugOpen ? '隐藏调试' : '调试 JSON'}
+                  </button>
+                </div>
+                {conversationTimeline?.events.length ? (
+                  <ol className="external-conversation-timeline-list">
+                    {conversationTimeline.events.map((event) => (
+                      <li key={`${event.sequenceNo}:${event.eventName}`}>
+                        <div className="external-conversation-timeline-marker">
+                          {event.sequenceNo}
+                        </div>
+                        <div className="external-conversation-timeline-body">
+                          <div className="external-conversation-timeline-title">
+                            <strong>{event.displayText || event.phase || event.eventName}</strong>
+                            <span>{formatObservationTime(event.createdAt)}</span>
+                          </div>
+                          <small>
+                            {event.eventName}
+                            {event.phase ? ` · phase=${event.phase}` : ''}
+                            {event.status ? ` · status=${event.status}` : ''}
+                          </small>
+                          {event.artifactLinks.length ? (
+                            <div className="external-conversation-timeline-links">
+                              {event.artifactLinks.map((link) => (
+                                <a href={link} target="_blank" rel="noreferrer" key={link}>
+                                  打开产物
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                          {conversationTimelineDebugOpen ? (
+                            <JsonPreview value={event.debugPayload || event.payloadSummary} />
+                          ) : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : conversationTimelineLoading ? (
+                  <div className="external-empty-state">正在读取该对话的中间事件。</div>
+                ) : (
+                  <div className="external-empty-state">该对话暂未记录中间事件。</div>
+                )}
+              </div>
             ) : null}
-          </div>
+          </>
         )}
       </section>
 

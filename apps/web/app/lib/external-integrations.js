@@ -410,6 +410,43 @@ export function normalizeExternalConversationTest(raw = {}) {
   };
 }
 
+export function normalizeExternalConversationTimeline(raw = {}) {
+  return {
+    eventId: String(raw.event_id || ''),
+    integrationId: String(raw.integration_id || ''),
+    integrationDisplayName: String(raw.integration_display_name || raw.integration_id || '未命名集成'),
+    platform: String(raw.platform || 'unknown'),
+    conversationExternalId: String(raw.conversation_external_id || ''),
+    messageExternalId: String(raw.message_external_id || ''),
+    direction: String(raw.direction || 'inbound'),
+    assistantRunId: raw.assistant_run_id ? String(raw.assistant_run_id) : '',
+    events: Array.isArray(raw.events)
+      ? raw.events.map(normalizeExternalConversationTimelineEvent)
+      : [],
+  };
+}
+
+export function normalizeExternalConversationTimelineEvent(raw = {}) {
+  const artifactLinks = Array.isArray(raw.artifact_links)
+    ? raw.artifact_links.map((link) => String(link || '').trim()).filter(Boolean)
+    : [];
+  return {
+    sequenceNo: Number.isFinite(Number(raw.sequence_no)) ? Number(raw.sequence_no) : 0,
+    eventName: String(raw.event_name || ''),
+    phase: conversationDisplayText(raw.phase),
+    status: conversationDisplayText(raw.status),
+    displayText: conversationDisplayText(raw.display_text),
+    artifactLinks,
+    payloadSummary: raw.payload_summary && typeof raw.payload_summary === 'object'
+      ? raw.payload_summary
+      : {},
+    debugPayload: raw.debug_payload && typeof raw.debug_payload === 'object'
+      ? raw.debug_payload
+      : null,
+    createdAt: raw.created_at || null,
+  };
+}
+
 export function databaseSourceSummary(integration = {}) {
   const configSummary = integration?.configSummary && typeof integration.configSummary === 'object'
     ? integration.configSummary

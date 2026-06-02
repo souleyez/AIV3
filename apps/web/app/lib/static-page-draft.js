@@ -1718,6 +1718,9 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
 }
 
 export function staticPageDirectHtmlBlockReason(draft = {}) {
+  if (staticPageUsesTemplateOrStyleGuide(draft)) {
+    return '已引用模板或风格指南，需先用 GPT-Image2 生成视觉效果图，再按图和真实数据制作静态页。';
+  }
   return '';
 }
 
@@ -2036,6 +2039,8 @@ function buildStaticPageImageDataRequirementLines(draft = {}) {
 function buildStaticPageImageProductionRules(draft = {}) {
   const subject = `${draft.objective || ''}\n${draft.title || ''}\n${draft.modelSummary || ''}`;
   const storeOrBrandPage = /新世界|新百|门店|分店|高分成|品牌店|店总|经营分析/.test(subject);
+  const templateOrStyleGuidePage = staticPageUsesTemplateOrStyleGuide(draft);
+  const fixedTemplatePublish = storeOrBrandPage || templateOrStyleGuidePage;
   return {
     workflow: 'requirements_to_image2_then_image_to_html',
     imageFirst: true,
@@ -2046,32 +2051,55 @@ function buildStaticPageImageProductionRules(draft = {}) {
     unitPolicy: 'format raw amounts as 万 below 1亿 and 亿 at or above 1亿; investigate aggregation before changing units',
     detailPolicy: storeOrBrandPage
       ? 'store/brand/customer detail lists are required for actionable store-manager pages'
-      : 'include drill-down details when the customer asks for action lists',
+      : templateOrStyleGuidePage
+        ? 'style-guide/template pages must preserve the visual system through Image2 before HTML production'
+        : 'include drill-down details when the customer asks for action lists',
     publishTarget: 'v3_generated_artifacts_on_8_server',
     codexHostEscalation: {
       eligible: true,
-      defaultMode: storeOrBrandPage ? 'fixed_template_exec_schema' : 'plan_only_or_dry_run',
-      templateId: storeOrBrandPage ? 'static_page_image2_data_publish' : '',
-      requiredCapability: storeOrBrandPage ? 'static_page_image2_data_publish' : 'static_page_edit',
-      legacyCapability: storeOrBrandPage ? 'static_page_advanced_publish' : '',
-      confirmationPolicy: storeOrBrandPage ? 'auto_for_new_generated_artifact' : 'human_review_for_writes',
-      publishMode: storeOrBrandPage ? 'new_generated_artifact_only' : 'manual_or_draft_only',
-      humanReviewRequiredForWrites: !storeOrBrandPage,
+      defaultMode: fixedTemplatePublish ? 'fixed_template_exec_schema' : 'plan_only_or_dry_run',
+      templateId: fixedTemplatePublish ? 'static_page_image2_data_publish' : '',
+      requiredCapability: fixedTemplatePublish ? 'static_page_image2_data_publish' : 'static_page_edit',
+      legacyCapability: fixedTemplatePublish ? 'static_page_advanced_publish' : '',
+      confirmationPolicy: fixedTemplatePublish ? 'auto_for_new_generated_artifact' : 'human_review_for_writes',
+      publishMode: fixedTemplatePublish ? 'new_generated_artifact_only' : 'manual_or_draft_only',
+      humanReviewRequiredForWrites: !fixedTemplatePublish,
       humanReviewRequiredForOverwrite: true,
       humanReviewRequiredForUncertainDataPolicy: true,
     },
   };
 }
 
+function staticPageUsesTemplateOrStyleGuide(draft = {}) {
+  const designReferences = normalizeTemplateDesignReferences(
+    draft.designReferences || draft.source?.templateReferences || draft.dataSnapshot?.designReferences || [],
+  );
+  if (designReferences.length > 0 || draft.templateReferenceId || draft.template_reference_id) {
+    return true;
+  }
+  const subject = [
+    draft.objective,
+    draft.title,
+    draft.modelSummary,
+    draft.source?.templateEvidenceSummary,
+    draft.templateEvidenceSummary,
+  ].filter(Boolean).join('\n');
+  return /风格指南|样式指南|视觉规范|设计规范|style\s*guide|data\s*buddy|模板参考|引用模板/i.test(subject);
+}
+
 function buildStaticPageImageBusinessRequirementLines(draft = {}) {
   const subject = draft.objective || draft.title || '经营分析静态页';
   const isStoreTopic = /新世界|新百|门店|分店|高分成|品牌店|店总/.test(`${subject}\n${draft.modelSummary || ''}`);
+  const isTemplateOrStyleGuidePage = staticPageUsesTemplateOrStyleGuide(draft);
   return [
     '顶部默认要有时间选择区，视觉上可以像筛选条，但不要做成后台编辑框。',
     '默认要有主要分区选择；如果是新世界/新百项目，主分区优先呈现不同门店/分店。',
     '页面要体现数据可刷新：文档或数据库更新后，页面数据应能按最新快照更新。',
     isStoreTopic
       ? '新世界/新百这版要服务店总：让店总快速看到哪些品牌店或门店快达到高分成线，便于运营助推。'
+      : '',
+    isTemplateOrStyleGuidePage
+      ? '已引用模板或风格指南：必须先把模板视觉语言交给 GPT-Image2 出效果图，再根据效果图制作最终 HTML；不要直接把风格指南翻译成低保真 HTML。'
       : '',
     '如果数据来自快照表，KPI、排行、机会池和明细默认只取最新快照；只有趋势图可以按日期序列展开，禁止把多天快照重复累加成当前状态。',
     '金额单位必须先校验取数口径，再按数值展示：低于1亿用“万”，达到1亿才用“亿”，不要用改单位掩盖聚合错误。',

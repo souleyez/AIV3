@@ -43,6 +43,8 @@
 
 **Progress update 2026-05-31 real smoke slice:** The real 8-server third-party static-page mutation smoke passed and returned a generated-artifact URL immediately. The data-ingestion mutation smoke reached real execution after adding `data_ingestion_analysis` to the platform and Codex Host agent allowlists; it now reports queued/running/retrying instead of auth/source/allowlist failure, with terminal polling still outstanding.
 
+**Progress update 2026-06-02 template-library visibility slice:** V3 now surfaces generated static-page template reuse decisions in third-party status cards and final replies. Exact dataset-combination reuse reports `template_match_policy=exact_dataset_artifact_key`; relaxed dataset-overlap reuse reports `template_match_policy=dataset_overlap` plus `relaxed_template_match`; normal explicit/inferred templates report `explicit_or_inferred_template`. The same fields are preserved when status replies are reconstructed from AssistantRun events, and the pure/full third-party integration docs now describe the template-library reuse policy and response fields.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection
