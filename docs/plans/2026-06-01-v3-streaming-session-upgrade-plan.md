@@ -24,13 +24,13 @@
 - External docs no longer expose internal high-quality visualization implementation details.
 - Long static-page jobs can continue through `status_url` polling after an SSE timeout.
 - 2026-06-02 update: `/events/stream` structured external events now use `schema=v3.external_channel.sse.v1`, public stream events are persisted into `assistant_run_events`, and reconnect can replay persisted public events by `Last-Event-ID`, `since_sequence`, or `stream_since_sequence`.
-- 2026-06-02 update: normal Q&A currently still uses the existing non-token provider completion path, so token streaming remains a gateway/runtime follow-up; static page/report progress now focuses on phase events, replay, and immediate artifact-link delivery.
+- 2026-06-02 update: normal Q&A live delta streaming is wired behind `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true`; provider deltas are buffered per attempt until the reply passes display-quality checks, so rejected generic fallback text is not leaked to third-party clients. Retry/timeout/rejection paths emit public `external_channel.answer_retrying` progress with `status_url`.
 
 ## Main Problems To Solve
 
-1. Normal Q&A is not truly token-streamed yet; the current path mostly returns a completed response or coarse progress.
-2. Normal Q&A token streaming is still coarse: completed answers now persist/replay, but provider token deltas still need the dedicated streaming path.
-3. Reconnect support now covers persisted public events; broader live token-stream resume still needs the normal Q&A streaming path.
+1. Normal Q&A live streaming is available only behind a default-off feature flag; production rollout still needs smoke on 8 server with the active model pool.
+2. Native provider token deltas are emitted only after per-attempt quality checks; this avoids leaking rejected answers but means the first rollout favors safety over raw token immediacy.
+3. Reconnect support covers persisted public progress events; transient live answer deltas are not yet replayed from storage.
 4. `/events`, `/events/stream`, and `/assistant-runs/{id}/reply` can drift in status shape and field sanitization.
 5. Long tasks must not become false failures when they merely exceed an SSE timeout.
 6. "Need more information" must be an executable state, not a dead-end answer.
@@ -78,6 +78,7 @@ external_channel.started
 external_channel.retrieval_started
 external_channel.retrieval_expanded
 external_channel.answer_delta
+external_channel.answer_retrying
 external_channel.answer_completed
 external_channel.needs_input
 external_channel.static_page_planning
@@ -261,11 +262,11 @@ cargo test -p platform-api external_channel_streaming_answer --lib
 cargo test -p llm-gateway --lib
 ```
 
-**2026-06-02 status:** Partially completed for the non-streaming fallback path and still deferred for provider-native token streaming. The current gateway-facing assistant path primarily calls `complete()` and receives a full response, then the API layer chunks completed text for SSE compatibility. External `/events/stream` now emits `external_channel.retrieval_started` immediately after `external_channel.started`, so third-party clients can show visible progress while V3 prepares visible documents, data sources, and conversation context. True token streaming should still be implemented as a separate `llm-gateway`/assistant-runtime provider stream contract so it does not destabilize static-page/report delivery before demos. Verified the fallback progress path with `cargo test -p platform-api generic_chat_page_event_stream_does_not_emit_accepted_as_answer_state --lib`, `cargo check -p platform-api`, and third-party docs checks.
+**2026-06-02 status:** Initial fallback progress completed. External `/events/stream` emits `external_channel.retrieval_started` immediately after `external_channel.started`, so third-party clients can show visible progress while V3 prepares visible documents, data sources, and conversation context. This was later superseded by the gateway streaming contract and platform live SSE wiring below. Verified the fallback progress path with `cargo test -p platform-api generic_chat_page_event_stream_does_not_emit_accepted_as_answer_state --lib`, `cargo check -p platform-api`, and third-party docs checks.
 
 **2026-06-02 status:** Gateway streaming contract completed locally. `llm-gateway::LlmProvider` now exposes `complete_streaming`, with a default buffered fallback for providers that do not support native streaming and an OpenAI-compatible SSE implementation that sends `stream=true`, parses `data:` chunks, returns usage/finish metadata, and calls back per delta. Platform live SSE wiring remains the next batch because the external ordinary-chat path still needs a background task/channel bridge to preserve model-pool retry, answer rejection, artifact persistence, and user-memory side effects. Verified with `cargo test -p llm-gateway --lib` and `cargo check -p platform-api`.
 
-**2026-06-02 status:** Platform live SSE wiring completed locally behind the default-off `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` flag. When enabled for `/v1/external/channels/{connection_id}/events/stream`, V3 runs the existing external ordinary-chat processing in a background task, passes provider deltas through an mpsc channel as `external_channel.delta`, and suppresses duplicate buffered final deltas before `external_channel.completed`. Static-page/report follow-up logic and JSON `/events` remain on the existing path. Verified with `cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib`, the existing stream endpoint test, `cargo check -p platform-api`, and `cargo test -p llm-gateway --lib`.
+**2026-06-02 status:** Platform live SSE wiring completed locally behind the default-off `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` flag. When enabled for `/v1/external/channels/{connection_id}/events/stream`, V3 runs the existing external ordinary-chat processing in a background task and emits answer deltas before `external_channel.completed`. Provider deltas are buffered per model attempt until the final text passes display-quality rejection checks, so generic orchestration acknowledgements are not streamed to third-party clients. Model-pool limit/error/timeout/rejection paths emit `external_channel.answer_retrying` with public `phase=answering`, `status=retrying`, sanitized display text, and `status_url`. Static-page/report follow-up logic and JSON `/events` remain on the existing path. Verified with `cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib`, `cargo test -p platform-api generic_chat_page_event_stream_retries_without_leaking_rejected_live_delta --lib`, the existing stream endpoint test, `cargo check -p platform-api`, and `cargo test -p llm-gateway --lib`.
 
 ### Task 5: Unify Status Mapping Across Three Exits
 
@@ -489,7 +490,8 @@ When V3 lacks required information, it should return:
 | Static page stream | `cargo test -p platform-api external_channel_static_page --lib` | Pass |
 | Stream envelope | `cargo test -p platform-api external_channel_sse --lib` | Pass |
 | Resume | `cargo test -p platform-api external_channel_stream_resume --lib` | Pass |
-| Q&A stream | `cargo test -p platform-api external_channel_streaming_answer --lib` | Pass |
+| Q&A stream | `cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib` | Pass |
+| Q&A retry stream | `cargo test -p platform-api generic_chat_page_event_stream_retries_without_leaking_rejected_live_delta --lib` | Pass |
 | Docs render | `npm run build:pure-third-party-guide-html && npm run check:pure-third-party-guide-html` | Public docs up to date |
 | Public docs secrecy | `rg -n "Image2|GPT-Image|Codex|Cloudflare|效果图|生图" docs/integrations apps/web/public/external-integrations` | No matches in public docs |
 | 8 server smoke | request `/events/stream` with a test message | `started`, progress/delta, `completed`, `done` |
@@ -529,4 +531,5 @@ curl -fsSL https://v3.elepcloud.com/external-integrations/pure-third-party-integ
 - 是否要把 envelope v1 放进 `contracts` 公开契约，还是先作为 `platform-api` 局部 JSON 约定？
 - 主站调试态是否允许显示更细内部事件，还是和第三方完全一致，只在受保护观测页显示内部细节？
 - 第三方是否能设置 `Last-Event-ID` header；如果不能，优先支持 `since_sequence` query/body。
-- 普通问答真实 token stream 是否由当前默认 GPT-5.5 网关直接支持，还是需要先在 `llm-gateway` 增加 provider streaming adapter？
+- 8 服务器默认 GPT-5.5 通道是否开启 `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` 灰度，还是先用观测环境跑 10 路 smoke 后再打开？
+- live answer delta 是否需要持久化用于断线重放；当前只持久化公共进度事件，最终答案仍可通过 `/reply` 获取。

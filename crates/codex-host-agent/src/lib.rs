@@ -1058,7 +1058,7 @@ fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>)
     );
     if template_id == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
         prompt.push_str(
-            "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `task.json.image2.local_preview_path` or `visual_contract_local_path` is present, use that local preview file as the visual contract before writing HTML.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Write a complete artifact directory under the task workspace, normally `generated-artifacts/<artifact-id>/`, containing `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json`.\n- `index.html` must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Every report page must expose a time-range selector. Operating reports default to a monthly view; when the user does not specify a range, use the latest available month while keeping custom range/month controls.\n- Bind real V3 dataset/database/document evidence from `task.json`. If selected evidence is thin or partially insufficient, first use every supplied dataset/database/document summary and available sample; then still publish a useful page with visible data-gap notes and `validation_report.warnings`. Do not return `needs_human` or `failed` solely because sample rows, optional dimensions, or some modules are incomplete.",
+            "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `task.json.requirements.existing_artifact.local_index_path` is present, treat it as the current published page to revise: preserve its style and module structure unless the user explicitly requests redesign, repair the requested data binding or content issue, and publish a new generated artifact instead of overwriting the old URL.\n- If `task.json.image2.local_preview_path` or `visual_contract_local_path` is present, use that local preview file as the visual contract before writing HTML.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Write a complete artifact directory under the task workspace, normally `generated-artifacts/<artifact-id>/`, containing `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json`.\n- `index.html` must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Every report page must expose a time-range selector. Operating reports default to a monthly view; when the user does not specify a range, use the latest available month while keeping custom range/month controls.\n- Bind real V3 dataset/database/document evidence from `task.json`. If selected evidence is thin or partially insufficient, first use every supplied dataset/database/document summary and available sample; then still publish a useful page with visible data-gap notes and `validation_report.warnings`. Do not return `needs_human` or `failed` solely because sample rows, optional dimensions, or some modules are incomplete.",
         );
     }
     Ok(prompt)
@@ -1155,6 +1155,7 @@ pub fn materialize_fixed_task_bundle(
 
     let mut task_json = json!(fixed_task);
     materialize_static_page_image2_preview_asset(workspace_path, &mut task_json)?;
+    materialize_static_page_existing_artifact(workspace_path, &mut task_json)?;
     write_json_file(&workspace_path.join("task.json"), &task_json)?;
     let schema: Value = serde_json::from_str(fixed_task_output_schema_hint(
         fixed_task.template_id.as_str(),
@@ -1275,6 +1276,171 @@ fn materialize_static_page_image2_preview_asset(
             "materialized": true,
         }),
     )?;
+    Ok(())
+}
+
+fn materialize_static_page_existing_artifact(
+    workspace_path: &Path,
+    task_json: &mut Value,
+) -> Result<()> {
+    if task_json.get("template_id").and_then(Value::as_str) != Some(STATIC_PAGE_IMAGE2_DATA_PUBLISH)
+    {
+        return Ok(());
+    }
+    let Some(public_url) = task_json
+        .pointer("/requirements/existing_artifact/public_url")
+        .or_else(|| task_json.pointer("/requirements/existing_artifact/index_url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.starts_with(V3_GENERATED_ARTIFACTS_URL_PREFIX))
+        .map(str::to_string)
+    else {
+        return Ok(());
+    };
+    let Some(relative_artifact_path) = v3_generated_artifact_relative_path(&public_url) else {
+        return Ok(());
+    };
+    let source_path = generated_artifacts_root().join(&relative_artifact_path);
+    let source_index = if source_path.is_file() {
+        source_path
+    } else {
+        source_path.join("index.html")
+    };
+    if !source_index.is_file() {
+        return Ok(());
+    }
+    let Some(source_dir) = source_index.parent() else {
+        return Ok(());
+    };
+    let target_dir = workspace_path.join("existing-artifact");
+    let mut copy_summary = ExistingArtifactCopySummary::default();
+    copy_existing_artifact_tree(source_dir, &target_dir, &mut copy_summary)?;
+    let local_index_path = "existing-artifact/index.html";
+    let data_path = target_dir.join("data.json");
+    let snapshot_path = target_dir.join("data-snapshot.json");
+    if let Some(existing_artifact) = task_json
+        .pointer_mut("/requirements/existing_artifact")
+        .and_then(Value::as_object_mut)
+    {
+        existing_artifact.insert("materialized".to_string(), Value::Bool(true));
+        existing_artifact.insert(
+            "local_dir".to_string(),
+            Value::String("existing-artifact".to_string()),
+        );
+        existing_artifact.insert(
+            "local_index_path".to_string(),
+            Value::String(local_index_path.to_string()),
+        );
+        if data_path.is_file() {
+            existing_artifact.insert(
+                "local_data_path".to_string(),
+                Value::String("existing-artifact/data.json".to_string()),
+            );
+        }
+        if snapshot_path.is_file() {
+            existing_artifact.insert(
+                "local_data_snapshot_path".to_string(),
+                Value::String("existing-artifact/data-snapshot.json".to_string()),
+            );
+        }
+        existing_artifact.insert(
+            "materialized_file_count".to_string(),
+            Value::from(copy_summary.file_count as u64),
+        );
+        existing_artifact.insert(
+            "materialized_total_bytes".to_string(),
+            Value::from(copy_summary.total_bytes),
+        );
+    }
+    write_json_file(
+        &target_dir.join("source-manifest.json"),
+        &json!({
+            "kind": "static_page_existing_artifact",
+            "source_url": public_url,
+            "local_index_path": local_index_path,
+            "file_count": copy_summary.file_count,
+            "total_bytes": copy_summary.total_bytes,
+            "materialized": true,
+        }),
+    )?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct ExistingArtifactCopySummary {
+    file_count: usize,
+    total_bytes: u64,
+}
+
+fn copy_existing_artifact_tree(
+    source_dir: &Path,
+    target_dir: &Path,
+    summary: &mut ExistingArtifactCopySummary,
+) -> Result<()> {
+    const MAX_EXISTING_ARTIFACT_FILES: usize = 500;
+    const MAX_EXISTING_ARTIFACT_BYTES: u64 = 100 * 1024 * 1024;
+    fs::create_dir_all(target_dir).map_err(|error| {
+        anyhow!(
+            "failed to create existing artifact directory {}: {error}",
+            target_dir.display()
+        )
+    })?;
+    for entry in fs::read_dir(source_dir).map_err(|error| {
+        anyhow!(
+            "failed to read existing artifact {}: {error}",
+            source_dir.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            anyhow!(
+                "failed to read existing artifact entry {}: {error}",
+                source_dir.display()
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            anyhow!(
+                "failed to inspect existing artifact entry {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let target_path = target_dir.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_existing_artifact_tree(&entry.path(), &target_path, summary)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let size = entry
+            .metadata()
+            .map_err(|error| {
+                anyhow!(
+                    "failed to inspect existing artifact file {}: {error}",
+                    entry.path().display()
+                )
+            })?
+            .len();
+        if summary.file_count >= MAX_EXISTING_ARTIFACT_FILES
+            || summary.total_bytes.saturating_add(size) > MAX_EXISTING_ARTIFACT_BYTES
+        {
+            return Err(anyhow!(
+                "existing artifact copy limit exceeded at {}",
+                entry.path().display()
+            ));
+        }
+        fs::copy(entry.path(), &target_path).map_err(|error| {
+            anyhow!(
+                "failed to copy existing artifact {} to {}: {error}",
+                entry.path().display(),
+                target_path.display()
+            )
+        })?;
+        summary.file_count += 1;
+        summary.total_bytes = summary.total_bytes.saturating_add(size);
+    }
     Ok(())
 }
 
@@ -2337,6 +2503,84 @@ summary text before final output
         assert!(task.contains("\"local_preview_path\": \"image2/preview.png\""));
         assert!(task.contains("\"visual_contract_materialized\": true"));
         assert!(manifest.contains("\"materialized\": true"));
+    }
+
+    #[test]
+    fn fixed_task_bundle_materializes_existing_static_page_artifact() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let root = std::env::temp_dir().join(format!("v3-codex-host-artifacts-{}", Uuid::new_v4()));
+        let source_dir = root.join("database-static-pages/xinbai/report");
+        fs::create_dir_all(source_dir.join("assets")).expect("source dir");
+        fs::write(source_dir.join("index.html"), b"<html>old report</html>").expect("index");
+        fs::write(source_dir.join("data.json"), br#"{"kpi":1}"#).expect("data");
+        fs::write(source_dir.join("data-snapshot.json"), br#"{"snapshot":1}"#).expect("snapshot");
+        fs::write(source_dir.join("assets/chart.css"), b".chart{}").expect("asset");
+        let _root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_GENERATED_ARTIFACTS_ROOT",
+            root.to_str().expect("utf-8 temp root"),
+        );
+
+        let mut fixed_task =
+            CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.requirements["existing_artifact"] = json!({
+            "kind": "v3_generated_static_page",
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
+            "revision_requested": true,
+            "publish_mode": "new_generated_artifact_only"
+        });
+        let mut context = test_context(
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+            Some("Run the fixed static-page template package."),
+        );
+        context.fixed_task = Some(fixed_task);
+        let policy = fixed_task_policy(
+            CodexHostExecutionMode::PlanOnly,
+            STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        );
+        let decision = policy.prepare(&context).expect("decision");
+        let workspace =
+            std::env::temp_dir().join(format!("v3-codex-host-bundle-test-{}", Uuid::new_v4()));
+
+        materialize_fixed_task_bundle(
+            &workspace,
+            &context,
+            &decision,
+            &CodexHostWorkspaceRetentionPolicy::new(336),
+        )
+        .expect("bundle should materialize");
+
+        assert_eq!(
+            fs::read(workspace.join("existing-artifact/index.html")).expect("local index"),
+            b"<html>old report</html>"
+        );
+        assert_eq!(
+            fs::read(workspace.join("existing-artifact/data.json")).expect("local data"),
+            br#"{"kpi":1}"#
+        );
+        assert_eq!(
+            fs::read(workspace.join("existing-artifact/assets/chart.css")).expect("local asset"),
+            b".chart{}"
+        );
+        let task: Value = serde_json::from_str(
+            &fs::read_to_string(workspace.join("task.json")).expect("task.json"),
+        )
+        .expect("task json");
+        assert_eq!(
+            task["requirements"]["existing_artifact"]["local_index_path"],
+            json!("existing-artifact/index.html")
+        );
+        assert_eq!(
+            task["requirements"]["existing_artifact"]["local_data_path"],
+            json!("existing-artifact/data.json")
+        );
+        assert_eq!(
+            task["requirements"]["existing_artifact"]["local_data_snapshot_path"],
+            json!("existing-artifact/data-snapshot.json")
+        );
+        assert_eq!(
+            task["requirements"]["existing_artifact"]["materialized"],
+            json!(true)
+        );
     }
 
     #[test]

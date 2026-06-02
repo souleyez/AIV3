@@ -9489,6 +9489,7 @@ fn external_channel_static_page_sse_sequence(status: &str) -> i64 {
     match status {
         "started" => 0,
         "retrieval_started" => 5,
+        "answer_retrying" => 55,
         "static_page_planning" => 10,
         "static_page_image_preview_queued" | "static_page_generation_queued" => 20,
         "static_page_effect_image_ready" | "static_page_preview_ready" => 30,
@@ -10667,15 +10668,68 @@ enum ExternalChannelEventSseState {
 
 enum ExternalChannelEventSseWorkerMessage {
     AnswerDelta(String),
+    Progress(ExternalChannelSseProgressMessage),
     Finished(std::result::Result<(StatusCode, ExternalChannelEventResponse), ApiError>),
 }
 
 #[derive(Clone)]
 struct ExternalChannelAnswerDeltaSink {
     sender: tokio::sync::mpsc::UnboundedSender<ExternalChannelEventSseWorkerMessage>,
+    run_id: Option<AssistantRunId>,
+    connection_id: Option<String>,
+    idempotency_key: Option<String>,
+    conversation_external_id: Option<String>,
+    progress_sequence: Arc<AtomicUsize>,
+}
+
+struct ExternalChannelSseProgressMessage {
+    run_id: AssistantRunId,
+    event_name: &'static str,
+    dedupe_key: String,
+    display_text: String,
+    payload: Value,
+}
+
+struct ExternalChannelStreamedProviderResponse {
+    response: LlmResponse,
+    deltas: Vec<LlmStreamDelta>,
+}
+
+struct ExternalChannelProviderAttemptResult {
+    response: LlmResponse,
+    deltas: Vec<LlmStreamDelta>,
 }
 
 impl ExternalChannelAnswerDeltaSink {
+    fn new(
+        sender: tokio::sync::mpsc::UnboundedSender<ExternalChannelEventSseWorkerMessage>,
+    ) -> Self {
+        Self {
+            sender,
+            run_id: None,
+            connection_id: None,
+            idempotency_key: None,
+            conversation_external_id: None,
+            progress_sequence: Arc::new(AtomicUsize::new(
+                external_channel_static_page_sse_sequence("answer_retrying") as usize,
+            )),
+        }
+    }
+
+    fn with_run(
+        mut self,
+        connection_id: String,
+        run_id: AssistantRunId,
+        idempotency_key: String,
+        conversation_external_id: String,
+    ) -> Self {
+        self.connection_id = Some(connection_id);
+        self.run_id = Some(run_id);
+        self.idempotency_key = Some(idempotency_key);
+        self.conversation_external_id = Some(conversation_external_id);
+        self
+    }
+
     fn emit(&self, delta: LlmStreamDelta) {
         if delta.delta.is_empty() {
             return;
@@ -10685,6 +10739,71 @@ impl ExternalChannelAnswerDeltaSink {
             .send(ExternalChannelEventSseWorkerMessage::AnswerDelta(
                 sse_text_delta_event("external_channel.delta", delta.index, &delta.delta),
             ));
+    }
+
+    fn emit_many(&self, deltas: Vec<LlmStreamDelta>) {
+        for delta in deltas {
+            self.emit(delta);
+        }
+    }
+
+    fn emit_answer_retrying(&self, reason: &'static str) {
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+        let Some(connection_id) = self.connection_id.as_deref() else {
+            return;
+        };
+        let idempotency_key = self.idempotency_key.as_deref().unwrap_or_default();
+        let conversation_external_id = self.conversation_external_id.as_deref().unwrap_or_default();
+        let display_text = external_channel_answer_retrying_text(reason);
+        let sequence = self.progress_sequence.fetch_add(1, Ordering::AcqRel) as i64;
+        let status_url = external_channel_assistant_run_reply_status_url(connection_id, run_id);
+        let data = json!({
+            "assistant_run_id": run_id,
+            "idempotency_key": idempotency_key,
+            "conversation_external_id": conversation_external_id,
+            "status": "retrying",
+            "phase": "answering",
+            "reason": reason,
+            "retryable": true,
+            "text": display_text,
+        });
+        let payload = external_channel_sse_public_payload(
+            Some(run_id),
+            idempotency_key,
+            conversation_external_id,
+            sequence,
+            "answering",
+            "retrying",
+            display_text,
+            Some(status_url),
+            Some(15),
+            data,
+        );
+        let dedupe_key = format!("external_channel.answer_retrying:{reason}:{sequence}");
+        let _ = self
+            .sender
+            .send(ExternalChannelEventSseWorkerMessage::Progress(
+                ExternalChannelSseProgressMessage {
+                    run_id,
+                    event_name: "external_channel.answer_retrying",
+                    dedupe_key,
+                    display_text: display_text.to_string(),
+                    payload,
+                },
+            ));
+    }
+}
+
+fn external_channel_answer_retrying_text(reason: &str) -> &'static str {
+    match reason {
+        "gateway_limit" => "模型通道繁忙，V3 正在切换可用通道继续回答。",
+        "provider_timeout" => "本次模型回答较慢，V3 正在重试或切换通道。",
+        "answer_rejected" => "模型回复未达到可展示要求，V3 正在重新生成回答。",
+        "provider_retry" | "provider_error" => "模型通道暂时不可用，V3 正在重试或切换通道。",
+        "runtime_unavailable" => "当前模型通道暂不可用，V3 正在寻找可用通道继续回答。",
+        _ => "V3 正在重试或切换可用通道继续回答。",
     }
 }
 
@@ -10738,9 +10857,7 @@ async fn external_channel_event_sse_next(
                 let worker_connection_id = connection_id.clone();
                 let worker_connection = connection.clone();
                 let worker_message = message.clone();
-                let sink = ExternalChannelAnswerDeltaSink {
-                    sender: sender.clone(),
-                };
+                let sink = ExternalChannelAnswerDeltaSink::new(sender.clone());
                 tokio::spawn(async move {
                     let result = ingest_external_channel_message_with_connection_inner(
                         &worker_state,
@@ -10846,6 +10963,29 @@ async fn external_channel_event_sse_next(
                     answer_delta_emitted: true,
                 },
             )),
+            Some(ExternalChannelEventSseWorkerMessage::Progress(progress)) => {
+                let payload = persist_external_channel_public_stream_payload_or_original(
+                    &state,
+                    Some(progress.run_id),
+                    progress.event_name,
+                    &progress.dedupe_key,
+                    progress.payload,
+                )
+                .await;
+                Some((
+                    Ok(Bytes::from(external_channel_sse_event_with_delta(
+                        progress.event_name,
+                        payload,
+                        &progress.display_text,
+                    ))),
+                    ExternalChannelEventSseState::ProcessLive {
+                        state,
+                        connection_id,
+                        receiver,
+                        answer_delta_emitted,
+                    },
+                ))
+            }
             Some(ExternalChannelEventSseWorkerMessage::Finished(result)) => {
                 let body = match result {
                     Ok((_, response)) => {
@@ -18641,6 +18781,14 @@ async fn ingest_external_channel_message_with_connection_inner(
         .map_err(ApiError::from_storage)?;
 
     record_external_message_event(state, connection_id, run.id, &message, &payload_summary).await?;
+    let answer_delta_sink = answer_delta_sink.map(|sink| {
+        sink.with_run(
+            connection_id.to_string(),
+            run.id,
+            message.idempotency_key.clone(),
+            message.conversation_external_id.clone(),
+        )
+    });
     state
         .storage
         .assistant_runs()
@@ -26449,6 +26597,10 @@ fn external_channel_fixed_task_reply_from_events(
             "codex_host_task.cloudflare_heartbeat" | "codex_host_task.exec_heartbeat"
         )
     });
+    let latest_exec_failed = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "codex_host_task.exec_failed");
     let latest_cancelled = events
         .iter()
         .rev()
@@ -26465,6 +26617,17 @@ fn external_channel_fixed_task_reply_from_events(
                 "cancelled",
                 fixed,
                 Some(cancelled),
+            ));
+        }
+        if let Some(failed) =
+            latest_exec_failed.filter(|failed| failed.sequence_no > fixed.sequence_no)
+        {
+            return Some(external_channel_fixed_task_processing_reply(
+                conversation_external_id,
+                &template_id,
+                "failed",
+                fixed,
+                Some(failed),
             ));
         }
         if let Some(retry) = latest_poll_retry.filter(|retry| retry.sequence_no > fixed.sequence_no)
@@ -26574,6 +26737,9 @@ fn external_channel_fixed_task_processing_reply(
         ("data_ingestion_analysis", "cancelled") => {
             "V3 数据接入分析任务已取消，未写入生产库，也未继续修改数据集。"
         }
+        ("data_ingestion_analysis", "failed") => {
+            "V3 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
+        }
         ("data_ingestion_analysis", _) => "V3 数据接入分析正在执行，请稍后查询结果。",
         ("static_page_image2_data_publish", "retrying") => {
             "V3 静态页发布仍在执行，Cloudflare Codex 超时后已自动续轮询。"
@@ -26581,14 +26747,17 @@ fn external_channel_fixed_task_processing_reply(
         ("static_page_image2_data_publish", "cancelled") => {
             "V3 静态页发布任务已取消，未生成新的最终发布链接。"
         }
+        ("static_page_image2_data_publish", "failed") => "V3 静态页发布未完成，需重试或人工处理。",
         ("static_page_image2_data_publish", _) => "V3 已生成效果图，Codex 正在生成最终静态页。",
         ("answer_quality_autofix", "cancelled") => {
             "V3 回答质量修复诊断任务已取消，未应用任何代码或配置变更。"
         }
         ("answer_quality_autofix", "retrying") => "V3 回答质量修复诊断仍在执行，已自动续轮询。",
+        ("answer_quality_autofix", "failed") => "V3 回答质量修复诊断未完成。",
         ("answer_quality_autofix", _) => "V3 回答质量修复诊断正在执行。",
         (_, "cancelled") => "V3 Codex 固定任务已取消。",
         (_, "retrying") => "V3 Codex 固定任务仍在执行，已自动续轮询。",
+        (_, "failed") => "V3 Codex 固定任务未完成，需重试或人工处理。",
         _ => "V3 Codex 固定任务正在执行。",
     };
     external_channel_task_status_reply_for_conversation(
@@ -26623,7 +26792,7 @@ fn external_channel_fixed_task_processing_reply(
             })).unwrap_or(Value::Null),
             "poll_after_seconds": match state {
                 "retrying" => Value::from(30),
-                "cancelled" => Value::Null,
+                "cancelled" | "failed" => Value::Null,
                 _ => Value::from(15),
             },
         })),
@@ -29095,6 +29264,156 @@ fn static_page_prompt_requests_explicit_redesign(prompt: &str) -> bool {
     )
 }
 
+fn static_page_prompt_requests_existing_artifact_revision(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    external_channel_text_has_any(
+        &compact,
+        prompt,
+        &[
+            "修复",
+            "修正",
+            "更正",
+            "修改",
+            "调整",
+            "改一下",
+            "改成",
+            "变更",
+            "小修",
+            "补充",
+            "新增",
+            "增加",
+            "删除",
+            "去掉",
+            "替换",
+            "联动",
+            "筛选",
+            "不会变",
+            "不变",
+            "数据绑定",
+            "绑定错误",
+            "口径错",
+            "口径不对",
+            "单位错",
+            "小数点",
+            "bug",
+            "fix",
+            "revise",
+            "update",
+            "change",
+            "correct",
+        ],
+    )
+}
+
+fn static_page_prompt_allows_stable_artifact_reuse(prompt: &str) -> bool {
+    !static_page_prompt_requests_explicit_redesign(prompt)
+        && !static_page_prompt_requests_existing_artifact_revision(prompt)
+}
+
+fn static_page_prompt_generated_artifact_urls(prompt: &str) -> Vec<String> {
+    let prefixes = vec![
+        "https://v3.elepcloud.com/generated-artifacts/".to_string(),
+        format!(
+            "{}/",
+            external_channel_generated_artifact_public_base_url().trim_end_matches('/')
+        ),
+    ];
+    let mut urls = Vec::new();
+    for prefix in prefixes {
+        let mut search_from = 0usize;
+        while let Some(offset) = prompt[search_from..].find(&prefix) {
+            let start = search_from + offset;
+            let raw = &prompt[start..];
+            let end = raw
+                .find(|ch: char| {
+                    ch.is_whitespace()
+                        || matches!(
+                            ch,
+                            '"' | '\''
+                                | '<'
+                                | '>'
+                                | '，'
+                                | '。'
+                                | '、'
+                                | '；'
+                                | '（'
+                                | '）'
+                                | '('
+                                | ')'
+                                | '【'
+                                | '】'
+                                | '['
+                                | ']'
+                        )
+                })
+                .unwrap_or(raw.len());
+            let candidate = raw[..end].trim_end_matches(|ch: char| {
+                matches!(ch, ',' | '.' | ';' | ':' | '，' | '。' | '；')
+            });
+            if let Ok(mut url) = reqwest::Url::parse(candidate) {
+                url.set_query(None);
+                url.set_fragment(None);
+                let normalized = url.as_str().trim_end_matches('/').to_string();
+                if codex_host_fixed_task_public_artifact_url_allowed(&normalized)
+                    && !urls.iter().any(|existing| existing == &normalized)
+                {
+                    urls.push(normalized);
+                }
+            }
+            search_from = start + end.max(prefix.len());
+            if search_from >= prompt.len() {
+                break;
+            }
+        }
+    }
+    urls
+}
+
+fn static_page_artifact_sibling_url(public_url: &str, file_name: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(public_url).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    let mut segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())?;
+    if segments
+        .last()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("index.html"))
+    {
+        segments.pop();
+    }
+    segments.push(file_name);
+    url.set_path(&format!("/{}", segments.join("/")));
+    Some(url.to_string())
+}
+
+fn static_page_existing_artifact_reference_from_prompt(prompt: &str) -> Value {
+    let Some(public_url) = static_page_prompt_generated_artifact_urls(prompt)
+        .into_iter()
+        .next()
+    else {
+        return Value::Null;
+    };
+    json!({
+        "kind": "v3_generated_static_page",
+        "source": "prompt_generated_artifact_url",
+        "reference_role": "existing_artifact_to_revise",
+        "public_url": public_url,
+        "index_url": public_url,
+        "data_url": static_page_artifact_sibling_url(&public_url, "data.json"),
+        "data_snapshot_url": static_page_artifact_sibling_url(&public_url, "data-snapshot.json"),
+        "revision_requested": static_page_prompt_requests_existing_artifact_revision(prompt),
+        "preserve_style_unless_redesign_requested": !static_page_prompt_requests_explicit_redesign(prompt),
+        "data_binding_policy": "read_existing_data_json_when_available_and_rebind_requested_modules",
+        "publish_mode": "new_generated_artifact_only",
+        "materialization_policy": "host_agent_maps_v3_generated_artifact_to_local_workspace_when_available",
+    })
+}
+
 fn external_static_page_template_reference_label(reference: &Value) -> Option<String> {
     ["label", "name", "title", "templateId", "template_id", "id"]
         .iter()
@@ -29711,6 +30030,7 @@ fn external_channel_static_page_image2_fixed_task(
             "message_external_id": message.message_external_id,
             "artifact_type": message.artifact_type,
             "artifact_template": message.template.as_ref().map(external_artifact_template_summary),
+            "existing_artifact": static_page_existing_artifact_reference_from_prompt(prompt),
             "output_format": message.output_format,
             "render_mode": message.render_mode,
             "requested_skills": external_requested_skills_summary(&message.requested_skills),
@@ -29826,6 +30146,7 @@ fn assistant_run_static_page_image2_fixed_task(
             "source": "main_assistant_static_page_image2_pipeline",
             "local_thread_id": run.local_thread_id,
             "template_reference": template_reference.cloned().unwrap_or(Value::Null),
+            "existing_artifact": static_page_existing_artifact_reference_from_prompt(prompt),
             "source_data_snapshot": image_prompt_payload_summary
                 .get("data_snapshot")
                 .cloned()
@@ -31060,7 +31381,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         now,
     );
     if let Some(dataset_artifact_key) = dataset_artifact_key.as_deref() {
-        if !static_page_prompt_requests_explicit_redesign(&assistant_request.prompt) {
+        if static_page_prompt_allows_stable_artifact_reuse(&assistant_request.prompt) {
             if let Some(baseline_draft) = state
                 .storage
                 .static_page_drafts()
@@ -32131,6 +32452,9 @@ async fn external_channel_chat_model_or_acceptance_reply(
                     )
                     .await
                     .map_err(ApiError::from_storage)?;
+                    if let Some(sink) = answer_delta_sink.as_ref() {
+                        sink.emit_answer_retrying("gateway_limit");
+                    }
                     continue;
                 }
             };
@@ -32139,63 +32463,68 @@ async fn external_channel_chat_model_or_acceptance_reply(
         let remaining_budget = direct_reply_total_budget.saturating_sub(elapsed);
         let attempt_timeout = external_channel_direct_reply_attempt_timeout(remaining_budget);
         let attempt_started_at = Instant::now();
-        let response_result = if let Some(profile) = attempt.profile.clone() {
-            if let Some(sink) = answer_delta_sink.clone() {
-                tokio::time::timeout(
-                    attempt_timeout,
+        let response_result = tokio::time::timeout(attempt_timeout, async {
+            if let Some(profile) = attempt.profile.clone() {
+                if let Some(sink) = answer_delta_sink.clone() {
                     complete_assistant_run_provider_with_profile_streaming(
                         attempt.env_prefix.clone(),
                         MODEL_LANE_ASSISTANT_CHAT,
                         profile,
                         provider_input.clone(),
                         sink,
-                    ),
-                )
-                .await
-            } else {
-                tokio::time::timeout(
-                    attempt_timeout,
+                    )
+                    .await
+                    .map(|streamed| ExternalChannelProviderAttemptResult {
+                        response: streamed.response,
+                        deltas: streamed.deltas,
+                    })
+                } else {
                     complete_assistant_run_provider_with_profile(
                         attempt.env_prefix.clone(),
                         MODEL_LANE_ASSISTANT_CHAT,
                         profile,
                         provider_input.clone(),
-                    ),
+                    )
+                    .await
+                    .map(|response| ExternalChannelProviderAttemptResult {
+                        response,
+                        deltas: Vec::new(),
+                    })
+                }
+            } else if let Some(sink) = answer_delta_sink.clone() {
+                complete_assistant_run_provider_with_env_prefix_streaming(
+                    attempt.env_prefix.clone(),
+                    MODEL_LANE_ASSISTANT_CHAT,
+                    attempt.runtime.mode.clone(),
+                    attempt.runtime.provider.clone(),
+                    attempt.runtime.model.clone(),
+                    provider_input.clone(),
+                    sink,
                 )
                 .await
-            }
-        } else {
-            if let Some(sink) = answer_delta_sink.clone() {
-                tokio::time::timeout(
-                    attempt_timeout,
-                    complete_assistant_run_provider_with_env_prefix_streaming(
-                        attempt.env_prefix.clone(),
-                        MODEL_LANE_ASSISTANT_CHAT,
-                        attempt.runtime.mode.clone(),
-                        attempt.runtime.provider.clone(),
-                        attempt.runtime.model.clone(),
-                        provider_input.clone(),
-                        sink,
-                    ),
-                )
-                .await
+                .map(|streamed| ExternalChannelProviderAttemptResult {
+                    response: streamed.response,
+                    deltas: streamed.deltas,
+                })
             } else {
-                tokio::time::timeout(
-                    attempt_timeout,
-                    complete_assistant_run_provider_with_env_prefix(
-                        attempt.env_prefix.clone(),
-                        MODEL_LANE_ASSISTANT_CHAT,
-                        attempt.runtime.mode.clone(),
-                        attempt.runtime.provider.clone(),
-                        attempt.runtime.model.clone(),
-                        provider_input.clone(),
-                    ),
+                complete_assistant_run_provider_with_env_prefix(
+                    attempt.env_prefix.clone(),
+                    MODEL_LANE_ASSISTANT_CHAT,
+                    attempt.runtime.mode.clone(),
+                    attempt.runtime.provider.clone(),
+                    attempt.runtime.model.clone(),
+                    provider_input.clone(),
                 )
                 .await
+                .map(|response| ExternalChannelProviderAttemptResult {
+                    response,
+                    deltas: Vec::new(),
+                })
             }
-        };
-        let response = match response_result {
-            Ok(Ok(response)) => response,
+        })
+        .await;
+        let attempt_result = match response_result {
+            Ok(Ok(attempt_result)) => attempt_result,
             Ok(Err(error)) => {
                 let reason = format!(
                     "provider_error:{}:{}",
@@ -32262,6 +32591,9 @@ async fn external_channel_chat_model_or_acceptance_reply(
                     )
                     .await
                     .map_err(ApiError::from_storage)?;
+                if let Some(sink) = answer_delta_sink.as_ref() {
+                    sink.emit_answer_retrying("provider_error");
+                }
                 continue;
             }
             Err(_elapsed) => {
@@ -32318,9 +32650,14 @@ async fn external_channel_chat_model_or_acceptance_reply(
                     )
                     .await
                     .map_err(ApiError::from_storage)?;
+                if let Some(sink) = answer_delta_sink.as_ref() {
+                    sink.emit_answer_retrying("provider_timeout");
+                }
                 continue;
             }
         };
+        let response = attempt_result.response;
+        let accepted_deltas = attempt_result.deltas;
 
         let output_text = response.output_text.trim().to_string();
         let mut runtime_manifest = render_runtime_manifest(&response.runtime);
@@ -32389,6 +32726,9 @@ async fn external_channel_chat_model_or_acceptance_reply(
                 )
                 .await
                 .map_err(ApiError::from_storage)?;
+            if let Some(sink) = answer_delta_sink.as_ref() {
+                sink.emit_answer_retrying("answer_rejected");
+            }
             continue;
         }
         if let Some(profile) = attempt.profile.as_ref() {
@@ -32513,6 +32853,9 @@ async fn external_channel_chat_model_or_acceptance_reply(
         let mut reply = external_channel_text_reply(message, output_text, "answered");
         if let Some(artifact) = template_html_artifact {
             reply.artifact_links.push(artifact.download_url);
+        }
+        if let Some(sink) = answer_delta_sink.as_ref() {
+            sink.emit_many(accepted_deltas);
         }
         spawn_external_channel_shadow_quality_eval(
             state,
@@ -34084,7 +34427,7 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
     let evidence_summary = static_page_template_evidence_summary(&run.evidence_state);
     let missing_evidence =
         static_page_template_missing_evidence(template_reference, &run.evidence_state);
-    if !static_page_prompt_requests_explicit_redesign(prompt) {
+    if static_page_prompt_allows_stable_artifact_reuse(prompt) {
         let mut reusable_dataset_artifact_keys = Vec::new();
         if let Some(dataset_artifact_key) = dataset_artifact_key.as_deref() {
             reusable_dataset_artifact_keys.push(dataset_artifact_key);
@@ -38949,7 +39292,7 @@ async fn complete_assistant_run_provider_with_env_prefix_streaming(
     runtime_model: String,
     provider_input: String,
     answer_delta_sink: ExternalChannelAnswerDeltaSink,
-) -> std::result::Result<LlmResponse, ApiError> {
+) -> std::result::Result<ExternalChannelStreamedProviderResponse, ApiError> {
     let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
     let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
     tokio::task::spawn_blocking(move || {
@@ -38966,18 +39309,21 @@ async fn complete_assistant_run_provider_with_env_prefix_streaming(
             input: provider_input,
         };
         for attempt_index in 0..retry_attempts {
-            let sink = answer_delta_sink.clone();
-            let mut on_delta = move |delta: LlmStreamDelta| {
-                sink.emit(delta);
+            let mut deltas = Vec::new();
+            let mut on_delta = |delta: LlmStreamDelta| {
+                deltas.push(delta);
                 Ok(())
             };
             match provider.complete_streaming(&request, &mut on_delta) {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    return Ok(ExternalChannelStreamedProviderResponse { response, deltas });
+                }
                 Err(error) => {
                     let can_retry = assistant_run_provider_error_is_retryable(&error);
                     if !can_retry || attempt_index + 1 >= retry_attempts {
                         return Err(error);
                     }
+                    answer_delta_sink.emit_answer_retrying("provider_retry");
                     std::thread::sleep(assistant_run_runtime_retry_delay(
                         retry_backoff,
                         attempt_index,
@@ -39050,7 +39396,7 @@ async fn complete_assistant_run_provider_with_profile_streaming(
     profile: ModelProviderProfile,
     provider_input: String,
     answer_delta_sink: ExternalChannelAnswerDeltaSink,
-) -> std::result::Result<LlmResponse, ApiError> {
+) -> std::result::Result<ExternalChannelStreamedProviderResponse, ApiError> {
     let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
     let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
     tokio::task::spawn_blocking(move || {
@@ -39066,18 +39412,21 @@ async fn complete_assistant_run_provider_with_profile_streaming(
             input: provider_input,
         };
         for attempt_index in 0..retry_attempts {
-            let sink = answer_delta_sink.clone();
-            let mut on_delta = move |delta: LlmStreamDelta| {
-                sink.emit(delta);
+            let mut deltas = Vec::new();
+            let mut on_delta = |delta: LlmStreamDelta| {
+                deltas.push(delta);
                 Ok(())
             };
             match provider.complete_streaming(&request, &mut on_delta) {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    return Ok(ExternalChannelStreamedProviderResponse { response, deltas });
+                }
                 Err(error) => {
                     let can_retry = assistant_run_provider_error_is_retryable(&error);
                     if !can_retry || attempt_index + 1 >= retry_attempts {
                         return Err(error);
                     }
+                    answer_delta_sink.emit_answer_retrying("provider_retry");
                     std::thread::sleep(assistant_run_runtime_retry_delay(
                         retry_backoff,
                         attempt_index,
@@ -43900,6 +44249,7 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
                     | "codex_host_task.exec_heartbeat"
                     | "codex_host_task.cloudflare_heartbeat"
                     | "codex_host_task.cancelled"
+                    | "codex_host_task.exec_failed"
                     | "codex_host_task.exec_completed"
                     | "codex_host_task.completed"
             )
@@ -43984,6 +44334,7 @@ fn assistant_run_codex_fixed_task_event_summary(events: &[AssistantRunEvent]) ->
         "rejected_count": fixed_events.iter().filter(|event| event.event_name == "codex_host.fixed_task.rejected").count(),
         "poll_retry_count": runtime_events.iter().filter(|event| event.event_name == "codex_host_task.poll_retry").count(),
         "cancelled_count": runtime_events.iter().filter(|event| event.event_name == "codex_host_task.cancelled").count(),
+        "exec_failed_count": runtime_events.iter().filter(|event| event.event_name == "codex_host_task.exec_failed").count(),
         "heartbeat_count": runtime_events
             .iter()
             .filter(|event| matches!(
@@ -79747,6 +80098,40 @@ mod tests {
         assert!(!static_page_prompt_requests_explicit_redesign(
             "把标题改一下"
         ));
+        assert!(static_page_prompt_requests_existing_artifact_revision(
+            "把标题改一下"
+        ));
+        assert!(static_page_prompt_requests_existing_artifact_revision(
+            "修复近7日销售，切换区域和门店后需要跟着变化"
+        ));
+        assert!(!static_page_prompt_requests_existing_artifact_revision(
+            "把之前生成过的报表链接再发我一下"
+        ));
+        assert!(!static_page_prompt_allows_stable_artifact_reuse(
+            "把标题改一下"
+        ));
+        assert!(!static_page_prompt_allows_stable_artifact_reuse(
+            "修复近7日销售，切换区域和门店后需要跟着变化"
+        ));
+        assert!(static_page_prompt_allows_stable_artifact_reuse(
+            "把之前生成过的报表链接再发我一下"
+        ));
+        let existing_artifact = static_page_existing_artifact_reference_from_prompt(
+            "修复这个页面：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html?token=fixture#frag，切换门店后近7日销售要重算。",
+        );
+        assert_eq!(
+            existing_artifact["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html")
+        );
+        assert_eq!(
+            existing_artifact["data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/data.json")
+        );
+        assert_eq!(existing_artifact["revision_requested"], json!(true));
+        assert_eq!(
+            static_page_existing_artifact_reference_from_prompt("重新做一个经营分析报表"),
+            Value::Null
+        );
         assert!(static_page_prompt_requests_explicit_redesign(
             "重新出图，换个风格"
         ));
@@ -81502,7 +81887,7 @@ mod tests {
         let mut message = sample_external_bot_message();
         message.conversation_external_id = "conv-static-baseline".to_string();
         message.message_external_id = "msg-static-baseline-002".to_string();
-        message.text = Some("在这个报表基础上把标题改成新百经营日报".to_string());
+        message.text = Some("把之前生成过的新百经营报表链接再发我一下".to_string());
         message.output_format = Some("rich_text".to_string());
         message.render_mode = Some("artifact".to_string());
         message.artifact_type = Some("static_page".to_string());
@@ -81815,7 +82200,7 @@ mod tests {
                 &NewAssistantRun {
                     user_id: Some(owner_user_id),
                     local_thread_id: Some("main-static-page-baseline-thread".to_string()),
-                    user_prompt: "在这个经营分析静态页基础上把标题改一下".to_string(),
+                    user_prompt: "把之前生成过的新百经营分析静态页链接再发我一下".to_string(),
                     startup_briefing: json!({"surface": "local_chat"}),
                     selected_scope: selected_scope.clone(),
                     scope_candidates: json!([]),
@@ -81837,7 +82222,7 @@ mod tests {
             Some(owner_user_id),
             CreateStaticPageDraftRequest {
                 title: None,
-                prompt: Some("在这个经营分析静态页基础上把标题改一下".to_string()),
+                prompt: Some("把之前生成过的新百经营分析静态页链接再发我一下".to_string()),
                 template_reference_id: None,
                 selected_scope: Some(selected_scope.clone()),
                 visibility_snapshot: None,
@@ -82562,7 +82947,7 @@ mod tests {
             tenant_id,
             user_id: None,
             local_thread_id: Some("external:conversation-1".to_string()),
-            user_prompt: "新世界项目生成静态页，按分店展示品牌名单明细和高分成线机会".to_string(),
+            user_prompt: "请基于这个已发布页面修复近7日销售联动：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html 页面风格不变，按分店展示品牌名单明细和高分成线机会".to_string(),
             startup_briefing: json!({}),
             selected_scope: json!({
                 "datasets": [{"type": "dataset", "id": dataset_id}],
@@ -82721,6 +83106,18 @@ mod tests {
         );
         assert_eq!(
             encoded["requirements"]["recipient_delivery"]["can_create_recipient_specific_links"],
+            json!(true)
+        );
+        assert_eq!(
+            encoded["requirements"]["existing_artifact"]["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html")
+        );
+        assert_eq!(
+            encoded["requirements"]["existing_artifact"]["data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/data.json")
+        );
+        assert_eq!(
+            encoded["requirements"]["existing_artifact"]["revision_requested"],
             json!(true)
         );
         assert_eq!(
@@ -85307,6 +85704,122 @@ mod tests {
         assert!(delta_index < completed_index);
         assert!(body.contains("这是一个用于验证实时流式通道的模型完整回复"));
         assert!(body.contains("event: done"));
+        clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_page_event_stream_retries_without_leaking_rejected_live_delta() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let _live_stream =
+            TestEnvVarRestore::set("EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED", "true");
+        std::env::set_var("LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE", "active");
+        std::env::set_var(
+            "LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE_CONNECTIONS",
+            "generic-chat-main",
+        );
+        std::env::set_var(
+            "LLM_GATEWAY_LANE_ASSISTANT_CHAT_PROFILES",
+            "POOL_PRIMARY,POOL_SECONDARY",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_MODEL_ID",
+            "pool-primary-live-v1",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_PRIMARY_PRIORITY", "100");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_PRIMARY_RUNTIME_OUTPUT_TEXT",
+            "已收到指令。系统将结合知识库与数据源进行分析，并为您输出结论。",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_SECONDARY_PROVIDER_ID", "scripted");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_MODEL_ID",
+            "pool-secondary-live-v1",
+        );
+        std::env::set_var("LLM_GATEWAY_PROFILE_POOL_SECONDARY_PRIORITY", "80");
+        std::env::set_var(
+            "LLM_GATEWAY_PROFILE_POOL_SECONDARY_RUNTIME_OUTPUT_TEXT",
+            "这是 live 备用 profile 的可展示直答，专门用于验证被拒绝的主回答不会流给第三方。",
+        );
+
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat live retry endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-live-retry-test-{}", Uuid::new_v4()),
+                "Generic Chat Live Retry Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.text = Some("请直接给出一段验证回复。".to_string());
+        message.message_external_id = "msg-live-retry-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-live-retry-001".to_string();
+        let response = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events/stream",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("SSE body should load");
+        let body = String::from_utf8(body.to_vec()).expect("SSE should be utf8");
+
+        assert!(body.contains("event: external_channel.answer_retrying"));
+        assert!(body.contains("\"phase\":\"answering\""));
+        assert!(body.contains("\"status\":\"retrying\""));
+        assert!(body.contains("模型回复未达到可展示要求"));
+        assert!(body.contains("event: external_channel.delta"));
+        assert!(body.contains("这是 live 备用 profile 的可展示直答"));
+        assert!(!body.contains("已收到指令。系统将结合知识库与数据源进行分析"));
+        let retry_index = body
+            .find("event: external_channel.answer_retrying")
+            .expect("retry event should be emitted");
+        let answer_index = body
+            .find("这是 live 备用 profile 的可展示直答")
+            .expect("accepted answer should be emitted");
+        assert!(retry_index < answer_index);
+
+        let run_id = load_external_message_event_run_id(&state, &message.idempotency_key)
+            .await
+            .expect("message event lookup should load")
+            .expect("run id should be recorded");
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should load");
+        assert!(events.iter().any(|event| {
+            event.event_name == "external_channel.answer_retrying"
+                && event.payload["schema"] == json!(EXTERNAL_CHANNEL_SSE_SCHEMA_V1)
+                && event.payload["status"] == json!("retrying")
+        }));
         clear_assistant_openclaw_env();
     }
 
@@ -96720,6 +97233,89 @@ retrieve_evidence:
     }
 
     #[test]
+    fn external_channel_fixed_task_reply_surfaces_exec_failed_status() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new().to_string();
+        let now = Utc::now();
+        let events = vec![
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 1,
+                event_name: "codex_host.fixed_task.queued".to_string(),
+                payload: json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "queued",
+                    "workflow_execution_id": workflow_execution_id,
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 2,
+                event_name: "codex_host_task.exec_heartbeat".to_string(),
+                payload: json!({
+                    "status": "processing",
+                    "heartbeat_count": 1,
+                    "secrets_exposed": false,
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 3,
+                event_name: "codex_host_task.exec_failed".to_string(),
+                payload: json!({
+                    "status": "failed",
+                    "reason": "non_zero_exit",
+                    "retryable": false,
+                    "attempt": 1,
+                    "max_attempts": 1,
+                    "error": "command failed",
+                    "secrets_exposed": false,
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 4,
+                event_name: "codex_host_task.poll_retry".to_string(),
+                payload: json!({
+                    "status": "processing",
+                    "reason": "cloudflare_orchestrator_poll_timeout",
+                    "attempt": 1,
+                    "max_attempts": 3,
+                    "available_at": "2026-06-02T04:00:30Z",
+                    "secrets_exposed": false,
+                }),
+                created_at: now,
+            },
+        ];
+
+        let reply =
+            external_channel_fixed_task_reply_from_events(&events, "conv-1").expect("failed reply");
+
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        let card = reply.card.as_ref().expect("status card");
+        assert_eq!(card["status"], json!("static_page_publish_failed"));
+        assert_eq!(
+            card["runtime_event"]["event_name"],
+            json!("codex_host_task.exec_failed")
+        );
+        assert_eq!(card["runtime_event"]["reason"], json!("non_zero_exit"));
+        assert_eq!(card["runtime_event"]["retryable"], json!(false));
+        assert!(card["poll_after_seconds"].is_null());
+    }
+
+    #[test]
     fn codex_host_fixed_task_runtime_summary_surfaces_cancelled_safely() {
         let tenant_id = TenantId::new();
         let run_id = AssistantRunId::new();
@@ -96737,7 +97333,7 @@ retrieve_evidence:
                 "retryable": false,
                 "attempt": 1,
                 "max_attempts": 3,
-                "error": "Authorization: Bearer secret",
+                "error": "Authorization: Bearer fixture-value",
                 "secrets_exposed": false,
             }),
             created_at: now,
@@ -96756,6 +97352,42 @@ retrieve_evidence:
         );
         assert_eq!(summary["latest_runtime"]["retryable"], json!(false));
         assert!(!summary.to_string().contains("Bearer secret"));
+    }
+
+    #[test]
+    fn codex_host_fixed_task_runtime_summary_surfaces_exec_failed_safely() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 2,
+            event_name: "codex_host_task.exec_failed".to_string(),
+            payload: json!({
+                "mode": "codex_exec",
+                "status": "failed",
+                "reason": "non_zero_exit",
+                "retryable": false,
+                "attempt": 1,
+                "max_attempts": 1,
+                "error": "Authorization: Bearer fixture-value",
+                "secrets_exposed": false,
+            }),
+            created_at: now,
+        }];
+
+        let summary = assistant_run_codex_fixed_task_event_summary(&events);
+
+        assert_eq!(summary["exec_failed_count"], json!(1));
+        assert_eq!(
+            summary["latest_runtime"]["event_name"],
+            json!("codex_host_task.exec_failed")
+        );
+        assert_eq!(summary["latest_runtime"]["reason"], json!("non_zero_exit"));
+        assert_eq!(summary["latest_runtime"]["retryable"], json!(false));
+        assert!(!summary.to_string().contains("Bearer fixture-value"));
     }
 
     #[test]

@@ -387,6 +387,27 @@ async fn process_task(
             .workflow_tasks()
             .mark_failed(task.id, &error_message, Utc::now())
             .await?;
+        if let Err(append_error) = append_assistant_event(
+            storage,
+            task.tenant_id,
+            task_context.assistant_run_id,
+            "codex_host_task.exec_failed",
+            codex_host_task_failed_payload(
+                execution_policy.mode.as_str(),
+                &task_context,
+                &task,
+                &error_message,
+            ),
+        )
+        .await
+        {
+            tracing::error!(
+                error = ?append_error,
+                task_id = %task.id,
+                execution_id = %task.execution_id,
+                "codex host task failed to append assistant failure event"
+            );
+        }
         return Err(error);
     }
 
@@ -424,6 +445,47 @@ fn codex_host_cancelled_error_reason(error_message: &str) -> Option<&'static str
     } else {
         None
     }
+}
+
+fn codex_host_failure_reason(error_message: &str) -> &'static str {
+    if error_message.contains("timed out") {
+        "timeout"
+    } else if error_message.contains("non_zero_exit") {
+        "non_zero_exit"
+    } else if error_message.contains("failed to launch") {
+        "launch_failed"
+    } else {
+        "codex_host_task_failed"
+    }
+}
+
+fn codex_host_safe_error_summary(error_message: &str) -> String {
+    safe_response_excerpt(error_message, 500)
+}
+
+fn codex_host_task_failed_payload(
+    mode: &str,
+    task_context: &CodexHostTaskContext,
+    task: &domain_model::WorkflowTask,
+    error_message: &str,
+) -> Value {
+    json!({
+        "mode": mode,
+        "status": "failed",
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "workflow_execution_id": task.execution_id.to_string(),
+        "workflow_task_id": task.id.to_string(),
+        "attempt": task.attempt,
+        "max_attempts": task.max_attempts,
+        "reason": codex_host_failure_reason(error_message),
+        "error": codex_host_safe_error_summary(error_message),
+        "retryable": false,
+        "raw_prompt_exposed": false,
+        "stdout_exposed": false,
+        "stderr_exposed": false,
+        "secrets_exposed": false,
+    })
 }
 
 fn codex_host_task_cancelled_payload(
@@ -1602,7 +1664,7 @@ fn build_cloudflare_orchestrator_prompt(task_context: &CodexHostTaskContext) -> 
         );
         if fixed_task.template_id.as_str() == "static_page_image2_data_publish" {
             prompt.push_str(
-                "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Cloudflare runtime cannot write V3 server files directly. If you cannot produce an approved V3 `artifact.public_url`, return `artifact.html` as a complete standalone HTML document plus `artifact.data_json`; the V3 host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.\n- The final HTML must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Bind real V3 dataset/database/document evidence from the task package. If selected evidence is thin or partially insufficient, first use every supplied dataset/database/document summary and available sample; then still publish a useful page with visible data-gap notes and `validation_report.warnings`. Do not return `needs_human` or `failed` solely because sample rows, optional dimensions, or some modules are incomplete.",
+                "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `requirements.existing_artifact.public_url` is present, treat it as the current published page to revise: preserve its style and module structure unless the user explicitly requests redesign, repair the requested data binding or content issue, and publish a new generated artifact instead of overwriting the old URL.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Cloudflare runtime cannot write V3 server files directly. If you cannot produce an approved V3 `artifact.public_url`, return `artifact.html` as a complete standalone HTML document plus `artifact.data_json`; the V3 host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.\n- The final HTML must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- Bind real V3 dataset/database/document evidence from the task package. If selected evidence is thin or partially insufficient, first use every supplied dataset/database/document summary and available sample; then still publish a useful page with visible data-gap notes and `validation_report.warnings`. Do not return `needs_human` or `failed` solely because sample rows, optional dimensions, or some modules are incomplete.",
             );
         }
         return Ok(prompt);
@@ -1667,6 +1729,10 @@ fn compact_static_page_image2_fixed_task_for_orchestrator(
             "artifact_type": fixed_task.requirements.get("artifact_type").cloned().unwrap_or(Value::Null),
             "artifact_template": bounded_orchestrator_prompt_value(
                 fixed_task.requirements.get("artifact_template").unwrap_or(&Value::Null),
+                2,
+            ),
+            "existing_artifact": bounded_orchestrator_prompt_value(
+                fixed_task.requirements.get("existing_artifact").unwrap_or(&Value::Null),
                 2,
             ),
             "output_format": fixed_task.requirements.get("output_format").cloned().unwrap_or(Value::Null),
@@ -1889,6 +1955,10 @@ fn minimal_fixed_task_for_orchestrator(
             "project_name": fixed_task.requirements.get("project_name").cloned().unwrap_or(Value::Null),
             "output_format": fixed_task.requirements.get("output_format").cloned().unwrap_or(Value::Null),
             "render_mode": fixed_task.requirements.get("render_mode").cloned().unwrap_or(Value::Null),
+            "existing_artifact": bounded_orchestrator_prompt_value(
+                fixed_task.requirements.get("existing_artifact").unwrap_or(&Value::Null),
+                2,
+            ),
             "evidence_summary_excerpt": value_excerpt_for_orchestrator(
                 fixed_task.requirements.get("evidence_summary"),
                 500,
@@ -4000,6 +4070,13 @@ mod tests {
                 }))
                 .collect::<Vec<_>>()
         });
+        fixed_task.requirements["existing_artifact"] = json!({
+            "kind": "v3_generated_static_page",
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
+            "data_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/data.json",
+            "revision_requested": true,
+            "publish_mode": "new_generated_artifact_only"
+        });
         fixed_task.image2["prompt_text"] = json!("视觉提示词".repeat(2_000));
         fixed_task.image2["image_prompt_payload"] = json!({
             "title": "新世界项目经营分析",
@@ -4051,6 +4128,14 @@ mod tests {
             json!("static_page_image2_data_publish")
         );
         assert!(prompt_json.contains("preview_asset_key"));
+        assert_eq!(
+            parsed["requirements"]["existing_artifact"]["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html")
+        );
+        assert_eq!(
+            parsed["requirements"]["existing_artifact"]["revision_requested"],
+            json!(true)
+        );
         assert_eq!(
             parsed["image2"]["asset_provenance"]["sourceAssetRef"],
             json!("https://souleye.cc/artifacts/preview.png")
@@ -4328,6 +4413,44 @@ mod tests {
         assert!(!serialized.contains("secret-token"));
         assert!(!serialized.contains("database_url"));
         assert!(!serialized.contains("contains secret prompt"));
+        assert!(!serialized.contains("should-not-leak"));
+    }
+
+    #[test]
+    fn codex_host_failed_payload_is_safe_and_non_retryable() {
+        let mut task = test_workflow_task(1, 1);
+        task.payload = json!({"raw": "should-not-leak"});
+        let mut task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "static_page_image2_data_publish".to_string(),
+            task: Some("inspect secret prompt".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: Some(
+                contracts::CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example(),
+            ),
+        };
+        task_context.fixed_task.as_mut().unwrap().requirements =
+            json!({"database_url": "mysql://secret"});
+
+        let payload = codex_host_task_failed_payload(
+            "codex_exec",
+            &task_context,
+            &task,
+            "kind=non_zero_exit\nAuthorization: Bearer fixture-value\nstderr line",
+        );
+        let serialized = payload.to_string();
+
+        assert_eq!(payload["status"], json!("failed"));
+        assert_eq!(payload["reason"], json!("non_zero_exit"));
+        assert_eq!(payload["retryable"], json!(false));
+        assert_eq!(payload["attempt"], json!(1));
+        assert_eq!(payload["raw_prompt_exposed"], json!(false));
+        assert!(serialized.contains("[redacted-log-line]"));
+        assert!(!serialized.contains("fixture-value"));
+        assert!(!serialized.contains("database_url"));
+        assert!(!serialized.contains("inspect secret prompt"));
         assert!(!serialized.contains("should-not-leak"));
     }
 
