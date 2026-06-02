@@ -7,7 +7,9 @@ use codex_host_agent::{
     CodexHostTaskContext, CodexProcessOutput,
 };
 use contracts::CodexHostTaskOutputView;
-use domain_model::{AssistantRunId, StaticPageDraftId, WorkflowExecutionId, WorkflowKind};
+use domain_model::{
+    AssistantRunId, StaticPageDraftId, StaticPageDraftStatus, WorkflowExecutionId, WorkflowKind,
+};
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
     EventSubscription,
@@ -848,6 +850,7 @@ async fn maybe_record_external_static_page_publish_completed_from_task_output(
         source_refs,
     );
 
+    mark_external_static_page_draft_published(storage, tenant_id, &completed_payload).await?;
     attach_external_static_page_artifact_to_run(
         storage,
         tenant_id,
@@ -1150,6 +1153,9 @@ async fn external_static_page_source_refs_for_fixed_task(
 fn external_static_page_filtered_source_refs(source_refs: &Value) -> Value {
     let mut output = Map::new();
     for key in [
+        "source",
+        "local_thread_id",
+        "local_draft_id",
         "channel_connection_id",
         "platform",
         "tenant_external_id",
@@ -1160,6 +1166,7 @@ fn external_static_page_filtered_source_refs(source_refs: &Value) -> Value {
         "message_external_id",
         "output_format",
         "render_mode",
+        "dataset_artifact_key",
     ] {
         if let Some(value) = source_refs
             .get(key)
@@ -1170,7 +1177,175 @@ fn external_static_page_filtered_source_refs(source_refs: &Value) -> Value {
             output.insert(key.to_string(), Value::String(value.to_string()));
         }
     }
+    if let Some(value) = source_refs.get("recipient_delivery") {
+        output.insert("recipient_delivery".to_string(), value.clone());
+    }
+    if let Some(value) = source_refs.get("artifact_stability") {
+        output.insert("artifact_stability".to_string(), value.clone());
+    }
     Value::Object(output)
+}
+
+fn static_page_dataset_artifact_key_from_source_refs(source_refs: &Value) -> Option<String> {
+    source_refs
+        .get("dataset_artifact_key")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            source_refs
+                .pointer("/artifact_stability/dataset_artifact_key")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            source_refs
+                .pointer("/artifact_stability/datasetArtifactKey")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn static_page_dataset_artifact_key_from_draft_payload(draft_payload: &Value) -> Option<String> {
+    draft_payload
+        .pointer("/artifactStability/datasetArtifactKey")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            draft_payload
+                .pointer("/artifact_stability/dataset_artifact_key")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            draft_payload
+                .pointer("/finalPage/datasetArtifactKey")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn static_page_artifact_stability_metadata(
+    dataset_artifact_key: &str,
+    public_url: &str,
+    now: chrono::DateTime<Utc>,
+) -> Value {
+    json!({
+        "schema": "v3.static_page_artifact_stability",
+        "schemaVersion": 1,
+        "dataset_artifact_key": dataset_artifact_key,
+        "datasetArtifactKey": dataset_artifact_key,
+        "baseline_status": "accepted",
+        "baselineStatus": "accepted",
+        "reuse_policy": "reuse_accepted_baseline_unless_explicit_redesign",
+        "reusePolicy": "reuse_accepted_baseline_unless_explicit_redesign",
+        "style_reuse_policy": "reuse_style_unless_explicit_redesign",
+        "styleReusePolicy": "reuse_style_unless_explicit_redesign",
+        "default_template_scope": "dataset_combination",
+        "defaultTemplateScope": "dataset_combination",
+        "edit_mode": "incremental_existing_artifact",
+        "editMode": "incremental_existing_artifact",
+        "image2_reuse_policy": "skip_when_accepted_baseline_exists",
+        "image2ReusePolicy": "skip_when_accepted_baseline_exists",
+        "data_refresh_policy": "refresh_data_files_from_dataset_sources",
+        "dataRefreshPolicy": "refresh_data_files_from_dataset_sources",
+        "public_url": public_url,
+        "publicUrl": public_url,
+        "updated_at": now,
+        "updatedAt": now,
+    })
+}
+
+fn apply_static_page_artifact_stability_to_source_refs(
+    mut source_refs: Value,
+    dataset_artifact_key: Option<&str>,
+    public_url: &str,
+    now: chrono::DateTime<Utc>,
+) -> Value {
+    let Some(dataset_artifact_key) = dataset_artifact_key else {
+        return source_refs;
+    };
+    if !source_refs.is_object() {
+        source_refs = json!({});
+    }
+    if let Some(object) = source_refs.as_object_mut() {
+        object.insert(
+            "dataset_artifact_key".to_string(),
+            json!(dataset_artifact_key),
+        );
+        object.insert(
+            "artifact_stability".to_string(),
+            static_page_artifact_stability_metadata(dataset_artifact_key, public_url, now),
+        );
+    }
+    source_refs
+}
+
+fn apply_static_page_artifact_stability_to_payload(
+    mut payload: Value,
+    dataset_artifact_key: Option<&str>,
+    public_url: &str,
+    now: chrono::DateTime<Utc>,
+) -> Value {
+    let Some(dataset_artifact_key) = dataset_artifact_key else {
+        return payload;
+    };
+    if !payload.is_object() {
+        payload = json!({});
+    }
+    if let Some(object) = payload.as_object_mut() {
+        let metadata =
+            static_page_artifact_stability_metadata(dataset_artifact_key, public_url, now);
+        object.insert("artifactStability".to_string(), metadata.clone());
+        object.insert("artifact_stability".to_string(), metadata);
+        object.insert(
+            "datasetArtifactKey".to_string(),
+            json!(dataset_artifact_key),
+        );
+        let final_page = object
+            .entry("finalPage".to_string())
+            .or_insert_with(|| json!({}));
+        if !final_page.is_object() {
+            *final_page = json!({});
+        }
+        if let Some(final_page_object) = final_page.as_object_mut() {
+            final_page_object.insert(
+                "datasetArtifactKey".to_string(),
+                json!(dataset_artifact_key),
+            );
+            final_page_object.insert("baselineStatus".to_string(), json!("accepted"));
+            final_page_object.insert("publicUrl".to_string(), json!(public_url));
+            final_page_object.insert("public_url".to_string(), json!(public_url));
+            final_page_object.insert("generatedArtifactUrl".to_string(), json!(public_url));
+            final_page_object.insert("generated_artifact_url".to_string(), json!(public_url));
+        }
+    }
+    payload
+}
+
+fn static_page_artifact_payload_value(payload: &Value, key: &str) -> Value {
+    payload
+        .get(key)
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("artifact")
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("output")
+                .and_then(|output| output.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("output")
+                .and_then(|output| output.get("artifact"))
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
 }
 
 fn external_static_page_completed_payload_from_fixed_task_output(
@@ -1216,7 +1391,17 @@ fn external_static_page_completed_payload_from_fixed_task_output(
             .pointer("/artifact/manifest_path")
             .cloned()
             .unwrap_or(Value::Null),
+        "data_url": static_page_artifact_payload_value(fixed_task_output, "data_url"),
+        "data_snapshot_url": static_page_artifact_payload_value(fixed_task_output, "data_snapshot_url"),
+        "dynamic_page_contract": static_page_artifact_payload_value(fixed_task_output, "dynamic_page_contract"),
         "validation_summary": validation_summary,
+        "dataset_artifact_key": static_page_dataset_artifact_key_from_source_refs(&source_refs),
+        "baseline_status": static_page_dataset_artifact_key_from_source_refs(&source_refs)
+            .map(|_| "accepted")
+            .unwrap_or(""),
+        "artifact_stability": static_page_dataset_artifact_key_from_source_refs(&source_refs)
+            .map(|key| static_page_artifact_stability_metadata(&key, public_url, Utc::now()))
+            .unwrap_or(Value::Null),
         "source_refs": source_refs,
     })
 }
@@ -1241,6 +1426,172 @@ fn external_static_page_validation_summary_from_fixed_output(fixed_task_output: 
             .cloned()
             .unwrap_or_else(|| json!([])),
     })
+}
+
+async fn mark_external_static_page_draft_published(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    completed_payload: &Value,
+) -> Result<()> {
+    let Some(public_url) = completed_payload
+        .get("public_url")
+        .and_then(Value::as_str)
+        .filter(|value| generated_artifact_url_allowed(value))
+    else {
+        return Ok(());
+    };
+    let Some(draft_id) = completed_payload
+        .get("draft_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(StaticPageDraftId)
+    else {
+        return Ok(());
+    };
+    let Some(mut draft) = storage
+        .static_page_drafts()
+        .get_by_id(tenant_id, draft_id)
+        .await?
+    else {
+        return Ok(());
+    };
+
+    let now = Utc::now();
+    let source_refs = completed_payload
+        .get("source_refs")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let dataset_artifact_key = completed_payload
+        .get("dataset_artifact_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| static_page_dataset_artifact_key_from_source_refs(&source_refs))
+        .or_else(|| static_page_dataset_artifact_key_from_source_refs(&draft.source_refs))
+        .or_else(|| static_page_dataset_artifact_key_from_draft_payload(&draft.draft_payload));
+
+    let mut payload = draft.draft_payload.as_object().cloned().unwrap_or_default();
+    let mut final_page = payload
+        .get("finalPage")
+        .or_else(|| payload.get("final_page"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut asset_manifest = final_page
+        .get("assetManifest")
+        .or_else(|| final_page.get("asset_manifest"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let data_url = completed_payload
+        .get("data_url")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let data_snapshot_url = completed_payload
+        .get("data_snapshot_url")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let dynamic_page_contract = completed_payload
+        .get("dynamic_page_contract")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    asset_manifest.insert("status".to_string(), json!("rendered"));
+    asset_manifest.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    asset_manifest.insert(
+        "publish_mode".to_string(),
+        completed_payload
+            .get("publish_mode")
+            .cloned()
+            .unwrap_or_else(|| json!("new_generated_artifact_only")),
+    );
+    asset_manifest.insert("public_url".to_string(), json!(public_url));
+    asset_manifest.insert("generated_artifact_url".to_string(), json!(public_url));
+    asset_manifest.insert("data_url".to_string(), data_url.clone());
+    asset_manifest.insert("data_snapshot_url".to_string(), data_snapshot_url.clone());
+    asset_manifest.insert("dynamic_page_contract".to_string(), dynamic_page_contract);
+    asset_manifest.insert(
+        "validation_summary".to_string(),
+        completed_payload
+            .get("validation_summary")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    asset_manifest.insert(
+        "codex_host_workflow_execution_id".to_string(),
+        completed_payload
+            .get("codex_host_workflow_execution_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    asset_manifest.insert(
+        "workflow".to_string(),
+        json!({
+            "status": "succeeded",
+            "executionId": completed_payload
+                .get("codex_host_workflow_execution_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "updatedAt": now,
+        }),
+    );
+
+    final_page.insert("status".to_string(), json!("rendered"));
+    final_page.insert(
+        "renderer".to_string(),
+        json!("cloudflare-codex-static-page-image2-data-publish"),
+    );
+    final_page.insert("publicUrl".to_string(), json!(public_url));
+    final_page.insert("public_url".to_string(), json!(public_url));
+    final_page.insert("generatedArtifactUrl".to_string(), json!(public_url));
+    final_page.insert("generated_artifact_url".to_string(), json!(public_url));
+    final_page.insert("htmlPreviewUrl".to_string(), json!(public_url));
+    final_page.insert("html_preview_url".to_string(), json!(public_url));
+    final_page.insert("htmlDownloadUrl".to_string(), json!(public_url));
+    final_page.insert("html_download_url".to_string(), json!(public_url));
+    final_page.insert("downloadUrl".to_string(), json!(public_url));
+    final_page.insert("download_url".to_string(), json!(public_url));
+    final_page.insert(
+        "imageJobId".to_string(),
+        completed_payload
+            .get("image_job_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    final_page.insert("directHtml".to_string(), json!(false));
+    final_page.insert("assetManifest".to_string(), Value::Object(asset_manifest));
+
+    payload.insert("status".to_string(), json!("rendered"));
+    payload.insert(
+        "modelSummary".to_string(),
+        json!("Cloudflare Codex 已生成最终静态页，可直接打开链接查看。"),
+    );
+    payload.insert("finalPage".to_string(), Value::Object(final_page));
+    payload.insert("updatedAt".to_string(), json!(now));
+
+    draft.status = StaticPageDraftStatus::Rendered;
+    draft.source_refs = apply_static_page_artifact_stability_to_source_refs(
+        draft.source_refs,
+        dataset_artifact_key.as_deref(),
+        public_url,
+        now,
+    );
+    draft.draft_payload = apply_static_page_artifact_stability_to_payload(
+        Value::Object(payload),
+        dataset_artifact_key.as_deref(),
+        public_url,
+        now,
+    );
+    storage
+        .static_page_drafts()
+        .update(tenant_id, &draft)
+        .await?;
+    Ok(())
 }
 
 async fn attach_external_static_page_artifact_to_run(
@@ -4865,7 +5216,13 @@ function renderInsight(k){
             "artifact": {
                 "local_path": "/srv/aiv3/shared/objects/generated-artifacts/database-static-pages/final/index.html",
                 "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
-                "manifest_path": "/srv/aiv3/shared/objects/generated-artifacts/database-static-pages/final/manifest.json"
+                "manifest_path": "/srv/aiv3/shared/objects/generated-artifacts/database-static-pages/final/manifest.json",
+                "data_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data.json",
+                "data_snapshot_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data-snapshot.json"
+            },
+            "dynamic_page_contract": {
+                "version": 1,
+                "data_file": "data.json"
             },
             "validation_report": {
                 "latest_snapshot": "2026-05-10",
@@ -4881,6 +5238,11 @@ function renderInsight(k){
             "platform": "generic_chat",
             "conversation_external_id": "conv-1",
             "message_external_id": "msg-1",
+            "dataset_artifact_key": "v3-static-page|dataset_external_id:xinbai",
+            "artifact_stability": {
+                "dataset_artifact_key": "v3-static-page|dataset_external_id:xinbai",
+                "baseline_status": "candidate"
+            },
             "selected_scope": {"must": "not leak"}
         });
         let workflow_execution_id = WorkflowExecutionId::new();
@@ -4906,6 +5268,27 @@ function renderInsight(k){
         assert_eq!(
             payload["validation_summary"]["source_row_count"],
             json!(862)
+        );
+        assert_eq!(
+            payload["dataset_artifact_key"],
+            json!("v3-static-page|dataset_external_id:xinbai")
+        );
+        assert_eq!(payload["baseline_status"], json!("accepted"));
+        assert_eq!(
+            payload["artifact_stability"]["baseline_status"],
+            json!("accepted")
+        );
+        assert_eq!(
+            payload["source_refs"]["dataset_artifact_key"],
+            json!("v3-static-page|dataset_external_id:xinbai")
+        );
+        assert_eq!(
+            payload["data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data.json")
+        );
+        assert_eq!(
+            payload["dynamic_page_contract"]["data_file"],
+            json!("data.json")
         );
         assert!(!payload.to_string().contains("must"));
     }
