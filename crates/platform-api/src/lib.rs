@@ -28698,6 +28698,7 @@ fn static_page_template_match_tokens(
         "availableDatasetExternalIds",
     ] {
         static_page_template_match_insert_external_tokens(&mut tokens, selected_scope.get(key));
+        static_page_template_match_insert_external_tokens(&mut tokens, source_refs.get(key));
     }
     if let Some(dataset_scope) = selected_scope.get("dataset_document_scope") {
         for key in [
@@ -28754,7 +28755,27 @@ fn static_page_template_tokens_intersect(
     if left.is_empty() || right.is_empty() {
         return false;
     }
+    let left_has_material_scope = static_page_template_tokens_have_material_scope(left);
+    let right_has_material_scope = static_page_template_tokens_have_material_scope(right);
+    if left_has_material_scope || right_has_material_scope {
+        return left
+            .iter()
+            .filter(|token| static_page_template_token_is_material_scope(token))
+            .any(|token| right.contains(token));
+    }
     left.iter().any(|token| right.contains(token))
+}
+
+fn static_page_template_tokens_have_material_scope(tokens: &BTreeSet<String>) -> bool {
+    tokens
+        .iter()
+        .any(|token| static_page_template_token_is_material_scope(token))
+}
+
+fn static_page_template_token_is_material_scope(token: &str) -> bool {
+    token.starts_with("dataset_external:")
+        || token.starts_with("dataset_canonical:")
+        || token.starts_with("dataset_id:")
 }
 
 async fn find_static_page_template_baseline_by_dataset_overlap(
@@ -80489,6 +80510,53 @@ mod tests {
         assert!(!static_page_template_tokens_intersect(
             &baseline_tokens,
             &unrelated_tokens
+        ));
+    }
+
+    #[test]
+    fn static_page_template_match_tokens_read_dataset_scope_from_source_refs() {
+        let request_scope = json!({
+            "requested_dataset_external_ids": ["dataset-b"]
+        });
+        let baseline_source_refs = json!({
+            "dataset_external_ids": ["dataset-a", "dataset-b"],
+            "database_source_id": "db-main"
+        });
+
+        let request_tokens = static_page_template_match_tokens(&request_scope, &json!({}));
+        let baseline_tokens = static_page_template_match_tokens(&json!({}), &baseline_source_refs);
+
+        assert!(static_page_template_tokens_intersect(
+            &baseline_tokens,
+            &request_tokens
+        ));
+    }
+
+    #[test]
+    fn static_page_template_match_does_not_use_database_when_material_scope_exists() {
+        let baseline_scope = json!({
+            "dataset_external_ids": ["dataset-a"],
+            "database_source_id": "db-main"
+        });
+        let request_scope = json!({
+            "database_source_id": "db-main"
+        });
+        let database_only_baseline = json!({
+            "database_source_id": "db-main"
+        });
+
+        let baseline_tokens = static_page_template_match_tokens(&baseline_scope, &json!({}));
+        let request_tokens = static_page_template_match_tokens(&request_scope, &json!({}));
+        let database_only_tokens =
+            static_page_template_match_tokens(&database_only_baseline, &json!({}));
+
+        assert!(!static_page_template_tokens_intersect(
+            &baseline_tokens,
+            &request_tokens
+        ));
+        assert!(static_page_template_tokens_intersect(
+            &database_only_tokens,
+            &request_tokens
         ));
     }
 
