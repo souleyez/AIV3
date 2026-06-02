@@ -358,12 +358,15 @@ async fn process_task(
             let logical_queue = cloudflare_orchestrator_logical_queue(&task_context);
             let logical_task_key = cloudflare_orchestrator_poll_logical_task_key(&task_context);
             let current_payload = latest_workflow_task_payload(storage, &task).await?;
+            let poll_attempt = next_cloudflare_orchestrator_poll_attempt(&current_payload);
+            let preserve_claim_attempt =
+                cloudflare_orchestrator_pending_progress_error(&error_message);
             let updated_payload = workflow_task_payload_with_cloudflare_orchestrator_poll(
                 &current_payload,
                 retry_reason,
                 logical_queue,
                 logical_task_key,
-                task.attempt,
+                poll_attempt,
                 retry_delay_ms,
                 available_at,
                 now,
@@ -385,7 +388,10 @@ async fn process_task(
                     "reason": retry_reason,
                     "retryable": true,
                     "attempt": task.attempt,
+                    "claim_attempt": task.attempt,
+                    "poll_attempt": poll_attempt,
                     "max_attempts": task.max_attempts,
+                    "consume_attempt": !preserve_claim_attempt,
                     "retry_delay_ms": retry_delay_ms,
                     "available_at": available_at.to_rfc3339(),
                     "task_id": remote_task_id,
@@ -394,15 +400,29 @@ async fn process_task(
                 }),
             )
             .await?;
-            storage
-                .workflow_tasks()
-                .requeue_after_transient_error(task.id, &error_message, available_at, now)
-                .await?;
+            if preserve_claim_attempt {
+                storage
+                    .workflow_tasks()
+                    .requeue_after_non_consuming_transient_error(
+                        task.id,
+                        &error_message,
+                        available_at,
+                        now,
+                    )
+                    .await?;
+            } else {
+                storage
+                    .workflow_tasks()
+                    .requeue_after_transient_error(task.id, &error_message, available_at, now)
+                    .await?;
+            }
             tracing::warn!(
                 task_id = %task.id,
                 execution_id = %task.execution_id,
                 attempt = task.attempt,
                 max_attempts = task.max_attempts,
+                poll_attempt,
+                consume_attempt = !preserve_claim_attempt,
                 retry_delay_ms,
                 reason = retry_reason,
                 "Cloudflare Codex task requeued for non-blocking continued polling"
@@ -1692,6 +1712,15 @@ fn cloudflare_orchestrator_task_id_from_payload(payload: &Value) -> Option<Strin
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn next_cloudflare_orchestrator_poll_attempt(payload: &Value) -> u32 {
+    payload
+        .pointer("/cloudflare_orchestrator/poll_attempt")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .saturating_add(1)
+        .min(u64::from(u32::MAX)) as u32
 }
 
 fn workflow_task_payload_with_cloudflare_orchestrator_task(
@@ -5316,6 +5345,27 @@ function renderInsight(k){
             json!(next_poll_at.to_rfc3339())
         );
         assert!(updated["cloudflare_orchestrator"].get("prompt").is_none());
+    }
+
+    #[test]
+    fn cloudflare_orchestrator_poll_attempt_is_separate_from_task_attempt() {
+        assert_eq!(next_cloudflare_orchestrator_poll_attempt(&json!({})), 1);
+        assert_eq!(
+            next_cloudflare_orchestrator_poll_attempt(&json!({
+                "cloudflare_orchestrator": {
+                    "poll_attempt": 7,
+                }
+            })),
+            8
+        );
+        assert_eq!(
+            next_cloudflare_orchestrator_poll_attempt(&json!({
+                "cloudflare_orchestrator": {
+                    "poll_attempt": u64::from(u32::MAX),
+                }
+            })),
+            u32::MAX
+        );
     }
 
     #[test]
