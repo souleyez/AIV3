@@ -9741,74 +9741,94 @@ async fn append_external_channel_public_stream_event(
     dedupe_key: &str,
     payload: Value,
 ) -> std::result::Result<Value, ApiError> {
-    let row = sqlx::query(
-        r#"
-        with run_event_lock as (
-            select pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))
-        ),
-        existing as (
-            select event_name, sequence_no, payload
-            from assistant_run_events
-            where tenant_id = $1
-              and run_id = $2
-              and event_name = $3
-              and payload->>$7 = $4
-            order by sequence_no asc
-            limit 1
-        ),
-        next_sequence as (
-            select coalesce((
-                select max(sequence_no)
+    let mut attempt = 0u64;
+    loop {
+        let result = sqlx::query(
+            r#"
+            with run_event_lock as (
+                select pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))
+            ),
+            existing as (
+                select event_name, sequence_no, payload
                 from assistant_run_events
-                where tenant_id = $1 and run_id = $2
-            ), 0) + 1 as sequence_no
-            from run_event_lock
-        ),
-        inserted as (
-            insert into assistant_run_events (
-                tenant_id,
-                run_id,
-                sequence_no,
-                event_name,
-                payload,
-                created_at
+                where tenant_id = $1
+                  and run_id = $2
+                  and event_name = $3
+                  and payload->>$7 = $4
+                order by sequence_no asc
+                limit 1
+            ),
+            next_sequence as (
+                select coalesce((
+                    select max(sequence_no)
+                    from assistant_run_events
+                    where tenant_id = $1 and run_id = $2
+                ), 0) + 1 as sequence_no
+                from run_event_lock
+            ),
+            inserted as (
+                insert into assistant_run_events (
+                    tenant_id,
+                    run_id,
+                    sequence_no,
+                    event_name,
+                    payload,
+                    created_at
+                )
+                select
+                    $1,
+                    $2,
+                    next_sequence.sequence_no,
+                    $3,
+                    (
+                        $5::jsonb ||
+                        jsonb_build_object(
+                            'sequence', next_sequence.sequence_no,
+                            'event_id', $2::text || ':' || lpad(next_sequence.sequence_no::text, 6, '0'),
+                            $7, $4
+                        )
+                    ),
+                    $6
+                from next_sequence
+                where not exists (select 1 from existing)
+                returning event_name, sequence_no, payload
             )
-            select
-                $1,
-                $2,
-                next_sequence.sequence_no,
-                $3,
-                (
-                    $5::jsonb ||
-                    jsonb_build_object(
-                        'sequence', next_sequence.sequence_no,
-                        'event_id', $2::text || ':' || lpad(next_sequence.sequence_no::text, 6, '0'),
-                        $7, $4
-                    )
-                ),
-                $6
-            from next_sequence
-            where not exists (select 1 from existing)
-            returning event_name, sequence_no, payload
+            select event_name, sequence_no, payload from inserted
+            union all
+            select event_name, sequence_no, payload from existing
+            limit 1
+            "#,
         )
-        select event_name, sequence_no, payload from inserted
-        union all
-        select event_name, sequence_no, payload from existing
-        limit 1
-        "#,
-    )
-    .bind(state.tenant_id.0)
-    .bind(run_id.0)
-    .bind(event_name)
-    .bind(dedupe_key)
-    .bind(&payload)
-    .bind(Utc::now())
-    .bind(EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY)
-    .fetch_one(state.storage.pool())
-    .await
-    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+        .bind(state.tenant_id.0)
+        .bind(run_id.0)
+        .bind(event_name)
+        .bind(dedupe_key)
+        .bind(&payload)
+        .bind(Utc::now())
+        .bind(EXTERNAL_CHANNEL_PUBLIC_STREAM_DEDUPE_KEY)
+        .fetch_one(state.storage.pool())
+        .await;
 
-    Ok(external_channel_public_stream_payload(row.get("payload")))
+        match result {
+            Ok(row) => return Ok(external_channel_public_stream_payload(row.get("payload"))),
+            Err(error)
+                if attempt < 5
+                    && external_channel_assistant_run_event_sequence_unique_violation(&error) =>
+            {
+                attempt += 1;
+                tokio::time::sleep(StdDuration::from_millis(5 * attempt)).await;
+            }
+            Err(error) => return Err(ApiError::from_storage(anyhow::Error::new(error))),
+        }
+    }
+}
+
+fn external_channel_assistant_run_event_sequence_unique_violation(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(database_error) = error else {
+        return false;
+    };
+    database_error.code().as_deref() == Some("23505")
+        && database_error.constraint() == Some("assistant_run_events_run_id_sequence_no_key")
 }
 
 async fn persist_external_channel_public_stream_payload_or_original(

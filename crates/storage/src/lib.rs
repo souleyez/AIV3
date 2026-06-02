@@ -4144,41 +4144,52 @@ impl PgAssistantRunRepository {
         run_id: AssistantRunId,
         new_event: &NewAssistantRunEvent,
     ) -> Result<AssistantRunEvent> {
-        let row = sqlx::query(
-            r#"
-            with run_event_lock as (
-                select pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))
-            ),
-            next_sequence as (
-                select coalesce((
-                    select max(sequence_no)
-                    from assistant_run_events
-                    where tenant_id = $1 and run_id = $2
-                ), 0) + 1 as sequence_no
-                from run_event_lock
+        let mut attempt = 0u64;
+        loop {
+            let result = sqlx::query(
+                r#"
+                with run_event_lock as (
+                    select pg_advisory_xact_lock(hashtext($1::text), hashtext($2::text))
+                ),
+                next_sequence as (
+                    select coalesce((
+                        select max(sequence_no)
+                        from assistant_run_events
+                        where tenant_id = $1 and run_id = $2
+                    ), 0) + 1 as sequence_no
+                    from run_event_lock
+                )
+                insert into assistant_run_events (
+                    tenant_id,
+                    run_id,
+                    sequence_no,
+                    event_name,
+                    payload,
+                    created_at
+                )
+                select $1, $2, next_sequence.sequence_no, $3, $4, $5
+                from next_sequence
+                returning id, tenant_id, run_id, sequence_no, event_name, payload, created_at
+                "#,
             )
-            insert into assistant_run_events (
-                tenant_id,
-                run_id,
-                sequence_no,
-                event_name,
-                payload,
-                created_at
-            )
-            select $1, $2, next_sequence.sequence_no, $3, $4, $5
-            from next_sequence
-            returning id, tenant_id, run_id, sequence_no, event_name, payload, created_at
-            "#,
-        )
-        .bind(tenant_id.0)
-        .bind(run_id.0)
-        .bind(&new_event.event_name)
-        .bind(&new_event.payload)
-        .bind(new_event.created_at)
-        .fetch_one(&self.pool)
-        .await?;
+            .bind(tenant_id.0)
+            .bind(run_id.0)
+            .bind(&new_event.event_name)
+            .bind(&new_event.payload)
+            .bind(new_event.created_at)
+            .fetch_one(&self.pool)
+            .await;
 
-        map_assistant_run_event_row(&row)
+            match result {
+                Ok(row) => return map_assistant_run_event_row(&row),
+                Err(error)
+                    if attempt < 5 && is_assistant_run_event_sequence_unique_violation(&error) =>
+                {
+                    attempt += 1;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     pub async fn list_events(
@@ -6828,6 +6839,14 @@ fn map_assistant_run_event_row(row: &sqlx::postgres::PgRow) -> Result<AssistantR
         payload: row.get("payload"),
         created_at: row.get("created_at"),
     })
+}
+
+fn is_assistant_run_event_sequence_unique_violation(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(database_error) = error else {
+        return false;
+    };
+    database_error.code().as_deref() == Some("23505")
+        && database_error.constraint() == Some("assistant_run_events_run_id_sequence_no_key")
 }
 
 fn map_conversation_memory_item_row(row: &sqlx::postgres::PgRow) -> Result<ConversationMemoryItem> {
