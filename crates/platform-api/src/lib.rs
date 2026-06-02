@@ -29454,6 +29454,160 @@ fn static_page_existing_artifact_reference_from_prompt(prompt: &str) -> Value {
     })
 }
 
+fn static_page_generated_template_reference_is_page(reference: &Value) -> bool {
+    let source = reference
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let template_kind = reference
+        .get("templateKind")
+        .or_else(|| reference.get("template_kind"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let template_id = reference
+        .get("templateId")
+        .or_else(|| reference.get("template_id"))
+        .or_else(|| reference.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    source.eq_ignore_ascii_case("v3-static-page-template-library")
+        || template_kind.eq_ignore_ascii_case("generated_static_page")
+        || template_id.starts_with("generated-static-page:")
+        || template_id.starts_with("static-page-template:")
+        || template_id.starts_with("static_page_template:")
+}
+
+fn static_page_generated_template_public_url(reference: &Value) -> Option<String> {
+    if !static_page_generated_template_reference_is_page(reference) {
+        return None;
+    }
+    [
+        "publicUrl",
+        "public_url",
+        "generatedArtifactUrl",
+        "generated_artifact_url",
+    ]
+    .into_iter()
+    .filter_map(|key| reference.get(key).and_then(Value::as_str))
+    .map(str::trim)
+    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+    .map(ToOwned::to_owned)
+    .next()
+}
+
+fn static_page_existing_artifact_reference_from_public_url(
+    public_url: &str,
+    source: &str,
+) -> Value {
+    json!({
+        "kind": "v3_generated_static_page",
+        "source": source,
+        "reference_role": "existing_artifact_to_revise",
+        "public_url": public_url,
+        "index_url": public_url,
+        "data_url": static_page_artifact_sibling_url(public_url, "data.json"),
+        "data_snapshot_url": static_page_artifact_sibling_url(public_url, "data-snapshot.json"),
+        "revision_requested": true,
+        "preserve_style_unless_redesign_requested": true,
+        "data_binding_policy": "read_existing_data_json_when_available_and_rebind_requested_modules",
+        "publish_mode": "new_generated_artifact_only",
+        "materialization_policy": "host_agent_maps_v3_generated_artifact_to_local_workspace_when_available",
+    })
+}
+
+fn static_page_existing_artifact_reference_from_template_context(
+    prompt: &str,
+    template_reference: Option<&Value>,
+    source_refs: Option<&Value>,
+) -> Value {
+    if !static_page_prompt_requests_existing_artifact_revision(prompt)
+        || static_page_prompt_requests_explicit_redesign(prompt)
+    {
+        return Value::Null;
+    }
+
+    if let Some(reference) = template_reference {
+        if let Some(public_url) = static_page_generated_template_public_url(reference) {
+            let mut existing = static_page_existing_artifact_reference_from_public_url(
+                &public_url,
+                "generated_static_page_template_reference",
+            );
+            if let Some(object) = existing.as_object_mut() {
+                object.insert("template_reference".to_string(), reference.clone());
+            }
+            return existing;
+        }
+    }
+
+    if let Some(source_refs) = source_refs {
+        for reference in source_refs
+            .get("template_references")
+            .or_else(|| source_refs.get("templateReferences"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(public_url) = static_page_generated_template_public_url(reference) {
+                let mut existing = static_page_existing_artifact_reference_from_public_url(
+                    &public_url,
+                    "generated_static_page_template_source_refs",
+                );
+                if let Some(object) = existing.as_object_mut() {
+                    object.insert("template_reference".to_string(), reference.clone());
+                }
+                return existing;
+            }
+        }
+
+        if source_refs
+            .pointer("/relaxed_template_match/policy")
+            .and_then(Value::as_str)
+            == Some("dataset_overlap")
+        {
+            if let Some(public_url) = source_refs
+                .pointer("/relaxed_template_match/baseline_public_url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+            {
+                let mut existing = static_page_existing_artifact_reference_from_public_url(
+                    public_url,
+                    "dataset_overlap_static_page_template_baseline",
+                );
+                if let Some(object) = existing.as_object_mut() {
+                    object.insert(
+                        "relaxed_template_match".to_string(),
+                        source_refs
+                            .get("relaxed_template_match")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    );
+                }
+                return existing;
+            }
+        }
+    }
+
+    Value::Null
+}
+
+fn static_page_existing_artifact_reference_for_fixed_task(
+    prompt: &str,
+    template_reference: Option<&Value>,
+    source_refs: Option<&Value>,
+) -> Value {
+    let explicit = static_page_existing_artifact_reference_from_prompt(prompt);
+    if !explicit.is_null() {
+        return explicit;
+    }
+    static_page_existing_artifact_reference_from_template_context(
+        prompt,
+        template_reference,
+        source_refs,
+    )
+}
+
 fn external_static_page_template_reference_label(reference: &Value) -> Option<String> {
     ["label", "name", "title", "templateId", "template_id", "id"]
         .iter()
@@ -30070,7 +30224,11 @@ fn external_channel_static_page_image2_fixed_task(
             "message_external_id": message.message_external_id,
             "artifact_type": message.artifact_type,
             "artifact_template": message.template.as_ref().map(external_artifact_template_summary),
-            "existing_artifact": static_page_existing_artifact_reference_from_prompt(prompt),
+            "existing_artifact": static_page_existing_artifact_reference_for_fixed_task(
+                prompt,
+                template_reference,
+                Some(&draft.source_refs),
+            ),
             "output_format": message.output_format,
             "render_mode": message.render_mode,
             "requested_skills": external_requested_skills_summary(&message.requested_skills),
@@ -30186,7 +30344,11 @@ fn assistant_run_static_page_image2_fixed_task(
             "source": "main_assistant_static_page_image2_pipeline",
             "local_thread_id": run.local_thread_id,
             "template_reference": template_reference.cloned().unwrap_or(Value::Null),
-            "existing_artifact": static_page_existing_artifact_reference_from_prompt(prompt),
+            "existing_artifact": static_page_existing_artifact_reference_for_fixed_task(
+                prompt,
+                template_reference,
+                Some(&draft.source_refs),
+            ),
             "source_data_snapshot": image_prompt_payload_summary
                 .get("data_snapshot")
                 .cloned()
@@ -80208,6 +80370,45 @@ mod tests {
             static_page_existing_artifact_reference_from_prompt("重新做一个经营分析报表"),
             Value::Null
         );
+        let generated_template_reference = json!({
+            "templateId": "generated-static-page:template-001",
+            "source": "v3-static-page-template-library",
+            "templateKind": "generated_static_page",
+            "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
+        });
+        let template_existing_artifact = static_page_existing_artifact_reference_for_fixed_task(
+            "修复近7日销售，切换区域和门店后需要跟着变化",
+            Some(&generated_template_reference),
+            None,
+        );
+        assert_eq!(
+            template_existing_artifact["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html")
+        );
+        assert_eq!(
+            template_existing_artifact["data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/data.json")
+        );
+        assert_eq!(
+            template_existing_artifact["source"],
+            json!("generated_static_page_template_reference")
+        );
+        assert_eq!(
+            static_page_existing_artifact_reference_for_fixed_task(
+                "重新出图，换个风格，修复近7日销售",
+                Some(&generated_template_reference),
+                None,
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            static_page_existing_artifact_reference_for_fixed_task(
+                "生成新百经营月报",
+                Some(&generated_template_reference),
+                None,
+            ),
+            Value::Null
+        );
         assert!(static_page_prompt_requests_explicit_redesign(
             "重新出图，换个风格"
         ));
@@ -83227,6 +83428,39 @@ mod tests {
         assert_eq!(
             encoded["requirements"]["existing_artifact"]["revision_requested"],
             json!(true)
+        );
+        let generated_template_reference = json!({
+            "templateId": "generated-static-page:template-001",
+            "source": "v3-static-page-template-library",
+            "templateKind": "generated_static_page",
+            "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html",
+        });
+        let templated_fixed_task = external_channel_static_page_image2_fixed_task(
+            tenant_id,
+            "generic-chat-main",
+            &connection,
+            &run,
+            &draft,
+            &image_job,
+            &message,
+            "修复近7日销售，切换区域和门店后需要跟着变化",
+            Some(&generated_template_reference),
+            &json!({"status": "ready"}),
+            &json!({"status": "ready"}),
+        );
+        let templated_encoded =
+            serde_json::to_value(&templated_fixed_task).expect("fixed task encodes");
+        assert_eq!(
+            templated_encoded["requirements"]["existing_artifact"]["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html")
+        );
+        assert_eq!(
+            templated_encoded["requirements"]["existing_artifact"]["data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/data.json")
+        );
+        assert_eq!(
+            templated_encoded["requirements"]["existing_artifact"]["source"],
+            json!("generated_static_page_template_reference")
         );
         assert_eq!(
             encoded["requirements"]["permission_review_status"],
