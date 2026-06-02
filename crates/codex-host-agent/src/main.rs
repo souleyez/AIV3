@@ -42,6 +42,8 @@ const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 const DEFAULT_CODEX_HOST_CONCURRENCY: usize = 1;
 const MAX_CODEX_HOST_CONCURRENCY: usize = 8;
 const DEFAULT_STATIC_PAGE_CODEX_EXEC_TIMEOUT_MS: u64 = 900_000;
+const DEFAULT_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS: u32 = 2;
+const MAX_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS: u32 = 5;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -205,7 +207,7 @@ async fn process_task(
                     .ok_or_else(|| anyhow!("codex_exec mode missing command plan"))?;
                 let codex_exec_runtime_config =
                     codex_exec_runtime_config_for_task_context(&task_context, runtime_config);
-                match run_codex_exec_with_heartbeat(
+                match run_codex_exec_with_static_page_retries(
                     storage,
                     task.tenant_id,
                     task.execution_id,
@@ -603,6 +605,58 @@ fn should_fallback_codex_exec_to_cloudflare(
         codex_host_failure_reason(&error_message),
         "timeout" | "non_zero_exit"
     )
+}
+
+fn should_retry_codex_exec_locally(
+    task_context: &CodexHostTaskContext,
+    error: &anyhow::Error,
+) -> bool {
+    if task_context.capability != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        return false;
+    }
+    let error_message = error.to_string();
+    matches!(
+        codex_host_failure_reason(&error_message),
+        "timeout" | "non_zero_exit"
+    )
+}
+
+fn codex_exec_local_max_attempts(task_context: &CodexHostTaskContext) -> u32 {
+    if task_context.capability != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        return 1;
+    }
+    env_u64(
+        "CODEX_HOST_AGENT_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS",
+        u64::from(DEFAULT_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS),
+    )
+    .clamp(1, u64::from(MAX_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS)) as u32
+}
+
+fn codex_exec_retry_payload(
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    status: &'static str,
+    local_attempt: u32,
+    max_local_attempts: u32,
+    error_message: Option<&str>,
+) -> Value {
+    let reason = error_message.map(codex_host_failure_reason);
+    json!({
+        "mode": "codex_exec",
+        "status": status,
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "host_kind": decision.host_kind.clone(),
+        "profile": decision.profile.safe_summary(),
+        "local_attempt": local_attempt,
+        "max_local_attempts": max_local_attempts,
+        "reason": reason,
+        "error": error_message.map(codex_host_safe_error_summary),
+        "raw_prompt_exposed": false,
+        "stdout_exposed": false,
+        "stderr_exposed": false,
+        "secrets_exposed": false,
+    })
 }
 
 fn codex_host_execution_decision_for_task(
@@ -1648,6 +1702,137 @@ async fn attach_external_static_page_artifact_to_run(
         .attach_output_artifacts(tenant_id, assistant_run_id, &Value::Array(output_artifacts))
         .await?;
     Ok(())
+}
+
+async fn run_codex_exec_with_static_page_retries(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    execution_id: domain_model::WorkflowExecutionId,
+    command_plan: &CodexCommandPlan,
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    runtime_config: &CodexHostRuntimeConfig,
+) -> Result<serde_json::Value> {
+    let max_local_attempts = codex_exec_local_max_attempts(task_context);
+    let mut local_attempt = 1u32;
+    loop {
+        if local_attempt > 1 {
+            append_codex_exec_retry_event(
+                storage,
+                tenant_id,
+                execution_id,
+                task_context,
+                decision,
+                "codex_host_task.exec_retry_started",
+                codex_exec_retry_payload(
+                    task_context,
+                    decision,
+                    "retry_started",
+                    local_attempt,
+                    max_local_attempts,
+                    None,
+                ),
+            )
+            .await;
+        }
+        match run_codex_exec_with_heartbeat(
+            storage,
+            tenant_id,
+            execution_id,
+            command_plan,
+            task_context,
+            decision,
+            runtime_config,
+        )
+        .await
+        {
+            Ok(output) => {
+                if local_attempt > 1 {
+                    append_codex_exec_retry_event(
+                        storage,
+                        tenant_id,
+                        execution_id,
+                        task_context,
+                        decision,
+                        "codex_host_task.exec_retry_succeeded",
+                        codex_exec_retry_payload(
+                            task_context,
+                            decision,
+                            "retry_succeeded",
+                            local_attempt,
+                            max_local_attempts,
+                            None,
+                        ),
+                    )
+                    .await;
+                }
+                return Ok(output);
+            }
+            Err(error)
+                if local_attempt < max_local_attempts
+                    && should_retry_codex_exec_locally(task_context, &error) =>
+            {
+                let error_message = error.to_string();
+                append_codex_exec_retry_event(
+                    storage,
+                    tenant_id,
+                    execution_id,
+                    task_context,
+                    decision,
+                    "codex_host_task.exec_retry_scheduled",
+                    codex_exec_retry_payload(
+                        task_context,
+                        decision,
+                        "retry_scheduled",
+                        local_attempt + 1,
+                        max_local_attempts,
+                        Some(&error_message),
+                    ),
+                )
+                .await;
+                tracing::warn!(
+                    execution_id = %execution_id,
+                    assistant_run_id = %task_context.assistant_run_id,
+                    capability = %task_context.capability,
+                    next_local_attempt = local_attempt + 1,
+                    max_local_attempts,
+                    reason = %codex_host_failure_reason(&error_message),
+                    "Codex exec failed; retrying locally before fallback"
+                );
+                local_attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn append_codex_exec_retry_event(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    execution_id: domain_model::WorkflowExecutionId,
+    task_context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    event_name: &'static str,
+    payload: Value,
+) {
+    if let Err(error) = append_assistant_event(
+        storage,
+        tenant_id,
+        task_context.assistant_run_id,
+        event_name,
+        payload,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = ?error,
+            execution_id = %execution_id,
+            assistant_run_id = %task_context.assistant_run_id,
+            profile_id = %decision.profile.id,
+            event_name,
+            "failed to append Codex exec retry event"
+        );
+    }
 }
 
 async fn run_codex_exec_with_heartbeat(
@@ -5603,6 +5788,94 @@ function renderInsight(k){
             &task_context,
             &task
         ));
+    }
+
+    #[test]
+    fn static_page_codex_exec_local_attempts_are_configurable_and_clamped() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let task_context = test_static_page_task_context();
+        let non_static_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "inspect_project".to_string(),
+            task: Some("Inspect the repository".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
+        };
+
+        let _attempts =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS", "4");
+        assert_eq!(codex_exec_local_max_attempts(&task_context), 4);
+        assert_eq!(codex_exec_local_max_attempts(&non_static_context), 1);
+        drop(_attempts);
+
+        let _attempts =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS", "99");
+        assert_eq!(
+            codex_exec_local_max_attempts(&task_context),
+            MAX_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS
+        );
+        drop(_attempts);
+
+        let _attempts =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS", "0");
+        assert_eq!(
+            codex_exec_local_max_attempts(&task_context),
+            DEFAULT_STATIC_PAGE_CODEX_EXEC_MAX_ATTEMPTS
+        );
+    }
+
+    #[test]
+    fn static_page_codex_exec_local_retry_only_allows_retryable_failures() {
+        let task_context = test_static_page_task_context();
+        let non_static_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "inspect_project".to_string(),
+            task: Some("Inspect the repository".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
+        };
+        let retryable = anyhow!("Codex Host command failed: kind=non_zero_exit exit_code=Some(1)");
+        let timeout = anyhow!("Codex Host command timed out after 900000ms");
+        let blocked = anyhow!("failed to launch Codex Host command: missing binary");
+
+        assert!(should_retry_codex_exec_locally(&task_context, &retryable));
+        assert!(should_retry_codex_exec_locally(&task_context, &timeout));
+        assert!(!should_retry_codex_exec_locally(&task_context, &blocked));
+        assert!(!should_retry_codex_exec_locally(
+            &non_static_context,
+            &retryable
+        ));
+    }
+
+    #[test]
+    fn codex_exec_retry_payload_is_safe() {
+        let task_context = test_static_page_task_context();
+        let policy = test_codex_exec_policy();
+        let task = test_workflow_task(1, 3);
+        let decision =
+            codex_host_execution_decision_for_task(&policy, &task_context, &task).unwrap();
+
+        let payload = codex_exec_retry_payload(
+            &task_context,
+            &decision,
+            "retry_scheduled",
+            2,
+            4,
+            Some("Authorization: Bearer secret-token\nkind=non_zero_exit"),
+        );
+        let serialized = payload.to_string();
+
+        assert_eq!(payload["status"], json!("retry_scheduled"));
+        assert_eq!(payload["local_attempt"], json!(2));
+        assert_eq!(payload["max_local_attempts"], json!(4));
+        assert_eq!(payload["reason"], json!("non_zero_exit"));
+        assert!(serialized.contains("[redacted-log-line]"));
+        assert!(!serialized.contains("secret-token"));
+        assert_eq!(payload["raw_prompt_exposed"], json!(false));
     }
 
     #[test]
