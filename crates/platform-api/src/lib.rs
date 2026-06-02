@@ -26371,6 +26371,21 @@ fn external_channel_static_page_fixed_task_reply_from_events(
             Some(cancelled),
         ));
     }
+    let latest_exec_failed = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "codex_host_task.exec_failed");
+    if let Some(failed) =
+        latest_exec_failed.filter(|failed| failed.sequence_no > latest_fixed.sequence_no)
+    {
+        return Some(external_channel_fixed_task_processing_reply(
+            conversation_external_id,
+            "static_page_image2_data_publish",
+            "failed",
+            latest_fixed,
+            Some(failed),
+        ));
+    }
     let latest_poll_retry = events
         .iter()
         .rev()
@@ -97405,6 +97420,74 @@ retrieve_evidence:
         );
         assert_eq!(card["runtime_event"]["reason"], json!("non_zero_exit"));
         assert_eq!(card["runtime_event"]["retryable"], json!(false));
+        assert!(card["poll_after_seconds"].is_null());
+    }
+
+    #[test]
+    fn external_channel_static_page_reply_surfaces_exec_failed_over_heartbeat() {
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new().to_string();
+        let now = Utc::now();
+        let events = vec![
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 1,
+                event_name: "codex_host.fixed_task.queued".to_string(),
+                payload: json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "queued",
+                    "workflow_execution_id": workflow_execution_id,
+                    "status_url": "https://v3.elepcloud.com/status",
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 2,
+                event_name: "codex_host_task.exec_heartbeat".to_string(),
+                payload: json!({
+                    "status": "running",
+                    "heartbeat_count": 98,
+                    "elapsed_ms": 1455003,
+                    "secrets_exposed": false,
+                }),
+                created_at: now,
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 3,
+                event_name: "codex_host_task.exec_failed".to_string(),
+                payload: json!({
+                    "status": "failed",
+                    "reason": "non_zero_exit",
+                    "retryable": false,
+                    "attempt": 1,
+                    "max_attempts": 3,
+                    "secrets_exposed": false,
+                    "stderr_exposed": false,
+                    "stdout_exposed": false,
+                }),
+                created_at: now,
+            },
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-1")
+            .expect("static page failed reply");
+
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        let card = reply.card.as_ref().expect("status card");
+        assert_eq!(card["status"], json!("static_page_publish_failed"));
+        assert_eq!(
+            card["runtime_event"]["event_name"],
+            json!("codex_host_task.exec_failed")
+        );
         assert!(card["poll_after_seconds"].is_null());
     }
 
