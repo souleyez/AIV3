@@ -199,7 +199,7 @@ async fn process_task(
                     .command_plan
                     .as_ref()
                     .ok_or_else(|| anyhow!("codex_exec mode missing command plan"))?;
-                run_codex_exec_with_heartbeat(
+                match run_codex_exec_with_heartbeat(
                     storage,
                     task.tenant_id,
                     task.execution_id,
@@ -208,7 +208,47 @@ async fn process_task(
                     &decision,
                     runtime_config,
                 )
-                .await?
+                .await
+                {
+                    Ok(output) => output,
+                    Err(error)
+                        if should_fallback_codex_exec_to_cloudflare(&task_context, &error) =>
+                    {
+                        let error_message = error.to_string();
+                        let fallback_decision =
+                            cloudflare_fallback_decision_from_codex_exec(&decision);
+                        append_assistant_event(
+                            storage,
+                            task.tenant_id,
+                            task_context.assistant_run_id,
+                            "codex_host_task.exec_fallback_started",
+                            codex_exec_cloudflare_fallback_started_payload(
+                                &task_context,
+                                &task,
+                                &error_message,
+                            ),
+                        )
+                        .await?;
+                        tracing::warn!(
+                            task_id = %task.id,
+                            execution_id = %task.execution_id,
+                            reason = %codex_host_failure_reason(&error_message),
+                            "Codex exec failed; falling back to Cloudflare orchestrator"
+                        );
+                        run_cloudflare_orchestrator_with_heartbeat(
+                            storage,
+                            task.tenant_id,
+                            task.execution_id,
+                            task.id,
+                            &task.payload,
+                            &task_context,
+                            &fallback_decision,
+                            runtime_config,
+                        )
+                        .await?
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             CodexHostExecutionMode::CloudflareOrchestrator => {
                 run_cloudflare_orchestrator_with_heartbeat(
@@ -303,6 +343,7 @@ async fn process_task(
         if should_requeue_cloudflare_orchestrator_poll(
             &execution_policy.mode,
             &error_message,
+            &task_context,
             &task,
         ) {
             let now = Utc::now();
@@ -457,6 +498,86 @@ fn codex_host_failure_reason(error_message: &str) -> &'static str {
     } else {
         "codex_host_task_failed"
     }
+}
+
+fn should_fallback_codex_exec_to_cloudflare(
+    task_context: &CodexHostTaskContext,
+    error: &anyhow::Error,
+) -> bool {
+    if !codex_exec_cloudflare_fallback_enabled() {
+        return false;
+    }
+    if task_context.capability != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        return false;
+    }
+    let error_message = error.to_string();
+    matches!(
+        codex_host_failure_reason(&error_message),
+        "timeout" | "non_zero_exit"
+    )
+}
+
+fn codex_exec_cloudflare_fallback_enabled() -> bool {
+    std::env::var("CODEX_HOST_AGENT_CODEX_EXEC_CLOUDFLARE_FALLBACK_ENABLED")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
+        })
+        .unwrap_or(true)
+}
+
+fn cloudflare_fallback_decision_from_codex_exec(
+    decision: &CodexHostExecutionDecision,
+) -> CodexHostExecutionDecision {
+    let mut profile = decision.profile.clone();
+    profile.id = format!("{}-cloudflare-fallback", profile.id);
+    profile.kind = "cloudflare_orchestrator".to_string();
+    profile.model = None;
+    profile.provider_id = Some("cloudflare".to_string());
+    profile.base_url = std::env::var("CODEX_ORCHESTRATOR_BASE_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    profile.env_key = Some("CODEX_ORCHESTRATOR_ACCESS_KEY".to_string());
+    profile.wire_api = Some("orchestrator".to_string());
+
+    CodexHostExecutionDecision {
+        mode: CodexHostExecutionMode::CloudflareOrchestrator,
+        profile,
+        host_kind: "cloudflare_codex".to_string(),
+        command_plan: None,
+    }
+}
+
+fn codex_exec_cloudflare_fallback_started_payload(
+    task_context: &CodexHostTaskContext,
+    task: &domain_model::WorkflowTask,
+    error_message: &str,
+) -> Value {
+    json!({
+        "mode": "codex_exec",
+        "status": "fallback_started",
+        "fallback_mode": "cloudflare_orchestrator",
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "template_id": task_context
+            .fixed_task
+            .as_ref()
+            .map(|fixed_task| fixed_task.template_id.as_str())
+            .unwrap_or(task_context.capability.as_str()),
+        "workflow_execution_id": task.execution_id.to_string(),
+        "workflow_task_id": task.id.to_string(),
+        "attempt": task.attempt,
+        "max_attempts": task.max_attempts,
+        "reason": codex_host_failure_reason(error_message),
+        "error": codex_host_safe_error_summary(error_message),
+        "retryable": true,
+        "raw_prompt_exposed": false,
+        "stdout_exposed": false,
+        "stderr_exposed": false,
+        "secrets_exposed": false,
+    })
 }
 
 fn codex_host_safe_error_summary(error_message: &str) -> String {
@@ -1235,9 +1356,14 @@ fn cloudflare_orchestrator_heartbeat_payload(
 fn should_requeue_cloudflare_orchestrator_poll(
     mode: &CodexHostExecutionMode,
     error_message: &str,
+    task_context: &CodexHostTaskContext,
     task: &domain_model::WorkflowTask,
 ) -> bool {
-    matches!(mode, CodexHostExecutionMode::CloudflareOrchestrator)
+    let cloudflare_mode = matches!(mode, CodexHostExecutionMode::CloudflareOrchestrator)
+        || (matches!(mode, CodexHostExecutionMode::CodexExec)
+            && task_context.capability == STATIC_PAGE_IMAGE2_DATA_PUBLISH
+            && codex_exec_cloudflare_fallback_enabled());
+    cloudflare_mode
         && cloudflare_orchestrator_requeueable_error(error_message)
         && (cloudflare_orchestrator_pending_progress_error(error_message)
             || task.attempt < task.max_attempts)
@@ -3035,11 +3161,13 @@ async fn run_codex_exec(
     };
 
     if !output.status.success() {
+        let stderr_excerpt = safe_response_excerpt(&process_output.stderr_excerpt, 800);
         return Err(anyhow!(
-            "Codex Host command failed: kind=non_zero_exit exit_code={:?}; stdout_chars={}; stderr_chars={}",
+            "Codex Host command failed: kind=non_zero_exit exit_code={:?}; stdout_chars={}; stderr_chars={}; stderr_excerpt={}",
             process_output.exit_code,
             process_output.stdout_excerpt.chars().count(),
-            process_output.stderr_excerpt.chars().count()
+            process_output.stderr_excerpt.chars().count(),
+            stderr_excerpt
         ));
     }
 
@@ -4250,10 +4378,12 @@ mod tests {
     #[test]
     fn cloudflare_orchestrator_timeout_requeue_requires_attempt_budget() {
         let mut task = test_workflow_task(1, 3);
+        let task_context = test_static_page_task_context();
 
         assert!(should_requeue_cloudflare_orchestrator_poll(
             &CodexHostExecutionMode::CloudflareOrchestrator,
             "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
+            &task_context,
             &task
         ));
 
@@ -4261,12 +4391,14 @@ mod tests {
         assert!(!should_requeue_cloudflare_orchestrator_poll(
             &CodexHostExecutionMode::CloudflareOrchestrator,
             "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
+            &task_context,
             &task
         ));
         task.attempt = 1;
-        assert!(!should_requeue_cloudflare_orchestrator_poll(
+        assert!(should_requeue_cloudflare_orchestrator_poll(
             &CodexHostExecutionMode::CodexExec,
             "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
+            &task_context,
             &task
         ));
     }
@@ -4274,10 +4406,12 @@ mod tests {
     #[test]
     fn cloudflare_orchestrator_pending_requeue_does_not_consume_attempt_budget() {
         let task = test_workflow_task(9, 3);
+        let task_context = test_static_page_task_context();
 
         assert!(should_requeue_cloudflare_orchestrator_poll(
             &CodexHostExecutionMode::CloudflareOrchestrator,
             "Cloudflare Codex task still running; task_id=abc status=running",
+            &task_context,
             &task
         ));
         assert_eq!(
@@ -4297,6 +4431,7 @@ mod tests {
     #[test]
     fn cloudflare_orchestrator_waf_and_auth_errors_are_operator_failures() {
         let task = test_workflow_task(1, 3);
+        let task_context = test_static_page_task_context();
         let waf_error = "Cloudflare Codex poll failed: status=403 body_excerpt=\"1010 browser_signature_banned\"";
         let auth_error =
             "Cloudflare Codex poll failed: status=401 body_excerpt=\"invalid service key\"";
@@ -4306,6 +4441,7 @@ mod tests {
         assert!(!should_requeue_cloudflare_orchestrator_poll(
             &CodexHostExecutionMode::CloudflareOrchestrator,
             waf_error,
+            &task_context,
             &task
         ));
         assert_eq!(
@@ -4574,6 +4710,22 @@ mod tests {
             error: None,
             created_at: now,
             updated_at: now,
+        }
+    }
+
+    fn test_static_page_task_context() -> CodexHostTaskContext {
+        let assistant_run_id = AssistantRunId::new();
+        let mut fixed_task =
+            contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example();
+        fixed_task.assistant_run_id = Some(assistant_run_id.to_string());
+        CodexHostTaskContext {
+            assistant_run_id,
+            capability: STATIC_PAGE_IMAGE2_DATA_PUBLISH.to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some(format!("codex-host-task:{assistant_run_id}")),
+            fixed_task: Some(fixed_task),
         }
     }
 
