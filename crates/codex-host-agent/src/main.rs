@@ -4401,6 +4401,22 @@ mod tests {
             &task_context,
             &task
         ));
+
+        let non_static_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: "inspect_project".to_string(),
+            task: Some("Inspect the repository".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
+        };
+        assert!(!should_requeue_cloudflare_orchestrator_poll(
+            &CodexHostExecutionMode::CodexExec,
+            "Cloudflare Codex task timed out after 1800000ms; task_id=abc",
+            &non_static_context,
+            &task
+        ));
     }
 
     #[test]
@@ -4454,6 +4470,30 @@ mod tests {
         );
         assert!(cloudflare_orchestrator_requeueable_error(
             "Cloudflare Codex poll failed: status=500 body_excerpt=\"temporary upstream error\""
+        ));
+    }
+
+    #[test]
+    fn codex_exec_cloudflare_fallback_can_be_disabled() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _fallback_enabled = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_CODEX_EXEC_CLOUDFLARE_FALLBACK_ENABLED",
+            "false",
+        );
+        let task = test_workflow_task(1, 3);
+        let task_context = test_static_page_task_context();
+        let error = anyhow!("Codex Host command failed: kind=non_zero_exit exit_code=Some(1)");
+
+        assert!(!codex_exec_cloudflare_fallback_enabled());
+        assert!(!should_fallback_codex_exec_to_cloudflare(
+            &task_context,
+            &error
+        ));
+        assert!(!should_requeue_cloudflare_orchestrator_poll(
+            &CodexHostExecutionMode::CodexExec,
+            "Cloudflare Codex task still running; task_id=abc status=running",
+            &task_context,
+            &task
         ));
     }
 
