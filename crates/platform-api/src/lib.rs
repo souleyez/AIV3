@@ -29517,6 +29517,26 @@ fn static_page_generated_template_public_url(reference: &Value) -> Option<String
     .next()
 }
 
+fn static_page_generated_template_preview_url(reference: &Value) -> Option<String> {
+    if !static_page_generated_template_reference_is_page(reference) {
+        return None;
+    }
+    [
+        "previewUrl",
+        "preview_url",
+        "effectImageUrl",
+        "effect_image_url",
+        "visualContractUrl",
+        "visual_contract_url",
+    ]
+    .into_iter()
+    .filter_map(|key| reference.get(key).and_then(Value::as_str))
+    .map(str::trim)
+    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+    .map(ToOwned::to_owned)
+    .next()
+}
+
 fn static_page_existing_artifact_reference_from_public_url(
     public_url: &str,
     source: &str,
@@ -29542,9 +29562,7 @@ fn static_page_existing_artifact_reference_from_template_context(
     template_reference: Option<&Value>,
     source_refs: Option<&Value>,
 ) -> Value {
-    if !static_page_prompt_requests_existing_artifact_revision(prompt)
-        || static_page_prompt_requests_explicit_redesign(prompt)
-    {
+    if static_page_prompt_requests_explicit_redesign(prompt) {
         return Value::Null;
     }
 
@@ -30807,6 +30825,191 @@ fn external_channel_static_page_image_job_preview_ready(
         )
 }
 
+fn static_page_relaxed_template_match_is_dataset_overlap(relaxed_template_match: &Value) -> bool {
+    relaxed_template_match.get("policy").and_then(Value::as_str) == Some("dataset_overlap")
+}
+
+fn static_page_relaxed_template_match_baseline_public_url(
+    relaxed_template_match: &Value,
+) -> Option<String> {
+    relaxed_template_match
+        .get("baseline_public_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+        .map(ToOwned::to_owned)
+}
+
+fn static_page_template_baseline_visual_contract_url(
+    template_reference: Option<&Value>,
+    relaxed_template_match: &Value,
+) -> Option<String> {
+    if let Some(preview_url) =
+        template_reference.and_then(static_page_generated_template_preview_url)
+    {
+        return Some(preview_url);
+    }
+
+    let public_url = static_page_relaxed_template_match_baseline_public_url(relaxed_template_match)
+        .or_else(|| template_reference.and_then(static_page_generated_template_public_url))?;
+    static_page_artifact_sibling_url(&public_url, "image2-visual-reference.png")
+        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+        .or(Some(public_url))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_static_page_template_baseline_preview_job(
+    state: &AppState,
+    draft: StaticPageDraft,
+    prompt: &str,
+    template_reference: Option<&Value>,
+    relaxed_template_match: &Value,
+    visual_contract_url: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<(StaticPageDraft, StaticPageImageJobView), ApiError> {
+    let mut draft = refresh_static_page_draft_data_contract_for_action(
+        state,
+        draft,
+        "submit_static_page_template_baseline_preview",
+    )
+    .await?;
+    let mut image_prompt_payload = build_static_page_image_prompt_payload(&draft, Some(prompt));
+    set_payload_value(&mut image_prompt_payload, "image2_skipped", json!(true));
+    set_payload_value(
+        &mut image_prompt_payload,
+        "image2_skip_reason",
+        json!("accepted_dataset_overlap_template_baseline"),
+    );
+    set_payload_value(
+        &mut image_prompt_payload,
+        "template_baseline_visual_contract_url",
+        json!(visual_contract_url),
+    );
+    set_payload_value(
+        &mut image_prompt_payload,
+        "relaxed_template_match",
+        relaxed_template_match.clone(),
+    );
+    if let Some(template_reference) = template_reference {
+        set_payload_value(
+            &mut image_prompt_payload,
+            "template_reference",
+            template_reference.clone(),
+        );
+    }
+    let mut orchestrator = image_prompt_payload
+        .get("orchestrator")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    ensure_json_object(&mut orchestrator);
+    set_payload_value(&mut orchestrator, "image2Skipped", json!(true));
+    set_payload_value(
+        &mut orchestrator,
+        "image2SkipReason",
+        json!("accepted_dataset_overlap_template_baseline"),
+    );
+    set_payload_value(
+        &mut orchestrator,
+        "previewAssetProvenance",
+        json!({
+            "sourceAssetKind": "accepted_static_page_template_baseline",
+            "sourceAssetRef": visual_contract_url,
+            "sourceAssetRefRedacted": false,
+            "sourceAssetHadQuery": false,
+            "persisted": true,
+            "persistedPreviewAssetKey": visual_contract_url,
+            "storageStatus": "accepted_template_baseline",
+        }),
+    );
+    set_payload_value(&mut image_prompt_payload, "orchestrator", orchestrator);
+
+    let job = state
+        .storage
+        .static_page_image_jobs()
+        .create(
+            state.tenant_id,
+            &NewStaticPageImageJob {
+                draft_id: draft.id,
+                assistant_run_id: draft.assistant_run_id,
+                status: StaticPageImageJobStatus::PreviewReady,
+                queue_position: None,
+                image_prompt_payload,
+                preview_asset_key: Some(visual_contract_url.to_string()),
+                failure_reason: None,
+                confirmed_at: Some(now),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let operations = vec![json!({
+        "type": "mark_preview_ready",
+        "previewImage": {
+            "imageJobId": job.id,
+            "assetKey": visual_contract_url,
+            "source": "accepted_static_page_template_baseline",
+            "image2Skipped": true,
+            "image2SkipReason": "accepted_dataset_overlap_template_baseline",
+        },
+    })];
+    draft.draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload,
+        &operations,
+        Some("已命中已发布模板，复用模板视觉合同并继续制作静态页。"),
+    );
+    append_static_page_operations_metadata(
+        &mut draft.draft_payload,
+        &operations,
+        Some(prompt),
+        "已命中已发布模板，复用模板视觉合同并继续制作静态页。",
+    );
+    draft.status = StaticPageDraftStatus::Previewed;
+    let draft = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    append_static_page_draft_run_event(
+        state,
+        &draft,
+        "static_page_image_job.created",
+        json!({
+            "draft_id": draft.id,
+            "image_job_id": job.id,
+            "status": job.status.as_str(),
+            "queue_position": job.queue_position,
+            "workflow_execution_id": Value::Null,
+            "workflow_task_id": Value::Null,
+            "image2_skipped": true,
+            "image2_skip_reason": "accepted_dataset_overlap_template_baseline",
+            "preview_asset_key": visual_contract_url,
+            "relaxed_template_match": relaxed_template_match,
+        }),
+    )
+    .await?;
+    append_static_page_draft_run_event(
+        state,
+        &draft,
+        "static_page_image_job.preview_ready",
+        json!({
+            "draft_id": draft.id,
+            "image_job_id": job.id,
+            "status": "preview_ready",
+            "preview_asset_key": visual_contract_url,
+            "image2_skipped": true,
+            "image2_skip_reason": "accepted_dataset_overlap_template_baseline",
+            "template_reference": template_reference.cloned().unwrap_or(Value::Null),
+            "relaxed_template_match": relaxed_template_match,
+        }),
+    )
+    .await?;
+
+    Ok((draft, to_static_page_image_job_view(job)))
+}
+
 fn assistant_run_model_is_gpt_55(model: &str) -> bool {
     let normalized = model
         .chars()
@@ -31827,6 +32030,453 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         external_channel_static_page_default_template_scope_from_payload(
             &template_observability_payload,
         );
+    let codex_auto_publish_readiness = external_channel_static_page_codex_auto_publish_readiness();
+    let gpt55_main_model_preferred = assistant_run_static_page_should_use_gpt_55_local_route(run);
+    let codex_auto_publish_enabled = codex_auto_publish_readiness.ready;
+    let gpt55_local_publish_after_preview = false;
+    let auto_publish_after_preview = codex_auto_publish_enabled;
+    let final_publish_route = if codex_auto_publish_enabled && gpt55_main_model_preferred {
+        "gpt_5_5_image2_codex_publish"
+    } else if codex_auto_publish_enabled {
+        "cloudflare_codex"
+    } else {
+        "image2_preview_waiting_for_publish_config"
+    };
+    let template_reference_for_publish = draft_outcome.template_reference.clone().or_else(|| {
+        (!draft_template_reference.is_null()).then(|| draft_template_reference.clone())
+    });
+    let template_baseline_visual_contract_url = if codex_auto_publish_enabled
+        && static_page_relaxed_template_match_is_dataset_overlap(&draft_relaxed_template_match)
+        && !static_page_prompt_requests_explicit_redesign(&assistant_request.prompt)
+    {
+        static_page_template_baseline_visual_contract_url(
+            template_reference_for_publish.as_ref(),
+            &draft_relaxed_template_match,
+        )
+    } else {
+        None
+    };
+    if let Some(visual_contract_url) = template_baseline_visual_contract_url.as_deref() {
+        let (draft, image_job) = create_static_page_template_baseline_preview_job(
+            state,
+            draft_outcome.draft.clone(),
+            &assistant_request.prompt,
+            template_reference_for_publish.as_ref(),
+            &draft_relaxed_template_match,
+            visual_contract_url,
+            now,
+        )
+        .await?;
+        let codex_execution_id = external_channel_static_page_image2_enqueue_if_enabled(
+            state,
+            connection_id,
+            connection,
+            run,
+            &draft,
+            &image_job,
+            message,
+            template_reference_for_publish.as_ref(),
+            &draft_outcome.evidence_summary,
+            &draft_outcome.missing_evidence,
+        )
+        .await?;
+        if let Some(codex_execution_id) = codex_execution_id {
+            let image_job_id_string = image_job.id.to_string();
+            mark_static_page_draft_generated_artifact_publish_queued(
+                &state.storage,
+                state.tenant_id,
+                &draft,
+                Some(image_job_id_string.as_str()),
+                codex_execution_id,
+            )
+            .await?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_static_page_publish_queued"
+                            .to_string(),
+                        payload: json!({
+                            "source": draft.source_refs.get("source").and_then(Value::as_str),
+                            "channel_connection_id": connection_id,
+                            "draft_id": draft.id,
+                            "image_job_id": image_job.id,
+                            "preview_asset_key": image_job.preview_asset_key.clone(),
+                            "codex_host_workflow_execution_id": codex_execution_id,
+                            "template_id": "static_page_image2_data_publish",
+                            "publish_mode": "new_generated_artifact_only",
+                            "final_publish_route": final_publish_route,
+                            "gpt_5_5_main_model_preferred": gpt55_main_model_preferred,
+                            "gpt_5_5_local_publish_after_preview": gpt55_local_publish_after_preview,
+                            "cloudflare_codex_used": true,
+                            "effect_image_confirmation_required": false,
+                            "image2_skipped": true,
+                            "image2_skip_reason": "accepted_dataset_overlap_template_baseline",
+                            "recipient_delivery": recipient_delivery.clone(),
+                            "permission_review_status": recipient_delivery
+                                .get("permission_review_status")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "editable_after_publish": recipient_delivery
+                                .get("editable_after_publish")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "status_url": external_channel_assistant_run_reply_status_url(
+                                connection_id,
+                                run.id,
+                            ),
+                            "status_method": "GET",
+                            "poll_after_seconds": 15,
+                            "template_reference_id": draft_template_reference_id.clone(),
+                            "template_reference": draft_template_reference.clone(),
+                            "template_match_policy": draft_template_match_policy.clone(),
+                            "relaxed_template_match": draft_relaxed_template_match.clone(),
+                            "style_reuse_policy": draft_style_reuse_policy.clone(),
+                            "data_refresh_policy": draft_data_refresh_policy.clone(),
+                            "default_template_scope": draft_default_template_scope.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+        }
+        let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
+        let codex_execution_id_value = codex_execution_id
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null);
+        let mut pipeline_payload = json!({
+            "channel_connection_id": connection_id,
+            "platform": external_channel_platform_wire_value(&message.platform),
+            "message_external_id": message.message_external_id,
+            "draft_id": draft.id,
+            "image_job_id": image_job.id,
+            "status": "static_page_image2_auto_publish_pending",
+            "status_url": status_url.clone(),
+            "status_method": "GET",
+            "poll_after_seconds": 15,
+            "template_id": "static_page_image2_data_publish",
+        });
+        set_payload_value(
+            &mut pipeline_payload,
+            "image_job_status",
+            json!(image_job.status.clone()),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "preview_asset_key",
+            json!(image_job.preview_asset_key.clone()),
+        );
+        set_payload_value(&mut pipeline_payload, "render_output_id", Value::Null);
+        set_payload_value(&mut pipeline_payload, "render_output_status", Value::Null);
+        set_payload_value(&mut pipeline_payload, "html_preview_url", Value::Null);
+        set_payload_value(&mut pipeline_payload, "html_download_url", Value::Null);
+        set_payload_value(&mut pipeline_payload, "public_url", Value::Null);
+        set_payload_value(
+            &mut pipeline_payload,
+            "recipient_delivery",
+            recipient_delivery.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "permission_review_status",
+            recipient_delivery
+                .get("permission_review_status")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "editable_after_publish",
+            recipient_delivery
+                .get("editable_after_publish")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "codex_host_workflow_execution_id",
+            codex_execution_id_value.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "auto_publish_after_preview",
+            json!(auto_publish_after_preview),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "final_publish_route",
+            json!(final_publish_route),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "gpt_5_5_main_model_preferred",
+            json!(gpt55_main_model_preferred),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "gpt_5_5_local_publish_after_preview",
+            json!(gpt55_local_publish_after_preview),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "codex_auto_publish_ready",
+            json!(codex_auto_publish_enabled),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "codex_auto_publish_disabled_reason",
+            Value::Null,
+        );
+        set_payload_value(&mut pipeline_payload, "direct_html_fallback", json!(false));
+        set_payload_value(
+            &mut pipeline_payload,
+            "provisional_direct_html",
+            json!(false),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "demo_generated_artifact_publish",
+            json!(false),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "codex_final_status",
+            json!("static_page_image2_auto_publish_pending"),
+        );
+        set_payload_value(&mut pipeline_payload, "image2_skipped", json!(true));
+        set_payload_value(
+            &mut pipeline_payload,
+            "image2_skip_reason",
+            json!("accepted_dataset_overlap_template_baseline"),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "visual_contract_url",
+            json!(visual_contract_url),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "template_reference_id",
+            draft_template_reference_id.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "template_reference",
+            draft_template_reference.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "template_match_policy",
+            draft_template_match_policy.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "relaxed_template_match",
+            draft_relaxed_template_match.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "style_reuse_policy",
+            draft_style_reuse_policy.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "data_refresh_policy",
+            draft_data_refresh_policy.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "default_template_scope",
+            draft_default_template_scope.clone(),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "effect_image_confirmation_required",
+            json!(false),
+        );
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_channel_static_page_pipeline_queued"
+                        .to_string(),
+                    payload: pipeline_payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+
+        let task_status = "static_page_image2_auto_publish_pending";
+        let mut reply_card = json!({
+            "type": "v3_static_page_image2_pipeline",
+            "status": task_status,
+            "draft_id": draft.id.to_string(),
+            "image_job_id": image_job.id.to_string(),
+            "status_url": status_url,
+            "status_method": "GET",
+            "poll_after_seconds": 15,
+            "fixed_task_template_id": "static_page_image2_data_publish",
+            "publish_mode": "new_generated_artifact_only",
+        });
+        set_payload_value(
+            &mut reply_card,
+            "image_job_status",
+            json!(image_job.status.clone()),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "preview_asset_key",
+            json!(image_job.preview_asset_key.clone()),
+        );
+        set_payload_value(&mut reply_card, "render_output_id", Value::Null);
+        set_payload_value(&mut reply_card, "render_output_status", Value::Null);
+        set_payload_value(&mut reply_card, "html_preview_url", Value::Null);
+        set_payload_value(&mut reply_card, "html_download_url", Value::Null);
+        set_payload_value(&mut reply_card, "download_url", Value::Null);
+        set_payload_value(&mut reply_card, "public_url", Value::Null);
+        set_payload_value(&mut reply_card, "generated_artifact_url", Value::Null);
+        set_payload_value(
+            &mut reply_card,
+            "recipient_delivery",
+            recipient_delivery.clone(),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "permission_review_status",
+            recipient_delivery
+                .get("permission_review_status")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "editable_after_publish",
+            recipient_delivery
+                .get("editable_after_publish")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_host_workflow_execution_id",
+            codex_execution_id_value,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "auto_publish_after_preview",
+            json!(auto_publish_after_preview),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "final_publish_route",
+            json!(final_publish_route),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "gpt_5_5_main_model_preferred",
+            json!(gpt55_main_model_preferred),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "gpt_5_5_local_publish_after_preview",
+            json!(gpt55_local_publish_after_preview),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_auto_publish_ready",
+            json!(codex_auto_publish_enabled),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_auto_publish_disabled_reason",
+            Value::Null,
+        );
+        set_payload_value(&mut reply_card, "direct_html_fallback", json!(false));
+        set_payload_value(&mut reply_card, "provisional_direct_html", json!(false));
+        set_payload_value(
+            &mut reply_card,
+            "demo_generated_artifact_publish",
+            json!(false),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_final_status",
+            json!("static_page_image2_auto_publish_pending"),
+        );
+        set_payload_value(&mut reply_card, "image2_skipped", json!(true));
+        set_payload_value(
+            &mut reply_card,
+            "image2_skip_reason",
+            json!("accepted_dataset_overlap_template_baseline"),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "visual_contract_url",
+            json!(visual_contract_url),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "template_reference_id",
+            draft_template_reference_id,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "template_reference",
+            draft_template_reference,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "template_match_policy",
+            draft_template_match_policy,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "relaxed_template_match",
+            draft_relaxed_template_match,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "style_reuse_policy",
+            draft_style_reuse_policy,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "data_refresh_policy",
+            draft_data_refresh_policy,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "default_template_scope",
+            draft_default_template_scope,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "effect_image_confirmation_required",
+            json!(false),
+        );
+        return Ok(Some(ExternalBotReplyView {
+            target_conversation_external_id: message.conversation_external_id.clone(),
+            reply_type: ExternalBotReplyTypeView::TaskStatus,
+            text: Some(
+                "已命中已发布静态页模板；V3 将复用该模板视觉基线并刷新当前数据，正在通过 Codex 制作并发布新的静态页。"
+                    .to_string(),
+            ),
+            card: Some(reply_card),
+            artifact_links: Vec::new(),
+            task_status: Some(external_channel_public_task_status(task_status).to_string()),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        }));
+    }
     let image_prompt_payload = build_static_page_image_prompt_payload(
         &draft_outcome.draft,
         Some(&assistant_request.prompt),
@@ -31840,18 +32490,6 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         },
     )
     .await?;
-    let codex_auto_publish_readiness = external_channel_static_page_codex_auto_publish_readiness();
-    let gpt55_main_model_preferred = assistant_run_static_page_should_use_gpt_55_local_route(run);
-    let codex_auto_publish_enabled = codex_auto_publish_readiness.ready;
-    let gpt55_local_publish_after_preview = false;
-    let auto_publish_after_preview = codex_auto_publish_enabled;
-    let final_publish_route = if codex_auto_publish_enabled && gpt55_main_model_preferred {
-        "gpt_5_5_image2_codex_publish"
-    } else if codex_auto_publish_enabled {
-        "cloudflare_codex"
-    } else {
-        "image2_preview_waiting_for_publish_config"
-    };
     let create_direct_render_now = false;
     let direct_render_result = if create_direct_render_now {
         let result =
@@ -80427,8 +81065,36 @@ mod tests {
                 "生成新百经营月报",
                 Some(&generated_template_reference),
                 None,
-            ),
-            Value::Null
+            )["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html")
+        );
+        assert_eq!(
+            static_page_template_baseline_visual_contract_url(
+                Some(&generated_template_reference),
+                &json!({
+                    "policy": "dataset_overlap",
+                    "baseline_public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html"
+                })
+            )
+            .as_deref(),
+            Some(
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/image2-visual-reference.png"
+            )
+        );
+        let generated_template_reference_with_preview = json!({
+            "templateId": "generated-static-page:template-001",
+            "source": "v3-static-page-template-library",
+            "templateKind": "generated_static_page",
+            "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
+            "previewUrl": "https://v3.elepcloud.com/generated-artifacts/static-page-previews/xinbai-template.png"
+        });
+        assert_eq!(
+            static_page_template_baseline_visual_contract_url(
+                Some(&generated_template_reference_with_preview),
+                &json!({"policy": "dataset_overlap"})
+            )
+            .as_deref(),
+            Some("https://v3.elepcloud.com/generated-artifacts/static-page-previews/xinbai-template.png")
         );
         assert!(static_page_prompt_requests_explicit_redesign(
             "重新出图，换个风格"
@@ -82460,6 +83126,277 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_channel_static_page_dataset_template_overlap_skips_image2_and_queues_codex() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external static-page template overlap test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "MiniMax-M2.7");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-static-page-template-overlap-{}", Uuid::new_v4()),
+                "External Static Page Template Overlap Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-static-template-overlap".to_string();
+        message.message_external_id = "msg-static-template-overlap-001".to_string();
+        message.text = Some("生成新百经营分析月报，按当前数据刷新并保留分店筛选".to_string());
+        message.output_format = Some("rich_text".to_string());
+        message.render_mode = Some("artifact".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        message.dataset_external_ids = vec!["xinbai-project-dataset".to_string()];
+        let mut assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let canonical_dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "dataset_external_ids": ["xinbai-project-dataset"],
+            "requested_dataset_external_ids": ["xinbai-project-dataset"],
+            "canonical_datasets": [{"type": "dataset", "id": canonical_dataset_id}],
+            "external_document_scope_status": "dataset_resolved"
+        });
+        assistant_request.selected_scope = Some(selected_scope.clone());
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/index.html";
+        let baseline_source_refs = apply_static_page_artifact_stability_to_source_refs(
+            json!({
+                "source": "external_channel_static_page_artifact_request",
+                "channel_connection_id": "generic-chat-main",
+                "platform": "generic_chat",
+                "conversation_external_id": "conv-static-template-overlap",
+                "message_external_id": "msg-static-template-baseline-001",
+                "artifact_type": "static_page",
+                "dataset_external_ids": ["xinbai-project-dataset"]
+            }),
+            None,
+            "accepted",
+            Some(public_url),
+            Utc::now(),
+        );
+        let baseline_payload = apply_static_page_artifact_stability_to_payload(
+            json!({
+                "status": "rendered",
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": public_url
+                }
+            }),
+            None,
+            "accepted",
+            Some(public_url),
+            Utc::now(),
+        );
+        let now = Utc::now();
+        let baseline_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: "生成新百经营分析默认模板".to_string(),
+                    startup_briefing: json!({"surface": "external_channel"}),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("baseline run should be created");
+        state
+            .storage
+            .static_page_drafts()
+            .create(
+                state.tenant_id,
+                &NewStaticPageDraft {
+                    assistant_run_id: baseline_run.id,
+                    owner_user_id: None,
+                    title: "静态页：新百经营分析默认模板".to_string(),
+                    status: StaticPageDraftStatus::Rendered,
+                    selected_scope: selected_scope.clone(),
+                    visibility_snapshot: json!({"policy": "test"}),
+                    source_refs: baseline_source_refs,
+                    draft_payload: baseline_payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("baseline draft should be created");
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: assistant_request.prompt.clone(),
+                    startup_briefing: assistant_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!(assistant_request.scope_candidates.clone()),
+                    context_policy: assistant_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+
+        let reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &run,
+            &assistant_request,
+            &message,
+            now,
+        )
+        .await
+        .expect("static-page pipeline should complete")
+        .expect("static-page reply should be returned");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        let card = reply.card.expect("card should be returned");
+        assert_eq!(
+            card["status"],
+            json!("static_page_image2_auto_publish_pending")
+        );
+        assert_eq!(card["image2_skipped"], json!(true));
+        assert_eq!(
+            card["image2_skip_reason"],
+            json!("accepted_dataset_overlap_template_baseline")
+        );
+        assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
+        assert_eq!(
+            card["visual_contract_url"],
+            json!(
+                "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/image2-visual-reference.png"
+            )
+        );
+        assert!(card["codex_host_workflow_execution_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+
+        let new_run_drafts = state
+            .storage
+            .static_page_drafts()
+            .list_by_assistant_run(state.tenant_id, run.id)
+            .await
+            .expect("drafts should list");
+        assert_eq!(new_run_drafts.len(), 1);
+        let image_jobs = state
+            .storage
+            .static_page_image_jobs()
+            .list_by_draft(state.tenant_id, new_run_drafts[0].id)
+            .await
+            .expect("image jobs should list");
+        assert_eq!(image_jobs.len(), 1);
+        assert_eq!(image_jobs[0].status, StaticPageImageJobStatus::PreviewReady);
+        assert_eq!(
+            image_jobs[0].preview_asset_key.as_deref(),
+            Some(
+                "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/image2-visual-reference.png"
+            )
+        );
+        assert_eq!(
+            image_jobs[0].image_prompt_payload["image2_skipped"],
+            json!(true)
+        );
+
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        assert_eq!(
+            workflows
+                .iter()
+                .filter(|execution| execution.kind == WorkflowKind::StaticPageImageGeneration)
+                .count(),
+            0
+        );
+        let codex_workflows = workflows
+            .iter()
+            .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
+            .collect::<Vec<_>>();
+        assert_eq!(codex_workflows.len(), 1);
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["requirements"]["existing_artifact"]
+                ["public_url"],
+            json!(public_url)
+        );
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["image2"]["preview_asset_key"],
+            json!(
+                "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/image2-visual-reference.png"
+            )
+        );
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                && event.payload["image2_skip_reason"]
+                    == json!("accepted_dataset_overlap_template_baseline")
+        }));
+    }
+
+    #[tokio::test]
     async fn main_static_page_draft_reuses_accepted_dataset_artifact_baseline() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
@@ -83528,6 +84465,29 @@ mod tests {
         );
         assert_eq!(
             templated_encoded["requirements"]["existing_artifact"]["source"],
+            json!("generated_static_page_template_reference")
+        );
+        let templated_report_task = external_channel_static_page_image2_fixed_task(
+            tenant_id,
+            "generic-chat-main",
+            &connection,
+            &run,
+            &draft,
+            &image_job,
+            &message,
+            "生成新百经营分析月报，按当前数据刷新",
+            Some(&generated_template_reference),
+            &json!({"status": "ready"}),
+            &json!({"status": "ready"}),
+        );
+        let templated_report_encoded =
+            serde_json::to_value(&templated_report_task).expect("fixed task encodes");
+        assert_eq!(
+            templated_report_encoded["requirements"]["existing_artifact"]["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html")
+        );
+        assert_eq!(
+            templated_report_encoded["requirements"]["existing_artifact"]["source"],
             json!("generated_static_page_template_reference")
         );
         assert_eq!(
