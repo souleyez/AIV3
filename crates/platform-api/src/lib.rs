@@ -38888,6 +38888,38 @@ fn assistant_run_xinbai_published_report_link_answer(prompt: &str) -> Option<Str
     if compact.is_empty() {
         return None;
     }
+    let strong_revision_signal = prompt_contains_any(
+        &compact,
+        &[
+            "修复",
+            "修正",
+            "更正",
+            "联动",
+            "筛选",
+            "不会变",
+            "不变",
+            "数据绑定",
+            "绑定错误",
+            "口径错",
+            "口径不对",
+            "单位错",
+            "小数点",
+            "重新生成",
+            "生成新的",
+            "新产物",
+            "不覆盖旧页面",
+            "bug",
+        ],
+    ) || ascii_prompt_contains_any(
+        &compact.to_ascii_lowercase(),
+        &["fix", "revise", "update", "correct", "bug"],
+    );
+    if static_page_prompt_requests_existing_artifact_revision(prompt)
+        && (strong_revision_signal
+            || !static_page_prompt_generated_artifact_urls(prompt).is_empty())
+    {
+        return None;
+    }
     let compact_without_soft_punctuation =
         compact.replace(['/', '\\', '"', '\'', '“', '”', '‘', '’'], "");
     let lower_prompt = compact.to_ascii_lowercase();
@@ -78042,6 +78074,10 @@ mod tests {
         assert!(
             assistant_run_xinbai_published_report_link_answer("新百报表怎么重新设计").is_none()
         );
+        assert!(assistant_run_xinbai_published_report_link_answer(
+            "请修复这个已经发布的新百经营分析月报静态页：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html 。近7日销售不会随筛选联动变化，生成新的 V3 产物链接，不覆盖旧页面。"
+        )
+        .is_none());
     }
 
     #[test]
