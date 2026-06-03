@@ -10242,6 +10242,12 @@ fn external_channel_public_artifact_url_from_reply(reply: &ExternalBotReplyView)
         })
 }
 
+fn external_channel_static_page_provisional_existing_artifact(card: Option<&Value>) -> bool {
+    card.and_then(|card| card.get("provisional_existing_artifact"))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
 fn external_channel_static_page_reply_with_public_artifact_terminal(
     mut reply: ExternalBotReplyView,
 ) -> ExternalBotReplyView {
@@ -10255,7 +10261,9 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         .or(reply.task_status.as_deref())
         .unwrap_or_default()
         .to_string();
-    if raw_status != "static_page_stable_artifact_reused" {
+    let provisional_existing_artifact =
+        external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
+    if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
         reply.text = Some("V3 静态页已生成并发布，可以把链接返回给用户。".to_string());
@@ -10268,7 +10276,7 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         reply.artifact_links.insert(0, public_url.clone());
     }
     if let Some(Value::Object(card)) = reply.card.as_mut() {
-        if raw_status != "static_page_stable_artifact_reused" {
+        if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
             card.insert(
                 "status".to_string(),
                 Value::String("static_page_published".to_string()),
@@ -10458,6 +10466,7 @@ fn external_channel_static_page_sse_status(response: &ExternalChannelEventRespon
         .unwrap_or("processing")
         .to_string();
     if raw_status != "static_page_stable_artifact_reused"
+        && !external_channel_static_page_provisional_existing_artifact(response.reply.card.as_ref())
         && external_channel_public_artifact_url_from_reply(&response.reply).is_some()
     {
         "static_page_published".to_string()
@@ -26073,17 +26082,19 @@ fn external_channel_static_page_reply_from_events(
             ));
         }
         if event.event_name == "assistant_run.external_channel_static_page_pipeline_queued" {
-            if let Some(public_url) = event
-                .payload
-                .get("public_url")
-                .and_then(Value::as_str)
-                .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-            {
-                return Some(external_channel_static_page_published_reply(
-                    conversation_external_id,
-                    public_url,
-                    &event.payload,
-                ));
+            if !external_channel_static_page_provisional_existing_artifact(Some(&event.payload)) {
+                if let Some(public_url) = event
+                    .payload
+                    .get("public_url")
+                    .and_then(Value::as_str)
+                    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+                {
+                    return Some(external_channel_static_page_published_reply(
+                        conversation_external_id,
+                        public_url,
+                        &event.payload,
+                    ));
+                }
             }
             if let Some(preview_ready) = external_channel_static_page_latest_named_event(
                 events,
@@ -32844,7 +32855,31 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         set_payload_value(&mut pipeline_payload, "render_output_status", Value::Null);
         set_payload_value(&mut pipeline_payload, "html_preview_url", Value::Null);
         set_payload_value(&mut pipeline_payload, "html_download_url", Value::Null);
-        set_payload_value(&mut pipeline_payload, "public_url", Value::Null);
+        set_payload_value(
+            &mut pipeline_payload,
+            "public_url",
+            json!(visual_contract_url),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "generated_artifact_url",
+            json!(visual_contract_url),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "artifact_links",
+            json!([visual_contract_url]),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "provisional_existing_artifact",
+            json!(true),
+        );
+        set_payload_value(
+            &mut pipeline_payload,
+            "provisional_existing_artifact_reason",
+            json!("accepted_dataset_overlap_template_baseline"),
+        );
         set_payload_value(
             &mut pipeline_payload,
             "recipient_delivery",
@@ -33011,8 +33046,27 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         set_payload_value(&mut reply_card, "html_preview_url", Value::Null);
         set_payload_value(&mut reply_card, "html_download_url", Value::Null);
         set_payload_value(&mut reply_card, "download_url", Value::Null);
-        set_payload_value(&mut reply_card, "public_url", Value::Null);
-        set_payload_value(&mut reply_card, "generated_artifact_url", Value::Null);
+        set_payload_value(&mut reply_card, "public_url", json!(visual_contract_url));
+        set_payload_value(
+            &mut reply_card,
+            "generated_artifact_url",
+            json!(visual_contract_url),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "artifact_links",
+            json!([visual_contract_url]),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "provisional_existing_artifact",
+            json!(true),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "provisional_existing_artifact_reason",
+            json!("accepted_dataset_overlap_template_baseline"),
+        );
         set_payload_value(
             &mut reply_card,
             "recipient_delivery",
@@ -33140,7 +33194,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     .to_string(),
             ),
             card: Some(reply_card),
-            artifact_links: Vec::new(),
+            artifact_links: vec![visual_contract_url.to_string()],
             task_status: Some(external_channel_public_task_status(task_status).to_string()),
             requires_confirmation: false,
             action_id: None,
@@ -45491,6 +45545,17 @@ fn external_channel_static_page_card_with_template_payload(
             "default_template_scope".to_string(),
             external_channel_static_page_default_template_scope_from_payload(payload),
         );
+        for key in [
+            "public_url",
+            "generated_artifact_url",
+            "artifact_links",
+            "provisional_existing_artifact",
+            "provisional_existing_artifact_reason",
+        ] {
+            if let Some(value) = payload.get(key) {
+                object.insert(key.to_string(), value.clone());
+            }
+        }
     }
     card
 }
@@ -83072,6 +83137,51 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_provisional_existing_artifact_keeps_processing_status() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/demo/index.html";
+        let reply = ExternalBotReplyView {
+            target_conversation_external_id: "room-1".to_string(),
+            reply_type: ExternalBotReplyTypeView::TaskStatus,
+            text: Some("已先返回已有静态页链接，后台继续刷新。".to_string()),
+            card: Some(json!({
+                "type": "v3_static_page_image2_pipeline",
+                "status": "static_page_image2_auto_publish_pending",
+                "public_url": public_url,
+                "generated_artifact_url": public_url,
+                "artifact_links": [public_url],
+                "provisional_existing_artifact": true,
+                "provisional_existing_artifact_reason": "accepted_dataset_overlap_template_baseline"
+            })),
+            artifact_links: vec![public_url.to_string()],
+            task_status: Some("processing".to_string()),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        };
+
+        let public_reply = external_channel_public_reply(reply.clone());
+        assert_eq!(
+            public_reply.reply_type,
+            ExternalBotReplyTypeView::TaskStatus
+        );
+        assert_eq!(public_reply.task_status.as_deref(), Some("processing"));
+        assert_eq!(public_reply.artifact_links, vec![public_url.to_string()]);
+
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(AssistantRunId::new()),
+            idempotency_key: "generic:tenant:static-page-provisional-001".to_string(),
+            reply,
+        };
+        assert_eq!(
+            external_channel_static_page_sse_status(&response),
+            "static_page_image2_auto_publish_pending"
+        );
+        assert!(!external_channel_static_page_sse_is_terminal(&response));
+    }
+
+    #[test]
     fn external_channel_static_page_sse_progress_emits_preview_and_publish_events() {
         let assistant_run_id = AssistantRunId::new();
         let preview_response = ExternalChannelEventResponse {
@@ -84390,11 +84500,16 @@ mod tests {
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
         assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
         let card = reply.card.expect("card should be returned");
         assert_eq!(
             card["status"],
             json!("static_page_image2_auto_publish_pending")
         );
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
+        assert_eq!(card["provisional_existing_artifact"], json!(true));
         assert_eq!(card["image2_skipped"], json!(true));
         assert_eq!(
             card["image2_skip_reason"],
@@ -84465,6 +84580,8 @@ mod tests {
             event.event_name == "assistant_run.external_channel_static_page_publish_queued"
                 && event.payload["image2_skip_reason"]
                     == json!("accepted_dataset_overlap_template_baseline")
+                && event.payload["provisional_existing_artifact"] == json!(true)
+                && event.payload["artifact_links"] == json!([public_url])
         }));
     }
 
