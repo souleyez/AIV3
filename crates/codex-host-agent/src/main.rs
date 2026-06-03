@@ -259,17 +259,45 @@ async fn process_task(
                 }
             }
             CodexHostExecutionMode::CloudflareOrchestrator => {
-                run_cloudflare_orchestrator_with_heartbeat(
-                    storage,
-                    task.tenant_id,
-                    task.execution_id,
-                    task.id,
-                    &task.payload,
+                match try_publish_existing_static_page_repair_before_cloudflare(
                     &task_context,
+                    task.execution_id,
                     &decision,
                     runtime_config,
-                )
-                .await?
+                ) {
+                    Ok(Some(output)) => output,
+                    Ok(None) => {
+                        run_cloudflare_orchestrator_with_heartbeat(
+                            storage,
+                            task.tenant_id,
+                            task.execution_id,
+                            task.id,
+                            &task.payload,
+                            &task_context,
+                            &decision,
+                            runtime_config,
+                        )
+                        .await?
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            error = ?error,
+                            assistant_run_id = %task_context.assistant_run_id,
+                            "existing static-page repair preflight failed; falling back to Cloudflare orchestrator"
+                        );
+                        run_cloudflare_orchestrator_with_heartbeat(
+                            storage,
+                            task.tenant_id,
+                            task.execution_id,
+                            task.id,
+                            &task.payload,
+                            &task_context,
+                            &decision,
+                            runtime_config,
+                        )
+                        .await?
+                    }
+                }
             }
         };
         let event_name = codex_host_task_event_name(&output);
@@ -3125,6 +3153,43 @@ struct StaticPageRepairPatchReport {
     patches: Vec<&'static str>,
 }
 
+fn try_publish_existing_static_page_repair_before_cloudflare(
+    task_context: &CodexHostTaskContext,
+    execution_id: domain_model::WorkflowExecutionId,
+    decision: &CodexHostExecutionDecision,
+    runtime_config: &CodexHostRuntimeConfig,
+) -> Result<Option<Value>> {
+    let Some(fixed_task) = task_context.fixed_task.as_ref() else {
+        return Ok(None);
+    };
+    if fixed_task.template_id.as_str() != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        return Ok(None);
+    }
+    if !static_page_existing_artifact_filter_binding_repair_requested(fixed_task) {
+        return Ok(None);
+    }
+    let Some(workspace_path) = task_workspace_path(task_context) else {
+        return Ok(None);
+    };
+    fs::create_dir_all(&workspace_path).map_err(|error| {
+        anyhow!(
+            "failed to prepare existing static-page repair workspace {}: {error}",
+            workspace_path.display()
+        )
+    })?;
+    materialize_fixed_task_bundle(
+        &workspace_path,
+        task_context,
+        decision,
+        &runtime_config.workspace_retention_policy(),
+    )?;
+    publish_existing_static_page_repair_fallback_if_available(
+        task_context,
+        execution_id,
+        "preflight-existing-artifact-repair",
+    )
+}
+
 fn publish_existing_static_page_repair_fallback_if_available(
     task_context: &CodexHostTaskContext,
     execution_id: domain_model::WorkflowExecutionId,
@@ -5291,6 +5356,12 @@ fn codex_host_task_event_name(output: &serde_json::Value) -> &'static str {
         Some("plan_only") => "codex_host_task.plan_only_completed",
         Some("codex_exec") => "codex_host_task.exec_completed",
         Some("cloudflare_orchestrator") => "codex_host_task.exec_completed",
+        Some("existing_artifact_repair_fallback") => {
+            "codex_host_task.existing_artifact_repair_fallback_completed"
+        }
+        Some("static_page_template_fallback") => {
+            "codex_host_task.static_page_template_fallback_completed"
+        }
         _ => "codex_host_task.completed",
     }
 }
@@ -6338,6 +6409,144 @@ function renderInsight(k){
             .pointer("/fixed_task_output/validation_report/warnings")
             .and_then(Value::as_array)
             .is_some_and(|warnings| !warnings.is_empty()));
+    }
+
+    #[test]
+    fn cloudflare_preflight_materializes_and_repairs_existing_static_page() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let workspace_root = std::env::temp_dir()
+            .join("v3-codex-host-test-workspaces")
+            .join(Uuid::new_v4().to_string());
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-test-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let source_dir = artifact_root.join("database-static-pages/xinbai/report");
+        fs::create_dir_all(&source_dir).expect("source dir");
+        let _workspace_root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT",
+            workspace_root.to_str().expect("utf-8 workspace root"),
+        );
+        let _materialize_root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_GENERATED_ARTIFACTS_ROOT",
+            artifact_root.to_str().expect("utf-8 artifact root"),
+        );
+        let _artifact_root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.to_str().expect("utf-8 artifact root"),
+        );
+        let _artifact_base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+
+        let html = r#"
+<!doctype html><html><body>
+<label>月份</label><select data-time-range="required"><option>本月</option></select>
+<script>
+const state = { data: null, district: '全部', store: '全部', category: '全部', highOnly: false, month: '2026-05' };
+fetch('data.json').then(r=>r.json()).then(data=>{ state.data = data; document.body.dataset.snapshotVersion = data.snapshots?.salesDate || ''; });
+function amount(n){ return String(n); }
+function pct(n){ return String(n); }
+function currentKpi(){
+  const salesRows = filteredSales();
+  return { sales: salesRows.reduce((s,r)=>s+Number(r.sales||0),0) };
+}
+function render(){
+  const d = state.data; const k = currentKpi(); initTabActive();
+  const last7 = d.kpi.last7VsPrev7;
+  $('kpiGrid').innerHTML = [
+    ['↗','近7日销售', amount(d.kpi.last7Sales), '环比 <span class="delta '+(last7 >= 0 ? 'good' : 'bad')+'">' + pct(last7) + '</span>'],
+  ].map(x => x.join('')).join('');
+  renderTrend(); renderCategory(); renderInsight(k);
+}
+function renderTrend(){
+  const rows = state.data.salesSeries.filter(r => r.txdate.slice(0,7) === state.month || state.month === '全部');
+  $('trendChart').innerHTML = rows.length;
+}
+function renderCategory(){
+  const rows = state.data.categoryLatest.filter(filterCategory).slice(0,6);
+  $('categoryLegend').innerHTML = rows.length;
+}
+function renderInsight(k){
+  const top = filteredOpportunities().filter(r => gap(r) > 0).slice().sort((a,b)=>gap(a)-gap(b))[0];
+  $('aiInsight').textContent = '近7日销售为 ' + amount(state.data.kpi.last7Sales) + '，环比 ' + pct(state.data.kpi.last7VsPrev7) + '。当前筛选下机会池约 ' + amount(k.need || state.data.kpi.requiredSales);
+}
+</script></body></html>
+"#;
+        fs::write(source_dir.join("index.html"), html).expect("source index");
+        fs::write(
+            source_dir.join("data.json"),
+            serde_json::to_vec_pretty(&json!({
+                "snapshots": {"salesDate": "2026-05-10", "salesRowsTotal": 30},
+                "kpi": {"last7Sales": 100, "last7VsPrev7": 0.1},
+                "salesSeries": [],
+                "salesSeriesByStore": {},
+                "categoryLatest": [],
+                "categoryByStore": {},
+                "opportunities": [{"id": 1}]
+            }))
+            .expect("data"),
+        )
+        .expect("source data");
+        fs::write(
+            source_dir.join("data-snapshot.json"),
+            br#"{"snapshotVersion":"2026-05-10"}"#,
+        )
+        .expect("source snapshot");
+
+        let mut task_context = test_static_page_task_context();
+        let assistant_run_id = task_context.assistant_run_id;
+        task_context.task_memory_space_id = Some(format!("codex-host-task:{assistant_run_id}"));
+        let fixed_task = task_context
+            .fixed_task
+            .as_mut()
+            .expect("static page fixed task");
+        fixed_task.requirements["user_goal"] =
+            json!("修复这个已有页面，切换区域和门店后近7日销售、趋势和AI洞察需要联动变化。");
+        fixed_task.requirements["existing_artifact"] = json!({
+            "kind": "v3_generated_static_page",
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
+            "revision_requested": true,
+            "publish_mode": "new_generated_artifact_only"
+        });
+        let policy = test_codex_exec_policy();
+        let decision = CodexHostExecutionDecision {
+            mode: CodexHostExecutionMode::CloudflareOrchestrator,
+            profile: policy.profile,
+            host_kind: "cloudflare_codex".to_string(),
+            command_plan: None,
+        };
+        let runtime_config = CodexHostRuntimeConfig {
+            task_timeout_ms: 10_000,
+            heartbeat_ms: 100,
+            stdout_limit_bytes: 1024,
+            stderr_limit_bytes: 1024,
+            task_workspace_retention_hours: 336,
+        };
+
+        let output = try_publish_existing_static_page_repair_before_cloudflare(
+            &task_context,
+            WorkflowExecutionId::new(),
+            &decision,
+            &runtime_config,
+        )
+        .expect("preflight should not fail")
+        .expect("preflight should publish patched artifact");
+
+        assert_eq!(output["mode"], json!("existing_artifact_repair_fallback"));
+        assert_eq!(
+            output.pointer("/fixed_task_output/status"),
+            Some(&json!("success"))
+        );
+        let workspace = task_workspace_path(&task_context).expect("workspace path");
+        assert!(workspace.join("existing-artifact/index.html").is_file());
+        let local_path = output
+            .pointer("/fixed_task_output/artifact/local_path")
+            .and_then(Value::as_str)
+            .expect("local path");
+        let patched = fs::read_to_string(local_path).expect("patched html");
+        assert!(patched.contains("function filteredSalesSeriesForCurrentScope()"));
+        assert!(patched.contains("amount(last7Stats.last7Sales)"));
     }
 
     #[test]
