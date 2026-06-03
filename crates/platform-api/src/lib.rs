@@ -29319,7 +29319,7 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
     message: &ExternalBotMessageView,
     now: DateTime<Utc>,
 ) -> std::result::Result<(), ApiError> {
-    if !platform_env_flag("STATIC_PAGE_TEMPLATE_PREWARM_ENABLED", true) {
+    if !platform_env_flag("STATIC_PAGE_TEMPLATE_PREWARM_ENABLED", false) {
         return Ok(());
     }
     if external_channel_message_requests_static_page_artifact(message, &assistant_request.prompt)
@@ -31473,11 +31473,8 @@ fn static_page_template_baseline_visual_contract_url(
         return Some(preview_url);
     }
 
-    let public_url = static_page_relaxed_template_match_baseline_public_url(relaxed_template_match)
-        .or_else(|| template_reference.and_then(static_page_generated_template_public_url))?;
-    static_page_artifact_sibling_url(&public_url, "image2-visual-reference.png")
-        .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-        .or(Some(public_url))
+    static_page_relaxed_template_match_baseline_public_url(relaxed_template_match)
+        .or_else(|| template_reference.and_then(static_page_generated_template_public_url))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -81928,7 +81925,7 @@ mod tests {
             )
             .as_deref(),
             Some(
-                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/image2-visual-reference.png"
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html"
             )
         );
         let generated_template_reference_with_preview = json!({
@@ -84404,12 +84401,7 @@ mod tests {
             json!("accepted_dataset_overlap_template_baseline")
         );
         assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
-        assert_eq!(
-            card["visual_contract_url"],
-            json!(
-                "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/image2-visual-reference.png"
-            )
-        );
+        assert_eq!(card["visual_contract_url"], json!(public_url));
         assert!(card["codex_host_workflow_execution_id"]
             .as_str()
             .is_some_and(|value| !value.is_empty()));
@@ -84429,12 +84421,7 @@ mod tests {
             .expect("image jobs should list");
         assert_eq!(image_jobs.len(), 1);
         assert_eq!(image_jobs[0].status, StaticPageImageJobStatus::PreviewReady);
-        assert_eq!(
-            image_jobs[0].preview_asset_key.as_deref(),
-            Some(
-                "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/image2-visual-reference.png"
-            )
-        );
+        assert_eq!(image_jobs[0].preview_asset_key.as_deref(), Some(public_url));
         assert_eq!(
             image_jobs[0].image_prompt_payload["image2_skipped"],
             json!(true)
@@ -84465,9 +84452,7 @@ mod tests {
         );
         assert_eq!(
             codex_workflows[0].context["fixed_task"]["image2"]["preview_asset_key"],
-            json!(
-                "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/image2-visual-reference.png"
-            )
+            json!(public_url)
         );
 
         let events = state
