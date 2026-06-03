@@ -9372,25 +9372,37 @@ fn continue_assistant_run_sse_accepted_event(run_id: AssistantRunId) -> String {
 }
 
 fn create_assistant_run_sse_completion(response: CreateAssistantRunResponse) -> String {
+    create_assistant_run_sse_completion_with_delta(response, true)
+}
+
+fn create_assistant_run_sse_completion_with_delta(
+    response: CreateAssistantRunResponse,
+    emit_answer_delta: bool,
+) -> String {
     let text = response.assistant_message.content.clone();
     let assistant_run_id = response.assistant_run_id;
     let completed_data = json!({
         "assistant_run_id": assistant_run_id,
         "response": response,
     });
-    sse_text_delta_events("assistant_run.delta", &text)
-        + &sse_json_event(
-            "assistant_run.completed",
-            assistant_run_sse_public_payload(
-                Some(assistant_run_id),
-                100,
-                "completed",
-                "completed",
-                "本轮回复已生成。",
-                completed_data,
-            ),
-        )
-        + &sse_json_event("done", json!({"ok": true}))
+    let mut encoded = if emit_answer_delta {
+        sse_text_delta_events("assistant_run.delta", &text)
+    } else {
+        String::new()
+    };
+    encoded.push_str(&sse_json_event(
+        "assistant_run.completed",
+        assistant_run_sse_public_payload(
+            Some(assistant_run_id),
+            100,
+            "completed",
+            "completed",
+            "本轮回复已生成。",
+            completed_data,
+        ),
+    ));
+    encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+    encoded
 }
 
 fn continue_assistant_run_sse_completion(response: ContinueAssistantRunResponse) -> String {
@@ -11487,15 +11499,83 @@ async fn external_channel_static_page_sse_continue_polling_event_persisted(
     )
 }
 
+enum AssistantRunSseWorkerMessage {
+    AnswerDelta(String),
+    Finished(std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError>),
+}
+
+#[derive(Clone)]
+struct AssistantRunLiveDeltaSink {
+    sender: tokio::sync::mpsc::UnboundedSender<AssistantRunSseWorkerMessage>,
+}
+
+impl AssistantRunLiveDeltaSink {
+    fn new(sender: tokio::sync::mpsc::UnboundedSender<AssistantRunSseWorkerMessage>) -> Self {
+        Self { sender }
+    }
+
+    fn emit(&self, delta: LlmStreamDelta) {
+        if delta.delta.is_empty() {
+            return;
+        }
+        let _ = self.sender.send(AssistantRunSseWorkerMessage::AnswerDelta(
+            sse_text_delta_event("assistant_run.delta", delta.index, &delta.delta),
+        ));
+    }
+}
+
+fn assistant_run_live_answer_stream_enabled() -> bool {
+    env_flag("ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED", false)
+}
+
 async fn create_assistant_run_stream(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateAssistantRunRequest>,
 ) -> std::result::Result<Response, ApiError> {
     validate_required("prompt", &request.prompt)?;
+    if assistant_run_live_answer_stream_enabled() {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sink = AssistantRunLiveDeltaSink::new(sender.clone());
+        tokio::spawn(async move {
+            let result = create_assistant_run_inner(state, headers, request, Some(sink)).await;
+            let _ = sender.send(AssistantRunSseWorkerMessage::Finished(result));
+        });
+        let accepted = create_assistant_run_sse_accepted_event();
+        let live_stream = stream::unfold(Some((receiver, false)), |state| async move {
+            let Some((mut receiver, answer_delta_emitted)) = state else {
+                return None;
+            };
+            match receiver.recv().await {
+                Some(AssistantRunSseWorkerMessage::AnswerDelta(body)) => {
+                    Some((Ok(Bytes::from(body)), Some((receiver, true))))
+                }
+                Some(AssistantRunSseWorkerMessage::Finished(result)) => {
+                    let body = match result {
+                        Ok((_, Json(response))) => create_assistant_run_sse_completion_with_delta(
+                            response,
+                            !answer_delta_emitted,
+                        ),
+                        Err(error) => sse_error_event(error),
+                    };
+                    Some((Ok(Bytes::from(body)), None))
+                }
+                None => Some((
+                    Ok(Bytes::from(sse_error_event(ApiError::internal(
+                        "assistant_run_live_stream_closed",
+                        "assistant run live stream worker closed before returning a result"
+                            .to_string(),
+                    )))),
+                    None,
+                )),
+            }
+        });
+        let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(live_stream);
+        return Ok(sse_stream_response(stream));
+    }
     let accepted = create_assistant_run_sse_accepted_event();
     let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(stream::once(async move {
-        let body = match create_assistant_run(State(state), headers, Json(request)).await {
+        let body = match create_assistant_run_inner(state, headers, request, None).await {
             Ok((_, Json(response))) => create_assistant_run_sse_completion(response),
             Err(error) => sse_error_event(error),
         };
@@ -11507,7 +11587,16 @@ async fn create_assistant_run_stream(
 async fn create_assistant_run(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(mut request): Json<CreateAssistantRunRequest>,
+    Json(request): Json<CreateAssistantRunRequest>,
+) -> std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError> {
+    create_assistant_run_inner(state, headers, request, None).await
+}
+
+async fn create_assistant_run_inner(
+    state: AppState,
+    headers: HeaderMap,
+    mut request: CreateAssistantRunRequest,
+    live_delta_sink: Option<AssistantRunLiveDeltaSink>,
 ) -> std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError> {
     validate_required("prompt", &request.prompt)?;
     let client_scope_candidates = request.scope_candidates.clone();
@@ -12026,12 +12115,13 @@ async fn create_assistant_run(
                             Some(&evidence_state),
                         )
                     };
-                    match complete_assistant_run_provider(
+                    match complete_assistant_run_provider_for_create(
                         MODEL_LANE_ASSISTANT_CHAT,
                         chat_runtime.mode.clone(),
                         chat_runtime.provider.clone(),
                         chat_runtime.model.clone(),
                         provider_input,
+                        live_delta_sink.clone(),
                     )
                     .await
                     {
@@ -12063,12 +12153,13 @@ async fn create_assistant_run(
                                 )
                                 .await
                                 .map_err(ApiError::from_storage)?;
-                                match complete_assistant_run_provider(
+                                match complete_assistant_run_provider_for_create(
                                     MODEL_LANE_ASSISTANT_CHAT,
                                     chat_runtime.mode.clone(),
                                     chat_runtime.provider.clone(),
                                     chat_runtime.model.clone(),
                                     compact_provider_input,
+                                    live_delta_sink.clone(),
                                 )
                                 .await
                                 {
@@ -40984,6 +41075,36 @@ async fn complete_assistant_run_provider(
     .await
 }
 
+async fn complete_assistant_run_provider_for_create(
+    model_lane: &'static str,
+    runtime_mode: String,
+    runtime_provider: String,
+    runtime_model: String,
+    provider_input: String,
+    live_delta_sink: Option<AssistantRunLiveDeltaSink>,
+) -> std::result::Result<LlmResponse, ApiError> {
+    if let Some(live_delta_sink) = live_delta_sink {
+        complete_assistant_run_provider_live_streaming(
+            model_lane,
+            runtime_mode,
+            runtime_provider,
+            runtime_model,
+            provider_input,
+            live_delta_sink,
+        )
+        .await
+    } else {
+        complete_assistant_run_provider(
+            model_lane,
+            runtime_mode,
+            runtime_provider,
+            runtime_model,
+            provider_input,
+        )
+        .await
+    }
+}
+
 async fn complete_assistant_run_provider_with_env_prefix(
     env_prefix: impl Into<String>,
     model_lane: &'static str,
@@ -41030,6 +41151,61 @@ async fn complete_assistant_run_provider_with_env_prefix(
         ApiError::internal(
             "assistant_run_join_failed",
             format!("assistant run worker join failed: {error}"),
+        )
+    })?
+    .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
+}
+
+async fn complete_assistant_run_provider_live_streaming(
+    model_lane: &'static str,
+    runtime_mode: String,
+    runtime_provider: String,
+    runtime_model: String,
+    provider_input: String,
+    live_delta_sink: AssistantRunLiveDeltaSink,
+) -> std::result::Result<LlmResponse, ApiError> {
+    let env_prefix = "ASSISTANT_RUN".to_string();
+    let retry_attempts = assistant_run_runtime_retry_attempts(&env_prefix);
+    let retry_backoff = assistant_run_runtime_retry_backoff(&env_prefix);
+    tokio::task::spawn_blocking(move || {
+        let provider = build_provider_from_env(
+            &env_prefix,
+            &runtime_mode,
+            runtime_provider,
+            bootstrap_default_prompt_registry(),
+        )?;
+        let request = LlmRequest {
+            model: runtime_model,
+            lane: Some(model_lane.to_string()),
+            system_prompt_key: None,
+            input: provider_input,
+        };
+        for attempt_index in 0..retry_attempts {
+            let mut on_delta = |delta: LlmStreamDelta| {
+                live_delta_sink.emit(delta);
+                Ok(())
+            };
+            match provider.complete_streaming(&request, &mut on_delta) {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let can_retry = assistant_run_provider_error_is_retryable(&error);
+                    if !can_retry || attempt_index + 1 >= retry_attempts {
+                        return Err(error);
+                    }
+                    std::thread::sleep(assistant_run_runtime_retry_delay(
+                        retry_backoff,
+                        attempt_index,
+                    ));
+                }
+            }
+        }
+        unreachable!("retry_attempts is always at least one")
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(
+            "assistant_run_join_failed",
+            format!("assistant run live streaming worker join failed: {error}"),
         )
     })?
     .map_err(|error| ApiError::internal("assistant_run_provider_failed", error.to_string()))
@@ -105906,6 +106082,54 @@ retrieve_evidence:
         assert!(encoded.contains("\"assistant_message\""));
         assert!(encoded.contains("event: done"));
         assert!(encoded.contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn assistant_run_sse_completion_can_skip_final_delta_after_live_stream() {
+        let run_id = AssistantRunId::new();
+        let encoded = create_assistant_run_sse_completion_with_delta(
+            CreateAssistantRunResponse {
+                assistant_run_id: run_id,
+                assistant_message: AssistantRunMessageView {
+                    role: ChatMessageRole::Assistant,
+                    content: "主站 live 已经吐过这一段。".to_string(),
+                },
+                runtime: json!({"provider": "scripted"}),
+                selected_scope: json!({"mode": "ordinary_chat"}),
+                scope_candidates: Vec::new(),
+                evidence_state: json!({}),
+                execution_trail: Vec::new(),
+                output_artifacts: Vec::new(),
+                required_confirmations: Vec::new(),
+                diagnostics: json!({}),
+            },
+            false,
+        );
+
+        assert!(!encoded.contains("event: assistant_run.delta"));
+        assert!(encoded.contains("event: assistant_run.completed"));
+        assert!(encoded.contains(&format!("\"assistant_run_id\":\"{run_id}\"")));
+        assert!(encoded.contains("event: done"));
+        assert!(encoded.contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn assistant_run_live_delta_sink_emits_assistant_delta_event() {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sink = AssistantRunLiveDeltaSink::new(sender);
+
+        sink.emit(LlmStreamDelta {
+            index: 7,
+            delta: "首段 live delta".to_string(),
+        });
+
+        let body = match receiver.try_recv().expect("live delta should be queued") {
+            AssistantRunSseWorkerMessage::AnswerDelta(body) => body,
+            AssistantRunSseWorkerMessage::Finished(_) => panic!("expected answer delta"),
+        };
+        assert!(body.contains("event: assistant_run.delta"));
+        assert!(body.contains("\"index\":7"));
+        assert!(body.contains("\"delta\":\"首段 live delta\""));
     }
 
     #[test]
