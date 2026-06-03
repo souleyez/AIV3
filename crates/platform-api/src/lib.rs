@@ -9956,7 +9956,11 @@ fn external_channel_sse_completion_with_done(
             external_channel_static_page_sse_sequence("completed"),
             "completed",
             "completed",
-            "本轮处理已返回当前结果。",
+            if text.trim().is_empty() {
+                "本轮处理已返回当前结果。"
+            } else {
+                &text
+            },
             None,
             None,
             completed_data,
@@ -10097,7 +10101,11 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
         external_channel_static_page_sse_sequence("completed"),
         "completed",
         "completed",
-        "本轮处理已返回当前结果。",
+        if text.trim().is_empty() {
+            "本轮处理已返回当前结果。"
+        } else {
+            &text
+        },
         None,
         None,
         completed_data.clone(),
@@ -10260,6 +10268,23 @@ fn external_channel_static_page_provisional_existing_artifact(card: Option<&Valu
         == Some(true)
 }
 
+fn external_channel_text_with_public_artifact_link(
+    text: impl Into<String>,
+    public_url: &str,
+) -> String {
+    let mut text = text.into();
+    let public_url = public_url.trim();
+    if public_url.is_empty() || text.contains(public_url) {
+        return text;
+    }
+    if !text.trim().is_empty() {
+        text.push_str("\n\n");
+    }
+    text.push_str("页面链接：");
+    text.push_str(public_url);
+    text
+}
+
 fn external_channel_static_page_reply_with_public_artifact_terminal(
     mut reply: ExternalBotReplyView,
 ) -> ExternalBotReplyView {
@@ -10278,7 +10303,19 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
     if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
-        reply.text = Some("V3 静态页已生成并发布，可以把链接返回给用户。".to_string());
+        reply.text = Some(external_channel_text_with_public_artifact_link(
+            "V3 静态页已生成并发布，可以把链接返回给用户。",
+            &public_url,
+        ));
+    } else {
+        let text = reply
+            .text
+            .take()
+            .unwrap_or_else(|| "V3 已找到可发送的静态页链接。".to_string());
+        reply.text = Some(external_channel_text_with_public_artifact_link(
+            text,
+            &public_url,
+        ));
     }
     if !reply
         .artifact_links
@@ -10559,10 +10596,19 @@ fn external_channel_static_page_sse_progress_text(
     response: &ExternalChannelEventResponse,
 ) -> String {
     let status = external_channel_static_page_sse_status(response);
-    if status == "static_page_published"
-        && external_channel_public_artifact_url_from_reply(&response.reply).is_some()
-    {
-        return "静态页已生成并发布，可以把链接返回给用户。".to_string();
+    if let Some(public_url) = external_channel_public_artifact_url_from_reply(&response.reply) {
+        if status == "static_page_published" {
+            return external_channel_text_with_public_artifact_link(
+                "静态页已生成并发布，可以把链接返回给用户。",
+                &public_url,
+            );
+        }
+        if status == "static_page_stable_artifact_reused" {
+            return external_channel_text_with_public_artifact_link(
+                "已复用该数据集已发布的静态页；后续调整会在原产物基础上处理，本轮未重新发起页面生成。",
+                &public_url,
+            );
+        }
     }
     if let Some(text) = response
         .reply
@@ -46018,9 +46064,12 @@ fn external_channel_static_page_published_reply(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let text = if provisional_direct_html {
-        "V3 已先生成可发送的静态页链接；最终 Codex 页面仍在后台继续发布。"
+        external_channel_text_with_public_artifact_link(
+            "V3 已先生成可发送的静态页链接；最终页面仍在后台继续优化发布。",
+            public_url,
+        )
     } else {
-        "V3 静态页已生成并发布。"
+        external_channel_text_with_public_artifact_link("V3 静态页已生成并发布。", public_url)
     };
     let template_reference_id =
         external_channel_static_page_template_reference_id_from_payload(payload);
@@ -46037,7 +46086,7 @@ fn external_channel_static_page_published_reply(
     ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
-        text: Some(text.to_string()),
+        text: Some(text),
         card: Some(json!({
             "type": "v3_static_page_image2_publish_completed",
             "status": "static_page_published",
@@ -46164,10 +46213,10 @@ fn external_channel_static_page_stable_artifact_reused_reply(
     ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
-        text: Some(
-            "已复用该数据集已发布的静态页；后续调整会在原产物基础上处理，本轮未重新发起 Image2。"
-                .to_string(),
-        ),
+        text: Some(external_channel_text_with_public_artifact_link(
+            "已复用该数据集已发布的静态页；后续调整会在原产物基础上处理，本轮未重新发起页面生成。",
+            public_url,
+        )),
         card: Some(json!({
             "type": "v3_static_page_stable_artifact",
             "status": "static_page_stable_artifact_reused",
@@ -83749,6 +83798,7 @@ mod tests {
         assert!(published_body.contains("\"assistant_run_id\""));
         assert!(published_body.contains(published_url));
         assert!(published_body.contains("静态页已生成并发布"));
+        assert!(published_body.contains("页面链接"));
     }
 
     #[test]
@@ -83784,7 +83834,37 @@ mod tests {
         assert!(body.contains("\"status\":\"static_page_published\""));
         assert!(body.contains(published_url));
         assert!(body.contains("链接返回给用户"));
+        assert!(body.contains("页面链接"));
         assert!(!body.contains("static_page_publish_running"));
+    }
+
+    #[test]
+    fn external_channel_static_page_sse_stable_reuse_delta_contains_link() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html";
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(AssistantRunId::new()),
+            idempotency_key: "generic:tenant:static-page-stable-reuse".to_string(),
+            reply: external_channel_static_page_stable_artifact_reused_reply(
+                "room-1",
+                &json!({
+                    "status": "static_page_stable_artifact_reused",
+                    "public_url": public_url,
+                    "draft_id": StaticPageDraftId::new().to_string(),
+                }),
+            ),
+        };
+
+        assert!(external_channel_static_page_sse_is_terminal(&response));
+        let body = external_channel_sse_completion(response);
+
+        assert!(body.contains("event: external_channel.delta"));
+        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains("static_page_stable_artifact_reused"));
+        assert!(body.contains("页面链接"));
+        assert!(body.contains(public_url));
+        assert!(body.contains("event: done"));
     }
 
     #[test]
@@ -99060,6 +99140,11 @@ retrieve_evidence:
                     .to_string()
             ]
         );
+        assert!(reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("页面链接：https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"));
         let card = reply.card.as_ref().expect("completed reply has card");
         assert_eq!(card["public_url"], json!(payload["public_url"]));
         assert_eq!(card["generated_artifact_url"], json!(payload["public_url"]));
@@ -99120,6 +99205,11 @@ retrieve_evidence:
             reply.task_status.as_deref(),
             Some("static_page_stable_artifact_reused")
         );
+        assert!(reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("页面链接：https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html"));
         let card = reply.card.as_ref().expect("reuse card");
         assert_eq!(
             card["template_reference_id"],
