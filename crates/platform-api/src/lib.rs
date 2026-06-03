@@ -10280,7 +10280,9 @@ fn external_channel_text_with_public_artifact_link(
     if !text.trim().is_empty() {
         text.push_str("\n\n");
     }
-    text.push_str("页面链接：");
+    text.push_str("页面链接：[点击查看报表](");
+    text.push_str(public_url);
+    text.push_str(")\n\n页面地址: ");
     text.push_str(public_url);
     text
 }
@@ -95772,7 +95774,7 @@ retrieve_evidence:
             assert!(payload["reply"]["text"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("页面链接：https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"));
+                .contains("页面链接：[点击查看报表](https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html)"));
             assert!(!body.contains("reply-secret"));
             assert!(!body.contains("callback-token-should-not-leak"));
 
@@ -100523,7 +100525,7 @@ retrieve_evidence:
             .text
             .as_deref()
             .unwrap_or_default()
-            .contains("页面链接：https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"));
+            .contains("页面地址: https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"));
         let card = reply.card.as_ref().expect("completed reply has card");
         assert_eq!(card["public_url"], json!(payload["public_url"]));
         assert_eq!(card["generated_artifact_url"], json!(payload["public_url"]));
@@ -100591,7 +100593,7 @@ retrieve_evidence:
             .text
             .as_deref()
             .unwrap_or_default()
-            .contains("页面链接：https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html"));
+            .contains("页面链接：[点击查看报表](https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html)"));
         assert!(!reply.text.as_deref().unwrap_or_default().contains("复用"));
         let card = reply.card.as_ref().expect("reuse card");
         assert_eq!(card["status"], json!("static_page_published"));
