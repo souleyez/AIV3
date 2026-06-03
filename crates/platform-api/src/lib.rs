@@ -34028,6 +34028,25 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         let codex_execution_id_value = codex_execution_id
             .map(|value| json!(value))
             .unwrap_or(Value::Null);
+        let revision_request =
+            static_page_prompt_requests_existing_artifact_revision(&assistant_request.prompt);
+        let expose_visual_contract_as_artifact = !revision_request;
+        let provisional_public_url_value = if expose_visual_contract_as_artifact {
+            json!(visual_contract_url)
+        } else {
+            Value::Null
+        };
+        let provisional_artifact_links_value = if expose_visual_contract_as_artifact {
+            json!([visual_contract_url])
+        } else {
+            json!([])
+        };
+        let provisional_existing_artifact_value = json!(expose_visual_contract_as_artifact);
+        let provisional_existing_artifact_reason_value = if expose_visual_contract_as_artifact {
+            json!("accepted_dataset_overlap_template_baseline")
+        } else {
+            Value::Null
+        };
         let mut pipeline_payload = json!({
             "channel_connection_id": connection_id,
             "platform": external_channel_platform_wire_value(&message.platform),
@@ -34057,27 +34076,27 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         set_payload_value(
             &mut pipeline_payload,
             "public_url",
-            json!(visual_contract_url),
+            provisional_public_url_value.clone(),
         );
         set_payload_value(
             &mut pipeline_payload,
             "generated_artifact_url",
-            json!(visual_contract_url),
+            provisional_public_url_value.clone(),
         );
         set_payload_value(
             &mut pipeline_payload,
             "artifact_links",
-            json!([visual_contract_url]),
+            provisional_artifact_links_value.clone(),
         );
         set_payload_value(
             &mut pipeline_payload,
             "provisional_existing_artifact",
-            json!(true),
+            provisional_existing_artifact_value.clone(),
         );
         set_payload_value(
             &mut pipeline_payload,
             "provisional_existing_artifact_reason",
-            json!("accepted_dataset_overlap_template_baseline"),
+            provisional_existing_artifact_reason_value.clone(),
         );
         set_payload_value(
             &mut pipeline_payload,
@@ -34245,26 +34264,30 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         set_payload_value(&mut reply_card, "html_preview_url", Value::Null);
         set_payload_value(&mut reply_card, "html_download_url", Value::Null);
         set_payload_value(&mut reply_card, "download_url", Value::Null);
-        set_payload_value(&mut reply_card, "public_url", json!(visual_contract_url));
+        set_payload_value(
+            &mut reply_card,
+            "public_url",
+            provisional_public_url_value.clone(),
+        );
         set_payload_value(
             &mut reply_card,
             "generated_artifact_url",
-            json!(visual_contract_url),
+            provisional_public_url_value.clone(),
         );
         set_payload_value(
             &mut reply_card,
             "artifact_links",
-            json!([visual_contract_url]),
+            provisional_artifact_links_value.clone(),
         );
         set_payload_value(
             &mut reply_card,
             "provisional_existing_artifact",
-            json!(true),
+            provisional_existing_artifact_value,
         );
         set_payload_value(
             &mut reply_card,
             "provisional_existing_artifact_reason",
-            json!("accepted_dataset_overlap_template_baseline"),
+            provisional_existing_artifact_reason_value,
         );
         set_payload_value(
             &mut reply_card,
@@ -34388,12 +34411,13 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         return Ok(Some(ExternalBotReplyView {
             target_conversation_external_id: message.conversation_external_id.clone(),
             reply_type: ExternalBotReplyTypeView::TaskStatus,
-            text: Some(
-                "已命中已发布静态页模板；V3 将复用该模板视觉基线并刷新当前数据，正在通过 Codex 制作并发布新的静态页。"
-                    .to_string(),
-            ),
+            text: Some("已收到报表页面需求，正在按当前数据生成并发布新的页面。".to_string()),
             card: Some(reply_card),
-            artifact_links: vec![visual_contract_url.to_string()],
+            artifact_links: if expose_visual_contract_as_artifact {
+                vec![visual_contract_url.to_string()]
+            } else {
+                Vec::new()
+            },
             task_status: Some(external_channel_public_task_status(task_status).to_string()),
             requires_confirmation: false,
             action_id: None,
@@ -86214,6 +86238,99 @@ mod tests {
                 && event.payload["provisional_existing_artifact"] == json!(true)
                 && event.payload["artifact_links"] == json!([public_url])
         }));
+
+        let mut revision_message = message.clone();
+        revision_message.conversation_external_id = "conv-static-template-revision".to_string();
+        revision_message.message_external_id = "msg-static-template-revision-001".to_string();
+        revision_message.text =
+            Some("请修改已有新百经营分析月报：近7日销售切换区域和门店必须联动刷新。".to_string());
+        let mut revision_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &revision_message);
+        revision_request.selected_scope = Some(selected_scope.clone());
+        let revision_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: revision_request.local_thread_id.clone(),
+                    user_prompt: revision_request.prompt.clone(),
+                    startup_briefing: revision_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!(revision_request.scope_candidates.clone()),
+                    context_policy: revision_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("revision run should be created");
+
+        let revision_reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &revision_run,
+            &revision_request,
+            &revision_message,
+            now,
+        )
+        .await
+        .expect("revision static-page pipeline should complete")
+        .expect("revision static-page reply should be returned");
+
+        assert_eq!(
+            revision_reply.reply_type,
+            ExternalBotReplyTypeView::TaskStatus
+        );
+        assert_eq!(revision_reply.task_status.as_deref(), Some("processing"));
+        assert!(revision_reply.artifact_links.is_empty());
+        assert!(revision_reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("正在按当前数据生成并发布"));
+        let revision_card = revision_reply
+            .card
+            .expect("revision card should be returned");
+        assert!(revision_card["public_url"].is_null());
+        assert!(revision_card["generated_artifact_url"].is_null());
+        assert_eq!(revision_card["artifact_links"], json!([]));
+        assert_eq!(revision_card["provisional_existing_artifact"], json!(false));
+        assert_eq!(revision_card["visual_contract_url"], json!(public_url));
+
+        let revision_workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("revision workflows should list");
+        let revision_codex_workflows = revision_workflows
+            .iter()
+            .filter(|execution| {
+                execution.kind == WorkflowKind::CodexHostTask
+                    && execution.context["fixed_task"]["requirements"]["user_goal"]
+                        .as_str()
+                        .is_some_and(|value| value.contains("近7日销售"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(revision_codex_workflows.len(), 1);
+        assert_eq!(
+            revision_codex_workflows[0].context["fixed_task"]["requirements"]["existing_artifact"]
+                ["public_url"],
+            json!(public_url)
+        );
     }
 
     #[tokio::test]
