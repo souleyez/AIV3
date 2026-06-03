@@ -10285,6 +10285,10 @@ fn external_channel_text_with_public_artifact_link(
     text
 }
 
+fn external_channel_static_page_customer_ready_text() -> &'static str {
+    "已依据客户需求生成可访问的报表页面。"
+}
+
 fn external_channel_static_page_reply_with_public_artifact_terminal(
     mut reply: ExternalBotReplyView,
 ) -> ExternalBotReplyView {
@@ -10304,16 +10308,19 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
         reply.text = Some(external_channel_text_with_public_artifact_link(
-            "V3 静态页已生成并发布，可以把链接返回给用户。",
+            external_channel_static_page_customer_ready_text(),
             &public_url,
         ));
-    } else {
-        let text = reply
-            .text
-            .take()
-            .unwrap_or_else(|| "V3 已找到可发送的静态页链接。".to_string());
+    } else if raw_status == "static_page_stable_artifact_reused" {
         reply.text = Some(external_channel_text_with_public_artifact_link(
-            text,
+            external_channel_static_page_customer_ready_text(),
+            &public_url,
+        ));
+        reply.task_status = Some("static_page_published".to_string());
+        reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
+    } else {
+        reply.text = Some(external_channel_text_with_public_artifact_link(
+            "已依据客户需求准备好可查看的报表页面，页面更新完成后会继续同步最新结果。",
             &public_url,
         ));
     }
@@ -10325,7 +10332,7 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         reply.artifact_links.insert(0, public_url.clone());
     }
     if let Some(Value::Object(card)) = reply.card.as_mut() {
-        if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
+        if raw_status == "static_page_stable_artifact_reused" || !provisional_existing_artifact {
             card.insert(
                 "status".to_string(),
                 Value::String("static_page_published".to_string()),
@@ -10514,8 +10521,7 @@ fn external_channel_static_page_sse_status(response: &ExternalChannelEventRespon
         .or(response.reply.task_status.as_deref())
         .unwrap_or("processing")
         .to_string();
-    if raw_status != "static_page_stable_artifact_reused"
-        && !external_channel_static_page_provisional_existing_artifact(response.reply.card.as_ref())
+    if !external_channel_static_page_provisional_existing_artifact(response.reply.card.as_ref())
         && external_channel_public_artifact_url_from_reply(&response.reply).is_some()
     {
         "static_page_published".to_string()
@@ -10599,13 +10605,13 @@ fn external_channel_static_page_sse_progress_text(
     if let Some(public_url) = external_channel_public_artifact_url_from_reply(&response.reply) {
         if status == "static_page_published" {
             return external_channel_text_with_public_artifact_link(
-                "静态页已生成并发布，可以把链接返回给用户。",
+                external_channel_static_page_customer_ready_text(),
                 &public_url,
             );
         }
         if status == "static_page_stable_artifact_reused" {
             return external_channel_text_with_public_artifact_link(
-                "已复用该数据集已发布的静态页；后续调整会在原产物基础上处理，本轮未重新发起页面生成。",
+                external_channel_static_page_customer_ready_text(),
                 &public_url,
             );
         }
@@ -10627,7 +10633,7 @@ fn external_channel_static_page_sse_progress_text(
         "static_page_publish_retrying" => {
             "静态页发布遇到临时波动，V3 会继续重试或切换可用发布链路。".to_string()
         }
-        "static_page_published" => "静态页已生成并发布，可以把链接返回给用户。".to_string(),
+        "static_page_published" => external_channel_static_page_customer_ready_text().to_string(),
         "static_page_publish_failed" => {
             "静态页最终发布暂未完成，V3 已记录原因，可继续重试或人工接管。".to_string()
         }
@@ -27339,7 +27345,7 @@ fn external_channel_public_task_status(task_status: &str) -> &str {
     }
     match task_status {
         "static_page_published" => "static_page_published",
-        "static_page_stable_artifact_reused" => "static_page_stable_artifact_reused",
+        "static_page_stable_artifact_reused" => "static_page_published",
         "static_page_publish_failed" => "processing",
         "static_page_publish_cancelled" => "failed",
         "static_page_publish_needs_human" => "processing",
@@ -46214,12 +46220,12 @@ fn external_channel_static_page_stable_artifact_reused_reply(
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
         text: Some(external_channel_text_with_public_artifact_link(
-            "已复用该数据集已发布的静态页；后续调整会在原产物基础上处理，本轮未重新发起页面生成。",
+            external_channel_static_page_customer_ready_text(),
             public_url,
         )),
         card: Some(json!({
             "type": "v3_static_page_stable_artifact",
-            "status": "static_page_stable_artifact_reused",
+            "status": "static_page_published",
             "public_url": public_url,
             "generated_artifact_url": public_url,
             "download_url": public_url,
@@ -46278,7 +46284,7 @@ fn external_channel_static_page_stable_artifact_reused_reply(
         } else {
             vec![public_url.to_string()]
         },
-        task_status: Some("static_page_stable_artifact_reused".to_string()),
+        task_status: Some("static_page_published".to_string()),
         requires_confirmation: false,
         action_id: None,
         confirmation_id: None,
@@ -83173,7 +83179,7 @@ mod tests {
             .text
             .as_deref()
             .unwrap_or_default()
-            .contains("链接返回给用户"));
+            .contains("已依据客户需求生成可访问的报表页面"));
         assert!(card.get("codex_host_workflow_execution_id").is_none());
     }
 
@@ -83443,7 +83449,7 @@ mod tests {
             90,
             "static_page",
             "static_page_published",
-            "静态页已生成并发布，可以把链接返回给用户。",
+            "已依据客户需求生成可访问的报表页面。",
             None,
             None,
             json!({
@@ -83833,7 +83839,7 @@ mod tests {
         assert!(body.contains("\"sequence\":90"));
         assert!(body.contains("\"status\":\"static_page_published\""));
         assert!(body.contains(published_url));
-        assert!(body.contains("链接返回给用户"));
+        assert!(body.contains("已依据客户需求生成可访问的报表页面"));
         assert!(body.contains("页面链接"));
         assert!(!body.contains("static_page_publish_running"));
     }
@@ -83861,9 +83867,12 @@ mod tests {
 
         assert!(body.contains("event: external_channel.delta"));
         assert!(body.contains("event: external_channel.completed"));
-        assert!(body.contains("static_page_stable_artifact_reused"));
+        assert!(body.contains("static_page_published"));
+        assert!(body.contains("已依据客户需求生成可访问的报表页面"));
         assert!(body.contains("页面链接"));
         assert!(body.contains(public_url));
+        assert!(!body.contains("已复用"));
+        assert!(!body.contains("未重新发起"));
         assert!(body.contains("event: done"));
     }
 
@@ -84117,13 +84126,15 @@ mod tests {
             .expect("existing template link reply");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_stable_artifact_reused")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
         let card = reply.card.expect("stable card");
+        assert_eq!(card["status"], json!("static_page_published"));
         assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["download_url"], json!(public_url));
+        assert_eq!(card["html_download_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
         assert_eq!(
             card["image2_skip_reason"],
@@ -84907,13 +84918,15 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_stable_artifact_reused")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
         let card = reply.card.expect("stable artifact card");
+        assert_eq!(card["status"], json!("static_page_published"));
         assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["download_url"], json!(public_url));
+        assert_eq!(card["html_download_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         assert_eq!(card["draft_id"], json!(baseline_draft.id.to_string()));
         assert_eq!(card["dataset_artifact_key"], json!(dataset_artifact_key));
         assert_eq!(card["image2_skipped"], json!(true));
@@ -84948,7 +84961,7 @@ mod tests {
         .expect("status reply should reuse baseline");
         assert_eq!(
             status_reply.task_status.as_deref(),
-            Some("static_page_stable_artifact_reused")
+            Some("static_page_published")
         );
         assert_eq!(
             reused.payload["image2_skip_reason"],
@@ -85407,13 +85420,15 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_stable_artifact_reused")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
         let card = reply.card.expect("card should be returned");
+        assert_eq!(card["status"], json!("static_page_published"));
         assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["download_url"], json!(public_url));
+        assert_eq!(card["html_download_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
         assert_eq!(
             card["image2_skip_reason"],
@@ -99201,16 +99216,26 @@ retrieve_evidence:
             external_channel_static_page_stable_artifact_reused_reply("chat-static-page", &payload);
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(
-            reply.task_status.as_deref(),
-            Some("static_page_stable_artifact_reused")
-        );
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        assert!(reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("已依据客户需求生成可访问的报表页面"));
         assert!(reply
             .text
             .as_deref()
             .unwrap_or_default()
             .contains("页面链接：https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html"));
+        assert!(!reply.text.as_deref().unwrap_or_default().contains("复用"));
         let card = reply.card.as_ref().expect("reuse card");
+        assert_eq!(card["status"], json!("static_page_published"));
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["download_url"], json!(public_url));
+        assert_eq!(card["html_download_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         assert_eq!(
             card["template_reference_id"],
             json!("generated-static-page:template-003")
