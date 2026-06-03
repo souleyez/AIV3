@@ -56,7 +56,7 @@ const payload = {
   platform: "generic_chat",
   tenant_external_id: process.env.MODEL_GATEWAY_SMOKE_TENANT_ID || "tenant-ext-001",
   bot_external_id: process.env.MODEL_GATEWAY_SMOKE_BOT_ID || "bot-v3",
-  conversation_external_id: process.env.MODEL_GATEWAY_SMOKE_CONVERSATION_ID || `model-gateway-smoke-${runId}`,
+  conversation_external_id: process.env.MODEL_GATEWAY_SMOKE_CONVERSATION_ID || `model-gateway-smoke-${runId}-${index}`,
   sender_external_id: process.env.MODEL_GATEWAY_SMOKE_SENDER_ID || "model-gateway-smoke-user",
   message_external_id: `model-gateway-smoke-${runId}-${index}`,
   message_type: "text",

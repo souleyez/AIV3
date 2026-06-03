@@ -183,7 +183,7 @@ async function postOne(args, index, runId) {
     const events = parseSse(body);
     const completed = events.find((item) => item.event === 'external_channel.completed');
     const error = events.find((item) => item.event === 'external_channel.error');
-    const reply = completed?.data?.reply || null;
+    const reply = completed?.data?.response?.reply || completed?.data?.reply || null;
     const status = reply?.task_status || completed?.data?.status || null;
     return {
       index,
