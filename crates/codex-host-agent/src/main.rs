@@ -4303,6 +4303,10 @@ fn patch_existing_static_page_filter_binding_html(
         }
     }
     if html.contains("function filteredSalesSeriesForCurrentScope(") {
+        if !report.applied && static_page_html_has_time_range_control_signal(&updated) {
+            report.applied = true;
+            report.patches.push("filter_binding_already_repaired");
+        }
         return (updated, report);
     }
     let helper = r#"function storeAllowedForCurrentScope(storecode){
@@ -6339,6 +6343,24 @@ function renderInsight(k){
             r#"<select id="monthSelect" data-time-range="required" aria-label="时间范围""#
         ));
         assert!(patched.contains("function filteredSalesSeriesForCurrentScope()"));
+    }
+
+    #[test]
+    fn existing_static_page_filter_binding_patch_accepts_already_repaired_page() {
+        let html = r#"
+<!doctype html><html><body>
+<label class="control"><span>月份</span><select id="monthSelect" data-time-range="required"></select></label>
+<script>
+function filteredSalesSeriesForCurrentScope(){ return []; }
+function currentLast7Stats(){ return {}; }
+</script></body></html>
+"#;
+
+        let (patched, report) = patch_existing_static_page_filter_binding_html(html);
+
+        assert!(report.applied);
+        assert!(report.patches.contains(&"filter_binding_already_repaired"));
+        assert_eq!(patched, html);
     }
 
     #[test]
