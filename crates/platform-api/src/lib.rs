@@ -17264,9 +17264,9 @@ async fn find_external_documents_by_dataset_external_id(
         .into_iter()
         .filter(|document| {
             external_document_source_matches(&document.metadata, source_id, None)
-                && external_document_dataset_external_id_from_metadata(&document.metadata)
-                    .as_deref()
-                    == Some(dataset_external_id)
+                && external_document_dataset_external_ids_from_metadata(&document.metadata)
+                    .iter()
+                    .any(|value| value == dataset_external_id)
         })
         .collect())
 }
@@ -17284,12 +17284,13 @@ async fn infer_external_document_scope_source_id_by_dataset_external_ids(
     let dataset_external_ids = dataset_external_ids.iter().collect::<BTreeSet<_>>();
     let mut source_ids = BTreeSet::new();
     for document in documents {
-        let Some(dataset_external_id) =
-            external_document_dataset_external_id_from_metadata(&document.metadata)
-        else {
-            continue;
-        };
-        if !dataset_external_ids.contains(&dataset_external_id) {
+        let document_dataset_external_ids =
+            external_document_dataset_external_ids_from_metadata(&document.metadata);
+        if document_dataset_external_ids.is_empty()
+            || !document_dataset_external_ids
+                .iter()
+                .any(|dataset_external_id| dataset_external_ids.contains(dataset_external_id))
+        {
             continue;
         };
         if let Some(source_id) = external_document_source_id_from_metadata(&document.metadata, None)
@@ -17400,24 +17401,34 @@ fn external_document_external_id_from_metadata(
         .and_then(non_empty_trimmed_string)
 }
 
-fn external_document_dataset_external_id_from_metadata(
+fn external_document_dataset_external_ids_from_metadata(
     metadata: &BTreeMap<String, Value>,
-) -> Option<String> {
-    metadata
+) -> Vec<String> {
+    let Some(object) = metadata
         .get("external_source")
         .or_else(|| metadata.get("externalSource"))
         .and_then(Value::as_object)
-        .and_then(|object| {
-            [
-                "dataset_external_id",
-                "datasetExternalId",
-                "requested_dataset_external_id",
-                "requestedDatasetExternalId",
-            ]
-            .iter()
-            .find_map(|key| object.get(*key).and_then(Value::as_str))
-        })
-        .and_then(non_empty_trimmed_string)
+    else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    for key in [
+        "dataset_external_id",
+        "datasetExternalId",
+        "requested_dataset_external_id",
+        "requestedDatasetExternalId",
+    ] {
+        if let Some(value) = object
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(non_empty_trimmed_string)
+        {
+            if !values.contains(&value) {
+                values.push(value);
+            }
+        }
+    }
+    values
 }
 
 fn external_document_metadata_matches(
@@ -51991,6 +52002,10 @@ async fn build_assistant_run_database_aggregate_supply(
                         "metric": result.metric,
                         "aggregation": result.aggregation,
                         "sort_direction": order_direction.clone(),
+                        "sort_semantics": assistant_run_database_aggregate_sort_semantics(
+                            metric.as_deref(),
+                            &order_direction,
+                        ),
                         "time_filter": latest_time_column.as_ref().map(|column| json!({
                             "mode": "latest",
                             "column": column,
@@ -52402,8 +52417,11 @@ fn assistant_run_database_aggregate_summary(
     let time_filter = latest_time_column
         .map(|column| format!("；时间口径为最新 {column}"))
         .unwrap_or_default();
+    let sort_semantics = assistant_run_database_aggregate_sort_semantics(metric, order_direction)
+        .map(|note| format!("；{note}"))
+        .unwrap_or_default();
     format!(
-        "{}：表 {} 按 {} 对 {} 做 {} 聚合并按聚合值{}{}，返回 {} 行样本，扫描上限 {}。",
+        "{}：表 {} 按 {} 对 {} 做 {} 聚合并按聚合值{}{}{}，返回 {} 行样本，扫描上限 {}。",
         role_label,
         mapping.table,
         assistant_run_database_join_or_dash(dimensions),
@@ -52411,11 +52429,31 @@ fn assistant_run_database_aggregate_summary(
         aggregation,
         order_label,
         time_filter,
+        sort_semantics,
         row_count,
         scan_limit
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_string())
     )
+}
+
+fn assistant_run_database_aggregate_sort_semantics(
+    metric: Option<&str>,
+    order_direction: &str,
+) -> Option<&'static str> {
+    if !order_direction.eq_ignore_ascii_case("asc") {
+        return None;
+    }
+    let metric = metric.unwrap_or_default().to_ascii_lowercase();
+    if metric.contains("xuzeng")
+        || metric.contains("quekou")
+        || metric.contains("gap")
+        || metric.contains("shortfall")
+    {
+        Some("缺口/续增销售等取高机会指标按升序返回；数值越小越接近高分成线，机会越靠前，可直接按返回顺序列 TopN")
+    } else {
+        None
+    }
 }
 
 async fn load_dataset_external_source_ids(
@@ -80206,6 +80244,22 @@ mod tests {
             assistant_run_database_aggregate_order_direction(prompt, Some("xuzengxiaoshou")),
             "asc"
         );
+        assert_eq!(
+            assistant_run_database_aggregate_sort_semantics(Some("xuzengxiaoshou"), "asc"),
+            Some("缺口/续增销售等取高机会指标按升序返回；数值越小越接近高分成线，机会越靠前，可直接按返回顺序列 TopN")
+        );
+        assert!(assistant_run_database_aggregate_summary(
+            &mapping,
+            "ranking",
+            &["shopdesc".to_string()],
+            Some("xuzengxiaoshou"),
+            "sum",
+            "asc",
+            Some("txdate"),
+            5,
+            Some(5000),
+        )
+        .contains("机会越靠前"));
         assert_eq!(
             assistant_run_database_aggregate_latest_time_column(
                 &mapping,
@@ -115022,8 +115076,33 @@ retrieve_evidence:
         .collect::<BTreeMap<_, _>>();
 
         assert_eq!(
-            external_document_dataset_external_id_from_metadata(&metadata).as_deref(),
-            Some("e64cb5b5-e05a-40ce-a904-0c371da04048")
+            external_document_dataset_external_ids_from_metadata(&metadata),
+            vec!["e64cb5b5-e05a-40ce-a904-0c371da04048".to_string()]
+        );
+    }
+
+    #[test]
+    fn external_document_dataset_lookup_collects_effective_and_requested_ids() {
+        let metadata = json!({
+            "external_source": {
+                "source_id": "third-party-source-main",
+                "dataset_external_id": "external-source-third-party-source-main-dataset-archived",
+                "requested_dataset_external_id": "e64cb5b5-e05a-40ce-a904-0c371da04048",
+                "document_external_id": "doc-68bc1e63-810b-496d-b332-18a6428f216c"
+            }
+        })
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            external_document_dataset_external_ids_from_metadata(&metadata),
+            vec![
+                "external-source-third-party-source-main-dataset-archived".to_string(),
+                "e64cb5b5-e05a-40ce-a904-0c371da04048".to_string()
+            ]
         );
     }
 
