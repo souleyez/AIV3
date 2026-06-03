@@ -402,6 +402,38 @@ Content-Type: application/json
 }
 ```
 
+### 2.1.1 可选主动回推
+
+如果第三方页面等待时间较短，或 SSE 可能中断，可在 V3 通道配置里提供助手回复回推地址。V3 后台结果完成或失败后，会向该地址主动 POST 一次最终 `reply`，第三方收到后追加到对应 `conversation_external_id` 的会话即可。
+
+配置项：
+
+| 配置键 | 注释 |
+| --- | --- |
+| `reply_dispatch_url` | 第三方接收助手最终回复的 HTTPS 地址；别名：`external_reply_dispatch_url`、`outbound_reply_url`、`assistant_reply_dispatch_url` |
+| `reply_dispatch_bearer_token` | 可选，V3 回推时使用的 Bearer Token；别名：`external_reply_bearer_token`、`outbound_reply_bearer_token` |
+| `reply_dispatch_signing_secret` | 可选，V3 回推签名密钥；别名：`external_reply_signing_secret`、`outbound_reply_signing_secret` |
+
+回推载荷：
+
+```jsonc
+{
+  "schema": "v3.external_channel.outbound_reply.v1", // 固定结构版本
+  "event_type": "assistant_reply",                   // 固定为助手回复
+  "trigger": "async_result_completed",               // 后台异步结果完成或失败后触发
+  "source_event_name": "assistant_run.external_channel_static_page_publish_completed", // V3 内部公开事件名
+  "assistant_run_id": "assistant-run-id",             // V3 本次运行 ID
+  "idempotency_key": "outbound:assistant-run-id:hash",// 回推幂等键
+  "conversation_external_id": "conv-20260520-0001",  // 目标会话 ID
+  "reply": {},                                       // 结构同 POST /events 响应中的 reply
+  "artifact_links": [],                              // 便于直接取链接；没有为空数组
+  "task_status": "static_page_published",            // 当前任务状态
+  "requires_confirmation": false                     // 是否需要用户确认
+}
+```
+
+V3 回推会带 `Authorization: Bearer <reply_dispatch_bearer_token>`，并在配置签名密钥时带 `x-v3-signature`、`x-v3-timestamp`、`x-v3-nonce`、`x-v3-content-sha256`。如果未配置回推地址，第三方仍可继续使用 `/events/stream` 断线续传或 `status_url` 轮询。
+
 ### 2.2 流式聊天
 
 ```http
@@ -671,7 +703,7 @@ Content-Type: application/json
 
 V3 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。
 
-V3 会把已经通过 Image2 → Codex 流程发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 `default_prompt`，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 `default_prompt` 相同，V3 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 `default_prompt` 表达了不同报表口径/主题时，才重新进入新的 Image2 设计流程。
+V3 会把已经发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 `default_prompt`，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 `default_prompt` 相同，V3 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 `default_prompt` 表达了不同报表口径/主题时，才重新进入新的页面设计流程。
 
 第三方操作人员可以先把 `card.public_url` 或 `artifact_links[0]` 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；V3 会在静态页卡片返回 `recipient_delivery`，说明当前是否已具备自动配置条件，或还缺哪些权限映射。
 

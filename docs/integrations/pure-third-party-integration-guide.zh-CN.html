@@ -380,17 +380,18 @@
 <a class="nav-depth-3" href="#section-06">1.5 创建/更新数据库源</a>
 <a class="nav-depth-2" href="#section-07">2. 聊天同步</a>
 <a class="nav-depth-3" href="#section-08">2.1 普通聊天</a>
-<a class="nav-depth-3" href="#section-09">2.2 流式聊天</a>
-<a class="nav-depth-3" href="#section-10">2.3 数据接入/入库分析请求</a>
-<a class="nav-depth-2" href="#section-11">3. 生成产物（报表）</a>
-<a class="nav-depth-3" href="#section-12">3.1 模板列表字段</a>
-<a class="nav-depth-3" href="#section-13">3.2 模板解析</a>
-<a class="nav-depth-3" href="#section-14">3.3 按模板生成静态页/报表</a>
-<a class="nav-depth-3" href="#section-15">3.4 查询、预览、下载产物</a>
-<a class="nav-depth-2" href="#section-16">4. 枚举与错误</a>
-<a class="nav-depth-3" href="#section-17">4.1 `output_format`</a>
-<a class="nav-depth-3" href="#section-18">4.2 `render_mode`</a>
-<a class="nav-depth-3" href="#section-19">4.3 错误格式</a>
+<a class="nav-depth-3" href="#section-09">2.1.1 可选主动回推</a>
+<a class="nav-depth-3" href="#section-10">2.2 流式聊天</a>
+<a class="nav-depth-3" href="#section-11">2.3 数据接入/入库分析请求</a>
+<a class="nav-depth-2" href="#section-12">3. 生成产物（报表）</a>
+<a class="nav-depth-3" href="#section-13">3.1 模板列表字段</a>
+<a class="nav-depth-3" href="#section-14">3.2 模板解析</a>
+<a class="nav-depth-3" href="#section-15">3.3 按模板生成静态页/报表</a>
+<a class="nav-depth-3" href="#section-16">3.4 查询、预览、下载产物</a>
+<a class="nav-depth-2" href="#section-17">4. 枚举与错误</a>
+<a class="nav-depth-3" href="#section-18">4.1 `output_format`</a>
+<a class="nav-depth-3" href="#section-19">4.2 `render_mode`</a>
+<a class="nav-depth-3" href="#section-20">4.3 错误格式</a>
       </nav>
     </aside>
     <main>
@@ -697,7 +698,29 @@ Content-Type: application/json</code></pre>
   }
 }</code></pre>
   </figure>
-<h3 id="section-09">2.2 流式聊天</h3>
+<h3 id="section-09">2.1.1 可选主动回推</h3>
+<p>如果第三方页面等待时间较短，或 SSE 可能中断，可在 V3 通道配置里提供助手回复回推地址。V3 后台结果完成或失败后，会向该地址主动 POST 一次最终 <code>reply</code>，第三方收到后追加到对应 <code>conversation_external_id</code> 的会话即可。</p>
+<p>配置项：</p>
+<div class="table-shell"><table><thead><tr><th>配置键</th><th>注释</th></tr></thead><tbody><tr><td><code>reply_dispatch_url</code></td><td>第三方接收助手最终回复的 HTTPS 地址；别名：<code>external_reply_dispatch_url</code>、<code>outbound_reply_url</code>、<code>assistant_reply_dispatch_url</code></td></tr><tr><td><code>reply_dispatch_bearer_token</code></td><td>可选，V3 回推时使用的 Bearer Token；别名：<code>external_reply_bearer_token</code>、<code>outbound_reply_bearer_token</code></td></tr><tr><td><code>reply_dispatch_signing_secret</code></td><td>可选，V3 回推签名密钥；别名：<code>external_reply_signing_secret</code>、<code>outbound_reply_signing_secret</code></td></tr></tbody></table></div>
+<p>回推载荷：</p>
+<figure class="code-card">
+    <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;schema&quot;: &quot;v3.external_channel.outbound_reply.v1&quot;, // 固定结构版本
+  &quot;event_type&quot;: &quot;assistant_reply&quot;,                   // 固定为助手回复
+  &quot;trigger&quot;: &quot;async_result_completed&quot;,               // 后台异步结果完成或失败后触发
+  &quot;source_event_name&quot;: &quot;assistant_run.external_channel_static_page_publish_completed&quot;, // V3 内部公开事件名
+  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,             // V3 本次运行 ID
+  &quot;idempotency_key&quot;: &quot;outbound:assistant-run-id:hash&quot;,// 回推幂等键
+  &quot;conversation_external_id&quot;: &quot;conv-20260520-0001&quot;,  // 目标会话 ID
+  &quot;reply&quot;: {},                                       // 结构同 POST /events 响应中的 reply
+  &quot;artifact_links&quot;: [],                              // 便于直接取链接；没有为空数组
+  &quot;task_status&quot;: &quot;static_page_published&quot;,            // 当前任务状态
+  &quot;requires_confirmation&quot;: false                     // 是否需要用户确认
+}</code></pre>
+  </figure>
+<p>V3 回推会带 <code>Authorization: Bearer &lt;reply_dispatch_bearer_token&gt;</code>，并在配置签名密钥时带 <code>x-v3-signature</code>、<code>x-v3-timestamp</code>、<code>x-v3-nonce</code>、<code>x-v3-content-sha256</code>。如果未配置回推地址，第三方仍可继续使用 <code>/events/stream</code> 断线续传或 <code>status_url</code> 轮询。</p>
+<h3 id="section-10">2.2 流式聊天</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events/stream
@@ -793,7 +816,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   </figure>
 <p>如果前端只能使用原生 <code>EventSource</code>，请在第三方服务端做一个 GET 代理：服务端保存本轮请求体并调用 V3 的 POST <code>/events/stream</code>，浏览器只连接自己的 <code>GET /v3-stream-proxy?message_id=...</code>。浏览器重连时把最后的 <code>event_id</code> 传给服务端，服务端转成 <code>Last-Event-ID</code> 或 <code>stream_since_sequence</code>。</p>
 <p>如果 <code>reply.task_status=needs_input</code> 或收到 <code>external_channel.needs_input</code>，表示当前可见资料不足但可以继续。第三方只需要把 <code>reply.text</code> / <code>reply.card.question</code> 展示给用户；用户补充制度名称、页码、关键词、文档范围或统计口径后，继续用同一个 <code>conversation_external_id</code> 发下一轮消息。</p>
-<h3 id="section-10">2.3 数据接入/入库分析请求</h3>
+<h3 id="section-11">2.3 数据接入/入库分析请求</h3>
 <p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出数据接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求，例如：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -817,8 +840,8 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_retrying</code>、<code>data_ingestion_analysis_completed</code>、<code>data_ingestion_analysis_needs_human</code>、<code>data_ingestion_analysis_failed</code>、<code>data_ingestion_analysis_cancelled</code>、人工确认后的 <code>data_ingestion_staging_dataset_ready</code>，以及同步阶段的 <code>data_ingestion_staging_sync_started</code>、<code>data_ingestion_staging_sync_running</code>、<code>data_ingestion_staging_sync_completed</code>、<code>data_ingestion_staging_sync_failed</code></td></tr><tr><td><code>reply.card.type</code></td><td>排队时为 <code>v3_data_ingestion_analysis</code>；完成后为 <code>v3_data_ingestion_analysis_result</code>；确认创建/复用 staging 数据集后为 <code>v3_data_ingestion_staging_plan_execution</code>；同步启动后为 <code>v3_data_ingestion_staging_sync</code></td></tr><tr><td><code>reply.card.result_summary</code></td><td>完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作</td></tr><tr><td><code>reply.card.staging_plan</code></td><td>完成后可返回 <code>v3_data_ingestion_staging_plan</code>，用于人工确认后的数据集/数据源导入草稿；固定 <code>production_write_allowed=false</code></td></tr><tr><td><code>reply.card.dataset_id</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 V3 创建或复用的 staging 数据集 ID</td></tr><tr><td><code>reply.card.dataset_key</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 staging 数据集 key</td></tr><tr><td><code>reply.card.source_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回本次使用的数据库源 ID</td></tr><tr><td><code>reply.card.sync_run_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回 V3 内部同步任务 ID</td></tr><tr><td><code>reply.card.runtime_event.retryable</code></td><td>固定任务取消时为 <code>false</code>；第三方不需要自动重试取消态</td></tr><tr><td><code>reply.card.workflow_status</code></td><td>同步阶段返回 V3 内部工作流状态，例如 <code>running</code>、<code>succeeded</code>、<code>failed</code></td></tr><tr><td><code>reply.card.workflow_stage</code></td><td>同步阶段返回当前阶段，例如 <code>sync_users</code>、<code>fetch_content</code>、<code>ingest</code>、<code>index</code>、<code>completed</code></td></tr><tr><td><code>reply.card.imported_row_count</code></td><td>当前确认步骤不自动导入原始行，固定为 <code>0</code>；后续导入/数据库同步需走人工确认执行</td></tr></tbody></table></div>
 <p>当 <code>reply.task_status=data_ingestion_staging_sync_completed</code> 后，同一个 <code>conversation_external_id</code> 的后续问题会自动复用该 staging 数据集作为可见数据范围；第三方不必每轮重复传内部 <code>dataset_id</code>。如果第三方更换会话 ID，或希望切换数据范围，应重新传稳定 <code>dataset_external_id</code>、具体文档范围，或由 V3 侧重新确认新的 staging 数据集。</p>
 <p>若没有选中或上传可分析的数据源/表格/文档，V3 会返回 <code>data_ingestion_analysis_source_required</code>，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。</p>
-<h2 id="section-11">3. 生成产物（报表）</h2>
-<h3 id="section-12">3.1 模板列表字段</h3>
+<h2 id="section-12">3. 生成产物（报表）</h2>
+<h3 id="section-13">3.1 模板列表字段</h3>
 <p>第三方页面或第三方 AI 只需要保留下面这些模板字段；生成时把选中的模板带入 3.3。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -836,7 +859,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template_document_external_id</code></td><td>是</td><td>模板文档 ID；必须先按 1.1 解析</td></tr><tr><td><code>source_id</code></td><td>是</td><td>模板所属文档源 ID</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>title</code></td><td>是</td><td>模板展示名</td></tr><tr><td><code>output_type</code></td><td>是</td><td><code>static_page</code>、<code>html</code>、<code>report</code> 或 <code>any</code></td></tr><tr><td><code>description</code></td><td>否</td><td>模板说明</td></tr><tr><td><code>tags</code></td><td>否</td><td>模板标签</td></tr></tbody></table></div>
-<h3 id="section-13">3.2 模板解析</h3>
+<h3 id="section-14">3.2 模板解析</h3>
 <p>模板也是文档，用 1.1 的解析接口。建议在 <code>metadata</code> 标记模板用途。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -857,7 +880,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   &quot;idempotency_key&quot;: &quot;parse-template:tpl-weekly-report-001:rev-template-01&quot; // 幂等键
 }</code></pre>
   </figure>
-<h3 id="section-14">3.3 按模板生成静态页/报表</h3>
+<h3 id="section-15">3.3 按模板生成静态页/报表</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
@@ -898,7 +921,7 @@ Content-Type: application/json</code></pre>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template.source_id</code></td><td>建议填</td><td>模板所属文档源 ID；未单独传 <code>available_document_source_id</code> 时，V3 会用它补齐</td></tr><tr><td><code>template.document_external_id</code></td><td>文档模板必填</td><td>模板文档 ID；兼容 <code>template_document_external_id</code>、<code>documentExternalId</code></td></tr><tr><td><code>template.revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>template.mode</code></td><td>否</td><td>推荐传 <code>reference</code>，表示作为结构/版式/字段参考</td></tr><tr><td><code>template.output_type</code></td><td>否</td><td><code>static_page</code>、<code>html</code>、<code>report</code>、<code>document</code>、<code>table</code>、<code>image</code> 或 <code>any</code>；不传时跟随 <code>artifact_type</code></td></tr><tr><td><code>template.template_reference_id</code></td><td>否</td><td>V3 内置静态页模板引用；使用第三方文档模板时通常不用传</td></tr></tbody></table></div>
 <p>兼容旧写法仍然有效：已接入第三方可以继续传 <code>render_mode: &quot;artifact&quot;</code>、<code>output_format: &quot;image_text&quot;</code>，并在 <code>requested_skills[].arguments.output_type</code> 中传 <code>static_page</code>。如果同时传了 <code>template</code> 和旧 <code>requested_skills</code>，V3 会去重，不重复加载同一模板文档。</p>
 <p>V3 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 <code>artifact_links[0]</code>、<code>card.generated_artifact_url</code> / <code>card.public_url</code>，同时兼容保留 <code>render_output_id</code> 和下载/预览地址。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。</p>
-<p>V3 会把已经通过 Image2 → Codex 流程发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 <code>default_prompt</code>，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 <code>default_prompt</code> 相同，V3 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 <code>default_prompt</code> 表达了不同报表口径/主题时，才重新进入新的 Image2 设计流程。</p>
+<p>V3 会把已经发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 <code>default_prompt</code>，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 <code>default_prompt</code> 相同，V3 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 <code>default_prompt</code> 表达了不同报表口径/主题时，才重新进入新的页面设计流程。</p>
 <p>第三方操作人员可以先把 <code>card.public_url</code> 或 <code>artifact_links[0]</code> 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；V3 会在静态页卡片返回 <code>recipient_delivery</code>，说明当前是否已具备自动配置条件，或还缺哪些权限映射。</p>
 <p>第三方不需要关心 V3 内部生成配置，只需按响应字段判断是否已拿到最终 HTML 页面，或仍在自动发布队列。</p>
 <p>若进入静态页/报表生成流程，响应通常为：</p>
@@ -910,7 +933,7 @@ Content-Type: application/json</code></pre>
 <p>如果第三方使用 <code>assistant_run_id</code> 做轮询，推荐直接调用 3.4 的运行结果查询接口；返回仍是 2.1 的 <code>reply</code> 对象。发布完成后，<code>reply.task_status=static_page_published</code>，<code>reply.artifact_links[0]</code> 就是最终页面链接。第三方不需要再做额外确认、下载或二次提交。</p>
 <p>若已生成静态页/报表/HTML 产物，重点读取：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code>、<code>text</code> 或 <code>task_status</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的说明</td></tr><tr><td><code>reply.artifact_links</code></td><td>产物链接数组；静态页优先返回 generated-artifact 页面 URL，兼容返回 HTML 下载地址；模板 HTML 产物会返回 <code>/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0</code></td></tr><tr><td><code>reply.card</code></td><td>可能包含 <code>render_output_id</code>、<code>html_preview_url</code>、<code>html_download_url</code>、<code>generated_artifact_url</code>、<code>data_url</code>、<code>dynamic_page_contract</code>、<code>draft_id</code>、产物状态或结构化卡片</td></tr><tr><td><code>assistant_run_id</code></td><td>本次生成运行 ID</td></tr></tbody></table></div>
-<h3 id="section-15">3.4 查询、预览、下载产物</h3>
+<h3 id="section-16">3.4 查询、预览、下载产物</h3>
 <p>查询本次运行的最新第三方回复：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -942,13 +965,13 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>运行结果查询必填</td><td>2.1 响应返回的 V3 本次运行 ID</td></tr><tr><td><code>artifact_id</code></td><td>HTML 产物下载必填</td><td><code>reply.artifact_links</code> 中的 HTML artifact ID</td></tr><tr><td><code>file_index</code></td><td>HTML 产物下载必填</td><td>文件序号；当前模板 HTML 产物固定传 <code>0</code></td></tr><tr><td><code>render_output_id</code></td><td>静态页/报表必填</td><td>V3 生成的静态页/报表渲染 ID</td></tr></tbody></table></div>
-<h2 id="section-16">4. 枚举与错误</h2>
-<h3 id="section-17">4.1 <code>output_format</code></h3>
+<h2 id="section-17">4. 枚举与错误</h2>
+<h3 id="section-18">4.1 <code>output_format</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>rich_text</code></td><td>富文本回答</td></tr><tr><td><code>image_text</code></td><td>图文排版回答</td></tr><tr><td><code>markdown_table</code></td><td>MD 表格回答</td></tr><tr><td><code>json</code></td><td>JSON 回答</td></tr></tbody></table></div>
 <p>中文值也可传：<code>富文本</code>、<code>图文排版</code>、<code>MD表格</code>、<code>JSON</code>。</p>
-<h3 id="section-18">4.2 <code>render_mode</code></h3>
+<h3 id="section-19">4.2 <code>render_mode</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>normal</code></td><td>普通聊天回答</td></tr><tr><td><code>artifact</code></td><td>生成可预览/下载产物</td></tr></tbody></table></div>
-<h3 id="section-19">4.3 错误格式</h3>
+<h3 id="section-20">4.3 错误格式</h3>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{

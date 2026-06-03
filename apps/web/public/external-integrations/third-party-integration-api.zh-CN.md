@@ -610,6 +610,87 @@ SSE data 字段说明：
 
 说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回本轮初始响应；第三方页面不要把 `started` 渲染为助手消息。若返回 `needs_input`，第三方展示问题并让用户补充，下一轮仍用同一个会话 ID。静态页生成时，V3 会继续在同一条 SSE 连接里输出页面规划、生成进度、发布进度、最终页面链接或问题原因；如果第三方连接较短，仍可按 `status_url` 轮询。若出现可继续的超时、重试或后台继续，顶层 `reply.task_status` 仍为 `processing`，可按 `poll_after_seconds` 继续查询；只有顶层 `reply.task_status=failed` 才表示不可继续失败/取消。若 `completed.data.data.response.reply.card.public_url`、`completed.data.data.response.reply.artifact_links[0]`、结构化事件顶层 `card.public_url` 或 `artifact_links[0]` 已存在，第三方可先展示或转存该页面链接。若只返回 `render_output_id`，第三方可按静态页渲染产物接口查询、预览或下载 HTML。第三方不需要为过程预览单独做确认、下载或二次提交。
 
+### 10.2.1 可选助手回复主动回推
+
+如果第三方页面等待时间较短、SSE 连接可能中断，或希望后台异步结果完成后自动追加到第三方会话，可在聊天通道配置里提供助手回复回推 endpoint。V3 仍以 `/events` 或 `/events/stream` 接收入站消息；后台结果完成或失败后，V3 会向第三方配置的回推地址 POST 一次最终助手回复。未配置回推地址时，不影响原有响应、SSE 断线续传和 `status_url` 轮询。
+
+回推 endpoint 配置键：
+
+- `reply_dispatch_url`、`replyDispatchUrl`；
+- `external_reply_dispatch_url`、`externalReplyDispatchUrl`；
+- `outbound_reply_url`、`outboundReplyUrl`；
+- `assistant_reply_dispatch_url`、`assistantReplyDispatchUrl`。
+
+回推鉴权配置键：
+
+- Bearer Token：`reply_dispatch_bearer_token`、`replyDispatchBearerToken`、`external_reply_bearer_token`、`externalReplyBearerToken`、`outbound_reply_bearer_token`、`outboundReplyBearerToken`；
+- 签名密钥：`reply_dispatch_signing_secret`、`replyDispatchSigningSecret`、`external_reply_signing_secret`、`externalReplySigningSecret`、`outbound_reply_signing_secret`、`outboundReplySigningSecret`。
+
+如果只配置了动作派发鉴权，V3 可复用 `dispatch_bearer_token` / `dispatch_signing_secret` 作为回推鉴权；但回推 endpoint 必须使用回复专用配置键，避免把业务动作 endpoint 误用为聊天回复地址。V3 不会把平台通用 `token`、`callback_token`、`verification_token` 当作回推凭证。
+
+V3 回推请求头：
+
+| Header | 说明 |
+| --- | --- |
+| `Authorization` | 配置 Bearer Token 时为 `Bearer <token>` |
+| `x-v3-connection-id` | V3 聊天通道连接 ID |
+| `x-v3-timestamp` | ISO 8601 时间 |
+| `x-v3-nonce` | 本次请求随机值 |
+| `x-v3-content-sha256` | 请求体 SHA-256 |
+| `x-v3-signature` | 配置签名密钥时为 `sha256=<hex>` |
+
+签名串与业务动作派发一致：
+
+```text
+POST
+<path-with-query>
+<x-v3-timestamp>
+<x-v3-nonce>
+<x-v3-content-sha256>
+```
+
+回推 payload：
+
+```json
+{
+  "schema": "v3.external_channel.outbound_reply.v1",
+  "event_type": "assistant_reply",
+  "trigger": "async_result_completed",
+  "source_event_name": "assistant_run.external_channel_static_page_publish_completed",
+  "assistant_run_id": "assistant-run-id",
+  "idempotency_key": "outbound:assistant-run-id:hash",
+  "conversation_external_id": "conv-20260518-0001",
+  "reply": {
+    "target_conversation_external_id": "conv-20260518-0001",
+    "reply_type": "artifact_link",
+    "text": "已依据客户需求生成可访问的报表页面。\n\n页面链接：https://v3.elepcloud.com/...",
+    "card": {
+      "public_url": "https://v3.elepcloud.com/..."
+    },
+    "artifact_links": [
+      "https://v3.elepcloud.com/..."
+    ],
+    "task_status": "static_page_published",
+    "requires_confirmation": false,
+    "action_id": null,
+    "confirmation_id": null
+  },
+  "artifact_links": [
+    "https://v3.elepcloud.com/..."
+  ],
+  "task_status": "static_page_published",
+  "requires_confirmation": false
+}
+```
+
+第三方处理规则：
+
+- 按 `idempotency_key` 去重；
+- 按 `conversation_external_id` 找到第三方会话并追加助手消息；
+- `reply` 结构与 `/events`、`/events/stream` 最终响应一致；
+- `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 可作为页面或报表链接；
+- 回推失败不会改变 V3 原任务结果，V3 会记录脱敏审计；第三方仍可通过状态接口补拉结果。
+
 任务状态响应示例：
 
 ```json
@@ -1536,10 +1617,10 @@ Authorization: Bearer <V3 inbound token>
 | `reply.card.template_reference_id` | 本次使用的静态页模板引用；若为 `generated-static-page:{draft_id}`，表示来自 V3 已发布页面模板库 |
 | `reply.card.template_match_policy` | 模板命中策略：`exact_dataset_artifact_key` 表示相同数据集组合直接复用，`dataset_overlap` 表示按数据集交集套用模板，`explicit_or_inferred_template` 表示显式或意图推断模板 |
 | `reply.card.relaxed_template_match` | 当 `template_match_policy=dataset_overlap` 时返回历史模板匹配摘要；第三方可记录但不需要参与计算 |
-| `reply.card.style_reuse_policy` / `reply.card.data_refresh_policy` | 默认复用模板样式并按本轮授权数据集/业务库刷新数据；客户明确要求换风格时才重新进入新的 Image2 设计流程 |
+| `reply.card.style_reuse_policy` / `reply.card.data_refresh_policy` | 默认复用模板样式并按本轮授权数据集/业务库刷新数据；客户明确要求换风格时才重新进入新的页面设计流程 |
 | `artifact_links` | 产物链接数组；第三方页面可直接展示 |
 
-已发布并被接受的 Image2 → Codex 静态页会进入 V3 模板库。后续同一数据集组合优先复用已有页面；若数据集组合不完全相同但存在交集，V3 可自动套用该模板的视觉风格、布局结构和组件组织，事实数据仍以当前会话授权范围为准。
+已发布并被接受的静态页会进入 V3 模板库。后续同一数据集组合优先复用已有页面；若数据集组合不完全相同但存在交集，V3 可自动套用该模板的视觉风格、布局结构和组件组织，事实数据仍以当前会话授权范围为准。
 
 #### 11.6.11 状态判断
 
