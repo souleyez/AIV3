@@ -3299,6 +3299,9 @@ fn publish_static_page_template_fallback_if_available(
     if fixed_task.template_id.as_str() != STATIC_PAGE_IMAGE2_DATA_PUBLISH {
         return Ok(None);
     }
+    if static_page_existing_artifact_revision_requested(fixed_task) {
+        return Ok(None);
+    }
 
     let workspace_path = task_workspace_path(task_context).filter(|path| path.is_dir());
     let task_json = workspace_path
@@ -3498,15 +3501,20 @@ fn static_page_existing_artifact_repair_fallback_enabled() -> bool {
         .unwrap_or(true)
 }
 
-fn static_page_existing_artifact_filter_binding_repair_requested(
+fn static_page_existing_artifact_revision_requested(
     fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
 ) -> bool {
-    if fixed_task
+    fixed_task
         .requirements
         .pointer("/existing_artifact/revision_requested")
         .and_then(Value::as_bool)
-        != Some(true)
-    {
+        == Some(true)
+}
+
+fn static_page_existing_artifact_filter_binding_repair_requested(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> bool {
+    if !static_page_existing_artifact_revision_requested(fixed_task) {
         return false;
     }
     let goal = fixed_task
@@ -6447,6 +6455,33 @@ function renderInsight(k){
             .is_some_and(
                 |url| url.contains("/generated-artifacts/database-static-pages/codex-host/")
             ));
+    }
+
+    #[test]
+    fn static_page_template_fallback_skips_existing_artifact_revision_request() {
+        let mut task_context = test_static_page_task_context();
+        let fixed_task = task_context
+            .fixed_task
+            .as_mut()
+            .expect("static page fixed task");
+        fixed_task.requirements["user_goal"] =
+            json!("修复已有报表：切换区域和门店后近7日销售必须联动。");
+        fixed_task.requirements["existing_artifact"] = json!({
+            "kind": "v3_generated_static_page",
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
+            "revision_requested": true,
+            "publish_mode": "new_generated_artifact_only"
+        });
+
+        let output = publish_static_page_template_fallback_if_available(
+            &task_context,
+            WorkflowExecutionId::new(),
+            "unit-template",
+            "codex_host_task_failed",
+        )
+        .expect("fallback should not error");
+
+        assert!(output.is_none());
     }
 
     #[test]
