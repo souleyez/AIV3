@@ -26622,6 +26622,11 @@ fn external_channel_static_page_reply_from_events(
             return Some(reply);
         }
     }
+    if let Some(reply) =
+        external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
+    {
+        return Some(reply);
+    }
     if let Some(event) = events.iter().rev().find(|event| {
         event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
             || (event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
@@ -26642,11 +26647,6 @@ fn external_channel_static_page_reply_from_events(
             conversation_external_id,
             &event.payload,
         ));
-    }
-    if let Some(reply) =
-        external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
-    {
-        return Some(reply);
     }
     for event in events.iter().rev() {
         if event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused" {
@@ -84629,7 +84629,8 @@ mod tests {
     }
 
     #[test]
-    fn external_channel_static_page_reply_prefers_existing_template_link_over_fixed_task_queue() {
+    fn external_channel_static_page_reply_reports_fixed_task_queue_over_provisional_template_link()
+    {
         let run_id = AssistantRunId::new();
         let draft_id = StaticPageDraftId::new();
         let image_job_id = StaticPageImageJobId::new();
@@ -84670,23 +84671,19 @@ mod tests {
         ];
 
         let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
-            .expect("existing template link reply");
+            .expect("fixed task queue reply");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
-        let card = reply.card.expect("stable card");
-        assert_eq!(card["status"], json!("static_page_published"));
-        assert_eq!(card["public_url"], json!(public_url));
-        assert_eq!(card["generated_artifact_url"], json!(public_url));
-        assert_eq!(card["download_url"], json!(public_url));
-        assert_eq!(card["html_download_url"], json!(public_url));
-        assert_eq!(card["artifact_links"], json!([public_url]));
-        assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert!(reply.artifact_links.is_empty());
+        let card = reply.card.expect("fixed task status card");
+        assert_eq!(card["type"], json!("v3_static_page_image2_publish_status"));
+        assert_eq!(card["status"], json!("static_page_publish_queued"));
         assert_eq!(
-            card["image2_skip_reason"],
-            json!("accepted_dataset_overlap_template_baseline")
+            card["template_id"],
+            json!("static_page_image2_data_publish")
         );
+        assert_eq!(card["poll_after_seconds"], json!(15));
     }
 
     #[test]
@@ -101679,6 +101676,69 @@ retrieve_evidence:
             .expect("static page failed reply");
 
         assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        let card = reply.card.as_ref().expect("status card");
+        assert_eq!(card["status"], json!("static_page_publish_failed"));
+        assert_eq!(
+            card["runtime_event"]["event_name"],
+            json!("codex_host_task.exec_failed")
+        );
+        assert!(card["poll_after_seconds"].is_null());
+    }
+
+    #[test]
+    fn external_channel_static_page_reply_surfaces_exec_failed_over_provisional_template_link() {
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new().to_string();
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/index.html";
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_pipeline_queued",
+                json!({
+                    "status": "static_page_image2_auto_publish_pending",
+                    "public_url": public_url,
+                    "generated_artifact_url": public_url,
+                    "artifact_links": [public_url],
+                    "provisional_existing_artifact": true,
+                    "image2_skipped": true,
+                    "image2_skip_reason": "accepted_dataset_overlap_template_baseline",
+                    "template_match_policy": "dataset_overlap",
+                    "codex_host_workflow_execution_id": workflow_execution_id,
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "codex_host.fixed_task.queued",
+                json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "queued",
+                    "workflow_execution_id": workflow_execution_id,
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                3,
+                "codex_host_task.exec_failed",
+                json!({
+                    "status": "failed",
+                    "reason": "codex_host_task_failed",
+                    "retryable": false,
+                    "attempt": 1,
+                    "max_attempts": 3,
+                    "secrets_exposed": false,
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-1")
+            .expect("failed status reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert!(reply.artifact_links.is_empty());
         let card = reply.card.as_ref().expect("status card");
         assert_eq!(card["status"], json!("static_page_publish_failed"));
         assert_eq!(
