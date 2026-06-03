@@ -29652,8 +29652,299 @@ fn static_page_default_prompt_tokens_match(
     )
 }
 
+#[derive(Debug, Clone)]
+struct StaticPageTemplateBaselineScore {
+    score: i32,
+    features: Vec<String>,
+}
+
+impl StaticPageTemplateBaselineScore {
+    fn new() -> Self {
+        Self {
+            score: 100,
+            features: vec!["eligible_dataset_overlap".to_string()],
+        }
+    }
+
+    fn add(&mut self, points: i32, feature: impl Into<String>) {
+        self.score += points;
+        self.features.push(feature.into());
+    }
+}
+
+fn static_page_template_text_contains_any(text: &str, lower_text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| {
+        let needle = needle.trim();
+        if needle.is_empty() {
+            return false;
+        }
+        if text.contains(needle) {
+            return true;
+        }
+        lower_text.contains(&needle.to_ascii_lowercase())
+    })
+}
+
+fn static_page_template_request_needs_store_sales_binding(prompt: Option<&str>) -> bool {
+    let prompt = prompt.unwrap_or_default().trim();
+    if prompt.is_empty() {
+        return false;
+    }
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let lower = compact.to_ascii_lowercase();
+    let has_metric = static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &[
+            "近7日",
+            "近七日",
+            "销售",
+            "营业额",
+            "营收",
+            "租金",
+            "高分成",
+            "取高",
+            "sales",
+            "revenue",
+            "rent",
+        ],
+    );
+    let has_partition = static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &[
+            "门店", "分店", "店铺", "区域", "分区", "品牌", "客户", "store", "region", "area",
+            "brand",
+        ],
+    );
+    let has_binding = static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &[
+            "联动",
+            "筛选",
+            "切换",
+            "刷新",
+            "不会变",
+            "不变化",
+            "不更新",
+            "绑定",
+            "filter",
+            "binding",
+            "refresh",
+            "change",
+        ],
+    );
+    has_metric && (has_partition || has_binding)
+}
+
+fn static_page_template_limited_value_text(value: &Value) -> String {
+    value.to_string().chars().take(20_000).collect()
+}
+
+fn static_page_template_draft_profile_text(draft: &StaticPageDraft) -> String {
+    let mut text = String::new();
+    text.push_str(&draft.title);
+    text.push('\n');
+    if let Some(public_url) = static_page_published_public_url_from_draft(draft) {
+        text.push_str(&public_url);
+        text.push('\n');
+    }
+    for value in [
+        &draft.selected_scope,
+        &draft.visibility_snapshot,
+        &draft.source_refs,
+        &draft.draft_payload,
+    ] {
+        text.push_str(&static_page_template_limited_value_text(value));
+        text.push('\n');
+    }
+    text
+}
+
+fn static_page_template_current_scope_mentions_recipient_role(
+    selected_scope: &Value,
+    source_refs: &Value,
+) -> bool {
+    let text = format!(
+        "{}\n{}",
+        static_page_template_limited_value_text(selected_scope),
+        static_page_template_limited_value_text(source_refs)
+    );
+    let lower = text.to_ascii_lowercase();
+    static_page_template_text_contains_any(
+        &text,
+        &lower,
+        &[
+            "recipient_role",
+            "recipientRole",
+            "store_manager",
+            "店总",
+            "角色",
+            "权限",
+        ],
+    )
+}
+
+fn static_page_template_baseline_score(
+    current_prompt: Option<&str>,
+    selected_scope: &Value,
+    source_refs: &Value,
+    current_tokens: &BTreeSet<String>,
+    draft: &StaticPageDraft,
+    baseline_tokens: &BTreeSet<String>,
+) -> StaticPageTemplateBaselineScore {
+    let mut score = StaticPageTemplateBaselineScore::new();
+    let material_overlap_count = current_tokens
+        .iter()
+        .filter(|token| {
+            static_page_template_token_is_material_scope(token) && baseline_tokens.contains(*token)
+        })
+        .count();
+    if material_overlap_count > 0 {
+        score.add(
+            (material_overlap_count.min(4) as i32) * 12,
+            format!("material_scope_overlap:{material_overlap_count}"),
+        );
+    }
+    if static_page_default_prompt_tokens_match(
+        selected_scope,
+        source_refs,
+        &draft.selected_scope,
+        &draft.source_refs,
+    ) {
+        score.add(20, "default_prompt_compatible");
+    }
+
+    if !static_page_template_request_needs_store_sales_binding(current_prompt) {
+        return score;
+    }
+
+    score.add(25, "request_store_sales_filter_binding");
+    let profile = static_page_template_draft_profile_text(draft);
+    let profile_lower = profile.to_ascii_lowercase();
+    let has_store_or_region = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "门店", "分店", "店铺", "区域", "分区", "store", "region", "area",
+        ],
+    );
+    let has_sales_or_revenue = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "近7日",
+            "近七日",
+            "销售",
+            "营业额",
+            "营收",
+            "租金",
+            "高分成",
+            "取高",
+            "sales",
+            "revenue",
+            "rent",
+        ],
+    );
+    let has_filter_or_binding = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "联动",
+            "筛选",
+            "切换",
+            "selector",
+            "select",
+            "filter",
+            "binding",
+            "store-select",
+            "area-select",
+        ],
+    );
+    let has_real_data_report_signal = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "数据库真实数据",
+            "真实数据版",
+            "data-buddy-image2-report",
+            "template:data-report",
+            "business_report",
+            "经营分析总报表",
+        ],
+    );
+    let has_generic_health_signal = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "经营健康度总览",
+            "健康度总览",
+            "health overview",
+            "health_overview",
+        ],
+    );
+    let has_test_or_warmup_signal = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "并发编号",
+            "smoke",
+            "template_prewarm",
+            "prewarm",
+            "测试页",
+            "test page",
+        ],
+    );
+    let has_recipient_role_signal = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "recipient_role",
+            "recipientRole",
+            "store_manager",
+            "role:store",
+        ],
+    );
+
+    if has_store_or_region {
+        score.add(35, "baseline_has_store_or_region");
+    } else {
+        score.add(-25, "baseline_missing_store_or_region");
+    }
+    if has_sales_or_revenue {
+        score.add(45, "baseline_has_sales_or_revenue");
+    } else {
+        score.add(-35, "baseline_missing_sales_or_revenue");
+    }
+    if has_filter_or_binding {
+        score.add(20, "baseline_has_filter_or_binding");
+    }
+    if has_real_data_report_signal {
+        score.add(60, "baseline_real_data_report_signal");
+    }
+    if has_generic_health_signal {
+        score.add(-70, "baseline_generic_health_overview_penalty");
+    }
+    if has_test_or_warmup_signal {
+        score.add(-80, "baseline_test_or_prewarm_penalty");
+    }
+    if has_recipient_role_signal
+        && !static_page_template_current_scope_mentions_recipient_role(selected_scope, source_refs)
+    {
+        score.add(-30, "baseline_recipient_role_scope_penalty");
+    }
+
+    score
+}
+
 struct StaticPageTemplateOverlapSearchOutcome {
     draft: Option<StaticPageDraft>,
+    selected_score: Option<i32>,
+    selected_features: Vec<String>,
     current_token_count: usize,
     accepted_baseline_count: usize,
     visible_published_baseline_count: usize,
@@ -29698,6 +29989,8 @@ impl StaticPageTemplateOverlapSearchOutcome {
                 source_refs,
             ).is_some(),
             "current_token_count": self.current_token_count,
+            "selected_score": self.selected_score,
+            "selected_features": self.selected_features,
             "accepted_baseline_count": self.accepted_baseline_count,
             "visible_published_baseline_count": self.visible_published_baseline_count,
             "scope_intersection_count": self.scope_intersection_count,
@@ -29720,6 +30013,8 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
     let current_tokens = static_page_template_match_tokens(selected_scope, source_refs);
     let mut outcome = StaticPageTemplateOverlapSearchOutcome {
         draft: None,
+        selected_score: None,
+        selected_features: Vec::new(),
         current_token_count: current_tokens.len(),
         accepted_baseline_count: 0,
         visible_published_baseline_count: 0,
@@ -29740,6 +30035,7 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
         .map_err(ApiError::from_storage)?;
     outcome.accepted_baseline_count = baselines.len();
 
+    let mut best_match: Option<(StaticPageDraft, StaticPageTemplateBaselineScore)> = None;
     for draft in baselines {
         let draft_connection_id = external_channel_static_page_source_ref_string(
             &draft.source_refs,
@@ -29784,10 +30080,28 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
             &draft.source_refs,
         ) {
             outcome.default_prompt_match_count += 1;
-            outcome.draft = Some(draft);
-            break;
+            let candidate_score = static_page_template_baseline_score(
+                current_prompt,
+                selected_scope,
+                source_refs,
+                &current_tokens,
+                &draft,
+                &baseline_tokens,
+            );
+            let should_replace = best_match
+                .as_ref()
+                .is_none_or(|(_, best_score)| candidate_score.score > best_score.score);
+            if should_replace {
+                best_match = Some((draft, candidate_score));
+            }
+            continue;
         }
         outcome.default_prompt_mismatch_count += 1;
+    }
+    if let Some((draft, score)) = best_match {
+        outcome.selected_score = Some(score.score);
+        outcome.selected_features = score.features;
+        outcome.draft = Some(draft);
     }
     Ok(outcome)
 }
@@ -83230,6 +83544,8 @@ mod tests {
         });
         let outcome = StaticPageTemplateOverlapSearchOutcome {
             draft: None,
+            selected_score: None,
+            selected_features: Vec::new(),
             current_token_count: 1,
             accepted_baseline_count: 2,
             visible_published_baseline_count: 2,
@@ -83327,6 +83643,125 @@ mod tests {
             }
         });
         assert!(static_page_draft_is_template_fallback_baseline(&draft));
+    }
+
+    #[test]
+    fn static_page_template_score_prefers_sales_store_report_over_generic_health_page() {
+        let selected_scope = json!({
+            "type": "external_channel",
+            "dataset_external_ids": ["xinbai-project-dataset"],
+            "requested_dataset_external_ids": ["xinbai-project-dataset"]
+        });
+        let source_refs = json!({
+            "source": "external_channel_static_page_artifact_request",
+            "channel_connection_id": "generic-chat-main",
+            "database_source_ids": ["hy-sql-traffic-area"],
+            "answer_policy": {
+                "default_prompt": "请面向业务用户，只使用已授权数据库源 hy-sql-traffic-area 的真实数据。"
+            }
+        });
+        let current_tokens = static_page_template_match_tokens(&selected_scope, &source_refs);
+        let prompt =
+            "请修改已有新百经营分析月报：近7日销售切换区域和门店必须联动刷新，不要更换整体视觉风格。";
+        let now = Utc::now();
+
+        let generic_health = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: Some(UserId::new()),
+            title: "静态页：经营健康度总览报表 并发编号 17".to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: selected_scope.clone(),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "channel_connection_id": "generic-chat-main",
+                "dataset_external_ids": ["xinbai-project-dataset"],
+                "answer_policy": source_refs["answer_policy"].clone(),
+                "artifact_stability": {
+                    "dataset_artifact_key": "v3-static-page|template:generated-static-page:fixture|dataset_external_id:xinbai-project-dataset|recipient_role:store_manager"
+                }
+            }),
+            draft_payload: json!({
+                "finalPage": {
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/codex-host/generic-health/index.html"
+                },
+                "modules": ["经营健康度总览", "门店排行", "风险机会池"]
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        let sales_store_report = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: Some(UserId::new()),
+            title: "静态页：生成【新百经营分析总报表-数据库真实数据版】".to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: selected_scope.clone(),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "channel_connection_id": "generic-chat-main",
+                "database_source_ids": ["hy-sql-traffic-area"],
+                "dataset_external_ids": ["xinbai-project-dataset"],
+                "answer_policy": source_refs["answer_policy"].clone(),
+                "artifact_stability": {
+                    "dataset_artifact_key": "v3-static-page|template:data-report|database_source_id:hy-sql-traffic-area|dataset_external_id:xinbai-project-dataset"
+                }
+            }),
+            draft_payload: json!({
+                "finalPage": {
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html"
+                },
+                "dataShape": {
+                    "storeList": ["A店", "B店"],
+                    "salesSeriesByStore": true,
+                    "areaSelect": true,
+                    "storeSelect": true
+                },
+                "modules": ["近7日销售", "区域筛选", "门店筛选", "品牌高分成明细"]
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        let generic_tokens = static_page_template_match_tokens(
+            &generic_health.selected_scope,
+            &generic_health.source_refs,
+        );
+        let report_tokens = static_page_template_match_tokens(
+            &sales_store_report.selected_scope,
+            &sales_store_report.source_refs,
+        );
+
+        let generic_score = static_page_template_baseline_score(
+            Some(prompt),
+            &selected_scope,
+            &source_refs,
+            &current_tokens,
+            &generic_health,
+            &generic_tokens,
+        );
+        let report_score = static_page_template_baseline_score(
+            Some(prompt),
+            &selected_scope,
+            &source_refs,
+            &current_tokens,
+            &sales_store_report,
+            &report_tokens,
+        );
+
+        assert!(
+            report_score.score > generic_score.score,
+            "real report score {report_score:?} should outrank generic health score {generic_score:?}"
+        );
+        assert!(report_score
+            .features
+            .iter()
+            .any(|feature| feature == "baseline_real_data_report_signal"));
+        assert!(generic_score
+            .features
+            .iter()
+            .any(|feature| feature == "baseline_generic_health_overview_penalty"));
     }
 
     #[test]
