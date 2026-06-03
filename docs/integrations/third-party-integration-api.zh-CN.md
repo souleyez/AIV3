@@ -363,7 +363,7 @@ Authorization: Bearer <V3 inbound token>
 | `reply` | V3 返回给第三方页面展示或处理的回复对象 |
 | `reply.target_conversation_external_id` | 应展示回复的第三方会话 ID |
 | `reply.reply_type` | 回复类型，例如 `text`、`task_status`、`card`、`artifact_link` 或 `requires_confirmation` |
-| `reply.text` | 文本回复内容 |
+| `reply.text` | 文本回复内容；静态页/报表发布完成时会包含 Markdown 可点击链接和原始 `页面地址: URL`，第三方页面建议按富文本/Markdown 或 URL 自动链接渲染 |
 | `reply.task_status` | 任务状态，例如 `answered`、`processing`、`needs_input`、`failed`、`v3_search_evidence_required`、`data_ingestion_analysis_queued`、`data_ingestion_analysis_completed` |
 | `reply.requires_confirmation` | 是否需要第三方继续展示用户确认 |
 | `reply.action_id` | 待确认或待追踪的外部动作 ID |
@@ -1733,7 +1733,7 @@ V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，�
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可继续在 `requested_skills[].arguments.output_type` 中传 `static_page`。若同时传 `template` 和旧 skill，V3 会按模板文档去重。
 
-V3 会自动完成页面生成与发布，并通过 SSE/状态卡片展示过程进度。生成过程不作为阻塞确认点，也不要求第三方调用内部生成能力。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。第三方不需要做额外确认、下载或二次提交。
+V3 会自动完成页面生成与发布，并通过 SSE/状态卡片展示过程进度。生成过程不作为阻塞确认点，也不要求第三方调用内部生成能力。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 为准。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。第三方不需要做额外确认、下载或二次提交。
 
 静态页状态卡和最终发布卡会带 `reply.card.recipient_delivery`、`reply.card.permission_review_status` 和 `reply.card.editable_after_publish`。第三方操作人员可以先发送基础页面链接；若需要给总部、分店店总或指定人员发送不同权限口径的页面，继续传用户-角色-门店/区域范围映射，V3 可基于已生成页面继续调整并产出新的单独链接。
 

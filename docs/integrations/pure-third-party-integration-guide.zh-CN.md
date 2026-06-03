@@ -701,7 +701,7 @@ Content-Type: application/json
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，V3 会去重，不重复加载同一模板文档。
 
-V3 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。
+V3 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `artifact_links[0]`、`card.public_url`、`card.generated_artifact_url` 为准。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。
 
 V3 会把已经发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 `default_prompt`，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 `default_prompt` 相同，V3 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 `default_prompt` 表达了不同报表口径/主题时，才重新进入新的页面设计流程。
 
@@ -716,7 +716,7 @@ V3 会把已经发布且被接受的静态页沉淀为模板库。后续静态�
 | `reply.reply_type` | `artifact_link` 或 `task_status` |
 | `reply.task_status` | 顶层兼容状态；生成中、可重试、后台继续、待人工处理统一为 `processing`，需要用户补充为 `needs_input`，最终成功为 `static_page_published`，只有不可继续的失败/取消才返回 `failed` |
 | `reply.card.status` | 静态页细分阶段；第三方按生成中、发布中、重试中、需人工处理、失败或取消等状态处理即可 |
-| `reply.text` | 给用户展示的排队/处理说明；若已直接生成 HTML，会说明可通过 `card.render_output_id` 或下载链接获取产物 |
+| `reply.text` | 给用户展示的排队/处理说明；已发布页面会包含 Markdown 可点击链接和原始 `页面地址: URL`，第三方页面应按富文本/Markdown 或 URL 自动链接渲染 |
 | `reply.card.type` | 系统卡片类型；第三方按不透明字符串记录即可 |
 | `reply.card.draft_id` | V3 静态页草稿 ID |
 | `reply.card.render_output_id` | 已直接生成 HTML 时返回；第三方用它查询、预览或下载静态页 |
@@ -769,7 +769,7 @@ V3 会把已经发布且被接受的静态页沉淀为模板库。后续静态�
 | 字段 | 注释 |
 | --- | --- |
 | `reply.reply_type` | `artifact_link`、`text` 或 `task_status` |
-| `reply.text` | 给用户展示的说明 |
+| `reply.text` | 给用户展示的说明；静态页发布完成时会包含 Markdown 链接和原始 `页面地址: URL` |
 | `reply.artifact_links` | 产物链接数组；静态页优先返回 generated-artifact 页面 URL，兼容返回 HTML 下载地址；模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
 | `reply.card` | 可能包含 `render_output_id`、`html_preview_url`、`html_download_url`、`generated_artifact_url`、`data_url`、`dynamic_page_contract`、`draft_id`、产物状态或结构化卡片 |
 | `assistant_run_id` | 本次生成运行 ID |
