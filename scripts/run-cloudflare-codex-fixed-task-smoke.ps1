@@ -67,6 +67,22 @@ function New-SmokeResult {
     }
 }
 
+function Add-SmokeResult {
+    param(
+        [System.Collections.Generic.List[object]] $Results,
+        [string] $CaseId,
+        [string] $Status,
+        [string] $Message,
+        [object] $Details = $null
+    )
+    $result = New-SmokeResult `
+        -CaseId $CaseId `
+        -Status $Status `
+        -Message $Message `
+        -Details $Details
+    $Results.Add($result) | Out-Null
+}
+
 function Invoke-CheckedCommand {
     param(
         [string] $FilePath,
@@ -291,8 +307,8 @@ function New-ExternalStaticPageSmokeBody {
         sender_display_name = [string](Get-ConfigValue -Config $Config -Name "sender_display_name" -Default "V3 smoke")
         message_external_id = "msg-static-page-$RunId"
         message_type = "text"
-        text = [string](Get-ConfigValue -Config $Config -Name "text" -Default "请生成一页演示报表，先返回可访问链接，后续自动进入 Image2 和 Cloudflare Codex 静态页发布链路。")
-        default_prompt = [string](Get-ConfigValue -Config $Config -Name "default_prompt" -Default "请面向业务用户，优先基于本轮文档和数据源回答。")
+        text = [string](Get-ConfigValue -Config $Config -Name "text" -Default "Generate one public demo report page, return an accessible link first, and continue through the static-page publish pipeline automatically.")
+        default_prompt = [string](Get-ConfigValue -Config $Config -Name "default_prompt" -Default "Answer for business users using the selected documents and data sources first.")
         output_format = [string](Get-ConfigValue -Config $Config -Name "output_format" -Default "rich_text")
         render_mode = "artifact"
         artifact_type = "static_page"
@@ -347,8 +363,8 @@ function New-ExternalDataIngestionSmokeBody {
         sender_display_name = [string](Get-ConfigValue -Config $Config -Name "sender_display_name" -Default "V3 smoke")
         message_external_id = "msg-data-ingestion-$RunId"
         message_type = "text"
-        text = [string](Get-ConfigValue -Config $Config -Name "data_ingestion_text" -Default "请对本轮选中的数据源或文档做数据接入分析，输出只读字段映射、清洗建议、校验项和 staging 入库方案，不写生产库。")
-        default_prompt = [string](Get-ConfigValue -Config $Config -Name "default_prompt" -Default "请面向业务用户，优先基于本轮文档和数据源回答。")
+        text = [string](Get-ConfigValue -Config $Config -Name "data_ingestion_text" -Default "Analyze the selected data source or documents, return read-only field mapping, cleansing suggestions, validation checks, and a staging ingestion plan without production writes.")
+        default_prompt = [string](Get-ConfigValue -Config $Config -Name "default_prompt" -Default "Answer for business users using the selected documents and data sources first.")
         output_format = [string](Get-ConfigValue -Config $Config -Name "output_format" -Default "rich_text")
         available_document_source_id = if ([string]::IsNullOrWhiteSpace($sourceId)) { $null } else { $sourceId }
         available_document_external_ids = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids"))
@@ -773,7 +789,7 @@ if ($mode -eq "local_plan_only") {
             "runtime_summary" { "Runtime diagnostics summarize fixed-task status without raw prompt data." }
             default { "Fixed-task smoke case ran." }
         }
-        $results.Add((New-SmokeResult -CaseId $caseId -Status $caseSmoke.status -Message $message -Details $caseSmoke.details))
+        Add-SmokeResult -Results $results -CaseId $caseId -Status $caseSmoke.status -Message $message -Details $caseSmoke.details
     }
 } else {
     $base = $BaseUrl.TrimEnd("/")
@@ -782,31 +798,41 @@ if ($mode -eq "local_plan_only") {
 
     $docsUrl = "$base/external-integrations/pure-third-party-integration-guide.zh-CN.html"
     $docs = Invoke-SmokeHttpRequest -Method "GET" -Uri $docsUrl
-    $docsPassed = $docs.ok -and $docs.status_code -eq 200 -and $docs.content.Contains("第三方")
-    $results.Add((New-SmokeResult `
-        -CaseId "server_docs" `
-        -Status $(if ($docsPassed) { "passed" } else { "failed" }) `
-        -Message $(if ($docsPassed) { "Public third-party integration guide responded." } else { "Public third-party integration guide did not return the expected HTML content." }) `
-        -Details @{
-            url = $docsUrl
-            status_code = $docs.status_code
-            content_excerpt = New-ContentExcerpt -Content $docs.content
-            error = $docs.error
-        }))
+    $docsPassed = $docs.ok -and $docs.status_code -eq 200 -and $docs.content.Contains("default_prompt")
+    $docsStatus = "failed"
+    $docsMessage = "Public third-party integration guide did not return the expected HTML content."
+    if ($docsPassed) {
+        $docsStatus = "passed"
+        $docsMessage = "Public third-party integration guide responded."
+    }
+    $docsDetails = @{
+        url = $docsUrl
+        status_code = $docs.status_code
+        content_excerpt = New-ContentExcerpt -Content $docs.content
+        error = $docs.error
+    }
+    Add-SmokeResult -Results $results -CaseId "server_docs" -Status $docsStatus -Message $docsMessage -Details $docsDetails
 
     $authGuardUrl = "$base/v1/external/channels/generic-chat-main/events"
     $authGuard = Invoke-SmokeHttpRequest -Method "POST" -Uri $authGuardUrl -Body "{}" -ContentType "application/json"
-    $authGuardPassed = $authGuard.ok -and $authGuard.status_code -eq 401 -and $authGuard.content.Contains("external_channel_auth_failed")
-    $results.Add((New-SmokeResult `
-        -CaseId "server_external_api_auth_guard" `
-        -Status $(if ($authGuardPassed) { "passed" } else { "failed" }) `
-        -Message $(if ($authGuardPassed) { "External events API reached platform-api and rejected missing bearer token without mutation." } else { "External events API did not return the expected missing-token guard." }) `
-        -Details @{
-            url = $authGuardUrl
-            status_code = $authGuard.status_code
-            content_excerpt = New-ContentExcerpt -Content $authGuard.content
-            error = $authGuard.error
-        }))
+    $authGuardContent = if ($null -eq $authGuard.content) { "" } else { [string]$authGuard.content }
+    $authGuardPassed = $authGuard.ok -and $authGuard.status_code -eq 401 -and (
+        [string]::IsNullOrWhiteSpace($authGuardContent) -or
+        $authGuardContent.Contains("external_channel_auth_failed")
+    )
+    $authGuardStatus = "failed"
+    $authGuardMessage = "External events API did not return the expected missing-token guard."
+    if ($authGuardPassed) {
+        $authGuardStatus = "passed"
+        $authGuardMessage = "External events API reached platform-api and rejected missing bearer token without mutation."
+    }
+    $authGuardDetails = @{
+        url = $authGuardUrl
+        status_code = $authGuard.status_code
+        content_excerpt = New-ContentExcerpt -Content $authGuard.content
+        error = $authGuard.error
+    }
+    Add-SmokeResult -Results $results -CaseId "server_external_api_auth_guard" -Status $authGuardStatus -Message $authGuardMessage -Details $authGuardDetails
 
     $queueStatsUrl = "$base/v1/workflow-tasks/queue-stats"
     $queueStats = Invoke-SmokeHttpRequest -Method "GET" -Uri $queueStatsUrl
@@ -819,18 +845,25 @@ if ($mode -eq "local_plan_only") {
         }
     }
     $queueStatsPassed = $null -ne $queueStatsParsed -and -not [string]::IsNullOrWhiteSpace($queueStatsParsed.generated_at) -and $null -ne $queueStatsParsed.queues
-    $results.Add((New-SmokeResult `
-        -CaseId "server_queue_stats" `
-        -Status $(if ($queueStatsPassed) { "passed" } else { "failed" }) `
-        -Message $(if ($queueStatsPassed) { "Workflow queue stats endpoint returned JSON diagnostics." } else { "Workflow queue stats endpoint did not return the expected JSON diagnostics." }) `
-        -Details @{
-            url = $queueStatsUrl
-            status_code = $queueStats.status_code
-            queue_count = if ($queueStatsPassed) { @($queueStatsParsed.queues).Count } else { $null }
-            task_count = if ($queueStatsPassed) { $queueStatsParsed.task_count } else { $null }
-            content_excerpt = New-ContentExcerpt -Content $queueStats.content
-            error = $queueStats.error
-        }))
+    $queueStatsStatus = "failed"
+    $queueStatsMessage = "Workflow queue stats endpoint did not return the expected JSON diagnostics."
+    $queueCount = $null
+    $taskCount = $null
+    if ($queueStatsPassed) {
+        $queueStatsStatus = "passed"
+        $queueStatsMessage = "Workflow queue stats endpoint returned JSON diagnostics."
+        $queueCount = @($queueStatsParsed.queues).Count
+        $taskCount = $queueStatsParsed.task_count
+    }
+    $queueStatsDetails = @{
+        url = $queueStatsUrl
+        status_code = $queueStats.status_code
+        queue_count = $queueCount
+        task_count = $taskCount
+        content_excerpt = New-ContentExcerpt -Content $queueStats.content
+        error = $queueStats.error
+    }
+    Add-SmokeResult -Results $results -CaseId "server_queue_stats" -Status $queueStatsStatus -Message $queueStatsMessage -Details $queueStatsDetails
 
     if ($PlanOnly -or -not $AllowServerMutation) {
         foreach ($caseId in $selectedCases) {
@@ -846,7 +879,7 @@ if ($mode -eq "local_plan_only") {
                 $guardDetails.expected_output_statuses = @("analysis_ready", "staging_spec_ready", "needs_human", "failed")
                 $guardDetails.production_writes_allowed = $false
             }
-            $results.Add((New-SmokeResult -CaseId $caseId -Status "skipped" -Message "Server mutation smoke is guarded. Re-run on an approved host with -AllowServerMutation after deployment review." -Details $guardDetails))
+            Add-SmokeResult -Results $results -CaseId $caseId -Status "skipped" -Message "Server mutation smoke is guarded. Re-run on an approved host with -AllowServerMutation after deployment review." -Details $guardDetails
         }
     } else {
         foreach ($caseId in $selectedCases) {
@@ -855,7 +888,7 @@ if ($mode -eq "local_plan_only") {
             } elseif ($caseId -eq "data-ingestion-analysis") {
                 $results.Add((Invoke-ServerDataIngestionMutationSmoke -Base $base -Config $serverConfig -Token $serverBearerToken))
             } else {
-                $results.Add((New-SmokeResult -CaseId $caseId -Status "failed" -Message "Server mutation execution for this case is not wired yet; use -PlanOnly or add a private server case implementation before enabling." -Details @{ base_url = $BaseUrl }))
+                Add-SmokeResult -Results $results -CaseId $caseId -Status "failed" -Message "Server mutation execution for this case is not wired yet; use -PlanOnly or add a private server case implementation before enabling." -Details @{ base_url = $BaseUrl }
             }
         }
     }

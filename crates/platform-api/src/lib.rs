@@ -107,8 +107,9 @@ use domain_model::{
     StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
     StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
     StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
-    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
-    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
+    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventId,
+    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
+    WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -19000,6 +19001,24 @@ async fn ingest_external_channel_message_with_connection_inner(
         }
     };
 
+    if let Err(error) = maybe_enqueue_external_channel_static_page_template_prewarm(
+        state,
+        connection_id,
+        &run,
+        &assistant_request,
+        &message,
+        now,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = ?error,
+            assistant_run_id = %run.id,
+            connection_id = %connection_id,
+            "external channel static-page template prewarm enqueue failed"
+        );
+    }
+
     Ok((
         StatusCode::ACCEPTED,
         ExternalChannelEventResponse {
@@ -28800,12 +28819,67 @@ fn static_page_default_prompt_from_scope_or_refs<'a>(
         })
 }
 
-fn static_page_default_prompt_stability_token_from_scope_or_refs(
+fn static_page_default_prompt_reuse_class(prompt: &str) -> Option<&'static str> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return None;
+    }
+    if prompt.contains("简历")
+        || prompt.contains("招聘")
+        || prompt.to_ascii_lowercase().contains("resume")
+    {
+        return Some("resume");
+    }
+    if prompt.contains("经营")
+        || prompt.contains("报表")
+        || prompt.contains("业务")
+        || prompt.contains("数据")
+        || prompt.contains("数据库")
+        || prompt.contains("数据源")
+        || prompt.contains("文档")
+        || prompt.to_ascii_lowercase().contains("report")
+        || prompt.to_ascii_lowercase().contains("dashboard")
+    {
+        return Some("business_report");
+    }
+    None
+}
+
+fn static_page_default_prompt_tokens_compatible(
+    left_prompt: Option<&str>,
+    right_prompt: Option<&str>,
+) -> bool {
+    let left_token = left_prompt.and_then(static_page_stable_key_token);
+    let right_token = right_prompt.and_then(static_page_stable_key_token);
+    if left_token == right_token {
+        return true;
+    }
+    let Some(left_prompt) = left_prompt else {
+        return false;
+    };
+    let Some(right_prompt) = right_prompt else {
+        return false;
+    };
+    let Some(left_class) = static_page_default_prompt_reuse_class(left_prompt) else {
+        return false;
+    };
+    static_page_default_prompt_reuse_class(right_prompt) == Some(left_class)
+}
+
+fn static_page_default_prompt_template_token(
     selected_scope: &Value,
     source_refs: &Value,
-) -> Option<String> {
-    static_page_default_prompt_from_scope_or_refs(selected_scope, source_refs)
-        .and_then(static_page_stable_key_token)
+) -> String {
+    if let Some(prompt) = static_page_default_prompt_from_scope_or_refs(selected_scope, source_refs)
+    {
+        if let Some(class) = static_page_default_prompt_reuse_class(prompt) {
+            return format!("class:{class}");
+        }
+        if let Some(token) = static_page_stable_key_token(prompt) {
+            return token;
+        }
+    }
+    "none".to_string()
 }
 
 fn static_page_template_stability_key_with_default_prompt(
@@ -28826,11 +28900,64 @@ fn static_page_default_prompt_tokens_match(
     baseline_selected_scope: &Value,
     baseline_source_refs: &Value,
 ) -> bool {
-    static_page_default_prompt_stability_token_from_scope_or_refs(selected_scope, source_refs)
-        == static_page_default_prompt_stability_token_from_scope_or_refs(
+    static_page_default_prompt_tokens_compatible(
+        static_page_default_prompt_from_scope_or_refs(selected_scope, source_refs),
+        static_page_default_prompt_from_scope_or_refs(
             baseline_selected_scope,
             baseline_source_refs,
-        )
+        ),
+    )
+}
+
+struct StaticPageTemplateOverlapSearchOutcome {
+    draft: Option<StaticPageDraft>,
+    current_token_count: usize,
+    accepted_baseline_count: usize,
+    visible_published_baseline_count: usize,
+    scope_intersection_count: usize,
+    default_prompt_match_count: usize,
+    default_prompt_mismatch_count: usize,
+}
+
+impl StaticPageTemplateOverlapSearchOutcome {
+    fn not_matched_reason(&self) -> &'static str {
+        if self.current_token_count == 0 {
+            "missing_candidate_scope_tokens"
+        } else if self.accepted_baseline_count == 0 {
+            "no_accepted_template_baseline"
+        } else if self.visible_published_baseline_count == 0 {
+            "no_visible_published_template_baseline"
+        } else if self.scope_intersection_count == 0 {
+            "no_dataset_scope_intersection"
+        } else if self.default_prompt_match_count == 0 && self.default_prompt_mismatch_count > 0 {
+            "default_prompt_mismatch"
+        } else {
+            "no_matching_template_baseline"
+        }
+    }
+
+    fn summary(&self, selected_scope: &Value, source_refs: &Value) -> Value {
+        json!({
+            "policy": "dataset_overlap",
+            "status": if self.draft.is_some() { "matched" } else { "not_matched" },
+            "reason": if self.draft.is_some() {
+                "dataset_scope_intersects_existing_template_baseline_and_default_prompt_matches"
+            } else {
+                self.not_matched_reason()
+            },
+            "default_prompt_match_policy": "same_or_compatible_business_default_prompt",
+            "candidate_default_prompt_present": static_page_default_prompt_from_scope_or_refs(
+                selected_scope,
+                source_refs,
+            ).is_some(),
+            "current_token_count": self.current_token_count,
+            "accepted_baseline_count": self.accepted_baseline_count,
+            "visible_published_baseline_count": self.visible_published_baseline_count,
+            "scope_intersection_count": self.scope_intersection_count,
+            "default_prompt_match_count": self.default_prompt_match_count,
+            "default_prompt_mismatch_count": self.default_prompt_mismatch_count,
+        })
+    }
 }
 
 async fn find_static_page_template_baseline_by_dataset_overlap(
@@ -28839,10 +28966,19 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
     source_refs: &Value,
     current_user_id: Option<UserId>,
     connection_id: Option<&str>,
-) -> std::result::Result<Option<StaticPageDraft>, ApiError> {
+) -> std::result::Result<StaticPageTemplateOverlapSearchOutcome, ApiError> {
     let current_tokens = static_page_template_match_tokens(selected_scope, source_refs);
+    let mut outcome = StaticPageTemplateOverlapSearchOutcome {
+        draft: None,
+        current_token_count: current_tokens.len(),
+        accepted_baseline_count: 0,
+        visible_published_baseline_count: 0,
+        scope_intersection_count: 0,
+        default_prompt_match_count: 0,
+        default_prompt_mismatch_count: 0,
+    };
     if current_tokens.is_empty() {
-        return Ok(None);
+        return Ok(outcome);
     }
     let baselines = state
         .storage
@@ -28850,13 +28986,14 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
         .list_accepted_baselines(state.tenant_id, 100)
         .await
         .map_err(ApiError::from_storage)?;
+    outcome.accepted_baseline_count = baselines.len();
 
-    Ok(baselines.into_iter().find(|draft| {
+    for draft in baselines {
         if !static_page_owner_is_visible(draft.owner_user_id, current_user_id) {
-            return false;
+            continue;
         }
-        if static_page_published_public_url_from_draft(draft).is_none() {
-            return false;
+        if static_page_published_public_url_from_draft(&draft).is_none() {
+            continue;
         }
         if let Some(connection_id) = connection_id {
             let draft_connection_id = external_channel_static_page_source_ref_string(
@@ -28867,19 +29004,366 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
                 .as_deref()
                 .is_some_and(|value| value != connection_id)
             {
-                return false;
+                continue;
             }
         }
+        outcome.visible_published_baseline_count += 1;
         let baseline_tokens =
             static_page_template_match_tokens(&draft.selected_scope, &draft.source_refs);
-        static_page_template_tokens_intersect(&current_tokens, &baseline_tokens)
-            && static_page_default_prompt_tokens_match(
-                selected_scope,
-                source_refs,
-                &draft.selected_scope,
-                &draft.source_refs,
-            )
-    }))
+        if !static_page_template_tokens_intersect(&current_tokens, &baseline_tokens) {
+            continue;
+        }
+        outcome.scope_intersection_count += 1;
+        if static_page_default_prompt_tokens_match(
+            selected_scope,
+            source_refs,
+            &draft.selected_scope,
+            &draft.source_refs,
+        ) {
+            outcome.default_prompt_match_count += 1;
+            outcome.draft = Some(draft);
+            break;
+        }
+        outcome.default_prompt_mismatch_count += 1;
+    }
+    Ok(outcome)
+}
+
+const STATIC_PAGE_TEMPLATE_PREWARM_QUEUE: &str = "static_page_template_prewarm";
+const STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY: &str = "prewarm_static_page_template";
+
+#[derive(Debug, Clone)]
+struct StaticPageTemplatePrewarmCandidate {
+    prewarm_key: String,
+    scope_tokens: Vec<String>,
+    source_refs: Value,
+    template_stability_key: String,
+    dataset_artifact_key: Option<String>,
+}
+
+fn static_page_template_prewarm_source_refs(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> Value {
+    json!({
+        "source": "external_channel_static_page_template_prewarm_candidate",
+        "auto_publish_generated_artifact": true,
+        "effect_image_confirmation_required": false,
+        "continue_to_publish_after_effect_image": true,
+        "prewarm": {
+            "mode": "silent_low_load_template_prewarm",
+            "customer_visible": false,
+            "trigger": "external_channel_conversation_with_authorized_scope",
+        },
+        "channel_connection_id": connection_id,
+        "platform": external_channel_platform_wire_value(&message.platform),
+        "tenant_external_id": message.tenant_external_id,
+        "bot_external_id": message.bot_external_id,
+        "conversation_external_id": message.conversation_external_id,
+        "thread_external_id": message.thread_external_id,
+        "sender_external_id": message.sender_external_id,
+        "message_external_id": message.message_external_id,
+        "message_type": external_message_type_wire_value(&message.message_type),
+        "artifact_type": "static_page",
+        "output_format": message.output_format,
+        "render_mode": "artifact",
+        "requested_skills": external_requested_skills_summary(&message.requested_skills),
+        "answer_policy": external_answer_policy_value(message),
+    })
+}
+
+fn static_page_template_prewarm_candidate(
+    connection_id: &str,
+    selected_scope: &Value,
+    message: &ExternalBotMessageView,
+) -> Option<StaticPageTemplatePrewarmCandidate> {
+    let source_refs = static_page_template_prewarm_source_refs(connection_id, message);
+    let tokens = static_page_template_match_tokens(selected_scope, &source_refs);
+    if tokens.is_empty() {
+        return None;
+    }
+    let scope_tokens = tokens.into_iter().collect::<Vec<_>>();
+    let default_prompt_token =
+        static_page_default_prompt_template_token(selected_scope, &source_refs);
+    let joined_tokens = scope_tokens.join("|");
+    let prewarm_hash = sha256_hex([
+        connection_id.as_bytes(),
+        b":",
+        joined_tokens.as_bytes(),
+        b":",
+        default_prompt_token.as_bytes(),
+    ]);
+    let template_stability_key = static_page_template_stability_key_with_default_prompt(
+        "template:default",
+        static_page_default_prompt_from_scope_or_refs(selected_scope, &source_refs),
+    );
+    let dataset_artifact_key = static_page_dataset_artifact_key(
+        selected_scope,
+        &source_refs,
+        &template_stability_key,
+        Some(connection_id),
+    );
+    Some(StaticPageTemplatePrewarmCandidate {
+        prewarm_key: format!("static-page-template-prewarm:{}", &prewarm_hash[..24]),
+        scope_tokens,
+        source_refs,
+        template_stability_key,
+        dataset_artifact_key,
+    })
+}
+
+fn static_page_template_prewarm_delay(now: DateTime<Utc>) -> DateTime<Utc> {
+    let delay_minutes = std::env::var("STATIC_PAGE_TEMPLATE_PREWARM_DELAY_MINUTES")
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(30)
+        .clamp(1, 24 * 60);
+    now + Duration::minutes(delay_minutes)
+}
+
+fn static_page_template_prewarm_low_load_policy() -> Value {
+    json!({
+        "mode": "low_load_only",
+        "customer_visible": false,
+        "execution_priority": "background",
+        "worker_must_recheck_before_image2": true,
+        "skip_if_any_scope_template_exists": true,
+        "max_parallel_image2_html": 1,
+        "cloudflare_fallback_parallelism": 1,
+        "load_checks": [
+            "explicit_customer_static_page_queue_empty_or_low",
+            "codex_host_queue_below_threshold",
+            "model_gateway_assistant_chat_below_threshold",
+            "no_demo_freeze_window"
+        ],
+    })
+}
+
+fn static_page_template_prewarm_task_payload(
+    connection_id: &str,
+    run: &AssistantRun,
+    message: &ExternalBotMessageView,
+    selected_scope: &Value,
+    candidate: &StaticPageTemplatePrewarmCandidate,
+    now: DateTime<Utc>,
+) -> Value {
+    json!({
+        "type": "static_page_template_prewarm_candidate",
+        "logical_queue": "static_page_template_prewarm",
+        "logical_task_key": "prepare_template_when_low_load",
+        "prewarm_key": candidate.prewarm_key,
+        "template_id": "static_page_image2_data_publish",
+        "fixed_task_template_id": "static_page_image2_data_publish",
+        "channel_connection_id": connection_id,
+        "platform": external_channel_platform_wire_value(&message.platform),
+        "conversation_external_id": message.conversation_external_id,
+        "message_external_id": message.message_external_id,
+        "assistant_run_id": run.id.to_string(),
+        "local_thread_id": run.local_thread_id,
+        "scope_tokens": candidate.scope_tokens,
+        "selected_scope": selected_scope,
+        "source_refs": candidate.source_refs,
+        "template_stability_key": candidate.template_stability_key,
+        "dataset_artifact_key": candidate.dataset_artifact_key,
+        "default_prompt_match_policy": "same_default_prompt_required",
+        "low_load_policy": static_page_template_prewarm_low_load_policy(),
+        "execution_contract": {
+            "next_action": "create_image2_visual_then_static_page_template_only_when_low_load",
+            "customer_reply_policy": "silent_unless_user_requests_static_page",
+            "permission_scope": "selected_external_channel_scope_only",
+            "public_api_change_allowed": false,
+            "auth_change_allowed": false,
+            "request_response_field_change_allowed": false
+        },
+        "created_at": now.to_rfc3339(),
+    })
+}
+
+fn static_page_template_prewarm_execution(
+    tenant_id: TenantId,
+    run: &AssistantRun,
+    candidate: &StaticPageTemplatePrewarmCandidate,
+    now: DateTime<Utc>,
+) -> (WorkflowExecution, WorkflowEventRecord) {
+    let execution = WorkflowExecution {
+        id: WorkflowExecutionId::new(),
+        tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::CodexHostTask,
+        version: "static_page_template_prewarm.v1".to_string(),
+        stage: "static_page_template_prewarm_queued".to_string(),
+        status: WorkflowStatus::Pending,
+        attempt: 0,
+        context: json!({
+            "assistant_run_id": run.id.to_string(),
+            "local_thread_id": run.local_thread_id,
+            "capability": "static_page_template_prewarm",
+            "prewarm_key": candidate.prewarm_key,
+            "template_id": "static_page_image2_data_publish",
+            "fixed_task_template_id": "static_page_image2_data_publish",
+            "low_load_only": true,
+        }),
+        created_at: now,
+        updated_at: now,
+    };
+    let initial_event = WorkflowEventRecord {
+        id: WorkflowEventId::new(),
+        execution_id: execution.id,
+        sequence_no: 1,
+        event_name: "workflow.queued".to_string(),
+        payload: json!({
+            "type": "static_page_template_prewarm_candidate",
+            "prewarm_key": candidate.prewarm_key,
+            "low_load_only": true,
+        }),
+        created_at: now,
+    };
+    (execution, initial_event)
+}
+
+async fn static_page_template_prewarm_pending_exists(
+    state: &AppState,
+    prewarm_key: &str,
+) -> std::result::Result<bool, ApiError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        select exists (
+            select 1
+            from workflow_executions e
+            join workflow_tasks t on t.execution_id = e.id
+            where e.tenant_id = $1
+              and coalesce(e.context->>'prewarm_key', '') = $2
+              and coalesce(t.payload->>'prewarm_key', '') = $2
+              and e.status in ('pending', 'running')
+              and t.status in ('queued', 'claimed')
+        )
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(prewarm_key)
+    .fetch_one(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(exists)
+}
+
+async fn maybe_enqueue_external_channel_static_page_template_prewarm(
+    state: &AppState,
+    connection_id: &str,
+    run: &AssistantRun,
+    assistant_request: &CreateAssistantRunRequest,
+    message: &ExternalBotMessageView,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), ApiError> {
+    if !platform_env_flag("STATIC_PAGE_TEMPLATE_PREWARM_ENABLED", true) {
+        return Ok(());
+    }
+    if external_channel_message_requests_static_page_artifact(message, &assistant_request.prompt)
+        || external_channel_message_requests_data_ingestion_analysis(&assistant_request.prompt)
+    {
+        return Ok(());
+    }
+
+    let selected_scope = assistant_request
+        .selected_scope
+        .as_ref()
+        .unwrap_or(&run.selected_scope);
+    let Some(candidate) =
+        static_page_template_prewarm_candidate(connection_id, selected_scope, message)
+    else {
+        return Ok(());
+    };
+
+    if let Some(dataset_artifact_key) = candidate.dataset_artifact_key.as_deref() {
+        if state
+            .storage
+            .static_page_drafts()
+            .find_latest_accepted_baseline_by_artifact_key(state.tenant_id, dataset_artifact_key)
+            .await
+            .map_err(ApiError::from_storage)?
+            .as_ref()
+            .and_then(static_page_published_public_url_from_draft)
+            .is_some()
+        {
+            return Ok(());
+        }
+    }
+
+    let overlap_outcome = find_static_page_template_baseline_by_dataset_overlap(
+        state,
+        selected_scope,
+        &candidate.source_refs,
+        None,
+        Some(connection_id),
+    )
+    .await?;
+    if overlap_outcome.draft.is_some() {
+        return Ok(());
+    }
+    if static_page_template_prewarm_pending_exists(state, &candidate.prewarm_key).await? {
+        return Ok(());
+    }
+
+    let available_at = static_page_template_prewarm_delay(now);
+    let (execution, initial_event) =
+        static_page_template_prewarm_execution(state.tenant_id, run, &candidate, now);
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let task_payload = static_page_template_prewarm_task_payload(
+        connection_id,
+        run,
+        message,
+        selected_scope,
+        &candidate,
+        now,
+    );
+    let task = NewWorkflowTask {
+        queue: STATIC_PAGE_TEMPLATE_PREWARM_QUEUE.to_string(),
+        task_key: STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY.to_string(),
+        payload: task_payload,
+        available_at,
+        max_attempts: 1,
+    };
+    let persisted_task = state
+        .storage
+        .workflow_tasks()
+        .create(&execution, &task, now)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.static_page_template_prewarm_queued".to_string(),
+                payload: json!({
+                    "type": "static_page_template_prewarm_candidate",
+                    "prewarm_key": candidate.prewarm_key,
+                    "workflow_execution_id": execution.id,
+                    "workflow_task_id": persisted_task.id,
+                    "queue": STATIC_PAGE_TEMPLATE_PREWARM_QUEUE,
+                    "task_key": STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY,
+                    "available_at": available_at,
+                    "scope_token_count": candidate.scope_tokens.len(),
+                    "dataset_artifact_key": candidate.dataset_artifact_key,
+                    "low_load_policy": static_page_template_prewarm_low_load_policy(),
+                    "customer_visible": false,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(())
 }
 
 fn static_page_stable_key_collect_scope_parts(
@@ -31979,6 +32463,36 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         )
                         .await
                         .map_err(ApiError::from_storage)?;
+                    state
+                        .storage
+                        .assistant_runs()
+                        .append_event(
+                            state.tenant_id,
+                            run.id,
+                            &NewAssistantRunEvent {
+                                event_name:
+                                    "assistant_run.external_channel_static_page_template_reuse_observed"
+                                        .to_string(),
+                                payload: json!({
+                                    "template_match_policy": "exact_dataset_artifact_key",
+                                    "dataset_artifact_key_present": true,
+                                    "default_prompt_match_policy": "included_in_dataset_artifact_key",
+                                    "candidate_default_prompt_present": static_page_default_prompt_from_scope_or_refs(
+                                        &selected_scope,
+                                        &source_refs,
+                                    ).is_some(),
+                                    "baseline_default_prompt_present": static_page_default_prompt_from_scope_or_refs(
+                                        &baseline_draft.selected_scope,
+                                        &baseline_draft.source_refs,
+                                    ).is_some(),
+                                    "baseline_draft_id": baseline_draft.id,
+                                    "baseline_assistant_run_id": baseline_draft.assistant_run_id,
+                                }),
+                                created_at: now,
+                            },
+                        )
+                        .await
+                        .map_err(ApiError::from_storage)?;
                     return Ok(Some(
                         external_channel_static_page_stable_artifact_reused_reply(
                             &message.conversation_external_id,
@@ -31995,15 +32509,16 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             .and_then(|value| static_page_generated_template_draft_id(Some(value)))
             .is_none()
     {
-        if let Some(template_draft) = find_static_page_template_baseline_by_dataset_overlap(
+        let overlap_outcome = find_static_page_template_baseline_by_dataset_overlap(
             state,
             &selected_scope,
             &source_refs,
             None,
             Some(connection_id),
         )
-        .await?
-        {
+        .await?;
+        let overlap_summary = overlap_outcome.summary(&selected_scope, &source_refs);
+        if let Some(template_draft) = overlap_outcome.draft {
             if let Some(template_public_url) =
                 static_page_published_public_url_from_draft(&template_draft)
             {
@@ -32046,6 +32561,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                                 "baseline_draft_id": template_draft.id,
                                 "baseline_assistant_run_id": template_draft.assistant_run_id,
                                 "baseline_public_url": template_public_url.as_str(),
+                                "search_summary": overlap_summary,
                             }),
                             created_at: now,
                         },
@@ -32053,6 +32569,23 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     .await
                     .map_err(ApiError::from_storage)?;
             }
+        } else {
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name:
+                            "assistant_run.external_channel_static_page_relaxed_template_not_matched"
+                                .to_string(),
+                        payload: overlap_summary,
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
         }
     }
     let draft_outcome = create_static_page_draft_for_assistant_run_id(
@@ -36701,6 +37234,118 @@ fn assistant_run_answer_policy_output_format(answer_policy: &Value) -> Option<&s
         .filter(|format| !format.is_empty())
 }
 
+fn assistant_run_default_prompt_has_customer_tone_intensity(default_prompt: &str) -> bool {
+    let compact = default_prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let lower_ascii = default_prompt.to_ascii_lowercase();
+    prompt_contains_any(
+        &compact,
+        &[
+            "凶一点",
+            "凶一些",
+            "态度凶",
+            "语气凶",
+            "口吻凶",
+            "骂人",
+            "怼客户",
+            "怼用户",
+            "阴阳怪气",
+            "嘲讽客户",
+            "讽刺客户",
+            "不客气一点",
+            "不客气些",
+            "粗鲁一点",
+            "辱骂",
+            "威胁客户",
+            "恐吓客户",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_ascii,
+        &[
+            "be rude",
+            "rude tone",
+            "insult the customer",
+            "mock the customer",
+            "sarcastic to the customer",
+            "aggressive tone",
+            "threaten the customer",
+            "hostile tone",
+        ],
+    )
+}
+
+fn assistant_run_model_facing_answer_policy(answer_policy: &Value) -> Value {
+    let mut model_policy = answer_policy.clone();
+    let Some(default_prompt) = answer_policy
+        .get("default_prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return model_policy;
+    };
+    if !assistant_run_default_prompt_has_customer_tone_intensity(default_prompt) {
+        return model_policy;
+    }
+
+    let Some(object) = model_policy.as_object_mut() else {
+        return model_policy;
+    };
+    object.insert(
+        "default_prompt_rule".to_string(),
+        json!("default_prompt is integration-provided task guidance. If it includes a strong customer-facing tone request, preserve the underlying need for a more direct or firm stance, but express it as polite, professional, evidence-grounded, and actionable business wording."),
+    );
+    object.insert(
+        "default_prompt_tone_policy".to_string(),
+        json!({
+            "status": "customer_tone_translated",
+            "raw_default_prompt_supplied_to_model": true,
+            "reason": "strong_customer_tone_request",
+            "model_rule": "Treat the tone request as a request for firmer, clearer, more direct business expression. Do not turn it into insults, threats, mockery, or personal attacks.",
+        }),
+    );
+    model_policy
+}
+
+fn assistant_run_model_context_value(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(assistant_run_model_context_value)
+                .collect::<Vec<_>>(),
+        ),
+        Value::Object(object) => {
+            let mut model_object = Map::new();
+            for (key, child) in object {
+                let model_child = if matches!(
+                    key.as_str(),
+                    "answer_policy" | "answerPolicy" | "externalAnswerPolicy"
+                ) {
+                    assistant_run_model_facing_answer_policy(child)
+                } else {
+                    assistant_run_model_context_value(child)
+                };
+                model_object.insert(key.clone(), model_child);
+            }
+            let model_value = Value::Object(model_object);
+            if model_value.get("default_prompt").is_some()
+                && model_value
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .is_some_and(|source| source == "external_channel_message")
+            {
+                assistant_run_model_facing_answer_policy(&model_value)
+            } else {
+                model_value
+            }
+        }
+        _ => value.clone(),
+    }
+}
+
 fn assistant_run_external_answer_policy_guidance_lines(answer_policy: &Value) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(default_prompt) = answer_policy
@@ -36709,9 +37354,15 @@ fn assistant_run_external_answer_policy_guidance_lines(answer_policy: &Value) ->
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        lines.push(format!(
-            "第三方默认提示词：{default_prompt}。它是本轮任务指导，低于 V3 证据/安全规则，高于用户文本里的模糊要求。"
-        ));
+        if assistant_run_default_prompt_has_customer_tone_intensity(default_prompt) {
+            lines.push(format!(
+                "第三方默认提示词：{default_prompt}。它是本轮任务指导；其中较强语气要求应理解为客户希望表达更明确、更直接，最终答案要转译为坚定、专业、礼貌的商务表达，不使用辱骂、威胁、嘲讽或人身攻击。"
+            ));
+        } else {
+            lines.push(format!(
+                "第三方默认提示词：{default_prompt}。它是本轮任务指导，低于 V3 证据/安全规则，高于用户文本里的模糊要求。"
+            ));
+        }
     }
     if let Some(output_format) = answer_policy.get("output_format") {
         if let Some(format) = assistant_run_answer_policy_output_format(answer_policy) {
@@ -36799,9 +37450,10 @@ fn build_assistant_run_provider_input_with_evidence(
     }
     sections.extend(assistant_run_v3_awareness_lines());
     if let Some(answer_policy) = assistant_run_request_external_answer_policy(request) {
+        let model_answer_policy = assistant_run_model_facing_answer_policy(answer_policy);
         sections.push(format!(
             "本轮外部回答要求（第三方结构化传入）：{}",
-            serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&model_answer_policy).unwrap_or_else(|_| "{}".to_string())
         ));
         sections.extend(assistant_run_external_answer_policy_guidance_lines(
             answer_policy,
@@ -36822,23 +37474,27 @@ fn build_assistant_run_provider_input_with_evidence(
 
     if !plain_ordinary_chat {
         if let Some(briefing) = request.startup_briefing.as_ref() {
+            let model_briefing = assistant_run_model_context_value(briefing);
             sections.push(format!(
                 "启动简报：{}",
-                serde_json::to_string(briefing).unwrap_or_else(|_| "{}".to_string())
+                serde_json::to_string(&model_briefing).unwrap_or_else(|_| "{}".to_string())
             ));
         }
     }
     if !plain_ordinary_chat && !request.scope_candidates.is_empty() {
+        let model_scope_candidates =
+            assistant_run_model_context_value(&Value::Array(request.scope_candidates.clone()));
         sections.push(format!(
             "范围候选：{}",
-            serde_json::to_string(&request.scope_candidates).unwrap_or_else(|_| "[]".to_string())
+            serde_json::to_string(&model_scope_candidates).unwrap_or_else(|_| "[]".to_string())
         ));
     }
     if !plain_ordinary_chat {
         if let Some(selected_scope) = selected_scope {
+            let model_selected_scope = assistant_run_model_context_value(selected_scope);
             sections.push(format!(
                 "当前选中范围：{}",
-                serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
+                serde_json::to_string(&model_selected_scope).unwrap_or_else(|_| "{}".to_string())
             ));
         }
     }
@@ -36925,7 +37581,8 @@ fn build_assistant_run_continue_provider_input(
             format!("本次最多连续动作数：{}", max_steps),
             format!(
                 "当前选中范围：{}",
-                serde_json::to_string(selected_scope).unwrap_or_else(|_| "{}".to_string())
+                serde_json::to_string(&assistant_run_model_context_value(selected_scope))
+                    .unwrap_or_else(|_| "{}".to_string())
             ),
             format!(
                 "供料状态：{}",
@@ -36939,9 +37596,10 @@ fn build_assistant_run_continue_provider_input(
         .or_else(|| selected_scope.get("answerPolicy"))
         .filter(|policy| !policy.is_null())
     {
+        let model_answer_policy = assistant_run_model_facing_answer_policy(answer_policy);
         sections.push(format!(
             "本轮外部回答要求（第三方结构化传入）：{}",
-            serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&model_answer_policy).unwrap_or_else(|_| "{}".to_string())
         ));
         sections.extend(assistant_run_external_answer_policy_guidance_lines(
             answer_policy,
@@ -37098,27 +37756,25 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
 
 fn assistant_run_model_evidence_state(evidence_state: &Value) -> Value {
     let mut model_state = evidence_state.clone();
-    let Some(object) = model_state.as_object_mut() else {
-        return model_state;
-    };
-    let Some(items) = object
-        .get_mut("supplied_items")
-        .and_then(Value::as_array_mut)
-    else {
-        return model_state;
-    };
-    for item in items {
-        match item.get("type").and_then(Value::as_str) {
-            Some("dataset_entity_scan") => {
-                *item = assistant_run_model_dataset_entity_scan_item(item);
+    if let Some(object) = model_state.as_object_mut() {
+        if let Some(items) = object
+            .get_mut("supplied_items")
+            .and_then(Value::as_array_mut)
+        {
+            for item in items {
+                match item.get("type").and_then(Value::as_str) {
+                    Some("dataset_entity_scan") => {
+                        *item = assistant_run_model_dataset_entity_scan_item(item);
+                    }
+                    Some("dataset_fact_snapshot") => {
+                        *item = assistant_run_model_dataset_fact_snapshot_item(item);
+                    }
+                    _ => {}
+                }
             }
-            Some("dataset_fact_snapshot") => {
-                *item = assistant_run_model_dataset_fact_snapshot_item(item);
-            }
-            _ => {}
         }
     }
-    model_state
+    assistant_run_model_context_value(&model_state)
 }
 
 fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
@@ -37206,9 +37862,10 @@ fn assistant_run_compact_provider_retry_input(
     ];
 
     if let Some(answer_policy) = assistant_run_request_external_answer_policy(request) {
+        let model_answer_policy = assistant_run_model_facing_answer_policy(answer_policy);
         sections.push(format!(
             "本轮外部回答要求：{}",
-            serde_json::to_string(answer_policy).unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string(&model_answer_policy).unwrap_or_else(|_| "{}".to_string())
         ));
         sections.extend(assistant_run_external_answer_policy_guidance_lines(
             answer_policy,
@@ -72657,6 +73314,9 @@ fn workflow_task_logical_queue(task: &WorkflowTask) -> Option<String> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(|| match task.task_key.as_str() {
+            STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY => {
+                Some("static_page_template_prewarm".to_string())
+            }
             "generate_static_page_image" => Some("static_page_image_preview".to_string()),
             "render_static_page" => Some("static_page_render".to_string()),
             "run_codex_host_task" => {
@@ -72678,6 +73338,9 @@ fn workflow_task_logical_task_key(task: &WorkflowTask) -> Option<String> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(|| match task.task_key.as_str() {
+            STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY => {
+                Some("prepare_template_when_low_load".to_string())
+            }
             "generate_static_page_image" => Some("submit_static_page_image_preview".to_string()),
             "render_static_page" => Some("render_static_page".to_string()),
             "run_codex_host_task" => {
@@ -80408,6 +81071,34 @@ mod tests {
     }
 
     #[test]
+    fn external_answer_policy_customer_tone_request_is_supplied_with_professional_boundary() {
+        let mut message = sample_external_bot_message();
+        message.default_prompt = Some("态度要凶一点，按客户材料回答。".to_string());
+        message.output_format = Some("富文本".to_string());
+        validate_and_normalize_external_answer_policy(&mut message).expect("valid answer policy");
+
+        let request = external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        assert_eq!(
+            request.selected_scope.as_ref().expect("selected scope")["answer_policy"]
+                ["default_prompt"],
+            json!("态度要凶一点，按客户材料回答。")
+        );
+        assert_eq!(
+            request.startup_briefing.as_ref().expect("startup briefing")["externalAnswerPolicy"]
+                ["default_prompt"],
+            json!("态度要凶一点，按客户材料回答。")
+        );
+
+        let input = build_assistant_run_provider_input(&request);
+        assert!(input.contains("customer_tone_translated"));
+        assert!(input.contains("raw_default_prompt_supplied_to_model\":true"));
+        assert!(input.contains("态度要凶一点"));
+        assert!(input.contains("按客户材料回答。"));
+        assert!(input.contains("坚定、专业、礼貌"));
+        assert!(!input.contains("[withheld_by_v3_customer_tone_policy]"));
+    }
+
+    #[test]
     fn external_answer_policy_rejects_invalid_shape() {
         let mut invalid_format = sample_external_bot_message();
         invalid_format.output_format = Some("spreadsheet".to_string());
@@ -81274,7 +81965,7 @@ mod tests {
     }
 
     #[test]
-    fn static_page_template_match_requires_same_default_prompt_for_overlap() {
+    fn static_page_template_match_allows_compatible_business_default_prompt_for_overlap() {
         let selected_scope = json!({
             "requested_dataset_external_ids": ["dataset-b"]
         });
@@ -81289,6 +81980,11 @@ mod tests {
         let same_prompt_baseline_refs = json!({
             "answer_policy": {
                 "default_prompt": " 请面向业务用户，按经营月报口径输出。 "
+            }
+        });
+        let compatible_prompt_baseline_refs = json!({
+            "answer_policy": {
+                "default_prompt": "请面向业务用户，优先基于本轮文档和数据源回答。"
             }
         });
         let different_prompt_baseline_refs = json!({
@@ -81310,6 +82006,16 @@ mod tests {
             &baseline_scope,
             &same_prompt_baseline_refs,
         ));
+        assert!(static_page_default_prompt_tokens_match(
+            &selected_scope,
+            &json!({
+                "answer_policy": {
+                    "default_prompt": "请面向业务用户，优先基于本轮文档回答。"
+                }
+            }),
+            &baseline_scope,
+            &compatible_prompt_baseline_refs,
+        ));
         assert!(!static_page_default_prompt_tokens_match(
             &selected_scope,
             &request_source_refs,
@@ -81322,6 +82028,135 @@ mod tests {
             &baseline_scope,
             &json!({}),
         ));
+    }
+
+    #[test]
+    fn static_page_template_overlap_summary_reports_default_prompt_mismatch() {
+        let selected_scope = json!({
+            "requested_dataset_external_ids": ["dataset-b"]
+        });
+        let source_refs = json!({
+            "answer_policy": {
+                "default_prompt": "请面向业务用户，按经营月报口径输出。"
+            }
+        });
+        let outcome = StaticPageTemplateOverlapSearchOutcome {
+            draft: None,
+            current_token_count: 1,
+            accepted_baseline_count: 2,
+            visible_published_baseline_count: 2,
+            scope_intersection_count: 2,
+            default_prompt_match_count: 0,
+            default_prompt_mismatch_count: 2,
+        };
+
+        let summary = outcome.summary(&selected_scope, &source_refs);
+
+        assert_eq!(summary["status"], json!("not_matched"));
+        assert_eq!(summary["reason"], json!("default_prompt_mismatch"));
+        assert_eq!(
+            summary["default_prompt_match_policy"],
+            json!("same_or_compatible_business_default_prompt")
+        );
+        assert_eq!(summary["candidate_default_prompt_present"], json!(true));
+        assert_eq!(summary["default_prompt_mismatch_count"], json!(2));
+    }
+
+    #[test]
+    fn static_page_template_prewarm_key_uses_scope_and_default_prompt() {
+        let mut message = sample_external_bot_message();
+        message.default_prompt = Some("请按经营月报风格输出。".to_string());
+        let selected_scope = json!({
+            "type": "external_channel",
+            "requested_dataset_external_ids": ["dataset-b", "dataset-a"]
+        });
+
+        let candidate =
+            static_page_template_prewarm_candidate("generic-chat-main", &selected_scope, &message)
+                .expect("scope should create prewarm candidate");
+        let mut same_scope_message = message.clone();
+        same_scope_message.message_external_id = "msg-other".to_string();
+        same_scope_message.text = Some("另一个普通问题".to_string());
+        let same_scope_candidate = static_page_template_prewarm_candidate(
+            "generic-chat-main",
+            &selected_scope,
+            &same_scope_message,
+        )
+        .expect("same scope should create prewarm candidate");
+        assert_eq!(candidate.prewarm_key, same_scope_candidate.prewarm_key);
+
+        let mut other_prompt_message = message.clone();
+        other_prompt_message.default_prompt = Some("请按招商简报风格输出。".to_string());
+        let other_prompt_candidate = static_page_template_prewarm_candidate(
+            "generic-chat-main",
+            &selected_scope,
+            &other_prompt_message,
+        )
+        .expect("different prompt should create prewarm candidate");
+        assert_ne!(candidate.prewarm_key, other_prompt_candidate.prewarm_key);
+        assert_eq!(
+            candidate.source_refs["prewarm"]["customer_visible"],
+            json!(false)
+        );
+        assert!(candidate
+            .scope_tokens
+            .contains(&"dataset_external:dataset-a".to_string()));
+        assert!(candidate
+            .template_stability_key
+            .contains("|default-prompt:"));
+    }
+
+    #[test]
+    fn static_page_template_prewarm_skips_empty_scope_and_marks_low_load_payload() {
+        let mut message = sample_external_bot_message();
+        message.default_prompt = Some("请按经营月报风格输出。".to_string());
+        assert!(static_page_template_prewarm_candidate(
+            "generic-chat-main",
+            &json!({"type": "external_channel"}),
+            &message,
+        )
+        .is_none());
+
+        let selected_scope = json!({
+            "type": "external_channel",
+            "requested_dataset_external_ids": ["dataset-a"]
+        });
+        let candidate =
+            static_page_template_prewarm_candidate("generic-chat-main", &selected_scope, &message)
+                .expect("scope should create prewarm candidate");
+        let now = Utc::now();
+        let run = test_external_channel_assistant_run(
+            "问一下经营情况",
+            Some("经营情况摘要"),
+            "external_channel",
+            now,
+        );
+        let payload = static_page_template_prewarm_task_payload(
+            "generic-chat-main",
+            &run,
+            &message,
+            &selected_scope,
+            &candidate,
+            now,
+        );
+
+        assert_eq!(
+            payload["type"],
+            json!("static_page_template_prewarm_candidate")
+        );
+        assert_eq!(
+            payload["logical_queue"],
+            json!("static_page_template_prewarm")
+        );
+        assert_eq!(payload["low_load_policy"]["mode"], json!("low_load_only"));
+        assert_eq!(
+            payload["execution_contract"]["customer_reply_policy"],
+            json!("silent_unless_user_requests_static_page")
+        );
+        assert_eq!(
+            payload["execution_contract"]["request_response_field_change_allowed"],
+            json!(false)
+        );
     }
 
     #[test]
