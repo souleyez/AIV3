@@ -4282,10 +4282,29 @@ fn patch_existing_static_page_filter_binding_html(
     html: &str,
 ) -> (String, StaticPageRepairPatchReport) {
     let mut report = StaticPageRepairPatchReport::default();
-    if html.contains("function filteredSalesSeriesForCurrentScope(") {
-        return (html.to_string(), report);
-    }
     let mut updated = html.to_string();
+    if !static_page_html_has_time_range_control_signal(&updated) {
+        if updated.contains(r#"<select id="monthSelect""#) {
+            updated = updated.replacen(
+                r#"<select id="monthSelect""#,
+                r#"<select id="monthSelect" data-time-range="required" aria-label="时间范围""#,
+                1,
+            );
+            report.applied = true;
+            report.patches.push("mark_month_select_as_time_range");
+        } else if updated.contains("</body>") {
+            updated = updated.replacen(
+                "</body>",
+                r#"<label class="control" data-time-range-control="auto"><span>时间范围</span><select data-time-range="required" aria-label="时间范围"><option value="latest_month">本月 / 最新月份</option><option value="last_7_days">近7日</option></select></label></body>"#,
+                1,
+            );
+            report.applied = true;
+            report.patches.push("insert_time_range_control");
+        }
+    }
+    if html.contains("function filteredSalesSeriesForCurrentScope(") {
+        return (updated, report);
+    }
     let helper = r#"function storeAllowedForCurrentScope(storecode){
   const stores = state.data.storeList || [];
   const store = stores.find(s => s.storecode === storecode);
@@ -4852,22 +4871,7 @@ fn validate_static_page_image2_dynamic_artifact(
             "static_page_image2_data_publish HTML must expose time or snapshot controls/signals"
         ));
     }
-    let has_time_range_control_signal = [
-        "data-time-range",
-        "time-range",
-        "date-range",
-        "时间范围",
-        "日期范围",
-        "开始日期",
-        "结束日期",
-        "start_date",
-        "end_date",
-        "startdate",
-        "enddate",
-    ]
-    .iter()
-    .any(|term| html_lower.contains(term));
-    if !has_time_range_control_signal {
+    if !static_page_html_has_time_range_control_signal(&html_lower) {
         return Err(anyhow!(
             "static_page_image2_data_publish HTML must expose a time-range selector"
         ));
@@ -4881,6 +4885,25 @@ fn validate_static_page_image2_dynamic_artifact(
         ));
     }
     Ok(())
+}
+
+fn static_page_html_has_time_range_control_signal(html: &str) -> bool {
+    let html_lower = html.to_ascii_lowercase();
+    [
+        "data-time-range",
+        "time-range",
+        "date-range",
+        "时间范围",
+        "日期范围",
+        "开始日期",
+        "结束日期",
+        "start_date",
+        "end_date",
+        "startdate",
+        "enddate",
+    ]
+    .iter()
+    .any(|term| html_lower.contains(term))
 }
 
 fn publish_cloudflare_static_page_html(
@@ -6269,6 +6292,7 @@ function renderInsight(k){
 
         assert!(report.applied);
         assert!(patched.contains("function filteredSalesSeriesForCurrentScope()"));
+        assert!(patched.contains("data-time-range=\"required\""));
         assert!(patched.contains("const last7Stats = currentLast7Stats();"));
         assert!(patched.contains("amount(last7Stats.last7Sales)"));
         assert!(patched.contains("pct(last7Stats.last7VsPrev7)"));
@@ -6276,6 +6300,45 @@ function renderInsight(k){
         assert!(patched.contains("currentCategoryRowsForScope().filter"));
         assert!(!patched.contains("amount(d.kpi.last7Sales)"));
         assert!(!patched.contains("amount(state.data.kpi.last7Sales)"));
+    }
+
+    #[test]
+    fn existing_static_page_filter_binding_patch_marks_month_select_as_time_range() {
+        let html = r#"
+<!doctype html><html><body>
+<label class="control"><span>月份</span><select id="monthSelect"></select></label>
+<script>
+function currentKpi(){ return {}; }
+function render(){
+  const d = state.data; const k = currentKpi(); initTabActive();
+  const last7 = d.kpi.last7VsPrev7;
+  $('kpiGrid').innerHTML = [
+    ['↗','近7日销售', amount(d.kpi.last7Sales), '环比 <span class="delta '+(last7 >= 0 ? 'good' : 'bad')+'">' + pct(last7) + '</span>'],
+  ].map(x => x.join('')).join('');
+  renderTrend(); renderCategory(); renderInsight(k);
+}
+function renderTrend(){
+  const rows = state.data.salesSeries.filter(r => r.txdate.slice(0,7) === state.month || state.month === '全部');
+  $('trendChart').innerHTML = rows.length;
+}
+function renderCategory(){
+  const rows = state.data.categoryLatest.filter(filterCategory).slice(0,6);
+  $('categoryLegend').innerHTML = rows.length;
+}
+function renderInsight(k){
+  const top = filteredOpportunities().filter(r => gap(r) > 0).slice().sort((a,b)=>gap(a)-gap(b))[0];
+  $('aiInsight').textContent = amount(state.data.kpi.last7Sales) + pct(state.data.kpi.last7VsPrev7);
+}
+</script></body></html>
+"#;
+
+        let (patched, report) = patch_existing_static_page_filter_binding_html(html);
+
+        assert!(report.applied);
+        assert!(patched.contains(
+            r#"<select id="monthSelect" data-time-range="required" aria-label="时间范围""#
+        ));
+        assert!(patched.contains("function filteredSalesSeriesForCurrentScope()"));
     }
 
     #[test]
