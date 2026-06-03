@@ -28989,23 +28989,26 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
     outcome.accepted_baseline_count = baselines.len();
 
     for draft in baselines {
-        if !static_page_owner_is_visible(draft.owner_user_id, current_user_id) {
-            continue;
-        }
-        if static_page_published_public_url_from_draft(&draft).is_none() {
-            continue;
-        }
+        let draft_connection_id = external_channel_static_page_source_ref_string(
+            &draft.source_refs,
+            "channel_connection_id",
+        );
         if let Some(connection_id) = connection_id {
-            let draft_connection_id = external_channel_static_page_source_ref_string(
-                &draft.source_refs,
-                "channel_connection_id",
-            );
             if draft_connection_id
                 .as_deref()
                 .is_some_and(|value| value != connection_id)
             {
                 continue;
             }
+        }
+        let visible_by_owner = static_page_owner_is_visible(draft.owner_user_id, current_user_id);
+        let visible_by_same_channel = connection_id
+            .is_some_and(|connection_id| draft_connection_id.as_deref() == Some(connection_id));
+        if !visible_by_owner && !visible_by_same_channel {
+            continue;
+        }
+        if static_page_published_public_url_from_draft(&draft).is_none() {
+            continue;
         }
         outcome.visible_published_baseline_count += 1;
         let baseline_tokens =
@@ -84233,7 +84236,7 @@ mod tests {
                 state.tenant_id,
                 &NewStaticPageDraft {
                     assistant_run_id: baseline_run.id,
-                    owner_user_id: None,
+                    owner_user_id: Some(UserId::new()),
                     title: "静态页：新百经营分析默认模板".to_string(),
                     status: StaticPageDraftStatus::Rendered,
                     selected_scope: selected_scope.clone(),
