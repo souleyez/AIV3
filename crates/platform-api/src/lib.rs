@@ -17225,15 +17225,29 @@ async fn claim_external_owned_documents(
     documents: Vec<Document>,
     owner_user_id: UserId,
 ) -> std::result::Result<Vec<Document>, ApiError> {
+    claim_external_owned_documents_with_legacy_owners(
+        state,
+        documents,
+        owner_user_id,
+        &BTreeSet::new(),
+    )
+    .await
+}
+
+async fn claim_external_owned_documents_with_legacy_owners(
+    state: &AppState,
+    documents: Vec<Document>,
+    owner_user_id: UserId,
+    legacy_owner_user_ids: &BTreeSet<UserId>,
+) -> std::result::Result<Vec<Document>, ApiError> {
     let mut scoped_documents = Vec::with_capacity(documents.len());
     for document in documents {
-        if document
-            .owner_user_id
-            .is_some_and(|existing_owner| existing_owner != owner_user_id)
-        {
-            continue;
+        if let Some(existing_owner) = document.owner_user_id {
+            if existing_owner != owner_user_id && !legacy_owner_user_ids.contains(&existing_owner) {
+                continue;
+            }
         }
-        let document = if document.owner_user_id.is_none() {
+        let document = if document.owner_user_id != Some(owner_user_id) {
             state
                 .storage
                 .documents()
@@ -17247,6 +17261,26 @@ async fn claim_external_owned_documents(
         scoped_documents.push(document);
     }
     Ok(scoped_documents)
+}
+
+async fn external_channel_legacy_source_owner_user_ids(
+    state: &AppState,
+    connection_id: &str,
+    source_id: &str,
+) -> std::result::Result<BTreeSet<UserId>, ApiError> {
+    let legacy_scope_id = format!("{connection_id}:{source_id}");
+    let legacy_email = external_system_user_email("channel-source", &legacy_scope_id);
+    let mut owner_user_ids = BTreeSet::new();
+    if let Some(user) = state
+        .storage
+        .users()
+        .get_by_email(state.tenant_id, &legacy_email)
+        .await
+        .map_err(ApiError::from_storage)?
+    {
+        owner_user_ids.insert(user.id);
+    }
+    Ok(owner_user_ids)
 }
 
 async fn find_external_documents_by_dataset_external_id(
@@ -23282,6 +23316,7 @@ async fn enrich_external_channel_document_scope(
             {
                 enrich_external_channel_source_document_scope(
                     state,
+                    connection_id,
                     &source_id,
                     external_owner_user_id,
                     selected_scope,
@@ -23321,6 +23356,8 @@ async fn enrich_external_channel_document_scope(
         return Ok(());
     }
     let source_id = source_id.expect("source id checked above");
+    let legacy_owner_user_ids =
+        external_channel_legacy_source_owner_user_ids(state, connection_id, &source_id).await?;
 
     let mut selected_documents = Vec::new();
     let mut selected_document_ids = Vec::new();
@@ -23329,8 +23366,13 @@ async fn enrich_external_channel_document_scope(
     for external_id in &requested_external_ids {
         let mut candidates =
             find_external_documents_by_external_id(state, &source_id, external_id, None).await?;
-        candidates =
-            claim_external_owned_documents(state, candidates, external_owner_user_id).await?;
+        candidates = claim_external_owned_documents_with_legacy_owners(
+            state,
+            candidates,
+            external_owner_user_id,
+            &legacy_owner_user_ids,
+        )
+        .await?;
         candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         if let Some(document) = candidates.into_iter().next() {
             if !selected_datasets
@@ -23531,6 +23573,7 @@ fn set_external_channel_document_scope_missing_documents(
 
 async fn enrich_external_channel_source_document_scope(
     state: &AppState,
+    connection_id: &str,
     source_id: &str,
     owner_user_id: UserId,
     selected_scope: &mut Value,
@@ -23544,7 +23587,15 @@ async fn enrich_external_channel_source_document_scope(
         .into_iter()
         .filter(|document| external_document_source_matches(&document.metadata, source_id, None))
         .collect::<Vec<_>>();
-    documents = claim_external_owned_documents(state, documents, owner_user_id).await?;
+    let legacy_owner_user_ids =
+        external_channel_legacy_source_owner_user_ids(state, connection_id, source_id).await?;
+    documents = claim_external_owned_documents_with_legacy_owners(
+        state,
+        documents,
+        owner_user_id,
+        &legacy_owner_user_ids,
+    )
+    .await?;
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
     let mut dataset_ids = Vec::new();
@@ -23871,7 +23922,15 @@ async fn enrich_external_channel_dataset_documents_scope(
                 .await?,
         );
     }
-    documents = claim_external_owned_documents(state, documents, owner_user_id).await?;
+    let legacy_owner_user_ids =
+        external_channel_legacy_source_owner_user_ids(state, connection_id, source_id).await?;
+    documents = claim_external_owned_documents_with_legacy_owners(
+        state,
+        documents,
+        owner_user_id,
+        &legacy_owner_user_ids,
+    )
+    .await?;
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
     set_payload_value(
@@ -23923,7 +23982,13 @@ async fn enrich_external_channel_dataset_documents_scope(
         }
         let mut candidates =
             find_external_documents_by_external_id(state, source_id, external_id, None).await?;
-        candidates = claim_external_owned_documents(state, candidates, owner_user_id).await?;
+        candidates = claim_external_owned_documents_with_legacy_owners(
+            state,
+            candidates,
+            owner_user_id,
+            &legacy_owner_user_ids,
+        )
+        .await?;
         candidates.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         let Some(document) = candidates.into_iter().next() else {
             unresolved_external_ids.push(external_id.clone());
@@ -26059,6 +26124,36 @@ fn external_channel_static_page_reply_from_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,
 ) -> Option<ExternalBotReplyView> {
+    if let Some(event) = events.iter().rev().find(|event| {
+        event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+    }) {
+        if let Some(reply) =
+            external_channel_static_page_publish_completed_reply_from_event_payload(&event.payload)
+        {
+            return Some(reply);
+        }
+    }
+    if let Some(event) = events.iter().rev().find(|event| {
+        event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+            || (event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+                && external_channel_static_page_provisional_existing_artifact(Some(&event.payload))
+                && event
+                    .payload
+                    .get("image2_skip_reason")
+                    .and_then(Value::as_str)
+                    == Some("accepted_dataset_overlap_template_baseline")
+                && event
+                    .payload
+                    .get("public_url")
+                    .and_then(Value::as_str)
+                    .map(codex_host_fixed_task_public_artifact_url_allowed)
+                    .unwrap_or(false))
+    }) {
+        return Some(external_channel_static_page_stable_artifact_reused_reply(
+            conversation_external_id,
+            &event.payload,
+        ));
+    }
     if let Some(reply) =
         external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
     {
@@ -30106,6 +30201,57 @@ fn static_page_prompt_requests_existing_artifact_revision(prompt: &str) -> bool 
     )
 }
 
+fn static_page_prompt_requests_existing_artifact_delivery(prompt: &str) -> bool {
+    if static_page_prompt_requests_explicit_redesign(prompt)
+        || static_page_prompt_requests_existing_artifact_revision(prompt)
+    {
+        return false;
+    }
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    let has_existing_signal =
+        prompt_contains_any(
+            &compact,
+            &[
+                "最新",
+                "已有",
+                "已经",
+                "已生成",
+                "生成过",
+                "做过",
+                "之前",
+                "昨天",
+                "前面",
+                "上次",
+                "刚才",
+                "现有",
+            ],
+        ) || ascii_prompt_contains_any(&lower, &["latest", "existing", "previous", "last"]);
+    let has_delivery_signal =
+        prompt_contains_any(
+            &compact,
+            &[
+                "看看",
+                "看下",
+                "查看",
+                "打开",
+                "链接",
+                "地址",
+                "发我",
+                "发给",
+                "给我",
+                "给客户",
+            ],
+        ) || ascii_prompt_contains_any(&lower, &["open", "send", "link", "url"]);
+    has_existing_signal && has_delivery_signal
+}
+
 fn static_page_prompt_allows_stable_artifact_reuse(prompt: &str) -> bool {
     !static_page_prompt_requests_explicit_redesign(prompt)
         && !static_page_prompt_requests_existing_artifact_revision(prompt)
@@ -32708,17 +32854,18 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     source_refs,
                     &template_reference,
                 );
+                let relaxed_template_match = json!({
+                    "policy": "dataset_overlap",
+                    "template_reference_id": generated_template_reference_id,
+                    "baseline_draft_id": template_draft.id,
+                    "baseline_assistant_run_id": template_draft.assistant_run_id,
+                    "baseline_public_url": template_public_url.as_str(),
+                    "reason": "dataset_scope_intersects_existing_template_baseline",
+                });
                 set_payload_value(
                     &mut source_refs,
                     "relaxed_template_match",
-                    json!({
-                        "policy": "dataset_overlap",
-                        "template_reference_id": generated_template_reference_id,
-                        "baseline_draft_id": template_draft.id,
-                        "baseline_assistant_run_id": template_draft.assistant_run_id,
-                        "baseline_public_url": template_public_url.as_str(),
-                        "reason": "dataset_scope_intersects_existing_template_baseline",
-                    }),
+                    relaxed_template_match.clone(),
                 );
                 state
                     .storage
@@ -32736,13 +32883,124 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                                 "baseline_draft_id": template_draft.id,
                                 "baseline_assistant_run_id": template_draft.assistant_run_id,
                                 "baseline_public_url": template_public_url.as_str(),
-                                "search_summary": overlap_summary,
+                                "search_summary": overlap_summary.clone(),
                             }),
                             created_at: now,
                         },
                     )
                     .await
                     .map_err(ApiError::from_storage)?;
+                if static_page_prompt_requests_existing_artifact_delivery(&assistant_request.prompt)
+                {
+                    let baseline_template_payload = json!({
+                        "status": "static_page_stable_artifact_reused",
+                        "source_refs": source_refs.clone(),
+                        "template_reference": template_reference,
+                    });
+                    let baseline_style_reuse_policy =
+                        external_channel_static_page_style_reuse_policy_from_payload(
+                            &baseline_template_payload,
+                        );
+                    let baseline_data_refresh_policy =
+                        external_channel_static_page_data_refresh_policy_from_payload(
+                            &baseline_template_payload,
+                        );
+                    let baseline_default_template_scope =
+                        external_channel_static_page_default_template_scope_from_payload(
+                            &baseline_template_payload,
+                        );
+                    let event_payload = json!({
+                        "type": "v3_static_page_stable_artifact",
+                        "status": "static_page_stable_artifact_reused",
+                        "channel_connection_id": connection_id,
+                        "platform": external_channel_platform_wire_value(&message.platform),
+                        "conversation_external_id": message.conversation_external_id,
+                        "message_external_id": message.message_external_id,
+                        "draft_id": template_draft.id,
+                        "baseline_draft_id": template_draft.id,
+                        "baseline_assistant_run_id": template_draft.assistant_run_id,
+                        "dataset_artifact_key": dataset_artifact_key.as_deref(),
+                        "baseline_status": "accepted",
+                        "public_url": template_public_url.as_str(),
+                        "generated_artifact_url": template_public_url.as_str(),
+                        "artifact_links": [template_public_url.as_str()],
+                        "image2_skipped": true,
+                        "image2_skip_reason": "accepted_dataset_overlap_template_baseline",
+                        "edit_mode": "incremental_existing_artifact",
+                        "reuse_policy": "deliver_existing_template_baseline_for_view_request",
+                        "template_reference_id": template_reference_id.as_deref(),
+                        "template_reference": baseline_template_payload
+                            .get("template_reference")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "template_match_policy": "dataset_overlap",
+                        "relaxed_template_match": relaxed_template_match,
+                        "style_reuse_policy": baseline_style_reuse_policy,
+                        "data_refresh_policy": baseline_data_refresh_policy,
+                        "default_template_scope": baseline_default_template_scope,
+                        "status_url": external_channel_assistant_run_reply_status_url(
+                            connection_id,
+                            run.id,
+                        ),
+                        "status_method": "GET",
+                        "poll_after_seconds": Value::Null,
+                        "recipient_delivery": recipient_delivery.clone(),
+                        "permission_review_status": recipient_delivery
+                            .get("permission_review_status")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "editable_after_publish": recipient_delivery
+                            .get("editable_after_publish")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                        "source_refs": source_refs.clone(),
+                        "search_summary": overlap_summary,
+                    });
+                    state
+                        .storage
+                        .assistant_runs()
+                        .append_event(
+                            state.tenant_id,
+                            run.id,
+                            &NewAssistantRunEvent {
+                                event_name:
+                                    "assistant_run.external_channel_static_page_stable_artifact_reused"
+                                        .to_string(),
+                                payload: event_payload.clone(),
+                                created_at: now,
+                            },
+                        )
+                        .await
+                        .map_err(ApiError::from_storage)?;
+                    state
+                        .storage
+                        .assistant_runs()
+                        .append_event(
+                            state.tenant_id,
+                            run.id,
+                            &NewAssistantRunEvent {
+                                event_name:
+                                    "assistant_run.external_channel_static_page_template_reuse_observed"
+                                        .to_string(),
+                                payload: json!({
+                                    "template_match_policy": "dataset_overlap",
+                                    "dataset_artifact_key_present": dataset_artifact_key.is_some(),
+                                    "view_request_delivered_existing_artifact": true,
+                                    "baseline_draft_id": template_draft.id,
+                                    "baseline_assistant_run_id": template_draft.assistant_run_id,
+                                }),
+                                created_at: now,
+                            },
+                        )
+                        .await
+                        .map_err(ApiError::from_storage)?;
+                    return Ok(Some(
+                        external_channel_static_page_stable_artifact_reused_reply(
+                            &message.conversation_external_id,
+                            &event_payload,
+                        ),
+                    ));
+                }
             }
         } else {
             state
@@ -82155,6 +82413,18 @@ mod tests {
         assert!(static_page_prompt_allows_stable_artifact_reuse(
             "把之前生成过的报表链接再发我一下"
         ));
+        assert!(static_page_prompt_requests_existing_artifact_delivery(
+            "看看最新的门店取高报表"
+        ));
+        assert!(static_page_prompt_requests_existing_artifact_delivery(
+            "把之前生成过的报表链接再发我一下"
+        ));
+        assert!(!static_page_prompt_requests_existing_artifact_delivery(
+            "随便生成一个报表我看看"
+        ));
+        assert!(!static_page_prompt_requests_existing_artifact_delivery(
+            "生成新百经营分析月报，按当前数据刷新并保留分店筛选"
+        ));
         let existing_artifact = static_page_existing_artifact_reference_from_prompt(
             "修复这个页面：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html?token=fixture#frag，切换门店后近7日销售要重算。",
         );
@@ -83723,6 +83993,65 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_reply_prefers_existing_template_link_over_fixed_task_queue() {
+        let run_id = AssistantRunId::new();
+        let draft_id = StaticPageDraftId::new();
+        let image_job_id = StaticPageImageJobId::new();
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/index.html";
+        let events = vec![
+            static_page_reply_test_event(
+                run_id,
+                1,
+                "assistant_run.external_channel_static_page_pipeline_queued",
+                json!({
+                    "draft_id": draft_id.to_string(),
+                    "image_job_id": image_job_id.to_string(),
+                    "status": "static_page_image2_auto_publish_pending",
+                    "public_url": public_url,
+                    "generated_artifact_url": public_url,
+                    "artifact_links": [public_url],
+                    "provisional_existing_artifact": true,
+                    "image2_skipped": true,
+                    "image2_skip_reason": "accepted_dataset_overlap_template_baseline",
+                    "template_match_policy": "dataset_overlap",
+                    "relaxed_template_match": {
+                        "policy": "dataset_overlap",
+                        "baseline_public_url": public_url
+                    }
+                }),
+            ),
+            static_page_reply_test_event(
+                run_id,
+                2,
+                "codex_host.fixed_task.queued",
+                json!({
+                    "template_id": "static_page_image2_data_publish",
+                    "status": "queued",
+                    "workflow_execution_id": WorkflowExecutionId::new().to_string()
+                }),
+            ),
+        ];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("existing template link reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_stable_artifact_reused")
+        );
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        let card = reply.card.expect("stable card");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
+        assert_eq!(
+            card["image2_skip_reason"],
+            json!("accepted_dataset_overlap_template_baseline")
+        );
+    }
+
+    #[test]
     fn external_channel_static_page_reply_reports_image_preview_queue_progress() {
         let run_id = AssistantRunId::new();
         let draft_id = StaticPageDraftId::new();
@@ -84812,6 +85141,242 @@ mod tests {
                     == json!("accepted_dataset_overlap_template_baseline")
                 && event.payload["provisional_existing_artifact"] == json!(true)
                 && event.payload["artifact_links"] == json!([public_url])
+        }));
+    }
+
+    #[tokio::test]
+    async fn external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request(
+    ) {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external static-page template delivery test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "MiniMax-M2.7");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-static-page-template-delivery-{}", Uuid::new_v4()),
+                "External Static Page Template Delivery Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-static-template-delivery".to_string();
+        message.message_external_id = "msg-static-template-delivery-001".to_string();
+        message.text = Some("看看最新的门店取高报表".to_string());
+        message.output_format = Some("rich_text".to_string());
+        message.render_mode = Some("artifact".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        message.default_prompt = Some("请面向业务用户，按经营月报口径输出。".to_string());
+        message.dataset_external_ids = vec!["xinbai-project-dataset".to_string()];
+        let mut assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let canonical_dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "dataset_external_ids": ["xinbai-project-dataset"],
+            "requested_dataset_external_ids": ["xinbai-project-dataset"],
+            "canonical_datasets": [{"type": "dataset", "id": canonical_dataset_id}],
+            "external_document_scope_status": "dataset_resolved"
+        });
+        assistant_request.selected_scope = Some(selected_scope.clone());
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/index.html";
+        let baseline_source_refs = apply_static_page_artifact_stability_to_source_refs(
+            json!({
+                "source": "external_channel_static_page_artifact_request",
+                "channel_connection_id": "generic-chat-main",
+                "platform": "generic_chat",
+                "conversation_external_id": "conv-static-template-delivery",
+                "message_external_id": "msg-static-template-baseline-001",
+                "artifact_type": "static_page",
+                "dataset_external_ids": ["xinbai-project-dataset"],
+                "answer_policy": external_answer_policy_value(&message)
+            }),
+            None,
+            "accepted",
+            Some(public_url),
+            Utc::now(),
+        );
+        let baseline_payload = apply_static_page_artifact_stability_to_payload(
+            json!({
+                "status": "rendered",
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": public_url
+                }
+            }),
+            None,
+            "accepted",
+            Some(public_url),
+            Utc::now(),
+        );
+        let now = Utc::now();
+        let baseline_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: "生成新百经营分析默认模板".to_string(),
+                    startup_briefing: json!({"surface": "external_channel"}),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("baseline run should be created");
+        state
+            .storage
+            .static_page_drafts()
+            .create(
+                state.tenant_id,
+                &NewStaticPageDraft {
+                    assistant_run_id: baseline_run.id,
+                    owner_user_id: Some(UserId::new()),
+                    title: "静态页：新百经营分析默认模板".to_string(),
+                    status: StaticPageDraftStatus::Rendered,
+                    selected_scope: selected_scope.clone(),
+                    visibility_snapshot: json!({"policy": "test"}),
+                    source_refs: baseline_source_refs,
+                    draft_payload: baseline_payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("baseline draft should be created");
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: assistant_request.prompt.clone(),
+                    startup_briefing: assistant_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!(assistant_request.scope_candidates.clone()),
+                    context_policy: assistant_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+
+        let reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &run,
+            &assistant_request,
+            &message,
+            now,
+        )
+        .await
+        .expect("static-page pipeline should complete")
+        .expect("static-page reply should be returned");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("static_page_stable_artifact_reused")
+        );
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        let card = reply.card.expect("card should be returned");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
+        assert_eq!(
+            card["image2_skip_reason"],
+            json!("accepted_dataset_overlap_template_baseline")
+        );
+
+        let new_run_drafts = state
+            .storage
+            .static_page_drafts()
+            .list_by_assistant_run(state.tenant_id, run.id)
+            .await
+            .expect("drafts should list");
+        assert!(
+            new_run_drafts.is_empty(),
+            "view request should not create a new draft"
+        );
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        assert!(
+            workflows.iter().all(|execution| {
+                execution.kind != WorkflowKind::StaticPageImageGeneration
+                    && execution.kind != WorkflowKind::CodexHostTask
+            }),
+            "view request should not enqueue Image2 or Codex"
+        );
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+                && event.payload["artifact_links"] == json!([public_url])
+        }));
+        assert!(!events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+                || event.event_name.starts_with("codex_host.fixed_task.")
         }));
     }
 
@@ -89262,6 +89827,14 @@ mod tests {
             tenant.id,
             EventBus::Disabled,
         );
+        let legacy_source_user = ensure_external_system_user(
+            &state,
+            "channel-source",
+            "generic-chat-main:src-docs",
+            "src-docs",
+        )
+        .await
+        .expect("legacy source-scoped system user should exist");
         let dataset = state
             .storage
             .datasets()
@@ -89293,7 +89866,7 @@ mod tests {
                         object_key: format!("external-dataset-scope/{external_id}.md"),
                         content_type: "text/markdown".to_string(),
                         secret_binding_ids: Vec::new(),
-                        owner_user_id: None,
+                        owner_user_id: Some(legacy_source_user.id),
                         metadata: json!({
                             "external_source": {
                                 "source_id": "src-docs",
@@ -89367,6 +89940,19 @@ mod tests {
             selected_external_ids,
             BTreeSet::from(["doc-alpha", "doc-beta"])
         );
+        let channel_user = ensure_external_channel_system_user(&state, "generic-chat-main")
+            .await
+            .expect("channel system user should exist");
+        for document_id in &group_document_ids {
+            let document = state
+                .storage
+                .documents()
+                .get_by_id(state.tenant_id, *document_id)
+                .await
+                .expect("document lookup should succeed")
+                .expect("document should exist");
+            assert_eq!(document.owner_user_id, Some(channel_user.id));
+        }
         assert!(
             selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
         );
@@ -115110,12 +115696,20 @@ retrieve_evidence:
     fn external_channel_system_user_email_is_scoped_per_interface() {
         let left = external_system_user_email("channel", "generic-chat-main");
         let right = external_system_user_email("channel", "another-chat-main");
+        let legacy_channel_source = external_system_user_email(
+            "channel-source",
+            "generic-chat-main:third-party-source-main",
+        );
 
         assert_ne!(left, right);
         assert!(left.ends_with("@aidp.local"));
         assert_eq!(
             left,
             external_system_user_email("channel", "generic-chat-main")
+        );
+        assert_eq!(
+            legacy_channel_source,
+            "third-party-channel-source-generic-chat-main-third-7463c6883750@aidp.local"
         );
     }
 
