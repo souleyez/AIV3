@@ -28845,6 +28845,52 @@ fn static_page_default_prompt_reuse_class(prompt: &str) -> Option<&'static str> 
     None
 }
 
+fn static_page_template_intent_reuse_class(text: &str) -> Option<&'static str> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let lower = text.to_ascii_lowercase();
+    if text.contains("简历") || text.contains("招聘") || lower.contains("resume") {
+        return Some("resume");
+    }
+    if text.contains("经营")
+        || text.contains("报表")
+        || text.contains("业务")
+        || text.contains("数据")
+        || text.contains("数据库")
+        || text.contains("数据源")
+        || lower.contains("report")
+        || lower.contains("dashboard")
+    {
+        return Some("business_report");
+    }
+    None
+}
+
+fn static_page_template_draft_intent_reuse_class(draft: &StaticPageDraft) -> Option<&'static str> {
+    [
+        draft.draft_payload.get("prompt").and_then(Value::as_str),
+        draft.draft_payload.get("title").and_then(Value::as_str),
+        Some(draft.title.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(static_page_template_intent_reuse_class)
+}
+
+fn static_page_template_intent_compatible(
+    current_prompt: Option<&str>,
+    draft: &StaticPageDraft,
+) -> bool {
+    let Some(current_class) = current_prompt.and_then(static_page_template_intent_reuse_class)
+    else {
+        return true;
+    };
+    static_page_template_draft_intent_reuse_class(draft)
+        .is_none_or(|draft_class| draft_class == current_class)
+}
+
 fn static_page_default_prompt_tokens_compatible(
     left_prompt: Option<&str>,
     right_prompt: Option<&str>,
@@ -28915,6 +28961,8 @@ struct StaticPageTemplateOverlapSearchOutcome {
     accepted_baseline_count: usize,
     visible_published_baseline_count: usize,
     scope_intersection_count: usize,
+    template_intent_match_count: usize,
+    template_intent_mismatch_count: usize,
     default_prompt_match_count: usize,
     default_prompt_mismatch_count: usize,
 }
@@ -28929,6 +28977,8 @@ impl StaticPageTemplateOverlapSearchOutcome {
             "no_visible_published_template_baseline"
         } else if self.scope_intersection_count == 0 {
             "no_dataset_scope_intersection"
+        } else if self.template_intent_match_count == 0 && self.template_intent_mismatch_count > 0 {
+            "template_intent_mismatch"
         } else if self.default_prompt_match_count == 0 && self.default_prompt_mismatch_count > 0 {
             "default_prompt_mismatch"
         } else {
@@ -28954,6 +29004,8 @@ impl StaticPageTemplateOverlapSearchOutcome {
             "accepted_baseline_count": self.accepted_baseline_count,
             "visible_published_baseline_count": self.visible_published_baseline_count,
             "scope_intersection_count": self.scope_intersection_count,
+            "template_intent_match_count": self.template_intent_match_count,
+            "template_intent_mismatch_count": self.template_intent_mismatch_count,
             "default_prompt_match_count": self.default_prompt_match_count,
             "default_prompt_mismatch_count": self.default_prompt_mismatch_count,
         })
@@ -28962,6 +29014,7 @@ impl StaticPageTemplateOverlapSearchOutcome {
 
 async fn find_static_page_template_baseline_by_dataset_overlap(
     state: &AppState,
+    current_prompt: Option<&str>,
     selected_scope: &Value,
     source_refs: &Value,
     current_user_id: Option<UserId>,
@@ -28974,6 +29027,8 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
         accepted_baseline_count: 0,
         visible_published_baseline_count: 0,
         scope_intersection_count: 0,
+        template_intent_match_count: 0,
+        template_intent_mismatch_count: 0,
         default_prompt_match_count: 0,
         default_prompt_mismatch_count: 0,
     };
@@ -29017,6 +29072,11 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
             continue;
         }
         outcome.scope_intersection_count += 1;
+        if !static_page_template_intent_compatible(current_prompt, &draft) {
+            outcome.template_intent_mismatch_count += 1;
+            continue;
+        }
+        outcome.template_intent_match_count += 1;
         if static_page_default_prompt_tokens_match(
             selected_scope,
             source_refs,
@@ -29295,6 +29355,7 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
 
     let overlap_outcome = find_static_page_template_baseline_by_dataset_overlap(
         state,
+        message.text.as_deref(),
         selected_scope,
         &candidate.source_refs,
         None,
@@ -32514,6 +32575,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     {
         let overlap_outcome = find_static_page_template_baseline_by_dataset_overlap(
             state,
+            Some(&assistant_request.prompt),
             &selected_scope,
             &source_refs,
             None,
@@ -82049,6 +82111,8 @@ mod tests {
             accepted_baseline_count: 2,
             visible_published_baseline_count: 2,
             scope_intersection_count: 2,
+            template_intent_match_count: 2,
+            template_intent_mismatch_count: 0,
             default_prompt_match_count: 0,
             default_prompt_mismatch_count: 2,
         };
@@ -82063,6 +82127,42 @@ mod tests {
         );
         assert_eq!(summary["candidate_default_prompt_present"], json!(true));
         assert_eq!(summary["default_prompt_mismatch_count"], json!(2));
+    }
+
+    #[test]
+    fn static_page_template_intent_class_blocks_resume_template_for_business_report() {
+        assert_eq!(
+            static_page_template_intent_reuse_class("请生成一页简历库统计静态页报表"),
+            Some("resume")
+        );
+        assert_eq!(
+            static_page_template_intent_reuse_class("经营分析报表"),
+            Some("business_report")
+        );
+
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: Some(UserId::new()),
+            title: "静态页：请生成一页简历库统计静态页报表".to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({}),
+            draft_payload: json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        assert!(!static_page_template_intent_compatible(
+            Some("经营分析报表"),
+            &draft
+        ));
+        assert!(static_page_template_intent_compatible(
+            Some("简历库项目经历统计报表"),
+            &draft
+        ));
     }
 
     #[test]
