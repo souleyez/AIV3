@@ -243,6 +243,39 @@ test('renders static page planning and code review templates', () => {
   assert.match(review.html, /src\/api.rs:L42/);
 });
 
+test('renders published static page preview handoff without remote urls', () => {
+  const published = renderHtmlArtifactDocument(baseManifest({
+    id: 'published-static-page',
+    sourceType: 'static_page',
+    templateId: 'static_page_published_preview',
+    title: '新百经营分析报表 · 成品',
+    ownerScope: { type: 'static_page_draft', id: 'draft-1' },
+    payload: {
+      status: 'rendered',
+      draftId: 'draft-1',
+      renderOutputId: 'render-1',
+      previewPath: '/generated-artifacts/database-static-pages/xinbai/report/index.html',
+      dataPath: '/generated-artifacts/database-static-pages/xinbai/report/data.json',
+      summary: '页面已生成，可在主站内预览并继续修改。',
+    },
+  }));
+  const remote = normalizeHtmlArtifactManifest(baseManifest({
+    sourceType: 'static_page',
+    templateId: 'static_page_published_preview',
+    payload: {
+      previewPath: 'https://example.com/generated-artifacts/report/index.html',
+    },
+  }));
+
+  assert.equal(published.rejected, false);
+  assert.equal(published.sandbox, '');
+  assert.match(published.html, /已发布静态页/);
+  assert.match(published.html, /新百经营分析报表/);
+  assert.match(published.html, /\/generated-artifacts\/database-static-pages\/xinbai\/report\/index\.html/);
+  assert.equal(remote.rejected, true);
+  assert.match(remote.reason, /https/);
+});
+
 test('renders report render summary template', () => {
   const report = renderHtmlArtifactDocument(baseManifest({
     id: 'report-render-summary',

@@ -13,5 +13,14 @@ test('isExternalObservabilityPath protects conversation list and lazy timeline d
     ]),
     true,
   );
+  assert.equal(
+    isExternalObservabilityPath([
+      'external',
+      'integrations',
+      'generic-chat-main',
+      'reply-dispatch',
+    ]),
+    true,
+  );
   assert.equal(isExternalObservabilityPath(['external', 'integrations']), false);
 });

@@ -4,6 +4,7 @@ const HTML_ARTIFACT_VERSION = 1;
 export const HTML_ARTIFACT_TEMPLATE_IDS = Object.freeze([
   'codex_execution_report',
   'static_page_planning_handoff',
+  'static_page_published_preview',
   'static_page_data_quality_report',
   'report_render_summary',
   'code_review_summary',
@@ -31,6 +32,7 @@ export const HTML_ARTIFACT_INTERACTION_MODES = Object.freeze([
 const TEMPLATE_LABELS = {
   codex_execution_report: 'Codex 执行报告',
   static_page_planning_handoff: '静态页规划交接',
+  static_page_published_preview: '已发布静态页',
   static_page_data_quality_report: '静态页数据质量报告',
   report_render_summary: '报告渲染摘要',
   code_review_summary: '代码审查摘要',
@@ -487,6 +489,22 @@ function renderStaticPageDataQualityReport(manifest) {
     <section>
       <h2>模块检查</h2>
       ${renderList(modules, '暂无模块数据质量记录。')}
+    </section>
+  `;
+}
+
+function renderStaticPagePublishedPreview(manifest) {
+  const payload = manifest.payload || {};
+  return `
+    ${renderKeyValueGrid([
+    { label: '状态', value: payload.status || 'rendered' },
+    { label: '草稿', value: payload.draftId || payload.draft_id || manifest.ownerScope.id },
+    { label: 'Render Output', value: payload.renderOutputId || payload.render_output_id || '已发布链接' },
+    { label: '预览路径', value: payload.previewPath || payload.preview_path || '未提供' },
+  ])}
+    <section>
+      <h2>页面说明</h2>
+      <p>${escapeHtml(payload.summary || '静态页已经生成。主站会使用同源 iframe 打开真实页面；如预览路径不可用，会显示这份只读摘要。')}</p>
     </section>
   `;
 }
@@ -1119,9 +1137,11 @@ export function renderHtmlArtifactDocument(input = {}) {
     ? renderCodexExecutionReport(manifest)
     : manifest.templateId === 'static_page_planning_handoff'
       ? renderStaticPagePlanningHandoff(manifest)
-      : manifest.templateId === 'static_page_data_quality_report'
-        ? renderStaticPageDataQualityReport(manifest)
-        : manifest.templateId === 'report_render_summary'
+      : manifest.templateId === 'static_page_published_preview'
+        ? renderStaticPagePublishedPreview(manifest)
+        : manifest.templateId === 'static_page_data_quality_report'
+          ? renderStaticPageDataQualityReport(manifest)
+          : manifest.templateId === 'report_render_summary'
         ? renderReportRenderSummary(manifest)
         : manifest.templateId === 'code_review_summary'
           ? renderCodeReviewSummary(manifest)

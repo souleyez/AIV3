@@ -835,6 +835,7 @@ function GeneratedProjectCard({
   open,
   copied,
   onSelect,
+  onPreview,
   onDelete,
   onRevert,
   onCopyLink,
@@ -851,9 +852,16 @@ function GeneratedProjectCard({
     staleReason || draft?.finalPage?.notice || draft?.modelSummary || '模板规划、效果图、静态页会按阶段推进。',
     58,
   );
+  const handleSelect = () => {
+    if (staticPageIsRendered(draft) && canOpenFinalPage && onPreview) {
+      onPreview();
+      return;
+    }
+    onSelect?.();
+  };
   return (
     <article className={`generated-project-card ${active ? 'active' : ''}`.trim()}>
-      <button type="button" className="generated-project-main" onClick={onSelect}>
+      <button type="button" className="generated-project-main" onClick={handleSelect}>
         <div className="generated-project-title-row">
           <strong>{staticPageProjectTitle(draft)}</strong>
           <time dateTime={updatedAt || undefined}>{updatedAt ? formatRelativeTime(updatedAt) : '刚刚'}</time>
@@ -873,8 +881,13 @@ function GeneratedProjectCard({
           {stage.key === 'static' ? (
             <>
               {canOpenFinalPage ? (
-                <button type="button" className="primary-btn compact-action-btn" onClick={() => openStaticPageFromShelf(draft)}>
-                  打开页面
+                <button type="button" className="primary-btn compact-action-btn" onClick={onPreview || (() => openStaticPageFromShelf(draft))}>
+                  预览页面
+                </button>
+              ) : null}
+              {finalPageUrl ? (
+                <button type="button" className="ghost-btn compact-action-btn" onClick={() => openStaticPageFromShelf(draft)}>
+                  新窗口
                 </button>
               ) : null}
               <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageHtmlFromShelf(draft)}>
@@ -978,6 +991,7 @@ export default function InsightPanel({
   staticPageDraft,
   staticPageDrafts = [],
   onSelectStaticPageDraft,
+  onPreviewStaticPageDraft,
   onDeleteStaticPageDraft,
   onRevertStaticPageStage,
   onRefreshStaticPageDrafts,
@@ -992,6 +1006,7 @@ export default function InsightPanel({
   const shelfHtmlArtifacts = htmlArtifacts.filter((artifact) => {
     const templateId = artifact?.templateId || artifact?.template_id;
     return templateId !== 'static_page_planning_handoff'
+      && templateId !== 'static_page_published_preview'
       && templateId !== 'static_page_data_quality_report';
   });
   const resultCount = staticPageDrafts.length + shelfHtmlArtifacts.length;
@@ -1035,6 +1050,7 @@ export default function InsightPanel({
                 draft={draft}
                 onClick={() => onSelectStaticPageDraft?.(draft.id)}
                 onSelect={() => onSelectStaticPageDraft?.(draft.id)}
+                onPreview={() => onPreviewStaticPageDraft?.(draft.id)}
                 onDelete={() => onDeleteStaticPageDraft?.(draft.id)}
                 onRevert={() => onRevertStaticPageStage?.(draft.id)}
                 onCopyLink={() => copyProjectLink(draft)}

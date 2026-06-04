@@ -143,6 +143,19 @@ V3 接收第三方消息后，会按请求内容返回以下几类结果：
 - `requires_confirmation`：需要用户确认的动作；
 - `task_status`：处理中、失败、等待外部条件或无法立即完成。
 
+### 6.1 平台能力路由与状态总览
+
+第三方客户端不需要、也不应直接调用 V3 内部能力。第三方只需按本文接口发送普通消息、文档范围、数据集范围、模板、业务数据源 ID 或确认回调；V3 会在平台侧识别用户意图，并在权限、范围、预算和确认策略校验后，通过现有 `reply.reply_type`、`reply.task_status`、`reply.card`、`reply.artifact_links`、`requires_confirmation`、`action_id` 和 `confirmation_id` 字段返回结果。
+
+| 平台侧能力 | 第三方如何触发 | 常见返回状态/卡片 | 确认策略 |
+| --- | --- | --- | --- |
+| 静态页/报表 | 普通消息提出生成、修改、发布报表或传 `artifact_type=static_page` | 生成中为 `processing`；成功为 `static_page_published` 且返回 `artifact_links[0]`、`reply.card.public_url` 或 `reply.card.generated_artifact_url`；不可继续失败为 `failed` | 新生成/复用通常不需要确认；覆盖稳定 URL、扩大权限或外部分发需要确认 |
+| 数据接入/入库分析 | 普通消息提出建表、入库、字段映射、清洗、schema、ETL 或数据库分析 | `data_ingestion_analysis_queued`、`data_ingestion_analysis_retrying`、`data_ingestion_analysis_completed`、`data_ingestion_analysis_needs_human`、`data_ingestion_analysis_failed`、`data_ingestion_analysis_cancelled`；完成卡片为 `v3_data_ingestion_analysis_result` | 不自动写生产库；staging plan、生产写入、schema 变更或凭据动作需要确认 |
+| 文档处理/深解析 | 普通消息提出文档入库、解析状态、重解析、深解析、VLM 升级解析或事实抽取 | `document_processing_status`、`document_processing_review_required`、`document_processing_reparse_queued`；卡片包含可见文档解析状态摘要 | 无可见文档、重解析未启用、权限不明或高成本升级解析时需要人工/平台确认 |
+| 采集/资料库规划 | 普通消息提出资料采集、爬虫规划、公开来源或配置来源接入 | `needs_confirmation` 或 `capability_analysis_recorded`；卡片 `v3_collection_setup_analysis` | 新来源、登录、凭据、外部写入或爬虫执行需要确认 |
+| 第三方系统对接规划 | 普通消息提出 OA、文档库、数据库、用户/权限、API 或连接器对接 | `needs_confirmation` 或 `capability_analysis_recorded`；卡片 `v3_integration_setup_analysis` | API/鉴权/URL/请求字段/响应字段、权限或 schema 变更需要确认 |
+| 主动消息/主动发起对话 | 普通消息要求完成后通知某人、发给负责人、跨会话确认或消息渠道外发 | `message_outreach_confirmation_required`；卡片 `v3_message_channel_outreach`。后续若启用安全自动派发，可出现 `message_outreach_queued`、`message_outreach_sent`、`message_outreach_failed` | 模型不能直接发送消息；新收件人、跨渠道、敏感报表/文档内容、权限范围不明或未配置外发通道需要确认 |
+
 文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 `dataset_external_ids` 数组。分组字段和文档 ID 可以同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档会自动去重。只有想把本次会话限制为少数具体文档时，才只传文档 ID、不传分组字段。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会再替第三方扩大或缩小第三方内部权限。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
 
 当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。
@@ -382,6 +395,10 @@ Authorization: Bearer <V3 inbound token>
 - 第一阶段不要求第三方再调用单独的“取回复”接口。
 
 数据接入/入库分析不新增请求字段。第三方在普通消息里提出接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求即可。若服务端启用 `data_ingestion_analysis` 固定能力，V3 会返回 `task_status`：排队/重试中为 `data_ingestion_analysis_queued` 或 `data_ingestion_analysis_retrying`；完成后为 `data_ingestion_analysis_completed`，卡片 `reply.card.type=v3_data_ingestion_analysis_result`，`reply.card.result_summary` 只包含安全摘要（来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作）。如果可形成导入草稿，卡片还会返回 `reply.card.staging_plan.type=v3_data_ingestion_staging_plan`，该计划只用于人工确认后的数据集/数据源导入，固定 `production_write_allowed=false`。人工确认创建或复用 staging 数据集后，状态为 `data_ingestion_staging_dataset_ready`，卡片 `reply.card.type=v3_data_ingestion_staging_plan_execution`，可返回 `dataset_id`、`dataset_key`、`dataset_title` 和 `imported_row_count=0`。内部人工继续启动数据库源同步后，状态为 `data_ingestion_staging_sync_started`；同步执行中、完成、失败分别为 `data_ingestion_staging_sync_running`、`data_ingestion_staging_sync_completed`、`data_ingestion_staging_sync_failed`，卡片 `reply.card.type=v3_data_ingestion_staging_sync`，可返回 `source_id`、`sync_run_id`、`workflow_stage` 和 `workflow_status`。同步完成后，同一个 `conversation_external_id` 的后续消息会自动复用该 staging 数据集作为可见数据范围，用于继续问答、生成报表或静态页；第三方不需要每轮重复传内部 `dataset_id`。如需要人工确认，状态为 `data_ingestion_analysis_needs_human`；失败为 `data_ingestion_analysis_failed`；人工取消或运行被取消时为 `data_ingestion_analysis_cancelled`，`reply.card.runtime_event.retryable=false`，第三方不需要自动重试取消态。V3 不会在该流程里暴露数据库 URL、凭据、完整表 dump，也不会自动写生产库或修改 schema。
+
+采集/对接方案分析也不新增请求字段。客户在普通消息里提出资料采集、爬虫规划、外部资料库接入、第三方系统对接、接口字段确认、权限或消息渠道配置等需求时，V3 可能返回 `reply_type=requires_confirmation`、`reply.task_status=needs_confirmation`，并携带 `reply.card.type=v3_collection_setup_analysis` 或 `reply.card.type=v3_integration_setup_analysis`。这类卡片只表示 V3 已识别到平台受控能力请求，并给出 `requested_capability`、`intent`、`reason`、`risk_level`、`review_reason` 和 `next_actions`；第三方应按确认卡展示，不要当作已执行结果。只读状态检查或只读方案分析可返回 `reply_type=task_status`、`reply.task_status=capability_analysis_recorded`。V3 不会在该流程中自动执行爬取、登录、外部写入、凭据收集、公开接口 URL/鉴权/请求字段/响应字段变更，也不会自动扩大文档、数据集或用户权限；这些动作必须由 V3 侧确认后再进入后续流程。
+
+主动消息/主动发起对话也不新增请求字段。客户在普通消息里要求“完成后通知某人”“主动发给店总/负责人”“向另一个会话发起确认”等场景时，V3 可能返回 `reply_type=requires_confirmation`、`reply.task_status=message_outreach_confirmation_required`，卡片 `reply.card.type=v3_message_channel_outreach`。卡片只包含安全摘要，例如 `requested_capability`、`intent`、`risk_level`、`review_reason`、`target_summary.recipient_count` 和 `idempotency_key`；不会包含原始资料全文、明文凭据或无限制模型原文。第三方应把它展示为待 V3/人工确认的外发意图。V3 不会让模型直接发送消息；跨渠道、新收件人、敏感报表/文档内容、权限范围不明或未配置外发通道时，都必须先确认后再由宿主消息通道执行。
 
 ### 10.2 流式提交用户消息（SSE）
 

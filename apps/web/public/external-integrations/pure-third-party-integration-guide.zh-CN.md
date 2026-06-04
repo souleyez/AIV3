@@ -434,6 +434,22 @@ Content-Type: application/json
 
 V3 回推会带 `Authorization: Bearer <reply_dispatch_bearer_token>`，并在配置签名密钥时带 `x-v3-signature`、`x-v3-timestamp`、`x-v3-nonce`、`x-v3-content-sha256`。如果未配置回推地址，第三方仍可继续使用 `/events/stream` 断线续传或 `status_url` 轮询。
 
+### 2.1.2 平台能力路由与状态总览
+
+第三方页面不需要直接调用 V3 内部能力，也不需要解析内部工具名。第三方只需发送普通聊天消息、文档范围、数据集范围、模板、业务数据源 ID 或确认回调；V3 会在平台侧识别用户意图，并通过现有 `reply` 字段返回文本、状态、确认卡或产物链接。
+
+| 用户意图/平台能力 | 第三方请求方式 | 前端重点读取 | 常见状态 |
+| --- | --- | --- | --- |
+| 普通问答 | 普通消息 + 已授权文档/数据集范围 | `reply.text`、`reply.task_status` | `answered`、`needs_input`、`failed` |
+| 静态页/报表 | 普通消息提出生成/修改报表；推荐传 `artifact_type=static_page` | `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url`、`reply.card.status_url` | `processing`、`static_page_published`、`failed` |
+| 数据接入/建表分析 | 普通消息提出入库、建表、字段映射、清洗、schema、ETL 或数据库分析 | `reply.card.type`、`reply.card.result_summary`、`reply.card.staging_plan`、`reply.card.dataset_id`、`reply.card.sync_run_id` | `data_ingestion_analysis_queued`、`data_ingestion_analysis_retrying`、`data_ingestion_analysis_completed`、`data_ingestion_analysis_needs_human`、`data_ingestion_analysis_failed`、`data_ingestion_analysis_cancelled` |
+| 文档处理/深解析 | 普通消息提出解析状态、重解析、深解析、VLM 升级解析或事实抽取 | `reply.card.type`、`reply.card.documents`、`reply.card.status_counts` | `document_processing_status`、`document_processing_review_required`、`document_processing_reparse_queued` |
+| 采集/资料库规划 | 普通消息提出资料采集、爬虫规划或来源接入 | `reply.card.type=v3_collection_setup_analysis`、`reply.requires_confirmation` | `needs_confirmation`、`capability_analysis_recorded` |
+| 第三方系统对接规划 | 普通消息提出 OA、文档库、数据库、用户/权限、API 或连接器对接 | `reply.card.type=v3_integration_setup_analysis`、`reply.requires_confirmation` | `needs_confirmation`、`capability_analysis_recorded` |
+| 主动消息/主动发起对话 | 普通消息要求完成后通知某人、发给负责人或跨会话确认 | `reply.card.type=v3_message_channel_outreach`、`reply.card.target_summary`、`reply.requires_confirmation` | `message_outreach_confirmation_required`；后续如启用安全自动派发，可出现 `message_outreach_queued`、`message_outreach_sent`、`message_outreach_failed` |
+
+确认类状态只表示 V3 已识别到受控能力请求，并不表示动作已经执行。第三方应把 `requires_confirmation=true` 或 `reply.reply_type=requires_confirmation` 展示为“待 V3/人工确认”，不要自行扩大文档、数据集、用户、消息渠道或公开接口权限。
+
 ### 2.2 流式聊天
 
 ```http
@@ -593,6 +609,44 @@ V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、�
 当 `reply.task_status=data_ingestion_staging_sync_completed` 后，同一个 `conversation_external_id` 的后续问题会自动复用该 staging 数据集作为可见数据范围；第三方不必每轮重复传内部 `dataset_id`。如果第三方更换会话 ID，或希望切换数据范围，应重新传稳定 `dataset_external_id`、具体文档范围，或由 V3 侧重新确认新的 staging 数据集。
 
 若没有选中或上传可分析的数据源/表格/文档，V3 会返回 `data_ingestion_analysis_source_required`，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。
+
+### 2.4 采集/对接方案分析请求
+
+第三方接口无需新增字段。客户可以在普通聊天消息里直接提出资料采集、爬虫规划、外部资料库接入、第三方系统对接、接口字段确认、权限配置或消息渠道配置等需求。V3 会先把这类请求识别为平台受控能力，不会直接执行外部动作。
+
+常见返回形态：
+
+| 字段 | 注释 |
+| --- | --- |
+| `reply.reply_type` | 涉及新增外部动作、权限、凭据、接口变更时为 `requires_confirmation`；只读状态检查或只读方案分析时可为 `task_status` |
+| `reply.task_status` | 需要确认时为 `needs_confirmation`；只读分析记录时为 `capability_analysis_recorded` |
+| `reply.card.type` | 采集/资料库规划为 `v3_collection_setup_analysis`；第三方系统/API/权限对接规划为 `v3_integration_setup_analysis` |
+| `reply.card.requested_capability` | `collection_setup_analysis` 或 `integration_setup_analysis` |
+| `reply.card.risk_level` | `low`、`medium`、`high` 或 `critical` |
+| `reply.card.review_reason` | 需要确认或只读放行的原因 |
+| `reply.card.next_actions` | V3 建议的下一步，不表示已经执行 |
+| `reply.card.forbidden_actions` | 本轮禁止自动执行的动作摘要 |
+
+第三方应把 `requires_confirmation` 展示为“待 V3/人工确认”状态。V3 不会在该流程中自动执行爬取、登录、外部写入、凭据收集、公开接口 URL/鉴权/请求字段/响应字段变更，也不会自动扩大文档、数据集或用户权限。
+
+### 2.5 主动消息/主动发起对话请求
+
+第三方接口无需新增字段。客户可以在普通聊天消息里要求 V3 在任务完成后通知某人、提醒负责人查看报表、向当前会话继续发起确认，或把结果通过已配置消息渠道发送给指定人员。V3 会先生成受控外发意图，不会让模型直接发送消息。
+
+常见返回形态：
+
+| 字段 | 注释 |
+| --- | --- |
+| `reply.reply_type` | 通常为 `requires_confirmation` |
+| `reply.task_status` | `message_outreach_confirmation_required` |
+| `reply.card.type` | `v3_message_channel_outreach` |
+| `reply.card.status` | `message_outreach_confirmation_required` |
+| `reply.card.requested_capability` | `message_channel_outreach` |
+| `reply.card.risk_level` | 同会话运营通知通常为 `low`；新收件人、跨会话或跨渠道为 `medium`；含报表/文档/权限内容为 `high` |
+| `reply.card.target_summary` | 只返回安全摘要，如当前通道、会话 ID、接收人数和是否同会话 |
+| `reply.card.idempotency_key` | 本次外发意图幂等键；第三方可用于确认/审计对账 |
+
+第三方应把该回复展示为“待 V3/人工确认后发送”。V3 不会自动发送原始模型文本，不会绕过收件人权限，不会跨渠道外发，也不会在消息里携带明文凭据或原始客户资料全文。若后续接入安全的同会话运营通知自动派发，仍会通过 `reply.card.status=message_outreach_queued|message_outreach_sent|message_outreach_failed` 或对应状态事件明确告知。
 
 ## 3. 生成产物（报表）
 

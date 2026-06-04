@@ -37,6 +37,8 @@ import {
   normalizeIntegrationSummary,
   normalizeWorkflowQueueStats,
   normalizeWorkflowTask,
+  outboundReplyDispatchSignalLabel,
+  outboundReplyDispatchSummary,
   searchEvidenceSignalLabel,
   signalLabel,
   workflowQueueLabel,
@@ -109,6 +111,10 @@ test('buildExternalAuditQuery encodes fixed audit filters', () => {
   assert.equal(
     buildExternalAuditQuery({ itemType: 'search_evidence' }),
     '?item_type=search_evidence',
+  );
+  assert.equal(
+    buildExternalAuditQuery({ itemType: 'outbound_reply' }),
+    '?item_type=outbound_reply',
   );
   assert.equal(
     buildExternalAuditQuery({ itemType: 'action', actionId: 'act-001', limit: 1 }),
@@ -339,6 +345,48 @@ test('normalizeIntegrationSummary marks result failures as operational failures'
   assert.equal(integration.signal, 'failed');
   assert.equal(integration.actionSignal, 'result_failed');
   assert.equal(actionSignalLabel(integration.actionSignal), '结果失败');
+});
+
+test('outboundReplyDispatchSummary reports async reply dispatch readiness', () => {
+  const ready = outboundReplyDispatchSummary({
+    configSummary: {
+      outbound_reply_dispatch: {
+        endpoint_configured: true,
+        auth_configured: true,
+        auth_mode: 'signature_and_bearer',
+        auth_source: 'reply_specific',
+        endpoint_host: 'third.example.com',
+        ready: true,
+      },
+    },
+  });
+  const missingAuth = outboundReplyDispatchSummary({
+    configSummary: {
+      outbound_reply_dispatch: {
+        endpoint_configured: true,
+        auth_mode: 'none',
+        ready: false,
+      },
+    },
+  });
+  const missingEndpoint = outboundReplyDispatchSummary({
+    configSummary: {
+      outbound_reply_dispatch: {
+        auth_configured: true,
+        auth_mode: 'bearer',
+        ready: false,
+      },
+    },
+  });
+
+  assert.equal(ready.signal, 'ready');
+  assert.equal(ready.authSource, 'reply_specific');
+  assert.equal(ready.endpointHost, 'third.example.com');
+  assert.equal(outboundReplyDispatchSignalLabel(ready.signal), '可主动回推');
+  assert.equal(missingAuth.signal, 'missing_auth');
+  assert.equal(outboundReplyDispatchSignalLabel(missingAuth.signal), '待配置鉴权');
+  assert.equal(missingEndpoint.signal, 'missing_endpoint');
+  assert.equal(outboundReplyDispatchSignalLabel(missingEndpoint.signal), '待第三方回推地址');
 });
 
 test('database source observability helpers normalize redacted source summary', () => {
@@ -858,6 +906,7 @@ test('auditItemTypeLabel covers search evidence items', () => {
   assert.equal(auditItemTypeLabel('message'), '消息');
   assert.equal(auditItemTypeLabel('action'), '动作');
   assert.equal(auditItemTypeLabel('search_evidence'), '搜索证据');
+  assert.equal(auditItemTypeLabel('outbound_reply'), '回复回推');
   assert.equal(auditItemTypeLabel('sync'), '同步');
 });
 
@@ -885,6 +934,22 @@ test('normalizeControlResult summarizes management control responses', () => {
       enqueued_tasks: [{}, {}],
     })),
     '已入队 2 个动作重试',
+  );
+  assert.equal(
+    controlResultLabel(normalizeControlResult({
+      accepted: true,
+      action: 'configure_reply_dispatch',
+      status: 'reply_dispatch_ready',
+    })),
+    '助手消息回推配置已保存',
+  );
+  assert.equal(
+    controlResultLabel(normalizeControlResult({
+      accepted: true,
+      action: 'configure_reply_dispatch',
+      status: 'reply_dispatch_cleared',
+    })),
+    '助手消息回推配置已清空',
   );
 });
 

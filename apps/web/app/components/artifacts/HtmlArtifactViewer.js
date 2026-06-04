@@ -6,12 +6,37 @@ import {
   renderHtmlArtifactDocument,
 } from '../../lib/html-artifact-manifest';
 
+function safePublishedPreviewSrc(manifest) {
+  if (manifest?.templateId !== 'static_page_published_preview') {
+    return '';
+  }
+  const payload = manifest.payload || {};
+  const raw = String(payload.previewPath || payload.preview_path || '').trim();
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//')) {
+    return '';
+  }
+  if (/[<>"'\\]/.test(raw)) {
+    return '';
+  }
+  const path = raw.split(/[?#]/)[0];
+  if (!path.startsWith('/generated-artifacts/')
+    && !/^\/v1\/static-page-render-outputs\/[^/]+\/preview$/.test(path)
+    && !/^\/v1\/external\/channels\/[^/]+\/static-page-renders\/[^/]+\/preview$/.test(path)) {
+    return '';
+  }
+  return raw;
+}
+
 export default function HtmlArtifactViewer({
   artifact,
   compact = false,
   onArtifactEvent,
 }) {
   const rendered = useMemo(() => renderHtmlArtifactDocument(artifact || {}), [artifact]);
+  const publishedPreviewSrc = useMemo(
+    () => safePublishedPreviewSrc(rendered.manifest),
+    [rendered.manifest],
+  );
 
   useEffect(() => {
     if (!artifact || rendered.rejected || rendered.manifest?.interactionMode === 'read_only') {
@@ -52,13 +77,14 @@ export default function HtmlArtifactViewer({
           <span>{rendered.manifest.templateLabel}</span>
           <strong>{rendered.manifest.title}</strong>
         </div>
-        <em>{rendered.manifest.interactionMode === 'read_only' ? '只读沙箱' : '可提交意图'}</em>
+        <em>{publishedPreviewSrc ? '同源页面预览' : rendered.manifest.interactionMode === 'read_only' ? '只读沙箱' : '可提交意图'}</em>
       </div>
       <iframe
         className="html-artifact-frame"
         title={rendered.manifest.title}
-        srcDoc={rendered.html}
-        sandbox={rendered.sandbox}
+        src={publishedPreviewSrc || undefined}
+        srcDoc={publishedPreviewSrc ? undefined : rendered.html}
+        sandbox={publishedPreviewSrc ? 'allow-scripts allow-same-origin' : rendered.sandbox}
       />
     </div>
   );

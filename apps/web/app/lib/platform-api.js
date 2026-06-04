@@ -18,7 +18,8 @@ export function buildPlatformApiUrl(pathname, search = '') {
 export function isExternalObservabilityPath(pathSegments) {
   const path = Array.isArray(pathSegments) ? pathSegments.join('/') : '';
   return path === 'external/conversation-tests'
-    || /^external\/conversation-tests\/[^/]+\/timeline$/.test(path);
+    || /^external\/conversation-tests\/[^/]+\/timeline$/.test(path)
+    || /^external\/integrations\/[^/]+\/reply-dispatch$/.test(path);
 }
 
 export async function proxyPlatformApiRequest(request, pathSegments) {

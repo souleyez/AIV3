@@ -923,6 +923,20 @@ pub struct ExternalIntegrationControlRequest {
     pub sync_kind: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalIntegrationReplyDispatchConfigRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_dispatch_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_dispatch_bearer_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_dispatch_signing_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_reply_dispatch: Option<bool>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExternalIntegrationControlResponse {
     pub accepted: bool,
@@ -5713,6 +5727,19 @@ mod tests {
         .expect("control request should deserialize");
         assert_eq!(request.reason.as_deref(), Some("operator_retry"));
         assert_eq!(request.sync_kind.as_deref(), Some("incremental"));
+
+        let reply_dispatch_request: ExternalIntegrationReplyDispatchConfigRequest =
+            serde_json::from_value(json!({
+                "reason": "operator_configure_reply_dispatch",
+                "reply_dispatch_url": "https://third.example.com/v3/replies",
+                "reply_dispatch_bearer_token": "token",
+                "reply_dispatch_signing_secret": "secret"
+            }))
+            .expect("reply dispatch config request should deserialize");
+        assert_eq!(
+            reply_dispatch_request.reply_dispatch_url.as_deref(),
+            Some("https://third.example.com/v3/replies")
+        );
 
         let response = ExternalIntegrationControlResponse {
             accepted: true,

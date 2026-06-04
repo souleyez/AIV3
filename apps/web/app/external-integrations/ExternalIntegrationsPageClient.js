@@ -36,6 +36,8 @@ import {
   normalizeExternalConversationTest,
   normalizeIntegrationSummary,
   numberOrZero,
+  outboundReplyDispatchSignalLabel,
+  outboundReplyDispatchSummary,
   externalConversationStatusLabel,
   searchEvidenceSignalLabel,
   signalLabel,
@@ -205,6 +207,40 @@ function searchEvidenceMetrics(integration) {
   ];
 }
 
+function outboundReplyAuthModeLabel(mode) {
+  switch (String(mode || '').toLowerCase()) {
+    case 'signature_and_bearer':
+      return '签名 + Token';
+    case 'signature':
+      return '签名';
+    case 'bearer':
+      return 'Token';
+    default:
+      return '未配置';
+  }
+}
+
+function outboundReplyAuthSourceLabel(source) {
+  switch (String(source || '').toLowerCase()) {
+    case 'reply_specific':
+      return '回复专用';
+    case 'action_dispatch_fallback':
+      return '动作凭证兜底';
+    default:
+      return '无';
+  }
+}
+
+function outboundReplyDispatchMetrics(summary) {
+  return [
+    { label: '回推状态', value: outboundReplyDispatchSignalLabel(summary.signal) },
+    { label: '回推地址', value: summary.endpointConfigured ? '已配置' : '待第三方提供' },
+    { label: '地址主机', value: summary.endpointHost || '未配置' },
+    { label: '鉴权方式', value: outboundReplyAuthModeLabel(summary.authMode) },
+    { label: '凭证来源', value: outboundReplyAuthSourceLabel(summary.authSource) },
+  ];
+}
+
 function JsonPreview({ value }) {
   const text = useMemo(() => JSON.stringify(value || {}, null, 2), [value]);
   return <pre className="external-json-preview">{text}</pre>;
@@ -276,6 +312,12 @@ export default function ExternalIntegrationsPageClient() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [controlBusy, setControlBusy] = useState('');
+  const [replyDispatchBusy, setReplyDispatchBusy] = useState('');
+  const [replyDispatchForm, setReplyDispatchForm] = useState({
+    url: '',
+    bearerToken: '',
+    signingSecret: '',
+  });
   const [updatedAt, setUpdatedAt] = useState(null);
 
   async function loadIntegrations({ silent = false } = {}) {
@@ -585,12 +627,59 @@ export default function ExternalIntegrationsPageClient() {
     }
   }
 
+  async function saveReplyDispatchConfig({ clear = false } = {}) {
+    if (!selected || selected.kind !== 'channel' || replyDispatchBusy) {
+      return;
+    }
+    if (!clear && !replyDispatchForm.url.trim()) {
+      setError('请填写第三方接收助手消息的 HTTPS 地址');
+      return;
+    }
+    const busyKey = clear ? `reply_dispatch_clear:${selected.id}` : `reply_dispatch_save:${selected.id}`;
+    setReplyDispatchBusy(busyKey);
+    setError('');
+    setNotice('');
+    try {
+      const result = normalizeControlResult(await fetchJson(
+        `/api/v3/external/integrations/${encodeURIComponent(selected.id)}/reply-dispatch`,
+        {
+          method: 'POST',
+          body: clear
+            ? {
+              reason: 'web_external_integrations_clear_reply_dispatch',
+              clear_reply_dispatch: true,
+            }
+            : {
+              reason: 'web_external_integrations_configure_reply_dispatch',
+              reply_dispatch_url: replyDispatchForm.url,
+              reply_dispatch_bearer_token: replyDispatchForm.bearerToken || undefined,
+              reply_dispatch_signing_secret: replyDispatchForm.signingSecret || undefined,
+            },
+        },
+      ));
+      setNotice(controlResultLabel(result));
+      setReplyDispatchForm({ url: '', bearerToken: '', signingSecret: '' });
+      await loadIntegrations({ silent: true });
+      await loadAudit(selected.id, 'outbound_replies');
+      setAuditFilterKey('outbound_replies');
+    } catch (controlError) {
+      setError(controlError instanceof Error ? controlError.message : '助手消息回推配置保存失败');
+    } finally {
+      setReplyDispatchBusy('');
+    }
+  }
+
+  function updateReplyDispatchForm(field, value) {
+    setReplyDispatchForm((current) => ({ ...current, [field]: value }));
+  }
+
   function selectIntegration(integrationId) {
     setSelectedId(integrationId);
     setSelectedActionId('');
     setActionDetail(null);
     setAuditItems([]);
     setDatabaseStatusError('');
+    setReplyDispatchForm({ url: '', bearerToken: '', signingSecret: '' });
     setSelectedConversationEventId('');
     setConversationTimeline(null);
     setConversationTimelineDebugOpen(false);
@@ -727,6 +816,7 @@ export default function ExternalIntegrationsPageClient() {
   }, [selectedId, auditFilterKey, selectedActionId]);
 
   const selected = integrations.find((item) => item.id === selectedId) || integrations[0] || null;
+  const selectedOutboundReplyDispatch = outboundReplyDispatchSummary(selected || {});
   const selectedDatabaseSource = databaseSourceSummary(selected || {});
   const selectedDatabaseReadiness = databaseSourceReadiness(selected || {});
   const selectedDatabaseStatus = selected ? databaseStatusById[selected.id] || null : null;
@@ -1793,6 +1883,71 @@ export default function ExternalIntegrationsPageClient() {
                       </div>
                     ))}
                   </div>
+                  <div className="external-detail-strip external-outbound-reply-strip">
+                    {outboundReplyDispatchMetrics(selectedOutboundReplyDispatch).map((metric) => (
+                      <div key={metric.label}>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  <form
+                    className="external-reply-dispatch-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      saveReplyDispatchConfig();
+                    }}
+                  >
+                    <div className="external-reply-dispatch-form-head">
+                      <strong>助手消息回推</strong>
+                      <span>{outboundReplyDispatchSignalLabel(selectedOutboundReplyDispatch.signal)}</span>
+                    </div>
+                    <label>
+                      <span>接收地址</span>
+                      <input
+                        type="url"
+                        inputMode="url"
+                        value={replyDispatchForm.url}
+                        placeholder={selectedOutboundReplyDispatch.endpointHost ? `https://${selectedOutboundReplyDispatch.endpointHost}/...` : 'https://third.example.com/v3/replies'}
+                        onChange={(event) => updateReplyDispatchForm('url', event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>Bearer Token</span>
+                      <input
+                        type="password"
+                        value={replyDispatchForm.bearerToken}
+                        autoComplete="new-password"
+                        placeholder={selectedOutboundReplyDispatch.authConfigured ? '留空保持不变' : '可选'}
+                        onChange={(event) => updateReplyDispatchForm('bearerToken', event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>Signing Secret</span>
+                      <input
+                        type="password"
+                        value={replyDispatchForm.signingSecret}
+                        autoComplete="new-password"
+                        placeholder={selectedOutboundReplyDispatch.authConfigured ? '留空保持不变' : '可选'}
+                        onChange={(event) => updateReplyDispatchForm('signingSecret', event.target.value)}
+                      />
+                    </label>
+                    <div className="external-reply-dispatch-actions">
+                      <button
+                        type="submit"
+                        disabled={Boolean(replyDispatchBusy)}
+                      >
+                        {replyDispatchBusy === `reply_dispatch_save:${selected.id}` ? '保存中' : '保存配置'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={Boolean(replyDispatchBusy) || !selectedOutboundReplyDispatch.configured}
+                        onClick={() => saveReplyDispatchConfig({ clear: true })}
+                      >
+                        {replyDispatchBusy === `reply_dispatch_clear:${selected.id}` ? '清空中' : '清空'}
+                      </button>
+                    </div>
+                  </form>
                   <div className="external-detail-strip external-artifact-strip">
                     {artifactMetrics(selected).map((metric) => (
                       <div key={metric.label}>

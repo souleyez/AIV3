@@ -61,20 +61,21 @@ use contracts::{
     ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
     ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
     ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
-    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
-    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
-    HtmlArtifactDataRefView, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
-    HtmlArtifactOwnerScopeView, HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView,
-    HtmlArtifactTemplateIdView, InspectDatabaseSourceSchemaRequest,
-    InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
-    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
-    ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
-    ModelGatewayExternalChannelRuntimeStatusView, ModelGatewayLaneStatusView,
-    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
-    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
-    ModelGatewayProviderStatusView, ModelGatewayRuntimeDatabasePoolStatusView,
-    ModelGatewayRuntimeStatusView, ModelGatewayRuntimeWorkerPoolStatusView, ModelGatewayStatusView,
-    PlanReportRequest, PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
+    ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
+    ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactDataRefView,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
+    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
+    InspectDatabaseSourceSchemaRequest, InspectDatabaseSourceSchemaResponse, KeyLoginRequest,
+    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
+    ListExternalIntegrationsResponse, ListStaticPageTemplatesResponse, LlmInvocationView,
+    LogoutResponse, MemoryDirectoryView, ModelGatewayExternalChannelRuntimeStatusView,
+    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
+    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
+    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
+    ModelGatewayRuntimeDatabasePoolStatusView, ModelGatewayRuntimeStatusView,
+    ModelGatewayRuntimeWorkerPoolStatusView, ModelGatewayStatusView, PlanReportRequest,
+    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
     ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
     PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
@@ -1362,6 +1363,10 @@ pub fn router(
         .route(
             "/v1/external/integrations/{integration_id}/rotate-secret",
             axum::routing::post(rotate_external_integration_secret),
+        )
+        .route(
+            "/v1/external/integrations/{integration_id}/reply-dispatch",
+            axum::routing::post(configure_external_integration_reply_dispatch),
         )
         .route(
             "/v1/external/channels/{connection_id}/events",
@@ -13893,10 +13898,10 @@ fn external_integration_audit_filter(
         .filter(|value| !value.is_empty() && *value != "all")
         .map(|value| value.to_ascii_lowercase())
         .map(|value| match value.as_str() {
-            "message" | "action" | "sync" | "search_evidence" => Ok(value),
+            "message" | "action" | "sync" | "search_evidence" | "outbound_reply" => Ok(value),
             _ => Err(ApiError::bad_request_with_details(
                 "external_integration_audit_item_type_invalid",
-                "audit item_type must be one of message, action, search_evidence, sync, or all"
+                "audit item_type must be one of message, action, search_evidence, outbound_reply, sync, or all"
                     .to_string(),
                 json!({ "item_type": value }),
             )),
@@ -14161,6 +14166,81 @@ async fn rotate_external_integration_secret(
     }))
 }
 
+async fn configure_external_integration_reply_dispatch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(integration_id): Path<String>,
+    Json(request): Json<ExternalIntegrationReplyDispatchConfigRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    if !external_observability_access_allowed(&headers) {
+        return Err(ApiError::unauthorized(
+            "external_observability_access_required",
+            "external integration reply dispatch configuration requires an observability access key"
+                .to_string(),
+        ));
+    }
+
+    let row = sqlx::query(
+        r#"
+        select config_redacted
+        from external_channel_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&integration_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    let Some(row) = row else {
+        return Err(ApiError::not_found(
+            "external_channel_connection_not_found",
+            format!("external channel connection {integration_id} was not found"),
+        ));
+    };
+
+    let now = Utc::now();
+    let current_config = row.get::<Value, _>("config_redacted");
+    let prepared = apply_external_reply_dispatch_config(current_config, &request, now)?;
+    sqlx::query(
+        r#"
+        update external_channel_connections
+        set config_redacted = $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&integration_id)
+    .bind(prepared.config_redacted)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id,
+        integration_kind: "channel".to_string(),
+        action: "configure_reply_dispatch".to_string(),
+        status: if prepared.cleared {
+            "reply_dispatch_cleared".to_string()
+        } else {
+            "reply_dispatch_ready".to_string()
+        },
+        message: if prepared.cleared {
+            "assistant outbound reply dispatch configuration cleared".to_string()
+        } else {
+            "assistant outbound reply dispatch configuration saved".to_string()
+        },
+        affected_action_count: 0,
+        sync_run_id: None,
+        workflow_execution: None,
+        enqueued_tasks: Vec::new(),
+    }))
+}
+
 async fn external_channel_connection_exists(
     state: &AppState,
     integration_id: &str,
@@ -14225,6 +14305,174 @@ fn external_control_config_patch(action: &str, reason_present: bool, now: DateTi
             "secret_material_included": false,
         }
     })
+}
+
+#[derive(Debug)]
+struct PreparedExternalReplyDispatchConfig {
+    config_redacted: Value,
+    cleared: bool,
+}
+
+const EXTERNAL_REPLY_DISPATCH_URL_KEYS: &[&str] = &[
+    "external_reply_dispatch_url",
+    "externalReplyDispatchUrl",
+    "reply_dispatch_url",
+    "replyDispatchUrl",
+    "outbound_reply_url",
+    "outboundReplyUrl",
+    "assistant_reply_dispatch_url",
+    "assistantReplyDispatchUrl",
+];
+
+const EXTERNAL_REPLY_DISPATCH_BEARER_TOKEN_KEYS: &[&str] = &[
+    "external_reply_bearer_token",
+    "externalReplyBearerToken",
+    "reply_dispatch_bearer_token",
+    "replyDispatchBearerToken",
+    "outbound_reply_bearer_token",
+    "outboundReplyBearerToken",
+];
+
+const EXTERNAL_REPLY_DISPATCH_SIGNING_SECRET_KEYS: &[&str] = &[
+    "external_reply_signing_secret",
+    "externalReplySigningSecret",
+    "reply_dispatch_signing_secret",
+    "replyDispatchSigningSecret",
+    "outbound_reply_signing_secret",
+    "outboundReplySigningSecret",
+];
+
+fn apply_external_reply_dispatch_config(
+    mut config: Value,
+    request: &ExternalIntegrationReplyDispatchConfigRequest,
+    now: DateTime<Utc>,
+) -> std::result::Result<PreparedExternalReplyDispatchConfig, ApiError> {
+    ensure_json_object(&mut config);
+    let reason_present = external_control_reason_present(request.reason.as_deref());
+    if request.clear_reply_dispatch.unwrap_or(false) {
+        remove_payload_keys(&mut config, EXTERNAL_REPLY_DISPATCH_URL_KEYS);
+        remove_payload_keys(&mut config, EXTERNAL_REPLY_DISPATCH_BEARER_TOKEN_KEYS);
+        remove_payload_keys(&mut config, EXTERNAL_REPLY_DISPATCH_SIGNING_SECRET_KEYS);
+        set_payload_value(
+            &mut config,
+            "management_control",
+            json!({
+                "last_action": "clear_reply_dispatch",
+                "reason_present": reason_present,
+                "updated_at": now,
+                "secret_material_included": false,
+            }),
+        );
+        return Ok(PreparedExternalReplyDispatchConfig {
+            config_redacted: config,
+            cleared: true,
+        });
+    }
+
+    let Some(dispatch_url) = request
+        .reply_dispatch_url
+        .as_deref()
+        .and_then(non_empty_trimmed_string)
+    else {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_url_required",
+            "reply_dispatch_url is required unless clear_reply_dispatch is true".to_string(),
+        ));
+    };
+    validate_external_reply_dispatch_url(&dispatch_url)?;
+    let bearer_token = validate_external_reply_dispatch_secret(
+        "reply_dispatch_bearer_token",
+        request.reply_dispatch_bearer_token.as_deref(),
+    )?;
+    let signing_secret = validate_external_reply_dispatch_secret(
+        "reply_dispatch_signing_secret",
+        request.reply_dispatch_signing_secret.as_deref(),
+    )?;
+    let secret_material_included = bearer_token.is_some() || signing_secret.is_some();
+
+    remove_payload_keys(&mut config, EXTERNAL_REPLY_DISPATCH_URL_KEYS);
+    set_payload_value(&mut config, "reply_dispatch_url", json!(dispatch_url));
+    if let Some(token) = bearer_token {
+        remove_payload_keys(&mut config, EXTERNAL_REPLY_DISPATCH_BEARER_TOKEN_KEYS);
+        set_payload_value(&mut config, "reply_dispatch_bearer_token", json!(token));
+    }
+    if let Some(secret) = signing_secret {
+        remove_payload_keys(&mut config, EXTERNAL_REPLY_DISPATCH_SIGNING_SECRET_KEYS);
+        set_payload_value(&mut config, "reply_dispatch_signing_secret", json!(secret));
+    }
+
+    let auth = external_channel_outbound_reply_dispatch_auth_from_config(&config);
+    if !external_action_dispatch_auth_configured(&auth) {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_auth_required",
+            "reply_dispatch_bearer_token or reply_dispatch_signing_secret is required before outbound replies can be sent"
+                .to_string(),
+        ));
+    }
+
+    set_payload_value(
+        &mut config,
+        "management_control",
+        json!({
+            "last_action": "configure_reply_dispatch",
+            "reason_present": reason_present,
+            "updated_at": now,
+            "secret_material_included": secret_material_included,
+        }),
+    );
+    set_payload_value(&mut config, "reply_dispatch_updated_at", json!(now));
+
+    Ok(PreparedExternalReplyDispatchConfig {
+        config_redacted: config,
+        cleared: false,
+    })
+}
+
+fn validate_external_reply_dispatch_url(value: &str) -> std::result::Result<(), ApiError> {
+    if value.chars().count() > 2048 || value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_url_invalid",
+            "reply_dispatch_url must be a printable URL within 2048 characters".to_string(),
+        ));
+    }
+    let url = reqwest::Url::parse(value).map_err(|error| {
+        ApiError::bad_request(
+            "external_reply_dispatch_url_invalid",
+            format!("reply_dispatch_url must be a valid URL: {error}"),
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_url_invalid",
+            "reply_dispatch_url must use http or https and include a host".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_external_reply_dispatch_secret(
+    field: &str,
+    value: Option<&str>,
+) -> std::result::Result<Option<String>, ApiError> {
+    let Some(value) = value.and_then(non_empty_trimmed_string) else {
+        return Ok(None);
+    };
+    if value.chars().count() > 4096 || value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_reply_dispatch_secret_invalid",
+            format!("{field} must be printable text within 4096 characters"),
+        ));
+    }
+    Ok(Some(value))
+}
+
+fn remove_payload_keys(payload: &mut Value, keys: &[&str]) {
+    ensure_json_object(payload);
+    if let Some(object) = payload.as_object_mut() {
+        for key in keys {
+            object.remove(*key);
+        }
+    }
 }
 
 async fn disable_external_channel_connection(
@@ -14554,6 +14802,92 @@ async fn load_external_channel_audit_items(
         });
     }
 
+    let outbound_reply_rows = sqlx::query(
+        r#"
+        select run_id,
+               event_name,
+               payload,
+               created_at
+        from assistant_run_events
+        where tenant_id = $1
+          and event_name in (
+              'assistant_run.external_channel_outbound_reply_dispatch_blocked',
+              'assistant_run.external_channel_outbound_reply_dispatch_failed',
+              'assistant_run.external_channel_outbound_reply_dispatch_dispatched'
+          )
+          and payload ->> 'channel_connection_id' = $2
+        order by created_at desc
+        limit 25
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .fetch_all(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    for row in outbound_reply_rows {
+        let event_name = row.get::<String, _>("event_name");
+        let payload = row.get::<Value, _>("payload");
+        let dispatch = payload.get("dispatch").cloned().unwrap_or(Value::Null);
+        let status = dispatch
+            .get("status")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                if event_name.ends_with("_dispatched") {
+                    Some("dispatched")
+                } else if event_name.ends_with("_failed") {
+                    Some("dispatch_failed")
+                } else if event_name.ends_with("_blocked") {
+                    Some("dispatch_blocked")
+                } else {
+                    None
+                }
+            })
+            .map(str::to_string);
+        let failure_kind = dispatch
+            .get("reason")
+            .and_then(Value::as_str)
+            .or_else(|| dispatch.get("request_error_kind").and_then(Value::as_str))
+            .map(str::to_string);
+        items.push(ExternalIntegrationAuditItemView {
+            item_type: "outbound_reply".to_string(),
+            created_at: row.get("created_at"),
+            assistant_run_id: Some(AssistantRunId(row.get("run_id"))),
+            action_id: None,
+            status,
+            failure_kind,
+            summary: json!({
+                "source": event_name,
+                "source_event_name": payload
+                    .get("source_event_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "conversation_external_id": payload
+                    .get("conversation_external_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "reply_type": payload
+                    .get("reply_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "task_status": payload
+                    .get("task_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "artifact_links": payload
+                    .get("artifact_links")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+                "text_present": payload
+                    .get("text_present")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "dispatch": external_integration_redacted_summary(dispatch),
+            }),
+        });
+    }
+
     let action_rows = sqlx::query(
         r#"
         select id,
@@ -14675,7 +15009,39 @@ fn external_integration_config_summary(config: &Value) -> Value {
             ],
         )
         .is_some(),
+        "outbound_reply_dispatch": external_channel_outbound_reply_dispatch_summary(config),
         "database_source": external_database_source_config_summary(config),
+    })
+}
+
+fn external_channel_outbound_reply_dispatch_summary(config: &Value) -> Value {
+    let reply_auth = external_channel_reply_specific_dispatch_auth_from_config(config);
+    let action_auth = external_action_dispatch_auth_from_config(config);
+    let effective_auth = external_channel_outbound_reply_dispatch_auth_from_config(config);
+    let dispatch_url = external_channel_outbound_reply_dispatch_url_from_config(config);
+    let endpoint_configured = dispatch_url.is_some();
+    let endpoint_host = dispatch_url
+        .as_deref()
+        .and_then(|value| reqwest::Url::parse(value).ok())
+        .and_then(|url| url.host_str().map(str::to_string));
+    let reply_auth_configured = external_action_dispatch_auth_configured(&reply_auth);
+    let action_auth_fallback_available = external_action_dispatch_auth_configured(&action_auth);
+    let auth_configured = external_action_dispatch_auth_configured(&effective_auth);
+    let auth_source = if reply_auth_configured {
+        "reply_specific"
+    } else if action_auth_fallback_available {
+        "action_dispatch_fallback"
+    } else {
+        "none"
+    };
+    json!({
+        "endpoint_configured": endpoint_configured,
+        "endpoint_host": endpoint_host,
+        "auth_configured": auth_configured,
+        "auth_mode": external_action_dispatch_auth_mode(&effective_auth),
+        "auth_source": auth_source,
+        "action_auth_fallback_available": action_auth_fallback_available,
+        "ready": endpoint_configured && auth_configured,
     })
 }
 
@@ -19186,6 +19552,7 @@ async fn ingest_external_channel_message_with_connection_inner(
                 &assistant_request,
                 &message,
                 now,
+                None,
             )
             .await?
             {
@@ -20485,10 +20852,9 @@ fn external_action_dispatch_auth_from_config(config: &Value) -> ExternalActionDi
     }
 }
 
-fn external_channel_outbound_reply_dispatch_auth_from_config(
+fn external_channel_reply_specific_dispatch_auth_from_config(
     config: &Value,
 ) -> ExternalActionDispatchAuth {
-    let action_auth = external_action_dispatch_auth_from_config(config);
     ExternalActionDispatchAuth {
         bearer_token: external_config_string(
             config,
@@ -20500,8 +20866,7 @@ fn external_channel_outbound_reply_dispatch_auth_from_config(
                 "outbound_reply_bearer_token",
                 "outboundReplyBearerToken",
             ],
-        )
-        .or(action_auth.bearer_token),
+        ),
         signing_secret: external_config_string(
             config,
             &[
@@ -20512,8 +20877,18 @@ fn external_channel_outbound_reply_dispatch_auth_from_config(
                 "outbound_reply_signing_secret",
                 "outboundReplySigningSecret",
             ],
-        )
-        .or(action_auth.signing_secret),
+        ),
+    }
+}
+
+fn external_channel_outbound_reply_dispatch_auth_from_config(
+    config: &Value,
+) -> ExternalActionDispatchAuth {
+    let reply_auth = external_channel_reply_specific_dispatch_auth_from_config(config);
+    let action_auth = external_action_dispatch_auth_from_config(config);
+    ExternalActionDispatchAuth {
+        bearer_token: reply_auth.bearer_token.or(action_auth.bearer_token),
+        signing_secret: reply_auth.signing_secret.or(action_auth.signing_secret),
     }
 }
 
@@ -31987,22 +32362,43 @@ async fn maybe_enqueue_external_channel_data_ingestion_analysis(
     connection_id: &str,
     connection: &ExternalChannelConnectionSummary,
     run: &AssistantRun,
-    _assistant_request: &CreateAssistantRunRequest,
+    assistant_request: &CreateAssistantRunRequest,
     message: &ExternalBotMessageView,
     now: DateTime<Utc>,
+    force_tool_request: Option<&Value>,
 ) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
-    if !external_channel_message_requests_data_ingestion_analysis(&run.user_prompt) {
+    let forced_by_model_tool = force_tool_request.is_some();
+    if !forced_by_model_tool
+        && !external_channel_message_requests_data_ingestion_analysis(&run.user_prompt)
+    {
         return Ok(None);
     }
 
-    let fixed_task = external_channel_data_ingestion_fixed_task(
+    let prompt = if forced_by_model_tool {
+        assistant_request.prompt.as_str()
+    } else {
+        run.user_prompt.as_str()
+    };
+    let mut fixed_task = external_channel_data_ingestion_fixed_task(
         state.tenant_id,
         connection_id,
         connection,
         run,
         message,
-        &run.user_prompt,
+        prompt,
     );
+    if let Some(tool_request) = force_tool_request {
+        set_payload_value(
+            &mut fixed_task.requirements,
+            "model_tool_request",
+            tool_request.clone(),
+        );
+        set_payload_value(
+            &mut fixed_task.requirements,
+            "model_tool_request_source",
+            json!("external_channel_model_reply"),
+        );
+    }
     let capability = fixed_task.template_id.as_str();
     if !external_channel_data_ingestion_scope_has_source(&fixed_task.dataset_scope) {
         state
@@ -32018,6 +32414,8 @@ async fn maybe_enqueue_external_channel_data_ingestion_analysis(
                         "channel_connection_id": connection_id,
                         "platform": external_channel_platform_wire_value(&message.platform),
                         "message_external_id": message.message_external_id,
+                        "source": if forced_by_model_tool { "external_channel_model_reply" } else { "external_channel_message" },
+                        "model_tool_request": force_tool_request.cloned().unwrap_or(Value::Null),
                         "reason": "selected_source_scope_required",
                     }),
                     created_at: now,
@@ -32092,6 +32490,8 @@ async fn maybe_enqueue_external_channel_data_ingestion_analysis(
                     "platform": external_channel_platform_wire_value(&message.platform),
                     "message_external_id": message.message_external_id,
                     "codex_host_workflow_execution_id": execution_id.to_string(),
+                    "source": if forced_by_model_tool { "external_channel_model_reply" } else { "external_channel_message" },
+                    "model_tool_request": force_tool_request.cloned().unwrap_or(Value::Null),
                 }),
                 created_at: now,
             },
@@ -35766,7 +36166,75 @@ fn external_channel_prompt_requires_document_scope(prompt: &str) -> bool {
         .any(|marker| compact.contains(marker))
 }
 
-fn external_channel_model_static_page_tool_request(output_text: &str) -> Option<Value> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExternalChannelModelToolCapability {
+    StaticPageArtifact,
+    DataIngestionAnalysis,
+    DocumentProcessing,
+    CollectionSetupAnalysis,
+    IntegrationSetupAnalysis,
+    MessageChannelOutreach,
+}
+
+impl ExternalChannelModelToolCapability {
+    fn from_wire(tool: &str) -> Option<Self> {
+        let normalized = tool
+            .trim()
+            .to_ascii_lowercase()
+            .chars()
+            .map(|ch| match ch {
+                '-' | ' ' => '_',
+                other => other,
+            })
+            .collect::<String>();
+        match normalized.as_str() {
+            "static_page_artifact" | "static_page" | "report_artifact" | "dashboard_artifact" => {
+                Some(Self::StaticPageArtifact)
+            }
+            "data_ingestion_analysis"
+            | "data_ingestion"
+            | "database_ingestion_analysis"
+            | "staging_plan" => Some(Self::DataIngestionAnalysis),
+            "document_processing"
+            | "document_parse"
+            | "deep_parse"
+            | "reparse_document"
+            | "upgrade_parse" => Some(Self::DocumentProcessing),
+            "collection_setup_analysis" | "collection_setup" | "collection_analysis" => {
+                Some(Self::CollectionSetupAnalysis)
+            }
+            "integration_setup_analysis" | "integration_setup" | "integration_analysis" => {
+                Some(Self::IntegrationSetupAnalysis)
+            }
+            "message_channel_outreach"
+            | "message_outreach"
+            | "proactive_message"
+            | "start_conversation" => Some(Self::MessageChannelOutreach),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::StaticPageArtifact => "static_page_artifact",
+            Self::DataIngestionAnalysis => "data_ingestion_analysis",
+            Self::DocumentProcessing => "document_processing",
+            Self::CollectionSetupAnalysis => "collection_setup_analysis",
+            Self::IntegrationSetupAnalysis => "integration_setup_analysis",
+            Self::MessageChannelOutreach => "message_channel_outreach",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ExternalChannelModelToolRequest {
+    tool: ExternalChannelModelToolCapability,
+    payload: Value,
+}
+
+fn external_channel_model_tool_request(
+    output_text: &str,
+) -> Option<ExternalChannelModelToolRequest> {
     const START: &str = "<V3_TOOL_REQUEST>";
     const END: &str = "</V3_TOOL_REQUEST>";
     let start = output_text.find(START)? + START.len();
@@ -35780,16 +36248,1384 @@ fn external_channel_model_static_page_tool_request(output_text: &str) -> Option<
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    matches!(
+    let tool = ExternalChannelModelToolCapability::from_wire(tool)?;
+    Some(ExternalChannelModelToolRequest {
         tool,
-        "static_page_artifact"
-            | "static-page-artifact"
-            | "static_page"
-            | "static-page"
-            | "report_artifact"
-            | "dashboard_artifact"
+        payload: value,
+    })
+}
+
+fn external_channel_model_tool_capability_guidance_lines() -> Vec<String> {
+    vec![
+        "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
+        "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/表/文件接入需求并生成待确认 staging plan；`document_processing`=文档入库、深解析、重解析、VLM 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
+        "当你判断用户不是普通咨询，而是在要求 V3/DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。".to_string(),
+        "普通咨询、口径解释、数据问答、已可直接回答的问题仍正常自然语言回答；不要在客户答案中暴露 ReAct、retrieve_evidence、read_document_detail、upgrade_parse_vlm、codex_host_task、原始 connector/API 调用或内部质量门禁名称。".to_string(),
+    ]
+}
+
+fn external_channel_model_tool_request_pending_reply(
+    message: &ExternalBotMessageView,
+    tool_request: &ExternalChannelModelToolRequest,
+    task_status: &str,
+) -> ExternalBotReplyView {
+    external_channel_task_status_reply_for_conversation(
+        &message.conversation_external_id,
+        task_status,
+        Some("已识别为需要平台能力执行的请求，已记录并进入受控处理。".to_string()),
+        Some(json!({
+            "type": "v3_model_tool_request",
+            "tool": tool_request.tool.as_str(),
+            "status": task_status,
+            "host_controlled": true,
+            "requires_permission_check": true,
+        })),
+        Vec::new(),
     )
-    .then_some(value)
+}
+
+fn apply_external_channel_model_tool_request_to_selected_scope(
+    selected_scope: &mut Value,
+    tool_request: &ExternalChannelModelToolRequest,
+) {
+    set_payload_value(
+        selected_scope,
+        "model_tool_request",
+        tool_request.payload.clone(),
+    );
+    set_payload_value(
+        selected_scope,
+        "model_tool_request_source",
+        json!("external_channel_model_reply"),
+    );
+    set_payload_value(
+        selected_scope,
+        "model_tool_capability",
+        json!(tool_request.tool.as_str()),
+    );
+}
+
+const EXTERNAL_CHANNEL_DOCUMENT_PROCESSING_DOCUMENT_LIMIT: usize = 10;
+
+fn external_channel_document_processing_intent(
+    tool_request: &ExternalChannelModelToolRequest,
+) -> String {
+    tool_request
+        .payload
+        .get("intent")
+        .or_else(|| tool_request.payload.get("action"))
+        .or_else(|| tool_request.payload.get("operation"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("status")
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_")
+}
+
+fn external_channel_document_processing_intent_requests_reparse(intent: &str) -> bool {
+    matches!(
+        intent,
+        "reparse_request"
+            | "reparse"
+            | "deep_parse"
+            | "upgrade_parse"
+            | "vlm_reparse"
+            | "ocr_reparse"
+    )
+}
+
+fn external_channel_document_processing_reparse_enabled() -> bool {
+    platform_env_flag(
+        "EXTERNAL_CHANNEL_DOCUMENT_PROCESSING_REPARSE_ENABLED",
+        false,
+    )
+}
+
+fn external_channel_upload_ingest_workflow_snapshot_is_active(snapshot: &Value) -> bool {
+    snapshot
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "pending" | "running"))
+}
+
+fn external_channel_document_processing_reparse_candidate(status: &str) -> bool {
+    matches!(status, "failed" | "parse_degraded")
+}
+
+async fn external_channel_document_processing_visible_documents(
+    state: &AppState,
+    run: &AssistantRun,
+) -> std::result::Result<Vec<Document>, ApiError> {
+    let selected_document_ids = selected_document_ids_from_scope(&run.selected_scope);
+    let selected_dataset_ids = selected_dataset_ids_from_scope(&run.selected_scope);
+    let mut documents = Vec::new();
+
+    for document_id in selected_document_ids {
+        if documents.len() >= EXTERNAL_CHANNEL_DOCUMENT_PROCESSING_DOCUMENT_LIMIT {
+            break;
+        }
+        if let Some(document) = state
+            .storage
+            .documents()
+            .get_by_id(state.tenant_id, document_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        {
+            if !documents
+                .iter()
+                .any(|existing: &Document| existing.id == document.id)
+            {
+                documents.push(document);
+            }
+        }
+    }
+
+    if documents.len() < EXTERNAL_CHANNEL_DOCUMENT_PROCESSING_DOCUMENT_LIMIT {
+        for dataset_id in selected_dataset_ids {
+            let dataset_documents = list_documents_for_dataset_scope(state, dataset_id).await?;
+            for document in dataset_documents {
+                if documents.len() >= EXTERNAL_CHANNEL_DOCUMENT_PROCESSING_DOCUMENT_LIMIT {
+                    break;
+                }
+                if !documents.iter().any(|existing| existing.id == document.id) {
+                    documents.push(document);
+                }
+            }
+        }
+    }
+
+    Ok(documents)
+}
+
+async fn external_channel_document_processing_status_items(
+    state: &AppState,
+    documents: &[Document],
+) -> std::result::Result<Vec<Value>, ApiError> {
+    let mut document_ids_by_dataset = BTreeMap::<DatasetId, Vec<DocumentId>>::new();
+    for document in documents {
+        document_ids_by_dataset
+            .entry(document.dataset_id)
+            .or_default()
+            .push(document.id);
+    }
+    let mut workflow_by_document = HashMap::<DocumentId, Value>::new();
+    for (dataset_id, document_ids) in document_ids_by_dataset {
+        workflow_by_document.extend(
+            load_latest_upload_ingest_workflow_snapshots(state, dataset_id, &document_ids).await?,
+        );
+    }
+
+    let mut items = Vec::new();
+    for document in documents {
+        let chunks = state
+            .storage
+            .document_chunks()
+            .list_by_document(state.tenant_id, document.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let workflow = workflow_by_document.get(&document.id);
+        let parse_state = build_document_parse_status_view(document, &chunks, 0, workflow);
+        let mut item = json!({
+            "document_id": document.id,
+            "dataset_id": document.dataset_id,
+            "title": html_artifact_safe_summary_text(&document.title, 160),
+            "content_type": document.content_type,
+            "lifecycle": document.lifecycle.as_str(),
+            "parse_state": parse_state,
+            "reparse_active": workflow
+                .map(external_channel_upload_ingest_workflow_snapshot_is_active)
+                .unwrap_or(false),
+        });
+        if let Some(external_ref) = assistant_run_document_external_ref(document) {
+            set_payload_value(&mut item, "external_document", external_ref);
+        }
+        if let Some(workflow) = workflow {
+            set_payload_value(&mut item, "workflow", workflow.clone());
+        }
+        items.push(item);
+    }
+    Ok(items)
+}
+
+fn external_channel_document_processing_status_counts(items: &[Value]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for item in items {
+        let status = item
+            .pointer("/parse_state/model_status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        *counts.entry(status).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn external_channel_document_processing_reply(
+    message: &ExternalBotMessageView,
+    task_status: &str,
+    text: Option<String>,
+    card: Value,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: message.conversation_external_id.clone(),
+        reply_type: ExternalBotReplyTypeView::TaskStatus,
+        text,
+        card: Some(card),
+        artifact_links: Vec::new(),
+        task_status: Some(task_status.to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+async fn external_channel_document_processing_reply_from_tool_request(
+    state: &AppState,
+    connection_id: &str,
+    run: &AssistantRun,
+    message: &ExternalBotMessageView,
+    tool_request: &ExternalChannelModelToolRequest,
+    now: DateTime<Utc>,
+) -> std::result::Result<ExternalBotReplyView, ApiError> {
+    let intent = external_channel_document_processing_intent(tool_request);
+    let documents = external_channel_document_processing_visible_documents(state, run).await?;
+    if documents.is_empty() {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name:
+                        "assistant_run.external_channel_document_processing_status_returned"
+                            .to_string(),
+                    payload: json!({
+                        "channel_connection_id": connection_id,
+                        "platform": external_channel_platform_wire_value(&message.platform),
+                        "message_external_id": message.message_external_id,
+                        "tool": tool_request.tool.as_str(),
+                        "intent": intent,
+                        "status": "document_processing_source_required",
+                        "visible_document_count": 0,
+                        "model_tool_request": tool_request.payload.clone(),
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        return Ok(external_channel_document_processing_reply(
+            message,
+            "document_processing_source_required",
+            Some("需要先选择或上传要处理/重解析的文档。".to_string()),
+            json!({
+                "type": "v3_document_processing",
+                "status": "document_processing_source_required",
+                "source_required": true,
+                "intent": intent,
+            }),
+        ));
+    }
+
+    let items = external_channel_document_processing_status_items(state, &documents).await?;
+    let status_counts = external_channel_document_processing_status_counts(&items);
+    let reparse_requested = external_channel_document_processing_intent_requests_reparse(&intent);
+
+    if reparse_requested {
+        if let Some(active_item) = items
+            .iter()
+            .find(|item| item.get("reparse_active").and_then(Value::as_bool) == Some(true))
+        {
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name:
+                            "assistant_run.external_channel_document_reparse_review_required"
+                                .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id,
+                            "tool": tool_request.tool.as_str(),
+                            "intent": intent,
+                            "reason": "reparse_already_active",
+                            "document": active_item,
+                            "model_tool_request": tool_request.payload.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            return Ok(external_channel_document_processing_reply(
+                message,
+                "document_processing_reparse_active",
+                Some("已检测到相关文档正在解析或重解析，本轮不重复发起。".to_string()),
+                json!({
+                    "type": "v3_document_processing",
+                    "status": "document_processing_reparse_active",
+                    "intent": intent,
+                    "documents": items,
+                    "status_counts": status_counts,
+                }),
+            ));
+        }
+
+        let candidate = items.iter().find(|item| {
+            item.pointer("/parse_state/model_status")
+                .and_then(Value::as_str)
+                .is_some_and(external_channel_document_processing_reparse_candidate)
+        });
+        if let Some(candidate) = candidate {
+            if !external_channel_document_processing_reparse_enabled() {
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        run.id,
+                        &NewAssistantRunEvent {
+                            event_name:
+                                "assistant_run.external_channel_document_reparse_review_required"
+                                    .to_string(),
+                            payload: json!({
+                                "channel_connection_id": connection_id,
+                                "platform": external_channel_platform_wire_value(&message.platform),
+                                "message_external_id": message.message_external_id,
+                                "tool": tool_request.tool.as_str(),
+                                "intent": intent,
+                                "reason": "external_channel_document_reparse_disabled",
+                                "document": candidate,
+                                "model_tool_request": tool_request.payload.clone(),
+                            }),
+                            created_at: now,
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                return Ok(external_channel_document_processing_reply(
+                    message,
+                    "document_processing_review_required",
+                    Some("已识别到文档可能需要重解析，当前按受控策略进入人工/配置确认，不会直接发起高成本解析。".to_string()),
+                    json!({
+                        "type": "v3_document_processing",
+                        "status": "document_processing_review_required",
+                        "intent": intent,
+                        "review_required": true,
+                        "review_reason": "external_channel_document_reparse_disabled",
+                        "documents": items,
+                        "status_counts": status_counts,
+                    }),
+                ));
+            }
+
+            let Some(document_id) = candidate
+                .get("document_id")
+                .and_then(Value::as_str)
+                .and_then(|raw| Uuid::parse_str(raw).ok())
+                .map(DocumentId)
+            else {
+                return Ok(external_channel_document_processing_reply(
+                    message,
+                    "document_processing_review_required",
+                    Some("已识别到文档处理请求，但未能安全定位到可重解析文档。".to_string()),
+                    json!({
+                        "type": "v3_document_processing",
+                        "status": "document_processing_review_required",
+                        "intent": intent,
+                        "review_required": true,
+                        "review_reason": "document_id_missing",
+                        "documents": items,
+                        "status_counts": status_counts,
+                    }),
+                ));
+            };
+            let Some(document) = documents.iter().find(|document| document.id == document_id)
+            else {
+                return Ok(external_channel_document_processing_reply(
+                    message,
+                    "document_processing_review_required",
+                    Some("已识别到文档处理请求，但当前文档范围不可重解析。".to_string()),
+                    json!({
+                        "type": "v3_document_processing",
+                        "status": "document_processing_review_required",
+                        "intent": intent,
+                        "review_required": true,
+                        "review_reason": "document_not_visible",
+                        "documents": items,
+                        "status_counts": status_counts,
+                    }),
+                ));
+            };
+
+            let execution = build_initial_upload_ingest_execution(state, document)?;
+            let initial_event = build_initial_upload_ingest_event(&execution, document);
+            state
+                .storage
+                .workflow_executions()
+                .create_with_initial_event(&execution, &initial_event)
+                .await
+                .map_err(ApiError::from_storage)?;
+            let started = apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_document_reparse_queued"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id,
+                            "tool": tool_request.tool.as_str(),
+                            "intent": intent,
+                            "document_id": document.id,
+                            "dataset_id": document.dataset_id,
+                            "workflow_execution_id": started.execution.id,
+                            "workflow_status": started.execution.status.as_str(),
+                            "model_tool_request": tool_request.payload.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            return Ok(external_channel_document_processing_reply(
+                message,
+                "document_processing_reparse_queued",
+                Some("已按受控策略为可见文档发起重解析任务。".to_string()),
+                json!({
+                    "type": "v3_document_processing",
+                    "status": "document_processing_reparse_queued",
+                    "intent": intent,
+                    "document_id": document.id,
+                    "dataset_id": document.dataset_id,
+                    "workflow_execution_id": started.execution.id,
+                    "workflow_status": started.execution.status.as_str(),
+                    "documents": items,
+                    "status_counts": status_counts,
+                }),
+            ));
+        }
+    }
+
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_document_processing_status_returned"
+                    .to_string(),
+                payload: json!({
+                    "channel_connection_id": connection_id,
+                    "platform": external_channel_platform_wire_value(&message.platform),
+                    "message_external_id": message.message_external_id,
+                    "tool": tool_request.tool.as_str(),
+                    "intent": intent,
+                    "status": "document_processing_status",
+                    "visible_document_count": items.len(),
+                    "status_counts": status_counts,
+                    "model_tool_request": tool_request.payload.clone(),
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(external_channel_document_processing_reply(
+        message,
+        "document_processing_status",
+        Some("已返回当前可见文档的解析处理状态。".to_string()),
+        json!({
+            "type": "v3_document_processing",
+            "status": "document_processing_status",
+            "intent": intent,
+            "documents": items,
+            "status_counts": status_counts,
+            "reparse_requested": reparse_requested,
+        }),
+    ))
+}
+
+fn external_channel_capability_text_from_payload(payload: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .filter_map(|key| payload.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(|value| html_artifact_safe_summary_text(value, 240))
+        .unwrap_or_default()
+}
+
+fn external_channel_capability_payload_search_text(payload: &Value) -> String {
+    let mut parts = Vec::new();
+    for key in [
+        "intent",
+        "reason",
+        "goal",
+        "description",
+        "target",
+        "source",
+        "system",
+    ] {
+        if let Some(value) = payload.get(key).and_then(Value::as_str) {
+            parts.push(value.to_string());
+        }
+    }
+    serde_json::to_string(payload)
+        .ok()
+        .into_iter()
+        .for_each(|value| parts.push(value));
+    parts.join(" ").to_ascii_lowercase()
+}
+
+fn external_channel_capability_risk_profile(
+    capability: ExternalChannelModelToolCapability,
+    payload: &Value,
+) -> (&'static str, bool, &'static str, Vec<&'static str>) {
+    let text = external_channel_capability_payload_search_text(payload);
+    let has_any = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
+
+    if has_any(&[
+        "permission",
+        "权限",
+        "publish",
+        "external publish",
+        "发布",
+        "投递",
+        "revoke",
+        "下线",
+        "撤回",
+        "跨租户",
+    ]) {
+        return (
+            "critical",
+            true,
+            "permission_or_external_publish_requires_human",
+            vec![
+                "确认目标范围和接收方权限",
+                "确认不会扩大第三方可见资料范围",
+                "由宿主记录审计后再执行",
+            ],
+        );
+    }
+    if has_any(&[
+        "login",
+        "cookie",
+        "credential",
+        "secret",
+        "token",
+        "password",
+        "apikey",
+        "api key",
+        "登录",
+        "cookie",
+        "凭证",
+        "密钥",
+        "密码",
+        "鉴权",
+    ]) {
+        return (
+            "high",
+            true,
+            "credential_or_login_requires_human",
+            vec![
+                "通过受控密钥/连接配置处理凭证",
+                "不得在对话中索要或展示明文凭证",
+                "确认后只使用已授权连接",
+            ],
+        );
+    }
+    if has_any(&[
+        "api",
+        "auth",
+        "request field",
+        "response field",
+        "url",
+        "接口",
+        "字段",
+        "请求字段",
+        "响应字段",
+        "改接口",
+        "改鉴权",
+        "改url",
+    ]) {
+        return (
+            "high",
+            true,
+            "public_api_or_auth_change_requires_human",
+            vec![
+                "确认不修改第三方公开接口契约",
+                "仅输出对接分析和变更建议",
+                "涉及字段/鉴权/URL 变更必须人工确认",
+            ],
+        );
+    }
+    if has_any(&[
+        "crawler",
+        "crawl",
+        "spider",
+        "scrape",
+        "source setup",
+        "new source",
+        "connect",
+        "integration",
+        "接入",
+        "采集",
+        "爬虫",
+        "新建",
+        "新增",
+        "配置",
+        "同步",
+        "对接",
+    ]) {
+        return (
+            "medium",
+            true,
+            "new_source_or_external_setup_requires_confirmation",
+            match capability {
+                ExternalChannelModelToolCapability::CollectionSetupAnalysis => vec![
+                    "确认采集来源、频率和权限边界",
+                    "生成只读采集方案，不直接启动爬取",
+                    "确认后再创建采集任务或数据集配置",
+                ],
+                _ => vec![
+                    "确认目标系统、授权方式和回调边界",
+                    "生成只读对接方案，不直接改接口",
+                    "确认后再创建连接或派发对接任务",
+                ],
+            },
+        );
+    }
+    if has_any(&[
+        "status",
+        "check",
+        "read only",
+        "readonly",
+        "状态",
+        "检查",
+        "只读",
+        "查询",
+    ]) {
+        return (
+            "low",
+            false,
+            "read_only_status_or_planning",
+            vec![
+                "仅做只读状态/方案分析",
+                "不创建外部连接或任务",
+                "需要执行时再请求确认",
+            ],
+        );
+    }
+
+    (
+        "medium",
+        true,
+        "capability_execution_requires_confirmation",
+        vec![
+            "先输出方案和影响范围",
+            "确认权限、数据范围和风险后再执行",
+            "本轮不直接创建外部动作",
+        ],
+    )
+}
+
+fn external_channel_capability_confirmation_reply(
+    message: &ExternalBotMessageView,
+    capability: ExternalChannelModelToolCapability,
+    payload: &Value,
+) -> ExternalBotReplyView {
+    let intent = external_channel_capability_text_from_payload(payload, &["intent", "action"]);
+    let reason = external_channel_capability_text_from_payload(payload, &["reason", "goal"]);
+    let (risk_level, requires_confirmation, review_reason, next_actions) =
+        external_channel_capability_risk_profile(capability, payload);
+    let card_type = match capability {
+        ExternalChannelModelToolCapability::CollectionSetupAnalysis => {
+            "v3_collection_setup_analysis"
+        }
+        ExternalChannelModelToolCapability::IntegrationSetupAnalysis => {
+            "v3_integration_setup_analysis"
+        }
+        _ => "v3_model_capability_analysis",
+    };
+    let target_system = match capability {
+        ExternalChannelModelToolCapability::CollectionSetupAnalysis => "collection_setup",
+        ExternalChannelModelToolCapability::IntegrationSetupAnalysis => "integration_setup",
+        _ => "v3_platform",
+    };
+    let action_id = format!(
+        "model-capability-{}",
+        &sha256_hex([
+            message.idempotency_key.as_bytes(),
+            b":",
+            capability.as_str().as_bytes(),
+            b":",
+            intent.as_bytes(),
+        ])[..16]
+    );
+    let card = json!({
+        "type": card_type,
+        "requested_capability": capability.as_str(),
+        "intent": intent,
+        "reason": reason,
+        "risk_level": risk_level,
+        "review_reason": review_reason,
+        "requires_confirmation": requires_confirmation,
+        "confirmation_state": if requires_confirmation { "pending" } else { "not_required" },
+        "target_system": target_system,
+        "next_actions": next_actions,
+        "forbidden_actions": [
+            "do_not_execute_crawling_or_external_login",
+            "do_not_request_or_emit_credentials",
+            "do_not_change_public_api_url_auth_or_fields",
+            "do_not_expand_document_or_dataset_permissions"
+        ],
+        "host_controlled": true,
+    });
+
+    if requires_confirmation {
+        ExternalBotReplyView {
+            target_conversation_external_id: message.conversation_external_id.clone(),
+            reply_type: ExternalBotReplyTypeView::RequiresConfirmation,
+            text: Some("已识别为需要平台受控处理的采集/对接能力请求；涉及新增配置、外部系统或权限边界，执行前需要确认，本轮不会直接执行。".to_string()),
+            card: Some(card),
+            artifact_links: Vec::new(),
+            task_status: Some("needs_confirmation".to_string()),
+            requires_confirmation: true,
+            action_id: Some(action_id.clone()),
+            confirmation_id: Some(action_id),
+        }
+    } else {
+        ExternalBotReplyView {
+            target_conversation_external_id: message.conversation_external_id.clone(),
+            reply_type: ExternalBotReplyTypeView::TaskStatus,
+            text: Some(
+                "已识别为只读方案/状态分析请求，已按受控能力记录；本轮不会直接创建外部连接或任务。"
+                    .to_string(),
+            ),
+            card: Some(card),
+            artifact_links: Vec::new(),
+            task_status: Some("capability_analysis_recorded".to_string()),
+            requires_confirmation: false,
+            action_id: Some(action_id),
+            confirmation_id: None,
+        }
+    }
+}
+
+fn external_channel_message_outreach_payload_recipients(payload: &Value) -> Vec<String> {
+    let mut recipients = Vec::new();
+    for key in [
+        "recipient_external_id",
+        "recipient_external_ids",
+        "target_external_user_id",
+        "target_external_user_ids",
+        "mention_external_user_ids",
+        "mentionExternalUserIds",
+    ] {
+        let Some(value) = payload.get(key) else {
+            continue;
+        };
+        for recipient in external_string_ids_from_payload_value(value.clone()) {
+            if !recipients.contains(&recipient) {
+                recipients.push(recipient);
+            }
+        }
+    }
+    recipients
+}
+
+fn external_channel_message_outreach_payload_string(payload: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .filter_map(|key| payload.get(*key))
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn external_channel_message_outreach_payload_target_conversation(
+    payload: &Value,
+) -> Option<String> {
+    let value = external_channel_message_outreach_payload_string(
+        payload,
+        &[
+            "conversation_external_id",
+            "target_conversation_external_id",
+            "targetConversationExternalId",
+        ],
+    );
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn external_channel_message_outreach_risk_profile(
+    message: &ExternalBotMessageView,
+    payload: &Value,
+) -> (&'static str, &'static str, &'static str, Vec<&'static str>) {
+    let search_text = external_channel_capability_payload_search_text(payload);
+    let compact = search_text.to_ascii_lowercase();
+    let target_conversation =
+        external_channel_message_outreach_payload_target_conversation(payload);
+    let target_channel = external_channel_message_outreach_payload_string(
+        payload,
+        &[
+            "target_channel",
+            "target_channel_id",
+            "channel_connection_id",
+            "platform",
+        ],
+    );
+    let payload_recipients = external_channel_message_outreach_payload_recipients(payload);
+    let has_new_recipient =
+        !payload_recipients.is_empty() || !message.mention_external_user_ids.is_empty();
+    let cross_conversation = target_conversation
+        .as_deref()
+        .map(|target| target != message.conversation_external_id)
+        .unwrap_or(false);
+    let cross_channel = !target_channel.is_empty()
+        && target_channel != external_channel_platform_wire_value(&message.platform);
+    let has_sensitive_content = [
+        "sensitive",
+        "confidential",
+        "private",
+        "document",
+        "report",
+        "artifact",
+        "permission",
+        "敏感",
+        "机密",
+        "私密",
+        "文档",
+        "资料",
+        "报表",
+        "报告",
+        "链接",
+        "名单",
+        "权限",
+    ]
+    .iter()
+    .any(|marker| compact.contains(marker));
+
+    if has_sensitive_content {
+        return (
+            "high",
+            "sensitive_content_requires_permission_review",
+            "message_outreach_confirmation_required",
+            vec![
+                "确认接收方是否有查看资料/报表权限",
+                "只发送受控摘要或链接，不发送原始资料内容",
+                "确认后由宿主消息通道派发",
+            ],
+        );
+    }
+    if cross_channel {
+        return (
+            "medium",
+            "cross_channel_delivery_requires_confirmation",
+            "message_outreach_confirmation_required",
+            vec![
+                "确认目标消息渠道和接收方范围",
+                "检查通道是否已配置可用外发能力",
+                "确认后由宿主消息通道派发",
+            ],
+        );
+    }
+    if cross_conversation || has_new_recipient {
+        return (
+            "medium",
+            "new_recipient_or_conversation_requires_confirmation",
+            "message_outreach_confirmation_required",
+            vec![
+                "确认目标会话或接收方",
+                "检查接收方与当前资料范围的权限关系",
+                "确认后由宿主消息通道派发",
+            ],
+        );
+    }
+    (
+        "low",
+        "outbound_channel_policy_not_configured",
+        "message_outreach_confirmation_required",
+        vec![
+            "仅记录同会话运营通知意图",
+            "不直接发送模型原文",
+            "待通道外发策略确认后再派发",
+        ],
+    )
+}
+
+fn external_channel_message_outreach_reply_from_tool_request(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    tool_request: &ExternalChannelModelToolRequest,
+    now: DateTime<Utc>,
+) -> ExternalBotReplyView {
+    let intent = external_channel_message_outreach_payload_string(
+        &tool_request.payload,
+        &["intent", "action", "operation"],
+    );
+    let reason = external_channel_message_outreach_payload_string(
+        &tool_request.payload,
+        &["reason", "goal", "description"],
+    );
+    let target_conversation =
+        external_channel_message_outreach_payload_target_conversation(&tool_request.payload)
+            .unwrap_or_else(|| message.conversation_external_id.clone());
+    let payload_recipients =
+        external_channel_message_outreach_payload_recipients(&tool_request.payload);
+    let recipient_count = payload_recipients
+        .len()
+        .max(message.mention_external_user_ids.len())
+        .max(1);
+    let (risk_level, review_reason, status, next_actions) =
+        external_channel_message_outreach_risk_profile(message, &tool_request.payload);
+    let idempotency_key = format!(
+        "message-outreach:{}",
+        &sha256_hex([
+            message.idempotency_key.as_bytes(),
+            b":",
+            intent.as_bytes(),
+            b":",
+            target_conversation.as_bytes(),
+        ])[..16]
+    );
+    let card = json!({
+        "type": "v3_message_channel_outreach",
+        "status": status,
+        "requested_capability": tool_request.tool.as_str(),
+        "intent": intent,
+        "reason_summary": truncate_assistant_supply_text(&reason, 180),
+        "risk_level": risk_level,
+        "review_reason": review_reason,
+        "target_summary": {
+            "channel_connection_id": connection_id,
+            "platform": external_channel_platform_wire_value(&message.platform),
+            "conversation_external_id": target_conversation.clone(),
+            "same_conversation": target_conversation == message.conversation_external_id,
+            "recipient_count": recipient_count,
+            "mention_count": message.mention_external_user_ids.len(),
+        },
+        "idempotency_key": idempotency_key.clone(),
+        "requested_at": now,
+        "requires_confirmation": true,
+        "confirmation_state": "pending",
+        "host_controlled": true,
+        "next_actions": next_actions,
+        "forbidden_actions": [
+            "do_not_send_raw_model_text",
+            "do_not_send_to_new_recipient_without_confirmation",
+            "do_not_cross_channel_deliver_without_confirmation",
+            "do_not_expand_document_or_dataset_permissions",
+            "do_not_include_raw_credentials_or_private_documents"
+        ],
+    });
+
+    ExternalBotReplyView {
+        target_conversation_external_id: message.conversation_external_id.clone(),
+        reply_type: ExternalBotReplyTypeView::RequiresConfirmation,
+        text: Some("已识别为需要通过消息渠道主动通知/发起对话的请求；V3 已生成受控外发意图，当前不会直接发送，需确认渠道、接收方和权限后再执行。".to_string()),
+        card: Some(card),
+        artifact_links: Vec::new(),
+        task_status: Some(status.to_string()),
+        requires_confirmation: true,
+        action_id: Some(idempotency_key.clone()),
+        confirmation_id: Some(idempotency_key),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn external_channel_dispatch_model_tool_request(
+    state: &AppState,
+    connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
+    run_id: AssistantRunId,
+    assistant_request: &CreateAssistantRunRequest,
+    message: &ExternalBotMessageView,
+    now: DateTime<Utc>,
+    attempt_label: &str,
+    runtime_manifest: &Value,
+    tool_request: ExternalChannelModelToolRequest,
+) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
+    match tool_request.tool {
+        ExternalChannelModelToolCapability::StaticPageArtifact => {
+            let mut tool_message = message.clone();
+            tool_message.artifact_type = Some("static_page".to_string());
+            tool_message.render_mode = Some("artifact".to_string());
+            if tool_message.output_format.is_none() {
+                tool_message.output_format = Some("rich_text".to_string());
+            }
+
+            let mut tool_assistant_request = assistant_request.clone();
+            let mut tool_selected_scope = tool_assistant_request
+                .selected_scope
+                .clone()
+                .unwrap_or_else(|| json!({}));
+            apply_external_channel_model_tool_request_to_selected_scope(
+                &mut tool_selected_scope,
+                &tool_request,
+            );
+            enrich_external_channel_database_source_scope(
+                state,
+                connection,
+                &tool_message,
+                tool_assistant_request.prompt.trim(),
+                &mut tool_selected_scope,
+            )
+            .await?;
+            tool_assistant_request.selected_scope = Some(tool_selected_scope);
+
+            let current_run = state
+                .storage
+                .assistant_runs()
+                .get_by_id(state.tenant_id, run_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .ok_or_else(|| {
+                    ApiError::internal(
+                        "assistant_run_missing_for_model_tool_request",
+                        format!("assistant run {run_id} was not found"),
+                    )
+                })?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_detected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt_label,
+                            "tool": tool_request.tool.as_str(),
+                            "tool_request": tool_request.payload.clone(),
+                            "forced_artifact_type": "static_page",
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            if let Some(reply) = maybe_enqueue_external_channel_static_page_pipeline(
+                state,
+                connection_id,
+                connection,
+                &current_run,
+                &tool_assistant_request,
+                &tool_message,
+                now,
+            )
+            .await?
+            {
+                return Ok(Some(reply));
+            }
+            Ok(Some(external_channel_model_tool_request_pending_reply(
+                message,
+                &tool_request,
+                "model_tool_request_recorded",
+            )))
+        }
+        ExternalChannelModelToolCapability::DataIngestionAnalysis => {
+            let mut tool_assistant_request = assistant_request.clone();
+            let mut tool_selected_scope = tool_assistant_request
+                .selected_scope
+                .clone()
+                .unwrap_or_else(|| json!({}));
+            apply_external_channel_model_tool_request_to_selected_scope(
+                &mut tool_selected_scope,
+                &tool_request,
+            );
+            enrich_external_channel_database_source_scope(
+                state,
+                connection,
+                message,
+                tool_assistant_request.prompt.trim(),
+                &mut tool_selected_scope,
+            )
+            .await?;
+            tool_assistant_request.selected_scope = Some(tool_selected_scope.clone());
+
+            let current_run = state
+                .storage
+                .assistant_runs()
+                .get_by_id(state.tenant_id, run_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .ok_or_else(|| {
+                    ApiError::internal(
+                        "assistant_run_missing_for_model_tool_request",
+                        format!("assistant run {run_id} was not found"),
+                    )
+                })?;
+            let mut tool_run = current_run.clone();
+            tool_run.selected_scope = tool_selected_scope;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_detected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt_label,
+                            "tool": tool_request.tool.as_str(),
+                            "intent": tool_request.payload.get("intent").and_then(Value::as_str).unwrap_or(""),
+                            "source": "external_channel_model_reply",
+                            "tool_request": tool_request.payload.clone(),
+                            "handled": true,
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            if let Some(reply) = maybe_enqueue_external_channel_data_ingestion_analysis(
+                state,
+                connection_id,
+                connection,
+                &tool_run,
+                &tool_assistant_request,
+                message,
+                now,
+                Some(&tool_request.payload),
+            )
+            .await?
+            {
+                return Ok(Some(reply));
+            }
+            Ok(Some(external_channel_model_tool_request_pending_reply(
+                message,
+                &tool_request,
+                "model_tool_request_recorded",
+            )))
+        }
+        ExternalChannelModelToolCapability::DocumentProcessing => {
+            let current_run = state
+                .storage
+                .assistant_runs()
+                .get_by_id(state.tenant_id, run_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .ok_or_else(|| {
+                    ApiError::internal(
+                        "assistant_run_missing_for_model_tool_request",
+                        format!("assistant run {run_id} was not found"),
+                    )
+                })?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_detected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt_label,
+                            "tool": tool_request.tool.as_str(),
+                            "intent": tool_request.payload.get("intent").and_then(Value::as_str).unwrap_or(""),
+                            "source": "external_channel_model_reply",
+                            "tool_request": tool_request.payload.clone(),
+                            "handled": true,
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            let reply = external_channel_document_processing_reply_from_tool_request(
+                state,
+                connection_id,
+                &current_run,
+                message,
+                &tool_request,
+                now,
+            )
+            .await?;
+            Ok(Some(reply))
+        }
+        ExternalChannelModelToolCapability::CollectionSetupAnalysis
+        | ExternalChannelModelToolCapability::IntegrationSetupAnalysis => {
+            let reply = external_channel_capability_confirmation_reply(
+                message,
+                tool_request.tool,
+                &tool_request.payload,
+            );
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_detected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt_label,
+                            "tool": tool_request.tool.as_str(),
+                            "intent": tool_request.payload.get("intent").and_then(Value::as_str).unwrap_or(""),
+                            "source": "external_channel_model_reply",
+                            "tool_request": tool_request.payload.clone(),
+                            "handled": true,
+                            "requires_confirmation": reply.requires_confirmation,
+                            "risk_level": reply.card.as_ref().and_then(|card| card.get("risk_level")).and_then(Value::as_str).unwrap_or("unknown"),
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name:
+                            "assistant_run.external_channel_capability_confirmation_returned"
+                                .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "tool": tool_request.tool.as_str(),
+                            "reply_type": reply.reply_type.clone(),
+                            "task_status": reply.task_status.clone(),
+                            "requires_confirmation": reply.requires_confirmation,
+                            "card": reply.card.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            Ok(Some(reply))
+        }
+        ExternalChannelModelToolCapability::MessageChannelOutreach => {
+            let reply = external_channel_message_outreach_reply_from_tool_request(
+                connection_id,
+                message,
+                &tool_request,
+                now,
+            );
+            let card = reply.card.clone().unwrap_or_else(|| json!({}));
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_detected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt_label,
+                            "tool": tool_request.tool.as_str(),
+                            "intent": tool_request.payload.get("intent").and_then(Value::as_str).unwrap_or(""),
+                            "source": "external_channel_model_reply",
+                            "handled": true,
+                            "requires_confirmation": true,
+                            "risk_level": card.get("risk_level").and_then(Value::as_str).unwrap_or("unknown"),
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_message_outreach_requested"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "tool": tool_request.tool.as_str(),
+                            "intent": card.get("intent").cloned().unwrap_or_else(|| json!("")),
+                            "risk_level": card.get("risk_level").cloned().unwrap_or_else(|| json!("unknown")),
+                            "review_reason": card.get("review_reason").cloned().unwrap_or_else(|| json!("unknown")),
+                            "target_summary": card.get("target_summary").cloned().unwrap_or_else(|| json!({})),
+                            "action_id": reply.action_id.clone(),
+                            "confirmation_id": reply.confirmation_id.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name:
+                            "assistant_run.external_channel_message_outreach_confirmation_required"
+                                .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "reply_type": reply.reply_type.clone(),
+                            "task_status": reply.task_status.clone(),
+                            "requires_confirmation": reply.requires_confirmation,
+                            "card": card,
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            Ok(Some(reply))
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -36298,82 +38134,18 @@ async fn external_channel_chat_model_or_acceptance_reply(
             .await?;
         }
 
-        if let Some(tool_request) = external_channel_model_static_page_tool_request(&output_text) {
-            let mut tool_message = message.clone();
-            tool_message.artifact_type = Some("static_page".to_string());
-            tool_message.render_mode = Some("artifact".to_string());
-            if tool_message.output_format.is_none() {
-                tool_message.output_format = Some("rich_text".to_string());
-            }
-
-            let mut tool_assistant_request = assistant_request.clone();
-            let mut tool_selected_scope = tool_assistant_request
-                .selected_scope
-                .clone()
-                .unwrap_or_else(|| json!({}));
-            set_payload_value(
-                &mut tool_selected_scope,
-                "model_tool_request",
-                tool_request.clone(),
-            );
-            set_payload_value(
-                &mut tool_selected_scope,
-                "model_tool_request_source",
-                json!("external_channel_model_reply"),
-            );
-            enrich_external_channel_database_source_scope(
-                state,
-                connection,
-                &tool_message,
-                tool_assistant_request.prompt.trim(),
-                &mut tool_selected_scope,
-            )
-            .await?;
-            tool_assistant_request.selected_scope = Some(tool_selected_scope);
-
-            let current_run = state
-                .storage
-                .assistant_runs()
-                .get_by_id(state.tenant_id, run_id)
-                .await
-                .map_err(ApiError::from_storage)?
-                .ok_or_else(|| {
-                    ApiError::internal(
-                        "assistant_run_missing_for_model_tool_request",
-                        format!("assistant run {run_id} was not found"),
-                    )
-                })?;
-            state
-                .storage
-                .assistant_runs()
-                .append_event(
-                    state.tenant_id,
-                    run_id,
-                    &NewAssistantRunEvent {
-                        event_name: "assistant_run.external_channel_model_tool_request_detected"
-                            .to_string(),
-                        payload: json!({
-                            "channel_connection_id": connection_id,
-                            "platform": external_channel_platform_wire_value(&message.platform),
-                            "message_external_id": message.message_external_id.clone(),
-                            "attempt": attempt.label.as_str(),
-                            "tool_request": tool_request,
-                            "forced_artifact_type": "static_page",
-                            "runtime": runtime_manifest.clone(),
-                        }),
-                        created_at: now,
-                    },
-                )
-                .await
-                .map_err(ApiError::from_storage)?;
-            if let Some(reply) = maybe_enqueue_external_channel_static_page_pipeline(
+        if let Some(tool_request) = external_channel_model_tool_request(&output_text) {
+            if let Some(reply) = external_channel_dispatch_model_tool_request(
                 state,
                 connection_id,
                 connection,
-                &current_run,
-                &tool_assistant_request,
-                &tool_message,
+                run_id,
+                assistant_request,
+                message,
                 now,
+                attempt.label.as_str(),
+                &runtime_manifest,
+                tool_request,
             )
             .await?
             {
@@ -39598,10 +41370,7 @@ fn build_assistant_run_provider_input_with_evidence(
             "外部通道供料表达要求：如果已经收到文档、检索切片、事实快照或会话范围供料，优先把相关证据整理成可执行结论、步骤、表格或清单；不要把“当前可见”“暂未直接检索到”“资料不足”“建议补充资料”放在答案开头。若供料只是相关章节而非专项原文，必须区分“文档明文规定”和“按相关章节/通用规范整理的可参考流程”，不要把推导或通用经验写成文档明文。只有完全没有相关供料、或确实只能确认文档未就绪/不可见时，才用缺资料说明，并给出最短下一步。"
                 .to_string(),
         );
-        sections.push(
-            "外部通道可执行工具能力：宿主可创建、复用、修改和发布 `static_page_artifact`（静态页/可视化报表/经营看板/大屏/移动端报表），并可基于已有发布链接继续增量修改。若你根据用户文本、最近对话或当前产物判断用户是在要求生成、重新设计、修改、换风格、移动端适配、发布或返回报表页面链接，不要只给设计建议；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主调用生成工具。普通咨询、口径解释、数据问答则正常自然语言回答。"
-                .to_string(),
-        );
+        sections.extend(external_channel_model_tool_capability_guidance_lines());
     }
     sections.extend(assistant_run_v3_awareness_lines());
     if let Some(answer_policy) = assistant_run_request_external_answer_policy(request) {
@@ -83183,6 +84952,46 @@ mod tests {
         .expect("sample external bot message")
     }
 
+    async fn create_test_external_assistant_run(
+        state: &AppState,
+        assistant_request: &CreateAssistantRunRequest,
+        evidence_state: Value,
+        now: DateTime<Utc>,
+    ) -> AssistantRun {
+        state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: assistant_request.prompt.clone(),
+                    startup_briefing: assistant_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: assistant_request
+                        .selected_scope
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    scope_candidates: json!(assistant_request.scope_candidates.clone()),
+                    context_policy: assistant_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state,
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created")
+    }
+
     fn wecom_test_encoding_aes_key() -> String {
         use base64::{engine::general_purpose, Engine as _};
 
@@ -88107,7 +89916,7 @@ mod tests {
     }
 
     #[test]
-    fn external_channel_model_context_exposes_static_page_tool_request_protocol() {
+    fn external_channel_model_context_exposes_product_tool_request_protocol() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
@@ -88120,12 +89929,542 @@ mod tests {
         );
 
         assert!(provider_input.contains("static_page_artifact"));
+        assert!(provider_input.contains("data_ingestion_analysis"));
+        assert!(provider_input.contains("document_processing"));
+        assert!(provider_input.contains("collection_setup_analysis"));
+        assert!(provider_input.contains("integration_setup_analysis"));
+        assert!(provider_input.contains("message_channel_outreach"));
         assert!(provider_input.contains("<V3_TOOL_REQUEST>"));
-        let tool_request = external_channel_model_static_page_tool_request(
+        assert!(provider_input.contains("retrieve_evidence"));
+        let tool_request = external_channel_model_tool_request(
             r#"<V3_TOOL_REQUEST>{"tool":"static_page_artifact","intent":"create_or_update","reason":"用户要求修改报表风格"}</V3_TOOL_REQUEST>"#,
         )
         .expect("tool request should parse");
-        assert_eq!(tool_request["tool"], json!("static_page_artifact"));
+        assert_eq!(
+            tool_request.tool,
+            ExternalChannelModelToolCapability::StaticPageArtifact
+        );
+        assert_eq!(tool_request.payload["tool"], json!("static_page_artifact"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_parses_product_capabilities() {
+        let cases = [
+            (
+                "static-page",
+                ExternalChannelModelToolCapability::StaticPageArtifact,
+            ),
+            (
+                "data_ingestion_analysis",
+                ExternalChannelModelToolCapability::DataIngestionAnalysis,
+            ),
+            (
+                "deep_parse",
+                ExternalChannelModelToolCapability::DocumentProcessing,
+            ),
+            (
+                "collection_setup",
+                ExternalChannelModelToolCapability::CollectionSetupAnalysis,
+            ),
+            (
+                "integration_setup",
+                ExternalChannelModelToolCapability::IntegrationSetupAnalysis,
+            ),
+            (
+                "start_conversation",
+                ExternalChannelModelToolCapability::MessageChannelOutreach,
+            ),
+        ];
+
+        for (wire_tool, expected) in cases {
+            let output = format!(
+                r#"<V3_TOOL_REQUEST>{{"tool":"{wire_tool}","intent":"create_or_update","reason":"test"}}</V3_TOOL_REQUEST>"#
+            );
+            let request =
+                external_channel_model_tool_request(&output).expect("tool request should parse");
+            assert_eq!(request.tool, expected);
+        }
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct ExternalChannelCapabilityRoutingFixtureCase {
+        case_id: String,
+        prompt: String,
+        expected_tool: Option<String>,
+        expected_confirmation: bool,
+        expected_card_type: Option<String>,
+        deterministic_route: Option<String>,
+        notes: Option<String>,
+    }
+
+    fn external_channel_capability_routing_fixture_cases(
+    ) -> Vec<ExternalChannelCapabilityRoutingFixtureCase> {
+        include_str!("../../../fixtures/external-channel-capability-routing/cases.jsonl")
+            .lines()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                Some(serde_json::from_str(line).unwrap_or_else(|error| {
+                    panic!(
+                        "invalid external capability routing fixture on line {}: {error}",
+                        index + 1
+                    )
+                }))
+            })
+            .collect()
+    }
+
+    fn external_channel_capability_fixture_tool_request_output(
+        case: &ExternalChannelCapabilityRoutingFixtureCase,
+    ) -> Option<String> {
+        let tool = case.expected_tool.as_deref()?;
+        let payload = json!({
+            "tool": tool,
+            "intent": "fixture_route",
+            "reason": case.prompt,
+        });
+        Some(format!(
+            "<V3_TOOL_REQUEST>{}</V3_TOOL_REQUEST>",
+            serde_json::to_string(&payload).expect("fixture tool payload should serialize")
+        ))
+    }
+
+    #[test]
+    fn external_channel_capability_routing_fixture_is_valid_jsonl() {
+        let cases = external_channel_capability_routing_fixture_cases();
+        assert!(
+            cases.len() >= 8,
+            "capability routing fixture should cover all core routes"
+        );
+        let mut seen_case_ids = BTreeSet::new();
+        let mut tools = BTreeSet::new();
+        let mut has_plain_question = false;
+        for case in cases {
+            assert!(
+                seen_case_ids.insert(case.case_id.clone()),
+                "duplicate case_id {}",
+                case.case_id
+            );
+            assert!(
+                !case.prompt.trim().is_empty(),
+                "case {} prompt should not be empty",
+                case.case_id
+            );
+            assert!(
+                !case.prompt.contains("<V3_TOOL_REQUEST>"),
+                "case {} prompt must not contain raw tool tags",
+                case.case_id
+            );
+            if let Some(tool) = case.expected_tool.as_deref() {
+                assert!(
+                    ExternalChannelModelToolCapability::from_wire(tool).is_some(),
+                    "case {} expected unknown tool {}",
+                    case.case_id,
+                    tool
+                );
+                tools.insert(tool.to_string());
+            } else {
+                has_plain_question = true;
+            }
+            if let Some(route) = case.deterministic_route.as_deref() {
+                assert!(
+                    matches!(
+                        route,
+                        "static_page_artifact"
+                            | "data_ingestion_analysis"
+                            | "no_static_page_artifact"
+                    ),
+                    "case {} has unknown deterministic_route {}",
+                    case.case_id,
+                    route
+                );
+            }
+        }
+        for expected in [
+            "static_page_artifact",
+            "data_ingestion_analysis",
+            "document_processing",
+            "collection_setup_analysis",
+            "integration_setup_analysis",
+            "message_channel_outreach",
+        ] {
+            assert!(tools.contains(expected), "missing fixture tool {expected}");
+        }
+        assert!(
+            has_plain_question,
+            "fixture should include non-tool questions"
+        );
+    }
+
+    #[test]
+    fn external_channel_capability_routing_fixture_checks_deterministic_routes() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for case in external_channel_capability_routing_fixture_cases() {
+            match case.deterministic_route.as_deref() {
+                Some("static_page_artifact") => {
+                    assert!(
+                        external_channel_message_requests_static_page_artifact(
+                            &message,
+                            &case.prompt
+                        ),
+                        "case {} should route to static page: {:?}",
+                        case.case_id,
+                        case.notes
+                    );
+                }
+                Some("no_static_page_artifact") => {
+                    assert!(
+                        !external_channel_message_requests_static_page_artifact(
+                            &message,
+                            &case.prompt
+                        ),
+                        "case {} should not route to static page: {:?}",
+                        case.case_id,
+                        case.notes
+                    );
+                }
+                Some("data_ingestion_analysis") => {
+                    assert!(
+                        external_channel_message_requests_data_ingestion_analysis(&case.prompt),
+                        "case {} should route to data ingestion: {:?}",
+                        case.case_id,
+                        case.notes
+                    );
+                }
+                Some(other) => panic!("unexpected deterministic route {other}"),
+                None => {}
+            }
+        }
+    }
+
+    #[test]
+    fn external_channel_capability_routing_fixture_checks_model_tool_requests() {
+        let message = sample_external_bot_message();
+        for case in external_channel_capability_routing_fixture_cases() {
+            let Some(output) = external_channel_capability_fixture_tool_request_output(&case)
+            else {
+                assert!(
+                    external_channel_model_tool_request(&case.prompt).is_none(),
+                    "plain case {} should not contain a raw tool request",
+                    case.case_id
+                );
+                continue;
+            };
+            let request =
+                external_channel_model_tool_request(&output).expect("fixture tool should parse");
+            assert_eq!(
+                Some(request.tool.as_str()),
+                case.expected_tool.as_deref(),
+                "case {} parsed unexpected tool",
+                case.case_id
+            );
+            match request.tool {
+                ExternalChannelModelToolCapability::CollectionSetupAnalysis
+                | ExternalChannelModelToolCapability::IntegrationSetupAnalysis => {
+                    let reply = external_channel_capability_confirmation_reply(
+                        &message,
+                        request.tool,
+                        &request.payload,
+                    );
+                    assert!(
+                        reply.requires_confirmation,
+                        "case {} should require confirmation",
+                        case.case_id
+                    );
+                    assert_eq!(
+                        reply.requires_confirmation, case.expected_confirmation,
+                        "case {} confirmation mismatch",
+                        case.case_id
+                    );
+                    let card = reply.card.expect("confirmation card should be returned");
+                    assert_eq!(
+                        card["type"],
+                        json!(case.expected_card_type.as_deref().unwrap_or_default()),
+                        "case {} card type mismatch",
+                        case.case_id
+                    );
+                }
+                ExternalChannelModelToolCapability::MessageChannelOutreach => {
+                    let reply = external_channel_message_outreach_reply_from_tool_request(
+                        "generic-chat-main",
+                        &message,
+                        &request,
+                        Utc::now(),
+                    );
+                    assert!(
+                        reply.requires_confirmation,
+                        "case {} should require confirmation",
+                        case.case_id
+                    );
+                    assert_eq!(
+                        reply.requires_confirmation, case.expected_confirmation,
+                        "case {} confirmation mismatch",
+                        case.case_id
+                    );
+                    let card = reply
+                        .card
+                        .expect("message outreach card should be returned");
+                    assert_eq!(
+                        card["type"],
+                        json!(case.expected_card_type.as_deref().unwrap_or_default()),
+                        "case {} card type mismatch",
+                        case.case_id
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_data_ingestion_is_recognized() {
+        let request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"data_ingestion_analysis","intent":"create_staging_plan","reason":"用户要把当前资料整理成可查询业务库"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+
+        assert_eq!(
+            request.tool,
+            ExternalChannelModelToolCapability::DataIngestionAnalysis
+        );
+        assert_eq!(request.payload["intent"], json!("create_staging_plan"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_document_processing_is_recognized() {
+        let request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request","reason":"用户说上传文档无法回答，怀疑解析失败"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+
+        assert_eq!(
+            request.tool,
+            ExternalChannelModelToolCapability::DocumentProcessing
+        );
+        assert_eq!(request.payload["intent"], json!("reparse_request"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_collection_requires_confirmation() {
+        let request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"collection_setup_analysis","intent":"plan","reason":"用户要求接入外部资料采集源"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert_eq!(
+            request.tool,
+            ExternalChannelModelToolCapability::CollectionSetupAnalysis
+        );
+
+        let message = sample_external_bot_message();
+        let reply = external_channel_capability_confirmation_reply(
+            &message,
+            request.tool,
+            &request.payload,
+        );
+        assert_eq!(
+            reply.reply_type,
+            ExternalBotReplyTypeView::RequiresConfirmation
+        );
+        assert!(reply.requires_confirmation);
+        assert_eq!(reply.task_status.as_deref(), Some("needs_confirmation"));
+        let card = reply.card.expect("confirmation card should be returned");
+        assert_eq!(card["type"], json!("v3_collection_setup_analysis"));
+        assert_eq!(
+            card["requested_capability"],
+            json!("collection_setup_analysis")
+        );
+        assert_eq!(card["risk_level"], json!("medium"));
+        assert_eq!(
+            card["review_reason"],
+            json!("new_source_or_external_setup_requires_confirmation")
+        );
+        assert!(card["forbidden_actions"]
+            .as_array()
+            .expect("forbidden actions should be listed")
+            .iter()
+            .any(|item| item == "do_not_request_or_emit_credentials"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_integration_requires_confirmation() {
+        let request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"integration_setup_analysis","intent":"plan","reason":"用户要求接入外部系统并确认接口字段"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert_eq!(
+            request.tool,
+            ExternalChannelModelToolCapability::IntegrationSetupAnalysis
+        );
+
+        let message = sample_external_bot_message();
+        let reply = external_channel_capability_confirmation_reply(
+            &message,
+            request.tool,
+            &request.payload,
+        );
+        assert_eq!(
+            reply.reply_type,
+            ExternalBotReplyTypeView::RequiresConfirmation
+        );
+        assert!(reply.requires_confirmation);
+        assert_eq!(reply.task_status.as_deref(), Some("needs_confirmation"));
+        let card = reply.card.expect("confirmation card should be returned");
+        assert_eq!(card["type"], json!("v3_integration_setup_analysis"));
+        assert_eq!(
+            card["requested_capability"],
+            json!("integration_setup_analysis")
+        );
+        assert_eq!(card["risk_level"], json!("high"));
+        assert_eq!(
+            card["review_reason"],
+            json!("public_api_or_auth_change_requires_human")
+        );
+        assert!(card["forbidden_actions"]
+            .as_array()
+            .expect("forbidden actions should be listed")
+            .iter()
+            .any(|item| item == "do_not_change_public_api_url_auth_or_fields"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_message_outreach_requires_host_routing() {
+        let request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"message_channel_outreach","intent":"notify_task_completed","reason":"任务完成后通知当前会话用户"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert_eq!(
+            request.tool,
+            ExternalChannelModelToolCapability::MessageChannelOutreach
+        );
+
+        let message = sample_external_bot_message();
+        let reply = external_channel_message_outreach_reply_from_tool_request(
+            "generic-chat-main",
+            &message,
+            &request,
+            Utc::now(),
+        );
+        assert_eq!(
+            reply.reply_type,
+            ExternalBotReplyTypeView::RequiresConfirmation
+        );
+        assert!(reply.requires_confirmation);
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("message_outreach_confirmation_required")
+        );
+        let card = reply
+            .card
+            .expect("message outreach card should be returned");
+        assert_eq!(card["type"], json!("v3_message_channel_outreach"));
+        assert_eq!(
+            card["requested_capability"],
+            json!("message_channel_outreach")
+        );
+        assert_eq!(card["risk_level"], json!("low"));
+        assert_eq!(
+            card["review_reason"],
+            json!("outbound_channel_policy_not_configured")
+        );
+        assert_eq!(
+            card["target_summary"]["conversation_external_id"],
+            json!("chat-risk-room")
+        );
+        assert_eq!(card["target_summary"]["recipient_count"], json!(1));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_message_outreach_new_recipient_requires_confirmation() {
+        let request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"message_channel_outreach","intent":"start_conversation","reason":"主动通知店总查看任务状态","target_external_user_ids":["store-manager-001"]}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        let mut message = sample_external_bot_message();
+        message.mention_external_user_ids = vec!["store-manager-001".to_string()];
+
+        let reply = external_channel_message_outreach_reply_from_tool_request(
+            "generic-chat-main",
+            &message,
+            &request,
+            Utc::now(),
+        );
+        assert_eq!(
+            reply.reply_type,
+            ExternalBotReplyTypeView::RequiresConfirmation
+        );
+        let card = reply
+            .card
+            .expect("message outreach card should be returned");
+        assert_eq!(card["risk_level"], json!("medium"));
+        assert_eq!(
+            card["review_reason"],
+            json!("new_recipient_or_conversation_requires_confirmation")
+        );
+        assert_eq!(card["target_summary"]["recipient_count"], json!(1));
+        assert_eq!(card["target_summary"]["mention_count"], json!(1));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_message_outreach_sensitive_content_requires_review() {
+        let request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"message_channel_outreach","intent":"notify_report_ready","reason":"报表完成后通知用户查看链接"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        let message = sample_external_bot_message();
+
+        let reply = external_channel_message_outreach_reply_from_tool_request(
+            "generic-chat-main",
+            &message,
+            &request,
+            Utc::now(),
+        );
+        assert_eq!(
+            reply.reply_type,
+            ExternalBotReplyTypeView::RequiresConfirmation
+        );
+        let card = reply
+            .card
+            .expect("message outreach card should be returned");
+        assert_eq!(card["risk_level"], json!("high"));
+        assert_eq!(
+            card["review_reason"],
+            json!("sensitive_content_requires_permission_review")
+        );
+        assert!(card["forbidden_actions"]
+            .as_array()
+            .expect("forbidden actions should be listed")
+            .iter()
+            .any(|item| item == "do_not_send_raw_model_text"));
+    }
+
+    #[test]
+    fn external_channel_model_tool_request_rejects_unknown_or_malformed_tools() {
+        assert!(external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"retrieve_evidence","intent":"run"}</V3_TOOL_REQUEST>"#
+        )
+        .is_none());
+        assert!(external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"codex_host_task","intent":"run"}</V3_TOOL_REQUEST>"#
+        )
+        .is_none());
+        assert!(external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"intent":"create_or_update"}</V3_TOOL_REQUEST>"#
+        )
+        .is_none());
+        assert!(external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{not json}</V3_TOOL_REQUEST>"#
+        )
+        .is_none());
+        assert!(external_channel_model_tool_request(
+            r#"{"tool":"static_page_artifact","intent":"create_or_update"}"#
+        )
+        .is_none());
     }
 
     #[test]
@@ -88516,6 +90855,397 @@ mod tests {
         });
 
         assert!(!external_channel_data_ingestion_scope_has_source(&scope));
+    }
+
+    #[tokio::test]
+    async fn external_channel_model_tool_request_data_ingestion_bypasses_keyword_detection() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping model tool data ingestion dispatch test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-data-ingestion-tool-{}", Uuid::new_v4()),
+                "External Data Ingestion Tool Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-data-tool".to_string();
+        message.message_external_id = "msg-data-tool-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-data-tool-001".to_string();
+        message.text = Some("请看看这份材料后续可以怎样组织使用。".to_string());
+        message.attachment_refs = Vec::new();
+        let assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        assert!(!external_channel_message_requests_data_ingestion_analysis(
+            &assistant_request.prompt
+        ));
+        let now = Utc::now();
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: assistant_request.prompt.clone(),
+                    startup_briefing: assistant_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: assistant_request
+                        .selected_scope
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    scope_candidates: json!(assistant_request.scope_candidates.clone()),
+                    context_policy: assistant_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "not_requested"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+        let tool_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"data_ingestion_analysis","intent":"create_staging_plan","reason":"用户要把资料整理成业务库"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+
+        let reply = external_channel_dispatch_model_tool_request(
+            &state,
+            "generic-chat-main",
+            &connection,
+            run.id,
+            &assistant_request,
+            &message,
+            now,
+            "scripted",
+            &json!({"provider": "scripted"}),
+            tool_request,
+        )
+        .await
+        .expect("model tool dispatch should not fail")
+        .expect("model tool dispatch should return a reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("data_ingestion_analysis_source_required")
+        );
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_model_tool_request_detected"
+                && event.payload.get("tool").and_then(Value::as_str)
+                    == Some("data_ingestion_analysis")
+                && event.payload.get("handled").and_then(Value::as_bool) == Some(true)
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.data_ingestion_analysis_source_required"
+                && event
+                    .payload
+                    .get("model_tool_request")
+                    .and_then(|value| value.get("tool"))
+                    .and_then(Value::as_str)
+                    == Some("data_ingestion_analysis")
+        }));
+    }
+
+    #[tokio::test]
+    async fn external_channel_model_tool_request_document_processing_requires_visible_document() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping document processing source-required test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-document-processing-empty-{}", Uuid::new_v4()),
+                "External Document Processing Empty Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-doc-processing-empty".to_string();
+        message.message_external_id = "msg-doc-processing-empty-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-doc-processing-empty-001".to_string();
+        message.attachment_refs = Vec::new();
+        message.text = Some("重新解析一下材料".to_string());
+        let assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let now = Utc::now();
+        let run =
+            create_test_external_assistant_run(&state, &assistant_request, json!({}), now).await;
+        let tool_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request","reason":"用户要求重新解析"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+
+        let reply = external_channel_dispatch_model_tool_request(
+            &state,
+            "generic-chat-main",
+            &connection,
+            run.id,
+            &assistant_request,
+            &message,
+            now,
+            "scripted",
+            &json!({"provider": "scripted"}),
+            tool_request,
+        )
+        .await
+        .expect("dispatch should not fail")
+        .expect("dispatch should return reply");
+
+        assert_eq!(
+            reply.task_status.as_deref(),
+            Some("document_processing_source_required")
+        );
+        assert_eq!(
+            reply
+                .card
+                .as_ref()
+                .and_then(|card| card.get("type"))
+                .and_then(Value::as_str),
+            Some("v3_document_processing")
+        );
+    }
+
+    #[tokio::test]
+    async fn external_channel_model_tool_request_document_processing_reports_status_and_gates_reparse(
+    ) {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let _reparse_disabled = TestEnvVarRestore::set(
+            "EXTERNAL_CHANNEL_DOCUMENT_PROCESSING_REPARSE_ENABLED",
+            "false",
+        );
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping document processing dispatch test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-document-processing-{}", Uuid::new_v4()),
+                "External Document Processing Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-doc-processing-{}", Uuid::new_v4()),
+                    title: "External document processing dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "低质解析 PDF".to_string(),
+                    object_key: "documents/low-quality.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "third-party-source",
+                            "document_external_id": "low-quality-pdf"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let document = state
+            .storage
+            .documents()
+            .update_state(
+                state.tenant_id,
+                document.id,
+                DocumentLifecycle::Failed,
+                None,
+                &json!({
+                    "parse_status": "failed",
+                    "ingest": {
+                        "last_error": "only one text character extracted",
+                        "parse_metadata": {
+                            "parse_quality": {
+                                "status": "low_text_coverage_fallback_unavailable"
+                            }
+                        }
+                    }
+                }),
+                Utc::now(),
+            )
+            .await
+            .expect("document should be marked failed");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-doc-processing".to_string();
+        message.message_external_id = "msg-doc-processing-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-doc-processing-001".to_string();
+        message.attachment_refs = Vec::new();
+        message.text = Some("看看这个文档解析状态".to_string());
+        let mut assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        assistant_request.selected_scope = Some(json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "datasets": [{"type": "dataset", "id": dataset.id}],
+            "documents": [{"type": "document", "id": document.id}],
+            "external_document_scope_status": "authorized"
+        }));
+        let now = Utc::now();
+        let run =
+            create_test_external_assistant_run(&state, &assistant_request, json!({}), now).await;
+
+        let status_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"status","reason":"查看文档解析状态"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        let status_reply = external_channel_dispatch_model_tool_request(
+            &state,
+            "generic-chat-main",
+            &connection,
+            run.id,
+            &assistant_request,
+            &message,
+            now,
+            "scripted",
+            &json!({"provider": "scripted"}),
+            status_request,
+        )
+        .await
+        .expect("status dispatch should not fail")
+        .expect("status dispatch should return reply");
+        assert_eq!(
+            status_reply.task_status.as_deref(),
+            Some("document_processing_status")
+        );
+        assert_eq!(
+            status_reply
+                .card
+                .as_ref()
+                .and_then(|card| card.pointer("/documents/0/parse_state/model_status"))
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+
+        let reparse_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request","reason":"用户要求重新解析"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        let reparse_reply = external_channel_dispatch_model_tool_request(
+            &state,
+            "generic-chat-main",
+            &connection,
+            run.id,
+            &assistant_request,
+            &message,
+            now,
+            "scripted",
+            &json!({"provider": "scripted"}),
+            reparse_request,
+        )
+        .await
+        .expect("reparse dispatch should not fail")
+        .expect("reparse dispatch should return reply");
+        assert_eq!(
+            reparse_reply.task_status.as_deref(),
+            Some("document_processing_review_required")
+        );
+        assert_eq!(
+            reparse_reply
+                .card
+                .as_ref()
+                .and_then(|card| card.get("review_required"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_document_processing_status_returned"
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_document_reparse_review_required"
+                && event.payload.get("reason").and_then(Value::as_str)
+                    == Some("external_channel_document_reparse_disabled")
+        }));
     }
 
     #[test]
@@ -90232,6 +92962,8 @@ mod tests {
         let summary = external_integration_config_summary(&json!({
             "action_dispatch_url": "https://api.example.com/actions",
             "dispatch_bearer_token": "dispatch-token",
+            "reply_dispatch_url": "https://api.example.com/replies",
+            "reply_dispatch_signing_secret": "reply-secret",
             "token": "callback-token",
             "nested": {
                 "signing_secret": "hidden"
@@ -90241,10 +92973,55 @@ mod tests {
 
         assert_eq!(summary["dispatch_endpoint_configured"], json!(true));
         assert_eq!(summary["dispatch_auth_mode"], json!("bearer"));
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["endpoint_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["auth_mode"],
+            json!("signature_and_bearer")
+        );
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["auth_source"],
+            json!("reply_specific")
+        );
+        assert_eq!(summary["outbound_reply_dispatch"]["ready"], json!(true));
         assert_eq!(summary["platform_callback_token_configured"], json!(true));
         assert!(!summary_text.contains("dispatch-token"));
+        assert!(!summary_text.contains("reply-secret"));
         assert!(!summary_text.contains("callback-token"));
         assert!(!summary_text.contains("hidden"));
+    }
+
+    #[test]
+    fn external_outbound_reply_dispatch_summary_reports_action_auth_fallback() {
+        let summary = external_integration_config_summary(&json!({
+            "reply_dispatch_url": "https://api.example.com/replies",
+            "dispatch_bearer_token": "dispatch-token",
+        }));
+
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["endpoint_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["auth_configured"],
+            json!(true)
+        );
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["auth_mode"],
+            json!("bearer")
+        );
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["auth_source"],
+            json!("action_dispatch_fallback")
+        );
+        assert_eq!(
+            summary["outbound_reply_dispatch"]["action_auth_fallback_available"],
+            json!(true)
+        );
+        assert_eq!(summary["outbound_reply_dispatch"]["ready"], json!(true));
+        assert!(!summary.to_string().contains("dispatch-token"));
     }
 
     #[test]
@@ -90629,6 +93406,45 @@ mod tests {
     }
 
     #[test]
+    fn external_integration_audit_filter_selects_outbound_reply_items() {
+        let filter = external_integration_audit_filter(ExternalIntegrationAuditQuery {
+            item_type: Some("outbound_reply".to_string()),
+            action_state: None,
+            action_id: None,
+            limit: Some(10),
+        })
+        .expect("outbound reply filter should parse");
+        let item = ExternalIntegrationAuditItemView {
+            item_type: "outbound_reply".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: Some(AssistantRunId::new()),
+            action_id: None,
+            status: Some("dispatch_blocked".to_string()),
+            failure_kind: Some("reply_dispatch_endpoint_missing".to_string()),
+            summary: json!({
+                "source": "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+                "dispatch": {
+                    "status": "dispatch_blocked",
+                    "reason": "reply_dispatch_endpoint_missing"
+                }
+            }),
+        };
+        let action = ExternalIntegrationAuditItemView {
+            item_type: "action".to_string(),
+            created_at: Utc::now(),
+            assistant_run_id: Some(AssistantRunId::new()),
+            action_id: Some("act-001".to_string()),
+            status: Some("dispatched".to_string()),
+            failure_kind: None,
+            summary: json!({}),
+        };
+
+        assert_eq!(filter.item_type.as_deref(), Some("outbound_reply"));
+        assert!(external_integration_audit_item_matches(&item, &filter));
+        assert!(!external_integration_audit_item_matches(&action, &filter));
+    }
+
+    #[test]
     fn external_integration_audit_filter_rejects_conflicting_action_state() {
         let error = external_integration_audit_filter(ExternalIntegrationAuditQuery {
             item_type: Some("message".to_string()),
@@ -90713,6 +93529,147 @@ mod tests {
         );
         assert!(!patch_text.contains("operator"));
         assert!(!patch_text.contains("secret-token"));
+    }
+
+    #[test]
+    fn external_reply_dispatch_config_preserves_existing_auth_when_url_changes() {
+        let now = Utc::now();
+        let prepared = apply_external_reply_dispatch_config(
+            json!({
+                "reply_dispatch_url": "https://old.example.com/replies",
+                "reply_dispatch_bearer_token": "existing-token",
+                "reply_dispatch_signing_secret": "existing-secret"
+            }),
+            &ExternalIntegrationReplyDispatchConfigRequest {
+                reason: Some("operator_update_url".to_string()),
+                reply_dispatch_url: Some("https://new.example.com/replies".to_string()),
+                reply_dispatch_bearer_token: None,
+                reply_dispatch_signing_secret: None,
+                clear_reply_dispatch: None,
+            },
+            now,
+        )
+        .expect("reply dispatch config should apply");
+        let config = prepared.config_redacted;
+
+        assert!(!prepared.cleared);
+        assert_eq!(
+            config["reply_dispatch_url"],
+            json!("https://new.example.com/replies")
+        );
+        assert_eq!(
+            config["reply_dispatch_bearer_token"],
+            json!("existing-token")
+        );
+        assert_eq!(
+            config["reply_dispatch_signing_secret"],
+            json!("existing-secret")
+        );
+        assert_eq!(
+            config["management_control"]["last_action"],
+            json!("configure_reply_dispatch")
+        );
+        assert_eq!(
+            config["management_control"]["secret_material_included"],
+            json!(false)
+        );
+        assert_eq!(
+            external_channel_outbound_reply_dispatch_summary(&config)["ready"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn external_reply_dispatch_config_writes_canonical_secret_fields_without_echoing_reason() {
+        let now = Utc::now();
+        let prepared = apply_external_reply_dispatch_config(
+            json!({
+                "externalReplyDispatchUrl": "https://old.example.com/replies",
+                "externalReplyBearerToken": "old-token",
+                "externalReplySigningSecret": "old-secret"
+            }),
+            &ExternalIntegrationReplyDispatchConfigRequest {
+                reason: Some("operator supplied secret material".to_string()),
+                reply_dispatch_url: Some("https://new.example.com/replies".to_string()),
+                reply_dispatch_bearer_token: Some("new-token".to_string()),
+                reply_dispatch_signing_secret: Some("new-secret".to_string()),
+                clear_reply_dispatch: None,
+            },
+            now,
+        )
+        .expect("reply dispatch config should apply");
+        let config = prepared.config_redacted;
+        let text = config.to_string();
+
+        assert_eq!(
+            config["reply_dispatch_url"],
+            json!("https://new.example.com/replies")
+        );
+        assert_eq!(config["reply_dispatch_bearer_token"], json!("new-token"));
+        assert_eq!(config["reply_dispatch_signing_secret"], json!("new-secret"));
+        assert!(config.get("externalReplyDispatchUrl").is_none());
+        assert!(config.get("externalReplyBearerToken").is_none());
+        assert!(config.get("externalReplySigningSecret").is_none());
+        assert_eq!(
+            config["management_control"]["secret_material_included"],
+            json!(true)
+        );
+        assert!(!text.contains("operator supplied secret material"));
+    }
+
+    #[test]
+    fn external_reply_dispatch_config_clear_removes_reply_specific_fields() {
+        let now = Utc::now();
+        let prepared = apply_external_reply_dispatch_config(
+            json!({
+                "reply_dispatch_url": "https://old.example.com/replies",
+                "reply_dispatch_bearer_token": "existing-token",
+                "reply_dispatch_signing_secret": "existing-secret",
+                "dispatch_bearer_token": "action-token"
+            }),
+            &ExternalIntegrationReplyDispatchConfigRequest {
+                reason: Some("operator_clear".to_string()),
+                reply_dispatch_url: None,
+                reply_dispatch_bearer_token: None,
+                reply_dispatch_signing_secret: None,
+                clear_reply_dispatch: Some(true),
+            },
+            now,
+        )
+        .expect("reply dispatch config should clear");
+        let config = prepared.config_redacted;
+
+        assert!(prepared.cleared);
+        assert!(config.get("reply_dispatch_url").is_none());
+        assert!(config.get("reply_dispatch_bearer_token").is_none());
+        assert!(config.get("reply_dispatch_signing_secret").is_none());
+        assert_eq!(config["dispatch_bearer_token"], json!("action-token"));
+        assert_eq!(
+            external_channel_outbound_reply_dispatch_summary(&config)["ready"],
+            json!(false)
+        );
+        assert_eq!(
+            config["management_control"]["last_action"],
+            json!("clear_reply_dispatch")
+        );
+    }
+
+    #[test]
+    fn external_reply_dispatch_config_requires_auth() {
+        let error = apply_external_reply_dispatch_config(
+            json!({}),
+            &ExternalIntegrationReplyDispatchConfigRequest {
+                reason: None,
+                reply_dispatch_url: Some("https://new.example.com/replies".to_string()),
+                reply_dispatch_bearer_token: None,
+                reply_dispatch_signing_secret: None,
+                clear_reply_dispatch: None,
+            },
+            Utc::now(),
+        )
+        .expect_err("auth should be required");
+
+        assert_eq!(error.payload.code, "external_reply_dispatch_auth_required");
     }
 
     #[test]

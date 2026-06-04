@@ -21,6 +21,7 @@ This is the top-level development plan. Use it as the first document when decidi
 - Model-pool concurrency detail stays in `docs/plans/2026-05-21-model-gateway-concurrency-plan.md`.
 - Background enrichment/dedup detail stays in `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`.
 - Cloudflare Codex production bridge detail stays in `docs/plans/2026-05-26-cloudflare-codex-production-bridge-dev-doc.md`.
+- Model-visible capability routing and Host-controlled tool request closure stays in `docs/plans/2026-06-04-v3-model-visible-capability-loop-plan.md`.
 
 When these documents conflict, follow this plan for priority and product boundary, then update the lower-level plan that contains the implementation detail.
 
@@ -412,4 +413,3 @@ After 8-server deploy:
 - Parser/fact extraction improvements can change answer evidence ordering; keep tests anchored to evidence type and answer usefulness, not brittle wording.
 - Model-pool changes should stay disabled/observe-only until production health and rollback are clear.
 - Third-party database self-service APIs are not yet safe until credential handling and tenant isolation are fully specified.
-

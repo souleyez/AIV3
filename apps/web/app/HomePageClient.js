@@ -658,6 +658,110 @@ function compactStaticPageStructureSignals(draft) {
   };
 }
 
+function staticPageRenderedUrlFromDraft(draftOrOutput) {
+  const finalPage = draftOrOutput?.finalPage || draftOrOutput || {};
+  return finalPage.publicUrl
+    || finalPage.public_url
+    || finalPage.generatedArtifactUrl
+    || finalPage.generated_artifact_url
+    || finalPage.html_preview_url
+    || finalPage.htmlPreviewUrl
+    || finalPage.html_download_url
+    || finalPage.htmlDownloadUrl
+    || finalPage.download_url
+    || finalPage.downloadUrl
+    || finalPage.asset_manifest?.public_url
+    || finalPage.assetManifest?.public_url
+    || finalPage.assetManifest?.publicUrl
+    || finalPage.asset_manifest?.generated_artifact_url
+    || finalPage.assetManifest?.generatedArtifactUrl
+    || '';
+}
+
+function staticPageSafePreviewPath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const toAllowedPath = (url) => {
+    const path = `${url.pathname || '/'}${url.search || ''}${url.hash || ''}`;
+    if (path.startsWith('/generated-artifacts/')) return path;
+    if (/^\/v1\/static-page-render-outputs\/[^/]+\/preview(?:[?#].*)?$/.test(path)) return path;
+    if (/^\/v1\/external\/channels\/[^/]+\/static-page-renders\/[^/]+\/preview(?:[?#].*)?$/.test(path)) return path;
+    return '';
+  };
+  if (raw.startsWith('/') && !raw.startsWith('//')) {
+    return toAllowedPath({ pathname: raw.split(/[?#]/)[0], search: raw.match(/\?[^#]*/)?.[0] || '', hash: raw.match(/#.*$/)?.[0] || '' });
+  }
+  if (!/^https?:\/\//i.test(raw)) return '';
+  try {
+    const url = new URL(raw);
+    if (typeof window !== 'undefined' && url.origin !== window.location.origin) {
+      return '';
+    }
+    return toAllowedPath(url);
+  } catch {
+    return '';
+  }
+}
+
+function safeHtmlArtifactIdSegment(value, fallback = 'item') {
+  return String(value || fallback)
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96) || fallback;
+}
+
+function staticPagePublishedArtifactOwnerId(draft) {
+  return draft?.backendDraftId || draft?.id || '';
+}
+
+function buildStaticPagePublishedHtmlArtifact(draft) {
+  const finalStatus = draft?.finalPage?.status || draft?.status || '';
+  if (finalStatus !== 'rendered') return null;
+  const previewPath = staticPageSafePreviewPath(staticPageRenderedUrlFromDraft(draft));
+  if (!previewPath) return null;
+  const finalPage = draft.finalPage || {};
+  const assetManifest = finalPage.assetManifest || finalPage.asset_manifest || {};
+  const ownerId = staticPagePublishedArtifactOwnerId(draft);
+  const renderOutputId = finalPage.renderOutputId || finalPage.render_output_id || '';
+  const dataPath = staticPageSafePreviewPath(assetManifest.dataUrl || assetManifest.data_url || '');
+  const snapshotPath = staticPageSafePreviewPath(assetManifest.dataSnapshotUrl || assetManifest.data_snapshot_url || '');
+  return {
+    kind: 'html_artifact',
+    version: 1,
+    id: `html-static-page-published-${safeHtmlArtifactIdSegment(ownerId || draft.id)}-${safeHtmlArtifactIdSegment(renderOutputId || previewPath, 'page')}`,
+    title: `${draft.objective || draft.title || '静态页'} · 成品`,
+    sourceType: 'static_page',
+    templateId: 'static_page_published_preview',
+    interactionMode: 'read_only',
+    ownerScope: {
+      type: 'static_page_draft',
+      id: ownerId || draft.id,
+    },
+    dataRefs: [
+      draft.id ? { kind: 'local_static_page_draft', id: draft.id, label: '本地项目' } : null,
+      draft.backendDraftId ? { kind: 'static_page_draft', id: draft.backendDraftId, label: '后端草稿' } : null,
+      renderOutputId ? { kind: 'static_page_render_output', id: renderOutputId, label: 'Render Output' } : null,
+    ].filter(Boolean),
+    provenance: {
+      producer: finalPage.renderer || 'v3-static-page-publisher',
+      reason: 'published static page preview',
+      sourceRunId: draft.assistantRunId || draft.source?.assistantRunId || '',
+    },
+    createdAt: draft.backendUpdatedAt || draft.updated_at || draft.updatedAt || draft.created_at || new Date(0).toISOString(),
+    payload: {
+      status: 'rendered',
+      draftId: draft.id || '',
+      backendDraftId: draft.backendDraftId || '',
+      renderOutputId,
+      previewPath,
+      dataPath,
+      snapshotPath,
+      summary: draft.modelSummary || finalPage.notice || '页面已生成，可在主站内预览并继续通过对话修改。',
+    },
+  };
+}
+
 function buildStaticPagePlanningHtmlArtifact(draft) {
   if (!draft) return null;
   const id = draft.backendDraftId || draft.id || 'local-static-page-draft';
@@ -1018,6 +1122,7 @@ export default function HomePageClient() {
   const htmlArtifacts = useMemo(
     () => mergeHtmlArtifacts(
       backendHtmlArtifacts,
+      staticPageDraftItems.map(buildStaticPagePublishedHtmlArtifact).filter(Boolean),
       staticPageDraftItems.map(buildStaticPagePlanningHtmlArtifact).filter(Boolean),
       reportRenderOutputs.map((output) => buildReportRenderHtmlArtifact(output, selectedReportPlan)).filter(Boolean),
     ),
@@ -1274,17 +1379,7 @@ export default function HomePageClient() {
   }
 
   function staticPageRenderedUrl(draftOrOutput) {
-    const finalPage = draftOrOutput?.finalPage || draftOrOutput || {};
-    return finalPage.html_preview_url
-      || finalPage.htmlPreviewUrl
-      || finalPage.html_download_url
-      || finalPage.htmlDownloadUrl
-      || finalPage.download_url
-      || finalPage.downloadUrl
-      || finalPage.asset_manifest?.public_url
-      || finalPage.assetManifest?.public_url
-      || finalPage.assetManifest?.publicUrl
-      || '';
+    return staticPageRenderedUrlFromDraft(draftOrOutput);
   }
 
   function mergeBackendStaticPageDraft(localDraft, backendDraft) {
@@ -3194,9 +3289,53 @@ export default function HomePageClient() {
     return draft;
   }
 
-  function handleSelectStaticPageDraft(draftId) {
-    const draft = staticPageDrafts[draftId];
+  function staticPageDraftByAnyId(draftId) {
+    if (!draftId) return null;
+    return staticPageDrafts[draftId]
+      || staticPageDraftItems.find((draft) => draft?.id === draftId || draft?.backendDraftId === draftId)
+      || null;
+  }
+
+  function htmlArtifactOwnerScope(artifact) {
+    return artifact?.ownerScope || artifact?.owner_scope || {};
+  }
+
+  function publishedStaticPageArtifactForDraft(draft) {
+    if (!draft) return null;
+    const ownerIds = new Set([draft.id, draft.backendDraftId].filter(Boolean));
+    return htmlArtifacts.find((artifact) => {
+      const templateId = artifact?.templateId || artifact?.template_id;
+      if (templateId !== 'static_page_published_preview') return false;
+      const ownerScope = htmlArtifactOwnerScope(artifact);
+      return ownerScope?.type === 'static_page_draft' && ownerIds.has(ownerScope.id);
+    }) || null;
+  }
+
+  function handlePreviewStaticPageDraft(draftId) {
+    const draft = staticPageDraftByAnyId(draftId);
     if (!draft) {
+      return;
+    }
+    setActiveStaticPageDraftId(draft.id);
+    setStaticPageEditorOpen(false);
+    setMobilePanel('chat');
+    const artifact = publishedStaticPageArtifactForDraft(draft);
+    if (artifact?.id) {
+      setActiveHtmlArtifactId(artifact.id);
+      setBanner('已在主站打开静态页预览；后续直接在对话里说修改要求，会沿用这个项目。');
+      return;
+    }
+    setActiveHtmlArtifactId(null);
+    setBanner('静态页已生成，但当前链接不是主站可内嵌预览路径；右侧项目卡仍会保留，可复制链接或新窗口查看。');
+  }
+
+  function handleSelectStaticPageDraft(draftId) {
+    const draft = staticPageDraftByAnyId(draftId);
+    if (!draft) {
+      return;
+    }
+    if (draft.finalPage?.status === 'rendered' || draft.status === 'rendered') {
+      handlePreviewStaticPageDraft(draft.id);
       return;
     }
     if (activeStaticPageDraftId === draftId && staticPageEditorOpen) {
@@ -3297,9 +3436,17 @@ export default function HomePageClient() {
   }
 
   function handleSelectHtmlArtifact(artifactId) {
+    const artifact = htmlArtifacts.find((item) => (item?.id || item?.artifact_id) === artifactId);
+    const ownerScope = htmlArtifactOwnerScope(artifact);
+    if (ownerScope?.type === 'static_page_draft' && ownerScope.id) {
+      const draft = staticPageDraftByAnyId(ownerScope.id);
+      if (draft?.id) {
+        setActiveStaticPageDraftId(draft.id);
+      }
+    }
     setActiveHtmlArtifactId(artifactId);
     setStaticPageEditorOpen(false);
-    setBanner('已打开安全 HTML 产物；内容在沙箱中展示，不会执行任意外部脚本。');
+    setBanner('已打开主站内 HTML/静态页预览；需要调整时继续在对话里说修改要求。');
     setMobilePanel('chat');
   }
 
@@ -4070,12 +4217,20 @@ export default function HomePageClient() {
         ? `静态页已生成：${finalUrl}`
         : '静态页已生成，可以在右侧生成结果区打开。',
     );
+    const artifact = publishedStaticPageArtifactForDraft(draft);
+    if (artifact?.id && activeHtmlArtifactId !== artifact.id) {
+      setActiveHtmlArtifactId(artifact.id);
+      setStaticPageEditorOpen(false);
+      setMobilePanel('chat');
+    }
   }, [
     activeStaticPageDraft?.id,
     activeStaticPageDraft?.finalPage?.status,
     activeStaticPageDraft?.finalPage?.renderOutputId,
     activeStaticPageDraft?.finalPage?.htmlPreviewUrl,
     activeStaticPageDraft?.finalPage?.htmlDownloadUrl,
+    activeHtmlArtifactId,
+    htmlArtifacts,
   ]);
 
   useEffect(() => {
@@ -4289,6 +4444,7 @@ export default function HomePageClient() {
     staticPageDraft: activeStaticPageDraft,
     staticPageDrafts: staticPageDraftItems,
     onSelectStaticPageDraft: handleSelectStaticPageDraft,
+    onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,
     onRevertStaticPageStage: handleRevertStaticPageStage,
     onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: false }),

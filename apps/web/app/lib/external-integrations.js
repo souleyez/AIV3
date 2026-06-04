@@ -4,6 +4,7 @@ export const EXTERNAL_AUDIT_FILTERS = [
   { key: 'all', label: '全部', params: {} },
   { key: 'actions', label: '动作', params: { itemType: 'action' } },
   { key: 'search', label: '搜索证据', params: { itemType: 'search_evidence' } },
+  { key: 'outbound_replies', label: '回复回推', params: { itemType: 'outbound_reply' } },
   { key: 'callbacks', label: '结果回调', params: { itemType: 'action', actionState: 'result_callback' } },
   { key: 'waiting', label: '待结果', params: { itemType: 'action', actionState: 'waiting_result' } },
   { key: 'failed', label: '失败/阻断', params: { itemType: 'action', actionState: 'failed' } },
@@ -493,6 +494,68 @@ export function databaseSourceSummary(integration = {}) {
     tables,
     error: String(raw.error || ''),
   };
+}
+
+export function outboundReplyDispatchSummary(integration = {}) {
+  const configSummary = integration?.configSummary && typeof integration.configSummary === 'object'
+    ? integration.configSummary
+    : integration?.config_summary && typeof integration.config_summary === 'object'
+      ? integration.config_summary
+      : {};
+  const raw = configSummary.outbound_reply_dispatch && typeof configSummary.outbound_reply_dispatch === 'object'
+    ? configSummary.outbound_reply_dispatch
+    : configSummary.outboundReplyDispatch && typeof configSummary.outboundReplyDispatch === 'object'
+      ? configSummary.outboundReplyDispatch
+      : {};
+  const endpointConfigured = Boolean(
+    raw.endpoint_configured
+      ?? raw.endpointConfigured
+      ?? configSummary.reply_dispatch_endpoint_configured
+      ?? configSummary.replyDispatchEndpointConfigured,
+  );
+  const authMode = String(raw.auth_mode || raw.authMode || configSummary.reply_dispatch_auth_mode || 'none');
+  const authConfigured = Boolean(
+    raw.auth_configured
+      ?? raw.authConfigured
+      ?? (authMode && authMode !== 'none'),
+  );
+  const ready = Boolean(raw.ready ?? raw.configured ?? (endpointConfigured && authConfigured));
+  const authSource = String(raw.auth_source || raw.authSource || 'none');
+  const endpointHost = String(raw.endpoint_host || raw.endpointHost || '');
+  const actionAuthFallbackAvailable = Boolean(
+    raw.action_auth_fallback_available
+      ?? raw.actionAuthFallbackAvailable
+      ?? false,
+  );
+  const signal = ready
+    ? 'ready'
+    : endpointConfigured
+      ? 'missing_auth'
+      : 'missing_endpoint';
+  return {
+    configured: endpointConfigured || authConfigured,
+    ready,
+    signal,
+    endpointConfigured,
+    endpointHost,
+    authConfigured,
+    authMode,
+    authSource,
+    actionAuthFallbackAvailable,
+  };
+}
+
+export function outboundReplyDispatchSignalLabel(signal) {
+  switch (String(signal || '').toLowerCase()) {
+    case 'ready':
+      return '可主动回推';
+    case 'missing_auth':
+      return '待配置鉴权';
+    case 'missing_endpoint':
+      return '待第三方回推地址';
+    default:
+      return '未配置';
+  }
 }
 
 export function databaseSourceMetrics(integration = {}) {
@@ -1316,6 +1379,8 @@ export function auditItemTypeLabel(itemType) {
       return '动作';
     case 'search_evidence':
       return '搜索证据';
+    case 'outbound_reply':
+      return '回复回推';
     case 'sync':
       return '同步';
     default:
@@ -1354,6 +1419,11 @@ export function controlResultLabel(result) {
   }
   if (result.action === 'rotate_secret') {
     return '密钥轮换请求已记录';
+  }
+  if (result.action === 'configure_reply_dispatch') {
+    return result.status === 'reply_dispatch_cleared'
+      ? '助手消息回推配置已清空'
+      : '助手消息回推配置已保存';
   }
   return result.message || '操作已受理';
 }
