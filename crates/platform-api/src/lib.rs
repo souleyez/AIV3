@@ -55957,7 +55957,12 @@ fn selected_scope_allows_external_document_range_without_acl_snapshot(
             .get("external_document_scope_status")
             .and_then(Value::as_str),
         Some(
-            "resolved" | "partial" | "source_resolved" | "dataset_resolved" | "v3_dataset_resolved",
+            "resolved"
+                | "partial"
+                | "source_resolved"
+                | "dataset_resolved"
+                | "v3_dataset_resolved"
+                | "resolved_with_attachment_title",
         )
     ) {
         return false;
@@ -87082,6 +87087,41 @@ mod tests {
             DocumentId::new(),
             &[],
             true
+        ));
+    }
+
+    #[test]
+    fn external_attachment_title_scope_allows_missing_acl_snapshot_for_matched_document() {
+        let dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "external_document_scope_status": "resolved_with_attachment_title",
+            "datasets": [{"type": "dataset", "id": dataset_id}],
+            "documents": [{
+                "type": "document",
+                "id": document_id,
+                "scope_reason": "explicit_attachment_title_mention",
+            }],
+            "available_document_external_ids": ["doc-temp-resume"],
+            "attachment_title_resolution": {
+                "status": "matched",
+                "matched_documents": [{
+                    "id": document_id,
+                    "type": "document",
+                    "title": "郑宇宁简历.pdf"
+                }]
+            }
+        });
+
+        assert!(
+            selected_scope_allows_external_document_range_without_acl_snapshot(&selected_scope)
+        );
+        assert!(external_acl_allows_missing_snapshot_for_selected_document(
+            document_id,
+            &[document_id],
+            true,
         ));
     }
 
