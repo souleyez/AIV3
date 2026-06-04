@@ -1,20 +1,27 @@
 use anyhow::{anyhow, Result};
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use codex_host_agent::{
     extract_fixed_task_output_from_stdout, fixed_task_output_schema_hint,
     materialize_fixed_task_bundle, safe_log_excerpt, CodexCommandPlan, CodexHostAgentPolicy,
     CodexHostExecutionDecision, CodexHostExecutionMode, CodexHostRuntimeConfig,
     CodexHostTaskContext, CodexProcessOutput,
 };
-use contracts::CodexHostTaskOutputView;
+use contracts::{
+    CodexHostTaskOutputView, ExternalBotReplyTypeView, ExternalBotReplyView,
+    ExternalChannelEventResponse,
+};
 use domain_model::{
-    AssistantRunId, StaticPageDraftId, StaticPageDraftStatus, WorkflowExecutionId, WorkflowKind,
+    AssistantRunId, StaticPageDraftId, StaticPageDraftStatus, TenantId, WorkflowExecutionId,
+    WorkflowKind,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
     EventSubscription,
 };
+use hmac::{Hmac, Mac};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+use sqlx::Row;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -933,6 +940,736 @@ async fn append_assistant_event(
     Ok(())
 }
 
+#[derive(Clone, Debug, Default)]
+struct ExternalOutboundReplyDispatchAuth {
+    bearer_token: Option<String>,
+    signing_secret: Option<String>,
+}
+
+async fn maybe_dispatch_external_channel_outbound_reply_from_agent(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    assistant_run_id: AssistantRunId,
+    source_event_name: &str,
+    source_payload: &Value,
+) -> Result<()> {
+    let Some(connection_id) = source_payload
+        .get("channel_connection_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            source_payload
+                .pointer("/source_refs/channel_connection_id")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(());
+    };
+    let Some(reply) = (match source_event_name {
+        "assistant_run.external_channel_static_page_publish_completed" => {
+            external_channel_static_page_published_reply_from_agent_payload(source_payload)
+        }
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+
+    let source_event_hash = external_channel_public_stream_dedupe_hash(source_payload);
+    let existing_events = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await?;
+    if existing_events.iter().any(|event| {
+        event
+            .event_name
+            .starts_with("assistant_run.external_channel_outbound_reply_dispatch_")
+            && event
+                .payload
+                .get("source_event_hash")
+                .and_then(Value::as_str)
+                == Some(source_event_hash.as_str())
+    }) {
+        return Ok(());
+    }
+
+    let public_response = ExternalChannelEventResponse {
+        accepted: true,
+        assistant_run_id: Some(assistant_run_id),
+        idempotency_key: format!("outbound:{assistant_run_id}:{source_event_hash}"),
+        reply,
+    };
+    let row = sqlx::query(
+        r#"
+        select status, config_redacted
+        from external_channel_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(&connection_id)
+    .fetch_optional(storage.pool())
+    .await?;
+    let Some(row) = row else {
+        append_external_channel_outbound_reply_dispatch_event_from_agent(
+            storage,
+            tenant_id,
+            assistant_run_id,
+            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+                source_event_name,
+                &source_event_hash,
+                &connection_id,
+                &public_response,
+                json!({
+                    "status": "dispatch_blocked",
+                    "reason": "connection_missing",
+                }),
+            ),
+        )
+        .await?;
+        return Ok(());
+    };
+    let connection_status: String = row.get("status");
+    let config: Value = row.get("config_redacted");
+    if connection_status != "enabled" {
+        append_external_channel_outbound_reply_dispatch_event_from_agent(
+            storage,
+            tenant_id,
+            assistant_run_id,
+            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+                source_event_name,
+                &source_event_hash,
+                &connection_id,
+                &public_response,
+                json!({
+                    "status": "dispatch_blocked",
+                    "reason": "connection_disabled",
+                }),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let Some(dispatch_url) = external_channel_outbound_reply_dispatch_url_from_config(&config)
+    else {
+        append_external_channel_outbound_reply_dispatch_event_from_agent(
+            storage,
+            tenant_id,
+            assistant_run_id,
+            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+                source_event_name,
+                &source_event_hash,
+                &connection_id,
+                &public_response,
+                json!({
+                    "status": "dispatch_blocked",
+                    "endpoint_configured": false,
+                    "reason": "reply_dispatch_endpoint_missing",
+                }),
+            ),
+        )
+        .await?;
+        return Ok(());
+    };
+    let parsed_url = match reqwest::Url::parse(&dispatch_url) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") => url,
+        _ => {
+            append_external_channel_outbound_reply_dispatch_event_from_agent(
+                storage,
+                tenant_id,
+                assistant_run_id,
+                "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+                external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+                    source_event_name,
+                    &source_event_hash,
+                    &connection_id,
+                    &public_response,
+                    json!({
+                        "status": "dispatch_blocked",
+                        "endpoint_configured": true,
+                        "reason": "reply_dispatch_endpoint_invalid",
+                    }),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let auth = external_channel_outbound_reply_dispatch_auth_from_config(&config);
+    if !external_outbound_reply_dispatch_auth_configured(&auth) {
+        append_external_channel_outbound_reply_dispatch_event_from_agent(
+            storage,
+            tenant_id,
+            assistant_run_id,
+            "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+            external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+                source_event_name,
+                &source_event_hash,
+                &connection_id,
+                &public_response,
+                json!({
+                    "status": "dispatch_blocked",
+                    "endpoint_configured": true,
+                    "endpoint_host": parsed_url.host_str(),
+                    "auth_mode": "none",
+                    "reason": "reply_dispatch_auth_missing",
+                }),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let outbound_payload = external_channel_outbound_reply_dispatch_payload_from_agent(
+        &public_response,
+        source_event_name,
+    );
+    let body = serde_json::to_vec(&outbound_payload)?;
+    let nonce = Uuid::new_v4().simple().to_string();
+    let headers = match external_outbound_reply_dispatch_headers(
+        &connection_id,
+        &parsed_url,
+        &body,
+        &nonce,
+        &auth,
+    ) {
+        Ok(headers) => headers,
+        Err(reason) => {
+            append_external_channel_outbound_reply_dispatch_event_from_agent(
+                storage,
+                tenant_id,
+                assistant_run_id,
+                "assistant_run.external_channel_outbound_reply_dispatch_blocked",
+                external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+                    source_event_name,
+                    &source_event_hash,
+                    &connection_id,
+                    &public_response,
+                    json!({
+                        "status": "dispatch_blocked",
+                        "endpoint_configured": true,
+                        "endpoint_host": parsed_url.host_str(),
+                        "auth_mode": external_outbound_reply_dispatch_auth_mode(&auth),
+                        "reason": reason,
+                    }),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()?;
+    let response = match client
+        .post(parsed_url.clone())
+        .headers(headers)
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            append_external_channel_outbound_reply_dispatch_event_from_agent(
+                storage,
+                tenant_id,
+                assistant_run_id,
+                "assistant_run.external_channel_outbound_reply_dispatch_failed",
+                external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+                    source_event_name,
+                    &source_event_hash,
+                    &connection_id,
+                    &public_response,
+                    json!({
+                        "status": "dispatch_failed",
+                        "endpoint_configured": true,
+                        "endpoint_host": parsed_url.host_str(),
+                        "auth_mode": external_outbound_reply_dispatch_auth_mode(&auth),
+                        "reason": "request_failed",
+                        "request_error_kind": external_outbound_reply_reqwest_error_kind(&error),
+                    }),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    let http_status = response.status().as_u16();
+    let response_text = response.text().await.unwrap_or_default();
+    let response_json = serde_json::from_str::<Value>(&response_text).ok();
+    let success = (200..300).contains(&http_status);
+    append_external_channel_outbound_reply_dispatch_event_from_agent(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        if success {
+            "assistant_run.external_channel_outbound_reply_dispatch_dispatched"
+        } else {
+            "assistant_run.external_channel_outbound_reply_dispatch_failed"
+        },
+        external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+            source_event_name,
+            &source_event_hash,
+            &connection_id,
+            &public_response,
+            json!({
+                "status": if success { "dispatched" } else { "dispatch_failed" },
+                "endpoint_configured": true,
+                "endpoint_host": parsed_url.host_str(),
+                "auth_mode": external_outbound_reply_dispatch_auth_mode(&auth),
+                "http_status": http_status,
+                "response_summary": external_outbound_reply_response_summary(response_json.as_ref(), &response_text),
+            }),
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+fn external_channel_static_page_published_reply_from_agent_payload(
+    payload: &Value,
+) -> Option<ExternalBotReplyView> {
+    let public_url = payload
+        .get("public_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| generated_artifact_url_allowed(value))?;
+    let conversation_external_id = payload
+        .get("conversation_external_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .pointer("/source_refs/conversation_external_id")
+                .and_then(Value::as_str)
+        })?
+        .trim();
+    if conversation_external_id.is_empty() {
+        return None;
+    }
+    let text =
+        external_channel_text_with_public_artifact_link("V3 静态页已生成并发布。", public_url);
+    Some(ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: ExternalBotReplyTypeView::ArtifactLink,
+        text: Some(text),
+        card: Some(json!({
+            "type": "v3_static_page_image2_publish_completed",
+            "status": "static_page_published",
+            "public_url": public_url,
+            "generated_artifact_url": public_url,
+            "download_url": public_url,
+            "html_download_url": public_url,
+            "artifact_links": [public_url],
+            "data_url": external_channel_static_page_artifact_payload_value_from_agent(payload, "data_url"),
+            "data_snapshot_url": external_channel_static_page_artifact_payload_value_from_agent(payload, "data_snapshot_url"),
+            "dynamic_page_contract": external_channel_static_page_artifact_payload_value_from_agent(payload, "dynamic_page_contract"),
+            "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
+            "image_job_id": payload.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "render_output_id": payload.get("render_output_id").cloned().unwrap_or(Value::Null),
+            "codex_host_workflow_execution_id": payload.get("codex_host_workflow_execution_id").cloned().unwrap_or(Value::Null),
+            "status_url": payload.get("status_url").cloned().unwrap_or(Value::Null),
+            "status_method": payload.get("status_method").cloned().unwrap_or(Value::Null),
+            "poll_after_seconds": payload.get("poll_after_seconds").cloned().unwrap_or(Value::Null),
+            "recipient_delivery": external_channel_static_page_payload_or_source_ref_value_from_agent(payload, "recipient_delivery"),
+            "permission_review_status": external_channel_static_page_payload_or_source_ref_value_from_agent(payload, "permission_review_status"),
+            "editable_after_publish": external_channel_static_page_payload_or_source_ref_value_from_agent(payload, "editable_after_publish"),
+            "validation_summary": payload.get("validation_summary").cloned().unwrap_or(Value::Null),
+            "dataset_artifact_key": payload
+                .get("dataset_artifact_key")
+                .cloned()
+                .or_else(|| payload.pointer("/artifact_stability/dataset_artifact_key").cloned())
+                .or_else(|| payload.pointer("/source_refs/artifact_stability/dataset_artifact_key").cloned())
+                .unwrap_or(Value::Null),
+            "baseline_status": payload
+                .get("baseline_status")
+                .cloned()
+                .or_else(|| payload.pointer("/artifact_stability/baseline_status").cloned())
+                .or_else(|| payload.pointer("/source_refs/artifact_stability/baseline_status").cloned())
+                .unwrap_or(Value::Null),
+        })),
+        artifact_links: vec![public_url.to_string()],
+        task_status: Some("static_page_published".to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    })
+}
+
+fn external_channel_text_with_public_artifact_link(
+    text: impl Into<String>,
+    public_url: &str,
+) -> String {
+    let mut text = text.into();
+    let public_url = public_url.trim();
+    if public_url.is_empty() || text.contains(public_url) {
+        return text;
+    }
+    if !text.trim().is_empty() {
+        text.push_str("\n\n");
+    }
+    text.push_str("页面链接：[点击查看报表](");
+    text.push_str(public_url);
+    text.push_str(")\n\n页面地址: ");
+    text.push_str(public_url);
+    text
+}
+
+fn external_channel_static_page_artifact_payload_value_from_agent(
+    payload: &Value,
+    key: &str,
+) -> Value {
+    payload
+        .get(key)
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("artifact")
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .get("fixed_task_output")
+                .and_then(|output| output.get(key))
+                .cloned()
+        })
+        .or_else(|| {
+            payload
+                .pointer("/fixed_task_output/artifact")
+                .and_then(|artifact| artifact.get(key))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn external_channel_static_page_payload_or_source_ref_value_from_agent(
+    payload: &Value,
+    key: &str,
+) -> Value {
+    payload
+        .get(key)
+        .cloned()
+        .or_else(|| {
+            payload
+                .get("source_refs")
+                .and_then(|refs| refs.get(key))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn external_channel_outbound_reply_dispatch_url_from_config(config: &Value) -> Option<String> {
+    external_config_string(
+        config,
+        &[
+            "external_reply_dispatch_url",
+            "externalReplyDispatchUrl",
+            "reply_dispatch_url",
+            "replyDispatchUrl",
+            "outbound_reply_url",
+            "outboundReplyUrl",
+            "assistant_reply_dispatch_url",
+            "assistantReplyDispatchUrl",
+        ],
+    )
+}
+
+fn external_action_dispatch_auth_from_config(config: &Value) -> ExternalOutboundReplyDispatchAuth {
+    ExternalOutboundReplyDispatchAuth {
+        bearer_token: external_config_string(
+            config,
+            &[
+                "external_action_bearer_token",
+                "externalActionBearerToken",
+                "action_bearer_token",
+                "actionBearerToken",
+                "dispatch_bearer_token",
+                "dispatchBearerToken",
+            ],
+        ),
+        signing_secret: external_config_string(
+            config,
+            &[
+                "external_action_signing_secret",
+                "externalActionSigningSecret",
+                "action_signing_secret",
+                "actionSigningSecret",
+                "dispatch_signing_secret",
+                "dispatchSigningSecret",
+            ],
+        ),
+    }
+}
+
+fn external_channel_outbound_reply_dispatch_auth_from_config(
+    config: &Value,
+) -> ExternalOutboundReplyDispatchAuth {
+    let action_auth = external_action_dispatch_auth_from_config(config);
+    ExternalOutboundReplyDispatchAuth {
+        bearer_token: external_config_string(
+            config,
+            &[
+                "external_reply_bearer_token",
+                "externalReplyBearerToken",
+                "reply_dispatch_bearer_token",
+                "replyDispatchBearerToken",
+                "outbound_reply_bearer_token",
+                "outboundReplyBearerToken",
+            ],
+        )
+        .or(action_auth.bearer_token),
+        signing_secret: external_config_string(
+            config,
+            &[
+                "external_reply_signing_secret",
+                "externalReplySigningSecret",
+                "reply_dispatch_signing_secret",
+                "replyDispatchSigningSecret",
+                "outbound_reply_signing_secret",
+                "outboundReplySigningSecret",
+            ],
+        )
+        .or(action_auth.signing_secret),
+    }
+}
+
+fn external_config_string(config: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        config
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| {
+                !value.is_empty()
+                    && !value.eq_ignore_ascii_case("[redacted]")
+                    && !value.eq_ignore_ascii_case("redacted")
+            })
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn external_outbound_reply_dispatch_auth_configured(
+    auth: &ExternalOutboundReplyDispatchAuth,
+) -> bool {
+    auth.bearer_token.is_some() || auth.signing_secret.is_some()
+}
+
+fn external_outbound_reply_dispatch_auth_mode(
+    auth: &ExternalOutboundReplyDispatchAuth,
+) -> &'static str {
+    match (auth.signing_secret.is_some(), auth.bearer_token.is_some()) {
+        (true, true) => "signature_and_bearer",
+        (true, false) => "signature",
+        (false, true) => "bearer",
+        (false, false) => "none",
+    }
+}
+
+fn external_outbound_reply_dispatch_headers(
+    connection_id: &str,
+    url: &reqwest::Url,
+    body: &[u8],
+    nonce: &str,
+    auth: &ExternalOutboundReplyDispatchAuth,
+) -> std::result::Result<reqwest::header::HeaderMap, String> {
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let body_sha256 = sha256_hex([body]);
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    insert_dispatch_header(&mut headers, "x-v3-connection-id", connection_id)?;
+    insert_dispatch_header(&mut headers, "x-v3-timestamp", &timestamp)?;
+    insert_dispatch_header(&mut headers, "x-v3-nonce", nonce)?;
+    insert_dispatch_header(&mut headers, "x-v3-content-sha256", &body_sha256)?;
+    if let Some(token) = auth.bearer_token.as_deref() {
+        let header_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| "invalid_header_value:authorization".to_string())?;
+        headers.insert(reqwest::header::AUTHORIZATION, header_value);
+    }
+    if let Some(secret) = auth.signing_secret.as_deref() {
+        let signature_path = external_action_dispatch_signature_path(url);
+        let canonical = external_action_dispatch_signature_payload(
+            "POST",
+            &signature_path,
+            &timestamp,
+            nonce,
+            &body_sha256,
+        );
+        let signature = external_action_dispatch_signature_hex(secret, &canonical);
+        insert_dispatch_header(
+            &mut headers,
+            "x-v3-signature",
+            &format!("sha256={signature}"),
+        )?;
+    }
+    Ok(headers)
+}
+
+fn insert_dispatch_header(
+    headers: &mut reqwest::header::HeaderMap,
+    name: &'static str,
+    value: &str,
+) -> std::result::Result<(), String> {
+    let header_value = reqwest::header::HeaderValue::from_str(value)
+        .map_err(|_| format!("invalid_header_value:{name}"))?;
+    headers.insert(reqwest::header::HeaderName::from_static(name), header_value);
+    Ok(())
+}
+
+fn external_action_dispatch_signature_path(url: &reqwest::Url) -> String {
+    match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
+    }
+}
+
+fn external_action_dispatch_signature_payload(
+    method: &str,
+    path: &str,
+    timestamp: &str,
+    nonce: &str,
+    body_sha256: &str,
+) -> String {
+    format!("{method}\n{path}\n{timestamp}\n{nonce}\n{body_sha256}")
+}
+
+fn external_action_dispatch_signature_hex(secret: &str, payload: &str) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(payload.as_bytes());
+    bytes_to_lower_hex(mac.finalize().into_bytes().as_slice())
+}
+
+fn external_channel_outbound_reply_dispatch_payload_from_agent(
+    response: &ExternalChannelEventResponse,
+    source_event_name: &str,
+) -> Value {
+    json!({
+        "schema": "v3.external_channel.outbound_reply.v1",
+        "event_type": "assistant_reply",
+        "trigger": "async_result_completed",
+        "source_event_name": source_event_name,
+        "assistant_run_id": response.assistant_run_id,
+        "idempotency_key": response.idempotency_key,
+        "conversation_external_id": response.reply.target_conversation_external_id,
+        "reply": response.reply,
+        "artifact_links": response.reply.artifact_links,
+        "task_status": response.reply.task_status,
+        "requires_confirmation": response.reply.requires_confirmation,
+    })
+}
+
+fn external_channel_outbound_reply_dispatch_audit_payload_from_agent(
+    source_event_name: &str,
+    source_event_hash: &str,
+    connection_id: &str,
+    response: &ExternalChannelEventResponse,
+    dispatch: Value,
+) -> Value {
+    json!({
+        "schema": "v3.external_channel.outbound_reply.dispatch_audit.v1",
+        "source_event_name": source_event_name,
+        "source_event_hash": source_event_hash,
+        "channel_connection_id": connection_id,
+        "assistant_run_id": response.assistant_run_id,
+        "conversation_external_id": response.reply.target_conversation_external_id,
+        "reply_type": response.reply.reply_type,
+        "task_status": response.reply.task_status,
+        "artifact_links": response.reply.artifact_links,
+        "text_present": response.reply.text.as_ref().map(|text| !text.trim().is_empty()).unwrap_or(false),
+        "text_preview": response.reply.text.as_ref().map(|text| safe_response_excerpt(text, 240)).unwrap_or_default(),
+        "dispatch": dispatch,
+    })
+}
+
+async fn append_external_channel_outbound_reply_dispatch_event_from_agent(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    assistant_run_id: AssistantRunId,
+    event_name: &str,
+    payload: Value,
+) -> Result<()> {
+    append_assistant_event(storage, tenant_id, assistant_run_id, event_name, payload).await
+}
+
+fn external_outbound_reply_response_summary(
+    response_json: Option<&Value>,
+    response_text: &str,
+) -> Value {
+    if let Some(json) = response_json {
+        if json.is_object() {
+            return json!({
+                "kind": "json_object",
+                "field_count": json.as_object().map(|object| object.len()).unwrap_or(0),
+                "accepted": json.get("accepted").cloned().unwrap_or(Value::Null),
+                "status": json.get("status").cloned().unwrap_or(Value::Null),
+            });
+        }
+        return json!({"kind": "json", "value_type": json_value_kind(json)});
+    }
+    json!({
+        "kind": "text",
+        "byte_len": response_text.len(),
+        "preview": safe_response_excerpt(response_text, 160),
+    })
+}
+
+fn external_outbound_reply_reqwest_error_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_decode() {
+        "decode"
+    } else {
+        "unknown"
+    }
+}
+
+fn json_value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn external_channel_public_stream_dedupe_hash(value: &Value) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    sha256_hex([bytes.as_slice()])
+}
+
+fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    bytes_to_lower_hex(hasher.finalize().as_slice())
+}
+
+fn bytes_to_lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
 async fn maybe_record_external_static_page_publish_completed_from_task_output(
     storage: &PgStorage,
     tenant_id: domain_model::TenantId,
@@ -1008,9 +1745,24 @@ async fn maybe_record_external_static_page_publish_completed_from_task_output(
         tenant_id,
         assistant_run_id,
         "assistant_run.external_channel_static_page_publish_completed",
-        completed_payload,
+        completed_payload.clone(),
     )
     .await?;
+    if let Err(error) = maybe_dispatch_external_channel_outbound_reply_from_agent(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        "assistant_run.external_channel_static_page_publish_completed",
+        &completed_payload,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = ?error,
+            %assistant_run_id,
+            "external channel outbound reply dispatch failed after codex-host static-page publish completion"
+        );
+    }
     Ok(())
 }
 
@@ -7202,6 +7954,67 @@ function renderInsight(k){
             json!("data.json")
         );
         assert!(!payload.to_string().contains("must"));
+    }
+
+    #[test]
+    fn external_outbound_reply_payload_surfaces_static_page_link() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html";
+        let payload = json!({
+            "channel_connection_id": "generic-chat-main",
+            "conversation_external_id": "conv-1",
+            "message_external_id": "msg-1",
+            "public_url": public_url,
+            "artifact_links": [public_url],
+            "data_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data.json",
+            "data_snapshot_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/data-snapshot.json",
+            "dynamic_page_contract": {
+                "version": 1,
+                "data_file": "data.json"
+            },
+            "source_refs": {
+                "selected_scope": {"must": "not leak"},
+                "recipient_delivery": {
+                    "enabled": true,
+                    "current_delivery_mode": "base_link_first_then_recipient_specific_adjustment"
+                }
+            },
+            "validation_summary": {
+                "source_row_count": 862
+            }
+        });
+
+        let reply = external_channel_static_page_published_reply_from_agent_payload(&payload)
+            .expect("published static page payload should become reply");
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(AssistantRunId::new()),
+            idempotency_key: "outbound:test".to_string(),
+            reply,
+        };
+        let outbound = external_channel_outbound_reply_dispatch_payload_from_agent(
+            &response,
+            "assistant_run.external_channel_static_page_publish_completed",
+        );
+
+        assert_eq!(
+            outbound["schema"],
+            json!("v3.external_channel.outbound_reply.v1")
+        );
+        assert_eq!(outbound["trigger"], json!("async_result_completed"));
+        assert_eq!(outbound["conversation_external_id"], json!("conv-1"));
+        assert_eq!(outbound["reply"]["reply_type"], json!("artifact_link"));
+        assert_eq!(
+            outbound["reply"]["task_status"],
+            json!("static_page_published")
+        );
+        assert_eq!(outbound["artifact_links"][0], json!(public_url));
+        assert_eq!(outbound["reply"]["card"]["public_url"], json!(public_url));
+        assert!(outbound["reply"]["text"]
+            .as_str()
+            .expect("reply text")
+            .contains("[点击查看报表]"));
+        assert!(!outbound.to_string().contains("must"));
     }
 
     #[test]

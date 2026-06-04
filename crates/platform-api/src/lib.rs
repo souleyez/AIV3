@@ -18748,6 +18748,13 @@ async fn load_external_channel_assistant_run_reply_response(
             .await
             .map_err(ApiError::from_storage)?;
     }
+    maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_event(
+        &state.storage,
+        state.tenant_id,
+        run.id,
+        &events,
+    )
+    .await?;
     let reply =
         external_channel_reply_from_run_and_events(&run, &events, &conversation_external_id)
             .unwrap_or_else(|| {
@@ -20887,6 +20894,32 @@ async fn maybe_dispatch_external_channel_outbound_reply(
     )
     .await?;
     Ok(())
+}
+
+async fn maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_event(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    assistant_run_id: AssistantRunId,
+    events: &[AssistantRunEvent],
+) -> std::result::Result<(), ApiError> {
+    let Some(event) = events.iter().rev().find(|event| {
+        matches!(
+            event.event_name.as_str(),
+            "assistant_run.external_channel_static_page_publish_completed"
+                | "assistant_run.external_channel_static_page_publish_failed"
+        )
+    }) else {
+        return Ok(());
+    };
+    maybe_dispatch_external_channel_outbound_reply(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        &event.event_name,
+        &event.payload,
+        Utc::now(),
+    )
+    .await
 }
 
 fn external_channel_outbound_reply_dispatch_payload(
@@ -26388,6 +26421,13 @@ async fn external_channel_duplicate_reply(
                     .list_events(state.tenant_id, existing_run_id)
                     .await
                     .map_err(ApiError::from_storage)?;
+                maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_event(
+                    &state.storage,
+                    state.tenant_id,
+                    refreshed_run.id,
+                    &refreshed_events,
+                )
+                .await?;
                 if let Some(reply) = external_channel_reply_from_run_and_events(
                     &refreshed_run,
                     &refreshed_events,
@@ -26397,6 +26437,13 @@ async fn external_channel_duplicate_reply(
                 }
             }
         }
+        maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_event(
+            &state.storage,
+            state.tenant_id,
+            run.id,
+            &events,
+        )
+        .await?;
         if let Some(reply) = external_channel_reply_from_run_and_events(
             &run,
             &events,
@@ -96971,6 +97018,153 @@ retrieve_evidence:
         assert!(!audit_text.contains("reply-token"));
         assert!(!audit_text.contains("third-party-secret"));
         assert!(!audit_text.contains("accepted but not stored verbatim"));
+    }
+
+    #[tokio::test]
+    async fn external_outbound_reply_latest_terminal_event_records_blocked_when_endpoint_missing() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external outbound reply blocked test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-outbound-reply-blocked-test-{}", Uuid::new_v4()),
+                "External Outbound Reply Blocked Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection_with_config(
+            &state,
+            "generic-chat-main",
+            json!({
+                "tenant_external_id": "tenant-ext-001",
+                "bot_external_id": "bot-v3",
+                "inbound_bearer_token": "inbound-secret"
+            }),
+        )
+        .await;
+        let now = Utc::now();
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some(
+                        "external:generic_chat:tenant-ext-001:bot-v3:chat-static-page".to_string(),
+                    ),
+                    user_prompt: "生成经营分析静态页".to_string(),
+                    startup_briefing: json!({"surface": "external_channel"}),
+                    selected_scope: json!({
+                        "type": "external_channel",
+                        "channel_connection_id": "generic-chat-main",
+                        "conversation_external_id": "chat-static-page",
+                    }),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+        let source_payload = json!({
+            "channel_connection_id": "generic-chat-main",
+            "conversation_external_id": "chat-static-page",
+            "message_external_id": "msg-static-page-001",
+            "draft_id": StaticPageDraftId::new().to_string(),
+            "image_job_id": StaticPageImageJobId::new().to_string(),
+            "codex_host_workflow_execution_id": WorkflowExecutionId::new().to_string(),
+            "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+            "artifact_links": [
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
+            ],
+            "source_refs": {
+                "conversation_external_id": "chat-static-page"
+            }
+        });
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_channel_static_page_publish_completed"
+                        .to_string(),
+                    payload: source_payload,
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("terminal event should append");
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_event(
+            &state.storage,
+            state.tenant_id,
+            run.id,
+            &events,
+        )
+        .await
+        .expect("missing endpoint should be recorded, not fail");
+        maybe_dispatch_external_channel_outbound_reply_for_latest_terminal_event(
+            &state.storage,
+            state.tenant_id,
+            run.id,
+            &events,
+        )
+        .await
+        .expect("duplicate missing endpoint should dedupe");
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        let blocked_events = events
+            .iter()
+            .filter(|event| {
+                event.event_name == "assistant_run.external_channel_outbound_reply_dispatch_blocked"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(blocked_events.len(), 1);
+        let audit = &blocked_events[0].payload;
+        assert_eq!(
+            audit["source_event_name"],
+            json!("assistant_run.external_channel_static_page_publish_completed")
+        );
+        assert_eq!(
+            audit["dispatch"]["reason"],
+            json!("reply_dispatch_endpoint_missing")
+        );
+        assert_eq!(
+            audit["artifact_links"][0],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html")
+        );
     }
 
     #[tokio::test]

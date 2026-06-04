@@ -11,9 +11,13 @@ chrono.workspace = true
 contracts = { path = "../contracts" }
 domain-model = { path = "../domain-model" }
 event-bus = { path = "../event-bus" }
+hmac.workspace = true
 observability = { path = "../observability" }
+reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
 storage = { path = "../storage" }
 tokio.workspace = true
 tracing.workspace = true
