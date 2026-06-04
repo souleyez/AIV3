@@ -19187,6 +19187,7 @@ async fn ingest_external_channel_message_with_connection_inner(
                 external_channel_chat_model_or_acceptance_reply(
                     state,
                     connection_id,
+                    connection,
                     run.id,
                     &assistant_request,
                     &external_evidence_state,
@@ -35718,10 +35719,37 @@ fn external_channel_prompt_requires_document_scope(prompt: &str) -> bool {
         .any(|marker| compact.contains(marker))
 }
 
+fn external_channel_model_static_page_tool_request(output_text: &str) -> Option<Value> {
+    const START: &str = "<V3_TOOL_REQUEST>";
+    const END: &str = "</V3_TOOL_REQUEST>";
+    let start = output_text.find(START)? + START.len();
+    let end = output_text[start..].find(END)? + start;
+    let raw = output_text[start..end].trim();
+    let value: Value = serde_json::from_str(raw).ok()?;
+    let tool = value
+        .get("tool")
+        .or_else(|| value.get("tool_name"))
+        .or_else(|| value.get("toolName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    matches!(
+        tool,
+        "static_page_artifact"
+            | "static-page-artifact"
+            | "static_page"
+            | "static-page"
+            | "report_artifact"
+            | "dashboard_artifact"
+    )
+    .then_some(value)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn external_channel_chat_model_or_acceptance_reply(
     state: &AppState,
     connection_id: &str,
+    connection: &ExternalChannelConnectionSummary,
     run_id: AssistantRunId,
     assistant_request: &CreateAssistantRunRequest,
     evidence_state: &Value,
@@ -36221,6 +36249,89 @@ async fn external_channel_chat_model_or_acceptance_reply(
                 now,
             )
             .await?;
+        }
+
+        if let Some(tool_request) = external_channel_model_static_page_tool_request(&output_text) {
+            let mut tool_message = message.clone();
+            tool_message.artifact_type = Some("static_page".to_string());
+            tool_message.render_mode = Some("artifact".to_string());
+            if tool_message.output_format.is_none() {
+                tool_message.output_format = Some("rich_text".to_string());
+            }
+
+            let mut tool_assistant_request = assistant_request.clone();
+            let mut tool_selected_scope = tool_assistant_request
+                .selected_scope
+                .clone()
+                .unwrap_or_else(|| json!({}));
+            set_payload_value(
+                &mut tool_selected_scope,
+                "model_tool_request",
+                tool_request.clone(),
+            );
+            set_payload_value(
+                &mut tool_selected_scope,
+                "model_tool_request_source",
+                json!("external_channel_model_reply"),
+            );
+            enrich_external_channel_database_source_scope(
+                state,
+                connection,
+                &tool_message,
+                tool_assistant_request.prompt.trim(),
+                &mut tool_selected_scope,
+            )
+            .await?;
+            tool_assistant_request.selected_scope = Some(tool_selected_scope);
+
+            let current_run = state
+                .storage
+                .assistant_runs()
+                .get_by_id(state.tenant_id, run_id)
+                .await
+                .map_err(ApiError::from_storage)?
+                .ok_or_else(|| {
+                    ApiError::internal(
+                        "assistant_run_missing_for_model_tool_request",
+                        format!("assistant run {run_id} was not found"),
+                    )
+                })?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run_id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_model_tool_request_detected"
+                            .to_string(),
+                        payload: json!({
+                            "channel_connection_id": connection_id,
+                            "platform": external_channel_platform_wire_value(&message.platform),
+                            "message_external_id": message.message_external_id.clone(),
+                            "attempt": attempt.label.as_str(),
+                            "tool_request": tool_request,
+                            "forced_artifact_type": "static_page",
+                            "runtime": runtime_manifest.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            if let Some(reply) = maybe_enqueue_external_channel_static_page_pipeline(
+                state,
+                connection_id,
+                connection,
+                &current_run,
+                &tool_assistant_request,
+                &tool_message,
+                now,
+            )
+            .await?
+            {
+                return Ok(reply);
+            }
         }
 
         let assistant_artifact = json!({
@@ -39438,6 +39549,10 @@ fn build_assistant_run_provider_input_with_evidence(
         );
         sections.push(
             "外部通道供料表达要求：如果已经收到文档、检索切片、事实快照或会话范围供料，优先把相关证据整理成可执行结论、步骤、表格或清单；不要把“当前可见”“暂未直接检索到”“资料不足”“建议补充资料”放在答案开头。若供料只是相关章节而非专项原文，必须区分“文档明文规定”和“按相关章节/通用规范整理的可参考流程”，不要把推导或通用经验写成文档明文。只有完全没有相关供料、或确实只能确认文档未就绪/不可见时，才用缺资料说明，并给出最短下一步。"
+                .to_string(),
+        );
+        sections.push(
+            "外部通道可执行工具能力：宿主可创建、复用、修改和发布 `static_page_artifact`（静态页/可视化报表/经营看板/大屏/移动端报表），并可基于已有发布链接继续增量修改。若你根据用户文本、最近对话或当前产物判断用户是在要求生成、重新设计、修改、换风格、移动端适配、发布或返回报表页面链接，不要只给设计建议；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主调用生成工具。普通咨询、口径解释、数据问答则正常自然语言回答。"
                 .to_string(),
         );
     }
@@ -87942,6 +88057,28 @@ mod tests {
         assert!(external_channel_message_requests_static_page_artifact(
             &message, prompt
         ));
+    }
+
+    #[test]
+    fn external_channel_model_context_exposes_static_page_tool_request_protocol() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+        message.text = Some("我不喜欢这个风格的报表，想改成暗黑移动端版本。".to_string());
+        let request = external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+
+        let provider_input = build_assistant_run_provider_input_with_evidence(
+            &request,
+            Some(&json!({"status":"not_requested"})),
+        );
+
+        assert!(provider_input.contains("static_page_artifact"));
+        assert!(provider_input.contains("<V3_TOOL_REQUEST>"));
+        let tool_request = external_channel_model_static_page_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"static_page_artifact","intent":"create_or_update","reason":"用户要求修改报表风格"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert_eq!(tool_request["tool"], json!("static_page_artifact"));
     }
 
     #[test]
