@@ -29101,31 +29101,16 @@ fn external_channel_static_page_reply_from_events(
             return Some(reply);
         }
     }
+    if let Some(reply) = external_channel_static_page_existing_artifact_reply_from_events(
+        events,
+        conversation_external_id,
+    ) {
+        return Some(reply);
+    }
     if let Some(reply) =
         external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
     {
         return Some(reply);
-    }
-    if let Some(event) = events.iter().rev().find(|event| {
-        event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
-            || (event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
-                && external_channel_static_page_provisional_existing_artifact(Some(&event.payload))
-                && event
-                    .payload
-                    .get("image2_skip_reason")
-                    .and_then(Value::as_str)
-                    == Some("accepted_dataset_overlap_template_baseline")
-                && event
-                    .payload
-                    .get("public_url")
-                    .and_then(Value::as_str)
-                    .map(codex_host_fixed_task_public_artifact_url_allowed)
-                    .unwrap_or(false))
-    }) {
-        return Some(external_channel_static_page_stable_artifact_reused_reply(
-            conversation_external_id,
-            &event.payload,
-        ));
     }
     for event in events.iter().rev() {
         if event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused" {
@@ -29576,6 +29561,32 @@ fn external_channel_static_page_reply_from_events(
         }
     }
     None
+}
+
+fn external_channel_static_page_existing_artifact_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let event = events.iter().rev().find(|event| {
+        event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
+            || (event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
+                && external_channel_static_page_provisional_existing_artifact(Some(&event.payload))
+                && event
+                    .payload
+                    .get("image2_skip_reason")
+                    .and_then(Value::as_str)
+                    == Some("accepted_dataset_overlap_template_baseline")
+                && event
+                    .payload
+                    .get("public_url")
+                    .and_then(Value::as_str)
+                    .map(codex_host_fixed_task_public_artifact_url_allowed)
+                    .unwrap_or(false))
+    })?;
+    Some(external_channel_static_page_stable_artifact_reused_reply(
+        conversation_external_id,
+        &event.payload,
+    ))
 }
 
 fn external_channel_static_page_fixed_task_reply_from_events(
@@ -110596,7 +110607,7 @@ retrieve_evidence:
     }
 
     #[test]
-    fn external_channel_static_page_reply_surfaces_exec_failed_over_provisional_template_link() {
+    fn external_channel_static_page_reply_surfaces_provisional_template_link_over_exec_failed() {
         let run_id = AssistantRunId::new();
         let workflow_execution_id = WorkflowExecutionId::new().to_string();
         let public_url =
@@ -110644,17 +110655,15 @@ retrieve_evidence:
         ];
 
         let reply = external_channel_static_page_reply_from_events(&events, "conv-1")
-            .expect("failed status reply");
+            .expect("existing artifact reply");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(reply.task_status.as_deref(), Some("processing"));
-        assert!(reply.artifact_links.is_empty());
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
         let card = reply.card.as_ref().expect("status card");
-        assert_eq!(card["status"], json!("static_page_publish_failed"));
-        assert_eq!(
-            card["runtime_event"]["event_name"],
-            json!("codex_host_task.exec_failed")
-        );
+        assert_eq!(card["status"], json!("static_page_published"));
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
         assert!(card["poll_after_seconds"].is_null());
     }
 
