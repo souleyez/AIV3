@@ -9712,7 +9712,10 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
         .or_else(|| raw_data.get("text").and_then(Value::as_str))
         .unwrap_or("V3 正在处理。");
     let mut display_text = external_channel_public_stream_text(display_text);
-    if !include_artifact_link && display_text.contains("generated-artifacts/") {
+    if !include_artifact_link
+        && !include_preview_link
+        && display_text.contains("generated-artifacts/")
+    {
         display_text =
             "V3 已返回当前处理状态，页面仍在后台继续生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。".to_string();
     }
@@ -91195,6 +91198,41 @@ mod tests {
         assert!(provisional_completed
             .pointer("/data/card/public_url")
             .is_none());
+
+        let preview_ready = external_channel_sse_public_payload(
+            Some(run_id),
+            "generic:tenant:stream-001",
+            "room-1",
+            30,
+            "static_page",
+            "static_page_preview_ready",
+            "页面过程预览已生成：https://v3.elepcloud.com/generated-artifacts/demo/preview.png",
+            Some("https://v3.elepcloud.com/status/run-1".to_string()),
+            None,
+            json!({
+                "card": {
+                    "type": "v3_static_page_pipeline",
+                    "status": "static_page_preview_ready",
+                    "draft_id": "draft-1",
+                    "preview_url": "https://v3.elepcloud.com/generated-artifacts/demo/preview.png",
+                    "public_url": "https://v3.elepcloud.com/generated-artifacts/demo/index.html"
+                }
+            }),
+        );
+        let preview_ready = external_channel_public_stream_payload(preview_ready);
+        assert!(preview_ready
+            .get("display_text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("generated-artifacts/demo/preview.png"));
+        assert!(preview_ready.get("artifact_links").is_none());
+        assert!(preview_ready.pointer("/data/card/public_url").is_none());
+        assert_eq!(
+            preview_ready.pointer("/data/card/preview_url"),
+            Some(&json!(
+                "https://v3.elepcloud.com/generated-artifacts/demo/preview.png"
+            ))
+        );
     }
 
     #[test]
