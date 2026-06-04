@@ -29071,6 +29071,12 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
         return true;
     }
 
+    if static_page_prompt_requests_explicit_redesign(prompt)
+        || static_page_prompt_requests_existing_artifact_revision(prompt)
+    {
+        return true;
+    }
+
     external_channel_prompt_is_short_report_artifact_request(&compact, prompt)
 }
 
@@ -31059,6 +31065,20 @@ fn static_page_prompt_requests_explicit_redesign(prompt: &str) -> bool {
             "全新页面",
             "换个风格",
             "换风格",
+            "不喜欢这个风格",
+            "不喜欢现在风格",
+            "不喜欢当前风格",
+            "暗黑风格",
+            "深色风格",
+            "暗黑背景",
+            "深色背景",
+            "移动端优先",
+            "手机端优先",
+            "适合手机端",
+            "手机端展示",
+            "移动端展示",
+            "卡片风格",
+            "卡片式",
             "从头做",
             "newversion",
             "newpage",
@@ -31080,6 +31100,23 @@ fn static_page_prompt_requests_explicit_redesign(prompt: &str) -> bool {
             "全新页面",
             "换个风格",
             "换风格",
+            "不喜欢这个风格",
+            "不喜欢现在风格",
+            "不喜欢当前风格",
+            "不好看",
+            "观感不好",
+            "暗黑一点",
+            "暗黑风格",
+            "深色风格",
+            "暗黑背景",
+            "深色背景",
+            "移动端优先",
+            "手机端优先",
+            "适合手机端",
+            "手机端展示",
+            "移动端展示",
+            "卡片风格",
+            "卡片式",
             "从头做",
             "newversion",
             "newpage",
@@ -83919,6 +83956,9 @@ mod tests {
         assert!(static_page_prompt_requests_explicit_redesign(
             "重新设计一版全新页面"
         ));
+        assert!(static_page_prompt_requests_explicit_redesign(
+            "我不喜欢这个风格的报表，最好暗黑一点的背景，并且适合手机端展示，重点突出最近可取高门店。"
+        ));
         assert!(static_page_prompt_requests_existing_artifact_revision(
             "把标题改一下"
         ));
@@ -83991,6 +84031,14 @@ mod tests {
         assert_eq!(
             static_page_existing_artifact_reference_for_fixed_task(
                 "重新出图，换个风格，修复近7日销售",
+                Some(&generated_template_reference),
+                None,
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            static_page_existing_artifact_reference_for_fixed_task(
+                "我不喜欢这个风格的报表，最好暗黑一点的背景，并且适合手机端展示，重点突出最近可取高门店。",
                 Some(&generated_template_reference),
                 None,
             ),
@@ -87876,6 +87924,20 @@ mod tests {
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
         let prompt = "生成一张经营分析可视化报表页，最终给 generated-artifact 页面链接";
+
+        assert!(external_channel_message_requests_static_page_artifact(
+            &message, prompt
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_detects_report_redesign_feedback_without_artifact_mode(
+    ) {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+        let prompt =
+            "我不喜欢这个风格的报表，最好暗黑一点的背景，并且适合手机端展示，重点突出最近可取高门店。";
 
         assert!(external_channel_message_requests_static_page_artifact(
             &message, prompt
