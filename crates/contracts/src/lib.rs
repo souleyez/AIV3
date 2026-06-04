@@ -924,6 +924,30 @@ pub struct ExternalIntegrationControlRequest {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateExternalChannelConnectionRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub customer_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clone_from_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_database_source_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalIntegrationReplyDispatchConfigRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -952,6 +976,10 @@ pub struct ExternalIntegrationControlResponse {
     pub workflow_execution: Option<WorkflowExecutionView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enqueued_tasks: Vec<WorkflowTaskView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbound_bearer_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -5752,6 +5780,8 @@ mod tests {
             sync_run_id: Some("sync-run-001".to_string()),
             workflow_execution: None,
             enqueued_tasks: Vec::new(),
+            inbound_bearer_token: None,
+            token_expires_at: None,
         };
         let encoded = serde_json::to_value(response).expect("response should serialize");
 

@@ -338,6 +338,7 @@ export function normalizeIntegrationSummary(raw = {}) {
     actionSummary,
     actionSignal: action,
     configSummary: raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {},
+    inboundAuth: inboundAuthSummary(raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {}),
     searchSummary,
     searchSignal: search,
     searchEvidenceRequiredCount: numberOrZero(searchSummary.required_count),
@@ -354,6 +355,22 @@ export function normalizeIntegrationSummary(raw = {}) {
       healthStatus: raw.health_status,
       status: raw.status,
     }),
+  };
+}
+
+export function inboundAuthSummary(configSummary = {}) {
+  const temporaryAccess = configSummary.temporary_access && typeof configSummary.temporary_access === 'object'
+    ? configSummary.temporary_access
+    : configSummary.temporaryAccess && typeof configSummary.temporaryAccess === 'object'
+      ? configSummary.temporaryAccess
+      : {};
+  return {
+    configured: Boolean(configSummary.inbound_auth_configured ?? configSummary.inboundAuthConfigured),
+    mode: String(configSummary.inbound_auth_mode || configSummary.inboundAuthMode || 'none'),
+    temporary: Boolean(temporaryAccess.temporary),
+    expired: Boolean(temporaryAccess.expired),
+    expiresAt: temporaryAccess.expires_at || temporaryAccess.expiresAt || null,
+    tokenRotatedAt: temporaryAccess.token_rotated_at || temporaryAccess.tokenRotatedAt || null,
   };
 }
 
@@ -1399,6 +1416,8 @@ export function normalizeControlResult(raw = {}) {
     affectedActionCount: numberOrZero(raw.affected_action_count),
     syncRunId: raw.sync_run_id || null,
     enqueuedTaskCount: Array.isArray(raw.enqueued_tasks) ? raw.enqueued_tasks.length : 0,
+    inboundBearerToken: raw.inbound_bearer_token ? String(raw.inbound_bearer_token) : '',
+    tokenExpiresAt: raw.token_expires_at || null,
   };
 }
 
@@ -1416,6 +1435,15 @@ export function controlResultLabel(result) {
   }
   if (result.action === 'disable') {
     return '集成已停用';
+  }
+  if (result.action === 'enable') {
+    return '集成已启用';
+  }
+  if (result.action === 'create_channel') {
+    return '第三方通道已创建，token 仅本次展示';
+  }
+  if (result.action === 'rotate_token') {
+    return '入站 token 已轮换，token 仅本次展示';
   }
   if (result.action === 'rotate_secret') {
     return '密钥轮换请求已记录';

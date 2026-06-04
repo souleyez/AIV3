@@ -318,6 +318,19 @@ export default function ExternalIntegrationsPageClient() {
     bearerToken: '',
     signingSecret: '',
   });
+  const [channelCreateBusy, setChannelCreateBusy] = useState(false);
+  const [channelTokenBusy, setChannelTokenBusy] = useState('');
+  const [channelCreateForm, setChannelCreateForm] = useState({
+    customerKey: '',
+    connectionId: '',
+    displayName: '',
+    cloneFromConnectionId: 'generic-chat-main',
+    defaultSourceId: 'third-party-source-main',
+    allowedDatabaseSourceIds: '',
+    temporary: true,
+    expiresAt: '',
+  });
+  const [oneTimeToken, setOneTimeToken] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
 
   async function loadIntegrations({ silent = false } = {}) {
@@ -624,6 +637,129 @@ export default function ExternalIntegrationsPageClient() {
       setError(controlError instanceof Error ? controlError.message : '外部集成操作失败');
     } finally {
       setControlBusy('');
+    }
+  }
+
+  function updateChannelCreateForm(field, value) {
+    setChannelCreateForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function channelCreatePayload() {
+    const allowedDatabaseSourceIds = channelCreateForm.allowedDatabaseSourceIds
+      .split(/[\s,，]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const expiresAt = channelCreateForm.expiresAt
+      ? new Date(channelCreateForm.expiresAt).toISOString()
+      : undefined;
+    return {
+      reason: 'web_external_integrations_create_channel',
+      customer_key: channelCreateForm.customerKey || undefined,
+      connection_id: channelCreateForm.connectionId || undefined,
+      display_name: channelCreateForm.displayName || undefined,
+      clone_from_connection_id: channelCreateForm.cloneFromConnectionId || undefined,
+      default_source_id: channelCreateForm.defaultSourceId || undefined,
+      allowed_database_source_ids: allowedDatabaseSourceIds,
+      temporary: Boolean(channelCreateForm.temporary),
+      expires_at: expiresAt,
+    };
+  }
+
+  async function createChannelIntegration(event) {
+    event.preventDefault();
+    if (channelCreateBusy) {
+      return;
+    }
+    if (!channelCreateForm.customerKey.trim() && !channelCreateForm.connectionId.trim()) {
+      setError('请填写客户编码或 connection_id');
+      return;
+    }
+    setChannelCreateBusy(true);
+    setError('');
+    setNotice('');
+    setOneTimeToken(null);
+    try {
+      const result = normalizeControlResult(await fetchJson('/api/v3/external/integrations/channels', {
+        method: 'POST',
+        body: channelCreatePayload(),
+      }));
+      setNotice(controlResultLabel(result));
+      if (result.inboundBearerToken) {
+        setOneTimeToken({
+          connectionId: result.integrationId,
+          token: result.inboundBearerToken,
+          expiresAt: result.tokenExpiresAt,
+          action: result.action,
+        });
+      }
+      setSelectedId(result.integrationId || selectedId);
+      setChannelCreateForm((current) => ({
+        ...current,
+        customerKey: '',
+        connectionId: '',
+        displayName: '',
+        allowedDatabaseSourceIds: '',
+      }));
+      await loadIntegrations({ silent: true });
+    } catch (controlError) {
+      if (controlError?.status === 401 || controlError?.code === 'external_observability_access_required') {
+        setError('创建第三方通道需要先输入观测页访问密钥');
+      } else {
+        setError(controlError instanceof Error ? controlError.message : '第三方通道创建失败');
+      }
+    } finally {
+      setChannelCreateBusy(false);
+    }
+  }
+
+  async function rotateChannelInboundToken() {
+    if (!selected || selected.kind !== 'channel' || channelTokenBusy) {
+      return;
+    }
+    const busyKey = `rotate_token:${selected.id}`;
+    setChannelTokenBusy(busyKey);
+    setError('');
+    setNotice('');
+    setOneTimeToken(null);
+    try {
+      const result = normalizeControlResult(await fetchJson(
+        `/api/v3/external/integrations/${encodeURIComponent(selected.id)}/rotate-token`,
+        {
+          method: 'POST',
+          body: { reason: 'web_external_integrations_rotate_token' },
+        },
+      ));
+      setNotice(controlResultLabel(result));
+      if (result.inboundBearerToken) {
+        setOneTimeToken({
+          connectionId: result.integrationId,
+          token: result.inboundBearerToken,
+          expiresAt: result.tokenExpiresAt,
+          action: result.action,
+        });
+      }
+      await loadIntegrations({ silent: true });
+      await loadAudit(selected.id, auditFilterKey);
+    } catch (controlError) {
+      if (controlError?.status === 401 || controlError?.code === 'external_observability_access_required') {
+        setError('轮换入站 token 需要先输入观测页访问密钥');
+      } else {
+        setError(controlError instanceof Error ? controlError.message : '入站 token 轮换失败');
+      }
+    } finally {
+      setChannelTokenBusy('');
+    }
+  }
+
+  async function copyOneTimeToken() {
+    if (!oneTimeToken?.token || typeof window === 'undefined') {
+      return;
+    }
+    try {
+      await window.navigator.clipboard.writeText(oneTimeToken.token);
+      setNotice('token 已复制');
+    } catch {
+      setError('复制 token 失败');
     }
   }
 
@@ -1460,6 +1596,92 @@ export default function ExternalIntegrationsPageClient() {
             </button>
           </div>
 
+          <form className="external-channel-create-form" onSubmit={createChannelIntegration}>
+            <div className="external-channel-create-head">
+              <strong>新增第三方通道</strong>
+              <span>一家第三方一条连接</span>
+            </div>
+            <div className="external-channel-create-grid">
+              <label>
+                <span>客户编码</span>
+                <input
+                  value={channelCreateForm.customerKey}
+                  placeholder="customer-a"
+                  onChange={(event) => updateChannelCreateForm('customerKey', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>connection_id</span>
+                <input
+                  value={channelCreateForm.connectionId}
+                  placeholder="留空自动生成"
+                  onChange={(event) => updateChannelCreateForm('connectionId', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>展示名</span>
+                <input
+                  value={channelCreateForm.displayName}
+                  placeholder="客户临时联调"
+                  onChange={(event) => updateChannelCreateForm('displayName', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>克隆配置</span>
+                <input
+                  value={channelCreateForm.cloneFromConnectionId}
+                  onChange={(event) => updateChannelCreateForm('cloneFromConnectionId', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>默认文档源</span>
+                <input
+                  value={channelCreateForm.defaultSourceId}
+                  onChange={(event) => updateChannelCreateForm('defaultSourceId', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>业务库授权</span>
+                <input
+                  value={channelCreateForm.allowedDatabaseSourceIds}
+                  placeholder="hy-sql-traffic-area"
+                  onChange={(event) => updateChannelCreateForm('allowedDatabaseSourceIds', event.target.value)}
+                />
+              </label>
+              <label>
+                <span>过期时间</span>
+                <input
+                  type="datetime-local"
+                  value={channelCreateForm.expiresAt}
+                  onChange={(event) => updateChannelCreateForm('expiresAt', event.target.value)}
+                />
+              </label>
+              <label className="external-channel-create-check">
+                <input
+                  type="checkbox"
+                  checked={channelCreateForm.temporary}
+                  onChange={(event) => updateChannelCreateForm('temporary', event.target.checked)}
+                />
+                <span>临时 token</span>
+              </label>
+            </div>
+            <button type="submit" disabled={channelCreateBusy}>
+              {channelCreateBusy ? '创建中' : '创建通道'}
+            </button>
+          </form>
+
+          {oneTimeToken ? (
+            <div className="external-one-time-token" role="status">
+              <div>
+                <span>{oneTimeToken.action === 'rotate_token' ? '新 token' : '通道 token'}</span>
+                <strong>{oneTimeToken.connectionId}</strong>
+                {oneTimeToken.expiresAt ? <small>到期 {formatObservationTime(oneTimeToken.expiresAt)}</small> : null}
+              </div>
+              <code>{oneTimeToken.token}</code>
+              <button type="button" onClick={copyOneTimeToken}>复制</button>
+            </div>
+          ) : null}
+
           <div className="external-integration-table">
             <div className="external-table-row external-table-head">
               <span>集成</span>
@@ -1533,11 +1755,29 @@ export default function ExternalIntegrationsPageClient() {
                 <button
                   type="button"
                   className="external-control-button"
+                  disabled={Boolean(controlBusy) || selected.signal !== 'disabled'}
+                  onClick={() => handleControl('enable')}
+                >
+                  {controlBusy === `enable:${selected.id}` ? '启用中' : '启用'}
+                </button>
+                <button
+                  type="button"
+                  className="external-control-button"
                   disabled={Boolean(controlBusy)}
                   onClick={() => handleControl('rotate_secret')}
                 >
                   {controlBusy === `rotate_secret:${selected.id}` ? '记录中' : '标记轮换'}
                 </button>
+                {selected.kind === 'channel' ? (
+                  <button
+                    type="button"
+                    className="external-control-button"
+                    disabled={Boolean(channelTokenBusy)}
+                    onClick={rotateChannelInboundToken}
+                  >
+                    {channelTokenBusy === `rotate_token:${selected.id}` ? '生成中' : '生成新 token'}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="external-control-button external-control-danger"
@@ -1565,6 +1805,26 @@ export default function ExternalIntegrationsPageClient() {
                   <strong>{formatObservationTime(selected.lastFailureAt)}</strong>
                 </div>
               </div>
+              {selected.kind === 'channel' ? (
+                <div className="external-detail-strip external-inbound-auth-strip">
+                  <div>
+                    <span>入站鉴权</span>
+                    <strong>{selected.inboundAuth.configured ? selected.inboundAuth.mode : 'none'}</strong>
+                  </div>
+                  <div>
+                    <span>token 类型</span>
+                    <strong>{selected.inboundAuth.temporary ? '临时' : '长期'}</strong>
+                  </div>
+                  <div>
+                    <span>过期状态</span>
+                    <strong>{selected.inboundAuth.expired ? '已过期' : selected.inboundAuth.expiresAt ? '未过期' : '未设置'}</strong>
+                  </div>
+                  <div>
+                    <span>最近轮换</span>
+                    <strong>{formatObservationTime(selected.inboundAuth.tokenRotatedAt)}</strong>
+                  </div>
+                </div>
+              ) : null}
               <div className="external-detail-strip external-governance-strip">
                 {governanceMetrics(selected).map((metric) => (
                   <div key={metric.label}>

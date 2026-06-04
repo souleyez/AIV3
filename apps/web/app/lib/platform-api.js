@@ -19,6 +19,12 @@ export function isExternalObservabilityPath(pathSegments) {
   const path = Array.isArray(pathSegments) ? pathSegments.join('/') : '';
   return path === 'external/conversation-tests'
     || /^external\/conversation-tests\/[^/]+\/timeline$/.test(path)
+    || path === 'external/integrations/channels'
+    || /^external\/integrations\/[^/]+\/enable$/.test(path)
+    || /^external\/integrations\/[^/]+\/disable$/.test(path)
+    || /^external\/integrations\/[^/]+\/retry$/.test(path)
+    || /^external\/integrations\/[^/]+\/rotate-secret$/.test(path)
+    || /^external\/integrations\/[^/]+\/rotate-token$/.test(path)
     || /^external\/integrations\/[^/]+\/reply-dispatch$/.test(path);
 }
 

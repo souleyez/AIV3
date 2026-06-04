@@ -44,15 +44,16 @@ use contracts::{
     CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
     CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
     CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
-    CreateExternalDatabaseSourceRequest, CreateExternalDatabaseSourceResponse,
-    CreateExternalDocumentParseRequest, CreateExternalDocumentParseResponse,
-    CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
-    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
-    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
-    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
-    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
-    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentMediaDetailView,
-    DocumentSummary, ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
+    CreateExternalChannelConnectionRequest, CreateExternalDatabaseSourceRequest,
+    CreateExternalDatabaseSourceResponse, CreateExternalDocumentParseRequest,
+    CreateExternalDocumentParseResponse, CreateExternalSourceSyncRequest,
+    CreateExternalSourceSyncResponse, CreateMemoryDirectoryRefreshResponse,
+    CreateReportPlanResponse, CreateReportRenderRequest, CreateReportRenderResponse,
+    CreateStaticPageDraftRequest, CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
+    CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
+    CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
+    DocumentDetailView, DocumentMediaDetailView, DocumentSummary,
+    ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
     ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
     ExternalActionResultCallbackResponseView, ExternalArtifactTemplateView, ExternalBotMessageView,
     ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelEventResponse,
@@ -1349,8 +1350,16 @@ pub fn router(
         )
         .route("/v1/external/integrations", get(list_external_integrations))
         .route(
+            "/v1/external/integrations/channels",
+            axum::routing::post(create_external_channel_integration),
+        )
+        .route(
             "/v1/external/integrations/{integration_id}/audit",
             get(get_external_integration_audit),
+        )
+        .route(
+            "/v1/external/integrations/{integration_id}/enable",
+            axum::routing::post(enable_external_integration),
         )
         .route(
             "/v1/external/integrations/{integration_id}/disable",
@@ -1363,6 +1372,10 @@ pub fn router(
         .route(
             "/v1/external/integrations/{integration_id}/rotate-secret",
             axum::routing::post(rotate_external_integration_secret),
+        )
+        .route(
+            "/v1/external/integrations/{integration_id}/rotate-token",
+            axum::routing::post(rotate_external_channel_inbound_token),
         )
         .route(
             "/v1/external/integrations/{integration_id}/reply-dispatch",
@@ -14007,12 +14020,181 @@ fn external_integration_audit_item_matches(
     }
 }
 
-async fn disable_external_integration(
+async fn create_external_channel_integration(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateExternalChannelConnectionRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    ensure_external_integration_management_allowed(&headers)?;
+    let now = Utc::now();
+    let connection_id = external_channel_create_connection_id(&request)?;
+    let clone_from_connection_id = trim_optional(request.clone_from_connection_id.clone())
+        .unwrap_or_else(|| "generic-chat-main".to_string());
+    let clone_row = sqlx::query(
+        r#"
+        select platform, config_redacted
+        from external_channel_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&clone_from_connection_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    if request.clone_from_connection_id.is_some() && clone_row.is_none() {
+        return Err(ApiError::not_found(
+            "external_channel_clone_source_not_found",
+            format!("external channel connection {clone_from_connection_id} was not found"),
+        ));
+    }
+    if external_channel_connection_exists(&state, &connection_id).await? {
+        return Err(ApiError::bad_request(
+            "external_channel_connection_exists",
+            format!("external channel connection {connection_id} already exists"),
+        ));
+    }
+
+    let platform = trim_optional(request.platform.clone())
+        .or_else(|| {
+            clone_row
+                .as_ref()
+                .map(|row| row.get::<String, _>("platform"))
+        })
+        .unwrap_or_else(|| "generic_chat".to_string());
+    validate_external_channel_platform(&platform)?;
+    let display_name = trim_optional(request.display_name.clone())
+        .unwrap_or_else(|| format!("Generic Chat {}", connection_id));
+    let token = new_external_channel_inbound_token();
+    let system_user = ensure_external_channel_system_user(&state, &connection_id).await?;
+    let mut config = clone_row
+        .as_ref()
+        .map(|row| row.get::<Value, _>("config_redacted"))
+        .unwrap_or_else(|| json!({}));
+    sanitize_cloned_external_channel_config(&mut config);
+    apply_external_channel_inbound_token_config(
+        &mut config,
+        &token,
+        now,
+        request.temporary.unwrap_or(false),
+        request.expires_at,
+    );
+    if let Some(source_id) = trim_optional(request.default_source_id.clone()) {
+        let source_id = validate_external_database_source_id(&source_id)?;
+        set_payload_value(&mut config, "default_source_id", json!(source_id));
+    }
+    let allowed_database_source_ids = validate_external_channel_allowed_database_source_ids(
+        &request.allowed_database_source_ids,
+    )?;
+    if !allowed_database_source_ids.is_empty() {
+        set_payload_value(
+            &mut config,
+            "allowed_database_source_ids",
+            json!(allowed_database_source_ids),
+        );
+    }
+    set_payload_value(
+        &mut config,
+        "channel_management",
+        json!({
+            "created_by": "external_integrations_panel",
+            "created_at": now,
+            "clone_from_connection_id": clone_from_connection_id,
+            "customer_key": trim_optional(request.customer_key.clone()),
+            "reason_present": external_control_reason_present(request.reason.as_deref()),
+            "system_user_id": system_user.id,
+            "system_user_email": system_user.email,
+        }),
+    );
+
+    sqlx::query(
+        r#"
+        insert into external_channel_connections (
+            id,
+            tenant_id,
+            platform,
+            connection_key,
+            display_name,
+            config_redacted,
+            status,
+            health_status,
+            created_at,
+            updated_at
+        )
+        values ($1, $2, $3, $1, $4, $5, 'enabled', 'unknown', $6, $6)
+        "#,
+    )
+    .bind(&connection_id)
+    .bind(state.tenant_id.0)
+    .bind(&platform)
+    .bind(&display_name)
+    .bind(config)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id: connection_id,
+        integration_kind: "channel".to_string(),
+        action: "create_channel".to_string(),
+        status: "enabled".to_string(),
+        message: "external channel connection created; inbound token is returned once".to_string(),
+        affected_action_count: 0,
+        sync_run_id: None,
+        workflow_execution: None,
+        enqueued_tasks: Vec::new(),
+        inbound_bearer_token: Some(token),
+        token_expires_at: request.expires_at,
+    }))
+}
+
+async fn enable_external_integration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Path(integration_id): Path<String>,
     Json(request): Json<ExternalIntegrationControlRequest>,
 ) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
     validate_required("integration_id", &integration_id)?;
+    ensure_external_integration_management_allowed(&headers)?;
+    let now = Utc::now();
+    let reason_present = external_control_reason_present(request.reason.as_deref());
+    let channel_count =
+        enable_external_channel_connection(&state, &integration_id, reason_present, now).await?;
+    let source_count =
+        enable_external_source_connection(&state, &integration_id, reason_present, now).await?;
+    if channel_count == 0 && source_count == 0 {
+        return Err(ApiError::not_found(
+            "external_integration_not_found",
+            format!("external integration {integration_id} was not found"),
+        ));
+    }
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id,
+        integration_kind: external_control_integration_kind(channel_count, source_count),
+        action: "enable".to_string(),
+        status: "enabled".to_string(),
+        message: "external integration enabled".to_string(),
+        affected_action_count: 0,
+        sync_run_id: None,
+        workflow_execution: None,
+        enqueued_tasks: Vec::new(),
+        inbound_bearer_token: None,
+        token_expires_at: None,
+    }))
+}
+
+async fn disable_external_integration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(integration_id): Path<String>,
+    Json(request): Json<ExternalIntegrationControlRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    ensure_external_integration_management_allowed(&headers)?;
     let now = Utc::now();
     let reason_present = external_control_reason_present(request.reason.as_deref());
     let channel_count =
@@ -14038,15 +14220,19 @@ async fn disable_external_integration(
         sync_run_id: None,
         workflow_execution: None,
         enqueued_tasks: Vec::new(),
+        inbound_bearer_token: None,
+        token_expires_at: None,
     }))
 }
 
 async fn retry_external_integration(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(integration_id): Path<String>,
     Json(request): Json<ExternalIntegrationControlRequest>,
 ) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
     validate_required("integration_id", &integration_id)?;
+    ensure_external_integration_management_allowed(&headers)?;
     let channel_exists = external_channel_connection_exists(&state, &integration_id).await?;
     let source_exists = external_source_connection_exists(&state, &integration_id).await?;
     if !channel_exists && !source_exists {
@@ -14130,15 +14316,19 @@ async fn retry_external_integration(
         sync_run_id,
         workflow_execution,
         enqueued_tasks,
+        inbound_bearer_token: None,
+        token_expires_at: None,
     }))
 }
 
 async fn rotate_external_integration_secret(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(integration_id): Path<String>,
     Json(request): Json<ExternalIntegrationControlRequest>,
 ) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
     validate_required("integration_id", &integration_id)?;
+    ensure_external_integration_management_allowed(&headers)?;
     let now = Utc::now();
     let reason_present = external_control_reason_present(request.reason.as_deref());
     let channel_count =
@@ -14163,6 +14353,82 @@ async fn rotate_external_integration_secret(
         sync_run_id: None,
         workflow_execution: None,
         enqueued_tasks: Vec::new(),
+        inbound_bearer_token: None,
+        token_expires_at: None,
+    }))
+}
+
+async fn rotate_external_channel_inbound_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(integration_id): Path<String>,
+    Json(request): Json<ExternalIntegrationControlRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    ensure_external_integration_management_allowed(&headers)?;
+    let row = sqlx::query(
+        r#"
+        select config_redacted
+        from external_channel_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&integration_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    let Some(row) = row else {
+        return Err(ApiError::not_found(
+            "external_channel_connection_not_found",
+            format!("external channel connection {integration_id} was not found"),
+        ));
+    };
+
+    let now = Utc::now();
+    let token = new_external_channel_inbound_token();
+    let mut config = row.get::<Value, _>("config_redacted");
+    remove_external_channel_inbound_token_keys(&mut config);
+    apply_external_channel_inbound_token_config(&mut config, &token, now, false, None);
+    set_payload_value(
+        &mut config,
+        "management_control",
+        json!({
+            "last_action": "rotate_token",
+            "reason_present": external_control_reason_present(request.reason.as_deref()),
+            "updated_at": now,
+            "secret_material_included": true,
+        }),
+    );
+    sqlx::query(
+        r#"
+        update external_channel_connections
+        set config_redacted = $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&integration_id)
+    .bind(config)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id,
+        integration_kind: "channel".to_string(),
+        action: "rotate_token".to_string(),
+        status: "token_rotated".to_string(),
+        message: "external channel inbound token rotated; token is returned once".to_string(),
+        affected_action_count: 0,
+        sync_run_id: None,
+        workflow_execution: None,
+        enqueued_tasks: Vec::new(),
+        inbound_bearer_token: Some(token),
+        token_expires_at: None,
     }))
 }
 
@@ -14238,6 +14504,8 @@ async fn configure_external_integration_reply_dispatch(
         sync_run_id: None,
         workflow_execution: None,
         enqueued_tasks: Vec::new(),
+        inbound_bearer_token: None,
+        token_expires_at: None,
     }))
 }
 
@@ -14304,6 +14572,247 @@ fn external_control_config_patch(action: &str, reason_present: bool, now: DateTi
             "updated_at": now,
             "secret_material_included": false,
         }
+    })
+}
+
+fn ensure_external_integration_management_allowed(
+    headers: &HeaderMap,
+) -> std::result::Result<(), ApiError> {
+    if external_observability_access_allowed(headers) {
+        return Ok(());
+    }
+    Err(ApiError::unauthorized(
+        "external_observability_access_required",
+        "external integration management requires an observability access key".to_string(),
+    ))
+}
+
+fn external_channel_create_connection_id(
+    request: &CreateExternalChannelConnectionRequest,
+) -> std::result::Result<String, ApiError> {
+    let connection_id = trim_optional(request.connection_id.clone()).unwrap_or_else(|| {
+        let seed = trim_optional(request.customer_key.clone())
+            .or_else(|| trim_optional(request.display_name.clone()))
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        format!(
+            "generic-chat-{}",
+            external_document_parse_dataset_key_component(&seed)
+        )
+    });
+    validate_external_channel_connection_id(&connection_id)?;
+    Ok(connection_id)
+}
+
+fn validate_external_channel_connection_id(value: &str) -> std::result::Result<(), ApiError> {
+    let trimmed = value.trim();
+    if trimmed.len() < 3 || trimmed.len() > 96 {
+        return Err(ApiError::bad_request(
+            "external_channel_connection_id_invalid",
+            "connection_id must be 3-96 characters".to_string(),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        return Err(ApiError::bad_request(
+            "external_channel_connection_id_invalid",
+            "connection_id may only contain ASCII letters, numbers, dot, dash, or underscore"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_external_channel_platform(value: &str) -> std::result::Result<(), ApiError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 64
+        || !trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err(ApiError::bad_request(
+            "external_channel_platform_invalid",
+            "platform must be ASCII text within 64 characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_external_channel_allowed_database_source_ids(
+    values: &[String],
+) -> std::result::Result<Vec<String>, ApiError> {
+    let mut ids = BTreeSet::new();
+    for value in values {
+        ids.insert(validate_external_database_source_id(value)?);
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn new_external_channel_inbound_token() -> String {
+    format!(
+        "v3in_{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    )
+}
+
+fn remove_external_channel_inbound_token_keys(config: &mut Value) {
+    remove_payload_keys(
+        config,
+        &[
+            "inbound_bearer_token",
+            "inboundBearerToken",
+            "inbound_token",
+            "inboundToken",
+            "external_channel_bearer_token",
+            "externalChannelBearerToken",
+            "callback_bearer_token",
+            "callbackBearerToken",
+            "generic_chat_inbound_bearer_token",
+            "genericChatInboundBearerToken",
+            "inbound_bearer_token_expires_at",
+            "inboundBearerTokenExpiresAt",
+            "inbound_token_rotated_at",
+            "inboundTokenRotatedAt",
+        ],
+    );
+}
+
+fn sanitize_cloned_external_channel_config(config: &mut Value) {
+    remove_external_channel_inbound_token_keys(config);
+    remove_payload_keys(
+        config,
+        &[
+            "reply_dispatch_url",
+            "replyDispatchUrl",
+            "external_reply_dispatch_url",
+            "externalReplyDispatchUrl",
+            "outbound_reply_url",
+            "outboundReplyUrl",
+            "assistant_reply_dispatch_url",
+            "assistantReplyDispatchUrl",
+            "artifact_action_dispatch_url",
+            "artifactActionDispatchUrl",
+            "artifact_dispatch_url",
+            "artifactDispatchUrl",
+            "business_action_dispatch_url",
+            "businessActionDispatchUrl",
+            "business_dispatch_url",
+            "businessDispatchUrl",
+            "external_action_dispatch_url",
+            "externalActionDispatchUrl",
+            "action_dispatch_url",
+            "actionDispatchUrl",
+            "artifact_action_bearer_token",
+            "artifactActionBearerToken",
+            "artifact_bearer_token",
+            "artifactBearerToken",
+            "artifact_action_signing_secret",
+            "artifactActionSigningSecret",
+            "artifact_signing_secret",
+            "artifactSigningSecret",
+            "business_action_bearer_token",
+            "businessActionBearerToken",
+            "business_bearer_token",
+            "businessBearerToken",
+            "business_action_signing_secret",
+            "businessActionSigningSecret",
+            "business_signing_secret",
+            "businessSigningSecret",
+            "external_action_bearer_token",
+            "externalActionBearerToken",
+            "action_bearer_token",
+            "actionBearerToken",
+            "external_action_signing_secret",
+            "externalActionSigningSecret",
+            "action_signing_secret",
+            "actionSigningSecret",
+            "reply_dispatch_bearer_token",
+            "replyDispatchBearerToken",
+            "external_reply_bearer_token",
+            "externalReplyBearerToken",
+            "outbound_reply_bearer_token",
+            "outboundReplyBearerToken",
+            "reply_dispatch_signing_secret",
+            "replyDispatchSigningSecret",
+            "external_reply_signing_secret",
+            "externalReplySigningSecret",
+            "outbound_reply_signing_secret",
+            "outboundReplySigningSecret",
+            "dispatch_bearer_token",
+            "dispatchBearerToken",
+            "dispatch_signing_secret",
+            "dispatchSigningSecret",
+            "management_control",
+            "temporary_access",
+            "channel_management",
+        ],
+    );
+}
+
+fn apply_external_channel_inbound_token_config(
+    config: &mut Value,
+    token: &str,
+    now: DateTime<Utc>,
+    temporary: bool,
+    expires_at: Option<DateTime<Utc>>,
+) {
+    set_payload_value(config, "inbound_bearer_token", json!(token));
+    set_payload_value(config, "inbound_token_rotated_at", json!(now));
+    if let Some(expires_at) = expires_at {
+        set_payload_value(config, "inbound_bearer_token_expires_at", json!(expires_at));
+    }
+    set_payload_value(
+        config,
+        "temporary_access",
+        json!({
+            "temporary": temporary,
+            "expires_at": expires_at,
+            "updated_at": now,
+        }),
+    );
+}
+
+fn external_channel_inbound_token_rotated_at(config: &Value) -> Option<String> {
+    external_config_string(
+        config,
+        &["inbound_token_rotated_at", "inboundTokenRotatedAt"],
+    )
+}
+
+fn external_channel_inbound_token_expires_at(config: &Value) -> Option<DateTime<Utc>> {
+    external_config_string(
+        config,
+        &[
+            "inbound_bearer_token_expires_at",
+            "inboundBearerTokenExpiresAt",
+        ],
+    )
+    .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+    .map(|value| value.with_timezone(&Utc))
+}
+
+fn external_channel_inbound_token_expired(config: &Value, now: DateTime<Utc>) -> bool {
+    external_channel_inbound_token_expires_at(config).is_some_and(|expires_at| expires_at <= now)
+}
+
+fn external_channel_temporary_access_summary(config: &Value) -> Value {
+    let temporary_access = config
+        .get("temporary_access")
+        .or_else(|| config.get("temporaryAccess"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let temporary = temporary_access
+        .get("temporary")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    json!({
+        "temporary": temporary,
+        "expires_at": external_channel_inbound_token_expires_at(config),
+        "expired": external_channel_inbound_token_expired(config, Utc::now()),
+        "token_rotated_at": external_channel_inbound_token_rotated_at(config),
     })
 }
 
@@ -14506,6 +15015,33 @@ async fn disable_external_channel_connection(
     Ok(result.rows_affected())
 }
 
+async fn enable_external_channel_connection(
+    state: &AppState,
+    integration_id: &str,
+    reason_present: bool,
+    now: DateTime<Utc>,
+) -> std::result::Result<u64, ApiError> {
+    let result = sqlx::query(
+        r#"
+        update external_channel_connections
+        set status = 'enabled',
+            health_status = 'unknown',
+            disabled_at = null,
+            config_redacted = config_redacted || $4,
+            updated_at = $3
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .bind(now)
+    .bind(external_control_config_patch("enable", reason_present, now))
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(result.rows_affected())
+}
+
 async fn disable_external_source_connection(
     state: &AppState,
     integration_id: &str,
@@ -14530,6 +15066,33 @@ async fn disable_external_source_connection(
         reason_present,
         now,
     ))
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    Ok(result.rows_affected())
+}
+
+async fn enable_external_source_connection(
+    state: &AppState,
+    integration_id: &str,
+    reason_present: bool,
+    now: DateTime<Utc>,
+) -> std::result::Result<u64, ApiError> {
+    let result = sqlx::query(
+        r#"
+        update external_source_connections
+        set status = 'enabled',
+            health_status = 'unknown',
+            disabled_at = null,
+            config_redacted = config_redacted || $4,
+            updated_at = $3
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(integration_id)
+    .bind(now)
+    .bind(external_control_config_patch("enable", reason_present, now))
     .execute(state.storage.pool())
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
@@ -14995,6 +15558,8 @@ fn external_integration_config_summary(config: &Value) -> Value {
         "key_count": config.as_object().map(Map::len).unwrap_or(0),
         "redacted_value_present": external_integration_has_redacted_value(config),
         "inbound_auth_mode": if inbound_auth_configured { "bearer" } else { "none" },
+        "inbound_auth_configured": inbound_auth_configured,
+        "temporary_access": external_channel_temporary_access_summary(config),
         "dispatch_endpoint_configured": external_action_dispatch_url_from_config(config, "external_business_action.invoke").is_some()
             || external_action_dispatch_url_from_config(config, "external_artifact.publish").is_some(),
         "dispatch_auth_mode": external_action_dispatch_auth_mode(&dispatch_auth),
@@ -21693,6 +22258,9 @@ fn ensure_external_channel_inbound_bearer_auth(
     else {
         return Ok(());
     };
+    if external_channel_inbound_token_expired(&connection.config_redacted, Utc::now()) {
+        return Err(external_channel_auth_failed());
+    }
     let Some(provided_token) = authorization_bearer_token(headers) else {
         return Err(external_channel_auth_failed());
     };
@@ -32101,46 +32669,76 @@ fn static_page_prompt_requests_existing_artifact_delivery(prompt: &str) -> bool 
         return false;
     }
     let lower = compact.to_ascii_lowercase();
-    let has_existing_signal =
+    let has_existing_signal = prompt_contains_any(
+        &compact,
+        &[
+            "已有",
+            "已经",
+            "已生成",
+            "已发布",
+            "生成过",
+            "发布过",
+            "做过",
+            "之前",
+            "昨天",
+            "前面",
+            "上次",
+            "刚才",
+            "现有",
+            "历史",
+            "旧版",
+            "原页面",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &["existing", "previous", "already", "published", "last"],
+    );
+    let has_link_signal = prompt_contains_any(
+        &compact,
+        &[
+            "链接",
+            "地址",
+            "页面地址",
+            "页面链接",
+            "产物链接",
+            "原链接",
+            "旧链接",
+        ],
+    ) || ascii_prompt_contains_any(&lower, &["link", "url", "public_url"]);
+    let has_send_signal = prompt_contains_any(
+        &compact,
+        &["发我", "发给", "给我", "给客户", "再发", "直接发", "直接给"],
+    ) || ascii_prompt_contains_any(&lower, &["send"]);
+    let has_view_signal = prompt_contains_any(&compact, &["看看", "看下", "查看", "打开"])
+        || ascii_prompt_contains_any(&lower, &["open", "view"]);
+    let has_no_change_signal =
+        prompt_contains_any(
+            &compact,
+            &["不用改", "不要改", "无需修改", "别改", "直接用", "复用原"],
+        ) || ascii_prompt_contains_any(&lower, &["nochange", "no-change", "reuse"]);
+    let has_artifact_context =
         prompt_contains_any(
             &compact,
             &[
-                "最新",
-                "已有",
-                "已经",
-                "已生成",
-                "生成过",
-                "做过",
-                "之前",
-                "昨天",
-                "前面",
-                "上次",
-                "刚才",
-                "现有",
+                "报表",
+                "页面",
+                "静态页",
+                "产物",
+                "报告",
+                "dashboard",
+                "report",
             ],
-        ) || ascii_prompt_contains_any(&lower, &["latest", "existing", "previous", "last"]);
-    let has_delivery_signal =
-        prompt_contains_any(
-            &compact,
-            &[
-                "看看",
-                "看下",
-                "查看",
-                "打开",
-                "链接",
-                "地址",
-                "发我",
-                "发给",
-                "给我",
-                "给客户",
-            ],
-        ) || ascii_prompt_contains_any(&lower, &["open", "send", "link", "url"]);
-    has_existing_signal && has_delivery_signal
+        ) || ascii_prompt_contains_any(&lower, &["report", "page", "artifact", "dashboard"]);
+
+    has_existing_signal
+        && (has_link_signal
+            || has_send_signal
+            || has_no_change_signal
+            || (has_view_signal && has_artifact_context))
 }
 
 fn static_page_prompt_allows_stable_artifact_reuse(prompt: &str) -> bool {
-    !static_page_prompt_requests_explicit_redesign(prompt)
-        && !static_page_prompt_requests_existing_artifact_revision(prompt)
+    static_page_prompt_requests_existing_artifact_delivery(prompt)
 }
 
 fn static_page_prompt_generated_artifact_urls(prompt: &str) -> Vec<String> {
@@ -34767,6 +35365,16 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         external_channel_static_page_template_reference_from_payload(
                             &baseline_template_payload,
                         );
+                    let baseline_template_adaptation = if baseline_template_reference.is_null() {
+                        Value::Null
+                    } else {
+                        static_page_template_adaptation_plan_from_reference_value(
+                            &baseline_template_reference,
+                            Some(&assistant_request.prompt),
+                            Some(&run.evidence_state),
+                            None,
+                        )
+                    };
                     let baseline_style_reuse_policy =
                         external_channel_static_page_style_reuse_policy_from_payload(
                             &baseline_template_payload,
@@ -34800,6 +35408,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         "reuse_policy": "reuse_accepted_baseline_unless_explicit_redesign",
                         "template_reference_id": baseline_template_reference_id,
                         "template_reference": baseline_template_reference,
+                        "template_adaptation": baseline_template_adaptation,
                         "template_match_policy": "exact_dataset_artifact_key",
                         "relaxed_template_match": Value::Null,
                         "style_reuse_policy": baseline_style_reuse_policy,
@@ -34952,6 +35561,20 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         "source_refs": source_refs.clone(),
                         "template_reference": template_reference,
                     });
+                    let baseline_template_reference = baseline_template_payload
+                        .get("template_reference")
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    let baseline_template_adaptation = if baseline_template_reference.is_null() {
+                        Value::Null
+                    } else {
+                        static_page_template_adaptation_plan_from_reference_value(
+                            &baseline_template_reference,
+                            Some(&assistant_request.prompt),
+                            Some(&run.evidence_state),
+                            None,
+                        )
+                    };
                     let baseline_style_reuse_policy =
                         external_channel_static_page_style_reuse_policy_from_payload(
                             &baseline_template_payload,
@@ -34984,10 +35607,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         "edit_mode": "incremental_existing_artifact",
                         "reuse_policy": "deliver_existing_template_baseline_for_view_request",
                         "template_reference_id": template_reference_id.as_deref(),
-                        "template_reference": baseline_template_payload
-                            .get("template_reference")
-                            .cloned()
-                            .unwrap_or(Value::Null),
+                        "template_reference": baseline_template_reference,
+                        "template_adaptation": baseline_template_adaptation,
                         "template_match_policy": "dataset_overlap",
                         "relaxed_template_match": relaxed_template_match,
                         "style_reuse_policy": baseline_style_reuse_policy,
@@ -36861,6 +37482,7 @@ fn external_channel_model_tool_capability_guidance_lines() -> Vec<String> {
     vec![
         "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
         "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/表/文件接入需求并生成待确认 staging plan；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
+        "客户在线询问“能不能提供报表模板/有没有模板/给一份模板/按这个模板出报表”时，如果上下文指向报表、经营分析、看板、静态页或可视化产物，应视为 `static_page_artifact` 能力请求；不要只回复通用模板清单，宿主会先按客户本轮意向调整模板模块、字段组织和输出重点，再提供草稿或继续生成页面。".to_string(),
         "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级、事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
         "当你判断用户不是普通咨询，而是在要求 V3/DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。".to_string(),
         "普通咨询、口径解释、数据问答、已可直接回答的问题仍正常自然语言回答；不要在客户答案中暴露 ReAct、retrieve_evidence、read_document_detail、upgrade_parse_vlm、codex_host_task、原始 connector/API 调用或内部质量门禁名称。".to_string(),
@@ -40611,6 +41233,17 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
     let evidence_summary = static_page_template_evidence_summary(&run.evidence_state);
     let missing_evidence =
         static_page_template_missing_evidence(template_reference, &run.evidence_state);
+    let template_adaptation_payload = template_reference_payload
+        .as_ref()
+        .map(|reference| {
+            static_page_template_adaptation_plan_from_reference_value(
+                reference,
+                Some(prompt),
+                Some(&evidence_summary),
+                Some(&missing_evidence),
+            )
+        })
+        .unwrap_or(Value::Null);
     if static_page_prompt_allows_stable_artifact_reuse(prompt) {
         let mut reusable_dataset_artifact_keys = Vec::new();
         if let Some(dataset_artifact_key) = dataset_artifact_key.as_deref() {
@@ -40678,6 +41311,11 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
                         &mut event_payload,
                         "template_reference",
                         template_reference_payload.clone().unwrap_or(Value::Null),
+                    );
+                    set_payload_value(
+                        &mut event_payload,
+                        "template_adaptation",
+                        template_adaptation_payload.clone(),
                     );
                     set_payload_value(
                         &mut event_payload,
@@ -40783,6 +41421,16 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
         &mut event_payload,
         "template_reference",
         template_reference_payload.clone().unwrap_or(Value::Null),
+    );
+    set_payload_value(
+        &mut event_payload,
+        "template_adaptation",
+        draft
+            .draft_payload
+            .get("templateAdaptation")
+            .or_else(|| draft.draft_payload.get("template_adaptation"))
+            .cloned()
+            .unwrap_or(Value::Null),
     );
     set_payload_value(
         &mut event_payload,
@@ -50754,6 +51402,11 @@ fn external_channel_static_page_published_reply(
                 .unwrap_or(Value::Null),
             "template_reference_id": template_reference_id,
             "template_reference": template_reference,
+            "template_adaptation": payload
+                .get("template_adaptation")
+                .or_else(|| payload.get("templateAdaptation"))
+                .cloned()
+                .unwrap_or(Value::Null),
             "template_match_policy": template_match_policy,
             "relaxed_template_match": relaxed_template_match,
             "style_reuse_policy": style_reuse_policy,
@@ -80144,6 +80797,581 @@ fn static_page_template_mobile_order(modules: &Value) -> Value {
     )
 }
 
+fn static_page_template_prompt_from_payload(payload: &Value) -> Option<&str> {
+    payload
+        .get("prompt")
+        .or_else(|| payload.get("promptText"))
+        .or_else(|| payload.get("prompt_text"))
+        .or_else(|| payload.get("templateIntent"))
+        .or_else(|| payload.get("template_intent"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn static_page_template_prompt_subject(prompt: Option<&str>, reference_label: &str) -> String {
+    let Some(prompt) = prompt else {
+        return reference_label.to_string();
+    };
+    let compact = prompt.split_whitespace().collect::<Vec<_>>().join("");
+    let mut subject = compact
+        .replace("帮我", "")
+        .replace("请", "")
+        .replace("能不能", "")
+        .replace("能否", "")
+        .replace("可以", "")
+        .replace("提供", "")
+        .replace("一个", "")
+        .replace("一份", "")
+        .replace("模板", "")
+        .replace("报表", "")
+        .replace("静态页", "")
+        .replace("页面", "")
+        .replace("看看", "")
+        .replace("生成", "")
+        .replace("制作", "")
+        .replace("输出", "")
+        .replace("做", "");
+    subject = subject
+        .trim_matches(|ch: char| {
+            ch.is_ascii_punctuation()
+                || matches!(ch, '，' | '。' | '；' | '：' | '、' | '！' | '？')
+        })
+        .chars()
+        .take(28)
+        .collect::<String>();
+    if subject.chars().count() >= 2 {
+        subject
+    } else {
+        reference_label.to_string()
+    }
+}
+
+fn static_page_template_prompt_contains_any(prompt: Option<&str>, needles: &[&str]) -> bool {
+    let Some(prompt) = prompt else {
+        return false;
+    };
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let lower = compact.to_ascii_lowercase();
+    static_page_template_text_contains_any(&compact, &lower, needles)
+}
+
+fn static_page_template_adaptation_focus(prompt: Option<&str>) -> Vec<Value> {
+    let mut focus = Vec::new();
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &["门店", "分店", "店铺", "区域", "store", "region", "area"],
+    ) {
+        focus.push(json!({
+            "code": "store_or_region_scope",
+            "label": "门店/区域维度",
+            "instruction": "模板模块需要支持按门店、分店或区域筛选和对比。"
+        }));
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "取高",
+            "高分成",
+            "销售",
+            "营业额",
+            "营收",
+            "租金",
+            "sales",
+            "revenue",
+            "rent",
+        ],
+    ) {
+        focus.push(json!({
+            "code": "sales_take_high_metric",
+            "label": "销售/租金/取高口径",
+            "instruction": "模板指标位需要围绕销售额、租金、高分成或取高逻辑重排。"
+        }));
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "近7日",
+            "近七日",
+            "月",
+            "季度",
+            "年度",
+            "time",
+            "date",
+            "month",
+        ],
+    ) {
+        focus.push(json!({
+            "code": "time_range_controls",
+            "label": "时间筛选",
+            "instruction": "模板需要保留时间范围筛选、趋势图和动态刷新口径。"
+        }));
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "权限",
+            "角色",
+            "总部",
+            "店总",
+            "分店店总",
+            "recipient",
+            "role",
+            "permission",
+        ],
+    ) {
+        focus.push(json!({
+            "code": "role_permission_views",
+            "label": "角色权限视角",
+            "instruction": "模板需要区分总部视角和分店店总视角，说明哪些字段可见、哪些需要隐藏或分发不同链接。"
+        }));
+    }
+    if focus.is_empty() {
+        focus.push(json!({
+            "code": "current_intent_first",
+            "label": "当前意向优先",
+            "instruction": "模板先按客户本轮目标调整标题、模块顺序和指标占位，再提供给客户。"
+        }));
+    }
+    focus
+}
+
+fn static_page_template_adaptation_plan(
+    reference_label: &str,
+    reference_id: Option<&str>,
+    prompt: Option<&str>,
+    evidence_summary: Option<&Value>,
+    missing_evidence: Option<&Value>,
+) -> Value {
+    let subject = static_page_template_prompt_subject(prompt, reference_label);
+    let focus = static_page_template_adaptation_focus(prompt);
+    json!({
+        "policy": "adapt_template_before_delivery",
+        "templateUse": "style_structure_adjusted_to_current_intent",
+        "templateReferenceId": reference_id,
+        "templateLabel": reference_label,
+        "userIntent": prompt,
+        "adaptedSubject": subject,
+        "summary": format!("已基于客户本轮意向调整「{reference_label}」模板后再提供；模板只控制结构、版式和字段组织，事实内容仍以当前授权数据和证据为准。"),
+        "focus": focus,
+        "moduleOrderRule": "current_intent_highest_relevance_first",
+        "deliveryRule": "do_not_return_raw_or_generic_template; return adjusted_template_draft_or_continue_artifact_generation",
+        "evidenceSummary": evidence_summary.cloned().unwrap_or(Value::Null),
+        "missingEvidence": missing_evidence.cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn static_page_template_reference_value_label(reference: &Value) -> &str {
+    reference
+        .get("label")
+        .or_else(|| reference.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("模板参考")
+}
+
+fn static_page_template_reference_value_id(reference: &Value) -> Option<&str> {
+    reference
+        .get("templateId")
+        .or_else(|| reference.get("template_id"))
+        .or_else(|| reference.get("id"))
+        .and_then(Value::as_str)
+}
+
+fn static_page_template_adaptation_plan_from_reference_value(
+    reference: &Value,
+    prompt: Option<&str>,
+    evidence_summary: Option<&Value>,
+    missing_evidence: Option<&Value>,
+) -> Value {
+    static_page_template_adaptation_plan(
+        static_page_template_reference_value_label(reference),
+        static_page_template_reference_value_id(reference),
+        prompt,
+        evidence_summary,
+        missing_evidence,
+    )
+}
+
+fn static_page_template_adjusted_module_copy(
+    reference: StaticPageTemplateReferenceSpec,
+    module_id: &str,
+    subject: &str,
+    prompt: Option<&str>,
+) -> Option<(String, String)> {
+    let store_take_high = static_page_template_request_needs_store_sales_binding(prompt);
+    let permission_views = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "权限",
+            "角色",
+            "总部",
+            "店总",
+            "分店店总",
+            "recipient",
+            "role",
+            "permission",
+        ],
+    );
+    match reference.id {
+        "dashboard" => match module_id {
+            "hero" => Some((
+                format!("{subject}总览"),
+                format!("按客户本轮意向概括{subject}当前状态、异常等级和最需要关注的判断。"),
+            )),
+            "kpi" => Some((
+                if store_take_high {
+                    "门店取高关键指标".to_string()
+                } else {
+                    "关键状态指标".to_string()
+                },
+                if store_take_high {
+                    "展示门店/区域、销售额、租金、高分成和取高结果等核心指标；缺数时保留待补口径。"
+                        .to_string()
+                } else {
+                    format!("围绕{subject}提炼 3-5 个能判断健康度、效率或风险的指标。")
+                },
+            )),
+            "trend" => Some((
+                if store_take_high {
+                    "近7日经营趋势".to_string()
+                } else {
+                    "运行趋势".to_string()
+                },
+                format!("展示{subject}随时间、阶段或类别变化的方向，优先绑定可见数据。"),
+            )),
+            "risk" => Some((
+                if permission_views {
+                    "权限与风险预警".to_string()
+                } else {
+                    "风险预警".to_string()
+                },
+                if permission_views {
+                    "区分总部和店总可见范围，标注越权风险、缺失字段和需要单独分发的链接。"
+                        .to_string()
+                } else {
+                    format!("把{subject}的阻塞项、异常项和机会点按优先级展示。")
+                },
+            )),
+            "activity" => Some((
+                "后续动作".to_string(),
+                format!("列出{subject}的调整、复核、发布和分发动作。"),
+            )),
+            _ => None,
+        },
+        "docs-page" => match module_id {
+            "hero" => Some((
+                format!("{subject}模板说明"),
+                format!("说明{subject}模板适用对象、输出边界和当前资料完整度。"),
+            )),
+            "scope" => Some((
+                "范围与边界".to_string(),
+                format!("根据客户本轮意向列出{subject}的使用范围、权限边界和不可见内容。"),
+            )),
+            "steps" => Some((
+                "使用流程".to_string(),
+                format!("把{subject}模板的准备、填写、校验、生成和交付步骤拆清楚。"),
+            )),
+            "interfaces" => Some((
+                "字段与数据".to_string(),
+                format!("整理{subject}需要的字段、数据来源、样例行和缺失项。"),
+            )),
+            "checks" => Some((
+                "验收与风险".to_string(),
+                format!("列出{subject}模板交付后的验收标准、风险和待补信息。"),
+            )),
+            _ => None,
+        },
+        _ => match module_id {
+            "hero" => Some((
+                format!("{subject}核心结论"),
+                format!("先给出{subject}最重要的业务判断，并说明来自当前授权数据和证据。"),
+            )),
+            "kpi" => Some((
+                if store_take_high {
+                    "门店取高核心 KPI".to_string()
+                } else {
+                    "关键指标与口径".to_string()
+                },
+                if store_take_high {
+                    "围绕销售额、租金、高分成、取高结果和门店/区域筛选规划指标位；没有真实数值时显示待补口径。".to_string()
+                } else {
+                    format!("围绕{subject}规划 3-5 个关键指标位；没有真实数值时显示待补口径。")
+                },
+            )),
+            "trend" => Some((
+                if store_take_high {
+                    "近7日/周期趋势".to_string()
+                } else {
+                    "趋势与变化".to_string()
+                },
+                format!("展示{subject}随时间、阶段或类别的变化方向，优先绑定当前可见字段。"),
+            )),
+            "comparison" => Some((
+                if store_take_high {
+                    "门店/区域对比".to_string()
+                } else {
+                    "分类对比".to_string()
+                },
+                format!(
+                    "对{subject}的门店、区域、类别、角色或阶段差异做对比；缺少数据时保留补数提示。"
+                ),
+            )),
+            "evidence" => Some((
+                if permission_views {
+                    "权限口径与证据缺口".to_string()
+                } else {
+                    "证据与缺口".to_string()
+                },
+                if permission_views {
+                    "说明总部和分店店总各自可见字段、数据口径、证据来源和仍需补齐的信息。"
+                        .to_string()
+                } else {
+                    format!("列出{subject}的证据来源、当前不可见内容和后续需要补齐的数据。")
+                },
+            )),
+            _ => None,
+        },
+    }
+}
+
+fn static_page_template_module_id(module: &Value) -> &str {
+    module
+        .get("id")
+        .or_else(|| module.get("role"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+fn static_page_template_module_intent_score(
+    reference: StaticPageTemplateReferenceSpec,
+    module: &Value,
+    prompt: Option<&str>,
+    original_index: usize,
+) -> i64 {
+    let module_id = static_page_template_module_id(module);
+    if module_id == "hero" {
+        return 10_000;
+    }
+
+    let mut score = 1_000_i64.saturating_sub(original_index as i64);
+    let store_scope = static_page_template_prompt_contains_any(
+        prompt,
+        &["门店", "分店", "店铺", "区域", "store", "region", "area"],
+    );
+    let sales_take_high = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "取高",
+            "高分成",
+            "销售",
+            "营业额",
+            "营收",
+            "租金",
+            "sales",
+            "revenue",
+            "rent",
+        ],
+    );
+    let time_range = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "近7日",
+            "近七日",
+            "月",
+            "季度",
+            "年度",
+            "time",
+            "date",
+            "month",
+        ],
+    );
+    let permission_views = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "权限",
+            "角色",
+            "总部",
+            "店总",
+            "分店店总",
+            "recipient",
+            "role",
+            "permission",
+        ],
+    );
+    let template_or_field_request = static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "模板",
+            "字段",
+            "表格",
+            "要求文档",
+            "格式",
+            "template",
+            "field",
+        ],
+    );
+
+    if store_scope {
+        score += match module_id {
+            "kpi" => 700,
+            "trend" => 560,
+            "comparison" => 520,
+            "risk" | "evidence" | "scope" => 180,
+            "activity" | "steps" => 80,
+            _ => 0,
+        };
+    }
+    if sales_take_high {
+        score += match module_id {
+            "kpi" => 1_200,
+            "trend" => 680,
+            "comparison" => 620,
+            "risk" | "evidence" => 160,
+            _ => 0,
+        };
+    }
+    if time_range {
+        score += match module_id {
+            "trend" => 920,
+            "kpi" => 240,
+            "comparison" => 180,
+            "activity" | "steps" => 160,
+            _ => 0,
+        };
+    }
+    if permission_views {
+        score += match module_id {
+            "risk" | "evidence" | "scope" => 880,
+            "comparison" | "interfaces" => 380,
+            "kpi" => 140,
+            "activity" | "steps" => 120,
+            _ => 0,
+        };
+    }
+    if template_or_field_request {
+        score += match module_id {
+            "interfaces" | "evidence" | "scope" => 360,
+            "checks" | "risk" => 260,
+            "comparison" => 120,
+            _ => 0,
+        };
+    }
+
+    if reference.id == "docs-page" {
+        score += match module_id {
+            "scope" => 80,
+            "interfaces" => 70,
+            "steps" => 50,
+            "checks" => 40,
+            _ => 0,
+        };
+    }
+
+    score
+}
+
+fn static_page_template_layout_slot(
+    reference: StaticPageTemplateReferenceSpec,
+    index: usize,
+) -> Value {
+    let hero_height = if reference.id == "dashboard" { 2 } else { 3 };
+    let (x, y, w, h) = match index {
+        0 => (0, 0, 12, hero_height),
+        1 => (0, hero_height, 5, 3),
+        2 => (5, hero_height, 7, 3),
+        3 => (0, hero_height + 3, 6, 4),
+        4 => (6, hero_height + 3, 6, 4),
+        _ => (0, hero_height + 7 + ((index as i64 - 5) * 4), 12, 4),
+    };
+    json!({
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+    })
+}
+
+fn static_page_template_apply_intent_ordered_layouts(
+    modules: &mut [Value],
+    reference: StaticPageTemplateReferenceSpec,
+) {
+    for (index, module) in modules.iter_mut().enumerate() {
+        let Some(object) = module.as_object_mut() else {
+            continue;
+        };
+        object.insert(
+            "layout".to_string(),
+            static_page_template_layout_slot(reference, index),
+        );
+        if let Some(adjustment) = object
+            .get_mut("templateAdjustment")
+            .and_then(Value::as_object_mut)
+        {
+            adjustment.insert(
+                "moduleOrderPolicy".to_string(),
+                json!("current_intent_highest_relevance_first"),
+            );
+            adjustment.insert("moduleOrderIndex".to_string(), json!(index));
+        }
+    }
+}
+
+fn static_page_template_apply_adaptation_to_modules(
+    modules: Value,
+    reference: StaticPageTemplateReferenceSpec,
+    prompt: Option<&str>,
+) -> Value {
+    let subject = static_page_template_prompt_subject(prompt, reference.label);
+    let mut modules = value_array(modules);
+    for module in &mut modules {
+        let Some(object) = module.as_object_mut() else {
+            continue;
+        };
+        let module_id = object
+            .get("id")
+            .or_else(|| object.get("role"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some((title, content)) =
+            static_page_template_adjusted_module_copy(reference, &module_id, &subject, prompt)
+        else {
+            continue;
+        };
+        object.insert("title".to_string(), json!(title));
+        object.insert("content".to_string(), json!(content));
+        object.insert(
+            "templateAdjustment".to_string(),
+            json!({
+                "source": "current_customer_intent",
+                "subject": subject,
+                "policy": "adapted_before_delivery",
+            }),
+        );
+    }
+    let mut scored_modules = modules
+        .into_iter()
+        .enumerate()
+        .map(|(index, module)| {
+            (
+                static_page_template_module_intent_score(reference, &module, prompt, index),
+                index,
+                module,
+            )
+        })
+        .collect::<Vec<_>>();
+    scored_modules.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    let mut modules = scored_modules
+        .into_iter()
+        .map(|(_, _, module)| module)
+        .collect::<Vec<_>>();
+    static_page_template_apply_intent_ordered_layouts(&mut modules, reference);
+    Value::Array(modules)
+}
+
 fn json_object_string_missing(object: &Map<String, Value>, key: &str) -> bool {
     object
         .get(key)
@@ -80167,6 +81395,15 @@ fn apply_static_page_template_reference_to_payload(
     allow_module_seed: bool,
 ) -> Value {
     ensure_json_object(&mut payload);
+    let prompt = static_page_template_prompt_from_payload(&payload).map(str::to_string);
+    let prompt = prompt.as_deref();
+    let template_adaptation = static_page_template_adaptation_plan(
+        reference.label,
+        Some(reference.id),
+        prompt,
+        None,
+        None,
+    );
     let design_reference = static_page_template_design_reference(reference);
     if let Some(object) = payload.as_object_mut() {
         object.insert("templateReferenceId".to_string(), json!(reference.id));
@@ -80188,14 +81425,22 @@ fn apply_static_page_template_reference_to_payload(
             object.insert(
                 "modelSummary".to_string(),
                 json!(format!(
-                    "已收到模板参考：将以「{}」作为页面结构、版式风格和字段组织参考；事实内容仍以可见数据集、检索证据和缺失项为准。",
+                    "已收到模板参考，并已按客户本轮意向调整「{}」的模块标题、字段组织和输出重点；事实内容仍以可见数据集、检索证据和缺失项为准。",
                     reference.label
                 )),
             );
         }
+        object.insert(
+            "templateAdaptation".to_string(),
+            template_adaptation.clone(),
+        );
 
         if allow_module_seed && json_object_array_missing_or_empty(object, "modules") {
-            let modules = static_page_template_modules(reference);
+            let modules = static_page_template_apply_adaptation_to_modules(
+                static_page_template_modules(reference),
+                reference,
+                prompt,
+            );
             object.insert(
                 "mobileOrder".to_string(),
                 static_page_template_mobile_order(&modules),
@@ -80213,6 +81458,7 @@ fn apply_static_page_template_reference_to_payload(
             .or_insert_with(|| Value::Object(Map::new()));
         ensure_json_object(source);
         if let Some(source_object) = source.as_object_mut() {
+            source_object.insert("templateAdaptation".to_string(), template_adaptation);
             let references = source_object
                 .entry("templateReferences".to_string())
                 .or_insert_with(|| Value::Array(Vec::new()));
@@ -80251,6 +81497,28 @@ fn apply_static_page_template_context_to_payload(
     if let Some(object) = payload.as_object_mut() {
         if let Some(template_reference) = template_reference {
             object.insert("templateReference".to_string(), template_reference.clone());
+            let label = template_reference
+                .get("label")
+                .or_else(|| template_reference.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("模板参考");
+            let reference_id = template_reference
+                .get("templateId")
+                .or_else(|| template_reference.get("template_id"))
+                .or_else(|| template_reference.get("id"))
+                .and_then(Value::as_str);
+            let prompt = static_page_template_prompt_from_payload(&Value::Object(object.clone()))
+                .map(str::to_string);
+            object.insert(
+                "templateAdaptation".to_string(),
+                static_page_template_adaptation_plan(
+                    label,
+                    reference_id,
+                    prompt.as_deref(),
+                    Some(evidence_summary),
+                    Some(missing_evidence),
+                ),
+            );
         }
         object.insert(
             "templateEvidenceSummary".to_string(),
@@ -80258,6 +81526,7 @@ fn apply_static_page_template_context_to_payload(
         );
         object.insert("missingEvidence".to_string(), missing_evidence.clone());
 
+        let template_adaptation_for_source = object.get("templateAdaptation").cloned();
         let source = object
             .entry("source".to_string())
             .or_insert_with(|| Value::Object(Map::new()));
@@ -80265,6 +81534,9 @@ fn apply_static_page_template_context_to_payload(
         if let Some(source_object) = source.as_object_mut() {
             if let Some(template_reference) = template_reference {
                 source_object.insert("templateReference".to_string(), template_reference.clone());
+                if let Some(template_adaptation) = template_adaptation_for_source {
+                    source_object.insert("templateAdaptation".to_string(), template_adaptation);
+                }
             }
             source_object.insert(
                 "templateEvidenceSummary".to_string(),
@@ -80382,6 +81654,12 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         .or_else(|| payload.pointer("/source/templateReferences"))
         .cloned()
         .unwrap_or_else(|| Value::Array(Vec::new()));
+    let template_adaptation = payload
+        .get("templateAdaptation")
+        .or_else(|| payload.get("template_adaptation"))
+        .or_else(|| payload.pointer("/source/templateAdaptation"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let preview_contract =
         static_page_payload_value(payload, &["previewContract", "preview_contract"])
             .unwrap_or_else(|| {
@@ -80406,6 +81684,7 @@ fn build_static_page_image_prompt_payload(draft: &StaticPageDraft, prompt: Optio
         "data_snapshot": data_snapshot,
         "template_reference": template_reference,
         "template_references": template_references,
+        "template_adaptation": template_adaptation,
         "template_reuse_contract": {
             "policy": "reuse_generated_template_when_available",
             "data_rule": "template controls visual structure only; bind current selected_scope data",
@@ -85974,6 +87253,109 @@ mod tests {
     }
 
     #[test]
+    fn static_page_template_reference_adapts_modules_to_current_customer_intent() {
+        let reference = resolve_static_page_template_reference(Some("data-report"))
+            .expect("template id should parse")
+            .expect("template reference should exist");
+        let payload = apply_static_page_template_reference_to_payload(
+            json!({
+                "version": 1,
+                "status": "draft",
+                "prompt": "客户要一份新百门店取高报表模板，区分总部和分店店总权限，支持近7日筛选。",
+                "modules": []
+            }),
+            reference,
+            true,
+        );
+
+        assert_eq!(
+            payload["templateAdaptation"]["policy"],
+            json!("adapt_template_before_delivery")
+        );
+        assert_eq!(
+            payload["templateAdaptation"]["templateUse"],
+            json!("style_structure_adjusted_to_current_intent")
+        );
+        assert!(value_array(payload["templateAdaptation"]["focus"].clone())
+            .iter()
+            .any(|item| item["code"] == json!("role_permission_views")));
+        assert_eq!(
+            payload["templateAdaptation"]["moduleOrderRule"],
+            json!("current_intent_highest_relevance_first")
+        );
+        assert_eq!(
+            payload["mobileOrder"],
+            json!(["hero", "kpi", "trend", "comparison", "evidence"])
+        );
+        assert_eq!(payload["modules"][0]["id"], json!("hero"));
+        assert_eq!(payload["modules"][1]["id"], json!("kpi"));
+        assert_eq!(payload["modules"][2]["id"], json!("trend"));
+        assert_eq!(payload["modules"][3]["id"], json!("comparison"));
+        assert_eq!(payload["modules"][4]["id"], json!("evidence"));
+        assert_eq!(payload["modules"][1]["title"], json!("门店取高核心 KPI"));
+        assert_eq!(payload["modules"][1]["layout"]["y"], json!(3));
+        assert_eq!(
+            payload["modules"][1]["templateAdjustment"]["moduleOrderPolicy"],
+            json!("current_intent_highest_relevance_first")
+        );
+        assert_eq!(payload["modules"][3]["title"], json!("门店/区域对比"));
+        assert_eq!(payload["modules"][4]["title"], json!("权限口径与证据缺口"));
+        assert_eq!(
+            payload["source"]["templateAdaptation"]["policy"],
+            json!("adapt_template_before_delivery")
+        );
+        assert!(payload["modelSummary"]
+            .as_str()
+            .is_some_and(|text| text.contains("已按客户本轮意向调整")));
+    }
+
+    #[test]
+    fn static_page_image_prompt_includes_template_adaptation_plan() {
+        let reference = resolve_static_page_template_reference(Some("data-report"))
+            .expect("template id should parse")
+            .expect("template reference should exist");
+        let draft_payload = apply_static_page_template_reference_to_payload(
+            json!({
+                "version": 1,
+                "status": "draft",
+                "prompt": "提供一份门店取高报表模板，后续按当前数据生成页面。",
+                "modules": []
+            }),
+            reference,
+            true,
+        );
+        let now = Utc::now();
+        let draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            owner_user_id: None,
+            assistant_run_id: AssistantRunId::new(),
+            title: "门店取高报表模板".to_string(),
+            status: StaticPageDraftStatus::Draft,
+            selected_scope: json!({"intent": "static_page"}),
+            visibility_snapshot: json!({"policy": "test"}),
+            source_refs: Value::Null,
+            draft_payload,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let image_prompt_payload = build_static_page_image_prompt_payload(
+            &draft,
+            Some("提供一份门店取高报表模板，后续按当前数据生成页面。"),
+        );
+        assert_eq!(
+            image_prompt_payload["template_adaptation"]["policy"],
+            json!("adapt_template_before_delivery")
+        );
+        assert!(
+            value_array(image_prompt_payload["template_adaptation"]["focus"].clone())
+                .iter()
+                .any(|item| item["code"] == json!("sales_take_high_metric"))
+        );
+    }
+
+    #[test]
     fn static_page_template_reference_rejects_paused_tracks() {
         let error = resolve_static_page_template_reference(Some("video-hyperframes"))
             .expect_err("paused video reference should be rejected");
@@ -87210,11 +88592,17 @@ mod tests {
         assert!(static_page_prompt_allows_stable_artifact_reuse(
             "把之前生成过的报表链接再发我一下"
         ));
-        assert!(static_page_prompt_requests_existing_artifact_delivery(
+        assert!(!static_page_prompt_allows_stable_artifact_reuse(
+            "看看最新的门店取高报表"
+        ));
+        assert!(!static_page_prompt_requests_existing_artifact_delivery(
             "看看最新的门店取高报表"
         ));
         assert!(static_page_prompt_requests_existing_artifact_delivery(
             "把之前生成过的报表链接再发我一下"
+        ));
+        assert!(static_page_prompt_requests_existing_artifact_delivery(
+            "把昨天/之前生成的新百报表链接发我一下"
         ));
         assert!(!static_page_prompt_requests_existing_artifact_delivery(
             "随便生成一个报表我看看"
@@ -95129,6 +96517,65 @@ mod tests {
         .expect("platform callback token should not be treated as generic inbound bearer auth");
     }
 
+    #[test]
+    fn external_channel_inbound_bearer_auth_rejects_expired_token() {
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({
+                "inbound_bearer_token": "expired-secret",
+                "inbound_bearer_token_expires_at": Utc::now() - chrono::Duration::minutes(1)
+            }),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer expired-secret"),
+        );
+        let error = ensure_external_channel_inbound_bearer_auth(&headers, &connection)
+            .expect_err("expired bearer token should be rejected");
+        assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(error.payload.code, "external_channel_auth_failed");
+    }
+
+    #[test]
+    fn sanitize_cloned_external_channel_config_removes_secret_material_and_dispatch_urls() {
+        let mut config = json!({
+            "inbound_bearer_token": "old-inbound",
+            "reply_dispatch_url": "https://old.example.com/replies",
+            "external_reply_bearer_token": "old-reply-token",
+            "outbound_reply_signing_secret": "old-reply-secret",
+            "external_action_dispatch_url": "https://old.example.com/actions",
+            "artifact_dispatch_url": "https://old.example.com/artifacts",
+            "business_action_bearer_token": "old-action-token",
+            "dispatch_signing_secret": "old-action-secret",
+            "default_source_id": "third-party-source-main",
+            "allowed_database_source_ids": ["hy-sql-traffic-area"],
+            "channel_management": {"customer_key": "old"},
+            "temporary_access": {"temporary": true}
+        });
+        sanitize_cloned_external_channel_config(&mut config);
+
+        assert!(config.get("inbound_bearer_token").is_none());
+        assert!(config.get("reply_dispatch_url").is_none());
+        assert!(config.get("external_reply_bearer_token").is_none());
+        assert!(config.get("outbound_reply_signing_secret").is_none());
+        assert!(config.get("external_action_dispatch_url").is_none());
+        assert!(config.get("artifact_dispatch_url").is_none());
+        assert!(config.get("business_action_bearer_token").is_none());
+        assert!(config.get("dispatch_signing_secret").is_none());
+        assert!(config.get("channel_management").is_none());
+        assert!(config.get("temporary_access").is_none());
+        assert_eq!(
+            config["default_source_id"],
+            json!("third-party-source-main")
+        );
+        assert_eq!(
+            config["allowed_database_source_ids"],
+            json!(["hy-sql-traffic-area"])
+        );
+    }
+
     async fn insert_generic_external_channel_connection_with_config(
         state: &AppState,
         connection_id: &str,
@@ -102492,8 +103939,19 @@ retrieve_evidence:
         .await
         .expect("retryable external action run should be inserted");
 
+        let previous_observability_key = std::env::var("EXTERNAL_OBSERVABILITY_ACCESS_KEY").ok();
+        std::env::set_var(
+            "EXTERNAL_OBSERVABILITY_ACCESS_KEY",
+            "test-observability-secret",
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            EXTERNAL_OBSERVABILITY_ACCESS_HEADER,
+            HeaderValue::from_static("test-observability-secret"),
+        );
         let Json(response) = retry_external_integration(
             State(state.clone()),
+            headers,
             Path("generic-chat-main".to_string()),
             Json(ExternalIntegrationControlRequest {
                 reason: Some("operator retry".to_string()),
@@ -102502,6 +103960,10 @@ retrieve_evidence:
         )
         .await
         .expect("retry should be accepted");
+        match previous_observability_key {
+            Some(value) => std::env::set_var("EXTERNAL_OBSERVABILITY_ACCESS_KEY", value),
+            None => std::env::remove_var("EXTERNAL_OBSERVABILITY_ACCESS_KEY"),
+        }
 
         assert_eq!(response.status, "retry_queued");
         assert_eq!(response.affected_action_count, 1);

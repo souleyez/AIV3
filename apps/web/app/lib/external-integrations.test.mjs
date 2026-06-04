@@ -28,6 +28,7 @@ import {
   formatWorkflowDuration,
   formatObservationTime,
   latestIntegrationActivity,
+  inboundAuthSummary,
   normalizeControlResult,
   normalizeAuditItem,
   normalizeCodexExecutorTask,
@@ -51,6 +52,45 @@ test('buildThirdPartyApiUrl uses v3.elepcloud.com by default', () => {
     buildThirdPartyApiUrl('/v1/external/channels/main/events'),
     'https://v3.elepcloud.com/v1/external/channels/main/events',
   );
+});
+
+test('inboundAuthSummary redacts token material and exposes temporary state only', () => {
+  const summary = inboundAuthSummary({
+    inbound_auth_configured: true,
+    inbound_auth_mode: 'bearer',
+    temporary_access: {
+      temporary: true,
+      expired: false,
+      expires_at: '2026-06-05T00:00:00Z',
+      token_rotated_at: '2026-06-04T00:00:00Z',
+    },
+  });
+  assert.deepEqual(summary, {
+    configured: true,
+    mode: 'bearer',
+    temporary: true,
+    expired: false,
+    expiresAt: '2026-06-05T00:00:00Z',
+    tokenRotatedAt: '2026-06-04T00:00:00Z',
+  });
+  assert(!JSON.stringify(summary).includes('v3in_'));
+});
+
+test('normalizeControlResult captures one-time inbound token response', () => {
+  const result = normalizeControlResult({
+    accepted: true,
+    integration_id: 'generic-chat-customer-a',
+    integration_kind: 'channel',
+    action: 'create_channel',
+    status: 'enabled',
+    message: 'created',
+    affected_action_count: 0,
+    inbound_bearer_token: 'v3in_test_token',
+    token_expires_at: '2026-06-05T00:00:00Z',
+  });
+  assert.equal(result.inboundBearerToken, 'v3in_test_token');
+  assert.equal(result.tokenExpiresAt, '2026-06-05T00:00:00Z');
+  assert.equal(controlResultLabel(result), '第三方通道已创建，token 仅本次展示');
 });
 
 test('external integration modes are generic customer-facing guidance without secrets', () => {

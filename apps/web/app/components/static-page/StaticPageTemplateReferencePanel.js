@@ -89,6 +89,16 @@ export function staticPageMissingEvidenceFromDraft(draft) {
   );
 }
 
+export function staticPageTemplateAdaptationFromDraft(draft) {
+  if (!draft) return null;
+  return firstObject(
+    draft.templateAdaptation,
+    draft.template_adaptation,
+    draft.source?.templateAdaptation,
+    draft.source?.template_adaptation,
+  );
+}
+
 export function staticPageStructureSignalsFromDraft(draft) {
   if (!draft) return null;
   const raw = firstObject(
@@ -230,15 +240,42 @@ function StructureSignalsList({ structureSignals }) {
   );
 }
 
+function TemplateAdaptationSummary({ adaptation }) {
+  if (!adaptation) return null;
+  const summary = cleanText(adaptation.summary);
+  const subject = cleanText(adaptation.adaptedSubject || adaptation.adapted_subject);
+  const focus = asArray(adaptation.focus)
+    .map((item) => cleanText(item.label || item.code || item.instruction))
+    .filter(Boolean)
+    .slice(0, 3);
+  if (!summary && !subject && !focus.length) return null;
+
+  return (
+    <div className="static-page-template-adaptation" aria-label="模板按本轮意向调整">
+      <div className="static-page-template-adaptation-head">
+        <span>本轮意向</span>
+        <strong>{subject || '已按当前需求调整'}</strong>
+      </div>
+      {summary ? <p>{summary}</p> : null}
+      {focus.length ? (
+        <div className="static-page-template-hints">
+          {focus.map((item) => <span key={item}>{item}</span>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function StaticPageTemplateReferencePanel({ draft }) {
   const reference = staticPageTemplateReferenceFromDraft(draft);
   const missingEvidence = staticPageMissingEvidenceFromDraft(draft);
+  const adaptation = staticPageTemplateAdaptationFromDraft(draft);
   const structureSignals = staticPageStructureSignalsFromDraft(draft);
   const missingItems = asArray(missingEvidence?.items);
   const hasStructureSignals = Boolean(
     structureSignals?.sectionTitleHints?.length || structureSignals?.boundModules?.length,
   );
-  if (!reference && !missingItems.length && !hasStructureSignals) {
+  if (!reference && !adaptation && !missingItems.length && !hasStructureSignals) {
     return null;
   }
 
@@ -260,6 +297,7 @@ export default function StaticPageTemplateReferencePanel({ draft }) {
         {templateId ? <em>{templateId}</em> : null}
       </div>
       {designIntent ? <p className="static-page-template-intent">{designIntent}</p> : null}
+      {adaptation ? <TemplateAdaptationSummary adaptation={adaptation} /> : null}
       {reference ? <TemplateReferenceMeta reference={reference} /> : null}
       {promptHints.length ? (
         <div className="static-page-template-hints">
