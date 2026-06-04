@@ -24092,6 +24092,17 @@ async fn enrich_external_channel_document_scope(
         )
         .await?
         {
+            if let Some(source_id) = explicit_source_id.clone().or(default_source_id.clone()) {
+                enrich_external_channel_attachment_title_document_scope(
+                    state,
+                    connection_id,
+                    message,
+                    external_owner_user_id,
+                    &source_id,
+                    selected_scope,
+                )
+                .await?;
+            }
             return Ok(());
         }
         let dataset_external_id_pairs = effective_external_document_parse_dataset_external_id_pairs(
@@ -24184,6 +24195,15 @@ async fn enrich_external_channel_document_scope(
                 selected_scope,
             )
             .await?;
+            enrich_external_channel_attachment_title_document_scope(
+                state,
+                connection_id,
+                message,
+                external_owner_user_id,
+                &source_id,
+                selected_scope,
+            )
+            .await?;
             return Ok(());
         }
     }
@@ -24198,6 +24218,17 @@ async fn enrich_external_channel_document_scope(
         )
         .await?
         {
+            if let Some(source_id) = source_id.as_deref() {
+                enrich_external_channel_attachment_title_document_scope(
+                    state,
+                    connection_id,
+                    message,
+                    external_owner_user_id,
+                    source_id,
+                    selected_scope,
+                )
+                .await?;
+            }
             return Ok(());
         }
         if restore_external_channel_data_ingestion_staging_dataset_scope(
@@ -24210,6 +24241,18 @@ async fn enrich_external_channel_document_scope(
             return Ok(());
         }
         if let Some(source_id) = source_id {
+            if enrich_external_channel_attachment_title_document_scope(
+                state,
+                connection_id,
+                message,
+                external_owner_user_id,
+                &source_id,
+                selected_scope,
+            )
+            .await?
+            {
+                return Ok(());
+            }
             set_external_channel_document_scope_missing_documents(selected_scope, &source_id);
             if explicit_source_id.is_some()
                 && external_channel_source_document_scope_enabled(&connection.config_redacted)
@@ -24365,6 +24408,455 @@ async fn enrich_external_channel_document_scope(
     }
 
     Ok(())
+}
+
+async fn enrich_external_channel_attachment_title_document_scope(
+    state: &AppState,
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+    owner_user_id: UserId,
+    source_id: &str,
+    selected_scope: &mut Value,
+) -> std::result::Result<bool, ApiError> {
+    let hints = external_channel_attachment_title_hints(message);
+    if hints.is_empty() {
+        return Ok(false);
+    }
+
+    let mut documents = state
+        .storage
+        .documents()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .filter(|document| external_document_source_matches(&document.metadata, source_id, None))
+        .collect::<Vec<_>>();
+    let legacy_owner_user_ids =
+        external_channel_legacy_source_owner_user_ids(state, connection_id, source_id).await?;
+    documents = claim_external_owned_documents_with_legacy_owners(
+        state,
+        documents,
+        owner_user_id,
+        &legacy_owner_user_ids,
+    )
+    .await?;
+
+    let mut scored = Vec::new();
+    for document in documents {
+        let Some((score, hint)) = hints
+            .iter()
+            .filter_map(|hint| {
+                external_channel_attachment_title_match_score(hint, &document.title)
+                    .map(|score| (score, hint.clone()))
+            })
+            .max_by(|(left, _), (right, _)| left.cmp(right))
+        else {
+            continue;
+        };
+        scored.push((score, document.updated_at, hint, document));
+    }
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| left.3.title.cmp(&right.3.title))
+    });
+
+    let mut matched_documents = Vec::new();
+    let mut seen_document_ids = HashSet::new();
+    for (_, _, hint, document) in scored {
+        if !seen_document_ids.insert(document.id) {
+            continue;
+        }
+        matched_documents.push((hint, document));
+        if matched_documents.len() >= 5 {
+            break;
+        }
+    }
+    if matched_documents.is_empty() {
+        set_payload_value(
+            selected_scope,
+            "attachment_title_resolution",
+            json!({
+                "status": "not_matched",
+                "source_id": source_id,
+                "hints": hints,
+            }),
+        );
+        return Ok(false);
+    }
+
+    let existing_document_items = selected_scope
+        .get("documents")
+        .cloned()
+        .map(value_array)
+        .unwrap_or_default();
+    let mut document_ids = Vec::new();
+    let mut selected_documents = Vec::new();
+    let mut matched_payload = Vec::new();
+    let mut available_external_ids = selected_scope
+        .get("available_document_external_ids")
+        .map(|value| external_string_ids_from_payload_value(value.clone()))
+        .unwrap_or_default();
+    let mut canonical_dataset_ids = selected_dataset_ids_from_scope(&json!({
+        "datasets": selected_scope
+            .get("canonical_datasets")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()))
+    }));
+
+    for (hint, document) in &matched_documents {
+        if !document_ids.contains(&document.id) {
+            document_ids.push(document.id);
+        }
+        if !canonical_dataset_ids.contains(&document.dataset_id) {
+            canonical_dataset_ids.push(document.dataset_id);
+        }
+        let document_external_id = external_document_external_id_from_metadata(&document.metadata)
+            .unwrap_or_else(|| document.id.to_string());
+        if !available_external_ids.contains(&document_external_id) {
+            available_external_ids.push(document_external_id.clone());
+        }
+        let item = json!({
+            "type": "document",
+            "id": document.id,
+            "dataset_id": document.dataset_id,
+            "source_id": source_id,
+            "document_external_id": document_external_id,
+            "title": document.title,
+            "scope_reason": "explicit_attachment_title_mention",
+            "matched_attachment_title": hint,
+        });
+        selected_documents.push(item.clone());
+        matched_payload.push(item);
+    }
+
+    for item in existing_document_items {
+        let document_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
+            .map(DocumentId);
+        if let Some(document_id) = document_id {
+            if document_ids.contains(&document_id) {
+                continue;
+            }
+            document_ids.push(document_id);
+        }
+        selected_documents.push(item);
+    }
+    for document_id in selected_document_ids_from_scope(selected_scope) {
+        if !document_ids.contains(&document_id) {
+            document_ids.push(document_id);
+        }
+    }
+
+    let requested_dataset_external_ids = selected_scope
+        .get("requested_dataset_external_ids")
+        .map(|value| external_string_ids_from_payload_value(value.clone()))
+        .unwrap_or_default();
+    let dataset_external_ids = selected_scope
+        .get("dataset_external_ids")
+        .map(|value| external_string_ids_from_payload_value(value.clone()))
+        .unwrap_or_default();
+    let temporary_dataset = create_or_refresh_external_channel_temporary_dataset_scope(
+        state,
+        connection_id,
+        message,
+        Some(source_id),
+        &document_ids,
+        "attachment_title_mentions_and_existing_scope",
+        requested_dataset_external_ids.first().map(String::as_str),
+        dataset_external_ids.first().map(String::as_str),
+        &requested_dataset_external_ids,
+        &dataset_external_ids,
+    )
+    .await?;
+    set_external_channel_temporary_dataset_scope(
+        selected_scope,
+        connection_id,
+        message,
+        Some(source_id),
+        document_ids.len(),
+        temporary_dataset.as_ref(),
+        "attachment_title_mentions_and_existing_scope",
+    );
+
+    let mut detail_targets = selected_scope
+        .get("detail_targets")
+        .cloned()
+        .map(value_array)
+        .unwrap_or_default();
+    for (_, document) in &matched_documents {
+        let document_id = document.id.to_string();
+        let already_present = detail_targets.iter().any(|target| {
+            target
+                .get("document_id")
+                .or_else(|| target.get("documentId"))
+                .and_then(Value::as_str)
+                == Some(document_id.as_str())
+        });
+        if !already_present {
+            detail_targets.push(json!({
+                "type": "document_detail_target",
+                "document_id": document.id,
+                "dataset_id": document.dataset_id,
+                "reason": "explicit_attachment_title_mention",
+                "title": document.title,
+            }));
+        }
+    }
+
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_status",
+        json!("resolved_with_attachment_title"),
+    );
+    set_payload_value(
+        selected_scope,
+        "external_document_scope_summary",
+        json!("The message explicitly mentioned attachment filenames; V3 matched parsed documents from the same external source, merged them into the conversation-scoped temporary range, and prioritized them for this answer."),
+    );
+    set_payload_value(
+        selected_scope,
+        "available_document_source_id",
+        json!(source_id),
+    );
+    set_payload_value(
+        selected_scope,
+        "available_document_external_ids",
+        json!(available_external_ids),
+    );
+    set_payload_value(
+        selected_scope,
+        "documents",
+        Value::Array(selected_documents),
+    );
+    if !canonical_dataset_ids.is_empty() {
+        set_payload_value(
+            selected_scope,
+            "canonical_datasets",
+            Value::Array(
+                canonical_dataset_ids
+                    .iter()
+                    .map(|dataset_id| json!({"type": "dataset", "id": dataset_id}))
+                    .collect(),
+            ),
+        );
+    }
+    if !detail_targets.is_empty() {
+        set_payload_value(
+            selected_scope,
+            "detail_targets",
+            Value::Array(detail_targets),
+        );
+    }
+    let matched_document_ids = matched_documents
+        .iter()
+        .map(|(_, document)| document.id.to_string())
+        .collect::<Vec<_>>();
+    let mut supply_policy = assistant_run_scope_supply_policy(selected_scope);
+    set_payload_value(
+        &mut supply_policy,
+        "retrievalPolicy",
+        json!("explicit_attachment_title_document_first"),
+    );
+    set_payload_value(&mut supply_policy, "preferDetail", json!(true));
+    set_payload_value(
+        &mut supply_policy,
+        "suppressDefaultDatabaseSupply",
+        json!(true),
+    );
+    set_payload_value(
+        &mut supply_policy,
+        "attachmentTitleDocumentIds",
+        json!(matched_document_ids),
+    );
+    set_payload_value(selected_scope, "supply_policy", supply_policy);
+    set_payload_value(
+        selected_scope,
+        "attachment_title_resolution",
+        json!({
+            "status": "matched",
+            "source_id": source_id,
+            "hints": hints,
+            "matched_documents": matched_payload,
+        }),
+    );
+
+    Ok(true)
+}
+
+fn external_channel_attachment_title_hints(message: &ExternalBotMessageView) -> Vec<String> {
+    let mut hints = Vec::new();
+    for attachment in &message.attachment_refs {
+        if let Some(filename) = attachment
+            .filename
+            .as_deref()
+            .and_then(non_empty_trimmed_string)
+        {
+            if !hints.contains(&filename) {
+                hints.push(filename);
+            }
+        }
+    }
+    if let Some(text) = message.text.as_deref() {
+        for hint in external_channel_attachment_title_hints_from_text(text) {
+            if !hints.contains(&hint) {
+                hints.push(hint);
+            }
+        }
+    }
+    hints
+}
+
+fn external_channel_attachment_title_hints_from_text(text: &str) -> Vec<String> {
+    let mut hints = Vec::new();
+    let markers = ["[附件:", "【附件:", "附件：", "附件:"];
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < text.len() {
+        let slice = &text[index..];
+        let Some((marker_offset, marker)) = markers
+            .iter()
+            .filter_map(|marker| slice.find(marker).map(|offset| (offset, *marker)))
+            .min_by_key(|(offset, _)| *offset)
+        else {
+            break;
+        };
+        let start_byte = index + marker_offset + marker.len();
+        let start_char = text[..start_byte].chars().count();
+        let mut end_char = start_char;
+        while end_char < chars.len() {
+            let value = chars[end_char];
+            if matches!(value, ']' | '】' | '\n' | '\r') {
+                break;
+            }
+            end_char += 1;
+        }
+        let raw = chars[start_char..end_char].iter().collect::<String>();
+        if let Some(hint) = non_empty_trimmed_string(&raw) {
+            if !hints.contains(&hint) {
+                hints.push(hint);
+            }
+        }
+        index = text
+            .char_indices()
+            .nth(end_char.saturating_add(1))
+            .map(|(byte_index, _)| byte_index)
+            .unwrap_or_else(|| text.len());
+    }
+    hints
+}
+
+fn external_channel_attachment_title_match_score(hint: &str, document_title: &str) -> Option<i64> {
+    let normalized_hint = external_channel_attachment_title_normalized(hint);
+    let normalized_title = external_channel_attachment_title_normalized(document_title);
+    if normalized_hint.is_empty() || normalized_title.is_empty() {
+        return None;
+    }
+    if let Some(primary_name) = external_channel_attachment_title_primary_cjk_name(hint) {
+        if !document_title.contains(&primary_name) {
+            return None;
+        }
+    }
+    if normalized_hint == normalized_title {
+        return Some(10_000 + normalized_title.chars().count() as i64);
+    }
+    if normalized_hint.contains(&normalized_title) && normalized_title.chars().count() >= 4 {
+        return Some(5_000 + normalized_title.chars().count() as i64);
+    }
+    if normalized_title.contains(&normalized_hint) && normalized_hint.chars().count() >= 4 {
+        return Some(4_000 + normalized_hint.chars().count() as i64);
+    }
+
+    let hint_tokens = external_channel_attachment_title_match_tokens(hint);
+    let title_tokens = external_channel_attachment_title_match_tokens(document_title);
+    let mut score = 0i64;
+    let mut has_specific_overlap = false;
+    for token in &title_tokens {
+        if !hint_tokens.contains(token) {
+            continue;
+        }
+        let token_len = token.chars().count() as i64;
+        score += token_len * token_len;
+        if !external_channel_attachment_title_generic_token(token) {
+            has_specific_overlap = true;
+        }
+    }
+    if has_specific_overlap && score >= 9 {
+        Some(score)
+    } else {
+        None
+    }
+}
+
+fn external_channel_attachment_title_primary_cjk_name(value: &str) -> Option<String> {
+    let mut cjk_run = String::new();
+    for ch in value.chars() {
+        if is_cjk_query_token_char(ch) {
+            cjk_run.push(ch);
+            continue;
+        }
+        if !cjk_run.is_empty() {
+            break;
+        }
+    }
+    if cjk_run.chars().count() >= 2
+        && !external_channel_attachment_title_generic_token(cjk_run.as_str())
+    {
+        Some(cjk_run)
+    } else {
+        None
+    }
+}
+
+fn external_channel_attachment_title_match_tokens(value: &str) -> BTreeSet<String> {
+    lexical_query_tokens(value)
+        .into_iter()
+        .filter(|token| token.chars().count() >= 2)
+        .collect()
+}
+
+fn external_channel_attachment_title_generic_token(token: &str) -> bool {
+    matches!(
+        token,
+        "附件"
+            | "文件"
+            | "文档"
+            | "资料"
+            | "材料"
+            | "简历"
+            | "优化"
+            | "pdf"
+            | "doc"
+            | "docx"
+            | "xlsx"
+            | "xls"
+            | "ppt"
+            | "pptx"
+    )
+}
+
+fn external_channel_attachment_title_normalized(value: &str) -> String {
+    let mut normalized = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+        } else if is_cjk_query_token_char(ch) {
+            normalized.push(ch);
+        }
+    }
+    for suffix in ["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt"] {
+        if normalized.ends_with(suffix) {
+            let new_len = normalized.len().saturating_sub(suffix.len());
+            normalized.truncate(new_len);
+            break;
+        }
+    }
+    normalized
 }
 
 fn external_bot_message_requested_dataset_external_ids(
@@ -36368,7 +36860,8 @@ fn external_channel_model_tool_request(
 fn external_channel_model_tool_capability_guidance_lines() -> Vec<String> {
     vec![
         "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
-        "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/表/文件接入需求并生成待确认 staging plan；`document_processing`=文档入库、深解析、重解析、VLM 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
+        "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/表/文件接入需求并生成待确认 staging plan；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
+        "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级、事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
         "当你判断用户不是普通咨询，而是在要求 V3/DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。".to_string(),
         "普通咨询、口径解释、数据问答、已可直接回答的问题仍正常自然语言回答；不要在客户答案中暴露 ReAct、retrieve_evidence、read_document_detail、upgrade_parse_vlm、codex_host_task、原始 connector/API 调用或内部质量门禁名称。".to_string(),
     ]
@@ -36867,6 +37360,128 @@ async fn external_channel_document_processing_reply_from_tool_request(
             "reparse_requested": reparse_requested,
         }),
     ))
+}
+
+fn external_channel_document_processing_tool_request_should_retry_as_answer(
+    tool_request: &ExternalChannelModelToolRequest,
+    assistant_request: &CreateAssistantRunRequest,
+    evidence_state: &Value,
+    message: &ExternalBotMessageView,
+) -> bool {
+    if tool_request.tool != ExternalChannelModelToolCapability::DocumentProcessing {
+        return false;
+    }
+    let intent = external_channel_document_processing_intent(tool_request);
+    if intent == "status" || external_channel_document_processing_intent_requests_reparse(&intent) {
+        return false;
+    }
+    let prompt_text = [
+        message.text.as_deref().unwrap_or(""),
+        assistant_request.prompt.as_str(),
+        tool_request
+            .payload
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+    ]
+    .join(" ");
+    if external_channel_text_requests_document_processing_control(&prompt_text) {
+        return false;
+    }
+    if !external_channel_text_requests_document_content_answer(&prompt_text) {
+        return false;
+    }
+    let has_supplied_evidence = evidence_state
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status == "supplied")
+        || evidence_state
+            .get("items")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty());
+    let has_selected_documents = assistant_request
+        .selected_scope
+        .as_ref()
+        .is_some_and(|scope| {
+            !selected_document_ids_from_scope(scope).is_empty()
+                || scope
+                    .get("documents")
+                    .and_then(Value::as_array)
+                    .is_some_and(|documents| !documents.is_empty())
+        });
+    has_supplied_evidence || has_selected_documents
+}
+
+fn external_channel_text_requests_document_processing_control(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    [
+        "重新解析",
+        "重解析",
+        "深解析",
+        "解析状态",
+        "解析失败",
+        "解析质量",
+        "升级解析",
+        "文档入库",
+        "重新入库",
+        "事实抽取",
+        "问不出来",
+        "读不出来",
+        "无法读取",
+        "无法读",
+        "ocr",
+        "vlm",
+        "reparse",
+        "deep parse",
+        "parse status",
+        "parse failed",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn external_channel_text_requests_document_content_answer(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    [
+        "分析",
+        "总结",
+        "时间线",
+        "适任",
+        "岗位",
+        "风险",
+        "简历",
+        "项目经验",
+        "项目经历",
+        "排序",
+        "统计",
+        "列一下",
+        "判断",
+        "归纳",
+        "提炼",
+        "对比",
+        "是谁",
+        "缺勤",
+        "工时",
+        "根据",
+        "基于",
+        "这份",
+        "附件",
+        "pdf",
+        "resume",
+        "timeline",
+        "risk",
+        "analyze",
+        "analyse",
+        "summarize",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn external_channel_document_processing_answer_retry_provider_input(base_input: &str) -> String {
+    format!(
+        "{base_input}\n\n[宿主纠偏]\n上一轮模型把本轮问题误判为 document_processing 平台能力请求。当前用户是在要求基于已经授权/可见的文档或临时附件做内容分析、总结、时间线、岗位适配或风险判断。请直接给客户自然语言答案，优先使用当前供料和 detail_targets；不要输出 <V3_TOOL_REQUEST>，不要要求重新解析，除非供料明确显示目标文档不存在或解析失败。"
+    )
 }
 
 fn external_channel_capability_text_from_payload(payload: &Value, keys: &[&str]) -> String {
@@ -37777,9 +38392,9 @@ async fn external_channel_chat_model_or_acceptance_reply(
             .map_err(ApiError::from_storage)?;
         return Ok(external_channel_text_reply(message, reply, "failed"));
     }
-    let provider_input =
+    let mut provider_input =
         build_assistant_run_provider_input_with_evidence(assistant_request, Some(evidence_state));
-    let attempts = if let Some(pool_attempts) =
+    let mut attempts = if let Some(pool_attempts) =
         external_channel_chat_model_pool_attempts(state, connection_id, message).await?
     {
         pool_attempts
@@ -37794,8 +38409,12 @@ async fn external_channel_chat_model_or_acceptance_reply(
     let mut rejected_attempts = Vec::new();
     let direct_reply_started_at = Instant::now();
     let direct_reply_total_budget = external_channel_direct_reply_total_budget();
+    let mut document_processing_answer_retry_used = false;
 
-    for attempt in attempts {
+    let mut attempt_index = 0usize;
+    while attempt_index < attempts.len() {
+        let attempt = attempts[attempt_index].clone();
+        attempt_index += 1;
         let elapsed = direct_reply_started_at.elapsed();
         if elapsed >= direct_reply_total_budget {
             rejected_attempts.push(json!({
@@ -38245,6 +38864,60 @@ async fn external_channel_chat_model_or_acceptance_reply(
         }
 
         if let Some(tool_request) = external_channel_model_tool_request(&output_text) {
+            if external_channel_document_processing_tool_request_should_retry_as_answer(
+                &tool_request,
+                assistant_request,
+                evidence_state,
+                message,
+            ) && !document_processing_answer_retry_used
+            {
+                document_processing_answer_retry_used = true;
+                rejected_attempts.push(json!({
+                    "attempt": attempt.label.as_str(),
+                    "runtime_mode": attempt.runtime.mode.as_str(),
+                    "provider": attempt.runtime.provider.as_str(),
+                    "model": attempt.runtime.model.as_str(),
+                    "reason": "document_processing_tool_misrouted_content_answer",
+                    "tool": tool_request.tool.as_str(),
+                    "runtime": runtime_manifest.clone(),
+                }));
+                state
+                    .storage
+                    .assistant_runs()
+                    .append_event(
+                        state.tenant_id,
+                        run_id,
+                        &NewAssistantRunEvent {
+                            event_name:
+                                "assistant_run.external_channel_model_tool_request_retried_as_answer"
+                                    .to_string(),
+                            payload: json!({
+                                "channel_connection_id": connection_id,
+                                "platform": external_channel_platform_wire_value(&message.platform),
+                                "message_external_id": message.message_external_id.clone(),
+                                "attempt": attempt.label.as_str(),
+                                "tool": tool_request.tool.as_str(),
+                                "intent": tool_request.payload.get("intent").and_then(Value::as_str).unwrap_or(""),
+                                "reason": "document_processing_tool_misrouted_content_answer",
+                                "tool_request": tool_request.payload.clone(),
+                                "runtime": runtime_manifest.clone(),
+                            }),
+                            created_at: now,
+                        },
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?;
+                if let Some(sink) = answer_delta_sink.as_ref() {
+                    sink.emit_answer_retrying("document_processing_tool_misroute");
+                }
+                let mut retry_attempt = attempt.clone();
+                retry_attempt.label = format!("{}_document_answer_retry", retry_attempt.label);
+                attempts.insert(attempt_index, retry_attempt);
+                provider_input = external_channel_document_processing_answer_retry_provider_input(
+                    &provider_input,
+                );
+                continue;
+            }
             if let Some(reply) = external_channel_dispatch_model_tool_request(
                 state,
                 connection_id,
@@ -55582,6 +56255,10 @@ async fn build_assistant_run_evidence_state(
         assistant_run_dataset_entity_scan_requested(selected_scope, prompt);
     let external_acl_filter = load_external_acl_filter_context(state, selected_scope).await?;
     let evidence_document_ids = selected_document_ids_for_evidence_from_scope(selected_scope);
+    let attachment_title_document_ids =
+        selected_scope_attachment_title_document_ids(selected_scope);
+    let suppress_default_database_supply =
+        assistant_run_scope_suppresses_default_database_supply(selected_scope);
     let allow_selected_documents_without_acl_snapshot =
         selected_scope_allows_external_document_range_without_acl_snapshot(selected_scope);
     let mut supplied_items = Vec::new();
@@ -55633,6 +56310,23 @@ async fn build_assistant_run_evidence_state(
         .await?;
         supplied_items.extend(parse_status_items);
 
+        if !attachment_title_document_ids.is_empty() {
+            let attachment_items = build_assistant_run_chunk_fallback_supply(
+                state,
+                &dataset,
+                prompt,
+                ASSISTANT_RUN_EVIDENCE_MAX_LIMIT.min(limit.max(1)),
+                current_user_id,
+                external_acl_filter.as_ref(),
+                &attachment_title_document_ids,
+                allow_selected_documents_without_acl_snapshot,
+                &mut media_context_by_document,
+                "explicit_attachment_title_document_first",
+            )
+            .await?;
+            append_deduped_assistant_supply_items(&mut supplied_items, attachment_items);
+        }
+
         if dataset_entity_scan_requested {
             let fact_snapshot_items = build_assistant_run_dataset_fact_snapshot_supply(
                 state,
@@ -55662,9 +56356,11 @@ async fn build_assistant_run_evidence_state(
             }
         }
 
-        let database_supply_items =
-            build_assistant_run_database_aggregate_supply(state, &dataset, prompt).await?;
-        supplied_items.extend(database_supply_items);
+        if !suppress_default_database_supply {
+            let database_supply_items =
+                build_assistant_run_database_aggregate_supply(state, &dataset, prompt).await?;
+            supplied_items.extend(database_supply_items);
+        }
 
         let spreadsheet_row_analysis_items = build_assistant_run_spreadsheet_row_analysis_supply(
             state,
@@ -69140,6 +69836,47 @@ fn assistant_run_scope_supply_policy(scope: &Value) -> Value {
         .or_else(|| scope.get("supplyPolicy"))
         .cloned()
         .unwrap_or_else(|| json!({}))
+}
+
+fn assistant_run_scope_suppresses_default_database_supply(scope: &Value) -> bool {
+    let policy = assistant_run_scope_supply_policy(scope);
+    policy
+        .get("suppressDefaultDatabaseSupply")
+        .or_else(|| policy.get("suppress_default_database_supply"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn selected_scope_attachment_title_document_ids(scope: &Value) -> Vec<DocumentId> {
+    let policy = assistant_run_scope_supply_policy(scope);
+    let mut ids = Vec::new();
+    for value in [
+        policy.get("attachmentTitleDocumentIds"),
+        policy.get("attachment_title_document_ids"),
+        scope.pointer("/attachment_title_resolution/matched_documents"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(items) = value.as_array() {
+            for item in items {
+                let raw = item
+                    .as_str()
+                    .or_else(|| item.get("id").and_then(Value::as_str))
+                    .or_else(|| item.get("document_id").and_then(Value::as_str))
+                    .or_else(|| item.get("documentId").and_then(Value::as_str));
+                if let Some(document_id) = raw
+                    .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
+                    .map(DocumentId)
+                {
+                    if !ids.contains(&document_id) {
+                        ids.push(document_id);
+                    }
+                }
+            }
+        }
+    }
+    ids
 }
 
 fn assistant_run_scope_policy_string(
@@ -90472,6 +91209,7 @@ mod tests {
         assert!(provider_input.contains("collection_setup_analysis"));
         assert!(provider_input.contains("integration_setup_analysis"));
         assert!(provider_input.contains("message_channel_outreach"));
+        assert!(provider_input.contains("不要因为提到附件、PDF、简历、表格或文档就输出"));
         assert!(provider_input.contains("<V3_TOOL_REQUEST>"));
         assert!(provider_input.contains("retrieve_evidence"));
         let tool_request = external_channel_model_tool_request(
@@ -90483,6 +91221,71 @@ mod tests {
             ExternalChannelModelToolCapability::StaticPageArtifact
         );
         assert_eq!(tool_request.payload["tool"], json!("static_page_artifact"));
+    }
+
+    #[test]
+    fn external_channel_attachment_title_hints_match_resume_document_titles() {
+        let hints = external_channel_attachment_title_hints_from_text(
+            "[附件: 郑宇宁_AI全栈产品技术主管_优化简历.pdf] 分析下简历，列一下时间线。",
+        );
+        assert_eq!(
+            hints,
+            vec!["郑宇宁_AI全栈产品技术主管_优化简历.pdf".to_string()]
+        );
+        let score = external_channel_attachment_title_match_score(&hints[0], "郑宇宁简历.pdf")
+            .expect("resume title should match by explicit attachment title tokens");
+        assert!(score >= 9);
+        assert!(
+            external_channel_attachment_title_match_score(&hints[0], "李想周报0518-0522.docx")
+                .is_none()
+        );
+        assert!(external_channel_attachment_title_match_score(
+            &hints[0],
+            "李越-8年+技术-产品(即做技术又做产品）.pdf"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn external_channel_document_processing_tool_request_retries_resume_analysis_as_answer() {
+        let document_id = DocumentId::new();
+        let mut message = sample_external_bot_message();
+        message.text = Some(
+            "[附件: 郑宇宁_AI全栈产品技术主管_优化简历.pdf] 分析下简历，列一下时间线，判断一下适任岗位和风险。"
+                .to_string(),
+        );
+        let mut request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        request.selected_scope = Some(json!({
+            "type": "external_channel",
+            "mode": "external_document_scope",
+            "documents": [{"type": "document", "id": document_id}],
+        }));
+        let tool_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"create_or_update","reason":"用户要求分析附件简历 PDF，并输出时间线、适任岗位与风险判断"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert!(
+            external_channel_document_processing_tool_request_should_retry_as_answer(
+                &tool_request,
+                &request,
+                &json!({"status": "supplied"}),
+                &message,
+            )
+        );
+
+        let reparse_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"document_processing","intent":"reparse_request","reason":"用户明确要求重新解析 PDF"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        assert!(
+            !external_channel_document_processing_tool_request_should_retry_as_answer(
+                &reparse_request,
+                &request,
+                &json!({"status": "supplied"}),
+                &message,
+            )
+        );
     }
 
     #[test]
@@ -96830,6 +97633,168 @@ mod tests {
             .await
             .expect("active memberships should list after refresh");
         assert_eq!(active_document_ids, vec![document.id]);
+    }
+
+    #[tokio::test]
+    async fn external_channel_dataset_scope_merges_explicit_attachment_title_document() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external attachment title scope test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-attachment-title-test-{}", Uuid::new_v4()),
+                "External Attachment Title Scope Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let weekly_dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-weekly-{}", Uuid::new_v4()),
+                    title: "Weekly group".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("weekly dataset should be created");
+        let resume_dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("external-resume-{}", Uuid::new_v4()),
+                    title: "Resume group".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("resume dataset should be created");
+        let weekly_doc = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: weekly_dataset.id,
+                    title: "李想周报0518-0522.docx".to_string(),
+                    object_key: "external-attachment-title/weekly.docx".to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "dataset_external_id": "weekly-group",
+                            "document_external_id": "weekly-doc"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("weekly document should be created");
+        let resume_doc = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id: resume_dataset.id,
+                    title: "郑宇宁简历.pdf".to_string(),
+                    object_key: "external-attachment-title/resume.pdf".to_string(),
+                    content_type: "application/pdf".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({
+                        "external_source": {
+                            "source_id": "src-docs",
+                            "dataset_external_id": "resume-group",
+                            "document_external_id": "resume-doc"
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("resume document should be created");
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-attachment-title".to_string();
+        message.message_external_id = "msg-attachment-title-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-attachment-title-001".to_string();
+        message.available_document_source_id = Some("src-docs".to_string());
+        message.dataset_external_ids = vec!["weekly-group".to_string()];
+        message.text = Some(
+            "[附件: 郑宇宁_AI全栈产品技术主管_优化简历.pdf] 分析下简历，列一下时间线。".to_string(),
+        );
+        let mut selected_scope = json!({"type": "external_channel"});
+        enrich_external_channel_document_scope(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &message,
+            &mut selected_scope,
+        )
+        .await
+        .expect("document scope should include explicit attachment title");
+
+        assert_eq!(
+            selected_scope["external_document_scope_status"],
+            json!("resolved_with_attachment_title")
+        );
+        assert_eq!(
+            selected_scope["attachment_title_resolution"]["status"],
+            json!("matched")
+        );
+        assert!(selected_scope["available_document_external_ids"]
+            .as_array()
+            .expect("external ids should be an array")
+            .contains(&json!("resume-doc")));
+        let scoped_document_ids = selected_document_ids_from_scope(&selected_scope);
+        assert!(scoped_document_ids.contains(&weekly_doc.id));
+        assert!(scoped_document_ids.contains(&resume_doc.id));
+        assert_eq!(scoped_document_ids.first(), Some(&resume_doc.id));
+        assert!(selected_scope["detail_targets"]
+            .as_array()
+            .expect("detail targets should be an array")
+            .iter()
+            .any(|target| target.get("document_id") == Some(&json!(resume_doc.id))));
+
+        let temporary_dataset_id = selected_scope["temporary_dataset"]["id"]
+            .as_str()
+            .and_then(|raw| Uuid::parse_str(raw).ok())
+            .map(DatasetId)
+            .expect("temporary dataset id should exist");
+        let active_document_ids = state
+            .storage
+            .dataset_document_memberships()
+            .list_document_ids_by_dataset(state.tenant_id, temporary_dataset_id)
+            .await
+            .expect("temporary dataset memberships should list");
+        assert!(active_document_ids.contains(&weekly_doc.id));
+        assert!(active_document_ids.contains(&resume_doc.id));
     }
 
     #[tokio::test]
