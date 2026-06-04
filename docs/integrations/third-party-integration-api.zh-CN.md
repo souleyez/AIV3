@@ -319,7 +319,7 @@ Authorization: Bearer <V3 inbound token>
 | `requested_skills[].mode` | 否 | `required`、`preferred` 或 `disabled`；不传默认按 `preferred` |
 | `requested_skills[].arguments` | 否 | 本轮 skill 参数对象，只放非敏感参数 |
 | `mention_external_user_ids` | 否 | 被提及的第三方用户 ID 列表 |
-| `attachment_refs` | 否 | 附件引用列表；推荐对象数组，也兼容 `["https://example.com/a.docx"]` 字符串 URL 数组。后续若要 V3 主动下载附件，建议优先走文档解析接口 |
+| `attachment_refs` | 否 | 附件引用列表；推荐对象数组，也兼容 `["https://example.com/a.docx"]` 字符串 URL 数组；图片消息可直接传图片下载 URL |
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | 第三方收到或生成该消息的时间 |
 
@@ -393,6 +393,92 @@ Authorization: Bearer <V3 inbound token>
 - 如果当前资料不足但同会话可继续，会返回 `reply.task_status=needs_input` 和 `reply.card.type=v3_needs_input`，第三方把 `reply.text` 或 `reply.card.question` 展示给用户，用户补充后继续用同一个 `conversation_external_id` 发下一轮消息即可；
 - 如果需要用户确认动作，会返回 `reply_type=requires_confirmation`；
 - 第一阶段不要求第三方再调用单独的“取回复”接口。
+
+图片订单字段抽取也使用同一个 `/events` 接口。第三方聊天里用户直接发订单、充值、支付记录截图时，推荐传 `message_type: "image"`、`output_format: "json"` 和图片 `attachment_refs`；如需强制该能力，可在 `requested_skills` 里传 `skill_id: "order_screenshot_extract"`。V3 会返回 `reply_type=card`、`reply.card.type=v3_order_screenshot_extract`，并把可入库字段放在 `reply.card.records`。
+
+请求示例：
+
+```json
+{
+  "platform": "generic_chat",
+  "tenant_external_id": "tenant-ext-001",
+  "bot_external_id": "bot-v3",
+  "conversation_external_id": "conv-order-001",
+  "sender_external_id": "user-10001",
+  "message_external_id": "msg-order-image-001",
+  "message_type": "image",
+  "text": "请识别这张充值记录截图，按订单字段返回 JSON。",
+  "output_format": "json",
+  "requested_skills": [
+    {
+      "skill_id": "order_screenshot_extract",
+      "mode": "required",
+      "arguments": {
+        "schema": {
+          "record_type": "recharge_order"
+        }
+      }
+    }
+  ],
+  "attachment_refs": [
+    {
+      "attachment_external_id": "img-order-001",
+      "filename": "recharge-orders.png",
+      "content_type": "image/png",
+      "size_bytes": 2048,
+      "download_url_redacted": "https://example.com/recharge-orders.png"
+    }
+  ],
+  "idempotency_key": "chat:tenant-ext-001:msg-order-image-001",
+  "received_at": "2026-06-04T10:00:00Z"
+}
+```
+
+响应核心结构：
+
+```json
+{
+  "reply": {
+    "reply_type": "card",
+    "task_status": "answered",
+    "text": "{...JSON...}",
+    "card": {
+      "type": "v3_order_screenshot_extract",
+      "status": "answered",
+      "extraction_id": "img-extract-xxx",
+      "record_count": 1,
+      "needs_review": false,
+      "records": [
+        {
+          "recharge_amount": 100,
+          "recharge_amount_raw": "$100",
+          "pay_amount": 700,
+          "pay_amount_raw": "$700",
+          "payment_method": "alipay",
+          "payment_method_label": "支付宝",
+          "order_no": "A1778730534",
+          "status": "success",
+          "status_label": "成功",
+          "created_at": "2026/5/14 11:48:54"
+        }
+      ]
+    }
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `reply.card.records` | 可直接入库的结构化记录数组 |
+| `records[].*_raw` / `records[].*_label` | 图片原文，便于第三方展示或复核 |
+| `records[].payment_method` | 支付方式归一值，例如 `alipay`、`wechat_pay`、`bank_card` |
+| `records[].status` | 状态归一值，例如 `success`、`processing`、`failed`、`cancelled` |
+| `reply.card.needs_review` | 是否建议人工复核 |
+| `reply.card.failure_reason` | `needs_review` 时可能存在，说明未完成自动抽取的原因 |
+| `attachment_refs[].download_url_redacted` | 仅供 V3 拉取图片；响应不会回显原始 URL |
+| `idempotency_key` | 同一图片消息重试时保持不变，V3 会返回同一份结构化结果 |
 
 数据接入/入库分析不新增请求字段。第三方在普通消息里提出接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求即可。若服务端启用 `data_ingestion_analysis` 固定能力，V3 会返回 `task_status`：排队/重试中为 `data_ingestion_analysis_queued` 或 `data_ingestion_analysis_retrying`；完成后为 `data_ingestion_analysis_completed`，卡片 `reply.card.type=v3_data_ingestion_analysis_result`，`reply.card.result_summary` 只包含安全摘要（来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作）。如果可形成导入草稿，卡片还会返回 `reply.card.staging_plan.type=v3_data_ingestion_staging_plan`，该计划只用于人工确认后的数据集/数据源导入，固定 `production_write_allowed=false`。人工确认创建或复用 staging 数据集后，状态为 `data_ingestion_staging_dataset_ready`，卡片 `reply.card.type=v3_data_ingestion_staging_plan_execution`，可返回 `dataset_id`、`dataset_key`、`dataset_title` 和 `imported_row_count=0`。内部人工继续启动数据库源同步后，状态为 `data_ingestion_staging_sync_started`；同步执行中、完成、失败分别为 `data_ingestion_staging_sync_running`、`data_ingestion_staging_sync_completed`、`data_ingestion_staging_sync_failed`，卡片 `reply.card.type=v3_data_ingestion_staging_sync`，可返回 `source_id`、`sync_run_id`、`workflow_stage` 和 `workflow_status`。同步完成后，同一个 `conversation_external_id` 的后续消息会自动复用该 staging 数据集作为可见数据范围，用于继续问答、生成报表或静态页；第三方不需要每轮重复传内部 `dataset_id`。如需要人工确认，状态为 `data_ingestion_analysis_needs_human`；失败为 `data_ingestion_analysis_failed`；人工取消或运行被取消时为 `data_ingestion_analysis_cancelled`，`reply.card.runtime_event.retryable=false`，第三方不需要自动重试取消态。V3 不会在该流程里暴露数据库 URL、凭据、完整表 dump，也不会自动写生产库或修改 schema。
 

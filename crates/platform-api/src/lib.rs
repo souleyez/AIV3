@@ -55,28 +55,28 @@ use contracts::{
     DocumentDetailView, DocumentMediaDetailView, DocumentSummary,
     ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
     ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
-    ExternalActionResultCallbackResponseView, ExternalArtifactTemplateView, ExternalBotMessageView,
-    ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelEventResponse,
-    ExternalChannelPlatformView, ExternalConversationTestView,
-    ExternalConversationTimelineEventView, ExternalConversationTimelineResponse,
-    ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
-    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
-    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
-    ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
-    ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
-    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactDataRefView,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
-    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
-    InspectDatabaseSourceSchemaRequest, InspectDatabaseSourceSchemaResponse, KeyLoginRequest,
-    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
-    ListExternalIntegrationsResponse, ListStaticPageTemplatesResponse, LlmInvocationView,
-    LogoutResponse, MemoryDirectoryView, ModelGatewayExternalChannelRuntimeStatusView,
-    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
-    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
-    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
-    ModelGatewayRuntimeDatabasePoolStatusView, ModelGatewayRuntimeStatusView,
-    ModelGatewayRuntimeWorkerPoolStatusView, ModelGatewayStatusView, PlanReportRequest,
-    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
+    ExternalActionResultCallbackResponseView, ExternalArtifactTemplateView,
+    ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
+    ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
+    ExternalConversationTestView, ExternalConversationTimelineEventView,
+    ExternalConversationTimelineResponse, ExternalDocumentParseDetailItemView,
+    ExternalDocumentParseDocumentView, ExternalIntegrationAuditItemView,
+    ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
+    ExternalIntegrationControlResponse, ExternalIntegrationReplyDispatchConfigRequest,
+    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
+    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
+    HtmlArtifactDataRefView, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
+    HtmlArtifactOwnerScopeView, HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView,
+    HtmlArtifactTemplateIdView, InspectDatabaseSourceSchemaRequest,
+    InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
+    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
+    ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    ModelGatewayExternalChannelRuntimeStatusView, ModelGatewayLaneStatusView,
+    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
+    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
+    ModelGatewayProviderStatusView, ModelGatewayRuntimeDatabasePoolStatusView,
+    ModelGatewayRuntimeStatusView, ModelGatewayRuntimeWorkerPoolStatusView, ModelGatewayStatusView,
+    PlanReportRequest, PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
     ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
     PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
@@ -20075,6 +20075,28 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
+    if let Some(reply) = maybe_handle_external_channel_image_structured_extract(
+        state,
+        connection_id,
+        run.id,
+        &run.execution_trail,
+        &message,
+        &assistant_request.prompt,
+        now,
+    )
+    .await?
+    {
+        return Ok((
+            StatusCode::ACCEPTED,
+            ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(run.id),
+                idempotency_key: message.idempotency_key.clone(),
+                reply,
+            },
+        ));
+    }
+
     let external_action_plan = plan_and_record_external_action_run(
         state,
         connection_id,
@@ -27949,6 +27971,12 @@ fn external_channel_reply_from_run_and_events(
     })
     .or_else(|| external_channel_fixed_task_reply_from_events(events, conversation_external_id))
     .or_else(|| {
+        external_channel_image_structured_extract_reply_from_events(
+            events,
+            conversation_external_id,
+        )
+    })
+    .or_else(|| {
         external_channel_assistant_reply_from_run(run).map(|reply| {
             external_channel_assistant_text_reply_for_conversation(
                 run,
@@ -27957,6 +27985,972 @@ fn external_channel_reply_from_run_and_events(
             )
         })
     })
+}
+
+const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME: &str =
+    "assistant_run.external_channel_image_structured_extract_completed";
+const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_ARTIFACT_TYPE: &str =
+    "external_channel_image_structured_extract";
+
+#[derive(Clone, Debug)]
+struct ExternalImageStructuredExtractRuntimeConfig {
+    endpoint_url: String,
+    api_key: String,
+    model: String,
+    timeout_ms: u64,
+    provider_label: String,
+}
+
+#[derive(Debug)]
+struct ExternalImageStructuredExtractFailure {
+    reason: String,
+    runtime: Value,
+}
+
+async fn maybe_handle_external_channel_image_structured_extract(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    execution_trail: &Value,
+    message: &ExternalBotMessageView,
+    prompt: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
+    if !external_channel_message_requests_image_structured_extract(message, prompt) {
+        return Ok(None);
+    }
+
+    let extraction_id = external_image_structured_extract_id(connection_id, message);
+    let schema = external_image_structured_extract_schema_from_message(message);
+    let attachments = external_image_structured_extract_attachment_summaries(message);
+    let extract_result =
+        execute_external_image_structured_extract(message, prompt, &schema, &extraction_id).await;
+    let (payload, runtime_manifest) = match extract_result {
+        Ok((raw_payload, runtime_manifest)) => (
+            normalize_external_image_structured_extract_payload(
+                &extraction_id,
+                &raw_payload,
+                &schema,
+                attachments,
+                None,
+            ),
+            runtime_manifest,
+        ),
+        Err(failure) => (
+            normalize_external_image_structured_extract_payload(
+                &extraction_id,
+                &json!({ "records": [] }),
+                &schema,
+                attachments,
+                Some(failure.reason),
+            ),
+            failure.runtime,
+        ),
+    };
+    let reply = external_image_structured_extract_reply_for_conversation(
+        &message.conversation_external_id,
+        &payload,
+        external_image_structured_extract_output_format_is_json(message),
+    );
+    let mut trail = value_array(execution_trail.clone());
+    trail.push(json!({
+        "status": if payload.get("status").and_then(Value::as_str) == Some("answered") {
+            "completed"
+        } else {
+            "needs_review"
+        },
+        "label": "外部图片订单字段结构化抽取",
+        "extraction_id": extraction_id,
+        "record_count": payload
+            .get("record_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "at": now,
+    }));
+
+    let output_artifacts = json!([{
+        "type": EXTERNAL_IMAGE_STRUCTURED_EXTRACT_ARTIFACT_TYPE,
+        "source": "external_channel_image",
+        "content": reply
+            .text
+            .clone()
+            .unwrap_or_else(|| external_image_structured_extract_text(&payload, true)),
+        "payload": payload.clone(),
+    }]);
+    state
+        .storage
+        .assistant_runs()
+        .update_runtime_manifest(state.tenant_id, run_id, &runtime_manifest)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .update_execution_trail(state.tenant_id, run_id, &Value::Array(trail))
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .attach_output_artifacts(state.tenant_id, run_id, &output_artifacts)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME.to_string(),
+                payload: json!({
+                    "channel_connection_id": connection_id,
+                    "reply": reply.clone(),
+                    "payload": payload,
+                    "runtime": runtime_manifest,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.completed".to_string(),
+                payload: json!({
+                    "service_lane": "external_channel",
+                    "runtime": runtime_manifest,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Some(reply))
+}
+
+async fn execute_external_image_structured_extract(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+    schema: &Value,
+    extraction_id: &str,
+) -> std::result::Result<(Value, Value), ExternalImageStructuredExtractFailure> {
+    if let Some(scripted) = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_RUNTIME_OUTPUT_JSON",
+    ]) {
+        let raw_payload = serde_json::from_str::<Value>(&scripted).map_err(|error| {
+            ExternalImageStructuredExtractFailure {
+                reason: format!("scripted_output_invalid_json:{error}"),
+                runtime: json!({
+                    "mode": "external_image_structured_extract",
+                    "lane": "external_channel",
+                    "provider": "scripted",
+                    "model": "external-image-structured-extract-scripted",
+                    "provider_failure": {
+                        "kind": "invalid_scripted_output",
+                        "message": error.to_string(),
+                    },
+                }),
+            }
+        })?;
+        return Ok((
+            raw_payload,
+            json!({
+                "mode": "external_image_structured_extract",
+                "lane": "external_channel",
+                "provider": "scripted",
+                "model": "external-image-structured-extract-scripted",
+                "status": "responded",
+            }),
+        ));
+    }
+
+    let Some(image_url) = external_image_structured_extract_first_image_url(message) else {
+        return Err(ExternalImageStructuredExtractFailure {
+            reason: "image_attachment_url_missing".to_string(),
+            runtime: json!({
+                "mode": "external_image_structured_extract",
+                "lane": "external_channel",
+                "provider": "v3-control-plane",
+                "model": "none",
+                "provider_failure": {
+                    "kind": "missing_image_url",
+                    "message": "image attachment must provide download_url/url in attachment_refs",
+                },
+            }),
+        });
+    };
+    let Some(config) = external_image_structured_extract_runtime_config() else {
+        return Err(ExternalImageStructuredExtractFailure {
+            reason: "image_extract_runtime_unconfigured".to_string(),
+            runtime: json!({
+                "mode": "external_image_structured_extract",
+                "lane": "external_channel",
+                "provider": "v3-control-plane",
+                "model": "unconfigured",
+                "provider_failure": {
+                    "kind": "runtime_unconfigured",
+                    "message": "configure EXTERNAL_IMAGE_STRUCTURED_EXTRACT_* or ASSISTANT_RUN_RUNTIME_*",
+                },
+            }),
+        });
+    };
+
+    let started_at = Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_millis(config.timeout_ms))
+        .build()
+        .map_err(|error| ExternalImageStructuredExtractFailure {
+            reason: format!("image_extract_http_client_failed:{error}"),
+            runtime: external_image_structured_extract_failure_runtime(
+                &config,
+                "http_client_failed",
+                &error.to_string(),
+                started_at.elapsed().as_millis() as u64,
+            ),
+        })?;
+    let request_payload = json!({
+        "model": config.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是业务截图结构化抽取器。只输出 JSON，不要输出解释。优先抽取订单、充值、支付、状态、时间等可入库字段。无法确定的字段填 null，不要编造。"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": external_image_structured_extract_prompt(prompt, schema, extraction_id)
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url
+                        }
+                    }
+                ]
+            }
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0,
+        "max_tokens": 1800
+    });
+    let response = client
+        .post(&config.endpoint_url)
+        .bearer_auth(&config.api_key)
+        .json(&request_payload)
+        .send()
+        .await
+        .map_err(|error| ExternalImageStructuredExtractFailure {
+            reason: format!("image_extract_request_failed:{error}"),
+            runtime: external_image_structured_extract_failure_runtime(
+                &config,
+                "request_failed",
+                &error.to_string(),
+                started_at.elapsed().as_millis() as u64,
+            ),
+        })?;
+    let status = response.status();
+    let response_text =
+        response
+            .text()
+            .await
+            .map_err(|error| ExternalImageStructuredExtractFailure {
+                reason: format!("image_extract_response_read_failed:{error}"),
+                runtime: external_image_structured_extract_failure_runtime(
+                    &config,
+                    "response_read_failed",
+                    &error.to_string(),
+                    started_at.elapsed().as_millis() as u64,
+                ),
+            })?;
+    if !status.is_success() {
+        return Err(ExternalImageStructuredExtractFailure {
+            reason: format!("image_extract_provider_status:{}", status.as_u16()),
+            runtime: external_image_structured_extract_failure_runtime(
+                &config,
+                "provider_status_error",
+                &truncate_assistant_supply_text(&response_text, 800),
+                started_at.elapsed().as_millis() as u64,
+            ),
+        });
+    }
+    let response_json = serde_json::from_str::<Value>(&response_text).map_err(|error| {
+        ExternalImageStructuredExtractFailure {
+            reason: format!("image_extract_provider_json_invalid:{error}"),
+            runtime: external_image_structured_extract_failure_runtime(
+                &config,
+                "provider_json_invalid",
+                &error.to_string(),
+                started_at.elapsed().as_millis() as u64,
+            ),
+        }
+    })?;
+    let Some(content) = external_image_structured_extract_chat_response_text(&response_json) else {
+        return Err(ExternalImageStructuredExtractFailure {
+            reason: "image_extract_provider_content_missing".to_string(),
+            runtime: external_image_structured_extract_failure_runtime(
+                &config,
+                "provider_content_missing",
+                &truncate_assistant_supply_text(&response_text, 800),
+                started_at.elapsed().as_millis() as u64,
+            ),
+        });
+    };
+    let Some(raw_payload) = parse_json_object_from_model_text(&content) else {
+        return Err(ExternalImageStructuredExtractFailure {
+            reason: "image_extract_output_json_missing".to_string(),
+            runtime: external_image_structured_extract_failure_runtime(
+                &config,
+                "output_json_missing",
+                &truncate_assistant_supply_text(&content, 800),
+                started_at.elapsed().as_millis() as u64,
+            ),
+        });
+    };
+    Ok((
+        raw_payload,
+        json!({
+            "mode": "external_image_structured_extract",
+            "lane": "external_channel",
+            "provider": config.provider_label,
+            "model": config.model,
+            "status": "responded",
+            "latency_ms": started_at.elapsed().as_millis() as u64,
+        }),
+    ))
+}
+
+fn external_channel_message_requests_image_structured_extract(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> bool {
+    if external_channel_message_has_requested_image_extract_skill(message) {
+        return true;
+    }
+    if !matches!(message.message_type, ExternalMessageTypeView::Image)
+        || !external_channel_message_has_image_attachment(message)
+    {
+        return false;
+    }
+    if external_channel_message_is_artifact_generation_request(message, prompt) {
+        return false;
+    }
+    true
+}
+
+fn external_channel_message_has_requested_image_extract_skill(
+    message: &ExternalBotMessageView,
+) -> bool {
+    message.requested_skills.iter().any(|skill| {
+        if skill.mode.as_deref() == Some("disabled") {
+            return false;
+        }
+        let skill_id = skill.skill_id.trim().to_ascii_lowercase();
+        matches!(
+            skill_id.as_str(),
+            "order_screenshot_extract"
+                | "order_image_extract"
+                | "recharge_order_extract"
+                | "image_structured_extract"
+                | "screenshot_table_extract"
+                | "business_screenshot_extract"
+        )
+    })
+}
+
+fn external_channel_message_is_artifact_generation_request(
+    message: &ExternalBotMessageView,
+    prompt: &str,
+) -> bool {
+    if message
+        .render_mode
+        .as_deref()
+        .map(|value| value == "artifact")
+        .unwrap_or(false)
+        || message.artifact_type.is_some()
+        || message.template.is_some()
+    {
+        return true;
+    }
+    let lower = prompt.to_ascii_lowercase();
+    let artifact_markers = [
+        "static_page",
+        "html",
+        "artifact",
+        "dashboard",
+        "生成页面",
+        "生成报表",
+        "可视化",
+        "静态页",
+        "效果图",
+    ];
+    artifact_markers.iter().any(|marker| lower.contains(marker))
+}
+
+fn external_channel_message_has_image_attachment(message: &ExternalBotMessageView) -> bool {
+    message
+        .attachment_refs
+        .iter()
+        .any(external_attachment_ref_is_image)
+        || matches!(message.message_type, ExternalMessageTypeView::Image)
+}
+
+fn external_attachment_ref_is_image(attachment: &ExternalAttachmentRefView) -> bool {
+    if attachment
+        .content_type
+        .as_deref()
+        .map(|content_type| {
+            content_type
+                .trim()
+                .to_ascii_lowercase()
+                .starts_with("image/")
+        })
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let Some(filename) = attachment
+        .filename
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+    else {
+        return false;
+    };
+    [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]
+        .iter()
+        .any(|suffix| filename.ends_with(suffix))
+}
+
+fn external_image_structured_extract_first_image_url(
+    message: &ExternalBotMessageView,
+) -> Option<String> {
+    message
+        .attachment_refs
+        .iter()
+        .filter(|attachment| external_attachment_ref_is_image(attachment))
+        .chain(message.attachment_refs.iter())
+        .find_map(|attachment| {
+            attachment
+                .download_url_redacted
+                .as_deref()
+                .and_then(non_empty_trimmed_string)
+        })
+        .or_else(|| {
+            message
+                .text
+                .as_deref()
+                .and_then(non_empty_trimmed_string)
+                .filter(|value| {
+                    value.starts_with("https://")
+                        || value.starts_with("http://")
+                        || value.starts_with("data:image/")
+                })
+        })
+}
+
+fn external_image_structured_extract_attachment_summaries(
+    message: &ExternalBotMessageView,
+) -> Value {
+    Value::Array(
+        message
+            .attachment_refs
+            .iter()
+            .map(|attachment| {
+                json!({
+                    "attachment_external_id": attachment.attachment_external_id,
+                    "filename": attachment.filename,
+                    "content_type": attachment.content_type,
+                    "size_bytes": attachment.size_bytes,
+                    "download_url_present": attachment
+                        .download_url_redacted
+                        .as_ref()
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn external_image_structured_extract_schema_from_message(
+    message: &ExternalBotMessageView,
+) -> Value {
+    let skill_schema = message
+        .requested_skills
+        .iter()
+        .find(|skill| {
+            if skill.mode.as_deref() == Some("disabled") {
+                return false;
+            }
+            let skill_id = skill.skill_id.trim().to_ascii_lowercase();
+            matches!(
+                skill_id.as_str(),
+                "order_screenshot_extract"
+                    | "order_image_extract"
+                    | "recharge_order_extract"
+                    | "image_structured_extract"
+                    | "screenshot_table_extract"
+                    | "business_screenshot_extract"
+            )
+        })
+        .and_then(|skill| skill.arguments.as_ref())
+        .and_then(|arguments| {
+            arguments
+                .get("schema")
+                .or_else(|| arguments.get("fields"))
+                .cloned()
+        });
+    skill_schema.unwrap_or_else(|| {
+        json!({
+            "record_type": "recharge_order",
+            "fields": [
+                { "name": "recharge_amount", "type": "number", "source_label": "充值额度" },
+                { "name": "recharge_amount_raw", "type": "string", "source_label": "充值额度原文" },
+                { "name": "pay_amount", "type": "number", "source_label": "支付金额" },
+                { "name": "pay_amount_raw", "type": "string", "source_label": "支付金额原文" },
+                { "name": "payment_method", "type": "enum", "source_label": "支付方式" },
+                { "name": "payment_method_label", "type": "string", "source_label": "支付方式原文" },
+                { "name": "order_no", "type": "string", "source_label": "订单号" },
+                { "name": "status", "type": "enum", "source_label": "状态" },
+                { "name": "status_label", "type": "string", "source_label": "状态原文" },
+                { "name": "created_at", "type": "string", "source_label": "创建时间" }
+            ]
+        })
+    })
+}
+
+fn external_image_structured_extract_output_format_is_json(
+    message: &ExternalBotMessageView,
+) -> bool {
+    message.output_format.as_deref() == Some("json")
+}
+
+fn external_image_structured_extract_id(
+    connection_id: &str,
+    message: &ExternalBotMessageView,
+) -> String {
+    let attachment_key = message
+        .attachment_refs
+        .iter()
+        .map(|attachment| attachment.attachment_external_id.as_str())
+        .collect::<Vec<_>>()
+        .join("|");
+    let hash = sha256_hex([
+        connection_id.as_bytes(),
+        b":",
+        message.idempotency_key.as_bytes(),
+        b":",
+        attachment_key.as_bytes(),
+    ]);
+    format!("img-extract-{}", &hash[..24])
+}
+
+fn external_image_structured_extract_prompt(
+    prompt: &str,
+    schema: &Value,
+    extraction_id: &str,
+) -> String {
+    let schema_text = serde_json::to_string(schema).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "本轮抽取编号：{extraction_id}\n用户要求：{}\n字段 schema：{schema_text}\n请从图片中抽取所有可见表格行，输出严格 JSON：{{\"records\":[...] , \"confidence\":0-1, \"needs_review\":false, \"notes\":\"\"}}。每条记录字段优先包含 recharge_amount、recharge_amount_raw、pay_amount、pay_amount_raw、payment_method、payment_method_label、order_no、status、status_label、created_at。状态中文成功归一为 success，处理中归一为 processing；支付方式支付宝归一为 alipay。无法确认的字段填 null。",
+        prompt.trim()
+    )
+}
+
+fn external_image_structured_extract_runtime_config(
+) -> Option<ExternalImageStructuredExtractRuntimeConfig> {
+    let base_url = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_BASE_URL",
+        "ASSISTANT_RUN_RUNTIME_BASE_URL",
+    ])?;
+    let api_path = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_API_PATH",
+        "ASSISTANT_RUN_RUNTIME_API_PATH",
+    ])
+    .unwrap_or_else(|| "/v1/chat/completions".to_string());
+    let api_key = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_API_KEY",
+        "ASSISTANT_RUN_RUNTIME_API_KEY",
+    ])?;
+    let model = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_MODEL",
+        "ASSISTANT_RUN_RUNTIME_MODEL",
+    ])
+    .unwrap_or_else(|| "gpt-5.5".to_string());
+    let timeout_ms = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_TIMEOUT_MS",
+    ])
+    .and_then(|value| value.parse::<u64>().ok())
+    .filter(|value| *value >= 1_000)
+    .unwrap_or(60_000);
+    Some(ExternalImageStructuredExtractRuntimeConfig {
+        endpoint_url: external_image_structured_extract_join_url(&base_url, &api_path),
+        api_key,
+        model,
+        timeout_ms,
+        provider_label: external_image_structured_extract_env_value(&[
+            "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_PROVIDER",
+            "ASSISTANT_RUN_RUNTIME_PROVIDER",
+        ])
+        .unwrap_or_else(|| "openai_compatible_vision".to_string()),
+    })
+}
+
+fn external_image_structured_extract_env_value(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .and_then(|value| non_empty_trimmed_string(&value))
+    })
+}
+
+fn external_image_structured_extract_join_url(base_url: &str, api_path: &str) -> String {
+    if api_path.starts_with("http://") || api_path.starts_with("https://") {
+        return api_path.to_string();
+    }
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        api_path.trim_start_matches('/')
+    )
+}
+
+fn external_image_structured_extract_failure_runtime(
+    config: &ExternalImageStructuredExtractRuntimeConfig,
+    kind: &str,
+    message: &str,
+    latency_ms: u64,
+) -> Value {
+    json!({
+        "mode": "external_image_structured_extract",
+        "lane": "external_channel",
+        "provider": config.provider_label,
+        "model": config.model,
+        "latency_ms": latency_ms,
+        "provider_failure": {
+            "kind": kind,
+            "message": truncate_assistant_supply_text(message, 800),
+        },
+    })
+}
+
+fn external_image_structured_extract_chat_response_text(response: &Value) -> Option<String> {
+    response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| match content {
+            Value::String(text) => non_empty_trimmed_string(text),
+            Value::Array(parts) => {
+                let text = parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                non_empty_trimmed_string(&text)
+            }
+            other if other.is_object() || other.is_array() => Some(other.to_string()),
+            _ => None,
+        })
+}
+
+fn parse_json_object_from_model_text(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Some(value);
+    }
+    let unfenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|value| value.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    if let Ok(value) = serde_json::from_str::<Value>(unfenced) {
+        return Some(value);
+    }
+    let start = unfenced.find('{')?;
+    let end = unfenced.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str::<Value>(&unfenced[start..=end]).ok()
+}
+
+fn normalize_external_image_structured_extract_payload(
+    extraction_id: &str,
+    raw_payload: &Value,
+    schema: &Value,
+    attachments: Value,
+    failure_reason: Option<String>,
+) -> Value {
+    let raw_records = external_image_structured_extract_raw_records(raw_payload);
+    let records = raw_records
+        .iter()
+        .map(external_image_structured_extract_normalize_record)
+        .collect::<Vec<_>>();
+    let record_count = records.len();
+    let mut needs_review = raw_payload
+        .get("needs_review")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if record_count == 0 {
+        needs_review = true;
+    }
+    let status = if failure_reason.is_none() && record_count > 0 {
+        "answered"
+    } else {
+        "needs_review"
+    };
+    json!({
+        "type": "v3_order_screenshot_extract",
+        "status": status,
+        "extraction_id": extraction_id,
+        "schema": schema,
+        "records": records,
+        "record_count": record_count,
+        "needs_review": needs_review,
+        "confidence": raw_payload.get("confidence").cloned().unwrap_or(Value::Null),
+        "notes": raw_payload.get("notes").cloned().unwrap_or(Value::Null),
+        "failure_reason": failure_reason.map(Value::String).unwrap_or(Value::Null),
+        "attachments": attachments,
+        "source": "external_image_structured_extract",
+    })
+}
+
+fn external_image_structured_extract_raw_records(raw_payload: &Value) -> Vec<Value> {
+    if let Some(items) = raw_payload.get("records").and_then(Value::as_array) {
+        return items.clone();
+    }
+    for key in ["orders", "rows", "items", "data"] {
+        if let Some(items) = raw_payload.get(key).and_then(Value::as_array) {
+            return items.clone();
+        }
+    }
+    match raw_payload {
+        Value::Array(items) => items.clone(),
+        Value::Object(_) => vec![raw_payload.clone()],
+        _ => Vec::new(),
+    }
+}
+
+fn external_image_structured_extract_normalize_record(record: &Value) -> Value {
+    let recharge_amount_raw = external_image_structured_extract_record_text(
+        record,
+        &[
+            "recharge_amount_raw",
+            "recharge_amount",
+            "充值额度",
+            "充值金额",
+        ],
+    );
+    let pay_amount_raw = external_image_structured_extract_record_text(
+        record,
+        &[
+            "pay_amount_raw",
+            "pay_amount",
+            "payment_amount",
+            "支付金额",
+            "付款金额",
+        ],
+    );
+    let payment_method_label = external_image_structured_extract_record_text(
+        record,
+        &[
+            "payment_method_label",
+            "payment_method",
+            "pay_method",
+            "支付方式",
+        ],
+    );
+    let order_no = external_image_structured_extract_record_text(
+        record,
+        &["order_no", "order_id", "order_number", "订单号", "订单编号"],
+    );
+    let status_label =
+        external_image_structured_extract_record_text(record, &["status_label", "status", "状态"]);
+    let created_at = external_image_structured_extract_record_text(
+        record,
+        &[
+            "created_at",
+            "create_time",
+            "created_time",
+            "创建时间",
+            "时间",
+        ],
+    );
+    let recharge_amount =
+        external_image_structured_extract_record_number(record, "recharge_amount").or_else(|| {
+            recharge_amount_raw
+                .as_deref()
+                .and_then(external_image_structured_extract_amount_number)
+        });
+    let pay_amount =
+        external_image_structured_extract_record_number(record, "pay_amount").or_else(|| {
+            pay_amount_raw
+                .as_deref()
+                .and_then(external_image_structured_extract_amount_number)
+        });
+    json!({
+        "recharge_amount": recharge_amount,
+        "recharge_amount_raw": recharge_amount_raw,
+        "pay_amount": pay_amount,
+        "pay_amount_raw": pay_amount_raw,
+        "payment_method": payment_method_label
+            .as_deref()
+            .and_then(external_image_structured_extract_payment_method),
+        "payment_method_label": payment_method_label,
+        "order_no": order_no,
+        "status": status_label
+            .as_deref()
+            .and_then(external_image_structured_extract_status),
+        "status_label": status_label,
+        "created_at": created_at,
+        "raw": record,
+    })
+}
+
+fn external_image_structured_extract_record_text(record: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        record.get(*key).and_then(|value| match value {
+            Value::String(text) => non_empty_trimmed_string(text),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
+    })
+}
+
+fn external_image_structured_extract_record_number(record: &Value, key: &str) -> Option<f64> {
+    record.get(key).and_then(|value| match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => external_image_structured_extract_amount_number(text),
+        _ => None,
+    })
+}
+
+fn external_image_structured_extract_amount_number(value: &str) -> Option<f64> {
+    let cleaned = value
+        .chars()
+        .filter(|ch| ch.is_ascii_digit() || *ch == '.' || *ch == '-')
+        .collect::<String>();
+    if cleaned.trim().is_empty() {
+        return None;
+    }
+    cleaned.parse::<f64>().ok()
+}
+
+fn external_image_structured_extract_status(value: &str) -> Option<&'static str> {
+    let lower = value.trim().to_ascii_lowercase();
+    if lower.contains("成功") || lower.contains("success") || lower.contains("succeed") {
+        Some("success")
+    } else if lower.contains("处理")
+        || lower.contains("进行")
+        || lower.contains("pending")
+        || lower.contains("processing")
+    {
+        Some("processing")
+    } else if lower.contains("失败") || lower.contains("fail") || lower.contains("error") {
+        Some("failed")
+    } else if lower.contains("取消") || lower.contains("cancel") {
+        Some("cancelled")
+    } else {
+        None
+    }
+}
+
+fn external_image_structured_extract_payment_method(value: &str) -> Option<&'static str> {
+    let lower = value.trim().to_ascii_lowercase();
+    if lower.contains("支付宝") || lower.contains("alipay") {
+        Some("alipay")
+    } else if lower.contains("微信") || lower.contains("wechat") || lower.contains("weixin") {
+        Some("wechat_pay")
+    } else if lower.contains("银联") || lower.contains("银行卡") || lower.contains("unionpay")
+    {
+        Some("bank_card")
+    } else {
+        None
+    }
+}
+
+fn external_image_structured_extract_reply_for_conversation(
+    conversation_external_id: &str,
+    payload: &Value,
+    output_json: bool,
+) -> ExternalBotReplyView {
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("answered");
+    ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: ExternalBotReplyTypeView::Card,
+        text: Some(external_image_structured_extract_text(payload, output_json)),
+        card: Some(payload.clone()),
+        artifact_links: Vec::new(),
+        task_status: Some(status.to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+fn external_image_structured_extract_text(payload: &Value, output_json: bool) -> String {
+    if output_json {
+        return serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string());
+    }
+    let record_count = payload
+        .get("record_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("answered");
+    if status == "answered" {
+        format!("已识别并结构化 {record_count} 条订单记录，详情见 card.records。")
+    } else {
+        let reason = payload
+            .get("failure_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("needs_review");
+        format!("图片字段抽取需要复核：{reason}。详情见 card.records。")
+    }
+}
+
+fn external_channel_image_structured_extract_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let event = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME)?;
+    event
+        .payload
+        .get("reply")
+        .cloned()
+        .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok())
+        .or_else(|| {
+            event.payload.get("payload").map(|payload| {
+                external_image_structured_extract_reply_for_conversation(
+                    conversation_external_id,
+                    payload,
+                    true,
+                )
+            })
+        })
 }
 
 fn external_channel_assistant_text_reply_for_conversation(
@@ -96748,6 +97742,141 @@ mod tests {
         .expect("message events should be queryable");
         assert_eq!(event_count, 1);
         clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn external_image_message_extracts_order_records_as_structured_card() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let _scripted_extract = TestEnvVarRestore::set(
+            "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_RUNTIME_OUTPUT_JSON",
+            r#"{
+                "records": [
+                    {
+                        "recharge_amount_raw": "$100",
+                        "pay_amount_raw": "$700",
+                        "payment_method_label": "支付宝",
+                        "order_no": "A1778730534",
+                        "status_label": "成功",
+                        "created_at": "2026/5/14 11:48:54"
+                    },
+                    {
+                        "recharge_amount_raw": "$100",
+                        "pay_amount_raw": "$700",
+                        "payment_method_label": "支付宝",
+                        "order_no": "A1778729946",
+                        "status_label": "处理中",
+                        "created_at": "2026/5/14 11:39:06"
+                    }
+                ],
+                "confidence": 0.94,
+                "needs_review": false
+            }"#,
+        );
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external image extract endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("external-image-extract-test-{}", Uuid::new_v4()),
+                "External Image Extract Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.message_type = ExternalMessageTypeView::Image;
+        message.message_external_id = "msg-image-order-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-image-order-001".to_string();
+        message.output_format = Some("json".to_string());
+        message.text = Some("请识别这张充值记录截图，按订单字段返回 JSON。".to_string());
+        message.attachment_refs = vec![ExternalAttachmentRefView {
+            attachment_external_id: "img-order-001".to_string(),
+            filename: Some("recharge-orders.png".to_string()),
+            content_type: Some("image/png".to_string()),
+            size_bytes: Some(2048),
+            download_url_redacted: Some(
+                "https://third.example.com/private/recharge.png".to_string(),
+            ),
+        }];
+
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let first: ExternalChannelEventResponse = read_json_response(response).await;
+        assert!(first.accepted);
+        assert!(first.assistant_run_id.is_some());
+        assert_eq!(first.reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(first.reply.task_status.as_deref(), Some("answered"));
+        let card = first.reply.card.as_ref().expect("structured extract card");
+        assert_eq!(card["type"], json!("v3_order_screenshot_extract"));
+        assert_eq!(card["record_count"], json!(2));
+        assert_eq!(card["records"][0]["order_no"], json!("A1778730534"));
+        assert_eq!(card["records"][0]["status"], json!("success"));
+        assert_eq!(card["records"][0]["payment_method"], json!("alipay"));
+        assert_eq!(card["records"][0]["recharge_amount"], json!(100.0));
+        assert_eq!(card["records"][1]["status"], json!("processing"));
+        let text_payload: Value = serde_json::from_str(
+            first
+                .reply
+                .text
+                .as_deref()
+                .expect("json output text should be present"),
+        )
+        .expect("reply text should be valid json");
+        assert_eq!(text_payload["records"][0]["order_no"], json!("A1778730534"));
+        let card_text = card.to_string();
+        assert!(!card_text.contains("third.example.com/private"));
+
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, first.assistant_run_id.expect("assistant run id"))
+            .await
+            .expect("events should be queryable");
+        assert!(events
+            .iter()
+            .any(|event| event.event_name == EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME));
+
+        let duplicate = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        let second: ExternalChannelEventResponse = read_json_response(duplicate).await;
+        assert_eq!(second.assistant_run_id, first.assistant_run_id);
+        assert_eq!(second.reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(
+            second.reply.card.as_ref().unwrap()["records"][1]["order_no"],
+            json!("A1778729946")
+        );
     }
 
     #[tokio::test]

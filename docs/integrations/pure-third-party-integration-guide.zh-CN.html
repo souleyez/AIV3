@@ -380,21 +380,22 @@
 <a class="nav-depth-3" href="#section-06">1.5 创建/更新数据库源</a>
 <a class="nav-depth-2" href="#section-07">2. 聊天同步</a>
 <a class="nav-depth-3" href="#section-08">2.1 普通聊天</a>
-<a class="nav-depth-3" href="#section-09">2.1.1 可选主动回推</a>
-<a class="nav-depth-3" href="#section-10">2.1.2 平台能力路由与状态总览</a>
-<a class="nav-depth-3" href="#section-11">2.2 流式聊天</a>
-<a class="nav-depth-3" href="#section-12">2.3 数据接入/入库分析请求</a>
-<a class="nav-depth-3" href="#section-13">2.4 采集/对接方案分析请求</a>
-<a class="nav-depth-3" href="#section-14">2.5 主动消息/主动发起对话请求</a>
-<a class="nav-depth-2" href="#section-15">3. 生成产物（报表）</a>
-<a class="nav-depth-3" href="#section-16">3.1 模板列表字段</a>
-<a class="nav-depth-3" href="#section-17">3.2 模板解析</a>
-<a class="nav-depth-3" href="#section-18">3.3 按模板生成静态页/报表</a>
-<a class="nav-depth-3" href="#section-19">3.4 查询、预览、下载产物</a>
-<a class="nav-depth-2" href="#section-20">4. 枚举与错误</a>
-<a class="nav-depth-3" href="#section-21">4.1 `output_format`</a>
-<a class="nav-depth-3" href="#section-22">4.2 `render_mode`</a>
-<a class="nav-depth-3" href="#section-23">4.3 错误格式</a>
+<a class="nav-depth-3" href="#section-09">2.1.1 图片订单字段抽取</a>
+<a class="nav-depth-3" href="#section-10">2.1.2 可选主动回推</a>
+<a class="nav-depth-3" href="#section-11">2.1.2 平台能力路由与状态总览</a>
+<a class="nav-depth-3" href="#section-12">2.2 流式聊天</a>
+<a class="nav-depth-3" href="#section-13">2.3 数据接入/入库分析请求</a>
+<a class="nav-depth-3" href="#section-14">2.4 采集/对接方案分析请求</a>
+<a class="nav-depth-3" href="#section-15">2.5 主动消息/主动发起对话请求</a>
+<a class="nav-depth-2" href="#section-16">3. 生成产物（报表）</a>
+<a class="nav-depth-3" href="#section-17">3.1 模板列表字段</a>
+<a class="nav-depth-3" href="#section-18">3.2 模板解析</a>
+<a class="nav-depth-3" href="#section-19">3.3 按模板生成静态页/报表</a>
+<a class="nav-depth-3" href="#section-20">3.4 查询、预览、下载产物</a>
+<a class="nav-depth-2" href="#section-21">4. 枚举与错误</a>
+<a class="nav-depth-3" href="#section-22">4.1 `output_format`</a>
+<a class="nav-depth-3" href="#section-23">4.2 `render_mode`</a>
+<a class="nav-depth-3" href="#section-24">4.3 错误格式</a>
       </nav>
     </aside>
     <main>
@@ -666,7 +667,7 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>artifact_type</code></td><td>产物生成建议填</td><td>推荐产物语义字段；静态页传 <code>static_page</code> 后，V3 会自动进入报表页面生成流程</td></tr><tr><td><code>template</code></td><td>使用模板时填</td><td>产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 V3 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>business_datasource_ids</code></td><td>业务库问答/报表建议填</td><td>本轮指定业务库 ID 数组；值来自 1.5 的 <code>source_external_id</code>。兼容别名：<code>businessDatasourceIds</code>、<code>businessDataSourceIds</code>、<code>databaseSourceIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表；推荐对象数组，也兼容 <code>[&quot;https://example.com/a.docx&quot;]</code> 字符串 URL 数组</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>artifact_type</code></td><td>产物生成建议填</td><td>推荐产物语义字段；静态页传 <code>static_page</code> 后，V3 会自动进入报表页面生成流程</td></tr><tr><td><code>template</code></td><td>使用模板时填</td><td>产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 V3 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>business_datasource_ids</code></td><td>业务库问答/报表建议填</td><td>本轮指定业务库 ID 数组；值来自 1.5 的 <code>source_external_id</code>。兼容别名：<code>businessDatasourceIds</code>、<code>businessDataSourceIds</code>、<code>databaseSourceIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表；推荐对象数组，也兼容 <code>[&quot;https://example.com/a.docx&quot;]</code> 字符串 URL 数组；图片消息可传图片下载 URL</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
 <p><code>dataset_external_id</code> / <code>dataset_external_ids</code> 可以和 <code>available_document_external_ids</code> 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 <code>available_document_external_ids</code> 或 <code>documentExternalId</code>，不传分组字段。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会因为只传 <code>available_document_source_id</code> 自动扩大到整源文档。</p>
 <p><code>attachment_refs</code> 推荐对象格式：</p>
 <figure class="code-card">
@@ -680,7 +681,94 @@ Content-Type: application/json</code></pre>
   }
 ]</code></pre>
   </figure>
-<p>若第三方暂时只能传字符串 URL 数组，V3 会兼容为附件引用对象；后续若要 V3 主动下载附件，仍建议先走 1.1 文档解析接口。</p>
+<p>若第三方暂时只能传字符串 URL 数组，V3 会兼容为附件引用对象；文档入库建议走 1.1 文档解析接口，聊天图片结构化抽取可直接在本接口传图片附件。</p>
+<h3 id="section-09">2.1.1 图片订单字段抽取</h3>
+<p>第三方聊天里用户直接发图片时，可用同一个 <code>POST /events</code> 接口让 V3 识别图片中的订单/充值表格，并返回可入库字段。推荐传 <code>message_type: &quot;image&quot;</code>、<code>output_format: &quot;json&quot;</code> 和图片 <code>attachment_refs</code>。如果要强制走订单截图抽取，可加 <code>requested_skills[].skill_id = &quot;order_screenshot_extract&quot;</code>。</p>
+<p>请求示例：</p>
+<figure class="code-card">
+    <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;platform&quot;: &quot;generic_chat&quot;,                      // 平台类型
+  &quot;tenant_external_id&quot;: &quot;tenant-ext-001&quot;,          // 第三方租户/客户 ID
+  &quot;bot_external_id&quot;: &quot;bot-v3&quot;,                     // 第三方机器人/应用 ID
+  &quot;conversation_external_id&quot;: &quot;conv-order-001&quot;,    // 会话 ID
+  &quot;sender_external_id&quot;: &quot;user-10001&quot;,              // 用户 ID
+  &quot;message_external_id&quot;: &quot;msg-order-image-001&quot;,    // 第三方消息 ID
+  &quot;message_type&quot;: &quot;image&quot;,                         // 图片消息
+  &quot;text&quot;: &quot;请识别这张充值记录截图，按订单字段返回 JSON。&quot;, // 用户要求
+  &quot;output_format&quot;: &quot;json&quot;,                         // 推荐 JSON，reply.text 会返回 JSON 字符串
+  &quot;requested_skills&quot;: [                             // 可选；传了就强制走订单截图字段抽取
+    {
+      &quot;skill_id&quot;: &quot;order_screenshot_extract&quot;,      // 订单/充值截图字段抽取
+      &quot;mode&quot;: &quot;required&quot;,                          // required/preferred/disabled
+      &quot;arguments&quot;: {
+        &quot;schema&quot;: {
+          &quot;record_type&quot;: &quot;recharge_order&quot;           // 可选：第三方自己的记录类型
+        }
+      }
+    }
+  ],
+  &quot;attachment_refs&quot;: [
+    {
+      &quot;attachment_external_id&quot;: &quot;img-order-001&quot;,    // 第三方图片 ID
+      &quot;filename&quot;: &quot;recharge-orders.png&quot;,            // 文件名
+      &quot;content_type&quot;: &quot;image/png&quot;,                  // 图片 MIME
+      &quot;size_bytes&quot;: 2048,                           // 文件大小；没有可省略
+      &quot;download_url_redacted&quot;: &quot;https://example.com/recharge-orders.png&quot; // V3 拉取图片用 URL；响应不会回显原始 URL
+    }
+  ],
+  &quot;idempotency_key&quot;: &quot;chat:tenant-ext-001:msg-order-image-001&quot;, // 幂等键
+  &quot;received_at&quot;: &quot;2026-06-04T10:00:00Z&quot;             // 消息时间
+}</code></pre>
+  </figure>
+<p>响应示例：</p>
+<figure class="code-card">
+    <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
+    <pre><code>{
+  &quot;accepted&quot;: true,                                 // 已接收
+  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,           // V3 运行 ID
+  &quot;idempotency_key&quot;: &quot;chat:tenant-ext-001:msg-order-image-001&quot;, // 幂等键
+  &quot;reply&quot;: {
+    &quot;target_conversation_external_id&quot;: &quot;conv-order-001&quot;, // 回写会话 ID
+    &quot;reply_type&quot;: &quot;card&quot;,                         // 结构化卡片
+    &quot;task_status&quot;: &quot;answered&quot;,                    // answered 或 needs_review
+    &quot;text&quot;: &quot;{...JSON...}&quot;,                       // output_format=json 时为完整 JSON 字符串
+    &quot;card&quot;: {
+      &quot;type&quot;: &quot;v3_order_screenshot_extract&quot;,      // 固定类型
+      &quot;status&quot;: &quot;answered&quot;,                       // answered 或 needs_review
+      &quot;extraction_id&quot;: &quot;img-extract-xxx&quot;,         // 抽取 ID
+      &quot;record_count&quot;: 2,                          // 记录数
+      &quot;needs_review&quot;: false,                      // 是否建议人工复核
+      &quot;records&quot;: [
+        {
+          &quot;recharge_amount&quot;: 100,                 // 充值额度数字
+          &quot;recharge_amount_raw&quot;: &quot;$100&quot;,          // 充值额度原文
+          &quot;pay_amount&quot;: 700,                      // 支付金额数字
+          &quot;pay_amount_raw&quot;: &quot;$700&quot;,               // 支付金额原文
+          &quot;payment_method&quot;: &quot;alipay&quot;,             // 支付方式归一值
+          &quot;payment_method_label&quot;: &quot;支付宝&quot;,        // 支付方式原文
+          &quot;order_no&quot;: &quot;A1778730534&quot;,              // 订单号
+          &quot;status&quot;: &quot;success&quot;,                    // 状态归一值；如 success/processing/failed
+          &quot;status_label&quot;: &quot;成功&quot;,                 // 状态原文
+          &quot;created_at&quot;: &quot;2026/5/14 11:48:54&quot;      // 创建时间原文
+        }
+      ],
+      &quot;attachments&quot;: [
+        {
+          &quot;attachment_external_id&quot;: &quot;img-order-001&quot;, // 图片 ID
+          &quot;filename&quot;: &quot;recharge-orders.png&quot;,         // 文件名
+          &quot;content_type&quot;: &quot;image/png&quot;,               // MIME
+          &quot;size_bytes&quot;: 2048,                        // 大小
+          &quot;download_url_present&quot;: true               // 是否收到了下载 URL；不会回显原始 URL
+        }
+      ]
+    },
+    &quot;requires_confirmation&quot;: false
+  }
+}</code></pre>
+  </figure>
+<p>字段说明：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.card.type</code></td><td>固定 <code>v3_order_screenshot_extract</code></td></tr><tr><td><code>reply.card.status</code></td><td><code>answered</code> 表示已抽到记录；<code>needs_review</code> 表示图片、配置或识别结果需要复核</td></tr><tr><td><code>reply.card.records</code></td><td>可直接入库的记录数组</td></tr><tr><td><code>records[].*_raw</code> / <code>records[].*_label</code></td><td>图片原文，便于第三方保留展示或复核</td></tr><tr><td><code>records[].payment_method</code></td><td>支付方式归一值；例如 <code>alipay</code>、<code>wechat_pay</code>、<code>bank_card</code></td></tr><tr><td><code>records[].status</code></td><td>状态归一值；例如 <code>success</code>、<code>processing</code>、<code>failed</code>、<code>cancelled</code></td></tr><tr><td><code>reply.card.failure_reason</code></td><td><code>needs_review</code> 时可能存在，说明未完成自动抽取的原因</td></tr><tr><td><code>idempotency_key</code></td><td>同一图片消息重试时保持不变，V3 会返回同一份结构化结果</td></tr></tbody></table></div>
 <p>响应：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -701,7 +789,7 @@ Content-Type: application/json</code></pre>
   }
 }</code></pre>
   </figure>
-<h3 id="section-09">2.1.1 可选主动回推</h3>
+<h3 id="section-10">2.1.2 可选主动回推</h3>
 <p>如果第三方页面等待时间较短，或 SSE 可能中断，可在 V3 通道配置里提供助手回复回推地址。V3 后台结果完成或失败后，会向该地址主动 POST 一次最终 <code>reply</code>，第三方收到后追加到对应 <code>conversation_external_id</code> 的会话即可。</p>
 <p>配置项：</p>
 <div class="table-shell"><table><thead><tr><th>配置键</th><th>注释</th></tr></thead><tbody><tr><td><code>reply_dispatch_url</code></td><td>第三方接收助手最终回复的 HTTPS 地址；别名：<code>external_reply_dispatch_url</code>、<code>outbound_reply_url</code>、<code>assistant_reply_dispatch_url</code></td></tr><tr><td><code>reply_dispatch_bearer_token</code></td><td>可选，V3 回推时使用的 Bearer Token；别名：<code>external_reply_bearer_token</code>、<code>outbound_reply_bearer_token</code></td></tr><tr><td><code>reply_dispatch_signing_secret</code></td><td>可选，V3 回推签名密钥；别名：<code>external_reply_signing_secret</code>、<code>outbound_reply_signing_secret</code></td></tr></tbody></table></div>
@@ -723,11 +811,11 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <p>V3 回推会带 <code>Authorization: Bearer &lt;reply_dispatch_bearer_token&gt;</code>，并在配置签名密钥时带 <code>x-v3-signature</code>、<code>x-v3-timestamp</code>、<code>x-v3-nonce</code>、<code>x-v3-content-sha256</code>。如果未配置回推地址，第三方仍可继续使用 <code>/events/stream</code> 断线续传或 <code>status_url</code> 轮询。</p>
-<h3 id="section-10">2.1.2 平台能力路由与状态总览</h3>
+<h3 id="section-11">2.1.2 平台能力路由与状态总览</h3>
 <p>第三方页面不需要直接调用 V3 内部能力，也不需要解析内部工具名。第三方只需发送普通聊天消息、文档范围、数据集范围、模板、业务数据源 ID 或确认回调；V3 会在平台侧识别用户意图，并通过现有 <code>reply</code> 字段返回文本、状态、确认卡或产物链接。</p>
 <div class="table-shell"><table><thead><tr><th>用户意图/平台能力</th><th>第三方请求方式</th><th>前端重点读取</th><th>常见状态</th></tr></thead><tbody><tr><td>普通问答</td><td>普通消息 + 已授权文档/数据集范围</td><td><code>reply.text</code>、<code>reply.task_status</code></td><td><code>answered</code>、<code>needs_input</code>、<code>failed</code></td></tr><tr><td>静态页/报表</td><td>普通消息提出生成/修改报表；推荐传 <code>artifact_type=static_page</code></td><td><code>reply.artifact_links[0]</code>、<code>reply.card.public_url</code>、<code>reply.card.generated_artifact_url</code>、<code>reply.card.status_url</code></td><td><code>processing</code>、<code>static_page_published</code>、<code>failed</code></td></tr><tr><td>数据接入/建表分析</td><td>普通消息提出入库、建表、字段映射、清洗、schema、ETL 或数据库分析</td><td><code>reply.card.type</code>、<code>reply.card.result_summary</code>、<code>reply.card.staging_plan</code>、<code>reply.card.dataset_id</code>、<code>reply.card.sync_run_id</code></td><td><code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_retrying</code>、<code>data_ingestion_analysis_completed</code>、<code>data_ingestion_analysis_needs_human</code>、<code>data_ingestion_analysis_failed</code>、<code>data_ingestion_analysis_cancelled</code></td></tr><tr><td>文档处理/深解析</td><td>普通消息提出解析状态、重解析、深解析、VLM 升级解析或事实抽取</td><td><code>reply.card.type</code>、<code>reply.card.documents</code>、<code>reply.card.status_counts</code></td><td><code>document_processing_status</code>、<code>document_processing_review_required</code>、<code>document_processing_reparse_queued</code></td></tr><tr><td>采集/资料库规划</td><td>普通消息提出资料采集、爬虫规划或来源接入</td><td><code>reply.card.type=v3_collection_setup_analysis</code>、<code>reply.requires_confirmation</code></td><td><code>needs_confirmation</code>、<code>capability_analysis_recorded</code></td></tr><tr><td>第三方系统对接规划</td><td>普通消息提出 OA、文档库、数据库、用户/权限、API 或连接器对接</td><td><code>reply.card.type=v3_integration_setup_analysis</code>、<code>reply.requires_confirmation</code></td><td><code>needs_confirmation</code>、<code>capability_analysis_recorded</code></td></tr><tr><td>主动消息/主动发起对话</td><td>普通消息要求完成后通知某人、发给负责人或跨会话确认</td><td><code>reply.card.type=v3_message_channel_outreach</code>、<code>reply.card.target_summary</code>、<code>reply.requires_confirmation</code></td><td><code>message_outreach_confirmation_required</code>；后续如启用安全自动派发，可出现 <code>message_outreach_queued</code>、<code>message_outreach_sent</code>、<code>message_outreach_failed</code></td></tr></tbody></table></div>
 <p>确认类状态只表示 V3 已识别到受控能力请求，并不表示动作已经执行。第三方应把 <code>requires_confirmation=true</code> 或 <code>reply.reply_type=requires_confirmation</code> 展示为“待 V3/人工确认”，不要自行扩大文档、数据集、用户、消息渠道或公开接口权限。</p>
-<h3 id="section-11">2.2 流式聊天</h3>
+<h3 id="section-12">2.2 流式聊天</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events/stream
@@ -823,7 +911,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   </figure>
 <p>如果前端只能使用原生 <code>EventSource</code>，请在第三方服务端做一个 GET 代理：服务端保存本轮请求体并调用 V3 的 POST <code>/events/stream</code>，浏览器只连接自己的 <code>GET /v3-stream-proxy?message_id=...</code>。浏览器重连时把最后的 <code>event_id</code> 传给服务端，服务端转成 <code>Last-Event-ID</code> 或 <code>stream_since_sequence</code>。</p>
 <p>如果 <code>reply.task_status=needs_input</code> 或收到 <code>external_channel.needs_input</code>，表示当前可见资料不足但可以继续。第三方只需要把 <code>reply.text</code> / <code>reply.card.question</code> 展示给用户；用户补充制度名称、页码、关键词、文档范围或统计口径后，继续用同一个 <code>conversation_external_id</code> 发下一轮消息。</p>
-<h3 id="section-12">2.3 数据接入/入库分析请求</h3>
+<h3 id="section-13">2.3 数据接入/入库分析请求</h3>
 <p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出数据接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求，例如：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -847,18 +935,18 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_retrying</code>、<code>data_ingestion_analysis_completed</code>、<code>data_ingestion_analysis_needs_human</code>、<code>data_ingestion_analysis_failed</code>、<code>data_ingestion_analysis_cancelled</code>、人工确认后的 <code>data_ingestion_staging_dataset_ready</code>，以及同步阶段的 <code>data_ingestion_staging_sync_started</code>、<code>data_ingestion_staging_sync_running</code>、<code>data_ingestion_staging_sync_completed</code>、<code>data_ingestion_staging_sync_failed</code></td></tr><tr><td><code>reply.card.type</code></td><td>排队时为 <code>v3_data_ingestion_analysis</code>；完成后为 <code>v3_data_ingestion_analysis_result</code>；确认创建/复用 staging 数据集后为 <code>v3_data_ingestion_staging_plan_execution</code>；同步启动后为 <code>v3_data_ingestion_staging_sync</code></td></tr><tr><td><code>reply.card.result_summary</code></td><td>完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作</td></tr><tr><td><code>reply.card.staging_plan</code></td><td>完成后可返回 <code>v3_data_ingestion_staging_plan</code>，用于人工确认后的数据集/数据源导入草稿；固定 <code>production_write_allowed=false</code></td></tr><tr><td><code>reply.card.dataset_id</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 V3 创建或复用的 staging 数据集 ID</td></tr><tr><td><code>reply.card.dataset_key</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 staging 数据集 key</td></tr><tr><td><code>reply.card.source_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回本次使用的数据库源 ID</td></tr><tr><td><code>reply.card.sync_run_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回 V3 内部同步任务 ID</td></tr><tr><td><code>reply.card.runtime_event.retryable</code></td><td>固定任务取消时为 <code>false</code>；第三方不需要自动重试取消态</td></tr><tr><td><code>reply.card.workflow_status</code></td><td>同步阶段返回 V3 内部工作流状态，例如 <code>running</code>、<code>succeeded</code>、<code>failed</code></td></tr><tr><td><code>reply.card.workflow_stage</code></td><td>同步阶段返回当前阶段，例如 <code>sync_users</code>、<code>fetch_content</code>、<code>ingest</code>、<code>index</code>、<code>completed</code></td></tr><tr><td><code>reply.card.imported_row_count</code></td><td>当前确认步骤不自动导入原始行，固定为 <code>0</code>；后续导入/数据库同步需走人工确认执行</td></tr></tbody></table></div>
 <p>当 <code>reply.task_status=data_ingestion_staging_sync_completed</code> 后，同一个 <code>conversation_external_id</code> 的后续问题会自动复用该 staging 数据集作为可见数据范围；第三方不必每轮重复传内部 <code>dataset_id</code>。如果第三方更换会话 ID，或希望切换数据范围，应重新传稳定 <code>dataset_external_id</code>、具体文档范围，或由 V3 侧重新确认新的 staging 数据集。</p>
 <p>若没有选中或上传可分析的数据源/表格/文档，V3 会返回 <code>data_ingestion_analysis_source_required</code>，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。</p>
-<h3 id="section-13">2.4 采集/对接方案分析请求</h3>
+<h3 id="section-14">2.4 采集/对接方案分析请求</h3>
 <p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出资料采集、爬虫规划、外部资料库接入、第三方系统对接、接口字段确认、权限配置或消息渠道配置等需求。V3 会先把这类请求识别为平台受控能力，不会直接执行外部动作。</p>
 <p>常见返回形态：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td>涉及新增外部动作、权限、凭据、接口变更时为 <code>requires_confirmation</code>；只读状态检查或只读方案分析时可为 <code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td>需要确认时为 <code>needs_confirmation</code>；只读分析记录时为 <code>capability_analysis_recorded</code></td></tr><tr><td><code>reply.card.type</code></td><td>采集/资料库规划为 <code>v3_collection_setup_analysis</code>；第三方系统/API/权限对接规划为 <code>v3_integration_setup_analysis</code></td></tr><tr><td><code>reply.card.requested_capability</code></td><td><code>collection_setup_analysis</code> 或 <code>integration_setup_analysis</code></td></tr><tr><td><code>reply.card.risk_level</code></td><td><code>low</code>、<code>medium</code>、<code>high</code> 或 <code>critical</code></td></tr><tr><td><code>reply.card.review_reason</code></td><td>需要确认或只读放行的原因</td></tr><tr><td><code>reply.card.next_actions</code></td><td>V3 建议的下一步，不表示已经执行</td></tr><tr><td><code>reply.card.forbidden_actions</code></td><td>本轮禁止自动执行的动作摘要</td></tr></tbody></table></div>
 <p>第三方应把 <code>requires_confirmation</code> 展示为“待 V3/人工确认”状态。V3 不会在该流程中自动执行爬取、登录、外部写入、凭据收集、公开接口 URL/鉴权/请求字段/响应字段变更，也不会自动扩大文档、数据集或用户权限。</p>
-<h3 id="section-14">2.5 主动消息/主动发起对话请求</h3>
+<h3 id="section-15">2.5 主动消息/主动发起对话请求</h3>
 <p>第三方接口无需新增字段。客户可以在普通聊天消息里要求 V3 在任务完成后通知某人、提醒负责人查看报表、向当前会话继续发起确认，或把结果通过已配置消息渠道发送给指定人员。V3 会先生成受控外发意图，不会让模型直接发送消息。</p>
 <p>常见返回形态：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td>通常为 <code>requires_confirmation</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>message_outreach_confirmation_required</code></td></tr><tr><td><code>reply.card.type</code></td><td><code>v3_message_channel_outreach</code></td></tr><tr><td><code>reply.card.status</code></td><td><code>message_outreach_confirmation_required</code></td></tr><tr><td><code>reply.card.requested_capability</code></td><td><code>message_channel_outreach</code></td></tr><tr><td><code>reply.card.risk_level</code></td><td>同会话运营通知通常为 <code>low</code>；新收件人、跨会话或跨渠道为 <code>medium</code>；含报表/文档/权限内容为 <code>high</code></td></tr><tr><td><code>reply.card.target_summary</code></td><td>只返回安全摘要，如当前通道、会话 ID、接收人数和是否同会话</td></tr><tr><td><code>reply.card.idempotency_key</code></td><td>本次外发意图幂等键；第三方可用于确认/审计对账</td></tr></tbody></table></div>
 <p>第三方应把该回复展示为“待 V3/人工确认后发送”。V3 不会自动发送原始模型文本，不会绕过收件人权限，不会跨渠道外发，也不会在消息里携带明文凭据或原始客户资料全文。若后续接入安全的同会话运营通知自动派发，仍会通过 <code>reply.card.status=message_outreach_queued|message_outreach_sent|message_outreach_failed</code> 或对应状态事件明确告知。</p>
-<h2 id="section-15">3. 生成产物（报表）</h2>
-<h3 id="section-16">3.1 模板列表字段</h3>
+<h2 id="section-16">3. 生成产物（报表）</h2>
+<h3 id="section-17">3.1 模板列表字段</h3>
 <p>第三方页面或第三方 AI 只需要保留下面这些模板字段；生成时把选中的模板带入 3.3。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -876,7 +964,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template_document_external_id</code></td><td>是</td><td>模板文档 ID；必须先按 1.1 解析</td></tr><tr><td><code>source_id</code></td><td>是</td><td>模板所属文档源 ID</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>title</code></td><td>是</td><td>模板展示名</td></tr><tr><td><code>output_type</code></td><td>是</td><td><code>static_page</code>、<code>html</code>、<code>report</code> 或 <code>any</code></td></tr><tr><td><code>description</code></td><td>否</td><td>模板说明</td></tr><tr><td><code>tags</code></td><td>否</td><td>模板标签</td></tr></tbody></table></div>
-<h3 id="section-17">3.2 模板解析</h3>
+<h3 id="section-18">3.2 模板解析</h3>
 <p>模板也是文档，用 1.1 的解析接口。建议在 <code>metadata</code> 标记模板用途。</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -897,7 +985,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   &quot;idempotency_key&quot;: &quot;parse-template:tpl-weekly-report-001:rev-template-01&quot; // 幂等键
 }</code></pre>
   </figure>
-<h3 id="section-18">3.3 按模板生成静态页/报表</h3>
+<h3 id="section-19">3.3 按模板生成静态页/报表</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
@@ -950,7 +1038,7 @@ Content-Type: application/json</code></pre>
 <p>如果第三方使用 <code>assistant_run_id</code> 做轮询，推荐直接调用 3.4 的运行结果查询接口；返回仍是 2.1 的 <code>reply</code> 对象。发布完成后，<code>reply.task_status=static_page_published</code>，<code>reply.artifact_links[0]</code> 就是最终页面链接。第三方不需要再做额外确认、下载或二次提交。</p>
 <p>若已生成静态页/报表/HTML 产物，重点读取：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code>、<code>text</code> 或 <code>task_status</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的说明；静态页发布完成时会包含 Markdown 链接和原始 <code>页面地址: URL</code></td></tr><tr><td><code>reply.artifact_links</code></td><td>产物链接数组；静态页优先返回 generated-artifact 页面 URL，兼容返回 HTML 下载地址；模板 HTML 产物会返回 <code>/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0</code></td></tr><tr><td><code>reply.card</code></td><td>可能包含 <code>render_output_id</code>、<code>html_preview_url</code>、<code>html_download_url</code>、<code>generated_artifact_url</code>、<code>data_url</code>、<code>dynamic_page_contract</code>、<code>draft_id</code>、产物状态或结构化卡片</td></tr><tr><td><code>assistant_run_id</code></td><td>本次生成运行 ID</td></tr></tbody></table></div>
-<h3 id="section-19">3.4 查询、预览、下载产物</h3>
+<h3 id="section-20">3.4 查询、预览、下载产物</h3>
 <p>查询本次运行的最新第三方回复：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -982,13 +1070,13 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
   </figure>
 <p>字段说明：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>运行结果查询必填</td><td>2.1 响应返回的 V3 本次运行 ID</td></tr><tr><td><code>artifact_id</code></td><td>HTML 产物下载必填</td><td><code>reply.artifact_links</code> 中的 HTML artifact ID</td></tr><tr><td><code>file_index</code></td><td>HTML 产物下载必填</td><td>文件序号；当前模板 HTML 产物固定传 <code>0</code></td></tr><tr><td><code>render_output_id</code></td><td>静态页/报表必填</td><td>V3 生成的静态页/报表渲染 ID</td></tr></tbody></table></div>
-<h2 id="section-20">4. 枚举与错误</h2>
-<h3 id="section-21">4.1 <code>output_format</code></h3>
+<h2 id="section-21">4. 枚举与错误</h2>
+<h3 id="section-22">4.1 <code>output_format</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>rich_text</code></td><td>富文本回答</td></tr><tr><td><code>image_text</code></td><td>图文排版回答</td></tr><tr><td><code>markdown_table</code></td><td>MD 表格回答</td></tr><tr><td><code>json</code></td><td>JSON 回答</td></tr></tbody></table></div>
 <p>中文值也可传：<code>富文本</code>、<code>图文排版</code>、<code>MD表格</code>、<code>JSON</code>。</p>
-<h3 id="section-22">4.2 <code>render_mode</code></h3>
+<h3 id="section-23">4.2 <code>render_mode</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>normal</code></td><td>普通聊天回答</td></tr><tr><td><code>artifact</code></td><td>生成可预览/下载产物</td></tr></tbody></table></div>
-<h3 id="section-23">4.3 错误格式</h3>
+<h3 id="section-24">4.3 错误格式</h3>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{

@@ -360,7 +360,7 @@ Content-Type: application/json
 | `business_datasource_ids` | 业务库问答/报表建议填 | 本轮指定业务库 ID 数组；值来自 1.5 的 `source_external_id`。兼容别名：`businessDatasourceIds`、`businessDataSourceIds`、`databaseSourceIds` |
 | `requested_skills` | 否 | 本轮 skill 列表 |
 | `mention_external_user_ids` | 否 | 被 @ 的第三方用户 ID |
-| `attachment_refs` | 否 | 附件引用列表；推荐对象数组，也兼容 `["https://example.com/a.docx"]` 字符串 URL 数组 |
+| `attachment_refs` | 否 | 附件引用列表；推荐对象数组，也兼容 `["https://example.com/a.docx"]` 字符串 URL 数组；图片消息可传图片下载 URL |
 | `idempotency_key` | 是 | 幂等键 |
 | `received_at` | 是 | ISO 8601 时间 |
 
@@ -379,7 +379,109 @@ Content-Type: application/json
 ]
 ```
 
-若第三方暂时只能传字符串 URL 数组，V3 会兼容为附件引用对象；后续若要 V3 主动下载附件，仍建议先走 1.1 文档解析接口。
+若第三方暂时只能传字符串 URL 数组，V3 会兼容为附件引用对象；文档入库建议走 1.1 文档解析接口，聊天图片结构化抽取可直接在本接口传图片附件。
+
+### 2.1.1 图片订单字段抽取
+
+第三方聊天里用户直接发图片时，可用同一个 `POST /events` 接口让 V3 识别图片中的订单/充值表格，并返回可入库字段。推荐传 `message_type: "image"`、`output_format: "json"` 和图片 `attachment_refs`。如果要强制走订单截图抽取，可加 `requested_skills[].skill_id = "order_screenshot_extract"`。
+
+请求示例：
+
+```jsonc
+{
+  "platform": "generic_chat",                      // 平台类型
+  "tenant_external_id": "tenant-ext-001",          // 第三方租户/客户 ID
+  "bot_external_id": "bot-v3",                     // 第三方机器人/应用 ID
+  "conversation_external_id": "conv-order-001",    // 会话 ID
+  "sender_external_id": "user-10001",              // 用户 ID
+  "message_external_id": "msg-order-image-001",    // 第三方消息 ID
+  "message_type": "image",                         // 图片消息
+  "text": "请识别这张充值记录截图，按订单字段返回 JSON。", // 用户要求
+  "output_format": "json",                         // 推荐 JSON，reply.text 会返回 JSON 字符串
+  "requested_skills": [                             // 可选；传了就强制走订单截图字段抽取
+    {
+      "skill_id": "order_screenshot_extract",      // 订单/充值截图字段抽取
+      "mode": "required",                          // required/preferred/disabled
+      "arguments": {
+        "schema": {
+          "record_type": "recharge_order"           // 可选：第三方自己的记录类型
+        }
+      }
+    }
+  ],
+  "attachment_refs": [
+    {
+      "attachment_external_id": "img-order-001",    // 第三方图片 ID
+      "filename": "recharge-orders.png",            // 文件名
+      "content_type": "image/png",                  // 图片 MIME
+      "size_bytes": 2048,                           // 文件大小；没有可省略
+      "download_url_redacted": "https://example.com/recharge-orders.png" // V3 拉取图片用 URL；响应不会回显原始 URL
+    }
+  ],
+  "idempotency_key": "chat:tenant-ext-001:msg-order-image-001", // 幂等键
+  "received_at": "2026-06-04T10:00:00Z"             // 消息时间
+}
+```
+
+响应示例：
+
+```jsonc
+{
+  "accepted": true,                                 // 已接收
+  "assistant_run_id": "assistant-run-id",           // V3 运行 ID
+  "idempotency_key": "chat:tenant-ext-001:msg-order-image-001", // 幂等键
+  "reply": {
+    "target_conversation_external_id": "conv-order-001", // 回写会话 ID
+    "reply_type": "card",                         // 结构化卡片
+    "task_status": "answered",                    // answered 或 needs_review
+    "text": "{...JSON...}",                       // output_format=json 时为完整 JSON 字符串
+    "card": {
+      "type": "v3_order_screenshot_extract",      // 固定类型
+      "status": "answered",                       // answered 或 needs_review
+      "extraction_id": "img-extract-xxx",         // 抽取 ID
+      "record_count": 2,                          // 记录数
+      "needs_review": false,                      // 是否建议人工复核
+      "records": [
+        {
+          "recharge_amount": 100,                 // 充值额度数字
+          "recharge_amount_raw": "$100",          // 充值额度原文
+          "pay_amount": 700,                      // 支付金额数字
+          "pay_amount_raw": "$700",               // 支付金额原文
+          "payment_method": "alipay",             // 支付方式归一值
+          "payment_method_label": "支付宝",        // 支付方式原文
+          "order_no": "A1778730534",              // 订单号
+          "status": "success",                    // 状态归一值；如 success/processing/failed
+          "status_label": "成功",                 // 状态原文
+          "created_at": "2026/5/14 11:48:54"      // 创建时间原文
+        }
+      ],
+      "attachments": [
+        {
+          "attachment_external_id": "img-order-001", // 图片 ID
+          "filename": "recharge-orders.png",         // 文件名
+          "content_type": "image/png",               // MIME
+          "size_bytes": 2048,                        // 大小
+          "download_url_present": true               // 是否收到了下载 URL；不会回显原始 URL
+        }
+      ]
+    },
+    "requires_confirmation": false
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 注释 |
+| --- | --- |
+| `reply.card.type` | 固定 `v3_order_screenshot_extract` |
+| `reply.card.status` | `answered` 表示已抽到记录；`needs_review` 表示图片、配置或识别结果需要复核 |
+| `reply.card.records` | 可直接入库的记录数组 |
+| `records[].*_raw` / `records[].*_label` | 图片原文，便于第三方保留展示或复核 |
+| `records[].payment_method` | 支付方式归一值；例如 `alipay`、`wechat_pay`、`bank_card` |
+| `records[].status` | 状态归一值；例如 `success`、`processing`、`failed`、`cancelled` |
+| `reply.card.failure_reason` | `needs_review` 时可能存在，说明未完成自动抽取的原因 |
+| `idempotency_key` | 同一图片消息重试时保持不变，V3 会返回同一份结构化结果 |
 
 响应：
 
@@ -402,7 +504,7 @@ Content-Type: application/json
 }
 ```
 
-### 2.1.1 可选主动回推
+### 2.1.2 可选主动回推
 
 如果第三方页面等待时间较短，或 SSE 可能中断，可在 V3 通道配置里提供助手回复回推地址。V3 后台结果完成或失败后，会向该地址主动 POST 一次最终 `reply`，第三方收到后追加到对应 `conversation_external_id` 的会话即可。
 
