@@ -3153,6 +3153,12 @@ struct StaticPageRepairPatchReport {
     patches: Vec<&'static str>,
 }
 
+#[derive(Debug, Default)]
+struct StaticPageTextRevision {
+    title: Option<String>,
+    note: Option<String>,
+}
+
 fn try_publish_existing_static_page_repair_before_cloudflare(
     task_context: &CodexHostTaskContext,
     execution_id: domain_model::WorkflowExecutionId,
@@ -3225,7 +3231,13 @@ fn publish_existing_static_page_repair_fallback_if_available(
             source_index_path.display()
         )
     })?;
-    let (patched_html, patch_report) = patch_existing_static_page_filter_binding_html(&html);
+    let text_revision = static_page_existing_artifact_text_revision_from_fixed_task(fixed_task);
+    let (patched_html, mut patch_report) = patch_existing_static_page_filter_binding_html(&html);
+    let patched_html = patch_existing_static_page_text_revision_html(
+        &patched_html,
+        text_revision.as_ref(),
+        &mut patch_report,
+    );
     if !patch_report.applied {
         return Ok(None);
     }
@@ -3245,6 +3257,13 @@ fn publish_existing_static_page_repair_fallback_if_available(
             index_path.display()
         )
     })?;
+    if let Some(text_revision) = text_revision.as_ref() {
+        patch_existing_static_page_text_revision_data_files(
+            &artifact_dir,
+            text_revision,
+            &mut patch_report,
+        )?;
+    }
     validate_static_page_image2_dynamic_artifact(&index_path, &artifact_dir)?;
 
     let public_url = generated_artifact_public_url(&relative_dir);
@@ -4276,6 +4295,291 @@ fn static_page_template_fallback_html() -> &'static str {
   </script>
 </body>
 </html>"#
+}
+
+fn static_page_existing_artifact_text_revision_from_fixed_task(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> Option<StaticPageTextRevision> {
+    let goal = fixed_task
+        .requirements
+        .get("user_goal")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let title = extract_static_page_revision_value_after_markers(
+        goal,
+        &[
+            "标题改为",
+            "标题改成",
+            "标题修改为",
+            "标题修改成",
+            "title to",
+            "title:",
+        ],
+        80,
+    );
+    let note = extract_static_page_revision_value_after_markers(
+        goal,
+        &[
+            "新增说明",
+            "增加说明",
+            "添加说明",
+            "补充说明",
+            "加说明",
+            "add note",
+            "note:",
+        ],
+        160,
+    );
+    if title.is_none() && note.is_none() {
+        None
+    } else {
+        Some(StaticPageTextRevision { title, note })
+    }
+}
+
+fn extract_static_page_revision_value_after_markers(
+    text: &str,
+    markers: &[&str],
+    max_chars: usize,
+) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    for marker in markers {
+        let search = marker.to_ascii_lowercase();
+        let Some(index) = lower.find(&search) else {
+            continue;
+        };
+        let after = text[index + marker.len()..].trim_start_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ':' | '：' | ',' | '，' | ';' | '；')
+        });
+        let value = extract_static_page_revision_quoted_or_plain_value(after, max_chars);
+        if let Some(value) = value.filter(|item| !item.trim().is_empty()) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn extract_static_page_revision_quoted_or_plain_value(
+    text: &str,
+    max_chars: usize,
+) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let quote_pairs = [('“', '”'), ('‘', '’'), ('"', '"'), ('\'', '\'')];
+    if let Some(first) = trimmed.chars().next() {
+        if let Some((open, close)) = quote_pairs.iter().find(|(open, _)| *open == first) {
+            let start = open.len_utf8();
+            let rest = &trimmed[start..];
+            let end = rest.find(*close).unwrap_or(rest.len());
+            return static_page_clean_revision_value(&rest[..end], max_chars);
+        }
+    }
+    let mut value = String::new();
+    for ch in trimmed.chars() {
+        if matches!(ch, '，' | '。' | '；' | ';' | '\n' | '\r') {
+            break;
+        }
+        value.push(ch);
+        if value.chars().count() >= max_chars {
+            break;
+        }
+    }
+    static_page_clean_revision_value(&value, max_chars)
+}
+
+fn static_page_clean_revision_value(value: &str, max_chars: usize) -> Option<String> {
+    let trimmed = value
+        .trim()
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '"' | '\'' | '“' | '”' | '‘' | '’' | '。' | '，' | ',' | ';' | '；' | ':' | '：'
+            )
+        })
+        .trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(truncate_chars(trimmed, max_chars))
+    }
+}
+
+fn html_escape_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn patch_existing_static_page_text_revision_html(
+    html: &str,
+    revision: Option<&StaticPageTextRevision>,
+    report: &mut StaticPageRepairPatchReport,
+) -> String {
+    let Some(revision) = revision else {
+        return html.to_string();
+    };
+    let mut updated = html.to_string();
+    if let Some(title) = revision.title.as_deref() {
+        let escaped = html_escape_text(title);
+        if let Some(next) =
+            replace_between_ascii_case_insensitive(&updated, "<title>", "</title>", &escaped)
+        {
+            updated = next;
+            report.applied = true;
+            report.patches.push("apply_requested_title_to_title_tag");
+        }
+        if let Some(next) = replace_first_element_inner_html(&updated, "h1", &escaped) {
+            updated = next;
+            report.applied = true;
+            report.patches.push("apply_requested_title_to_h1");
+        } else if let Some(next) = insert_after_opening_element(
+            &updated,
+            "body",
+            &format!(r#"<h1 data-revision-title="true">{escaped}</h1>"#),
+        ) {
+            updated = next;
+            report.applied = true;
+            report.patches.push("insert_requested_title");
+        }
+    }
+    if let Some(note) = revision.note.as_deref() {
+        let escaped = html_escape_text(note);
+        if !updated.contains("data-revision-note") {
+            let note_html =
+                format!(r#"<p class="note revision-note" data-revision-note="true">{escaped}</p>"#);
+            if let Some(next) =
+                insert_after_ascii_case_insensitive(&updated, "</header>", &note_html)
+                    .or_else(|| insert_after_opening_element(&updated, "body", &note_html))
+            {
+                updated = next;
+                report.applied = true;
+                report.patches.push("insert_requested_revision_note");
+            }
+        }
+    }
+    updated
+}
+
+fn replace_between_ascii_case_insensitive(
+    input: &str,
+    start: &str,
+    end: &str,
+    replacement: &str,
+) -> Option<String> {
+    let lower = input.to_ascii_lowercase();
+    let start_lower = start.to_ascii_lowercase();
+    let end_lower = end.to_ascii_lowercase();
+    let start_index = lower.find(&start_lower)?;
+    let content_start = start_index + start.len();
+    let end_index = lower[content_start..].find(&end_lower)? + content_start;
+    let mut output =
+        String::with_capacity(input.len() - (end_index - content_start) + replacement.len());
+    output.push_str(&input[..content_start]);
+    output.push_str(replacement);
+    output.push_str(&input[end_index..]);
+    Some(output)
+}
+
+fn replace_first_element_inner_html(input: &str, tag: &str, replacement: &str) -> Option<String> {
+    let lower = input.to_ascii_lowercase();
+    let open = format!("<{}", tag.to_ascii_lowercase());
+    let close = format!("</{}>", tag.to_ascii_lowercase());
+    let start_index = lower.find(&open)?;
+    let content_start = input[start_index..].find('>')? + start_index + 1;
+    let end_index = lower[content_start..].find(&close)? + content_start;
+    let mut output =
+        String::with_capacity(input.len() - (end_index - content_start) + replacement.len());
+    output.push_str(&input[..content_start]);
+    output.push_str(replacement);
+    output.push_str(&input[end_index..]);
+    Some(output)
+}
+
+fn insert_after_ascii_case_insensitive(
+    input: &str,
+    needle: &str,
+    insertion: &str,
+) -> Option<String> {
+    let lower = input.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let index = lower.find(&needle_lower)? + needle.len();
+    let mut output = String::with_capacity(input.len() + insertion.len());
+    output.push_str(&input[..index]);
+    output.push_str(insertion);
+    output.push_str(&input[index..]);
+    Some(output)
+}
+
+fn insert_after_opening_element(input: &str, tag: &str, insertion: &str) -> Option<String> {
+    let lower = input.to_ascii_lowercase();
+    let open = format!("<{}", tag.to_ascii_lowercase());
+    let start_index = lower.find(&open)?;
+    let insert_index = input[start_index..].find('>')? + start_index + 1;
+    let mut output = String::with_capacity(input.len() + insertion.len());
+    output.push_str(&input[..insert_index]);
+    output.push_str(insertion);
+    output.push_str(&input[insert_index..]);
+    Some(output)
+}
+
+fn patch_existing_static_page_text_revision_data_files(
+    artifact_dir: &Path,
+    revision: &StaticPageTextRevision,
+    report: &mut StaticPageRepairPatchReport,
+) -> Result<()> {
+    for file_name in ["data.json", "data-snapshot.json"] {
+        let path = artifact_dir.join(file_name);
+        let Some(mut value) = read_json_value_if_available(&path)? else {
+            continue;
+        };
+        ensure_json_object(&mut value);
+        let mut changed = false;
+        if let Some(object) = value.as_object_mut() {
+            if let Some(title) = revision.title.as_deref() {
+                object.insert("title".to_string(), Value::String(title.to_string()));
+                object.insert("reportTitle".to_string(), Value::String(title.to_string()));
+                changed = true;
+            }
+            if let Some(note) = revision.note.as_deref() {
+                object.insert(
+                    "revisionNotice".to_string(),
+                    Value::String(note.to_string()),
+                );
+                object.insert(
+                    "revision_notice".to_string(),
+                    Value::String(note.to_string()),
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            write_json_value_file(&path, &value)?;
+            report.applied = true;
+            report.patches.push(if file_name == "data.json" {
+                "apply_text_revision_to_data_json"
+            } else {
+                "apply_text_revision_to_data_snapshot"
+            });
+        }
+    }
+    Ok(())
+}
+
+fn write_json_value_file(path: &Path, value: &Value) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| anyhow!("failed to serialize JSON file {}: {error}", path.display()))?;
+    fs::write(path, bytes).map_err(|error| anyhow!("failed to write {}: {error}", path.display()))
+}
+
+fn ensure_json_object(value: &mut Value) {
+    if !value.is_object() {
+        *value = Value::Object(Map::new());
+    }
 }
 
 fn patch_existing_static_page_filter_binding_html(
@@ -6396,7 +6700,7 @@ function currentLast7Stats(){ return {}; }
             .as_mut()
             .expect("static page fixed task");
         fixed_task.requirements["user_goal"] =
-            json!("修复这个已有页面，切换区域和门店后近7日销售、趋势和AI洞察需要联动变化。");
+            json!("修复这个已有页面，切换区域和门店后近7日销售、趋势和AI洞察需要联动变化；标题改为“新百门店取高经营看板（在线修改测试）”，新增说明“本页已完成在线修改链路验证”。");
         fixed_task.requirements["existing_artifact"] = json!({
             "kind": "v3_generated_static_page",
             "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html",
@@ -6407,7 +6711,7 @@ function currentLast7Stats(){ return {}; }
         let existing = workspace.join("existing-artifact");
         fs::create_dir_all(&existing).expect("existing artifact dir");
         let html = r#"
-<!doctype html><html><body>
+<!doctype html><html><head><title>旧报表标题</title></head><body><main><h1>旧报表标题</h1></main>
 <label>月份</label><select data-time-range="required"><option>本月</option></select>
 <script>
 const state = { data: null, district: '全部', store: '全部', category: '全部', highOnly: false, month: '2026-05' };
@@ -6485,6 +6789,25 @@ function renderInsight(k){
         let patched = fs::read_to_string(local_path).expect("patched html");
         assert!(patched.contains("function filteredSalesSeriesForCurrentScope()"));
         assert!(patched.contains("amount(last7Stats.last7Sales)"));
+        assert!(patched.contains("<title>新百门店取高经营看板（在线修改测试）</title>"));
+        assert!(patched.contains("<h1>新百门店取高经营看板（在线修改测试）</h1>"));
+        assert!(patched.contains("data-revision-note=\"true\""));
+        assert!(patched.contains("本页已完成在线修改链路验证"));
+        let artifact_dir = PathBuf::from(local_path)
+            .parent()
+            .expect("artifact dir")
+            .to_path_buf();
+        let patched_data: Value =
+            serde_json::from_slice(&fs::read(artifact_dir.join("data.json")).expect("data json"))
+                .expect("patched data parses");
+        assert_eq!(
+            patched_data["title"],
+            json!("新百门店取高经营看板（在线修改测试）")
+        );
+        assert_eq!(
+            patched_data["revisionNotice"],
+            json!("本页已完成在线修改链路验证")
+        );
         assert!(PathBuf::from(local_path)
             .parent()
             .expect("artifact dir")
