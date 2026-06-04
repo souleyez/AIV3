@@ -1,4 +1,4 @@
-#![cfg_attr(test, recursion_limit = "256")]
+#![recursion_limit = "256"]
 
 use assistant_runtime::{
     candidates_to_values, execute_codex_conversation_plan, plan_scope,
@@ -35538,7 +35538,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         },
     )
     .await?;
-    let create_direct_render_now = false;
+    let create_direct_render_now = true;
     let direct_render_result = if create_direct_render_now {
         let result =
             create_static_page_render_output_inline(state, draft_outcome.draft.clone(), None, true)
@@ -35548,10 +35548,45 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         None
     };
     let direct_render_output = direct_render_result.as_ref().map(|(_draft, output)| output);
-    let generated_artifact_payload: Option<Value> = None;
+    let generated_artifact_payload: Option<Value> =
+        if let Some((rendered_draft, render_output)) = direct_render_result.as_ref() {
+            let image_job_id = image_response.image_job.id.to_string();
+            let published = publish_external_static_page_render_output_as_generated_artifact(
+                run,
+                render_output,
+                &rendered_draft.source_refs,
+                now,
+            )?;
+            Some(
+                mark_external_static_page_local_generated_artifact_published(
+                    &state.storage,
+                    state.tenant_id,
+                    run,
+                    rendered_draft,
+                    render_output,
+                    Some(image_job_id.as_str()),
+                    &rendered_draft.source_refs,
+                    &published,
+                    now,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
     let generated_artifact_url = generated_artifact_payload
         .as_ref()
         .and_then(|payload| payload.get("public_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let generated_artifact_data_url = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("data_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let generated_artifact_data_snapshot_url = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("data_snapshot_url"))
         .and_then(Value::as_str)
         .map(str::to_string);
     let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
@@ -35598,6 +35633,22 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         .as_ref()
                         .map(|value| Value::String(value.clone()))
                         .unwrap_or(Value::Null),
+                    "generated_artifact_url": generated_artifact_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
+                    "artifact_links": generated_artifact_url
+                        .as_ref()
+                        .map(|value| json!([value]))
+                        .unwrap_or_else(|| json!([])),
+                    "data_url": generated_artifact_data_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
+                    "data_snapshot_url": generated_artifact_data_snapshot_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
                     "status_url": status_url.clone(),
                     "status_method": "GET",
                     "poll_after_seconds": poll_after_seconds.clone(),
@@ -35627,8 +35678,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         Value::String(codex_auto_publish_readiness.reason.to_string())
                     },
                     "direct_html_fallback": direct_render_output.is_some(),
-                    "provisional_direct_html": auto_publish_after_preview && direct_render_output.is_some(),
-                    "demo_generated_artifact_publish": generated_artifact_url.is_some(),
+                    "provisional_direct_html": false,
+                    "local_generated_artifact_first": generated_artifact_url.is_some(),
+                    "demo_generated_artifact_publish": false,
                     "codex_final_status": if codex_auto_publish_enabled {
                         Value::String("static_page_image2_auto_publish_pending".to_string())
                     } else {
@@ -35658,8 +35710,11 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     } else {
         "static_page_image_preview_queued"
     };
-    let text = if generated_artifact_url.is_some() {
-        "V3 静态页已生成并发布，可通过 artifact_links[0] 打开页面。".to_string()
+    let text = if let Some(public_url) = generated_artifact_url.as_deref() {
+        external_channel_text_with_public_artifact_link(
+            external_channel_static_page_customer_ready_text(),
+            public_url,
+        )
     } else if codex_auto_publish_enabled && gpt55_main_model_preferred {
         "已创建静态页草稿并提交 GPT-Image-2 效果图队列；效果图无需客户确认，生成后会继续进入 Image2 视觉合同发布链路，由 GPT-5.5/Codex 依据效果图生成最终动态网站。".to_string()
     } else if codex_auto_publish_enabled {
@@ -35706,6 +35761,18 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 .as_ref()
                 .map(|value| Value::String(value.clone()))
                 .unwrap_or(Value::Null),
+            "artifact_links": generated_artifact_url
+                .as_ref()
+                .map(|value| json!([value]))
+                .unwrap_or_else(|| json!([])),
+            "data_url": generated_artifact_data_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
+            "data_snapshot_url": generated_artifact_data_snapshot_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
             "status_url": status_url.clone(),
             "status_method": "GET",
             "poll_after_seconds": poll_after_seconds.clone(),
@@ -35735,8 +35802,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 Value::String(codex_auto_publish_readiness.reason.to_string())
             },
             "direct_html_fallback": direct_render_output.is_some(),
-            "provisional_direct_html": auto_publish_after_preview && direct_render_output.is_some(),
-            "demo_generated_artifact_publish": generated_artifact_url.is_some(),
+            "provisional_direct_html": false,
+            "local_generated_artifact_first": generated_artifact_url.is_some(),
+            "demo_generated_artifact_publish": false,
             "codex_final_status": if codex_auto_publish_enabled {
                 Value::String("static_page_image2_auto_publish_pending".to_string())
             } else {
@@ -47280,6 +47348,179 @@ struct ExternalStaticPageRecoveredArtifact {
     manifest_path: String,
 }
 
+struct ExternalStaticPageLocalGeneratedArtifact {
+    public_url: String,
+    data_url: String,
+    data_snapshot_url: String,
+    local_path: String,
+    manifest_path: String,
+    data_path: String,
+    data_snapshot_path: String,
+    dynamic_page_contract: Value,
+    validation_summary: Value,
+}
+
+fn publish_external_static_page_render_output_as_generated_artifact(
+    run: &AssistantRun,
+    render_output: &StaticPageRenderOutputView,
+    source_refs: &Value,
+    now: DateTime<Utc>,
+) -> std::result::Result<ExternalStaticPageLocalGeneratedArtifact, ApiError> {
+    if render_output.html.trim().is_empty() {
+        return Err(ApiError::internal(
+            "static_page_local_generated_artifact_publish_failed",
+            "local static-page render output was empty".to_string(),
+        ));
+    }
+    let run_segment = safe_external_path_segment(&run.id.to_string());
+    let render_segment = safe_external_path_segment(&render_output.id.to_string());
+    let relative_dir =
+        format!("database-static-pages/external-channel/{run_segment}/{render_segment}-local");
+    let artifact_dir = external_channel_generated_artifact_root()?.join(&relative_dir);
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        ApiError::internal(
+            "static_page_local_generated_artifact_publish_failed",
+            format!("failed to create local static-page generated artifact dir: {error}"),
+        )
+    })?;
+
+    let index_path = artifact_dir.join("index.html");
+    fs::write(&index_path, render_output.html.as_bytes()).map_err(|error| {
+        ApiError::internal(
+            "static_page_local_generated_artifact_publish_failed",
+            format!("failed to write local static-page index.html: {error}"),
+        )
+    })?;
+
+    let data_snapshot = render_output
+        .asset_manifest
+        .get("data_snapshot")
+        .cloned()
+        .unwrap_or_else(|| json!({"source": "local_static_page_render"}));
+    let dynamic_page_contract = normalize_static_page_dynamic_page_contract(
+        render_output
+            .asset_manifest
+            .get("dynamic_page_contract")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    let data_json = json!({
+        "kind": "v3_static_page_local_generated_artifact_data",
+        "version": 1,
+        "draft_id": render_output.draft_id.to_string(),
+        "assistant_run_id": run.id.to_string(),
+        "render_output_id": render_output.id.to_string(),
+        "snapshotVersion": data_snapshot
+            .get("snapshotVersion")
+            .or_else(|| data_snapshot.get("snapshot_version"))
+            .cloned()
+            .unwrap_or_else(|| json!(now.to_rfc3339_opts(SecondsFormat::Secs, true))),
+        "updatedAt": now,
+        "dataSnapshot": data_snapshot.clone(),
+        "data_snapshot": data_snapshot.clone(),
+        "modules": render_output
+            .asset_manifest
+            .get("modules")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "chart_runtime": render_output
+            .asset_manifest
+            .get("chart_runtime")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "dynamic_page_contract": dynamic_page_contract.clone(),
+    });
+    let data_path = artifact_dir.join("data.json");
+    fs::write(
+        &data_path,
+        serde_json::to_vec_pretty(&data_json).map_err(|error| {
+            ApiError::internal(
+                "static_page_local_generated_artifact_publish_failed",
+                format!("failed to serialize local static-page data.json: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        ApiError::internal(
+            "static_page_local_generated_artifact_publish_failed",
+            format!("failed to write local static-page data.json: {error}"),
+        )
+    })?;
+    let data_snapshot_path = artifact_dir.join("data-snapshot.json");
+    fs::write(
+        &data_snapshot_path,
+        serde_json::to_vec_pretty(&data_snapshot).map_err(|error| {
+            ApiError::internal(
+                "static_page_local_generated_artifact_publish_failed",
+                format!("failed to serialize local static-page data-snapshot.json: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        ApiError::internal(
+            "static_page_local_generated_artifact_publish_failed",
+            format!("failed to write local static-page data-snapshot.json: {error}"),
+        )
+    })?;
+
+    let public_url = external_channel_generated_artifact_public_url(&relative_dir);
+    let data_url = external_channel_generated_artifact_public_file_url(&relative_dir, "data.json");
+    let data_snapshot_url =
+        external_channel_generated_artifact_public_file_url(&relative_dir, "data-snapshot.json");
+    let validation_summary = data_snapshot
+        .get("validation_summary")
+        .or_else(|| data_snapshot.get("validationSummary"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "status": "local_generated_artifact_published",
+                "reason": "local_static_page_render_published",
+            })
+        });
+    let manifest_path = artifact_dir.join("manifest.json");
+    let manifest = json!({
+        "kind": "v3_external_channel_static_page_local_generated_artifact",
+        "version": 1,
+        "assistant_run_id": run.id.to_string(),
+        "render_output_id": render_output.id.to_string(),
+        "draft_id": render_output.draft_id.to_string(),
+        "public_url": public_url.clone(),
+        "data_url": data_url.clone(),
+        "data_snapshot_url": data_snapshot_url.clone(),
+        "dynamic_page_contract": dynamic_page_contract.clone(),
+        "validation_summary": validation_summary.clone(),
+        "source_refs": source_refs.clone(),
+        "created_at": now,
+    });
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).map_err(|error| {
+            ApiError::internal(
+                "static_page_local_generated_artifact_publish_failed",
+                format!("failed to serialize local static-page manifest: {error}"),
+            )
+        })?,
+    )
+    .map_err(|error| {
+        ApiError::internal(
+            "static_page_local_generated_artifact_publish_failed",
+            format!("failed to write local static-page manifest.json: {error}"),
+        )
+    })?;
+
+    Ok(ExternalStaticPageLocalGeneratedArtifact {
+        public_url,
+        data_url,
+        data_snapshot_url,
+        local_path: index_path.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+        data_path: data_path.display().to_string(),
+        data_snapshot_path: data_snapshot_path.display().to_string(),
+        dynamic_page_contract,
+        validation_summary,
+    })
+}
+
 fn publish_external_static_page_exec_completed_html_as_generated_artifact(
     run: &AssistantRun,
     exec_event: &AssistantRunEvent,
@@ -48877,6 +49118,208 @@ async fn mark_static_page_draft_generated_artifact_publish_queued(
         .await
         .map_err(ApiError::from_storage)?;
     Ok(())
+}
+
+async fn mark_external_static_page_local_generated_artifact_published(
+    storage: &PgStorage,
+    tenant_id: TenantId,
+    run: &AssistantRun,
+    draft: &StaticPageDraft,
+    render_output: &StaticPageRenderOutputView,
+    image_job_id: Option<&str>,
+    source_refs: &Value,
+    published: &ExternalStaticPageLocalGeneratedArtifact,
+    now: DateTime<Utc>,
+) -> std::result::Result<Value, ApiError> {
+    let dataset_artifact_key = static_page_dataset_artifact_key_from_source_refs(source_refs)
+        .or_else(|| static_page_dataset_artifact_key_from_draft_context(draft));
+    let mut next = draft.clone();
+    next.source_refs = apply_static_page_artifact_stability_to_source_refs(
+        next.source_refs,
+        dataset_artifact_key.as_deref(),
+        "accepted",
+        Some(published.public_url.as_str()),
+        now,
+    );
+    let mut payload = apply_static_page_artifact_stability_to_payload(
+        next.draft_payload.clone(),
+        dataset_artifact_key.as_deref(),
+        "accepted",
+        Some(published.public_url.as_str()),
+        now,
+    );
+    ensure_json_object(&mut payload);
+    let mut final_page = payload
+        .get("finalPage")
+        .or_else(|| payload.get("final_page"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut asset_manifest = render_output
+        .asset_manifest
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    asset_manifest.insert("status".to_string(), json!("rendered"));
+    asset_manifest.insert(
+        "renderer".to_string(),
+        json!("static-page-renderer-v1-local-generated-artifact"),
+    );
+    asset_manifest.insert(
+        "publish_mode".to_string(),
+        json!("local_generated_artifact_first"),
+    );
+    asset_manifest.insert(
+        "public_url".to_string(),
+        json!(published.public_url.clone()),
+    );
+    asset_manifest.insert(
+        "generated_artifact_url".to_string(),
+        json!(published.public_url.clone()),
+    );
+    asset_manifest.insert("data_url".to_string(), json!(published.data_url.clone()));
+    asset_manifest.insert(
+        "data_snapshot_url".to_string(),
+        json!(published.data_snapshot_url.clone()),
+    );
+    asset_manifest.insert(
+        "dynamic_page_contract".to_string(),
+        published.dynamic_page_contract.clone(),
+    );
+    asset_manifest.insert(
+        "validation_summary".to_string(),
+        published.validation_summary.clone(),
+    );
+    asset_manifest.insert(
+        "workflow".to_string(),
+        json!({
+            "status": "succeeded",
+            "mode": "local_generated_artifact_first",
+            "updatedAt": now,
+        }),
+    );
+
+    final_page.insert("status".to_string(), json!("rendered"));
+    final_page.insert(
+        "renderer".to_string(),
+        json!("static-page-renderer-v1-local-generated-artifact"),
+    );
+    final_page.insert("renderOutputId".to_string(), json!(render_output.id));
+    final_page.insert(
+        "imageJobId".to_string(),
+        image_job_id
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
+    );
+    final_page.insert("directHtml".to_string(), json!(true));
+    final_page.insert("publicUrl".to_string(), json!(published.public_url.clone()));
+    final_page.insert(
+        "public_url".to_string(),
+        json!(published.public_url.clone()),
+    );
+    final_page.insert(
+        "generatedArtifactUrl".to_string(),
+        json!(published.public_url.clone()),
+    );
+    final_page.insert(
+        "generated_artifact_url".to_string(),
+        json!(published.public_url.clone()),
+    );
+    final_page.insert("dataUrl".to_string(), json!(published.data_url.clone()));
+    final_page.insert("data_url".to_string(), json!(published.data_url.clone()));
+    final_page.insert(
+        "dataSnapshotUrl".to_string(),
+        json!(published.data_snapshot_url.clone()),
+    );
+    final_page.insert(
+        "data_snapshot_url".to_string(),
+        json!(published.data_snapshot_url.clone()),
+    );
+    final_page.insert("assetManifest".to_string(), Value::Object(asset_manifest));
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("status".to_string(), json!("rendered"));
+        object.insert(
+            "modelSummary".to_string(),
+            json!("已按本地静态页生成链路发布可访问页面；后续如需高保真重设计可继续进入 Image2/Codex 优化。"),
+        );
+        object.insert("finalPage".to_string(), Value::Object(final_page));
+        object.insert("updatedAt".to_string(), json!(now));
+    }
+    next.status = StaticPageDraftStatus::Rendered;
+    next.draft_payload = payload;
+    let updated_draft = storage
+        .static_page_drafts()
+        .update(tenant_id, &next)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let dataset_artifact_key_value = dataset_artifact_key.clone();
+    let baseline_status = if dataset_artifact_key.is_some() {
+        Value::String("accepted".to_string())
+    } else {
+        Value::Null
+    };
+    let completed_payload = json!({
+        "channel_connection_id": source_refs
+            .get("channel_connection_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "platform": source_refs.get("platform").cloned().unwrap_or(Value::Null),
+        "conversation_external_id": source_refs
+            .get("conversation_external_id")
+            .cloned()
+            .or_else(|| external_channel_conversation_external_id_from_run(run).map(Value::String))
+            .unwrap_or(Value::Null),
+        "message_external_id": source_refs
+            .get("message_external_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "draft_id": updated_draft.id.to_string(),
+        "image_job_id": image_job_id,
+        "render_output_id": render_output.id.to_string(),
+        "template_id": "static_page_image2_data_publish",
+        "publish_mode": "local_generated_artifact_first",
+        "public_url": published.public_url.clone(),
+        "generated_artifact_url": published.public_url.clone(),
+        "artifact_links": [published.public_url.clone()],
+        "local_path": published.local_path.clone(),
+        "manifest_path": published.manifest_path.clone(),
+        "data_path": published.data_path.clone(),
+        "data_snapshot_path": published.data_snapshot_path.clone(),
+        "data_url": published.data_url.clone(),
+        "data_snapshot_url": published.data_snapshot_url.clone(),
+        "dynamic_page_contract": published.dynamic_page_contract.clone(),
+        "validation_summary": published.validation_summary.clone(),
+        "direct_html_fallback": true,
+        "provisional_direct_html": false,
+        "local_generated_artifact_first": true,
+        "cloudflare_codex_used": false,
+        "source_refs": updated_draft.source_refs,
+        "dataset_artifact_key": dataset_artifact_key_value,
+        "baseline_status": baseline_status,
+    });
+    maybe_attach_external_static_page_artifact_to_run(
+        storage,
+        tenant_id,
+        run.id,
+        &completed_payload,
+    )
+    .await?;
+    storage
+        .assistant_runs()
+        .append_event(
+            tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.external_channel_static_page_publish_completed"
+                    .to_string(),
+                payload: completed_payload.clone(),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    Ok(completed_payload)
 }
 
 async fn mark_static_page_draft_generated_artifact_published(
@@ -88378,11 +88821,27 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.artifact_links.len(), 1);
+        let public_url = reply.artifact_links[0].clone();
+        assert!(public_url.starts_with(
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/external-channel/"
+        ));
         let card = reply.card.expect("card should be returned");
-        assert_eq!(card["status"], json!("static_page_image_preview_queued"));
-        assert_eq!(card["direct_html_fallback"], json!(false));
+        assert_eq!(card["status"], json!("static_page_published"));
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
+        assert!(card["data_url"]
+            .as_str()
+            .is_some_and(|value| value.ends_with("/data.json")));
+        assert!(card["data_snapshot_url"]
+            .as_str()
+            .is_some_and(|value| value.ends_with("/data-snapshot.json")));
+        assert_eq!(card["direct_html_fallback"], json!(true));
         assert_eq!(card["provisional_direct_html"], json!(false));
+        assert_eq!(card["local_generated_artifact_first"], json!(true));
+        assert_eq!(card["demo_generated_artifact_publish"], json!(false));
         assert_eq!(card["codex_auto_publish_ready"], json!(false));
         assert_eq!(
             card["codex_auto_publish_disabled_reason"],
@@ -88391,10 +88850,15 @@ mod tests {
         assert!(card["draft_id"]
             .as_str()
             .is_some_and(|value| !value.is_empty()));
-        assert!(card["render_output_id"].is_null());
-        assert!(card["html_download_url"].is_null());
-        assert!(card["html_preview_url"].is_null());
-        assert!(reply.artifact_links.is_empty());
+        assert!(card["render_output_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert!(card["html_download_url"]
+            .as_str()
+            .is_some_and(|value| value.contains("/static-page-renders/")));
+        assert!(card["html_preview_url"]
+            .as_str()
+            .is_some_and(|value| value.contains("/static-page-renders/")));
         assert!(card["status_url"]
             .as_str()
             .expect("status url")
@@ -88415,15 +88879,33 @@ mod tests {
                 event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
             })
             .expect("pipeline event should be recorded");
-        assert_eq!(queued.payload["direct_html_fallback"], json!(false));
+        assert_eq!(queued.payload["public_url"], card["public_url"]);
+        assert_eq!(
+            queued.payload["generated_artifact_url"],
+            card["generated_artifact_url"]
+        );
+        assert_eq!(queued.payload["artifact_links"], card["artifact_links"]);
+        assert_eq!(queued.payload["direct_html_fallback"], json!(true));
         assert_eq!(queued.payload["provisional_direct_html"], json!(false));
+        assert_eq!(
+            queued.payload["local_generated_artifact_first"],
+            json!(true)
+        );
+        assert_eq!(
+            queued.payload["demo_generated_artifact_publish"],
+            json!(false)
+        );
         assert_eq!(queued.payload["codex_auto_publish_ready"], json!(false));
         assert_eq!(
             queued.payload["codex_auto_publish_disabled_reason"],
             json!("codex_host_agent_not_real_execution_mode")
         );
-        assert!(queued.payload["render_output_id"].is_null());
+        assert_eq!(queued.payload["render_output_id"], card["render_output_id"]);
         assert_eq!(queued.payload["status_url"], card["status_url"]);
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+                && event.payload["public_url"] == card["public_url"]
+        }));
     }
 
     #[tokio::test]
@@ -89681,13 +90163,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_static_page_pipeline_returns_provisional_link_when_codex_publish_ready(
-    ) {
+    async fn external_channel_static_page_pipeline_returns_local_artifact_when_codex_publish_ready()
+    {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
-                eprintln!("skipping external static-page provisional publish test: {reason}");
+                eprintln!("skipping external static-page local publish test: {reason}");
                 return;
             }
         };
@@ -89719,7 +90201,7 @@ mod tests {
         let tenant = storage
             .ensure_tenant(
                 &format!("external-static-page-provisional-{}", Uuid::new_v4()),
-                "External Static Page Provisional Publish Test",
+                "External Static Page Local Publish Test",
             )
             .await
             .expect("tenant should exist");
@@ -89791,15 +90273,20 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(reply.task_status.as_deref(), Some("processing"));
-        assert!(reply.artifact_links.is_empty());
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.artifact_links.len(), 1);
+        let public_url = reply.artifact_links[0].clone();
         let card = reply.card.expect("card should be returned");
-        assert!(card["public_url"].is_null());
-        assert!(card["generated_artifact_url"].is_null());
+        assert_eq!(card["status"], json!("static_page_published"));
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         assert_eq!(card["codex_auto_publish_ready"], json!(true));
         assert_eq!(card["auto_publish_after_preview"], json!(true));
-        assert_eq!(card["direct_html_fallback"], json!(false));
+        assert_eq!(card["direct_html_fallback"], json!(true));
         assert_eq!(card["provisional_direct_html"], json!(false));
+        assert_eq!(card["local_generated_artifact_first"], json!(true));
+        assert_eq!(card["demo_generated_artifact_publish"], json!(false));
         assert_eq!(
             card["codex_final_status"],
             json!("static_page_image2_auto_publish_pending")
@@ -89809,7 +90296,7 @@ mod tests {
             .text
             .as_deref()
             .unwrap_or_default()
-            .contains("GPT-Image-2"));
+            .contains("页面链接：[点击查看报表]"));
 
         let events = state
             .storage
@@ -89823,30 +90310,39 @@ mod tests {
                 event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
             })
             .expect("pipeline event should be recorded");
-        assert!(queued.payload["public_url"].is_null());
+        assert_eq!(queued.payload["public_url"], card["public_url"]);
+        assert_eq!(
+            queued.payload["generated_artifact_url"],
+            card["generated_artifact_url"]
+        );
+        assert_eq!(queued.payload["artifact_links"], card["artifact_links"]);
         assert_eq!(queued.payload["codex_auto_publish_ready"], json!(true));
+        assert_eq!(queued.payload["direct_html_fallback"], json!(true));
         assert_eq!(queued.payload["provisional_direct_html"], json!(false));
+        assert_eq!(
+            queued.payload["local_generated_artifact_first"],
+            json!(true)
+        );
 
         let restored = external_channel_static_page_reply_from_events(
             &events,
             &message.conversation_external_id,
         )
         .expect("status reply should restore pipeline status");
-        assert_eq!(restored.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(restored.task_status.as_deref(), Some("processing"));
-        let restored_card = restored.card.expect("restored card should be returned");
-        assert!(restored_card["public_url"].is_null());
-        assert_eq!(restored_card["provisional_direct_html"], json!(false));
+        assert_eq!(restored.reply_type, ExternalBotReplyTypeView::ArtifactLink);
         assert_eq!(
-            restored_card["codex_final_status"],
-            json!("static_page_image2_auto_publish_pending")
+            restored.task_status.as_deref(),
+            Some("static_page_published")
         );
-        assert_eq!(restored_card["poll_after_seconds"], json!(15));
+        assert_eq!(restored.artifact_links, vec![public_url.clone()]);
+        let restored_card = restored.card.expect("restored card should be returned");
+        assert_eq!(restored_card["public_url"], json!(public_url));
+        assert_eq!(restored_card["provisional_direct_html"], json!(false));
         assert!(restored
             .text
             .as_deref()
             .unwrap_or_default()
-            .contains("GPT-Image-2"));
+            .contains("页面链接：[点击查看报表]"));
     }
 
     #[test]

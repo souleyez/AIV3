@@ -40,7 +40,7 @@ V3 should expose this as an advanced static-page workflow:
 2. Queue Cloudflare Image2 `static-page-visual`.
 3. Store the image preview as a visual contract.
 4. Render final HTML only after real data is bound and口径 checks pass.
-5. Publish to generated artifacts on 8服务器.
+5. Publish the first customer-visible page to generated artifacts on 8服务器 through the local V3 renderer when possible.
 6. Return the public link and the口径 summary.
 
 The current frontend prompt payload now carries production rules:
@@ -76,8 +76,9 @@ Safe first phase:
 Fixed-template phase:
 
 - Promote advanced static-page work to the fixed template `static_page_image2_data_publish`.
-- Allow the fixed Cloudflare Codex executor to create a new generated artifact without per-task human confirmation when the package uses V3-selected scope, publish mode is `new_generated_artifact_only`, and the output includes a validated snapshot/date/unit口径 report.
-- Preferred production mode is `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator`, `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex`, and a Codex Web orchestrator access key supplied by either `CODEX_ORCHESTRATOR_ACCESS_KEY` or `CODEX_ORCHESTRATOR_KEY_FILE`. Key files may be either a raw one-line token or the generated key JSON containing `keys.rawKey`. The static-page image worker and V3 host-agent must use the same access source. In this mode Cloudflare returns structured output or `artifact.html`; the V3 host-agent writes the final HTML into V3-owned `/generated-artifacts/` paths.
+- V3 production should prefer the local generated-artifact path for the first customer-visible static page. The local renderer writes `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json` under V3-owned `/generated-artifacts/`, returns `public_url`/`artifact_links`, and marks the draft as an accepted dataset-combination baseline.
+- Allow the fixed Cloudflare Codex executor to create a higher-fidelity follow-up generated artifact without per-task human confirmation when the package uses V3-selected scope, publish mode is `new_generated_artifact_only`, and the output includes a validated snapshot/date/unit口径 report.
+- `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator` is an optional advanced executor route, not the first customer-visible delivery dependency. If the orchestrator is unavailable, expired, or queued for too long, V3 must still return the local generated-artifact link and keep Cloudflare work as background optimization or retry.
 - Continue requiring human confirmation for overwrite, stable customer URL replacement, source-code changes, scope/credential expansion, customer-channel sending, or uncertain口径.
 - For the legacy `codex_exec` mode, enable write-capable artifact edits only in isolated workspaces.
 - Store output as V3 artifacts, not raw Codex HTML.

@@ -4,7 +4,9 @@
 
 Cloudflare Codex is an execution host, not a new product authority. V3 owns user scope, dataset visibility, task packaging, output validation, publication, audit, and rollback. The host may have operational access to V3 and the 8 server, but routine no-confirm execution is allowed only for server-owned fixed task templates.
 
-Current preferred runtime is the Codex Web orchestrator backed by the fixed Cloudflare Codex target. Configure the host agent with `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator`, `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex`, `CODEX_ORCHESTRATOR_BASE_URL=https://souleye.cc`, `CODEX_ORCHESTRATOR_API_PATH=/api/codex/orchestrator/v1`, `CODEX_ORCHESTRATOR_RUNTIME_TARGET=cloudflare`, and either `CODEX_ORCHESTRATOR_ACCESS_KEY` or `CODEX_ORCHESTRATOR_KEY_FILE`. In this mode the remote executor returns structured output or standalone HTML, and the V3 host-agent publishes final static-page HTML into V3-owned `/generated-artifacts/` paths.
+The first customer-visible static page should be produced by V3's local generated-artifact path when possible. Cloudflare Codex is an optional advanced executor for higher-fidelity Image2-driven revisions, heavy repair, or fallback work; it must not be the only path that can produce a customer link.
+
+When using the Cloudflare route, configure the host agent with `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator`, `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex`, `CODEX_ORCHESTRATOR_BASE_URL=https://souleye.cc`, `CODEX_ORCHESTRATOR_API_PATH=/api/codex/orchestrator/v1`, `CODEX_ORCHESTRATOR_RUNTIME_TARGET=cloudflare`, and either `CODEX_ORCHESTRATOR_ACCESS_KEY` or `CODEX_ORCHESTRATOR_KEY_FILE`. In this mode the remote executor returns structured output or standalone HTML, and the V3 host-agent publishes final static-page HTML into V3-owned `/generated-artifacts/` paths.
 
 ## Policy
 
@@ -27,7 +29,7 @@ Purpose:
 - Turn an advanced static-page request into an Image2 visual contract.
 - Bind real V3 data after the visual direction is available.
 - Validate snapshot, date-series, unit, and detail-table口径.
-- Publish a new generated artifact under the V3 generated-artifacts surface on the 8 server.
+- Publish a higher-fidelity generated artifact under the V3 generated-artifacts surface on the 8 server after the local first page is already available, or when explicitly requested by the operator/user.
 
 No-confirm conditions:
 
