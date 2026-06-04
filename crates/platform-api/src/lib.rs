@@ -9692,19 +9692,6 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
                 .and_then(Value::as_str)
         })
         .unwrap_or("processing");
-    let include_artifact_link = external_channel_public_status_allows_artifact_link(status);
-    let include_preview_link = external_channel_public_status_allows_preview_link(status);
-    let display_text = object
-        .get("display_text")
-        .and_then(Value::as_str)
-        .or_else(|| raw_data.get("text").and_then(Value::as_str))
-        .unwrap_or("V3 正在处理。");
-    let display_text = external_channel_public_stream_text(display_text);
-    object.insert(
-        "display_text".to_string(),
-        Value::String(display_text.clone()),
-    );
-
     let raw_card = object
         .get("card")
         .cloned()
@@ -9716,6 +9703,24 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
                 .and_then(|reply| reply.get("card"))
                 .cloned()
         });
+    let include_artifact_link =
+        external_channel_public_status_allows_artifact_link_for_card(status, raw_card.as_ref());
+    let include_preview_link = external_channel_public_status_allows_preview_link(status);
+    let display_text = object
+        .get("display_text")
+        .and_then(Value::as_str)
+        .or_else(|| raw_data.get("text").and_then(Value::as_str))
+        .unwrap_or("V3 正在处理。");
+    let mut display_text = external_channel_public_stream_text(display_text);
+    if !include_artifact_link && display_text.contains("generated-artifacts/") {
+        display_text =
+            "V3 已返回当前处理状态，页面仍在后台继续生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。".to_string();
+    }
+    object.insert(
+        "display_text".to_string(),
+        Value::String(display_text.clone()),
+    );
+
     let card = raw_card
         .as_ref()
         .map(|card| {
@@ -10388,12 +10393,20 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
     reply = external_channel_static_page_reply_with_public_artifact_terminal(reply);
     let static_page_like = external_channel_reply_is_static_page_like(&reply);
     let public_status = external_channel_reply_public_status(&reply);
+    let provisional_existing_artifact =
+        external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
     let include_artifact_links = if static_page_like {
         public_status
             .as_deref()
-            .map(external_channel_public_status_allows_artifact_link)
+            .map(|status| {
+                external_channel_public_status_allows_artifact_link_for_card(
+                    status,
+                    reply.card.as_ref(),
+                )
+            })
             .unwrap_or(false)
-            || reply.reply_type == ExternalBotReplyTypeView::ArtifactLink
+            || (reply.reply_type == ExternalBotReplyTypeView::ArtifactLink
+                && !provisional_existing_artifact)
     } else {
         true
     };
@@ -10583,12 +10596,15 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         .or(reply.task_status.as_deref())
         .unwrap_or_default()
         .to_string();
+    let provisional_existing_artifact =
+        external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
+    if provisional_existing_artifact && raw_status != "static_page_stable_artifact_reused" {
+        return reply;
+    }
     let terminal_artifact_status = external_channel_public_status_allows_artifact_link(&raw_status);
     if !terminal_artifact_status && reply.reply_type != ExternalBotReplyTypeView::ArtifactLink {
         return reply;
     }
-    let provisional_existing_artifact =
-        external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
     if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
@@ -10746,6 +10762,18 @@ fn external_channel_public_status_allows_artifact_link(status: &str) -> bool {
         external_channel_public_status(status).as_str(),
         "static_page_published" | "static_page_stable_artifact_reused"
     )
+}
+
+fn external_channel_public_status_allows_artifact_link_for_card(
+    status: &str,
+    card: Option<&Value>,
+) -> bool {
+    if external_channel_static_page_provisional_existing_artifact(card)
+        && external_channel_public_status(status) != "static_page_stable_artifact_reused"
+    {
+        return false;
+    }
+    external_channel_public_status_allows_artifact_link(status)
 }
 
 fn external_channel_public_status_allows_preview_link(status: &str) -> bool {
@@ -91129,6 +91157,44 @@ mod tests {
         );
         assert!(published.get("response").is_none());
         assert!(published.pointer("/data/card/download_url").is_none());
+
+        let provisional_completed = external_channel_sse_public_payload(
+            Some(run_id),
+            "generic:tenant:stream-001",
+            "room-1",
+            100,
+            "completed",
+            "completed",
+            "页面链接：https://v3.elepcloud.com/generated-artifacts/demo/index.html",
+            Some("https://v3.elepcloud.com/status/run-1".to_string()),
+            None,
+            json!({
+                "response": {
+                    "reply": {
+                        "text": "页面链接：https://v3.elepcloud.com/generated-artifacts/demo/index.html",
+                        "card": {
+                            "type": "v3_static_page_pipeline",
+                            "status": "static_page_published",
+                            "provisional_existing_artifact": true,
+                            "public_url": "https://v3.elepcloud.com/generated-artifacts/demo/index.html"
+                        },
+                        "artifact_links": [
+                            "https://v3.elepcloud.com/generated-artifacts/demo/index.html"
+                        ]
+                    }
+                }
+            }),
+        );
+        let provisional_completed = external_channel_public_stream_payload(provisional_completed);
+        assert!(!provisional_completed
+            .get("display_text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("generated-artifacts/"));
+        assert!(provisional_completed.get("artifact_links").is_none());
+        assert!(provisional_completed
+            .pointer("/data/card/public_url")
+            .is_none());
     }
 
     #[test]
