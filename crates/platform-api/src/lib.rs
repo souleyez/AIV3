@@ -34253,6 +34253,80 @@ fn static_page_artifact_sibling_url(public_url: &str, file_name: &str) -> Option
     Some(url.to_string())
 }
 
+fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let lower = compact.to_ascii_lowercase();
+    if static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &["风险店铺", "风险门店", "风险", "预警", "高风险", "risk"],
+    ) {
+        return Some("风险店铺");
+    }
+    if static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &[
+            "取高",
+            "高分成",
+            "提成",
+            "缺口",
+            "机会",
+            "rent",
+            "commission",
+        ],
+    ) {
+        return Some("取高机会");
+    }
+    if static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &["低活跃", "不活跃", "零销售", "异常", "inactive"],
+    ) {
+        return Some("低活跃");
+    }
+    if static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &["明细", "品牌", "店铺客户", "合同", "detail"],
+    ) {
+        return Some("品牌明细");
+    }
+    if static_page_template_text_contains_any(&compact, &lower, &["品类", "业态", "category"]) {
+        return Some("品类业态");
+    }
+    None
+}
+
+fn static_page_public_url_with_prompt_focus(public_url: &str, prompt: &str) -> String {
+    let Some(focus) = static_page_prompt_focus_query_value(prompt) else {
+        return public_url.to_string();
+    };
+    let Ok(mut url) = reqwest::Url::parse(public_url) else {
+        return public_url.to_string();
+    };
+    if !codex_host_fixed_task_public_artifact_url_allowed(url.as_str()) {
+        return public_url.to_string();
+    }
+    let existing_pairs = url
+        .query_pairs()
+        .filter(|(key, _)| key != "focus")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    url.set_query(None);
+    {
+        let mut pairs = url.query_pairs_mut();
+        for (key, value) in existing_pairs {
+            pairs.append_pair(&key, &value);
+        }
+        pairs.append_pair("focus", focus);
+    }
+    url.to_string()
+}
+
 fn static_page_existing_artifact_reference_from_prompt(prompt: &str) -> Value {
     let Some(public_url) = static_page_prompt_generated_artifact_urls(prompt)
         .into_iter()
@@ -36788,6 +36862,10 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 if let Some(public_url) =
                     static_page_published_public_url_from_draft(&baseline_draft)
                 {
+                    let public_url = static_page_public_url_with_prompt_focus(
+                        &public_url,
+                        &assistant_request.prompt,
+                    );
                     let baseline_template_payload = json!({
                         "status": "static_page_stable_artifact_reused",
                         "source_refs": baseline_draft.source_refs.clone(),
@@ -36942,6 +37020,10 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             if let Some(template_public_url) =
                 static_page_published_public_url_from_draft(&template_draft)
             {
+                let template_public_url = static_page_public_url_with_prompt_focus(
+                    &template_public_url,
+                    &assistant_request.prompt,
+                );
                 let template_reference = static_page_generated_template_reference_from_draft(
                     &template_draft,
                     &template_public_url,
@@ -42703,6 +42785,7 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
                 if let Some(public_url) =
                     static_page_published_public_url_from_draft(&baseline_draft)
                 {
+                    let public_url = static_page_public_url_with_prompt_focus(&public_url, prompt);
                     let mut event_payload = json!({
                         "type": "v3_static_page_stable_artifact",
                         "status": "static_page_stable_artifact_reused",
@@ -90189,6 +90272,28 @@ mod tests {
         )
         .expect("generated template reference should be ignored by built-in resolver")
         .is_none());
+    }
+
+    #[test]
+    fn static_page_public_url_with_prompt_focus_adds_module_query() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html";
+
+        assert_eq!(
+            static_page_public_url_with_prompt_focus(public_url, "看一下风险店铺排行"),
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html?focus=%E9%A3%8E%E9%99%A9%E5%BA%97%E9%93%BA"
+        );
+        assert_eq!(
+            static_page_public_url_with_prompt_focus(
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html?foo=bar&focus=old",
+                "最近取高机会",
+            ),
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html?foo=bar&focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A"
+        );
+        assert_eq!(
+            static_page_public_url_with_prompt_focus(public_url, "生成经营月报"),
+            public_url
+        );
     }
 
     #[test]
