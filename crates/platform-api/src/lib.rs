@@ -26688,10 +26688,27 @@ fn external_channel_static_page_reply_from_events(
                     .get("heartbeat_count")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
+                let publish_running_text = if event
+                    .payload
+                    .get("image2_skip_reason")
+                    .and_then(Value::as_str)
+                    == Some("prompt_existing_artifact_revision")
+                {
+                    "V3 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
+                } else if event
+                    .payload
+                    .get("image2_skipped")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "V3 已复用已发布页面基线，Codex 正在生成最终静态页。"
+                } else {
+                    "V3 已生成效果图，Codex 正在生成最终静态页。"
+                };
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_publish_running",
-                    Some("V3 已生成效果图，Codex 正在生成最终静态页。".to_string()),
+                    Some(publish_running_text.to_string()),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_publish_running",
@@ -26728,10 +26745,27 @@ fn external_channel_static_page_reply_from_events(
                     Vec::new(),
                 ));
             }
+            let publish_queued_text = if event
+                .payload
+                .get("image2_skip_reason")
+                .and_then(Value::as_str)
+                == Some("prompt_existing_artifact_revision")
+            {
+                "V3 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
+            } else if event
+                .payload
+                .get("image2_skipped")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "V3 已复用已发布页面基线，正在通过 Codex 发布静态页。"
+            } else {
+                "V3 已生成效果图，正在通过 Codex 发布静态页。"
+            };
             return Some(external_channel_task_status_reply_for_conversation(
                 conversation_external_id,
                 "static_page_publish_queued",
-                Some("V3 已生成效果图，正在通过 Codex 发布静态页。".to_string()),
+                Some(publish_queued_text.to_string()),
                 Some(external_channel_static_page_card_with_template_payload(
                     json!({
                         "type": "v3_static_page_image2_publish_queued",
@@ -26788,10 +26822,27 @@ fn external_channel_static_page_reply_from_events(
                 events,
                 "static_page_image_job.preview_ready",
             ) {
+                let preview_ready_text = if event
+                    .payload
+                    .get("image2_skip_reason")
+                    .and_then(Value::as_str)
+                    == Some("prompt_existing_artifact_revision")
+                {
+                    "V3 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
+                } else if event
+                    .payload
+                    .get("image2_skipped")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "V3 已复用已发布页面基线，正在准备发布最终静态页。"
+                } else {
+                    "V3 效果图已生成，正在准备发布最终静态页。"
+                };
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_effect_image_ready",
-                    Some("V3 效果图已生成，正在准备发布最终静态页。".to_string()),
+                    Some(preview_ready_text.to_string()),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_effect_image_ready",
@@ -30974,6 +31025,49 @@ fn static_page_prompt_requests_explicit_redesign(prompt: &str) -> bool {
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>()
         .to_ascii_lowercase();
+    let negated_redesign = external_channel_text_has_any(
+        &compact,
+        prompt,
+        &[
+            "不要重新出图",
+            "不重新出图",
+            "无需重新出图",
+            "不用重新出图",
+            "别重新出图",
+            "不要重新生成效果图",
+            "不重新生成效果图",
+            "无需重新生成效果图",
+            "不用重新生成效果图",
+            "不要重新设计",
+            "不重新设计",
+            "无需重新设计",
+            "不用重新设计",
+            "别重新设计",
+            "不换风格",
+            "不要换风格",
+            "不用换风格",
+            "donotredesign",
+            "don'tredesign",
+            "noredesign",
+            "withoutredesign",
+        ],
+    );
+    let strong_new_design_signal = external_channel_text_has_any(
+        &compact,
+        prompt,
+        &[
+            "全新页面",
+            "换个风格",
+            "换风格",
+            "从头做",
+            "newversion",
+            "newpage",
+            "fromscratch",
+        ],
+    );
+    if negated_redesign && !strong_new_design_signal {
+        return false;
+    }
     external_channel_text_has_any(
         &compact,
         prompt,
@@ -32729,6 +32823,149 @@ async fn create_static_page_template_baseline_preview_job(
     Ok((draft, to_static_page_image_job_view(job)))
 }
 
+async fn create_static_page_existing_artifact_preview_job(
+    state: &AppState,
+    draft: StaticPageDraft,
+    prompt: &str,
+    existing_artifact: &Value,
+    visual_contract_url: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<(StaticPageDraft, StaticPageImageJobView), ApiError> {
+    let mut draft = refresh_static_page_draft_data_contract_for_action(
+        state,
+        draft,
+        "submit_static_page_existing_artifact_revision_preview",
+    )
+    .await?;
+    let mut image_prompt_payload = build_static_page_image_prompt_payload(&draft, Some(prompt));
+    set_payload_value(&mut image_prompt_payload, "image2_skipped", json!(true));
+    set_payload_value(
+        &mut image_prompt_payload,
+        "image2_skip_reason",
+        json!("prompt_existing_artifact_revision"),
+    );
+    set_payload_value(
+        &mut image_prompt_payload,
+        "existing_artifact_visual_contract_url",
+        json!(visual_contract_url),
+    );
+    set_payload_value(
+        &mut image_prompt_payload,
+        "existing_artifact",
+        existing_artifact.clone(),
+    );
+    let mut orchestrator = image_prompt_payload
+        .get("orchestrator")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    ensure_json_object(&mut orchestrator);
+    set_payload_value(&mut orchestrator, "image2Skipped", json!(true));
+    set_payload_value(
+        &mut orchestrator,
+        "image2SkipReason",
+        json!("prompt_existing_artifact_revision"),
+    );
+    set_payload_value(
+        &mut orchestrator,
+        "previewAssetProvenance",
+        json!({
+            "sourceAssetKind": "prompt_existing_generated_static_page",
+            "sourceAssetRef": visual_contract_url,
+            "sourceAssetRefRedacted": false,
+            "sourceAssetHadQuery": false,
+            "persisted": true,
+            "persistedPreviewAssetKey": visual_contract_url,
+            "storageStatus": "prompt_existing_artifact_revision",
+        }),
+    );
+    set_payload_value(&mut image_prompt_payload, "orchestrator", orchestrator);
+
+    let job = state
+        .storage
+        .static_page_image_jobs()
+        .create(
+            state.tenant_id,
+            &NewStaticPageImageJob {
+                draft_id: draft.id,
+                assistant_run_id: draft.assistant_run_id,
+                status: StaticPageImageJobStatus::PreviewReady,
+                queue_position: None,
+                image_prompt_payload,
+                preview_asset_key: Some(visual_contract_url.to_string()),
+                failure_reason: None,
+                confirmed_at: Some(now),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    let operations = vec![json!({
+        "type": "mark_preview_ready",
+        "previewImage": {
+            "imageJobId": job.id,
+            "assetKey": visual_contract_url,
+            "source": "prompt_existing_generated_static_page",
+            "image2Skipped": true,
+            "image2SkipReason": "prompt_existing_artifact_revision",
+        },
+    })];
+    draft.draft_payload = apply_static_page_operations_to_payload(
+        draft.draft_payload,
+        &operations,
+        Some("已识别已有报表页面，复用原页面作为视觉合同并继续增量修改。"),
+    );
+    append_static_page_operations_metadata(
+        &mut draft.draft_payload,
+        &operations,
+        Some(prompt),
+        "已识别已有报表页面，复用原页面作为视觉合同并继续增量修改。",
+    );
+    draft.status = StaticPageDraftStatus::Previewed;
+    let draft = state
+        .storage
+        .static_page_drafts()
+        .update(state.tenant_id, &draft)
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    append_static_page_draft_run_event(
+        state,
+        &draft,
+        "static_page_image_job.created",
+        json!({
+            "draft_id": draft.id,
+            "image_job_id": job.id,
+            "status": job.status.as_str(),
+            "queue_position": job.queue_position,
+            "workflow_execution_id": Value::Null,
+            "workflow_task_id": Value::Null,
+            "image2_skipped": true,
+            "image2_skip_reason": "prompt_existing_artifact_revision",
+            "preview_asset_key": visual_contract_url,
+            "existing_artifact": existing_artifact,
+        }),
+    )
+    .await?;
+    append_static_page_draft_run_event(
+        state,
+        &draft,
+        "static_page_image_job.preview_ready",
+        json!({
+            "draft_id": draft.id,
+            "image_job_id": job.id,
+            "status": "preview_ready",
+            "preview_asset_key": visual_contract_url,
+            "image2_skipped": true,
+            "image2_skip_reason": "prompt_existing_artifact_revision",
+            "existing_artifact": existing_artifact,
+        }),
+    )
+    .await?;
+
+    Ok((draft, to_static_page_image_job_view(job)))
+}
+
 fn assistant_run_model_is_gpt_55(model: &str) -> bool {
     let normalized = model
         .chars()
@@ -33858,9 +34095,33 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         created_at: now,
                     },
                 )
-                .await
-                .map_err(ApiError::from_storage)?;
+            .await
+            .map_err(ApiError::from_storage)?;
         }
+    }
+    let prompt_existing_artifact =
+        static_page_existing_artifact_reference_from_prompt(&assistant_request.prompt);
+    if !prompt_existing_artifact.is_null() {
+        set_payload_value(
+            &mut source_refs,
+            "existing_artifact",
+            prompt_existing_artifact.clone(),
+        );
+        set_payload_value(
+            &mut source_refs,
+            "template_match_policy",
+            json!("prompt_existing_artifact_url"),
+        );
+        set_payload_value(
+            &mut source_refs,
+            "style_reuse_policy",
+            json!("preserve_existing_artifact_style_unless_explicit_redesign"),
+        );
+        set_payload_value(
+            &mut source_refs,
+            "data_refresh_policy",
+            json!("refresh_current_authorized_data_against_existing_artifact"),
+        );
     }
     let draft_outcome = create_static_page_draft_for_assistant_run_id(
         state,
@@ -33927,6 +34188,359 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
     let template_reference_for_publish = draft_outcome.template_reference.clone().or_else(|| {
         (!draft_template_reference.is_null()).then(|| draft_template_reference.clone())
     });
+    let prompt_existing_artifact_visual_contract_url = if codex_auto_publish_enabled
+        && prompt_existing_artifact
+            .get("revision_requested")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && prompt_existing_artifact
+            .get("preserve_style_unless_redesign_requested")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        prompt_existing_artifact
+            .get("public_url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+            .map(ToOwned::to_owned)
+    } else {
+        None
+    };
+    if let Some(visual_contract_url) = prompt_existing_artifact_visual_contract_url.as_deref() {
+        let (draft, image_job) = create_static_page_existing_artifact_preview_job(
+            state,
+            draft_outcome.draft.clone(),
+            &assistant_request.prompt,
+            &prompt_existing_artifact,
+            visual_contract_url,
+            now,
+        )
+        .await?;
+        let codex_execution_id = external_channel_static_page_image2_enqueue_if_enabled(
+            state,
+            connection_id,
+            connection,
+            run,
+            &draft,
+            &image_job,
+            message,
+            template_reference_for_publish.as_ref(),
+            &draft_outcome.evidence_summary,
+            &draft_outcome.missing_evidence,
+        )
+        .await?;
+        if let Some(codex_execution_id) = codex_execution_id {
+            let image_job_id_string = image_job.id.to_string();
+            mark_static_page_draft_generated_artifact_publish_queued(
+                &state.storage,
+                state.tenant_id,
+                &draft,
+                Some(image_job_id_string.as_str()),
+                codex_execution_id,
+            )
+            .await?;
+            state
+                .storage
+                .assistant_runs()
+                .append_event(
+                    state.tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.external_channel_static_page_publish_queued"
+                            .to_string(),
+                        payload: json!({
+                            "source": draft.source_refs.get("source").and_then(Value::as_str),
+                            "channel_connection_id": connection_id,
+                            "draft_id": draft.id,
+                            "image_job_id": image_job.id,
+                            "preview_asset_key": image_job.preview_asset_key.clone(),
+                            "codex_host_workflow_execution_id": codex_execution_id,
+                            "template_id": "static_page_image2_data_publish",
+                            "publish_mode": "new_generated_artifact_only",
+                            "final_publish_route": final_publish_route,
+                            "gpt_5_5_main_model_preferred": gpt55_main_model_preferred,
+                            "gpt_5_5_local_publish_after_preview": gpt55_local_publish_after_preview,
+                            "cloudflare_codex_used": true,
+                            "effect_image_confirmation_required": false,
+                            "image2_skipped": true,
+                            "image2_skip_reason": "prompt_existing_artifact_revision",
+                            "visual_contract_url": visual_contract_url,
+                            "existing_artifact": prompt_existing_artifact.clone(),
+                            "public_url": Value::Null,
+                            "generated_artifact_url": Value::Null,
+                            "artifact_links": [],
+                            "provisional_existing_artifact": false,
+                            "recipient_delivery": recipient_delivery.clone(),
+                            "permission_review_status": recipient_delivery
+                                .get("permission_review_status")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "editable_after_publish": recipient_delivery
+                                .get("editable_after_publish")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "status_url": external_channel_assistant_run_reply_status_url(
+                                connection_id,
+                                run.id,
+                            ),
+                            "status_method": "GET",
+                            "poll_after_seconds": 15,
+                            "template_reference_id": draft_template_reference_id.clone(),
+                            "template_reference": draft_template_reference.clone(),
+                            "template_match_policy": draft_template_match_policy.clone(),
+                            "relaxed_template_match": draft_relaxed_template_match.clone(),
+                            "style_reuse_policy": draft_style_reuse_policy.clone(),
+                            "data_refresh_policy": draft_data_refresh_policy.clone(),
+                            "default_template_scope": draft_default_template_scope.clone(),
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+        }
+        let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
+        let codex_execution_id_value = codex_execution_id
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null);
+        let pipeline_payload = json!({
+            "channel_connection_id": connection_id,
+            "platform": external_channel_platform_wire_value(&message.platform),
+            "message_external_id": message.message_external_id,
+            "draft_id": draft.id,
+            "image_job_id": image_job.id,
+            "status": "static_page_image2_auto_publish_pending",
+            "status_url": status_url.clone(),
+            "status_method": "GET",
+            "poll_after_seconds": 15,
+            "public_url": Value::Null,
+            "generated_artifact_url": Value::Null,
+            "artifact_links": [],
+            "provisional_existing_artifact": false,
+            "recipient_delivery": recipient_delivery.clone(),
+            "permission_review_status": recipient_delivery
+                .get("permission_review_status")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "editable_after_publish": recipient_delivery
+                .get("editable_after_publish")
+                .cloned()
+                .unwrap_or(Value::Null),
+            "codex_host_workflow_execution_id": codex_execution_id_value.clone(),
+            "auto_publish_after_preview": auto_publish_after_preview,
+            "final_publish_route": final_publish_route,
+            "gpt_5_5_main_model_preferred": gpt55_main_model_preferred,
+            "gpt_5_5_local_publish_after_preview": gpt55_local_publish_after_preview,
+            "codex_auto_publish_ready": codex_auto_publish_enabled,
+            "codex_auto_publish_disabled_reason": Value::Null,
+            "direct_html_fallback": false,
+            "provisional_direct_html": false,
+            "demo_generated_artifact_publish": false,
+            "codex_final_status": "static_page_image2_auto_publish_pending",
+            "image2_skipped": true,
+            "image2_skip_reason": "prompt_existing_artifact_revision",
+            "visual_contract_url": visual_contract_url,
+            "existing_artifact": prompt_existing_artifact.clone(),
+            "template_reference_id": draft_template_reference_id.clone(),
+            "template_reference": draft_template_reference.clone(),
+            "template_match_policy": draft_template_match_policy.clone(),
+            "relaxed_template_match": draft_relaxed_template_match.clone(),
+            "style_reuse_policy": draft_style_reuse_policy.clone(),
+            "data_refresh_policy": draft_data_refresh_policy.clone(),
+            "default_template_scope": draft_default_template_scope.clone(),
+            "effect_image_confirmation_required": false,
+        });
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.external_channel_static_page_pipeline_queued"
+                        .to_string(),
+                    payload: pipeline_payload.clone(),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+
+        let task_status = "static_page_image2_auto_publish_pending";
+        let mut reply_card = json!({
+            "type": "v3_static_page_image2_pipeline",
+            "status": task_status,
+            "draft_id": draft.id.to_string(),
+            "image_job_id": image_job.id.to_string(),
+            "status_url": status_url,
+            "status_method": "GET",
+            "poll_after_seconds": 15,
+            "fixed_task_template_id": "static_page_image2_data_publish",
+            "publish_mode": "new_generated_artifact_only",
+        });
+        set_payload_value(
+            &mut reply_card,
+            "image_job_status",
+            json!(image_job.status.clone()),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "preview_asset_key",
+            json!(image_job.preview_asset_key.clone()),
+        );
+        set_payload_value(&mut reply_card, "render_output_id", Value::Null);
+        set_payload_value(&mut reply_card, "render_output_status", Value::Null);
+        set_payload_value(&mut reply_card, "html_preview_url", Value::Null);
+        set_payload_value(&mut reply_card, "html_download_url", Value::Null);
+        set_payload_value(&mut reply_card, "download_url", Value::Null);
+        set_payload_value(&mut reply_card, "public_url", Value::Null);
+        set_payload_value(&mut reply_card, "generated_artifact_url", Value::Null);
+        set_payload_value(&mut reply_card, "artifact_links", json!([]));
+        set_payload_value(
+            &mut reply_card,
+            "provisional_existing_artifact",
+            json!(false),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "recipient_delivery",
+            recipient_delivery.clone(),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "permission_review_status",
+            recipient_delivery
+                .get("permission_review_status")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "editable_after_publish",
+            recipient_delivery
+                .get("editable_after_publish")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_host_workflow_execution_id",
+            codex_execution_id_value,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "auto_publish_after_preview",
+            json!(auto_publish_after_preview),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "final_publish_route",
+            json!(final_publish_route),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "gpt_5_5_main_model_preferred",
+            json!(gpt55_main_model_preferred),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "gpt_5_5_local_publish_after_preview",
+            json!(gpt55_local_publish_after_preview),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_auto_publish_ready",
+            json!(codex_auto_publish_enabled),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_auto_publish_disabled_reason",
+            Value::Null,
+        );
+        set_payload_value(&mut reply_card, "direct_html_fallback", json!(false));
+        set_payload_value(&mut reply_card, "provisional_direct_html", json!(false));
+        set_payload_value(
+            &mut reply_card,
+            "demo_generated_artifact_publish",
+            json!(false),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "codex_final_status",
+            json!("static_page_image2_auto_publish_pending"),
+        );
+        set_payload_value(&mut reply_card, "image2_skipped", json!(true));
+        set_payload_value(
+            &mut reply_card,
+            "image2_skip_reason",
+            json!("prompt_existing_artifact_revision"),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "visual_contract_url",
+            json!(visual_contract_url),
+        );
+        set_payload_value(
+            &mut reply_card,
+            "existing_artifact",
+            prompt_existing_artifact,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "template_reference_id",
+            draft_template_reference_id,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "template_reference",
+            draft_template_reference,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "template_match_policy",
+            draft_template_match_policy,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "relaxed_template_match",
+            draft_relaxed_template_match,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "style_reuse_policy",
+            draft_style_reuse_policy,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "data_refresh_policy",
+            draft_data_refresh_policy,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "default_template_scope",
+            draft_default_template_scope,
+        );
+        set_payload_value(
+            &mut reply_card,
+            "effect_image_confirmation_required",
+            json!(false),
+        );
+        return Ok(Some(ExternalBotReplyView {
+            target_conversation_external_id: message.conversation_external_id.clone(),
+            reply_type: ExternalBotReplyTypeView::TaskStatus,
+            text: Some(
+                "已识别已有报表页面，正在原页面基础上增量修改并发布新链接；本轮不重新设计。"
+                    .to_string(),
+            ),
+            card: Some(reply_card),
+            artifact_links: Vec::new(),
+            task_status: Some(external_channel_public_task_status(task_status).to_string()),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        }));
+    }
     let template_baseline_visual_contract_url = if codex_auto_publish_enabled
         && static_page_relaxed_template_match_is_dataset_overlap(&draft_relaxed_template_match)
         && !static_page_prompt_requests_explicit_redesign(&assistant_request.prompt)
@@ -83296,6 +83910,15 @@ mod tests {
         assert!(!static_page_prompt_requests_explicit_redesign(
             "把标题改一下"
         ));
+        assert!(!static_page_prompt_requests_explicit_redesign(
+            "在原报表基础上修改标题，不要重新设计"
+        ));
+        assert!(!static_page_prompt_requests_explicit_redesign(
+            "Update this report, do not redesign"
+        ));
+        assert!(static_page_prompt_requests_explicit_redesign(
+            "重新设计一版全新页面"
+        ));
         assert!(static_page_prompt_requests_existing_artifact_revision(
             "把标题改一下"
         ));
@@ -86333,6 +86956,238 @@ mod tests {
                 ["public_url"],
             json!(public_url)
         );
+    }
+
+    #[tokio::test]
+    async fn external_channel_static_page_prompt_existing_artifact_revision_skips_image2_and_queues_codex(
+    ) {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping external static-page prompt artifact revision test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+        let _runtime_model = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "MiniMax-M2.7");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!(
+                    "external-static-page-prompt-existing-artifact-{}",
+                    Uuid::new_v4()
+                ),
+                "External Static Page Prompt Existing Artifact Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({}),
+        };
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/image2-real-data-report/index.html";
+        let mut message = sample_external_bot_message();
+        message.conversation_external_id = "conv-static-prompt-existing-artifact".to_string();
+        message.message_external_id = "msg-static-prompt-existing-artifact-001".to_string();
+        message.text = Some(format!(
+            "请在已有新百门店取高报表基础上在线修改：标题改为“新百门店取高经营看板（在线修改测试）”，新增说明“本页已完成在线修改链路验证”，保留真实数据库数据、时间筛选、门店筛选和刷新能力，不要重新设计。已有页面：{public_url}"
+        ));
+        message.output_format = Some("rich_text".to_string());
+        message.render_mode = Some("artifact".to_string());
+        message.artifact_type = Some("static_page".to_string());
+        message.dataset_external_ids = vec!["xinbai-project-dataset".to_string()];
+        let mut assistant_request =
+            external_bot_message_to_assistant_run_request("generic-chat-main", &message);
+        let canonical_dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "dataset_external_ids": ["xinbai-project-dataset"],
+            "requested_dataset_external_ids": ["xinbai-project-dataset"],
+            "canonical_datasets": [{"type": "dataset", "id": canonical_dataset_id}],
+            "database_source_ids": ["hy-sql-traffic-area"],
+            "external_document_scope_status": "dataset_resolved"
+        });
+        assistant_request.selected_scope = Some(selected_scope.clone());
+        let now = Utc::now();
+        let run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: assistant_request.local_thread_id.clone(),
+                    user_prompt: assistant_request.prompt.clone(),
+                    startup_briefing: assistant_request
+                        .startup_briefing
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!(assistant_request.scope_candidates.clone()),
+                    context_policy: assistant_request
+                        .context_policy_hint
+                        .clone()
+                        .unwrap_or_else(|| json!({})),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("assistant run should be created");
+
+        let reply = maybe_enqueue_external_channel_static_page_pipeline(
+            &state,
+            "generic-chat-main",
+            &connection,
+            &run,
+            &assistant_request,
+            &message,
+            now,
+        )
+        .await
+        .expect("static-page pipeline should complete")
+        .expect("static-page reply should be returned");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert!(reply.artifact_links.is_empty());
+        assert!(reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("原页面基础上增量修改"));
+        let card = reply.card.expect("card should be returned");
+        assert_eq!(
+            card["status"],
+            json!("static_page_image2_auto_publish_pending")
+        );
+        assert_eq!(card["image2_skipped"], json!(true));
+        assert_eq!(
+            card["image2_skip_reason"],
+            json!("prompt_existing_artifact_revision")
+        );
+        assert_eq!(card["visual_contract_url"], json!(public_url));
+        assert_eq!(card["existing_artifact"]["public_url"], json!(public_url));
+        assert_eq!(
+            card["existing_artifact"]["data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/image2-real-data-report/data.json")
+        );
+        assert_eq!(
+            card["template_match_policy"],
+            json!("prompt_existing_artifact_url")
+        );
+        assert!(card["public_url"].is_null());
+        assert!(card["generated_artifact_url"].is_null());
+        assert_eq!(card["artifact_links"], json!([]));
+        assert_eq!(card["provisional_existing_artifact"], json!(false));
+        assert!(card["codex_host_workflow_execution_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+
+        let drafts = state
+            .storage
+            .static_page_drafts()
+            .list_by_assistant_run(state.tenant_id, run.id)
+            .await
+            .expect("drafts should list");
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(
+            drafts[0].source_refs["existing_artifact"]["public_url"],
+            json!(public_url)
+        );
+        let image_jobs = state
+            .storage
+            .static_page_image_jobs()
+            .list_by_draft(state.tenant_id, drafts[0].id)
+            .await
+            .expect("image jobs should list");
+        assert_eq!(image_jobs.len(), 1);
+        assert_eq!(image_jobs[0].status, StaticPageImageJobStatus::PreviewReady);
+        assert_eq!(image_jobs[0].preview_asset_key.as_deref(), Some(public_url));
+        assert_eq!(
+            image_jobs[0].image_prompt_payload["image2_skip_reason"],
+            json!("prompt_existing_artifact_revision")
+        );
+
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        assert_eq!(
+            workflows
+                .iter()
+                .filter(|execution| execution.kind == WorkflowKind::StaticPageImageGeneration)
+                .count(),
+            0
+        );
+        let codex_workflows = workflows
+            .iter()
+            .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
+            .collect::<Vec<_>>();
+        assert_eq!(codex_workflows.len(), 1);
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["requirements"]["existing_artifact"]
+                ["public_url"],
+            json!(public_url)
+        );
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["image2"]["preview_asset_key"],
+            json!(public_url)
+        );
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        assert!(!events
+            .iter()
+            .any(|event| { event.event_name == "static_page_image_job.submitted" }));
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                && event.payload["image2_skip_reason"] == json!("prompt_existing_artifact_revision")
+                && event.payload["public_url"].is_null()
+                && event.payload["artifact_links"] == json!([])
+        }));
+        let status_reply = external_channel_static_page_reply_from_events(
+            &events,
+            &message.conversation_external_id,
+        )
+        .expect("status reply should be available");
+        assert_eq!(status_reply.task_status.as_deref(), Some("processing"));
+        assert!(status_reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("原页面基础上增量修改"));
     }
 
     #[tokio::test]
