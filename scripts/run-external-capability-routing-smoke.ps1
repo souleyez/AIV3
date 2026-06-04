@@ -157,7 +157,11 @@ function Invoke-RoutingCase {
                 Add-IfPresent $taskStatuses (Get-JsonProp $innerData "task_status")
                 Add-IfPresent $taskStatuses (Get-JsonProp $innerData "status")
 
-                $reply = Get-JsonProp (Get-JsonProp $innerData "response") "reply"
+                $response = Get-JsonProp $data "response"
+                if ($null -eq $response) {
+                    $response = Get-JsonProp $innerData "response"
+                }
+                $reply = Get-JsonProp $response "reply"
                 Add-IfPresent $replyTypes (Get-JsonProp $reply "reply_type")
                 Add-IfPresent $taskStatuses (Get-JsonProp $reply "task_status")
 
@@ -236,10 +240,10 @@ function Invoke-RoutingCase {
     [pscustomobject]@{
         case_id = $Case.case_id
         expected_tool = $Case.expected_tool
-        statuses = @($taskStatuses)
-        card_types = @($cardTypes)
+        statuses = @($taskStatuses.ToArray())
+        card_types = @($cardTypes.ToArray())
         artifact_link_count = $artifactLinks.Count
-        reply_types = @($replyTypes)
+        reply_types = @($replyTypes.ToArray())
     }
 }
 

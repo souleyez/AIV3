@@ -36131,6 +36131,9 @@ fn external_channel_prompt_requires_document_scope(prompt: &str) -> bool {
     if compact.is_empty() {
         return false;
     }
+    if external_channel_prompt_requests_platform_capability_without_document_scope(&compact) {
+        return false;
+    }
     let document_markers = [
         "文档",
         "资料",
@@ -36164,6 +36167,45 @@ fn external_channel_prompt_requires_document_scope(prompt: &str) -> bool {
     identity_markers
         .iter()
         .any(|marker| compact.contains(marker))
+}
+
+fn external_channel_prompt_requests_platform_capability_without_document_scope(
+    compact_prompt: &str,
+) -> bool {
+    let collection_markers = ["采集", "爬虫", "抓取", "资料库", "知识库接入", "来源接入"];
+    if collection_markers
+        .iter()
+        .any(|marker| compact_prompt.contains(marker))
+    {
+        return true;
+    }
+    let integration_markers = [
+        "对接",
+        "接入",
+        "外部系统",
+        "oa",
+        "文档库",
+        "权限系统",
+        "接口字段",
+        "鉴权",
+    ];
+    if integration_markers
+        .iter()
+        .any(|marker| compact_prompt.contains(marker))
+    {
+        return true;
+    }
+    let outreach_markers = [
+        "主动发消息",
+        "主动通知",
+        "发给",
+        "通知店总",
+        "通知负责人",
+        "消息渠道",
+    ];
+    outreach_markers
+        .iter()
+        .any(|marker| compact_prompt.contains(marker))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90220,6 +90262,23 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn external_channel_document_scope_guard_allows_platform_capability_requests() {
+        assert!(!external_channel_prompt_requires_document_scope(
+            "帮我规划采集公开网站的政策更新，后续沉淀到资料库里。"
+        ));
+        assert!(!external_channel_prompt_requires_document_scope(
+            "我们要接入客户自己的 OA 权限和文档库，并确认接口字段。"
+        ));
+        assert!(!external_channel_prompt_requires_document_scope(
+            "报表生成好以后主动发消息给店总，让他打开链接看。"
+        ));
+        assert!(external_channel_prompt_requires_document_scope("邓工是谁"));
+        assert!(external_channel_prompt_requires_document_scope(
+            "这份资料里的邓工是谁"
+        ));
     }
 
     #[test]
