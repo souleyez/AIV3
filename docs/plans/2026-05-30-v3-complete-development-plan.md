@@ -38,6 +38,8 @@ When these documents conflict, follow this plan for priority and product boundar
   - simplified third-party docs;
   - static-page Image2/Codex auto-publish readiness;
   - `data.json` / `data-snapshot.json` dynamic page contract;
+  - Xinbai static-page template convergence to one accepted modular monthly report template;
+  - prompt-focus static-page reuse links such as `?focus=风险店铺` / `?focus=取高机会`;
   - database-source status and readiness smoke;
   - dataset fact snapshots and scoped document aggregates;
   - external observability lazy loading;
@@ -53,6 +55,7 @@ When these documents conflict, follow this plan for priority and product boundar
 - Database sources are external inputs, not live model tools. Rows must be synchronized into a V3 dataset or summarized into V3-owned evidence before chat/report/static-page use.
 - Static-page Image2 is a visual contract. Final pages must be generated from V3 structured data snapshots and validated artifacts.
 - Static-page generation should not block on customer confirmation after the initial prompt/template stage unless the user explicitly asks for review.
+- Accepted static-page templates are reuse defaults. For a customer/data-domain with one accepted default template, V3 should update data and focus rather than starting a new style from scratch unless the user explicitly requests a redesign.
 - Codex executor can generate or repair artifacts, but it must not mutate datasets, permissions, credentials, deployment config, or public integration contracts.
 - VLM fallback is premium and budget-gated. PaddleOCR/structured parsing remains the preferred low-quality parse recovery path.
 - No raw credentials, database URLs, API keys, source cursors, full customer dumps, or raw provider logs in prompts, docs, events, or generated artifacts.
@@ -65,7 +68,7 @@ When these documents conflict, follow this plan for priority and product boundar
 | Dataset and permissions | Visible datasets, document memberships, third-party temporary scopes | Stable multi-dataset membership, private enterprise documents, selected-scope persistence, source-scoped datasets |
 | AssistantRun Q&A | Dataset-aware answer path with retrieval/fact supply | Must-answer-or-actionable-follow-up behavior, expanded retrieval, deterministic facts for stats/tables/ranking |
 | Third-party integration | Events, stream, parse, templates, output format, static page task cards | Minimal docs, stable scope memory, dataset/document movement, status polling, generated artifact links |
-| Static pages/reports | Drafts, Image2 preview, Codex publish, dynamic data contract | No-confirm publish, data-rich reports, user-adjustable final page links, role-specific report variants |
+| Static pages/reports | Drafts, Image2 preview, Codex publish, dynamic data contract | No-confirm publish, data-rich reports, reusable default templates, prompt-focused page links, role-specific report variants |
 | Database sources | Managed MySQL source inspection/sync/status/readiness | Customer source onboarding, schema/profile mapping, synced datasets, report-ready semantic profiles |
 | Codex executor | Fixed templates and Cloudflare bridge | Reliable artifact generation, task status supply, operator observation, bounded retries and timeouts |
 | Model pool | Planned/parallel work | Concurrency for at least 10 users, profile routing, timeouts, fallback, health visibility |
@@ -83,6 +86,7 @@ When these documents conflict, follow this plan for priority and product boundar
 6. Fix dataset document membership operations from the data page: add document to dataset, remove document from dataset, and show all current dataset memberships.
 7. Preserve third-party private document isolation and clean accidental public duplicates when detected.
 8. Keep Cloudflare Codex static-page visual and final HTML path ready for demos.
+9. For Xinbai reports, keep the modular monthly report as the only accepted default template and reuse it with refreshed data/focus instead of competing historical templates.
 
 ### P1: Quality Mainline
 
@@ -268,11 +272,13 @@ When these documents conflict, follow this plan for priority and product boundar
 4. Publish final HTML as a V3 generated artifact.
 5. Include `data.json`, `data-snapshot.json`, validation summary, unit hints, row counts, and refresh metadata.
 6. For role-specific pages, create separate views or links from the same validated data snapshot.
+7. Prefer an accepted template for the same dataset/domain before starting a new style. For Xinbai, the default accepted template is the modular monthly report with a compact time/range filter, single KPI summary card, right-middle customer detail panel, and URL focus parameters for the user's current conversation emphasis.
 
 **Acceptance:**
 - Third-party request can go from instruction to final static page link.
 - Main station mirrors the same no-confirm path after the initial prompt/template.
 - A generated page can be adjusted after creation through chat or module edits.
+- Xinbai template reuse returns the monthly report URL and moves the relevant module forward with `focus` rather than exposing old/dark/fallback template variants.
 
 ### Workstream G: Database Source Integration
 

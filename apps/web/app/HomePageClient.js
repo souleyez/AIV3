@@ -536,6 +536,52 @@ function sortStaticPageDrafts(items) {
   });
 }
 
+function staticPageDraftDiscoveryId(draft) {
+  return String(
+    draft?.localDraftId
+      || draft?.local_draft_id
+      || draft?.source?.localDraftId
+      || draft?.source?.local_draft_id
+      || draft?.source_refs?.local_draft_id
+      || draft?.id
+      || draft?.backendDraftId
+      || '',
+  ).trim();
+}
+
+function staticPageDraftAsyncSnapshot(draft) {
+  const jobStatus = String(draft?.imageJob?.status || draft?.previewContract?.status || '').toLowerCase();
+  const draftStatus = String(draft?.status || '').toLowerCase();
+  const finalStatus = String(draft?.finalPage?.status || '').toLowerCase();
+  const previewAssetKey = String(draft?.previewImage?.assetKey || draft?.previewContract?.assetKey || '').trim();
+  const jobId = String(draft?.imageJob?.id || draft?.previewContract?.imageJobId || '').trim();
+  const renderOutputId = String(draft?.finalPage?.renderOutputId || draft?.finalPage?.render_output_id || '').trim();
+  const finalUrl = staticPageRenderedUrlFromDraft(draft);
+  return {
+    jobStatus,
+    draftStatus,
+    finalStatus,
+    previewAssetKey,
+    jobId,
+    renderOutputId,
+    finalUrl,
+    previewReady: jobStatus === 'preview_ready' || draftStatus === 'preview_ready',
+    renderInProgress: finalStatus === 'queued' || finalStatus === 'rendering',
+    rendered: finalStatus === 'rendered' || draftStatus === 'rendered',
+  };
+}
+
+function staticPageDraftReadyForAutoRender(draft) {
+  const snapshot = staticPageDraftAsyncSnapshot(draft);
+  return Boolean(
+    draft?.backendDraftId
+      && snapshot.previewReady
+      && snapshot.previewAssetKey
+      && !snapshot.renderInProgress
+      && !snapshot.rendered,
+  );
+}
+
 function firstObjectValue(...values) {
   for (const value of values) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -1075,6 +1121,7 @@ export default function HomePageClient() {
   const fileInputRef = useRef(null);
   const staticPageAutoRenderKeysRef = useRef(new Set());
   const staticPageProgressMessageKeysRef = useRef(new Set());
+  const staticPageDraftStatusRef = useRef(new Map());
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -4191,6 +4238,43 @@ export default function HomePageClient() {
   ]);
 
   useEffect(() => {
+    if (staticPageActionBusy) {
+      return;
+    }
+    const draft = staticPageDraftItems.find((candidate) => {
+      if (!staticPageDraftReadyForAutoRender(candidate)) {
+        return false;
+      }
+      const discoveryId = staticPageDraftDiscoveryId(candidate);
+      const previous = discoveryId ? staticPageDraftStatusRef.current.get(discoveryId) : null;
+      return Boolean(previous && !previous.previewReady);
+    });
+    if (!draft) {
+      return;
+    }
+    const snapshot = staticPageDraftAsyncSnapshot(draft);
+    const autoRenderKey = `${draft.backendDraftId}:${snapshot.jobId || snapshot.previewAssetKey}:${snapshot.previewAssetKey}`;
+    if (staticPageAutoRenderKeysRef.current.has(autoRenderKey)) {
+      return;
+    }
+    if (!canRequestStaticPageFinalRender(draft)) {
+      return;
+    }
+
+    staticPageAutoRenderKeysRef.current.add(autoRenderKey);
+    setStaticPageActionBusy(true);
+    appendStaticPageProgressMessage(
+      `${draft.id}:auto-render:${snapshot.jobId || snapshot.previewAssetKey}`,
+      '后台发现效果图已生成，正在自动续接静态页制作。完成后会直接给出页面链接。',
+    );
+    createBackendStaticPageRender(draft, {
+      previewImage: draft.previewImage || buildMockStaticPagePreview(draft),
+    }).catch((syncError) => {
+      setError(`静态页未进入后台制作：${staticPagePreviewGateErrorMessage(syncError, '后端渲染暂不可用')}。`);
+    }).finally(() => setStaticPageActionBusy(false));
+  }, [staticPageDraftItems, staticPageActionBusy]);
+
+  useEffect(() => {
     const backendDraftId = activeStaticPageDraft?.backendDraftId;
     const renderStatus = activeStaticPageDraft?.finalPage?.status;
     if (!backendDraftId || !['queued', 'rendering'].includes(renderStatus)) {
@@ -4232,6 +4316,73 @@ export default function HomePageClient() {
     activeHtmlArtifactId,
     htmlArtifacts,
   ]);
+
+  useEffect(() => {
+    const previous = staticPageDraftStatusRef.current;
+    const next = new Map();
+    const previewTransitions = [];
+    const renderedTransitions = [];
+
+    staticPageDraftItems.forEach((draft) => {
+      const discoveryId = staticPageDraftDiscoveryId(draft);
+      if (!discoveryId) {
+        return;
+      }
+      const snapshot = staticPageDraftAsyncSnapshot(draft);
+      next.set(discoveryId, snapshot);
+      const before = previous.get(discoveryId);
+      if (!before) {
+        return;
+      }
+      if (snapshot.previewReady && !before.previewReady && !snapshot.renderInProgress && !snapshot.rendered) {
+        previewTransitions.push({ draft, snapshot });
+      }
+      if (
+        snapshot.rendered
+        && (
+          !before.rendered
+          || before.renderOutputId !== snapshot.renderOutputId
+          || before.finalUrl !== snapshot.finalUrl
+        )
+      ) {
+        renderedTransitions.push({ draft, snapshot });
+      }
+    });
+
+    staticPageDraftStatusRef.current = next;
+    if (!previous.size) {
+      return;
+    }
+
+    const preview = previewTransitions[0];
+    if (preview?.draft) {
+      appendStaticPageProgressMessage(
+        `${preview.draft.id}:preview-ready:${preview.snapshot.previewAssetKey || 'ready'}`,
+        '效果图已生成，V3 正在继续读取视觉稿并制作最终页面。',
+      );
+    }
+
+    const rendered = renderedTransitions[0];
+    if (!rendered?.draft) {
+      return;
+    }
+    const finalUrl = rendered.snapshot.finalUrl;
+    appendStaticPageProgressMessage(
+      `${rendered.draft.id}:rendered:${rendered.snapshot.renderOutputId || finalUrl || 'ready'}`,
+      finalUrl
+        ? `静态页已生成：${finalUrl}`
+        : '静态页已生成，可以在右侧生成结果区打开。',
+    );
+    if (staticPageEditorOpen) {
+      return;
+    }
+    const artifact = publishedStaticPageArtifactForDraft(rendered.draft);
+    setActiveStaticPageDraftId(rendered.draft.id);
+    setMobilePanel('chat');
+    if (artifact?.id && activeHtmlArtifactId !== artifact.id) {
+      setActiveHtmlArtifactId(artifact.id);
+    }
+  }, [staticPageDraftItems, activeHtmlArtifactId, htmlArtifacts, staticPageEditorOpen]);
 
   useEffect(() => {
     if (!selectedReportPlanId) {

@@ -257,6 +257,18 @@ const ASSISTANT_RUN_SCOPE_SUMMARY_DOC_LIMIT: usize = 24;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_ITEM_LIMIT: usize = 4;
 const ASSISTANT_RUN_MODEL_SUPPLY_BRIEF_TEXT_LIMIT: usize = 220;
 const ASSISTANT_RUN_MODEL_SCAN_BRIEF_TEXT_LIMIT: usize = 900;
+const ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT: usize = 900;
+const ASSISTANT_RUN_MODEL_CONTEXT_SUPPLIED_ITEM_LIMIT: usize = 24;
+const ASSISTANT_RUN_MODEL_CONTEXT_PARSE_STATUS_LIMIT: usize = 2;
+const ASSISTANT_RUN_MODEL_CONTEXT_STRUCTURED_FACT_LIMIT: usize = 4;
+const ASSISTANT_RUN_MODEL_CONTEXT_SPREADSHEET_LIMIT: usize = 2;
+const ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT: usize = 8;
+const ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT: usize = 6;
+const ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT: usize = 4;
+const ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT: usize = 2;
+const ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT: usize = 520;
+const ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT: usize = 1200;
+const ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT: usize = 240;
 const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 1200;
@@ -44399,7 +44411,16 @@ fn build_assistant_run_provider_input_with_evidence(
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
+        .map(|message| {
+            format!(
+                "{}: {}",
+                message.role.as_str(),
+                truncate_assistant_supply_text(
+                    &message.content,
+                    ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT
+                )
+            )
+        })
         .collect::<Vec<_>>();
     if !history.is_empty() {
         sections.push(format!("最近对话：\n{}", history.join("\n")));
@@ -44498,7 +44519,16 @@ fn build_assistant_run_continue_provider_input(
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
+        .map(|message| {
+            format!(
+                "{}: {}",
+                message.role.as_str(),
+                truncate_assistant_supply_text(
+                    &message.content,
+                    ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT
+                )
+            )
+        })
         .collect::<Vec<_>>();
     if !history.is_empty() {
         sections.push(format!("继续前最近对话：\n{}", history.join("\n")));
@@ -44630,24 +44660,389 @@ fn build_assistant_run_model_supply_brief(evidence_state: &Value) -> Option<Stri
 fn assistant_run_model_evidence_state(evidence_state: &Value) -> Value {
     let mut model_state = evidence_state.clone();
     if let Some(object) = model_state.as_object_mut() {
-        if let Some(items) = object
-            .get_mut("supplied_items")
+        if let Some((items, budget)) = object
+            .get("supplied_items")
+            .and_then(Value::as_array)
+            .map(|items| assistant_run_model_budgeted_supply_items(items))
+        {
+            object.insert("supplied_items".to_string(), Value::Array(items));
+            object.insert("model_context_budget".to_string(), budget);
+        }
+        if let Some(memory_items) = object
+            .get_mut("conversation_memory_items")
             .and_then(Value::as_array_mut)
         {
-            for item in items {
-                match item.get("type").and_then(Value::as_str) {
-                    Some("dataset_entity_scan") => {
-                        *item = assistant_run_model_dataset_entity_scan_item(item);
-                    }
-                    Some("dataset_fact_snapshot") => {
-                        *item = assistant_run_model_dataset_fact_snapshot_item(item);
-                    }
-                    _ => {}
-                }
-            }
+            let compacted = memory_items
+                .iter()
+                .take(ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT)
+                .map(assistant_run_model_conversation_memory_item)
+                .collect::<Vec<_>>();
+            *memory_items = compacted;
+        }
+        if let Some(detail_targets) = object
+            .get_mut("detail_targets")
+            .and_then(Value::as_array_mut)
+        {
+            detail_targets.truncate(ASSISTANT_RUN_DETAIL_TARGET_LIMIT);
         }
     }
     assistant_run_model_context_value(&model_state)
+}
+
+fn assistant_run_model_budgeted_supply_items(items: &[Value]) -> (Vec<Value>, Value) {
+    let bucket_order = [
+        "document_status",
+        "structured_fact",
+        "spreadsheet",
+        "retrieval",
+        "database",
+        "memory",
+        "other",
+    ];
+    let mut selected_indices = BTreeSet::new();
+    let mut included_by_type = BTreeMap::<String, usize>::new();
+    let mut omitted_by_type = BTreeMap::<String, usize>::new();
+
+    for bucket in bucket_order {
+        let mut included_in_bucket = 0usize;
+        let bucket_limit = assistant_run_model_supply_bucket_limit(bucket);
+        for (index, item) in items.iter().enumerate() {
+            if assistant_run_model_supply_bucket(item) != bucket {
+                continue;
+            }
+            let type_label = assistant_run_model_supply_type_label(item);
+            if selected_indices.len() < ASSISTANT_RUN_MODEL_CONTEXT_SUPPLIED_ITEM_LIMIT
+                && included_in_bucket < bucket_limit
+            {
+                selected_indices.insert(index);
+                included_in_bucket += 1;
+                *included_by_type.entry(type_label).or_insert(0) += 1;
+            } else {
+                *omitted_by_type.entry(type_label).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let compacted_items = selected_indices
+        .iter()
+        .filter_map(|index| items.get(*index))
+        .map(assistant_run_model_supply_item_for_context)
+        .collect::<Vec<_>>();
+    let budget = json!({
+        "policy": "model_input_balanced_supply_buckets",
+        "original_supplied_item_count": items.len(),
+        "model_supplied_item_count": compacted_items.len(),
+        "omitted_supplied_item_count": items.len().saturating_sub(compacted_items.len()),
+        "global_item_limit": ASSISTANT_RUN_MODEL_CONTEXT_SUPPLIED_ITEM_LIMIT,
+        "bucket_limits": {
+            "document_status": ASSISTANT_RUN_MODEL_CONTEXT_PARSE_STATUS_LIMIT,
+            "structured_fact": ASSISTANT_RUN_MODEL_CONTEXT_STRUCTURED_FACT_LIMIT,
+            "spreadsheet": ASSISTANT_RUN_MODEL_CONTEXT_SPREADSHEET_LIMIT,
+            "retrieval": ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT,
+            "database": ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT,
+            "memory": ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT,
+            "other": ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT,
+        },
+        "included_by_type": included_by_type,
+        "omitted_by_type": omitted_by_type,
+        "model_rule": "The model input keeps separate quotas for document evidence, database aggregates, structured scans, spreadsheet analyses, parse status, and memory so one source cannot crowd out the others. Omitted items remain available to host tools/detail reads; do not infer that omitted means absent from the dataset.",
+    });
+
+    (compacted_items, budget)
+}
+
+fn assistant_run_model_supply_bucket(item: &Value) -> &'static str {
+    match item.get("type").and_then(Value::as_str) {
+        Some("document_parse_status") => "document_status",
+        Some("dataset_entity_scan" | "dataset_fact_snapshot") => "structured_fact",
+        Some("spreadsheet_row_analysis") => "spreadsheet",
+        Some("database_schema_context" | "database_aggregate" | "database_aggregate_error") => {
+            "database"
+        }
+        Some("conversation_memory_item") => "memory",
+        Some("retrieval_evidence") => "retrieval",
+        _ => "other",
+    }
+}
+
+fn assistant_run_model_supply_bucket_limit(bucket: &str) -> usize {
+    match bucket {
+        "document_status" => ASSISTANT_RUN_MODEL_CONTEXT_PARSE_STATUS_LIMIT,
+        "structured_fact" => ASSISTANT_RUN_MODEL_CONTEXT_STRUCTURED_FACT_LIMIT,
+        "spreadsheet" => ASSISTANT_RUN_MODEL_CONTEXT_SPREADSHEET_LIMIT,
+        "retrieval" => ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT,
+        "database" => ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT,
+        "memory" => ASSISTANT_RUN_MODEL_CONTEXT_MEMORY_LIMIT,
+        _ => ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT,
+    }
+}
+
+fn assistant_run_model_supply_type_label(item: &Value) -> String {
+    item.get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn assistant_run_model_supply_item_for_context(item: &Value) -> Value {
+    match item.get("type").and_then(Value::as_str) {
+        Some("dataset_entity_scan") => assistant_run_compact_dataset_entity_scan_payload(item)
+            .unwrap_or_else(|| assistant_run_model_dataset_entity_scan_item(item)),
+        Some("dataset_fact_snapshot") => assistant_run_model_dataset_fact_snapshot_item(item),
+        Some("retrieval_evidence") => assistant_run_model_retrieval_evidence_item(item),
+        Some("document_parse_status") => assistant_run_model_document_parse_status_item(item),
+        Some("database_schema_context") => assistant_run_model_database_schema_context_item(item),
+        Some("database_aggregate") => assistant_run_model_database_aggregate_item(item),
+        Some("spreadsheet_row_analysis") => assistant_run_model_spreadsheet_row_analysis_item(item),
+        Some("conversation_memory_item") => assistant_run_model_conversation_memory_item(item),
+        _ => assistant_run_model_compact_json_value(
+            item,
+            ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+            12,
+        ),
+    }
+}
+
+fn assistant_run_model_retrieval_evidence_item(item: &Value) -> Value {
+    let mut output = Map::new();
+    assistant_run_model_copy_value(&mut output, item, "type");
+    assistant_run_model_copy_value(&mut output, item, "source");
+    assistant_run_model_copy_value(&mut output, item, "fallback_reason");
+    assistant_run_model_copy_value(&mut output, item, "dataset_id");
+    assistant_run_model_copy_value(&mut output, item, "document_id");
+    assistant_run_model_copy_value(&mut output, item, "document_chunk_id");
+    assistant_run_model_copy_value(&mut output, item, "retrieval_evidence_id");
+    assistant_run_model_copy_value(&mut output, item, "chunk_index");
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "source_locator",
+        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "summary",
+        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "content_excerpt",
+        ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_value(&mut output, item, "score");
+    assistant_run_model_copy_value(&mut output, item, "lexical_score");
+    assistant_run_model_copy_value(&mut output, item, "recall_score");
+
+    let mut evidence_context = Map::new();
+    for key in ["section_title_hints", "noun_terms"] {
+        if let Some(value) = item.pointer(&format!("/evidence_manifest/evidence/{key}")) {
+            evidence_context.insert(
+                key.to_string(),
+                assistant_run_model_compact_json_value(
+                    value,
+                    ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT,
+                    16,
+                ),
+            );
+        }
+    }
+    if let Some(value) = item.pointer("/evidence_manifest/embedding/term_weights") {
+        evidence_context.insert(
+            "term_weights".to_string(),
+            assistant_run_model_compact_json_value(value, 80, 24),
+        );
+    }
+    if !evidence_context.is_empty() {
+        output.insert(
+            "evidence_context".to_string(),
+            Value::Object(evidence_context),
+        );
+    }
+    if let Some(media_context) = item.get("media_context") {
+        output.insert(
+            "media_context".to_string(),
+            assistant_run_model_compact_json_value(media_context, 360, 8),
+        );
+    }
+    Value::Object(output)
+}
+
+fn assistant_run_model_document_parse_status_item(item: &Value) -> Value {
+    let attention_documents = item
+        .get("attention_documents")
+        .and_then(Value::as_array)
+        .map(|documents| {
+            documents
+                .iter()
+                .take(6)
+                .map(|document| {
+                    json!({
+                        "document_id": document.get("document_id").cloned().unwrap_or(Value::Null),
+                        "title": document.get("title").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+                        "content_type": document.get("content_type").cloned().unwrap_or(Value::Null),
+                        "lifecycle": document.get("lifecycle").cloned().unwrap_or(Value::Null),
+                        "parse_status": document.get("parse_status").cloned().unwrap_or(Value::Null),
+                        "model_status": document.get("model_status").cloned().unwrap_or(Value::Null),
+                        "chunk_count": document.get("chunk_count").cloned().unwrap_or(Value::Null),
+                        "parse_quality_status": document.get("parse_quality_status").cloned().unwrap_or(Value::Null),
+                        "parse_quality_summary": document.get("parse_quality_summary").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT, 6)).unwrap_or(Value::Null),
+                        "external_document": document.get("external_document").map(|value| assistant_run_model_compact_json_value(value, 160, 4)).unwrap_or(Value::Null),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "type": "document_parse_status",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "scanned_document_count": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+        "status_summary": item.get("status_summary").cloned().unwrap_or(Value::Null),
+        "status_counts": item.get("status_counts").cloned().unwrap_or(Value::Null),
+        "active_parse_count": item.get("active_parse_count").cloned().unwrap_or(Value::Null),
+        "failed_document_count": item.get("failed_document_count").cloned().unwrap_or(Value::Null),
+        "reparsing_document_count": item.get("reparsing_document_count").cloned().unwrap_or(Value::Null),
+        "degraded_parse_count": item.get("degraded_parse_count").cloned().unwrap_or(Value::Null),
+        "not_ready_document_count": item.get("not_ready_document_count").cloned().unwrap_or(Value::Null),
+        "attention_documents": attention_documents,
+        "model_guidance": item.get("model_guidance").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT, 5)).unwrap_or(Value::Null),
+        "limits": item.get("limits").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn assistant_run_model_database_schema_context_item(item: &Value) -> Value {
+    json!({
+        "type": "database_schema_context",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+        "dataset_title": item.get("dataset_title").cloned().unwrap_or(Value::Null),
+        "source_id": item.get("source_id").cloned().unwrap_or(Value::Null),
+        "connector_kind": item.get("connector_kind").cloned().unwrap_or(Value::Null),
+        "table": item.get("table").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "field_roles": item.get("field_roles").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 24)).unwrap_or(Value::Null),
+        "entity_dimensions": item.get("entity_dimensions").cloned().unwrap_or(Value::Null),
+        "time_dimensions": item.get("time_dimensions").cloned().unwrap_or(Value::Null),
+        "category_dimensions": item.get("category_dimensions").cloned().unwrap_or(Value::Null),
+        "metrics": item.get("metrics").cloned().unwrap_or(Value::Null),
+        "analysis_views": item.get("analysis_views").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 8)).unwrap_or(Value::Null),
+        "answer_guidance": item.get("answer_guidance").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT, 8)).unwrap_or(Value::Null),
+    })
+}
+
+fn assistant_run_model_database_aggregate_item(item: &Value) -> Value {
+    json!({
+        "type": "database_aggregate",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "dataset_key": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+        "dataset_title": item.get("dataset_title").cloned().unwrap_or(Value::Null),
+        "source_id": item.get("source_id").cloned().unwrap_or(Value::Null),
+        "connector_kind": item.get("connector_kind").cloned().unwrap_or(Value::Null),
+        "table": item.get("table").cloned().unwrap_or(Value::Null),
+        "aggregate_role": item.get("aggregate_role").cloned().unwrap_or(Value::Null),
+        "aggregate_intent": item.get("aggregate_intent").cloned().unwrap_or(Value::Null),
+        "dimensions": item.get("dimensions").cloned().unwrap_or(Value::Null),
+        "metric": item.get("metric").cloned().unwrap_or(Value::Null),
+        "aggregation": item.get("aggregation").cloned().unwrap_or(Value::Null),
+        "sort_direction": item.get("sort_direction").cloned().unwrap_or(Value::Null),
+        "sort_semantics": item.get("sort_semantics").cloned().unwrap_or(Value::Null),
+        "time_filter": item.get("time_filter").cloned().unwrap_or(Value::Null),
+        "value_label": item.get("value_label").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "columns": item.get("columns").cloned().unwrap_or(Value::Null),
+        "field_semantics": item.get("field_semantics").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 24)).unwrap_or(Value::Null),
+        "rows": item.get("rows").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, ASSISTANT_RUN_DATABASE_AGGREGATE_RESULT_LIMIT as usize)).unwrap_or(Value::Null),
+        "row_limit": item.get("row_limit").cloned().unwrap_or(Value::Null),
+        "scan_limit": item.get("scan_limit").cloned().unwrap_or(Value::Null),
+        "source_scope": item.get("source_scope").cloned().unwrap_or(Value::Null),
+        "policy": item.get("policy").cloned().unwrap_or(Value::Null),
+        "note": item.get("note").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+    })
+}
+
+fn assistant_run_model_spreadsheet_row_analysis_item(item: &Value) -> Value {
+    json!({
+        "type": "spreadsheet_row_analysis",
+        "source": item.get("source").cloned().unwrap_or(Value::Null),
+        "dataset_id": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+        "analysis_kind": item.get("analysis_kind").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "content_excerpt": item.get("content_excerpt").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT)).unwrap_or_default(),
+        "row_count": item.get("row_count").cloned().unwrap_or(Value::Null),
+        "result_row_count": item.get("result_row_count").cloned().unwrap_or(Value::Null),
+        "rows": item.get("rows").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 64)).unwrap_or(Value::Null),
+        "documents": item.get("documents").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT, 16)).unwrap_or(Value::Null),
+        "source_locator": item.get("source_locator").cloned().unwrap_or(Value::Null),
+        "model_guidance": item.get("model_guidance").map(|value| assistant_run_model_compact_json_value(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT, 5)).unwrap_or(Value::Null),
+    })
+}
+
+fn assistant_run_model_conversation_memory_item(item: &Value) -> Value {
+    json!({
+        "type": "conversation_memory_item",
+        "conversation_memory_item_id": item.get("conversation_memory_item_id").cloned().unwrap_or(Value::Null),
+        "local_thread_id": item.get("local_thread_id").cloned().unwrap_or(Value::Null),
+        "role": item.get("role").cloned().unwrap_or(Value::Null),
+        "item_kind": item.get("item_kind").cloned().unwrap_or(Value::Null),
+        "summary": item.get("summary").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT)).unwrap_or_default(),
+        "source_message_refs": item.get("source_message_refs").map(|value| assistant_run_model_compact_json_value(value, 160, 8)).unwrap_or(Value::Null),
+        "artifact_refs": item.get("artifact_refs").map(|value| assistant_run_model_compact_json_value(value, 160, 8)).unwrap_or(Value::Null),
+        "created_at": item.get("created_at").cloned().unwrap_or(Value::Null),
+        "updated_at": item.get("updated_at").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn assistant_run_model_copy_value(output: &mut Map<String, Value>, item: &Value, key: &str) {
+    if let Some(value) = item.get(key) {
+        output.insert(key.to_string(), value.clone());
+    }
+}
+
+fn assistant_run_model_copy_text(
+    output: &mut Map<String, Value>,
+    item: &Value,
+    key: &str,
+    max_chars: usize,
+) {
+    if let Some(value) = item.get(key).and_then(Value::as_str) {
+        output.insert(
+            key.to_string(),
+            Value::String(truncate_assistant_supply_text(value, max_chars)),
+        );
+    }
+}
+
+fn assistant_run_model_compact_json_value(
+    value: &Value,
+    text_limit: usize,
+    array_limit: usize,
+) -> Value {
+    match value {
+        Value::String(text) => Value::String(truncate_assistant_supply_text(text, text_limit)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .take(array_limit)
+                .map(|item| assistant_run_model_compact_json_value(item, text_limit, array_limit))
+                .collect(),
+        ),
+        Value::Object(object) => {
+            let mut compact = Map::new();
+            for (key, child) in object {
+                compact.insert(
+                    key.clone(),
+                    assistant_run_model_compact_json_value(child, text_limit, array_limit),
+                );
+            }
+            Value::Object(compact)
+        }
+        _ => value.clone(),
+    }
 }
 
 fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
@@ -90294,6 +90689,19 @@ mod tests {
             static_page_public_url_with_prompt_focus(public_url, "生成经营月报"),
             public_url
         );
+        for (prompt, expected_focus) in [
+            ("低活跃品牌有哪些", "低活跃"),
+            ("展示品牌店铺客户明细", "品牌明细"),
+            ("按品类业态看一下销售结构", "品类业态"),
+        ] {
+            let focused = static_page_public_url_with_prompt_focus(public_url, prompt);
+            let url = reqwest::Url::parse(&focused).expect("focused artifact URL should parse");
+            let focus = url
+                .query_pairs()
+                .find(|(key, _)| key == "focus")
+                .map(|(_, value)| value.into_owned());
+            assert_eq!(focus.as_deref(), Some(expected_focus));
+        }
     }
 
     #[test]
@@ -114420,6 +114828,102 @@ retrieve_evidence:
             10
         )
         .is_empty());
+    }
+
+    #[test]
+    fn assistant_run_model_context_balances_database_and_retrieval_supply() {
+        let mut supplied_items = Vec::new();
+        for index in 0..10 {
+            supplied_items.push(json!({
+                "type": "database_aggregate",
+                "source": "database_source",
+                "dataset_id": "dataset-db",
+                "source_id": "hy-sql-traffic-area",
+                "table": "bi_traffic_area",
+                "summary": format!("数据库聚合 {index}"),
+                "rows": [{"shopdesc": format!("门店{index}"), "value": index}],
+                "evidence_manifest": {
+                    "raw_sql_debug": "should not enter model context"
+                }
+            }));
+        }
+        for index in 0..10 {
+            supplied_items.push(json!({
+                "type": "retrieval_evidence",
+                "source": "document_chunk_fallback",
+                "dataset_id": "dataset-doc",
+                "document_id": format!("doc-{index}"),
+                "document_chunk_id": format!("chunk-{index}"),
+                "retrieval_evidence_id": format!("evidence-{index}"),
+                "chunk_index": index,
+                "source_locator": format!("养老手册#chunk={index}"),
+                "summary": format!("文档证据 {index}"),
+                "content_excerpt": "老年人摔倒后应先评估意识、呼吸、疼痛和出血，必要时通知医护、家属并拨打120。",
+                "evidence_manifest": {
+                    "evidence": {
+                        "section_title_hints": ["突发事件应急预防与处置"],
+                        "noun_terms": ["跌倒", "120", "通知家属"]
+                    },
+                    "raw_internal_blob": "should not enter model context"
+                }
+            }));
+        }
+
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": supplied_items
+        });
+
+        let model_state = assistant_run_model_evidence_state(&evidence);
+        let model_items = model_state["supplied_items"]
+            .as_array()
+            .expect("model supplied items");
+        let database_count = model_items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("database_aggregate"))
+            .count();
+        let retrieval_count = model_items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("retrieval_evidence"))
+            .count();
+
+        assert_eq!(database_count, ASSISTANT_RUN_MODEL_CONTEXT_DATABASE_LIMIT);
+        assert_eq!(retrieval_count, ASSISTANT_RUN_MODEL_CONTEXT_RETRIEVAL_LIMIT);
+        assert_eq!(
+            model_state["model_context_budget"]["omitted_by_type"]["database_aggregate"],
+            json!(4)
+        );
+        assert_eq!(
+            model_state["model_context_budget"]["omitted_by_type"]["retrieval_evidence"],
+            json!(2)
+        );
+        let serialized = serde_json::to_string(&model_state).unwrap();
+        assert!(!serialized.contains("raw_sql_debug"));
+        assert!(!serialized.contains("raw_internal_blob"));
+        assert!(serialized.contains("突发事件应急预防与处置"));
+    }
+
+    #[test]
+    fn assistant_run_provider_input_truncates_long_history_messages() {
+        let long_history = "A".repeat(2000);
+        let request = CreateAssistantRunRequest {
+            prompt: "继续回答".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: vec![AssistantRunMessageView {
+                role: ChatMessageRole::User,
+                content: long_history,
+            }],
+        };
+
+        let input = build_assistant_run_provider_input_with_evidence(&request, None);
+
+        assert!(input.contains(&"A".repeat(ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT)));
+        assert!(!input.contains(&"A".repeat(ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT + 1)));
     }
 
     #[test]

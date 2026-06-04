@@ -890,6 +890,7 @@ Required cases:
 
 - third-party ordinary document Q&A: `邓工是谁`;
 - dark/mobile report redesign -> static page status/link;
+- Xinbai report request with existing accepted template -> reuse `xinbai-functional-modular-template-20260604` and return a focused URL when the prompt mentions risk, take-high opportunity, low activity, category, or brand details;
 - data ingestion natural wording -> `data_ingestion_analysis_*`;
 - PDF parse/reparse complaint -> `document_processing_*`;
 - ordinary care question -> natural answer, no artifact/data-ingestion tool;

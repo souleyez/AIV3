@@ -45,6 +45,8 @@
 
 **Progress update 2026-06-02 template-library visibility slice:** V3 now surfaces generated static-page template reuse decisions in third-party status cards and final replies. Exact dataset-combination reuse reports `template_match_policy=exact_dataset_artifact_key`; relaxed dataset-overlap reuse reports `template_match_policy=dataset_overlap` plus `relaxed_template_match`; normal explicit/inferred templates report `explicit_or_inferred_template`. The same fields are preserved when status replies are reconstructed from AssistantRun events, and the pure/full third-party integration docs now describe the template-library reuse policy and response fields.
 
+**Progress update 2026-06-05 Xinbai default-template convergence:** The Xinbai report template library has been narrowed to one accepted default: `xinbai-functional-modular-template-20260604`. Historical Xinbai pages remain as published artifacts but are not accepted defaults. The accepted monthly report template uses refreshed same-directory `data.json`, a compact time/range filter, one summary KPI card, a right-middle customer detail panel without extra explanatory header copy, and prompt-focused reuse links such as `?focus=风险店铺`, `?focus=取高机会`, `?focus=低活跃`, and `?focus=品牌明细`.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection
@@ -167,6 +169,17 @@ uiSpec/modelOutput/data snapshot
 - delivery rules and validation constraints.
 
 The effect image is a first-class artifact, not just a temporary prompt aid.
+
+### 1A. Reuse Accepted Templates Before Redesign
+
+The template library should prefer a stable accepted template when the current dataset/domain overlaps an existing accepted template. Reuse means:
+
+- keep the published page URL stable when the customer is adjusting or querying the same report family;
+- refresh or replace `data.json` / `data-snapshot.json` from the current dataset scope;
+- pass conversation emphasis through URL/query metadata such as `focus` so the relevant module appears first;
+- avoid re-running Image2/Codex for style unless the user explicitly asks for a new visual direction, the accepted template is missing, or the data contract is incompatible.
+
+For Xinbai, the only accepted default template is the modular monthly report. Old dark/fallback/one-off Xinbai pages may remain visible as artifacts, but they must not compete as default templates.
 
 ### 2. Make Worker Polling Non-Blocking
 
