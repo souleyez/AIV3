@@ -93288,6 +93288,47 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_reply_reports_fixed_task_completed_artifact_link() {
+        let run_id = AssistantRunId::new();
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/static-pages/final/index.html";
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            "codex_host.fixed_task.completed",
+            json!({
+                "template_id": "static_page_image2_data_publish",
+                "status": "completed",
+                "workflow_execution_id": WorkflowExecutionId::new().to_string(),
+                "output": {
+                    "artifact_public_url": public_url,
+                    "status": "success"
+                }
+            }),
+        )];
+
+        let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
+            .expect("completed fixed task reply");
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        let public_reply = external_channel_public_reply(reply);
+        assert_eq!(
+            public_reply.reply_type,
+            ExternalBotReplyTypeView::ArtifactLink
+        );
+        assert_eq!(
+            public_reply.task_status.as_deref(),
+            Some("static_page_published")
+        );
+        assert_eq!(public_reply.artifact_links, vec![public_url.to_string()]);
+        let card = public_reply.card.expect("public status card");
+        assert_eq!(card["type"], json!("v3_static_page_pipeline"));
+        assert_eq!(card["status"], json!("static_page_published"));
+        assert_eq!(card["public_url"], json!(public_url));
+    }
+
+    #[test]
     fn external_channel_static_page_reply_reports_image_preview_queue_progress() {
         let run_id = AssistantRunId::new();
         let draft_id = StaticPageDraftId::new();
