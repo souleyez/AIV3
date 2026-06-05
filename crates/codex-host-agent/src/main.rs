@@ -44,7 +44,8 @@ const DEFAULT_ORCHESTRATOR_SOURCE: &str = "v3-codex-host-agent";
 const DEFAULT_ORCHESTRATOR_USER_AGENT: &str = "v3-codex-host-agent/1.0";
 const DEFAULT_ORCHESTRATOR_KIND: &str = "code-task";
 const DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS: u64 = 15_000;
-const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 6_500;
+const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 4_800;
+const ORCHESTRATOR_FULL_PROMPT_LIMIT_CHARS: usize = 6_500;
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 const DEFAULT_CODEX_HOST_CONCURRENCY: usize = 1;
 const MAX_CODEX_HOST_CONCURRENCY: usize = 8;
@@ -3526,16 +3527,23 @@ async fn run_cloudflare_orchestrator(
 fn build_cloudflare_orchestrator_prompt(task_context: &CodexHostTaskContext) -> Result<String> {
     if let Some(fixed_task) = task_context.fixed_task.as_ref() {
         let task_json = fixed_task_json_for_orchestrator_prompt(fixed_task)?;
-        let schema_hint = fixed_task_output_schema_hint(fixed_task.template_id.as_str());
+        let template_id = fixed_task.template_id.as_str();
+        let schema_hint = cloudflare_orchestrator_schema_hint(template_id);
         let mut prompt = format!(
-            "Run the DataMax fixed Cloudflare Codex task template `{}`.\n\nRules:\n- Return exactly one final JSON object.\n- Do not wrap the final JSON in Markdown fences.\n- Do not expose credentials, provider logs, raw database URLs, or raw customer documents.\n- If the task cannot satisfy the no-confirm policy, return status `needs_human` with a bounded `human_review_reason`.\n\nExpected output schema:\n{}\n\nTask package JSON:\n{}",
-            fixed_task.template_id.as_str(),
+            "Run the DataMax fixed Codex task `{}`.\n\nRules:\n- Return exactly one final JSON object, without Markdown fences.\n- Do not expose credentials, provider logs, raw database URLs, raw customer documents, stdout, or stderr.\n- If the no-confirm policy truly cannot be satisfied, return `needs_human` with a short `human_review_reason`.\n\nExpected output schema:\n{}\n\nTask package JSON:\n{}",
+            template_id,
             schema_hint,
             task_json
         );
-        if fixed_task.template_id.as_str() == "static_page_image2_data_publish" {
-            prompt.push_str(
-                "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `requirements.existing_artifact.public_url` is present, treat it as the current published page to revise: preserve its style and module structure unless the user explicitly requests redesign, repair the requested data binding or content issue, and publish a new generated artifact instead of overwriting the old URL.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Cloudflare runtime cannot write DataMax server files directly. If you cannot produce an approved DataMax `artifact.public_url`, return `artifact.html` as a complete standalone HTML document plus `artifact.data_json`; the DataMax host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.\n- The final HTML must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- If selected evidence or temporary uploaded documents contain contract/store area fields, extract them into `data.storeList[].area` or `data.supplementalMetrics.storeAreas/storeAreaRows` and use them for per-square-meter efficiency. If they contain traffic/customer-flow rows, extract them into `data.trafficRows` or `data.supplementalMetrics.trafficRows` with store, date, and value fields for traffic comparisons.\n- Bind real DataMax dataset/database/document evidence from the task package. If selected evidence is thin or partially insufficient, first use every supplied dataset/database/document summary and available sample; then still publish a useful page with visible data-gap notes and `validation_report.warnings`. Do not return `needs_human` or `failed` solely because sample rows, optional dimensions, or some modules are incomplete. Do not invent store area or traffic data when absent.",
+        if template_id == "static_page_image2_data_publish" {
+            prompt.push_str(cloudflare_orchestrator_static_page_rules());
+        }
+        if prompt.chars().count() > ORCHESTRATOR_FULL_PROMPT_LIMIT_CHARS {
+            tracing::warn!(
+                prompt_chars = prompt.chars().count(),
+                prompt_limit = ORCHESTRATOR_FULL_PROMPT_LIMIT_CHARS,
+                template_id,
+                "Cloudflare Codex prompt exceeds soft limit after compaction"
             );
         }
         return Ok(prompt);
@@ -3547,6 +3555,18 @@ fn build_cloudflare_orchestrator_prompt(task_context: &CodexHostTaskContext) -> 
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| anyhow!("Cloudflare Codex task text is required"))
+}
+
+fn cloudflare_orchestrator_schema_hint(template_id: &str) -> &'static str {
+    if template_id == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        r#"{"template_id":"static_page_image2_data_publish","status":"success|needs_human|failed","artifact":{"public_url":"https://v3.elepcloud.com/generated-artifacts/...|null","html":"complete standalone html|null","data_json":{},"data_url":"...|null","data_snapshot_url":"...|null"},"dynamic_page_contract":{"data_file":"data.json","time_selector":true,"primary_partition_selector":true,"manual_refresh":true,"auto_refresh":true},"validation_report":{"visual_contract_used":true,"warnings":["string"]},"source_summary":["string"],"human_review_reason":"string|null"}"#
+    } else {
+        fixed_task_output_schema_hint(template_id)
+    }
+}
+
+fn cloudflare_orchestrator_static_page_rules() -> &'static str {
+    "\n\nStatic-page rules:\n- Image2 preview is mandatory visual contract: match layout, hierarchy, density, colors, and modules.\n- If existing_artifact.public_url exists, revise that page unless the user explicitly asks to redesign.\n- Return host-publishable artifact.public_url, or complete artifact.html plus artifact.data_json for DataMax to publish.\n- HTML must load data.json and keep time/range/partition selectors, manual refresh, auto refresh, and database-refresh readiness.\n- Bind supplied DataMax dataset/database/document evidence. If evidence is thin, still publish a useful page with visible data-gap notes and validation_report.warnings.\n- Do not return simplified/demo/placeholder/fallback page as success, and do not invent missing area or traffic data."
 }
 
 fn fixed_task_json_for_orchestrator_prompt(
@@ -3576,8 +3596,14 @@ fn fixed_task_json_for_orchestrator_prompt(
         return Ok(tight_text);
     }
     let minimal = minimal_fixed_task_for_orchestrator(fixed_task);
-    serde_json::to_string_pretty(&minimal)
-        .map_err(|error| anyhow!("failed to serialize minimal fixed task package: {error}"))
+    let minimal_text = serde_json::to_string_pretty(&minimal)
+        .map_err(|error| anyhow!("failed to serialize minimal fixed task package: {error}"))?;
+    if minimal_text.chars().count() <= ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS {
+        return Ok(minimal_text);
+    }
+    let tiny = tiny_fixed_task_for_orchestrator(fixed_task);
+    serde_json::to_string_pretty(&tiny)
+        .map_err(|error| anyhow!("failed to serialize tiny fixed task package: {error}"))
 }
 
 fn compact_static_page_image2_fixed_task_for_orchestrator(
@@ -3879,6 +3905,64 @@ fn minimal_fixed_task_for_orchestrator(
             "image_prompt_payload_excerpt": value_excerpt_for_orchestrator(
                 fixed_task.image2.get("image_prompt_payload"),
                 900,
+            ),
+        },
+        "policies": {
+            "publish_mode": fixed_task.policies.get("publish_mode").cloned().unwrap_or(Value::Null),
+            "effect_image_confirmation_required": fixed_task.policies.get("effect_image_confirmation_required").cloned().unwrap_or(Value::Null),
+            "continue_to_publish_after_effect_image": fixed_task.policies.get("continue_to_publish_after_effect_image").cloned().unwrap_or(Value::Null),
+        },
+        "human_review_policy": fixed_task.human_review_policy,
+    })
+}
+
+fn tiny_fixed_task_for_orchestrator(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> Value {
+    json!({
+        "template_id": fixed_task.template_id.as_str(),
+        "version": fixed_task.version,
+        "assistant_run_id": fixed_task.assistant_run_id,
+        "draft_id": fixed_task.draft_id,
+        "requirements": {
+            "user_goal": compact_value_string_field(&fixed_task.requirements, "user_goal", 600),
+            "project_name": fixed_task.requirements.get("project_name").cloned().unwrap_or(Value::Null),
+            "existing_artifact": bounded_orchestrator_prompt_value(
+                fixed_task.requirements.get("existing_artifact").unwrap_or(&Value::Null),
+                3,
+            ),
+            "output_format": fixed_task.requirements.get("output_format").cloned().unwrap_or(Value::Null),
+            "render_mode": fixed_task.requirements.get("render_mode").cloned().unwrap_or(Value::Null),
+            "evidence_summary_excerpt": value_excerpt_for_orchestrator(
+                fixed_task.requirements.get("evidence_summary"),
+                360,
+            ),
+            "supplemental_metrics_policy": bounded_orchestrator_prompt_value(
+                fixed_task.requirements.get("supplemental_metrics_policy").unwrap_or(&Value::Null),
+                3,
+            ),
+            "supplemental_metrics_summary": value_excerpt_for_orchestrator(
+                fixed_task
+                    .requirements
+                    .get("supplemental_metrics_summary")
+                    .or_else(|| {
+                        fixed_task
+                            .requirements
+                            .get("evidence_summary")
+                            .and_then(|value| value.get("supplemental_metrics"))
+                    }),
+                360,
+            ),
+        },
+        "dataset_scope": bounded_orchestrator_prompt_value(&fixed_task.dataset_scope, 4),
+        "image2": {
+            "prompt_text": compact_value_string_field(&fixed_task.image2, "prompt_text", 600),
+            "image_job_id": fixed_task.image2.get("image_job_id").cloned().unwrap_or(Value::Null),
+            "preview_asset_key": fixed_task.image2.get("preview_asset_key").cloned().unwrap_or(Value::Null),
+            "render_asset_url": fixed_task.image2.get("render_asset_url").cloned().unwrap_or(Value::Null),
+            "visual_contract_status": fixed_task.image2.get("visual_contract_status").cloned().unwrap_or(Value::Null),
+            "asset_provenance": compact_static_page_image2_asset_provenance_for_orchestrator(
+                fixed_task.image2.get("asset_provenance"),
             ),
         },
         "policies": {
@@ -8389,7 +8473,21 @@ function renderInsight(k){
         assert!(parsed["requirements"]["supplemental_metrics_summary"]
             .as_str()
             .is_some_and(|value| value.contains("candidate_available")));
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: STATIC_PAGE_IMAGE2_DATA_PUBLISH.to_string(),
+            task: Some("Run fixed static-page package".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:prompt-bound".to_string()),
+            fixed_task: Some(fixed_task),
+        };
+        let full_prompt =
+            build_cloudflare_orchestrator_prompt(&task_context).expect("full prompt should build");
+        assert!(full_prompt.chars().count() <= ORCHESTRATOR_FULL_PROMPT_LIMIT_CHARS);
+        assert!(full_prompt.contains("Image2 preview is mandatory visual contract"));
         assert!(!prompt_json.contains("secret-token"));
+        assert!(!full_prompt.contains("secret-token"));
     }
 
     #[test]
