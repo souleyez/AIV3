@@ -41212,6 +41212,18 @@ async fn external_channel_dispatch_model_tool_request(
                 )
                 .await
                 .map_err(ApiError::from_storage)?;
+            let existing_events = state
+                .storage
+                .assistant_runs()
+                .list_events(state.tenant_id, run_id)
+                .await
+                .map_err(ApiError::from_storage)?;
+            if let Some(reply) = external_channel_static_page_reply_from_events(
+                &existing_events,
+                &message.conversation_external_id,
+            ) {
+                return Ok(Some(reply));
+            }
             if let Some(reply) = maybe_enqueue_external_channel_static_page_pipeline(
                 state,
                 connection_id,
@@ -94843,6 +94855,63 @@ mod tests {
             event.event_name == "assistant_run.external_channel_static_page_publish_completed"
                 && event.payload["public_url"] == card["public_url"]
         }));
+
+        let draft_count_before = state
+            .storage
+            .static_page_drafts()
+            .list_by_assistant_run(state.tenant_id, run.id)
+            .await
+            .expect("drafts should list")
+            .len();
+        let tool_request = external_channel_model_tool_request(
+            r#"<V3_TOOL_REQUEST>{"tool":"static_page_artifact","intent":"create_or_update","reason":"用户要经营分析页面"}</V3_TOOL_REQUEST>"#,
+        )
+        .expect("tool request should parse");
+        let tool_reply = external_channel_dispatch_model_tool_request(
+            &state,
+            "generic-chat-main",
+            &connection,
+            run.id,
+            &assistant_request,
+            &message,
+            now,
+            "scripted",
+            &json!({"provider": "scripted"}),
+            tool_request,
+        )
+        .await
+        .expect("model tool dispatch should not fail")
+        .expect("model tool dispatch should reuse existing static-page reply");
+        assert_eq!(
+            tool_reply.task_status.as_deref(),
+            Some("static_page_published")
+        );
+        assert_eq!(tool_reply.artifact_links, vec![public_url.clone()]);
+        let events_after_tool = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .expect("events should list");
+        assert_eq!(
+            events_after_tool
+                .iter()
+                .filter(|event| event.event_name
+                    == "assistant_run.external_channel_static_page_pipeline_queued")
+                .count(),
+            1,
+            "model tool request should not enqueue a duplicate static-page pipeline"
+        );
+        assert_eq!(
+            state
+                .storage
+                .static_page_drafts()
+                .list_by_assistant_run(state.tenant_id, run.id)
+                .await
+                .expect("drafts should list")
+                .len(),
+            draft_count_before
+        );
     }
 
     #[tokio::test]
