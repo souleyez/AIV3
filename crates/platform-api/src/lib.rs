@@ -9720,6 +9720,10 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
                 .and_then(|reply| reply.get("card"))
                 .cloned()
         });
+    let raw_card = raw_card.map(|mut card| {
+        external_channel_static_page_enrich_report_card(&mut card);
+        card
+    });
     let direct_artifact_url = external_channel_public_artifact_url_from_links_value(
         object
             .get("artifact_links")
@@ -10760,6 +10764,19 @@ fn external_channel_static_page_focus_label(
         .next()
 }
 
+fn external_channel_static_page_public_url_with_payload_focus(
+    public_url: &str,
+    payload: &Value,
+) -> String {
+    if external_channel_static_page_focus_label_from_url(public_url).is_some() {
+        return public_url.to_string();
+    }
+    let Some(focus) = external_channel_static_page_focus_label(Some(payload), public_url) else {
+        return public_url.to_string();
+    };
+    static_page_public_url_with_focus_label(public_url, &focus)
+}
+
 fn external_channel_static_page_customer_ready_text_for_payload(
     base_text: &str,
     payload: Option<&Value>,
@@ -10792,9 +10809,16 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
     if !external_channel_reply_is_static_page_like(&reply) {
         return reply;
     }
-    let Some(public_url) = external_channel_public_artifact_url_from_reply(&reply) else {
+    let Some(raw_public_url) = external_channel_public_artifact_url_from_reply(&reply) else {
         return reply;
     };
+    let public_url = reply
+        .card
+        .as_ref()
+        .map(|card| {
+            external_channel_static_page_public_url_with_payload_focus(&raw_public_url, card)
+        })
+        .unwrap_or(raw_public_url);
     let raw_status = external_channel_reply_static_page_card_status(&reply)
         .or(reply.task_status.as_deref())
         .unwrap_or_default()
@@ -35765,6 +35789,14 @@ fn static_page_public_url_with_prompt_focus(public_url: &str, prompt: &str) -> S
     let Some(focus) = static_page_prompt_focus_query_value(prompt) else {
         return public_url.to_string();
     };
+    static_page_public_url_with_focus_label(public_url, focus)
+}
+
+fn static_page_public_url_with_focus_label(public_url: &str, focus: &str) -> String {
+    let focus = focus.trim();
+    if focus.is_empty() {
+        return public_url.to_string();
+    }
     let Ok(mut url) = reqwest::Url::parse(public_url) else {
         return public_url.to_string();
     };
@@ -40172,7 +40204,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .as_ref()
         .and_then(|payload| payload.get("public_url"))
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(|public_url| {
+            static_page_public_url_with_prompt_focus(public_url, &assistant_request.prompt)
+        });
     let generated_artifact_data_url = generated_artifact_payload
         .as_ref()
         .and_then(|payload| payload.get("data_url"))
@@ -55734,9 +55768,11 @@ fn external_channel_static_page_enrich_reply_card(reply: &mut ExternalBotReplyVi
 }
 
 fn external_channel_static_page_enrich_report_card(card: &mut Value) {
-    let Some(public_url) = external_channel_public_artifact_url_from_value(card) else {
+    let Some(raw_public_url) = external_channel_public_artifact_url_from_value(card) else {
         return;
     };
+    let public_url =
+        external_channel_static_page_public_url_with_payload_focus(&raw_public_url, card);
     let report_title = external_channel_static_page_report_title(card, &public_url);
     let data_url = external_channel_static_page_data_url(card, &public_url);
     let table_data_url = external_channel_static_page_export_url(
@@ -55778,6 +55814,24 @@ fn external_channel_static_page_enrich_report_card(card: &mut Value) {
         if external_channel_static_page_card_title_missing_or_generic(object.get(key)) {
             object.insert(key.to_string(), Value::String(report_title.clone()));
         }
+    }
+    if public_url != raw_public_url {
+        for key in [
+            "public_url",
+            "generated_artifact_url",
+            "download_url",
+            "html_download_url",
+        ] {
+            if object
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.trim() == raw_public_url)
+                || key == "public_url"
+            {
+                object.insert(key.to_string(), Value::String(public_url.clone()));
+            }
+        }
+        object.insert("artifact_links".to_string(), json!([public_url.clone()]));
     }
     external_channel_static_page_card_insert_if_missing(object, "data_url", data_url);
     external_channel_static_page_card_insert_if_missing(object, "table_data_url", table_data_url);
@@ -94705,7 +94759,8 @@ mod tests {
 
     #[test]
     fn external_channel_public_response_enriches_xinbai_report_card_exports() {
-        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A";
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
+        let focused_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A";
         let response = ExternalChannelEventResponse {
             accepted: true,
             assistant_run_id: Some(AssistantRunId::new()),
@@ -94720,6 +94775,9 @@ mod tests {
                     "public_url": public_url,
                     "title": "DataMax 经营分析报表",
                     "download_exports": [],
+                    "template_adaptation": {
+                        "userIntent": "取高"
+                    },
                 })),
                 artifact_links: vec![public_url.to_string()],
                 task_status: Some("static_page_published".to_string()),
@@ -94732,6 +94790,8 @@ mod tests {
         let public = external_channel_public_response(response);
         let card = public.reply.card.as_ref().expect("public report card");
 
+        assert_eq!(card["public_url"], json!(focused_url));
+        assert_eq!(public.reply.artifact_links, vec![focused_url.to_string()]);
         assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
         assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
         assert_eq!(
@@ -95697,7 +95757,7 @@ mod tests {
 
     #[test]
     fn external_channel_sse_completed_surfaces_xinbai_report_exports() {
-        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A";
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
         let response = ExternalChannelEventResponse {
             accepted: true,
             assistant_run_id: Some(AssistantRunId::new()),
@@ -95712,6 +95772,9 @@ mod tests {
                     "public_url": public_url,
                     "title": "DataMax 经营分析报表",
                     "download_exports": [],
+                    "template_adaptation": {
+                        "userIntent": "取高"
+                    },
                 })),
                 artifact_links: vec![public_url.to_string()],
                 task_status: Some("static_page_published".to_string()),
@@ -95725,6 +95788,7 @@ mod tests {
 
         assert!(body.contains("event: external_channel.completed"));
         assert!(body.contains(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert!(body.contains("focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A"));
         assert!(body.contains("\"download_exports\""));
         assert!(body.contains("table-data.csv"));
         assert!(body.contains("report.ppt"));
