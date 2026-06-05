@@ -179,6 +179,9 @@
   - Local verification passed for `cargo test -p platform-api external_channel_capability_routing_fixture --lib`, the focused static-page trigger test, and the prompt-focus URL test.
   - The live `run-external-capability-routing-smoke.ps1` now also collects report-card URL fields and validates `expected_focus` whenever a report link is returned by 8-server SSE.
   - `npm run smoke:external-report-export` now also validates the published report URL `focus` query value. The default expected focus is `取高机会`, matching the default take-high/sales-gap/assist prompt; operators can override with `--expected-focus` or disable with `--no-expected-focus`.
+- Continued by narrowly relaxing Xinbai/third-party business-report triggers for `经营健康度`, `整体经营情况/整体经营状况`, and store-specific `经营风险` prompts such as `看看新街口店经营风险`.
+  - The relaxation stays inside the external-channel business-report module workflow and does not broaden ordinary global Q&A; `经营风险是什么意思？` remains an ordinary answer case.
+  - Local verification passed for focused static-page trigger/focus tests and `external_channel_capability_routing_fixture`.
 
 ## Immediate Execution Queue
 

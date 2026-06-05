@@ -32,7 +32,7 @@ Local checks passed before rollout:
 | ordinary care question | Passed; returned normal text answer, no artifact/data-ingestion card |
 | dark mobile report redesign | Passed for routing/progress; returned `v3_static_page_pipeline`, preview ready and `static_page_publish_running`; final generated page was still queued/running in Cloudflare Codex at validation time |
 
-The local fixture now also covers the high-frequency Xinbai report prompts `取高`, `经营状况`, `风险识别`, `销售缺口统计一下，哪些门店需要助推？`, `看月度销售趋势`, and `客流降低预警`, including expected `?focus=` values for the accepted default template. The live smoke script collects report links from both `artifact_links[]` and report-card URL fields; when a selected fixture has `expected_focus` and a report link is returned, the script verifies that the returned URL carries the expected focus. These cases should be selected for live 8-server smoke when report routing or static-page template reuse changes.
+The local fixture now also covers the high-frequency Xinbai report prompts `取高`, `经营状况`, `经营健康度`, `看看整体经营情况`, `风险识别`, `看看新街口店经营风险`, `销售缺口统计一下，哪些门店需要助推？`, `看月度销售趋势`, and `客流降低预警`, including expected `?focus=` values for the accepted default template. The live smoke script collects report links from both `artifact_links[]` and report-card URL fields; when a selected fixture has `expected_focus` and a report link is returned, the script verifies that the returned URL carries the expected focus. These cases should be selected for live 8-server smoke when report routing or static-page template reuse changes.
 
 Event inspection:
 
