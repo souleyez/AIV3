@@ -11048,6 +11048,8 @@ fn external_channel_public_card_value(value: Value) -> Value {
                     || key_lc.contains("module")
                     || key_lc == "data"
                     || key_lc == "debug"
+                    || key_lc == "output"
+                    || key_lc == "validation"
                     || key_lc == "source_refs"
                     || key_lc == "auto_publish_after_preview"
                     || key_lc == "asset_provenance"
@@ -93326,6 +93328,8 @@ mod tests {
         assert_eq!(card["type"], json!("v3_static_page_pipeline"));
         assert_eq!(card["status"], json!("static_page_published"));
         assert_eq!(card["public_url"], json!(public_url));
+        assert!(card.get("output").is_none());
+        assert!(card.get("validation").is_none());
     }
 
     #[test]
