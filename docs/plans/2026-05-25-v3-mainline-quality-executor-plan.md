@@ -177,6 +177,7 @@
 - Continued by adding the same high-frequency Xinbai report prompts to `fixtures/external-channel-capability-routing/cases.jsonl`, including `expected_focus` checks for `取高机会`, `经营总览`, `风险店铺`, and `低活跃`.
   - Added negative fixture coverage for `取高是什么意思？` and `风险识别系统有哪些项目经历？` so metric explanations and resume/project-name questions stay ordinary Q&A.
   - Local verification passed for `cargo test -p platform-api external_channel_capability_routing_fixture --lib`, the focused static-page trigger test, and the prompt-focus URL test.
+  - The live `run-external-capability-routing-smoke.ps1` now also collects report-card URL fields and validates `expected_focus` whenever a report link is returned by 8-server SSE.
 
 ## Immediate Execution Queue
 

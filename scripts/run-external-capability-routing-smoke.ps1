@@ -53,6 +53,38 @@ function Add-IfPresent {
     }
 }
 
+function Add-LinkValues {
+    param([System.Collections.Generic.List[object]]$List, $Value)
+    if ($null -eq $Value) {
+        return
+    }
+    foreach ($link in @($Value)) {
+        if ($null -eq $link) {
+            continue
+        }
+        $text = "$link".Trim()
+        if ($text.Length -eq 0) {
+            continue
+        }
+        if (-not $List.Contains($text)) {
+            [void]$List.Add($text)
+        }
+    }
+}
+
+function Test-UrlFocus {
+    param([string]$Url, [string]$ExpectedFocus)
+    if ([string]::IsNullOrWhiteSpace($Url) -or [string]::IsNullOrWhiteSpace($ExpectedFocus)) {
+        return $false
+    }
+    if ($Url -notmatch "[?&]focus=([^&#]+)") {
+        return $false
+    }
+    $rawFocus = $Matches[1].Replace("+", " ")
+    $decodedFocus = [System.Uri]::UnescapeDataString($rawFocus)
+    return $decodedFocus -eq $ExpectedFocus
+}
+
 function Read-SseFrame {
     param([string[]]$Lines)
     $eventName = "message"
@@ -173,6 +205,11 @@ function Invoke-RoutingCase {
                 )) {
                     Add-IfPresent $cardTypes (Get-JsonProp $card "type")
                     Add-IfPresent $taskStatuses (Get-JsonProp $card "status")
+                    Add-LinkValues $artifactLinks (Get-JsonProp $card "artifact_links")
+                    Add-LinkValues $artifactLinks (Get-JsonProp $card "public_url")
+                    Add-LinkValues $artifactLinks (Get-JsonProp $card "generated_artifact_url")
+                    Add-LinkValues $artifactLinks (Get-JsonProp $card "download_url")
+                    Add-LinkValues $artifactLinks (Get-JsonProp $card "html_download_url")
                 }
 
                 foreach ($links in @(
@@ -184,9 +221,7 @@ function Invoke-RoutingCase {
                     if ($null -eq $links) {
                         continue
                     }
-                    foreach ($link in @($links)) {
-                        Add-IfPresent $artifactLinks $link
-                    }
+                    Add-LinkValues $artifactLinks $links
                 }
             } else {
                 [void]$frameLines.Add($line)
@@ -237,12 +272,29 @@ function Invoke-RoutingCase {
         }
     }
 
+    $expectedFocus = Get-JsonProp $Case "expected_focus"
+    $focusCheck = "not_configured"
+    if ($null -ne $expectedFocus -and "$expectedFocus" -ne "") {
+        if ($artifactLinks.Count -gt 0) {
+            $focusMatched = ($artifactLinks | Where-Object { Test-UrlFocus -Url "$_" -ExpectedFocus "$expectedFocus" }).Count -gt 0
+            if (-not $focusMatched) {
+                throw "Case $($Case.case_id) expected static page focus $expectedFocus, links: $($artifactLinks -join ', ')"
+            }
+            $focusCheck = "matched"
+        } else {
+            $focusCheck = "skipped_no_artifact_link"
+        }
+    }
+
     [pscustomobject]@{
         case_id = $Case.case_id
         expected_tool = $Case.expected_tool
+        expected_focus = $expectedFocus
+        focus_check = $focusCheck
         statuses = @($taskStatuses.ToArray())
         card_types = @($cardTypes.ToArray())
         artifact_link_count = $artifactLinks.Count
+        artifact_links = @($artifactLinks.ToArray())
         reply_types = @($replyTypes.ToArray())
     }
 }
