@@ -44,7 +44,8 @@
 - Existing: workflow queue aggregate status is already exposed at `/v1/workflow-tasks/queue-stats` and used by the external integrations UI.
 - Done: external-channel runtime status exposes active conversation guard count, recent pending idempotency preclaims, and direct-reply timeout budgets.
 - Done: Cloudflare fallback 2-way guard smoke checks Codex host cap and watched queue running counts without enqueuing expensive jobs.
-- Remaining: 8-server rollout validation with real credentials/cookies during a deployment window.
+- Remaining: 8-server mutation smoke with real third-party bearer and main-site cookie/dataset during a deployment window.
+- 2026-06-06 read-only validation update: 8-server runtime config matches the target concurrency profile (`CHAT_SESSION_WORKER_CONCURRENCY=20`, `STATIC_PAGE_IMAGE2_HTML_CONCURRENCY=5`, `CODEX_HOST_CLOUDFLARE_CONCURRENCY=2`, Right `gpt-5.5` assistant-chat profile `max_concurrency=20`, MiniMax fallback `max_concurrency=6`). Workflow queue stats are reachable and show no current visible backlog. Real 20-way third-party/main-site mutation smoke is still not proven because the local shell has no configured bearer/cookie.
 
 ## Task 1: Concurrency Contract And Runtime Knobs
 

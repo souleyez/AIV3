@@ -32,13 +32,25 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - `GET http://127.0.0.1:3000/v1/model-gateway/status` returned HTTP `401`.
   - Body prefix: `{"code":"auth_session_required","message":"请先登录主系统后再管理模型池"}`.
   - This confirms the status surface is operator-session protected; production validation still needs a private operator session/cookie or a sanitized operator-side receipt.
+- Model gateway profile database snapshot:
+  - `rightcode-gpt-5-5-default | assistant_chat | rightcode | gpt-5.5 | enabled=true | max_concurrency=20 | rpm_limit=120 | timeout_ms=45000`.
+  - `minimax-m2-7-fallback | assistant_chat | minimax | MiniMax-M2.7 | enabled=true | max_concurrency=6 | rpm_limit=120 | timeout_ms=120000`.
 - Worker concurrency config:
   - Services load `/etc/aiv3/aiv3.env` and `/etc/aiv3/minimax.env`.
   - `aiv3-static-page-worker.service` also loads `/etc/aiv3/codex-orchestrator.env` and has drop-in `/etc/systemd/system/aiv3-static-page-worker.service.d/20-codex-orchestrator.conf`.
   - Raw env files were not printed because they may contain credentials.
+  - `CHAT_SESSION_WORKER_CONCURRENCY=20`.
+  - `STATIC_PAGE_IMAGE2_HTML_CONCURRENCY=5`.
+  - `CODEX_HOST_CLOUDFLARE_CONCURRENCY=2`.
+  - `EXTERNAL_CHANNEL_DIRECT_REPLY_ATTEMPT_TIMEOUT_MS=45000`.
+  - `EXTERNAL_CHANNEL_DIRECT_REPLY_TOTAL_BUDGET_MS=120000`.
+  - `LLM_GATEWAY_EXTERNAL_CHANNEL_ACTIVE=true`.
+  - `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true`.
 - Database pool config:
-  - Not proven from the current read-only service snapshot.
-  - Must be validated through model-gateway runtime status or a sanitized operator command during Gate A.
+  - `CHAT_SESSION_DATABASE_MAX_CONNECTIONS=10`.
+  - `STATIC_PAGE_DATABASE_MAX_CONNECTIONS=8`.
+  - `CODEX_HOST_DATABASE_MAX_CONNECTIONS=4`.
+  - Platform API pool cap was not separately proven from the current snapshot.
 - Workflow queue status:
   - `GET http://127.0.0.1:3000/v1/workflow-tasks/queue-stats` returned HTTP `200`.
   - Snapshot generated at `2026-06-05T16:12:48Z`.
@@ -69,6 +81,8 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - 8 server is running the expected DataMax service set.
   - Platform API responds on local port `3000`.
   - Model-gateway status is correctly operator-session protected.
+  - Database profile snapshot confirms assistant-chat model pool target: Right `gpt-5.5` primary with concurrency 20 and MiniMax fallback with concurrency 6.
+  - Runtime environment confirms main chat concurrency 20, static-page/Image2 concurrency 5, and Cloudflare fallback concurrency 2.
   - Workflow queue stats are reachable and report no current visible backlog.
   - Private 20-way mutation smoke cannot be completed from this local shell until a bearer/cookie is configured.
 
