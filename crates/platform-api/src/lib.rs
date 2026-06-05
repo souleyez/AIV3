@@ -9889,6 +9889,20 @@ fn external_channel_public_stream_card_summary(
         "status_url",
         "poll_after_seconds",
         "public_url",
+        "generated_artifact_url",
+        "download_url",
+        "html_download_url",
+        "artifact_links",
+        "data_url",
+        "data_snapshot_url",
+        "table_data_url",
+        "ppt_download_url",
+        "markdown_download_url",
+        "text_download_url",
+        "download_exports",
+        "title",
+        "report_title",
+        "display_title",
         "preview_url",
         "requires_confirmation",
         "can_continue_same_conversation",
@@ -11412,12 +11426,31 @@ fn external_channel_static_page_sse_progress_payload(
     let progress_key = external_channel_static_page_sse_progress_key(&response);
     let text = external_channel_static_page_sse_progress_text(&response);
     let event_name = external_channel_static_page_sse_event_name(&status);
-    let public_response = external_channel_public_response(response);
+    let mut public_response = external_channel_public_response(response);
     let public_status = external_channel_public_status(&status);
     let conversation_external_id = public_response
         .reply
         .target_conversation_external_id
         .clone();
+    if public_status == "static_page_published" {
+        if let Some(public_url) =
+            external_channel_public_artifact_url_from_reply(&public_response.reply)
+        {
+            let payload = public_response.reply.card.clone().unwrap_or_else(|| {
+                json!({
+                    "public_url": public_url.clone(),
+                    "artifact_links": [public_url.clone()],
+                })
+            });
+            let published_reply = external_channel_static_page_published_reply(
+                &conversation_external_id,
+                &public_url,
+                &payload,
+            );
+            public_response.reply.card = published_reply.card;
+            public_response.reply.artifact_links = published_reply.artifact_links;
+        }
+    }
     let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
     let poll_after_seconds =
         external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
@@ -94583,8 +94616,7 @@ mod tests {
         assert!(!preview_body.contains("Image2"));
         assert!(!preview_body.contains("image_job_id"));
 
-        let published_url =
-            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/demo/index.html";
+        let published_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
         let published_response = ExternalChannelEventResponse {
             accepted: true,
             assistant_run_id: Some(assistant_run_id),
@@ -94615,6 +94647,11 @@ mod tests {
         assert!(published_body.contains(published_url));
         assert!(published_body.contains("已依据客户需求生成可访问的报表页面"));
         assert!(published_body.contains("页面链接"));
+        assert!(published_body.contains("\"download_exports\""));
+        assert!(published_body.contains("\"table_data_url\""));
+        assert!(published_body.contains("table-data.csv"));
+        assert!(published_body.contains("report.ppt"));
+        assert!(published_body.contains("report.md"));
     }
 
     #[test]
