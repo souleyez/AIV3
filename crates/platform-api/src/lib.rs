@@ -10758,6 +10758,10 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         return reply;
     }
     let terminal_artifact_status = external_channel_public_status_allows_artifact_link(&raw_status);
+    let final_publish_with_artifact_url = raw_status == "static_page_publish_running";
+    if !terminal_artifact_status && !final_publish_with_artifact_url {
+        return reply;
+    }
     if provisional_existing_artifact
         && !terminal_artifact_status
         && reply.reply_type != ExternalBotReplyTypeView::ArtifactLink
@@ -20926,7 +20930,10 @@ async fn ingest_external_channel_message_with_connection_inner(
                 )
                 .await
                 {
-                    Ok(reply) => reply,
+                    Ok(reply) => external_channel_reply_with_static_page_artifact_links(
+                        reply,
+                        static_page_side_reply.as_ref(),
+                    ),
                     Err(error)
                         if static_page_side_reply.is_some()
                             && error.payload.code
@@ -28968,13 +28975,24 @@ fn external_channel_reply_with_static_page_artifact_links(
     let Some(static_page_reply) = static_page_reply else {
         return reply;
     };
+    let mut first_public_link: Option<String> = None;
     for link in &static_page_reply.artifact_links {
         let link = link.trim();
         if link.is_empty() || !codex_host_fixed_task_public_artifact_url_allowed(link) {
             continue;
         }
+        if first_public_link.is_none() {
+            first_public_link = Some(link.to_string());
+        }
         if !reply.artifact_links.iter().any(|existing| existing == link) {
             reply.artifact_links.push(link.to_string());
+        }
+    }
+    if let Some(public_url) = first_public_link.as_deref() {
+        if let Some(text) = reply.text.take() {
+            reply.text = Some(external_channel_text_with_public_artifact_link(
+                text, public_url,
+            ));
         }
     }
     reply
@@ -30156,9 +30174,9 @@ fn external_channel_static_page_reply_from_events(
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                 {
-                    "DataMax 已复用已发布页面基线，Codex 正在生成最终静态页。"
+                    "DataMax 已复用已发布页面基线，正在生成最终静态页。"
                 } else {
-                    "DataMax 已生成效果图，Codex 正在生成最终静态页。"
+                    "DataMax 已完成页面规划，正在生成最终静态页。"
                 };
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
@@ -30213,9 +30231,9 @@ fn external_channel_static_page_reply_from_events(
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                "DataMax 已复用已发布页面基线，正在通过 Codex 发布静态页。"
+                "DataMax 已复用已发布页面基线，正在发布静态页。"
             } else {
-                "DataMax 已生成效果图，正在通过 Codex 发布静态页。"
+                "DataMax 已完成页面规划，正在发布静态页。"
             };
             return Some(external_channel_task_status_reply_for_conversation(
                 conversation_external_id,
@@ -30292,7 +30310,7 @@ fn external_channel_static_page_reply_from_events(
                 {
                     "DataMax 已复用已发布页面基线，正在准备发布最终静态页。"
                 } else {
-                    "DataMax 效果图已生成，正在准备发布最终静态页。"
+                    "DataMax 已完成页面过程预览，正在准备发布最终静态页。"
                 };
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
@@ -30336,7 +30354,7 @@ fn external_channel_static_page_reply_from_events(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
                     Some(
-                        "DataMax 效果图生成遇到临时网络或服务波动，已保持任务并继续轮询。"
+                        "DataMax 页面过程预览生成遇到临时网络或服务波动，已保持任务并继续轮询。"
                             .to_string(),
                     ),
                     Some(external_channel_static_page_card_with_template_payload(
@@ -30384,7 +30402,8 @@ fn external_channel_static_page_reply_from_events(
                     conversation_external_id,
                     "static_page_image_preview_running",
                     Some(
-                        "DataMax 效果图正在生成，当前不会占用本地 worker 长时间等待。".to_string(),
+                        "DataMax 页面过程预览正在生成，当前不会占用本地任务长时间等待。"
+                            .to_string(),
                     ),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
@@ -30419,7 +30438,10 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
-                    Some("DataMax 效果图生成较慢或遇到临时问题，已自动进入重试队列。".to_string()),
+                    Some(
+                        "DataMax 页面过程预览生成较慢或遇到临时问题，已自动进入重试队列。"
+                            .to_string(),
+                    ),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_retrying",
@@ -30452,7 +30474,10 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
-                    Some("DataMax 效果图生成遇到临时问题，正在等待重试或人工接管。".to_string()),
+                    Some(
+                        "DataMax 页面过程预览生成遇到临时问题，正在等待重试或人工接管。"
+                            .to_string(),
+                    ),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_retrying",
@@ -30480,7 +30505,7 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_queued",
-                    Some("DataMax 已提交效果图队列，生成后会自动继续发布。".to_string()),
+                    Some("DataMax 已提交页面生成队列，完成后会自动继续发布。".to_string()),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_queued",
@@ -30521,7 +30546,7 @@ fn external_channel_static_page_reply_from_events(
             return Some(external_channel_task_status_reply_for_conversation(
                 conversation_external_id,
                 task_status,
-                Some("DataMax 已接收静态页生成请求，正在生成效果图或发布页面。".to_string()),
+                Some("DataMax 已接收静态页生成请求，正在准备或发布页面。".to_string()),
                 Some(external_channel_static_page_card_with_template_payload(
                     json!({
                         "type": "v3_static_page_image2_pipeline",
@@ -31074,7 +31099,7 @@ fn external_channel_fixed_task_processing_reply(
     let task_status = format!("{prefix}_{state}");
     let text = match (template_id, state) {
         ("data_ingestion_analysis", "retrying") => {
-            "DataMax 数据接入分析仍在执行，Cloudflare Codex 超时后已自动续轮询。"
+            "DataMax 数据接入分析仍在执行，后台任务超时后已自动续轮询。"
         }
         ("data_ingestion_analysis", "cancelled") => {
             "DataMax 数据接入分析任务已取消，未写入生产库，也未继续修改数据集。"
@@ -31084,7 +31109,7 @@ fn external_channel_fixed_task_processing_reply(
         }
         ("data_ingestion_analysis", _) => "DataMax 数据接入分析正在执行，请稍后查询结果。",
         ("static_page_image2_data_publish", "retrying") => {
-            "DataMax 静态页发布仍在执行，Cloudflare Codex 超时后已自动续轮询。"
+            "DataMax 静态页发布仍在执行，后台任务超时后已自动续轮询。"
         }
         ("static_page_image2_data_publish", "cancelled") => {
             "DataMax 静态页发布任务已取消，未生成新的最终发布链接。"
@@ -31092,9 +31117,7 @@ fn external_channel_fixed_task_processing_reply(
         ("static_page_image2_data_publish", "failed") => {
             "DataMax 静态页发布未完成，需重试或人工处理。"
         }
-        ("static_page_image2_data_publish", _) => {
-            "DataMax 已生成效果图，Codex 正在生成最终静态页。"
-        }
+        ("static_page_image2_data_publish", _) => "DataMax 已完成页面规划，正在生成最终静态页。",
         ("answer_quality_autofix", "cancelled") => {
             "DataMax 回答质量修复诊断任务已取消，未应用任何代码或配置变更。"
         }
@@ -31103,10 +31126,10 @@ fn external_channel_fixed_task_processing_reply(
         }
         ("answer_quality_autofix", "failed") => "DataMax 回答质量修复诊断未完成。",
         ("answer_quality_autofix", _) => "DataMax 回答质量修复诊断正在执行。",
-        (_, "cancelled") => "DataMax Codex 固定任务已取消。",
-        (_, "retrying") => "DataMax Codex 固定任务仍在执行，已自动续轮询。",
-        (_, "failed") => "DataMax Codex 固定任务未完成，需重试或人工处理。",
-        _ => "DataMax Codex 固定任务正在执行。",
+        (_, "cancelled") => "DataMax 后台任务已取消。",
+        (_, "retrying") => "DataMax 后台任务仍在执行，已自动续轮询。",
+        (_, "failed") => "DataMax 后台任务未完成，需重试或人工处理。",
+        _ => "DataMax 后台任务正在执行。",
     };
     external_channel_task_status_reply_for_conversation(
         conversation_external_id,
@@ -31198,10 +31221,10 @@ fn external_channel_fixed_task_terminal_or_queued_reply(
         ("answer_quality_autofix", "needs_human") => "DataMax 回答质量修复诊断需要人工审查后继续。",
         ("answer_quality_autofix", "failed") => "DataMax 回答质量修复诊断未完成。",
         ("answer_quality_autofix", _) => "DataMax 已提交回答质量修复诊断任务。",
-        (_, "completed") => "DataMax Codex 固定任务已完成。",
-        (_, "needs_human") => "DataMax Codex 固定任务需要人工处理。",
-        (_, "failed") => "DataMax Codex 固定任务未完成，需重试或人工处理。",
-        _ => "DataMax Codex 固定任务已提交。",
+        (_, "completed") => "DataMax 后台任务已完成。",
+        (_, "needs_human") => "DataMax 后台任务需要人工处理。",
+        (_, "failed") => "DataMax 后台任务未完成，需重试或人工处理。",
+        _ => "DataMax 后台任务已提交。",
     };
     let card = json!({
         "type": external_channel_fixed_task_card_type(template_id),
@@ -32666,8 +32689,6 @@ fn external_channel_prompt_requests_business_report_module_workflow(
             "能不能",
             "可不可以",
             "吗",
-            "？",
-            "?",
             "介绍",
             "说明",
             "含义",
@@ -53418,7 +53439,7 @@ async fn mark_static_page_draft_generated_artifact_publish_queued(
     payload.insert("status".to_string(), json!("rendering"));
     payload.insert(
         "modelSummary".to_string(),
-        json!("效果图已生成，Cloudflare Codex 正在制作最终静态页。"),
+        json!("页面过程预览已生成，DataMax 正在制作最终静态页。"),
     );
     payload.insert("finalPage".to_string(), Value::Object(final_page));
     payload.insert("updatedAt".to_string(), json!(now));
@@ -53787,7 +53808,7 @@ async fn mark_static_page_draft_generated_artifact_published(
     payload.insert("status".to_string(), json!("rendered"));
     payload.insert(
         "modelSummary".to_string(),
-        json!("Cloudflare Codex 已生成最终静态页，可直接打开链接查看。"),
+        json!("DataMax 已生成最终静态页，可直接打开链接查看。"),
     );
     payload.insert("finalPage".to_string(), Value::Object(final_page));
     payload.insert("updatedAt".to_string(), json!(now));
@@ -53887,7 +53908,7 @@ async fn mark_static_page_draft_generated_artifact_publish_failed(
     payload.insert("status".to_string(), json!("preview_ready"));
     payload.insert(
         "modelSummary".to_string(),
-        json!("Image2 效果图已完成，但视觉合同静态页发布失败；需要重试 GPT-Image-2 到 Codex 动态网站发布链路。"),
+        json!("页面过程预览已完成，但最终静态页发布失败；需要重试页面发布链路。"),
     );
     payload.insert("finalPage".to_string(), Value::Object(final_page));
     payload.insert("updatedAt".to_string(), json!(now));
@@ -54842,7 +54863,7 @@ fn external_channel_static_page_publish_failed_reply_from_event_payload(
         conversation_external_id,
         "static_page_publish_failed",
         Some(
-            "DataMax 已生成效果图，但最终静态页暂未完成，系统已记录原因，可继续补充数据、重试或转人工处理。"
+            "DataMax 已完成页面规划，但最终静态页暂未完成，系统已记录原因，可继续补充数据、重试或转人工处理。"
                 .to_string(),
         ),
         Some(external_channel_static_page_card_with_template_payload(json!({
@@ -97135,6 +97156,7 @@ mod tests {
             "经营状况",
             "风险识别",
             "销售缺口统计一下",
+            "销售缺口统计一下，哪些门店需要助推？请同时正常回答重点。",
             "哪些需要助推的门店",
             "按取高统计门店排行",
         ] {
@@ -97143,6 +97165,35 @@ mod tests {
                 "prompt should request a focused business-report module: {prompt}"
             );
         }
+    }
+
+    #[test]
+    fn external_channel_text_reply_keeps_answer_and_appends_static_page_link() {
+        let message = sample_external_bot_message();
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html";
+        let text_reply = external_channel_text_reply(&message, "这是正常业务回答。", "answered");
+        let static_page_reply = external_channel_static_page_published_reply(
+            &message.conversation_external_id,
+            public_url,
+            &json!({
+                "public_url": public_url,
+                "artifact_links": [public_url],
+            }),
+        );
+
+        let merged = external_channel_reply_with_static_page_artifact_links(
+            text_reply,
+            Some(&static_page_reply),
+        );
+
+        assert_eq!(merged.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(merged.task_status.as_deref(), Some("answered"));
+        assert_eq!(merged.artifact_links, vec![public_url.to_string()]);
+        let text = merged.text.as_deref().expect("merged text");
+        assert!(text.contains("这是正常业务回答。"));
+        assert!(text.contains("页面链接：[点击查看报表]"));
+        assert_eq!(text.matches(public_url).count(), 1);
     }
 
     #[test]

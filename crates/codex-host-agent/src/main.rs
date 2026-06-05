@@ -2656,7 +2656,7 @@ async fn mark_external_static_page_draft_published(
     payload.insert("status".to_string(), json!("rendered"));
     payload.insert(
         "modelSummary".to_string(),
-        json!("Cloudflare Codex 已生成最终静态页，可直接打开链接查看。"),
+        json!("DataMax 已生成最终静态页，可直接打开链接查看。"),
     );
     payload.insert("finalPage".to_string(), Value::Object(final_page));
     payload.insert("updatedAt".to_string(), json!(now));
