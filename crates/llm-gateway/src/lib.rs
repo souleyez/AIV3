@@ -215,6 +215,38 @@ pub struct OpenAiCompatibleLlmProviderConfig {
     pub api_path: String,
     pub api_key: Option<String>,
     pub timeout_ms: Option<u64>,
+    pub reasoning_effort: Option<String>,
+    pub reasoning_wire_field: OpenAiCompatibleReasoningWireField,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiCompatibleReasoningWireField {
+    ReasoningObject,
+    ReasoningEffort,
+}
+
+impl Default for OpenAiCompatibleReasoningWireField {
+    fn default() -> Self {
+        Self::ReasoningObject
+    }
+}
+
+impl OpenAiCompatibleReasoningWireField {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReasoningObject => "reasoning",
+            Self::ReasoningEffort => "reasoning_effort",
+        }
+    }
+
+    fn from_env_value(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "reasoning" | "reasoning_object" | "responses" => Some(Self::ReasoningObject),
+            "reasoning_effort" | "chat_completions" | "chat" => Some(Self::ReasoningEffort),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -405,6 +437,10 @@ pub struct ModelProviderProfile {
     pub wire_api: ModelProfileWireApi,
     pub auth_env_key_name: Option<String>,
     pub capabilities: ModelCapabilityManifest,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub reasoning_wire_field: OpenAiCompatibleReasoningWireField,
     pub timeout_ms: Option<u64>,
     pub rate_limit: ModelRateLimitHints,
     pub cost: ModelCostHints,
@@ -427,6 +463,8 @@ impl ModelProviderProfile {
             wire_api: ModelProfileWireApi::ChatCompletions,
             auth_env_key_name: None,
             capabilities: ModelCapabilityManifest::default(),
+            reasoning_effort: None,
+            reasoning_wire_field: OpenAiCompatibleReasoningWireField::default(),
             timeout_ms: None,
             rate_limit: ModelRateLimitHints::default(),
             cost: ModelCostHints::default(),
@@ -456,6 +494,9 @@ impl ModelProviderProfile {
             let capability_names = split_csv_env(&capabilities);
             profile.capabilities = ModelCapabilityManifest::from_names(&capability_names);
         }
+        profile.reasoning_effort = optional_env_reasoning_effort(env_prefix, "REASONING_EFFORT")?;
+        profile.reasoning_wire_field =
+            optional_env_reasoning_wire_field(env_prefix, "REASONING_FIELD")?.unwrap_or_default();
         profile.rate_limit = ModelRateLimitHints {
             requests_per_minute: optional_env_u32(env_prefix, "RATE_LIMIT_RPM")?,
             tokens_per_minute: optional_env_u32(env_prefix, "RATE_LIMIT_TPM")?,
@@ -532,6 +573,8 @@ impl ModelProviderProfile {
             },
             "capabilities": self.capabilities.names(),
             "capability_flags": &self.capabilities,
+            "reasoning_effort": self.reasoning_effort.as_deref(),
+            "reasoning_field": self.reasoning_wire_field.as_str(),
             "timeout_ms": self.timeout_ms,
             "rate_limit": &self.rate_limit,
             "cost": &self.cost,
@@ -976,6 +1019,35 @@ fn optional_env_string(env_prefix: &str, suffix: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn optional_env_reasoning_effort(env_prefix: &str, suffix: &str) -> Result<Option<String>> {
+    optional_env_string(env_prefix, suffix)
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "none" | "minimal" | "low" | "medium" | "high" | "xhigh" => Ok(normalized),
+                _ => Err(anyhow!(
+                    "invalid {env_prefix}_{suffix} value {value}; expected none, minimal, low, medium, high, or xhigh"
+                )),
+            }
+        })
+        .transpose()
+}
+
+fn optional_env_reasoning_wire_field(
+    env_prefix: &str,
+    suffix: &str,
+) -> Result<Option<OpenAiCompatibleReasoningWireField>> {
+    optional_env_string(env_prefix, suffix)
+        .map(|value| {
+            OpenAiCompatibleReasoningWireField::from_env_value(&value).ok_or_else(|| {
+                anyhow!(
+                    "invalid {env_prefix}_{suffix} value {value}; expected reasoning or reasoning_effort"
+                )
+            })
+        })
+        .transpose()
+}
+
 fn optional_env_u32(env_prefix: &str, suffix: &str) -> Result<Option<u32>> {
     optional_env_string(env_prefix, suffix)
         .map(|value| {
@@ -1296,8 +1368,14 @@ pub fn build_provider_from_env(
                 return Ok(Arc::new(provider));
             }
 
-            if let Some((api_base_url, api_path, api_key, timeout_ms)) =
-                openai_compatible_runtime_config_from_env(env_prefix, &runtime_provider)?
+            if let Some((
+                api_base_url,
+                api_path,
+                api_key,
+                timeout_ms,
+                reasoning_effort,
+                reasoning_wire_field,
+            )) = openai_compatible_runtime_config_from_env(env_prefix, &runtime_provider)?
             {
                 let provider = OpenAiCompatibleLlmProvider::new(
                     runtime_provider,
@@ -1306,6 +1384,8 @@ pub fn build_provider_from_env(
                         api_path,
                         api_key,
                         timeout_ms,
+                        reasoning_effort,
+                        reasoning_wire_field,
                     },
                 )?
                 .with_prompt_registry(prompt_registry);
@@ -1356,6 +1436,14 @@ pub fn build_provider_from_profile_env(
                 api_path,
                 api_key,
                 timeout_ms: profile.timeout_ms,
+                reasoning_effort: profile.reasoning_effort.clone().or(
+                    optional_env_reasoning_effort(env_prefix, "REASONING_EFFORT")?,
+                ),
+                reasoning_wire_field: optional_env_reasoning_wire_field(
+                    env_prefix,
+                    "REASONING_FIELD",
+                )?
+                .unwrap_or_else(|| profile.reasoning_wire_field.clone()),
             },
         )?
         .with_prompt_registry(prompt_registry);
@@ -1373,13 +1461,34 @@ pub fn build_provider_from_profile_env(
 fn openai_compatible_runtime_config_from_env(
     env_prefix: &str,
     runtime_provider: &str,
-) -> Result<Option<(String, String, Option<String>, Option<u64>)>> {
+) -> Result<
+    Option<(
+        String,
+        String,
+        Option<String>,
+        Option<u64>,
+        Option<String>,
+        OpenAiCompatibleReasoningWireField,
+    )>,
+> {
     if let Ok(api_base_url) = std::env::var(format!("{env_prefix}_RUNTIME_BASE_URL")) {
         let api_path = std::env::var(format!("{env_prefix}_RUNTIME_API_PATH"))
             .unwrap_or_else(|_| "/v1/chat/completions".to_string());
         let api_key = std::env::var(format!("{env_prefix}_RUNTIME_API_KEY")).ok();
         let timeout_ms = optional_env_u64(env_prefix, "RUNTIME_TIMEOUT_MS")?;
-        return Ok(Some((api_base_url, api_path, api_key, timeout_ms)));
+        let reasoning_effort =
+            optional_env_reasoning_effort(env_prefix, "RUNTIME_REASONING_EFFORT")?;
+        let reasoning_wire_field =
+            optional_env_reasoning_wire_field(env_prefix, "RUNTIME_REASONING_FIELD")?
+                .unwrap_or_default();
+        return Ok(Some((
+            api_base_url,
+            api_path,
+            api_key,
+            timeout_ms,
+            reasoning_effort,
+            reasoning_wire_field,
+        )));
     }
 
     if runtime_provider.eq_ignore_ascii_case("minimax") {
@@ -1391,7 +1500,18 @@ fn openai_compatible_runtime_config_from_env(
             let timeout_ms = optional_env_u64(env_prefix, "RUNTIME_TIMEOUT_MS")?
                 .or(optional_env_u64("MINIMAX", "TIMEOUT_MS")?)
                 .or(Some(120_000));
-            return Ok(Some((api_base_url, api_path, Some(api_key), timeout_ms)));
+            let reasoning_effort = optional_env_reasoning_effort("MINIMAX", "REASONING_EFFORT")?;
+            let reasoning_wire_field =
+                optional_env_reasoning_wire_field("MINIMAX", "REASONING_FIELD")?
+                    .unwrap_or_default();
+            return Ok(Some((
+                api_base_url,
+                api_path,
+                Some(api_key),
+                timeout_ms,
+                reasoning_effort,
+                reasoning_wire_field,
+            )));
         }
     }
 
@@ -1603,6 +1723,23 @@ impl OpenAiCompatibleLlmProvider {
     }
 }
 
+fn apply_openai_compatible_reasoning_config(
+    body: &mut Value,
+    config: &OpenAiCompatibleLlmProviderConfig,
+) {
+    let Some(effort) = config.reasoning_effort.as_deref() else {
+        return;
+    };
+    match config.reasoning_wire_field {
+        OpenAiCompatibleReasoningWireField::ReasoningObject => {
+            body["reasoning"] = json!({ "effort": effort });
+        }
+        OpenAiCompatibleReasoningWireField::ReasoningEffort => {
+            body["reasoning_effort"] = json!(effort);
+        }
+    }
+}
+
 impl LlmProvider for OpenAiCompatibleLlmProvider {
     fn name(&self) -> &str {
         &self.provider_name
@@ -1629,10 +1766,11 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
             "content": request.input,
         }));
 
-        let body = json!({
+        let mut body = json!({
             "model": request.model,
             "messages": messages,
         });
+        apply_openai_compatible_reasoning_config(&mut body, &self.config);
 
         let mut http_request = self.client.post(&endpoint).json(&body);
         if let Some(api_key) = self.config.api_key.as_deref() {
@@ -1807,7 +1945,7 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
             "content": request.input,
         }));
 
-        let body = json!({
+        let mut body = json!({
             "model": request.model,
             "messages": messages,
             "stream": true,
@@ -1815,6 +1953,7 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
                 "include_usage": true,
             },
         });
+        apply_openai_compatible_reasoning_config(&mut body, &self.config);
 
         let mut http_request = self.client.post(&endpoint).json(&body);
         if let Some(api_key) = self.config.api_key.as_deref() {
@@ -3477,6 +3616,8 @@ mod tests {
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: Some("test-key".to_string()),
                 timeout_ms: None,
+                reasoning_effort: None,
+                reasoning_wire_field: OpenAiCompatibleReasoningWireField::default(),
             },
         )
         .expect("provider")
@@ -3525,6 +3666,52 @@ mod tests {
     }
 
     #[test]
+    fn openai_compatible_provider_sends_configured_reasoning_effort() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("\"reasoning\":{\"effort\":\"medium\"}"));
+            write_http_json_response(
+                &mut stream,
+                200,
+                r#"{
+                    "id": "chatcmpl_reasoning_123",
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": { "content": "REASONING_MEDIUM_OK" }
+                    }]
+                }"#,
+            );
+        });
+
+        let provider = OpenAiCompatibleLlmProvider::new(
+            "rightcode",
+            OpenAiCompatibleLlmProviderConfig {
+                api_base_url: format!("http://{addr}"),
+                api_path: "/v1/chat/completions".to_string(),
+                api_key: Some("test-key".to_string()),
+                timeout_ms: None,
+                reasoning_effort: Some("medium".to_string()),
+                reasoning_wire_field: OpenAiCompatibleReasoningWireField::ReasoningObject,
+            },
+        )
+        .expect("provider");
+        let response = provider
+            .complete(&LlmRequest {
+                model: "gpt-5.5".to_string(),
+                lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                system_prompt_key: None,
+                input: "Reply with REASONING_MEDIUM_OK".to_string(),
+            })
+            .expect("reasoning effort provider request should succeed");
+
+        server.join().expect("server join");
+        assert_eq!(response.output_text, "REASONING_MEDIUM_OK");
+    }
+
+    #[test]
     fn openai_compatible_provider_streams_chat_completion_chunks() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let addr = listener.local_addr().expect("addr");
@@ -3560,6 +3747,8 @@ mod tests {
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: None,
                 timeout_ms: None,
+                reasoning_effort: None,
+                reasoning_wire_field: OpenAiCompatibleReasoningWireField::default(),
             },
         )
         .expect("provider");
@@ -3666,6 +3855,8 @@ mod tests {
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: Some("test-key".to_string()),
                 timeout_ms: None,
+                reasoning_effort: None,
+                reasoning_wire_field: OpenAiCompatibleReasoningWireField::default(),
             },
         )
         .expect("provider");
@@ -3706,6 +3897,8 @@ mod tests {
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: Some("test-key".to_string()),
                 timeout_ms: Some(25),
+                reasoning_effort: None,
+                reasoning_wire_field: OpenAiCompatibleReasoningWireField::default(),
             },
         )
         .expect("provider");
@@ -3769,6 +3962,8 @@ mod tests {
                 api_path: "/v1/chat/completions".to_string(),
                 api_key: Some("client-secret-key".to_string()),
                 timeout_ms: None,
+                reasoning_effort: None,
+                reasoning_wire_field: OpenAiCompatibleReasoningWireField::default(),
             },
         )
         .expect("provider");
