@@ -10589,13 +10589,154 @@ fn external_channel_text_with_public_artifact_link(
     }
     text.push_str("页面链接：[点击查看报表](");
     text.push_str(public_url);
-    text.push_str(")\n\n页面地址: ");
-    text.push_str(public_url);
+    text.push(')');
     text
 }
 
 fn external_channel_static_page_customer_ready_text() -> &'static str {
     "已依据客户需求生成可访问的报表页面。"
+}
+
+fn external_channel_static_page_template_adaptation_from_payload(
+    payload: &Value,
+) -> Option<&Value> {
+    [
+        payload.get("template_adaptation"),
+        payload.get("templateAdaptation"),
+        payload.pointer("/source_refs/template_adaptation"),
+        payload.pointer("/source_refs/templateAdaptation"),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.is_null())
+}
+
+fn external_channel_static_page_focus_label_from_url(public_url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(public_url).ok()?;
+    url.query_pairs()
+        .find(|(key, _)| key == "focus")
+        .map(|(_, value)| value.into_owned())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn external_channel_static_page_user_intent_from_payload(payload: &Value) -> Option<&str> {
+    [
+        payload.pointer("/template_adaptation/userIntent"),
+        payload.pointer("/templateAdaptation/userIntent"),
+        payload.pointer("/template_adaptation/user_intent"),
+        payload.pointer("/templateAdaptation/user_intent"),
+        payload.pointer("/source_refs/template_adaptation/userIntent"),
+        payload.pointer("/source_refs/templateAdaptation/userIntent"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+}
+
+fn external_channel_static_page_focus_module_labels(payload: Option<&Value>) -> Vec<String> {
+    let mut labels = Vec::new();
+    let Some(payload) = payload else {
+        return labels;
+    };
+    let Some(adaptation) = external_channel_static_page_template_adaptation_from_payload(payload)
+    else {
+        return labels;
+    };
+    let Some(focus_items) = adaptation.get("focus").and_then(Value::as_array) else {
+        return labels;
+    };
+    for item in focus_items {
+        let Some(label) = item.get("label").and_then(Value::as_str).map(str::trim) else {
+            continue;
+        };
+        if label.is_empty() || label == "当前意向优先" {
+            continue;
+        }
+        if !labels.iter().any(|existing| existing == label) {
+            labels.push(label.to_string());
+        }
+        if labels.len() >= 3 {
+            break;
+        }
+    }
+    labels
+}
+
+fn external_channel_static_page_default_modules_for_focus(focus: &str) -> Vec<String> {
+    match focus {
+        "取高机会" => vec![
+            "最近可取高门店机会榜".to_string(),
+            "销售额缺口/需增销售额".to_string(),
+            "门店/品牌行动建议".to_string(),
+        ],
+        "风险店铺" => vec![
+            "低销售风险店铺".to_string(),
+            "销售预警分层".to_string(),
+            "门店跟进动作".to_string(),
+        ],
+        "低活跃" => vec![
+            "低活跃门店".to_string(),
+            "异常销售波动".to_string(),
+            "恢复动作建议".to_string(),
+        ],
+        "品牌明细" => vec![
+            "品牌/门店明细".to_string(),
+            "合同与租金字段".to_string(),
+            "可筛选明细表".to_string(),
+        ],
+        "品类业态" => vec![
+            "品类业态分布".to_string(),
+            "区域/门店对比".to_string(),
+            "结构变化分析".to_string(),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn external_channel_static_page_focus_label(
+    payload: Option<&Value>,
+    public_url: &str,
+) -> Option<String> {
+    if let Some(focus) = external_channel_static_page_focus_label_from_url(public_url) {
+        return Some(focus);
+    }
+    if let Some(intent) = payload.and_then(external_channel_static_page_user_intent_from_payload) {
+        if let Some(focus) = static_page_prompt_focus_query_value(intent) {
+            return Some(focus.to_string());
+        }
+    }
+    external_channel_static_page_focus_module_labels(payload)
+        .into_iter()
+        .next()
+}
+
+fn external_channel_static_page_customer_ready_text_for_payload(
+    base_text: &str,
+    payload: Option<&Value>,
+    public_url: &str,
+) -> String {
+    let mut text = base_text.to_string();
+    let focus = external_channel_static_page_focus_label(payload, public_url);
+    if let Some(focus) = focus.as_deref() {
+        text.push_str("\n系统识别到本轮关注焦点：");
+        text.push_str(focus);
+        text.push('。');
+    }
+    let mut modules = external_channel_static_page_focus_module_labels(payload);
+    if modules.is_empty() {
+        if let Some(focus) = focus.as_deref() {
+            modules = external_channel_static_page_default_modules_for_focus(focus);
+        }
+    }
+    if !modules.is_empty() {
+        text.push_str("\n报表会优先呈现：");
+        text.push_str(&modules.join("、"));
+        text.push('。');
+    }
+    text
 }
 
 fn external_channel_static_page_reply_with_public_artifact_terminal(
@@ -10620,23 +10761,33 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
     if !terminal_artifact_status && reply.reply_type != ExternalBotReplyTypeView::ArtifactLink {
         return reply;
     }
+    let ready_text = external_channel_static_page_customer_ready_text_for_payload(
+        external_channel_static_page_customer_ready_text(),
+        reply.card.as_ref(),
+        &public_url,
+    );
     if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
         reply.text = Some(external_channel_text_with_public_artifact_link(
-            external_channel_static_page_customer_ready_text(),
+            ready_text,
             &public_url,
         ));
     } else if raw_status == "static_page_stable_artifact_reused" {
         reply.text = Some(external_channel_text_with_public_artifact_link(
-            external_channel_static_page_customer_ready_text(),
+            ready_text,
             &public_url,
         ));
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
     } else {
-        reply.text = Some(external_channel_text_with_public_artifact_link(
+        let pending_text = external_channel_static_page_customer_ready_text_for_payload(
             "已依据客户需求准备好可查看的报表页面，页面更新完成后会继续同步最新结果。",
+            reply.card.as_ref(),
+            &public_url,
+        );
+        reply.text = Some(external_channel_text_with_public_artifact_link(
+            pending_text,
             &public_url,
         ));
     }
@@ -11066,13 +11217,21 @@ fn external_channel_static_page_sse_progress_text(
     if let Some(public_url) = external_channel_public_artifact_url_from_reply(&response.reply) {
         if status == "static_page_published" {
             return external_channel_text_with_public_artifact_link(
-                external_channel_static_page_customer_ready_text(),
+                external_channel_static_page_customer_ready_text_for_payload(
+                    external_channel_static_page_customer_ready_text(),
+                    response.reply.card.as_ref(),
+                    &public_url,
+                ),
                 &public_url,
             );
         }
         if status == "static_page_stable_artifact_reused" {
             return external_channel_text_with_public_artifact_link(
-                external_channel_static_page_customer_ready_text(),
+                external_channel_static_page_customer_ready_text_for_payload(
+                    external_channel_static_page_customer_ready_text(),
+                    response.reply.card.as_ref(),
+                    &public_url,
+                ),
                 &public_url,
             );
         }
@@ -13152,6 +13311,12 @@ enum ExternalMessageEventPreclaim {
     Claimed,
     ExistingRun(AssistantRunId),
     ExistingPending,
+}
+
+#[derive(Clone, Debug)]
+struct ExistingExternalMessageEvent {
+    assistant_run_id: Option<AssistantRunId>,
+    payload_summary: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -19949,6 +20114,7 @@ async fn ingest_external_channel_event_stream(
     let resume_since_sequence =
         parse_external_channel_stream_resume_sequence(&headers, &query, &payload);
     let message = parse_external_bot_message_payload(payload, &connection)?;
+    let payload_summary = external_bot_message_payload_summary(&message);
     let started_data = json!({
         "connection_id": connection_id.clone(),
         "conversation_external_id": message.conversation_external_id.clone(),
@@ -19972,9 +20138,36 @@ async fn ingest_external_channel_event_stream(
             started_data,
         ),
     );
-    if let Some(existing_run_id) =
-        load_external_message_event_run_id(&state, &message.idempotency_key).await?
+    if let Some(existing) =
+        load_external_message_event_by_idempotency(&state, &message.idempotency_key).await?
     {
+        ensure_external_message_event_payload_matches(
+            &message.idempotency_key,
+            &existing.payload_summary,
+            &payload_summary,
+        )?;
+        let Some(existing_run_id) = existing.assistant_run_id else {
+            let stream = stream::iter(vec![
+                Ok(Bytes::from(started)),
+                Ok(Bytes::from(sse_json_event(
+                    "external_channel.processing",
+                    external_channel_sse_public_payload(
+                        None,
+                        &message.idempotency_key,
+                        &message.conversation_external_id,
+                        external_channel_static_page_sse_sequence("processing"),
+                        "processing",
+                        "processing",
+                        "同一幂等键的消息正在处理中。",
+                        None,
+                        None,
+                        json!({"status": "processing"}),
+                    ),
+                ))),
+                Ok(Bytes::from(sse_json_event("done", json!({"ok": true})))),
+            ]);
+            return Ok(sse_stream_response(stream));
+        };
         let response = load_external_channel_assistant_run_reply_response(
             &state,
             &connection_id,
@@ -20205,9 +20398,26 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
-    if let Some(existing_run_id) =
-        load_external_message_event_run_id(&state, &message.idempotency_key).await?
+    let payload_summary = external_bot_message_payload_summary(&message);
+    if let Some(existing) =
+        load_external_message_event_by_idempotency(&state, &message.idempotency_key).await?
     {
+        ensure_external_message_event_payload_matches(
+            &message.idempotency_key,
+            &existing.payload_summary,
+            &payload_summary,
+        )?;
+        let Some(existing_run_id) = existing.assistant_run_id else {
+            return Ok((
+                StatusCode::ACCEPTED,
+                ExternalChannelEventResponse {
+                    accepted: true,
+                    assistant_run_id: None,
+                    idempotency_key: message.idempotency_key.clone(),
+                    reply: external_channel_task_status_reply(&message, "processing"),
+                },
+            ));
+        };
         let reply = external_channel_duplicate_reply(state, existing_run_id, &message).await?;
         return Ok((
             StatusCode::OK,
@@ -20312,7 +20522,6 @@ async fn ingest_external_channel_message_with_connection_inner(
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    let payload_summary = external_bot_message_payload_summary(&message);
     match preclaim_external_message_event(state, connection_id, &message, &payload_summary).await? {
         ExternalMessageEventPreclaim::Claimed => {}
         ExternalMessageEventPreclaim::ExistingRun(existing_run_id) => {
@@ -24917,13 +25126,13 @@ async fn update_external_sync_run_started(
     Ok(())
 }
 
-async fn load_external_message_event_run_id(
+async fn load_external_message_event_by_idempotency(
     state: &AppState,
     idempotency_key: &str,
-) -> std::result::Result<Option<AssistantRunId>, ApiError> {
+) -> std::result::Result<Option<ExistingExternalMessageEvent>, ApiError> {
     let row = sqlx::query(
         r#"
-        select assistant_run_id
+        select assistant_run_id, payload_summary
         from external_message_events
         where tenant_id = $1 and idempotency_key = $2
         "#,
@@ -24934,9 +25143,61 @@ async fn load_external_message_event_run_id(
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
 
-    Ok(row
-        .and_then(|row| row.get::<Option<Uuid>, _>("assistant_run_id"))
-        .map(AssistantRunId))
+    Ok(row.map(|row| ExistingExternalMessageEvent {
+        assistant_run_id: row
+            .get::<Option<Uuid>, _>("assistant_run_id")
+            .map(AssistantRunId),
+        payload_summary: row.get("payload_summary"),
+    }))
+}
+
+#[cfg(test)]
+async fn load_external_message_event_run_id(
+    state: &AppState,
+    idempotency_key: &str,
+) -> std::result::Result<Option<AssistantRunId>, ApiError> {
+    Ok(
+        load_external_message_event_by_idempotency(state, idempotency_key)
+            .await?
+            .and_then(|event| event.assistant_run_id),
+    )
+}
+
+fn ensure_external_message_event_payload_matches(
+    idempotency_key: &str,
+    existing_payload_summary: &Value,
+    current_payload_summary: &Value,
+) -> std::result::Result<(), ApiError> {
+    if existing_payload_summary == current_payload_summary {
+        return Ok(());
+    }
+    Err(ApiError {
+        status: StatusCode::CONFLICT,
+        payload: ApiErrorResponse {
+            code: "external_channel_idempotency_payload_mismatch".to_string(),
+            message: "idempotency_key has already been used with a different external message payload; use a new message_external_id and idempotency_key when the image, attachment, text, or scope changes".to_string(),
+            details: Some(json!({
+                "idempotency_key": idempotency_key,
+                "expected": external_message_event_conflict_public_summary(existing_payload_summary),
+                "received": external_message_event_conflict_public_summary(current_payload_summary),
+            })),
+        },
+    })
+}
+
+fn external_message_event_conflict_public_summary(summary: &Value) -> Value {
+    json!({
+        "message_external_id": summary.get("message_external_id").cloned().unwrap_or(Value::Null),
+        "message_type": summary.get("message_type").cloned().unwrap_or(Value::Null),
+        "text_chars": summary.get("text_chars").cloned().unwrap_or(Value::Null),
+        "attachment_count": summary.get("attachment_count").cloned().unwrap_or(Value::Null),
+        "attachments": summary.get("attachments").cloned().unwrap_or(Value::Null),
+        "dataset_external_count": summary.get("dataset_external_count").cloned().unwrap_or(Value::Null),
+        "requested_skill_count": summary.get("requested_skill_count").cloned().unwrap_or(Value::Null),
+        "output_format": summary.get("output_format").cloned().unwrap_or(Value::Null),
+        "render_mode": summary.get("render_mode").cloned().unwrap_or(Value::Null),
+        "artifact_type": summary.get("artifact_type").cloned().unwrap_or(Value::Null),
+    })
 }
 
 fn external_channel_conversation_guard_key(
@@ -24992,12 +25253,20 @@ async fn preclaim_external_message_event(
         return Ok(ExternalMessageEventPreclaim::Claimed);
     }
 
-    Ok(
-        match load_external_message_event_run_id(state, &message.idempotency_key).await? {
-            Some(run_id) => ExternalMessageEventPreclaim::ExistingRun(run_id),
-            None => ExternalMessageEventPreclaim::ExistingPending,
-        },
-    )
+    let Some(existing) =
+        load_external_message_event_by_idempotency(state, &message.idempotency_key).await?
+    else {
+        return Ok(ExternalMessageEventPreclaim::ExistingPending);
+    };
+    ensure_external_message_event_payload_matches(
+        &message.idempotency_key,
+        &existing.payload_summary,
+        payload_summary,
+    )?;
+    Ok(match existing.assistant_run_id {
+        Some(run_id) => ExternalMessageEventPreclaim::ExistingRun(run_id),
+        None => ExternalMessageEventPreclaim::ExistingPending,
+    })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -29002,7 +29271,7 @@ fn external_image_structured_extract_prompt(
 ) -> String {
     let schema_text = serde_json::to_string(schema).unwrap_or_else(|_| "{}".to_string());
     format!(
-        "本轮抽取编号：{extraction_id}\n用户要求：{}\n字段 schema：{schema_text}\n请从图片中抽取所有可见表格行，输出严格 JSON：{{\"records\":[...] , \"confidence\":0-1, \"needs_review\":false, \"notes\":\"\"}}。每条记录字段优先包含 recharge_amount、recharge_amount_raw、pay_amount、pay_amount_raw、payment_method、payment_method_label、order_no、status、status_label、created_at。状态中文成功归一为 success，处理中归一为 processing；支付方式支付宝归一为 alipay。无法确认的字段填 null。",
+        "本轮抽取编号：{extraction_id}\n用户要求：{}\n字段 schema：{schema_text}\n请只依据本轮图片中真实可见的表格行抽取，不要使用示例值、历史结果或字段 schema 猜测。若你无法实际看到图片、图片不可访问、图片内容与订单/充值记录无关，必须输出 {{\"records\":[],\"confidence\":0,\"needs_review\":true,\"notes\":\"image_not_visible_or_not_order_screenshot\"}}。输出严格 JSON：{{\"records\":[...] , \"confidence\":0-1, \"needs_review\":false, \"notes\":\"\"}}。每条记录字段优先包含 recharge_amount、recharge_amount_raw、pay_amount、pay_amount_raw、payment_method、payment_method_label、order_no、status、status_label、created_at。状态中文成功归一为 success，处理中归一为 processing；支付方式支付宝归一为 alipay。无法确认的字段填 null。",
         prompt.trim()
     )
 }
@@ -30669,9 +30938,18 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
             "content_type": attachment.content_type,
             "size_bytes": attachment.size_bytes,
             "download_url_redacted": attachment.download_url_redacted.as_ref().map(|_| "[redacted]"),
+            "download_url_fingerprint": attachment
+                .download_url_redacted
+                .as_deref()
+                .map(external_attachment_download_url_fingerprint),
         })).collect::<Vec<_>>(),
         "received_at": message.received_at,
     })
+}
+
+fn external_attachment_download_url_fingerprint(value: &str) -> String {
+    let hash = sha256_hex([value.trim().as_bytes()]);
+    format!("sha256:{}", &hash[..16])
 }
 
 fn external_artifact_template_summary(template: &ExternalArtifactTemplateView) -> Value {
@@ -53379,11 +53657,22 @@ fn external_channel_static_page_published_reply(
         .unwrap_or(false);
     let text = if provisional_direct_html {
         external_channel_text_with_public_artifact_link(
-            "V3 已先生成可发送的静态页链接；最终页面仍在后台继续优化发布。",
+            external_channel_static_page_customer_ready_text_for_payload(
+                "已依据客户需求生成可发送的报表页面；最终页面仍在后台继续优化发布。",
+                Some(payload),
+                public_url,
+            ),
             public_url,
         )
     } else {
-        external_channel_text_with_public_artifact_link("V3 静态页已生成并发布。", public_url)
+        external_channel_text_with_public_artifact_link(
+            external_channel_static_page_customer_ready_text_for_payload(
+                external_channel_static_page_customer_ready_text(),
+                Some(payload),
+                public_url,
+            ),
+            public_url,
+        )
     };
     let template_reference_id =
         external_channel_static_page_template_reference_id_from_payload(payload);
@@ -53533,7 +53822,11 @@ fn external_channel_static_page_stable_artifact_reused_reply(
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
         text: Some(external_channel_text_with_public_artifact_link(
-            external_channel_static_page_customer_ready_text(),
+            external_channel_static_page_customer_ready_text_for_payload(
+                external_channel_static_page_customer_ready_text(),
+                Some(payload),
+                public_url,
+            ),
             public_url,
         )),
         card: Some(json!({
@@ -99130,7 +99423,7 @@ mod tests {
         );
 
         let duplicate = post_json_request(
-            app,
+            app.clone(),
             "/v1/external/channels/generic-chat-main/events",
             &message,
             None,
@@ -99279,7 +99572,7 @@ mod tests {
             .any(|event| event.event_name == EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME));
 
         let duplicate = post_json_request(
-            app,
+            app.clone(),
             "/v1/external/channels/generic-chat-main/events",
             &message,
             None,
@@ -99292,6 +99585,76 @@ mod tests {
         assert_eq!(
             second.reply.card.as_ref().unwrap()["records"][1]["order_no"],
             json!("A1778729946")
+        );
+
+        let mut changed_image_message = message.clone();
+        changed_image_message.message_external_id = "msg-image-order-002".to_string();
+        changed_image_message.attachment_refs[0].attachment_external_id =
+            "img-order-002".to_string();
+        changed_image_message.attachment_refs[0].filename =
+            Some("different-recharge-orders.png".to_string());
+        changed_image_message.attachment_refs[0].download_url_redacted =
+            Some("https://third.example.com/private/different-recharge.png".to_string());
+        let conflict = post_json_request(
+            app,
+            "/v1/external/channels/generic-chat-main/events",
+            &changed_image_message,
+            None,
+        )
+        .await;
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        let conflict_error: ApiErrorResponse = read_json_response(conflict).await;
+        assert_eq!(
+            conflict_error.code,
+            "external_channel_idempotency_payload_mismatch"
+        );
+    }
+
+    #[test]
+    fn external_message_idempotency_reuse_rejects_changed_image_payload() {
+        let mut message = sample_external_bot_message();
+        message.message_type = ExternalMessageTypeView::Image;
+        message.message_external_id = "msg-image-order-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-image-order-001".to_string();
+        message.output_format = Some("json".to_string());
+        message.text = Some("请识别这张充值记录截图，按订单字段返回 JSON。".to_string());
+        message.attachment_refs = vec![ExternalAttachmentRefView {
+            attachment_external_id: "img-order-001".to_string(),
+            filename: Some("recharge-orders.png".to_string()),
+            content_type: Some("image/png".to_string()),
+            size_bytes: Some(2048),
+            download_url_redacted: Some(
+                "https://third.example.com/private/recharge.png".to_string(),
+            ),
+        }];
+        let original_summary = external_bot_message_payload_summary(&message);
+        assert_eq!(
+            original_summary["attachments"][0]["download_url_redacted"],
+            json!("[redacted]")
+        );
+        assert!(
+            original_summary["attachments"][0]["download_url_fingerprint"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("sha256:")
+        );
+
+        let mut changed = message.clone();
+        changed.message_external_id = "msg-image-order-002".to_string();
+        changed.attachment_refs[0].attachment_external_id = "img-order-002".to_string();
+        changed.attachment_refs[0].download_url_redacted =
+            Some("https://third.example.com/private/another-image.png".to_string());
+        let changed_summary = external_bot_message_payload_summary(&changed);
+        let error = ensure_external_message_event_payload_matches(
+            &message.idempotency_key,
+            &original_summary,
+            &changed_summary,
+        )
+        .expect_err("changed image payload should not reuse the same idempotency key");
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(
+            error.payload.code,
+            "external_channel_idempotency_payload_mismatch"
         );
     }
 
@@ -110257,6 +110620,13 @@ retrieve_evidence:
                 "detail_row_count": 40,
                 "unit_policy": "validate_raw_value_then_choose_wan_or_yi"
             },
+            "template_adaptation": {
+                "userIntent": "我想看看五月份最新的取高机会",
+                "focus": [
+                    {"label": "销售/租金/取高口径"},
+                    {"label": "门店/区域维度"}
+                ]
+            },
             "source_refs": {
                 "selected_scope": {"must": "not leak"},
                 "template_reference_id": "generated-static-page:template-002",
@@ -110293,11 +110663,20 @@ retrieve_evidence:
                     .to_string()
             ]
         );
-        assert!(reply
-            .text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("页面地址: https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"));
+        let text = reply.text.as_deref().unwrap_or_default();
+        assert!(text.contains(
+            "页面链接：[点击查看报表](https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html)"
+        ));
+        assert!(!text.contains("页面地址:"));
+        assert_eq!(
+            text.matches(
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
+            )
+            .count(),
+            1
+        );
+        assert!(text.contains("系统识别到本轮关注焦点：取高机会"));
+        assert!(text.contains("报表会优先呈现：销售/租金/取高口径、门店/区域维度"));
         let card = reply.card.as_ref().expect("completed reply has card");
         assert_eq!(card["public_url"], json!(payload["public_url"]));
         assert_eq!(card["generated_artifact_url"], json!(payload["public_url"]));
@@ -110333,7 +110712,7 @@ retrieve_evidence:
     #[test]
     fn external_channel_static_page_stable_reuse_reply_surfaces_template_fields() {
         let public_url =
-            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html";
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html?focus=%E9%A3%8E%E9%99%A9%E5%BA%97%E9%93%BA";
         let payload = json!({
             "status": "static_page_stable_artifact_reused",
             "public_url": public_url,
@@ -110347,7 +110726,13 @@ retrieve_evidence:
             "template_match_policy": "exact_dataset_artifact_key",
             "style_reuse_policy": "reuse_style_unless_explicit_redesign",
             "data_refresh_policy": "refresh_data_files_from_dataset_sources",
-            "default_template_scope": "dataset_combination"
+            "default_template_scope": "dataset_combination",
+            "template_adaptation": {
+                "focus": [
+                    {"label": "低销售风险店铺"},
+                    {"label": "销售预警分层"}
+                ]
+            }
         });
 
         let reply =
@@ -110356,17 +110741,14 @@ retrieve_evidence:
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
         assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
-        assert!(reply
-            .text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("已依据客户需求生成可访问的报表页面"));
-        assert!(reply
-            .text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("页面链接：[点击查看报表](https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html)"));
-        assert!(!reply.text.as_deref().unwrap_or_default().contains("复用"));
+        let text = reply.text.as_deref().unwrap_or_default();
+        assert!(text.contains("已依据客户需求生成可访问的报表页面"));
+        assert!(text.contains("页面链接：[点击查看报表](https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/index.html?focus=%E9%A3%8E%E9%99%A9%E5%BA%97%E9%93%BA)"));
+        assert_eq!(text.matches(public_url).count(), 1);
+        assert!(text.contains("系统识别到本轮关注焦点：风险店铺"));
+        assert!(text.contains("报表会优先呈现：低销售风险店铺、销售预警分层"));
+        assert!(!text.contains("页面地址:"));
+        assert!(!text.contains("复用"));
         let card = reply.card.as_ref().expect("reuse card");
         assert_eq!(card["status"], json!("static_page_published"));
         assert_eq!(card["public_url"], json!(public_url));
