@@ -64,7 +64,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
-| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Ingest-time fingerprint capture, canonical read-through, and 8-server migration rollout remain pending. |
+| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse now persists SHA-256/size and canonical fingerprint rows. Local upload capture, canonical read-through, and 8-server migration rollout remain pending. |
 | P1 Gate D: low-quality answer recovery | pending | Hard gate remains disabled; passive fixed-scope autofix loop needs implementation and validation. |
 | P1 Gate E: confirmed data ingestion | pending | `data_ingestion_analysis` terminal smoke exists; confirmed staging-to-dataset sync still needs closure and validation. |
 
@@ -152,6 +152,27 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - `cargo check -p platform-api` passed.
 - Remaining:
   - apply migration on 8 server during deployment;
-  - compute SHA-256/size during local upload and third-party parse;
+- compute SHA-256/size during local main-site upload;
   - register canonical document aliases without changing external document IDs;
   - add canonical read-through for retrieval/facts.
+
+### 2026-06-06 Third-Party Parse Fingerprint Capture
+
+- Files changed:
+  - `crates/storage/src/lib.rs`;
+  - `crates/platform-api/src/lib.rs`.
+- Behavior:
+  - external document parse computes SHA-256 from downloaded bytes;
+  - `documents.content_sha256` and `documents.content_size_bytes` are updated after document creation;
+  - first seen content is recorded in `document_content_fingerprints`;
+  - current document is marked `dedup_state=canonical` with `canonical_document_id` pointing to itself;
+  - later matching content can be marked duplicate by the same storage helper without changing external document IDs.
+- Local verification:
+  - `cargo fmt --check -p platform-api -p storage` passed.
+  - `cargo test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib` passed.
+  - `cargo test -p platform-api external_document_parse --lib` passed.
+  - `cargo check -p platform-api` passed.
+- Remaining:
+  - local main-site upload fingerprint capture;
+  - 8-server migration rollout and live upload/parse smoke;
+  - canonical read-through in retrieval/facts.

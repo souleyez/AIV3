@@ -1928,6 +1928,81 @@ impl PgDocumentRepository {
 
         row.as_ref().map(map_document_row).transpose()
     }
+
+    pub async fn record_content_fingerprint(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+        content_sha256: &str,
+        content_size_bytes: i64,
+        recorded_at: DateTime<Utc>,
+    ) -> Result<Document> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            r#"
+            insert into document_content_fingerprints (
+                tenant_id,
+                content_sha256,
+                content_size_bytes,
+                canonical_document_id,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $5)
+            on conflict (tenant_id, content_sha256) do nothing
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(content_sha256)
+        .bind(content_size_bytes)
+        .bind(document_id.0)
+        .bind(recorded_at)
+        .execute(&mut *tx)
+        .await?;
+
+        let canonical_document_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            select canonical_document_id
+            from document_content_fingerprints
+            where tenant_id = $1 and content_sha256 = $2
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(content_sha256)
+        .fetch_one(&mut *tx)
+        .await?;
+        let dedup_state = if canonical_document_id == document_id.0 {
+            "canonical"
+        } else {
+            "duplicate"
+        };
+
+        let row = sqlx::query(
+            r#"
+            update documents
+            set content_sha256 = $3,
+                content_size_bytes = $4,
+                canonical_document_id = $5,
+                dedup_state = $6,
+                deduped_at = $7,
+                updated_at = $7
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, dataset_id, owner_user_id, title, object_key, content_type, lifecycle, metadata, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_id.0)
+        .bind(content_sha256)
+        .bind(content_size_bytes)
+        .bind(canonical_document_id)
+        .bind(dedup_state)
+        .bind(recorded_at)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        map_document_row(&row)
+    }
 }
 
 impl PgDatasetDocumentMembershipRepository {

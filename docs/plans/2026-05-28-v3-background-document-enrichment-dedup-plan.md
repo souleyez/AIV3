@@ -94,7 +94,7 @@ Progress 2026-06-06:
 
 ## Task 2: Capture Content Fingerprints During Ingest
 
-Status: `pending`
+Status: `third-party-parse-completed-local-upload-pending-2026-06-06`
 
 Files:
 
@@ -114,6 +114,26 @@ Acceptance:
 - Third-party parse and local upload both persist `content_sha256`.
 - Existing idempotency behavior remains unchanged.
 - Smoke upload of a large document still succeeds under the current 50 MB cap.
+
+Progress 2026-06-06:
+
+- Third-party external document parse now computes SHA-256 from downloaded bytes and records it with byte size after document creation.
+- Storage records the first seen content fingerprint as the canonical document and marks later matching content as duplicate without changing external document IDs.
+- Added regression coverage in `external_document_parse_endpoint_downloads_and_enqueues_ingest` for:
+  - `documents.content_sha256`;
+  - `documents.content_size_bytes`;
+  - `documents.canonical_document_id`;
+  - `documents.dedup_state`;
+  - `document_content_fingerprints.canonical_document_id`.
+- Verified locally with:
+  - `cargo fmt --check -p platform-api -p storage`;
+  - `cargo test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib`;
+  - `cargo test -p platform-api external_document_parse --lib`;
+  - `cargo check -p platform-api`.
+- Not done yet:
+  - local main-site upload fingerprint capture;
+  - 8-server migration rollout;
+  - duplicate-read canonical routing in retrieval/facts.
 
 ## Task 3: Canonical Dedup Without Breaking Document IDs
 

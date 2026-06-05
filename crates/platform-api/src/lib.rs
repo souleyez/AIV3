@@ -17653,6 +17653,7 @@ async fn create_external_document_parse(
         .filter(|value| !value.is_empty())
         .unwrap_or(downloaded.content_type.as_str())
         .to_string();
+    let now = Utc::now();
     let document = state
         .storage
         .documents()
@@ -17695,6 +17696,18 @@ async fn create_external_document_parse(
                     }
                 }),
             },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    let document = state
+        .storage
+        .documents()
+        .record_content_fingerprint(
+            state.tenant_id,
+            document.id,
+            &downloaded.content_sha256,
+            downloaded.size_bytes as i64,
+            now,
         )
         .await
         .map_err(ApiError::from_storage)?;
@@ -18668,6 +18681,7 @@ struct DownloadedExternalDocument {
     object_key: String,
     content_type: String,
     content_url_redacted: String,
+    content_sha256: String,
     size_bytes: u64,
 }
 
@@ -18743,6 +18757,7 @@ async fn download_external_document_parse_file(
             format!("external document exceeds {} bytes", max_bytes),
         ));
     }
+    let content_sha256 = sha256_hex([bytes.as_ref()]);
 
     let root = external_document_object_root()?;
     let extension = external_document_file_extension(&url, request.content_type.as_deref())
@@ -18791,6 +18806,7 @@ async fn download_external_document_parse_file(
             .and_then(non_empty_trimmed_string)
             .unwrap_or(response_content_type),
         content_url_redacted: external_document_redact_url(&url),
+        content_sha256,
         size_bytes: bytes.len() as u64,
     })
 }
@@ -130564,15 +130580,18 @@ retrieve_evidence:
             "http://{}/doc-alpha.md",
             listener.local_addr().expect("listener address")
         );
+        let body = "# Alpha policy\n\nOrder delay risk should be reviewed.";
+        let expected_sha256 = sha256_hex([body.as_bytes()]);
+        let expected_size_bytes = body.len() as i64;
+        let server_body = body.to_string();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
             let request = read_http_request(&mut stream);
             assert!(request.starts_with("GET /doc-alpha.md HTTP/1.1"));
-            let body = "# Alpha policy\n\nOrder delay risk should be reviewed.";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
+                server_body.len(),
+                server_body
             );
             stream.write_all(response.as_bytes()).expect("write");
         });
@@ -130619,6 +130638,46 @@ retrieve_evidence:
         assert_eq!(response.workflow_execution.kind, WorkflowKind::UploadIngest);
         assert_eq!(response.document.parse_status, "received");
         assert_eq!(response.document.parse_status_camel, "received");
+        let fingerprint_row = sqlx::query(
+            r#"
+            select content_sha256, content_size_bytes, canonical_document_id, dedup_state
+            from documents
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(response.document.id.0)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("document fingerprint row should be readable");
+        assert_eq!(
+            fingerprint_row.get::<Option<String>, _>("content_sha256"),
+            Some(expected_sha256.clone())
+        );
+        assert_eq!(
+            fingerprint_row.get::<Option<i64>, _>("content_size_bytes"),
+            Some(expected_size_bytes)
+        );
+        assert_eq!(
+            fingerprint_row
+                .get::<Option<Uuid>, _>("canonical_document_id")
+                .map(DocumentId),
+            Some(response.document.id)
+        );
+        assert_eq!(fingerprint_row.get::<String, _>("dedup_state"), "canonical");
+        let canonical_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            select canonical_document_id
+            from document_content_fingerprints
+            where tenant_id = $1 and content_sha256 = $2
+            "#,
+        )
+        .bind(state.tenant_id.0)
+        .bind(&expected_sha256)
+        .fetch_one(state.storage.pool())
+        .await
+        .expect("document content fingerprint should be stored");
+        assert_eq!(DocumentId(canonical_id), response.document.id);
 
         let Json(detail) = get_external_document_parse_detail(
             State(state.clone()),
