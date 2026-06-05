@@ -17,6 +17,8 @@ const DEFAULT_HOST_KIND: &str = "developer_workstation";
 const DEFAULT_COMPAT_PROVIDER_ID: &str = "minimax";
 const DEFAULT_COMPAT_PROVIDER_ENV_KEY: &str = "MINIMAX_API_KEY";
 const DEFAULT_COMPAT_PROVIDER_WIRE_API: &str = "responses";
+const ENV_MODEL_REASONING_EFFORT: &str = "CODEX_HOST_AGENT_MODEL_REASONING_EFFORT";
+const ENV_STATIC_PAGE_REASONING_EFFORT: &str = "CODEX_HOST_AGENT_STATIC_PAGE_REASONING_EFFORT";
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 const ANSWER_QUALITY_AUTOFIX: &str = "answer_quality_autofix";
 const DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
@@ -1027,6 +1029,7 @@ fn build_codex_command_plan(
         sandbox.clone(),
     ];
     append_provider_config_args(&mut args_without_prompt, profile)?;
+    append_reasoning_effort_config_args(&mut args_without_prompt, context)?;
     if let Some(model) = profile
         .model
         .as_deref()
@@ -1566,6 +1569,35 @@ fn append_provider_config_args(args: &mut Vec<String>, profile: &CodexHostProfil
     args.push(format!(
         "model_providers.{provider_id}.requires_openai_auth=false"
     ));
+    Ok(())
+}
+
+fn append_reasoning_effort_config_args(
+    args: &mut Vec<String>,
+    context: &CodexHostTaskContext,
+) -> Result<()> {
+    let configured = if context.capability == STATIC_PAGE_IMAGE2_DATA_PUBLISH {
+        std::env::var(ENV_STATIC_PAGE_REASONING_EFFORT)
+            .or_else(|_| std::env::var(ENV_MODEL_REASONING_EFFORT))
+            .ok()
+    } else {
+        std::env::var(ENV_MODEL_REASONING_EFFORT).ok()
+    };
+    let Some(effort) = configured
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    if !matches!(
+        effort.as_str(),
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+    ) {
+        return Err(anyhow!(
+            "unsupported Codex reasoning effort {effort}; expected none, minimal, low, medium, high, or xhigh"
+        ));
+    }
+    push_config_arg(args, "model_reasoning_effort", &effort);
     Ok(())
 }
 
@@ -2294,6 +2326,55 @@ mod tests {
     }
 
     #[test]
+    fn static_page_reasoning_effort_overrides_codex_global_config() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _static_effort = TestEnvVarRestore::set(ENV_STATIC_PAGE_REASONING_EFFORT, "medium");
+        let _general_effort = TestEnvVarRestore::unset(ENV_MODEL_REASONING_EFFORT);
+        let context = test_context(STATIC_PAGE_IMAGE2_DATA_PUBLISH, Some("Publish page"));
+        let profile = compatible_shim_test_profile(STATIC_PAGE_IMAGE2_DATA_PUBLISH);
+
+        let plan =
+            build_codex_command_plan(&context, &profile, Some(Path::new("D:/codex-host/tasks")))
+                .expect("command plan");
+        let args = plan.args_without_prompt.join(" ");
+
+        assert!(args.contains("model_reasoning_effort=\"medium\""));
+    }
+
+    #[test]
+    fn general_reasoning_effort_applies_to_non_static_page_task() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _static_effort = TestEnvVarRestore::unset(ENV_STATIC_PAGE_REASONING_EFFORT);
+        let _general_effort = TestEnvVarRestore::set(ENV_MODEL_REASONING_EFFORT, "low");
+        let context = test_context("inspect_project", Some("Read the repo"));
+        let profile = compatible_shim_test_profile("inspect_project");
+
+        let plan =
+            build_codex_command_plan(&context, &profile, Some(Path::new("D:/codex-host/tasks")))
+                .expect("command plan");
+        let args = plan.args_without_prompt.join(" ");
+
+        assert!(args.contains("model_reasoning_effort=\"low\""));
+    }
+
+    #[test]
+    fn reasoning_effort_rejects_unknown_value() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _static_effort = TestEnvVarRestore::set(ENV_STATIC_PAGE_REASONING_EFFORT, "turbo");
+        let _general_effort = TestEnvVarRestore::unset(ENV_MODEL_REASONING_EFFORT);
+        let context = test_context(STATIC_PAGE_IMAGE2_DATA_PUBLISH, Some("Publish page"));
+        let profile = compatible_shim_test_profile(STATIC_PAGE_IMAGE2_DATA_PUBLISH);
+
+        let error =
+            build_codex_command_plan(&context, &profile, Some(Path::new("D:/codex-host/tasks")))
+                .expect_err("should reject unknown effort");
+
+        assert!(error
+            .to_string()
+            .contains("unsupported Codex reasoning effort"));
+    }
+
+    #[test]
     fn safe_log_excerpt_redacts_secret_lines_and_truncates() {
         let raw = b"ok\nAuthorization: Bearer abc\napi_key=xyz\nnormal line after secret\n";
 
@@ -2618,6 +2699,19 @@ summary text before final output
             host_kind: "cloudflare_codex".to_string(),
             allow_real_codex_exec: true,
             task_workspace_root: Some(PathBuf::from("D:/codex-host/tasks")),
+        }
+    }
+
+    fn compatible_shim_test_profile(capability: &str) -> CodexHostProfile {
+        CodexHostProfile {
+            id: "rightcode-gpt-5-5".to_string(),
+            kind: "codex-compatible-shim".to_string(),
+            model: Some("gpt-5.5".to_string()),
+            provider_id: Some("rightcode".to_string()),
+            base_url: Some("https://right.codes/codex/v1".to_string()),
+            env_key: Some("OPENAI_API_KEY".to_string()),
+            wire_api: Some("responses".to_string()),
+            allowed_capabilities: vec![capability.to_string()],
         }
     }
 
