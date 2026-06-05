@@ -30,6 +30,29 @@ target/external-report-export-smoke/
 
 It records only token presence, link/file checks, export counts, and compact SSE event metadata. It does not print or persist the bearer token.
 
+## 2026-06-05 8 Server Regression Receipt
+
+- Host: `8服务器`
+- Public endpoint: `https://v3.elepcloud.com`
+- Deployed commit: `bd2eefbf7`
+- Service: `aiv3-platform-api.service`
+- Service status after restart: `active`
+- Build command: `CC=clang CXX=clang++ cargo build --release -p platform-api`
+- Dataset scope: `64fff6c8-10e2-4ee8-8243-23166cce3abc`
+- Smoke command: `npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --dataset-external-ids 64fff6c8-10e2-4ee8-8243-23166cce3abc`
+- Receipt: `target/external-report-export-smoke/20260605144412.json`
+
+Results:
+
+- JSON `/v1/external/channels/generic-chat-main/events`: passed.
+- SSE `/v1/external/channels/generic-chat-main/events/stream`: passed.
+- `okCount=2`, `failedCount=0`.
+- Report title: `新世界百货经营管理月报表`.
+- Public URL focus: `取高机会`.
+- Export fields present: `table_data_url`, `ppt_download_url`, `markdown_download_url` / `text_download_url`, and `download_exports[]` with at least 3 entries.
+- Artifact files returned HTTP 200 with non-empty bodies: `index.html`, `data.json`, `data-snapshot.json`, `table-data.csv`, `report.ppt`, `report.md`.
+- Regression covered: stable/template report responses and SSE completed events now surface the report title and download exports even when the upstream card supplied a generic title or empty `download_exports`.
+
 ## 2026-06-05 8 Server Rollout Receipt
 
 - Host: `8服务器`

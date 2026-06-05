@@ -1,5 +1,34 @@
 # External Capability Routing Smoke
 
+## 2026-06-05 8 Server Focus/Export Regression
+
+- Host: `8服务器`
+- Public endpoint: `https://v3.elepcloud.com`
+- Deployed commit: `bd2eefbf7`
+- Service: `aiv3-platform-api.service`
+- Service status: `active`
+- Rollout command: `git pull --ff-only`, `CC=clang CXX=clang++ cargo build --release -p platform-api`, restart service.
+- Dataset scope for Xinbai report cases: `64fff6c8-10e2-4ee8-8243-23166cce3abc`
+
+8 server selected SSE smoke results:
+
+| Case | Expected | Result |
+| --- | --- | --- |
+| `取高` | report, focus `取高机会` | Passed; 1 artifact link, focus matched |
+| `经营状况` | report, focus `经营总览` | Passed; 1 artifact link, focus matched |
+| `风险识别` | report route | Passed; entered static-page publish queue; no artifact link was emitted within this stream window |
+| `销售缺口统计一下，哪些门店需要助推？` | report, focus `取高机会` | Passed; 1 artifact link, focus matched |
+| `长期卧床老人多长时间翻身一次？` | ordinary Q&A | Passed; completed, no artifact link |
+| `取高是什么意思？` | ordinary Q&A | Passed; completed, no artifact link |
+| `风险识别系统有哪些项目经历？` | ordinary Q&A | Passed; completed, no artifact link |
+| `经营风险是什么意思？` | ordinary Q&A | Passed; completed, no artifact link |
+
+Regression covered:
+
+- Short high-frequency Xinbai prompts now preserve the expected `?focus=` query on locally generated report URLs, not only on reused template URLs.
+- Ordinary metric-definition and project-experience questions remain normal Q&A and do not trigger report artifacts.
+- The report export smoke for the same deployment passed with `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, and three export files exposed through response fields.
+
 ## 2026-06-05 8 Server Rollout
 
 - Host: `8服务器`
