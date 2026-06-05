@@ -29180,6 +29180,9 @@ struct ExternalImageStructuredExtractRuntimeConfig {
     api_key: String,
     model: String,
     timeout_ms: u64,
+    max_tokens: u64,
+    reasoning_effort: Option<String>,
+    retry_enabled: bool,
     provider_label: String,
 }
 
@@ -29397,33 +29400,64 @@ async fn execute_external_image_structured_extract(
                 started_at.elapsed().as_millis() as u64,
             ),
         })?;
-    let request_payload = json!({
-        "model": config.model,
-        "messages": [
+    let initial_prompt = external_image_structured_extract_prompt(prompt, schema, extraction_id);
+    let mut raw_payload = external_image_structured_extract_call_provider(
+        &client,
+        &config,
+        &image_url,
+        initial_prompt,
+        started_at,
+    )
+    .await?;
+    let mut retry_performed = false;
+    let initial_quality = external_image_structured_extract_payload_quality_score(&raw_payload);
+    if config.retry_enabled && external_image_structured_extract_payload_needs_retry(&raw_payload) {
+        let retry_prompt = external_image_structured_extract_retry_prompt(
+            prompt,
+            schema,
+            extraction_id,
+            &raw_payload,
+        );
+        if let Ok(retry_payload) = external_image_structured_extract_call_provider(
+            &client,
+            &config,
+            &image_url,
+            retry_prompt,
+            started_at,
+        )
+        .await
+        {
+            retry_performed = true;
+            if external_image_structured_extract_payload_quality_score(&retry_payload)
+                >= initial_quality
             {
-                "role": "system",
-                "content": "你是业务截图结构化抽取器。只输出 JSON，不要输出解释。优先抽取订单、充值、支付、状态、时间等可入库字段。无法确定的字段填 null，不要编造。"
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": external_image_structured_extract_prompt(prompt, schema, extraction_id)
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": image_url
-                        }
-                    }
-                ]
+                raw_payload = retry_payload;
             }
-        ],
-        "response_format": { "type": "json_object" },
-        "temperature": 0,
-        "max_tokens": 1800
-    });
+        }
+    }
+    Ok((
+        raw_payload,
+        json!({
+            "mode": "external_image_structured_extract",
+            "lane": "external_channel",
+            "provider": config.provider_label,
+            "model": config.model,
+            "status": "responded",
+            "retry_performed": retry_performed,
+            "latency_ms": started_at.elapsed().as_millis() as u64,
+        }),
+    ))
+}
+
+async fn external_image_structured_extract_call_provider(
+    client: &reqwest::Client,
+    config: &ExternalImageStructuredExtractRuntimeConfig,
+    image_url: &str,
+    prompt_text: String,
+    started_at: Instant,
+) -> std::result::Result<Value, ExternalImageStructuredExtractFailure> {
+    let request_payload =
+        external_image_structured_extract_request_payload(config, image_url, prompt_text);
     let response = client
         .post(&config.endpoint_url)
         .bearer_auth(&config.api_key)
@@ -29433,7 +29467,7 @@ async fn execute_external_image_structured_extract(
         .map_err(|error| ExternalImageStructuredExtractFailure {
             reason: format!("image_extract_request_failed:{error}"),
             runtime: external_image_structured_extract_failure_runtime(
-                &config,
+                config,
                 "request_failed",
                 &error.to_string(),
                 started_at.elapsed().as_millis() as u64,
@@ -29447,7 +29481,7 @@ async fn execute_external_image_structured_extract(
             .map_err(|error| ExternalImageStructuredExtractFailure {
                 reason: format!("image_extract_response_read_failed:{error}"),
                 runtime: external_image_structured_extract_failure_runtime(
-                    &config,
+                    config,
                     "response_read_failed",
                     &error.to_string(),
                     started_at.elapsed().as_millis() as u64,
@@ -29457,7 +29491,7 @@ async fn execute_external_image_structured_extract(
         return Err(ExternalImageStructuredExtractFailure {
             reason: format!("image_extract_provider_status:{}", status.as_u16()),
             runtime: external_image_structured_extract_failure_runtime(
-                &config,
+                config,
                 "provider_status_error",
                 &truncate_assistant_supply_text(&response_text, 800),
                 started_at.elapsed().as_millis() as u64,
@@ -29468,7 +29502,7 @@ async fn execute_external_image_structured_extract(
         ExternalImageStructuredExtractFailure {
             reason: format!("image_extract_provider_json_invalid:{error}"),
             runtime: external_image_structured_extract_failure_runtime(
-                &config,
+                config,
                 "provider_json_invalid",
                 &error.to_string(),
                 started_at.elapsed().as_millis() as u64,
@@ -29479,35 +29513,63 @@ async fn execute_external_image_structured_extract(
         return Err(ExternalImageStructuredExtractFailure {
             reason: "image_extract_provider_content_missing".to_string(),
             runtime: external_image_structured_extract_failure_runtime(
-                &config,
+                config,
                 "provider_content_missing",
                 &truncate_assistant_supply_text(&response_text, 800),
                 started_at.elapsed().as_millis() as u64,
             ),
         });
     };
-    let Some(raw_payload) = parse_json_object_from_model_text(&content) else {
-        return Err(ExternalImageStructuredExtractFailure {
+    parse_json_object_from_model_text(&content).ok_or_else(|| {
+        ExternalImageStructuredExtractFailure {
             reason: "image_extract_output_json_missing".to_string(),
             runtime: external_image_structured_extract_failure_runtime(
-                &config,
+                config,
                 "output_json_missing",
                 &truncate_assistant_supply_text(&content, 800),
                 started_at.elapsed().as_millis() as u64,
             ),
-        });
-    };
-    Ok((
-        raw_payload,
-        json!({
-            "mode": "external_image_structured_extract",
-            "lane": "external_channel",
-            "provider": config.provider_label,
-            "model": config.model,
-            "status": "responded",
-            "latency_ms": started_at.elapsed().as_millis() as u64,
-        }),
-    ))
+        }
+    })
+}
+
+fn external_image_structured_extract_request_payload(
+    config: &ExternalImageStructuredExtractRuntimeConfig,
+    image_url: &str,
+    prompt_text: String,
+) -> Value {
+    let mut payload = json!({
+        "model": config.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是业务截图表格结构化抽取器。只输出 JSON，不要输出解释。必须先识别表头，再按图片从上到下逐行抽取订单/充值/支付记录。无法确定的字段填 null，不要编造，不要复用历史结果。"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt_text
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url,
+                            "detail": "high"
+                        }
+                    }
+                ]
+            }
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0,
+        "max_tokens": config.max_tokens
+    });
+    if let Some(effort) = config.reasoning_effort.as_deref() {
+        payload["reasoning"] = json!({ "effort": effort });
+    }
+    payload
 }
 
 fn external_channel_message_requests_image_structured_extract(
@@ -29742,9 +29804,120 @@ fn external_image_structured_extract_prompt(
 ) -> String {
     let schema_text = serde_json::to_string(schema).unwrap_or_else(|_| "{}".to_string());
     format!(
-        "本轮抽取编号：{extraction_id}\n用户要求：{}\n字段 schema：{schema_text}\n请只依据本轮图片中真实可见的表格行抽取，不要使用示例值、历史结果或字段 schema 猜测。若你无法实际看到图片、图片不可访问、图片内容与订单/充值记录无关，必须输出 {{\"records\":[],\"confidence\":0,\"needs_review\":true,\"notes\":\"image_not_visible_or_not_order_screenshot\"}}。输出严格 JSON：{{\"records\":[...] , \"confidence\":0-1, \"needs_review\":false, \"notes\":\"\"}}。每条记录字段优先包含 recharge_amount、recharge_amount_raw、pay_amount、pay_amount_raw、payment_method、payment_method_label、order_no、status、status_label、created_at。状态中文成功归一为 success，处理中归一为 processing；支付方式支付宝归一为 alipay。无法确认的字段填 null。",
+        "本轮抽取编号：{extraction_id}\n用户要求：{}\n字段 schema：{schema_text}\n抽取步骤必须遵守：\n1. 先识别图片中的表头/列名和可见数据行数量。\n2. 只抽取本轮图片真实可见的订单、充值、支付记录，不要使用示例值、历史结果或字段 schema 猜测。\n3. records 必须按图片从上到下逐行输出；看到几行有效记录就输出几条，不要只输出第一行，不要合并多行。\n4. 每条记录增加 row_index，从 1 开始，对应图片中的可见行序号。\n5. 输出 visible_row_count，表示你实际看到的有效数据行数量；如果 records 数量少于 visible_row_count，必须继续补齐。\n6. 金额保留原文和数字：例如 recharge_amount_raw=\"$100\"，recharge_amount=100；pay_amount_raw=\"$700\"，pay_amount=700。\n7. 订单号要逐字符抄写，不要改写相近字符；时间按图片原文输出。\n若你无法实际看到图片、图片不可访问、图片内容与订单/充值记录无关，必须输出 {{\"records\":[],\"visible_row_count\":0,\"confidence\":0,\"needs_review\":true,\"notes\":\"image_not_visible_or_not_order_screenshot\"}}。\n输出严格 JSON：{{\"records\":[...] , \"visible_row_count\":0, \"confidence\":0-1, \"needs_review\":false, \"notes\":\"\"}}。每条记录字段优先包含 row_index、recharge_amount、recharge_amount_raw、pay_amount、pay_amount_raw、payment_method、payment_method_label、order_no、status、status_label、created_at。状态中文成功归一为 success，处理中归一为 processing；支付方式支付宝归一为 alipay。无法确认的字段填 null。",
         prompt.trim()
     )
+}
+
+fn external_image_structured_extract_retry_prompt(
+    prompt: &str,
+    schema: &Value,
+    extraction_id: &str,
+    previous_payload: &Value,
+) -> String {
+    let previous_summary = json!({
+        "visible_row_count": external_image_structured_extract_visible_row_count(previous_payload),
+        "record_count": external_image_structured_extract_raw_records(previous_payload).len(),
+        "quality_score": external_image_structured_extract_payload_quality_score(previous_payload),
+        "notes": previous_payload.get("notes").cloned().unwrap_or(Value::Null),
+    });
+    format!(
+        "{}\n\n上一轮抽取疑似不完整，请重新看图复核。上一轮摘要：{}。\n这次必须重点检查是否漏行、漏订单号、漏状态、漏支付方式或把多行合并成一行。最终仍只输出一份完整 JSON，不要解释。",
+        external_image_structured_extract_prompt(prompt, schema, extraction_id),
+        previous_summary
+    )
+}
+
+fn external_image_structured_extract_payload_needs_retry(payload: &Value) -> bool {
+    let records = external_image_structured_extract_raw_records(payload);
+    if records.is_empty() {
+        return true;
+    }
+    if let Some(visible_row_count) = external_image_structured_extract_visible_row_count(payload) {
+        if visible_row_count > records.len() {
+            return true;
+        }
+    }
+    records.iter().any(|record| {
+        external_image_structured_extract_record_text(
+            record,
+            &["order_no", "order_id", "order_number", "订单号", "订单编号"],
+        )
+        .is_none()
+            || external_image_structured_extract_record_text(
+                record,
+                &["status", "status_label", "状态"],
+            )
+            .is_none()
+            || external_image_structured_extract_record_text(
+                record,
+                &[
+                    "pay_amount",
+                    "pay_amount_raw",
+                    "payment_amount",
+                    "支付金额",
+                    "付款金额",
+                ],
+            )
+            .is_none()
+    })
+}
+
+fn external_image_structured_extract_payload_quality_score(payload: &Value) -> usize {
+    let records = external_image_structured_extract_raw_records(payload);
+    records
+        .iter()
+        .map(|record| {
+            let mut score = 10;
+            for keys in [
+                &["order_no", "order_id", "order_number", "订单号", "订单编号"][..],
+                &["status", "status_label", "状态"][..],
+                &[
+                    "pay_amount",
+                    "pay_amount_raw",
+                    "payment_amount",
+                    "支付金额",
+                    "付款金额",
+                ][..],
+                &[
+                    "recharge_amount",
+                    "recharge_amount_raw",
+                    "充值额度",
+                    "充值金额",
+                ][..],
+                &[
+                    "payment_method",
+                    "payment_method_label",
+                    "pay_method",
+                    "支付方式",
+                ][..],
+                &[
+                    "created_at",
+                    "create_time",
+                    "created_time",
+                    "创建时间",
+                    "时间",
+                ][..],
+            ] {
+                if external_image_structured_extract_record_text(record, keys).is_some() {
+                    score += 2;
+                }
+            }
+            score
+        })
+        .sum::<usize>()
+}
+
+fn external_image_structured_extract_visible_row_count(payload: &Value) -> Option<usize> {
+    payload
+        .get("visible_row_count")
+        .or_else(|| payload.get("row_count"))
+        .or_else(|| payload.get("detected_row_count"))
+        .and_then(|value| match value {
+            Value::Number(number) => number.as_u64().map(|value| value as usize),
+            Value::String(text) => text.trim().parse::<usize>().ok(),
+            _ => None,
+        })
 }
 
 fn external_image_structured_extract_runtime_config(
@@ -29773,11 +29946,41 @@ fn external_image_structured_extract_runtime_config(
     .and_then(|value| value.parse::<u64>().ok())
     .filter(|value| *value >= 1_000)
     .unwrap_or(60_000);
+    let max_tokens = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_MAX_TOKENS",
+    ])
+    .and_then(|value| value.parse::<u64>().ok())
+    .filter(|value| (512..=16_000).contains(value))
+    .unwrap_or(4_096);
+    let reasoning_effort = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_REASONING_EFFORT",
+        "ASSISTANT_RUN_RUNTIME_REASONING_EFFORT",
+    ])
+    .map(|value| value.trim().to_ascii_lowercase())
+    .filter(|value| {
+        matches!(
+            value.as_str(),
+            "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
+        )
+    });
+    let retry_enabled = external_image_structured_extract_env_value(&[
+        "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_RETRY_ENABLED",
+    ])
+    .map(|value| {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off"
+        )
+    })
+    .unwrap_or(true);
     Some(ExternalImageStructuredExtractRuntimeConfig {
         endpoint_url: external_image_structured_extract_join_url(&base_url, &api_path),
         api_key,
         model,
         timeout_ms,
+        max_tokens,
+        reasoning_effort,
+        retry_enabled,
         provider_label: external_image_structured_extract_env_value(&[
             "EXTERNAL_IMAGE_STRUCTURED_EXTRACT_PROVIDER",
             "ASSISTANT_RUN_RUNTIME_PROVIDER",
@@ -29903,6 +30106,9 @@ fn normalize_external_image_structured_extract_payload(
         "schema": schema,
         "records": records,
         "record_count": record_count,
+        "visible_row_count": external_image_structured_extract_visible_row_count(raw_payload)
+            .map(|value| json!(value))
+            .unwrap_or(Value::Null),
         "needs_review": needs_review,
         "confidence": raw_payload.get("confidence").cloned().unwrap_or(Value::Null),
         "notes": raw_payload.get("notes").cloned().unwrap_or(Value::Null),
@@ -29929,13 +30135,29 @@ fn external_image_structured_extract_raw_records(raw_payload: &Value) -> Vec<Val
 }
 
 fn external_image_structured_extract_normalize_record(record: &Value) -> Value {
+    let row_index = external_image_structured_extract_record_number_any(
+        record,
+        &["row_index", "row", "index", "行号", "序号"],
+    )
+    .and_then(|value| {
+        if value.is_finite() && value >= 0.0 {
+            Some(value as u64)
+        } else {
+            None
+        }
+    });
     let recharge_amount_raw = external_image_structured_extract_record_text(
         record,
         &[
             "recharge_amount_raw",
             "recharge_amount",
+            "topup_amount",
+            "charge_amount",
+            "recharge",
             "充值额度",
             "充值金额",
+            "充值",
+            "充值额",
         ],
     );
     let pay_amount_raw = external_image_structured_extract_record_text(
@@ -29944,8 +30166,13 @@ fn external_image_structured_extract_normalize_record(record: &Value) -> Value {
             "pay_amount_raw",
             "pay_amount",
             "payment_amount",
+            "amount",
+            "paid_amount",
+            "payment",
             "支付金额",
+            "支付额",
             "付款金额",
+            "实付金额",
         ],
     );
     let payment_method_label = external_image_structured_extract_record_text(
@@ -29954,38 +30181,81 @@ fn external_image_structured_extract_normalize_record(record: &Value) -> Value {
             "payment_method_label",
             "payment_method",
             "pay_method",
+            "method",
+            "pay_type",
             "支付方式",
+            "支付渠道",
         ],
     );
     let order_no = external_image_structured_extract_record_text(
         record,
-        &["order_no", "order_id", "order_number", "订单号", "订单编号"],
+        &[
+            "order_no",
+            "order_id",
+            "order_number",
+            "trade_no",
+            "transaction_id",
+            "订单号",
+            "订单编号",
+            "订单",
+            "交易号",
+            "流水号",
+        ],
     );
-    let status_label =
-        external_image_structured_extract_record_text(record, &["status_label", "status", "状态"]);
+    let status_label = external_image_structured_extract_record_text(
+        record,
+        &[
+            "status_label",
+            "status",
+            "payment_status",
+            "状态",
+            "订单状态",
+        ],
+    );
     let created_at = external_image_structured_extract_record_text(
         record,
         &[
             "created_at",
             "create_time",
             "created_time",
+            "pay_time",
             "创建时间",
+            "支付时间",
+            "订单时间",
             "时间",
         ],
     );
-    let recharge_amount =
-        external_image_structured_extract_record_number(record, "recharge_amount").or_else(|| {
-            recharge_amount_raw
-                .as_deref()
-                .and_then(external_image_structured_extract_amount_number)
-        });
-    let pay_amount =
-        external_image_structured_extract_record_number(record, "pay_amount").or_else(|| {
-            pay_amount_raw
-                .as_deref()
-                .and_then(external_image_structured_extract_amount_number)
-        });
+    let recharge_amount = external_image_structured_extract_record_number_any(
+        record,
+        &[
+            "recharge_amount",
+            "topup_amount",
+            "charge_amount",
+            "recharge",
+        ],
+    )
+    .or_else(|| {
+        recharge_amount_raw
+            .as_deref()
+            .and_then(external_image_structured_extract_amount_number)
+    });
+    let pay_amount = external_image_structured_extract_record_number_any(
+        record,
+        &[
+            "pay_amount",
+            "payment_amount",
+            "amount",
+            "paid_amount",
+            "payment",
+        ],
+    )
+    .or_else(|| {
+        pay_amount_raw
+            .as_deref()
+            .and_then(external_image_structured_extract_amount_number)
+    });
     json!({
+        "row_index": row_index,
         "recharge_amount": recharge_amount,
         "recharge_amount_raw": recharge_amount_raw,
         "pay_amount": pay_amount,
@@ -30020,6 +30290,14 @@ fn external_image_structured_extract_record_number(record: &Value, key: &str) ->
         Value::String(text) => external_image_structured_extract_amount_number(text),
         _ => None,
     })
+}
+
+fn external_image_structured_extract_record_number_any(
+    record: &Value,
+    keys: &[&str],
+) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| external_image_structured_extract_record_number(record, key))
 }
 
 fn external_image_structured_extract_amount_number(value: &str) -> Option<f64> {
@@ -101828,6 +102106,7 @@ mod tests {
             r#"{
                 "records": [
                     {
+                        "row_index": 1,
                         "recharge_amount_raw": "$100",
                         "pay_amount_raw": "$700",
                         "payment_method_label": "支付宝",
@@ -101836,6 +102115,7 @@ mod tests {
                         "created_at": "2026/5/14 11:48:54"
                     },
                     {
+                        "row_index": 2,
                         "recharge_amount_raw": "$100",
                         "pay_amount_raw": "$700",
                         "payment_method_label": "支付宝",
@@ -101844,6 +102124,7 @@ mod tests {
                         "created_at": "2026/5/14 11:39:06"
                     }
                 ],
+                "visible_row_count": 2,
                 "confidence": 0.94,
                 "needs_review": false
             }"#,
@@ -101911,6 +102192,8 @@ mod tests {
         let card = first.reply.card.as_ref().expect("structured extract card");
         assert_eq!(card["type"], json!("v3_order_screenshot_extract"));
         assert_eq!(card["record_count"], json!(2));
+        assert_eq!(card["visible_row_count"], json!(2));
+        assert_eq!(card["records"][0]["row_index"], json!(1));
         assert_eq!(card["records"][0]["order_no"], json!("A1778730534"));
         assert_eq!(card["records"][0]["status"], json!("success"));
         assert_eq!(card["records"][0]["payment_method"], json!("alipay"));
@@ -102065,6 +102348,113 @@ mod tests {
         assert_eq!(
             error.payload.code,
             "external_channel_idempotency_payload_mismatch"
+        );
+    }
+
+    #[test]
+    fn external_image_structured_extract_request_uses_high_detail_and_reasoning() {
+        let config = ExternalImageStructuredExtractRuntimeConfig {
+            endpoint_url: "https://model.example.test/v1/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "gpt-5.5".to_string(),
+            timeout_ms: 60_000,
+            max_tokens: 4_096,
+            reasoning_effort: Some("medium".to_string()),
+            retry_enabled: true,
+            provider_label: "test-provider".to_string(),
+        };
+        let payload = external_image_structured_extract_request_payload(
+            &config,
+            "https://third.example.com/order.png",
+            "请按订单字段抽取".to_string(),
+        );
+        assert_eq!(payload["model"], json!("gpt-5.5"));
+        assert_eq!(payload["max_tokens"], json!(4096));
+        assert_eq!(payload["reasoning"]["effort"], json!("medium"));
+        assert_eq!(
+            payload["messages"][1]["content"][1]["image_url"]["url"],
+            json!("https://third.example.com/order.png")
+        );
+        assert_eq!(
+            payload["messages"][1]["content"][1]["image_url"]["detail"],
+            json!("high")
+        );
+    }
+
+    #[test]
+    fn external_image_structured_extract_retry_detects_missing_visible_rows() {
+        let incomplete = json!({
+            "visible_row_count": 3,
+            "records": [
+                {
+                    "row_index": 1,
+                    "order_no": "A1778730534",
+                    "pay_amount_raw": "$700",
+                    "status_label": "成功"
+                }
+            ]
+        });
+        assert!(external_image_structured_extract_payload_needs_retry(
+            &incomplete
+        ));
+
+        let complete = json!({
+            "visible_row_count": 2,
+            "records": [
+                {
+                    "row_index": 1,
+                    "order_no": "A1778730534",
+                    "pay_amount_raw": "$700",
+                    "status_label": "成功"
+                },
+                {
+                    "row_index": 2,
+                    "order_no": "A1778729946",
+                    "pay_amount_raw": "$700",
+                    "status_label": "处理中"
+                }
+            ]
+        });
+        assert!(!external_image_structured_extract_payload_needs_retry(
+            &complete
+        ));
+    }
+
+    #[test]
+    fn external_image_structured_extract_normalizes_common_order_aliases() {
+        let payload = normalize_external_image_structured_extract_payload(
+            "img-extract-test",
+            &json!({
+                "visible_row_count": "1",
+                "records": [
+                    {
+                        "序号": "1",
+                        "充值": "$100",
+                        "amount": "$700",
+                        "method": "支付宝",
+                        "trade_no": "A1778730534",
+                        "订单状态": "成功",
+                        "订单时间": "2026/5/14 11:48:54"
+                    }
+                ],
+                "confidence": 0.91,
+                "needs_review": false
+            }),
+            &json!({}),
+            json!([]),
+            None,
+        );
+        assert_eq!(payload["status"], json!("answered"));
+        assert_eq!(payload["visible_row_count"], json!(1));
+        assert_eq!(payload["records"][0]["row_index"], json!(1));
+        assert_eq!(payload["records"][0]["recharge_amount"], json!(100.0));
+        assert_eq!(payload["records"][0]["pay_amount"], json!(700.0));
+        assert_eq!(payload["records"][0]["payment_method"], json!("alipay"));
+        assert_eq!(payload["records"][0]["order_no"], json!("A1778730534"));
+        assert_eq!(payload["records"][0]["status"], json!("success"));
+        assert_eq!(
+            payload["records"][0]["created_at"],
+            json!("2026/5/14 11:48:54")
         );
     }
 
