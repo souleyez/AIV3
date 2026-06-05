@@ -33420,6 +33420,21 @@ fn static_page_template_baseline_score(
             "template:data-report",
             "business_report",
             "经营分析总报表",
+            "xinbai-functional-modular-template-20260604",
+            "xinbai_business_report",
+            "primary_default_template",
+            "project_unique_default_template",
+        ],
+    );
+    let has_xinbai_primary_default_signal = static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "xinbai-functional-modular-template-20260604",
+            "xinbai_business_report",
+            "monthly_report_only_default_template",
+            "project_unique_default_template",
+            "xinbai_only_accepted_default_template",
         ],
     );
     let has_generic_health_signal = static_page_template_text_contains_any(
@@ -33470,6 +33485,9 @@ fn static_page_template_baseline_score(
     }
     if has_real_data_report_signal {
         score.add(60, "baseline_real_data_report_signal");
+    }
+    if has_xinbai_primary_default_signal {
+        score.add(90, "baseline_xinbai_primary_default_template");
     }
     if has_generic_health_signal {
         score.add(-70, "baseline_generic_health_overview_penalty");
@@ -34895,21 +34913,24 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
     if static_page_template_text_contains_any(
         &compact,
         &lower,
-        &["风险店铺", "风险门店", "风险", "预警", "高风险", "risk"],
-    ) {
-        return Some("风险店铺");
-    }
-    if static_page_template_text_contains_any(
-        &compact,
-        &lower,
         &[
             "取高",
             "高分成",
             "提成",
+            "分成线",
+            "取高线",
+            "超溢",
             "缺口",
             "机会",
+            "达线",
+            "触发取高",
+            "机会门店",
+            "高预警",
+            "中预警",
+            "租金",
             "rent",
             "commission",
+            "takehigh",
         ],
     ) {
         return Some("取高机会");
@@ -34917,19 +34938,77 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
     if static_page_template_text_contains_any(
         &compact,
         &lower,
-        &["低活跃", "不活跃", "零销售", "异常", "inactive"],
+        &[
+            "低活跃",
+            "不活跃",
+            "零销售",
+            "无销售",
+            "连续无销售",
+            "低销售",
+            "客流下降",
+            "客流降低",
+            "同比下降",
+            "客流预警",
+            "异常",
+            "inactive",
+        ],
     ) {
         return Some("低活跃");
     }
     if static_page_template_text_contains_any(
         &compact,
         &lower,
-        &["明细", "品牌", "店铺客户", "合同", "detail"],
+        &[
+            "风险店铺",
+            "风险门店",
+            "风险品牌",
+            "风险提示",
+            "风险",
+            "预警",
+            "高风险",
+            "risk",
+        ],
+    ) {
+        return Some("风险店铺");
+    }
+    if static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &[
+            "明细",
+            "品牌",
+            "品牌店",
+            "店铺客户",
+            "客户名单",
+            "合同",
+            "detail",
+        ],
     ) {
         return Some("品牌明细");
     }
-    if static_page_template_text_contains_any(&compact, &lower, &["品类", "业态", "category"]) {
+    if static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &["品类", "业态", "类别", "结构", "占比", "category"],
+    ) {
         return Some("品类业态");
+    }
+    if static_page_template_text_contains_any(
+        &compact,
+        &lower,
+        &[
+            "经营总览",
+            "经营健康",
+            "健康度",
+            "评分",
+            "坪效",
+            "收入同比",
+            "总览",
+            "overview",
+            "health",
+        ],
+    ) {
+        return Some("经营总览");
     }
     None
 }
@@ -48360,7 +48439,7 @@ fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) 
     assistant_run_request_output_format(request).as_deref() == Some("json")
 }
 
-const XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL: &str = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/image2-real-data-report/index.html";
+const XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL: &str = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
 
 fn assistant_run_xinbai_published_report_url() -> String {
     std::env::var("XINBAI_PUBLISHED_REPORT_PUBLIC_URL")
@@ -91332,6 +91411,9 @@ mod tests {
             ("低活跃品牌有哪些", "低活跃"),
             ("展示品牌店铺客户明细", "品牌明细"),
             ("按品类业态看一下销售结构", "品类业态"),
+            ("取高预警门店有哪些", "取高机会"),
+            ("客流下降风险门店", "低活跃"),
+            ("经营健康度评分表", "经营总览"),
         ] {
             let focused = static_page_public_url_with_prompt_focus(public_url, prompt);
             let url = reqwest::Url::parse(&focused).expect("focused artifact URL should parse");
@@ -91666,13 +91748,21 @@ mod tests {
                 "dataset_external_ids": ["xinbai-project-dataset"],
                 "answer_policy": source_refs["answer_policy"].clone(),
                 "artifact_stability": {
-                    "dataset_artifact_key": "v3-static-page|template:data-report|database_source_id:hy-sql-traffic-area|dataset_external_id:xinbai-project-dataset"
+                    "dataset_artifact_key": "v3-static-page|template:xinbai-functional-modular-template-20260604|database_source_id:hy-sql-traffic-area|dataset_external_id:xinbai-project-dataset",
+                    "default_template_scope": "xinbai_business_report",
+                    "baseline_status": "accepted"
                 }
             }),
             draft_payload: json!({
                 "finalPage": {
-                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html"
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html"
                 },
+                "features": [
+                    "primary_default_template",
+                    "monthly_report_only_default_template",
+                    "project_unique_default_template",
+                    "xinbai_only_accepted_default_template"
+                ],
                 "dataShape": {
                     "storeList": ["A店", "B店"],
                     "salesSeriesByStore": true,
@@ -91718,6 +91808,10 @@ mod tests {
             .features
             .iter()
             .any(|feature| feature == "baseline_real_data_report_signal"));
+        assert!(report_score
+            .features
+            .iter()
+            .any(|feature| feature == "baseline_xinbai_primary_default_template"));
         assert!(generic_score
             .features
             .iter()
