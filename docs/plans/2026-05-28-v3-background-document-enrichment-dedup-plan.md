@@ -89,12 +89,12 @@ Progress 2026-06-06:
   - `cargo check -p platform-api`.
 - Not done yet:
   - applying the migration on 8 server;
-  - computing fingerprints during upload/third-party parse;
+  - backfilling fingerprints for existing documents;
   - canonical read-through in retrieval/facts.
 
 ## Task 2: Capture Content Fingerprints During Ingest
 
-Status: `third-party-parse-completed-local-upload-pending-2026-06-06`
+Status: `new-upload-capture-completed-backfill-pending-2026-06-06`
 
 Files:
 
@@ -118,6 +118,8 @@ Acceptance:
 Progress 2026-06-06:
 
 - Third-party external document parse now computes SHA-256 from downloaded bytes and records it with byte size after document creation.
+- Main-site document registration now records SHA-256 and byte size when `object_key` resolves to a local file; unreadable or remote object keys are skipped without blocking registration.
+- Zip archive expansion now records SHA-256 and byte size for extracted child documents before enqueueing child ingest workflows.
 - Storage records the first seen content fingerprint as the canonical document and marks later matching content as duplicate without changing external document IDs.
 - Added regression coverage in `external_document_parse_endpoint_downloads_and_enqueues_ingest` for:
   - `documents.content_sha256`;
@@ -125,14 +127,20 @@ Progress 2026-06-06:
   - `documents.canonical_document_id`;
   - `documents.dedup_state`;
   - `document_content_fingerprints.canonical_document_id`.
+- Added regression coverage in `register_document_records_local_content_fingerprint` for:
+  - local object-key fingerprint capture through `/v1/documents`;
+  - canonical document alias creation in `document_content_fingerprints`.
 - Verified locally with:
   - `cargo fmt --check -p platform-api -p storage`;
+  - `cargo test -p platform-api register_document_records_local_content_fingerprint --lib`;
+  - `cargo test -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`;
   - `cargo test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib`;
   - `cargo test -p platform-api external_document_parse --lib`;
+  - `cargo test -p storage document_canonical_enrichment --lib`;
   - `cargo check -p platform-api`.
 - Not done yet:
-  - local main-site upload fingerprint capture;
   - 8-server migration rollout;
+  - existing-document fingerprint backfill;
   - duplicate-read canonical routing in retrieval/facts.
 
 ## Task 3: Canonical Dedup Without Breaking Document IDs

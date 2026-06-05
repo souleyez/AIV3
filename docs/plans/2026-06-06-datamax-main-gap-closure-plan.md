@@ -376,7 +376,7 @@ git commit -m "Lock DataMax production concurrency profile"
 
 ## Task 4: Close Static-Page Template Operations And Prewarm
 
-**Status:** in progress as of 2026-06-06. Phase 1 storage schema for fingerprints, canonical document aliases, and enrichment runs is implemented locally. Third-party parse now records downloaded file SHA-256/size into `documents` and `document_content_fingerprints`; local upload fingerprint capture and canonical read-through are still pending.
+**Status:** in progress as of 2026-06-06. Accepted-template reuse and the Xinbai report template contract are validated locally/publicly. Prewarm task construction exists, but production low-load prewarm remains disabled on 8 server and operator observability still needs closure.
 
 **Files:**
 
@@ -463,7 +463,7 @@ git commit -m "Close static page template reuse and prewarm operations"
 
 ## Task 5: Implement Background Document Enrichment Phase 1
 
-**Status:** pending
+**Status:** in progress as of 2026-06-06. Storage schema, third-party parse fingerprint capture, main-site local register fingerprint capture, and zip child-document fingerprint capture are implemented locally. 8-server migration rollout, existing-document backfill, and canonical read-through in retrieval/facts remain pending.
 
 **Files:**
 

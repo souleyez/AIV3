@@ -72261,6 +72261,8 @@ async fn register_document(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let document =
+        record_local_document_content_fingerprint_if_available(&state, document, Utc::now()).await;
 
     Ok((
         StatusCode::CREATED,
@@ -72370,6 +72372,12 @@ async fn create_zip_archive_child_ingests(
             )
             .await
             .map_err(ApiError::from_storage)?;
+        let child_document = record_local_document_content_fingerprint_if_available(
+            state,
+            child_document,
+            Utc::now(),
+        )
+        .await;
 
         let execution = build_initial_upload_ingest_execution(state, &child_document)?;
         let initial_event = build_initial_upload_ingest_event(&execution, &child_document);
@@ -72585,6 +72593,76 @@ fn resolve_platform_local_object_path(object_key: &str) -> Option<PathBuf> {
     let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
     let rooted = StdPath::new(&root).join(raw);
     rooted.is_file().then_some(rooted)
+}
+
+async fn record_local_document_content_fingerprint_if_available(
+    state: &AppState,
+    document: Document,
+    recorded_at: DateTime<Utc>,
+) -> Document {
+    let Some((content_sha256, content_size_bytes)) =
+        local_document_content_fingerprint_from_object_key(&document.object_key)
+    else {
+        return document;
+    };
+    match state
+        .storage
+        .documents()
+        .record_content_fingerprint(
+            state.tenant_id,
+            document.id,
+            &content_sha256,
+            content_size_bytes,
+            recorded_at,
+        )
+        .await
+    {
+        Ok(updated) => updated,
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                document_id = %document.id,
+                "skipping local document content fingerprint after storage failure"
+            );
+            document
+        }
+    }
+}
+
+fn local_document_content_fingerprint_from_object_key(object_key: &str) -> Option<(String, i64)> {
+    let path = resolve_platform_local_object_path(object_key)?;
+    let metadata = fs::metadata(&path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let max_bytes = zip_ingest_env_u64("DOCUMENT_FINGERPRINT_MAX_BYTES", 300 * 1024 * 1024).max(1);
+    if metadata.len() > max_bytes || metadata.len() > i64::MAX as u64 {
+        tracing::warn!(
+            object_key = %object_key,
+            file_size_bytes = metadata.len(),
+            max_bytes,
+            "skipping local document content fingerprint because file is too large"
+        );
+        return None;
+    }
+
+    let mut file = File::open(&path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut total = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        if total > max_bytes || total > i64::MAX as u64 {
+            return None;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Some((format!("{:x}", hasher.finalize()), total as i64))
 }
 
 fn zip_child_output_root(
@@ -133899,6 +133977,99 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn register_document_records_local_content_fingerprint() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("fingerprint-upload-{}", Uuid::new_v4()),
+                    title: "Fingerprint Upload Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": "public",
+                    "default_secret_binding_ids": []
+                }),
+            )
+            .await
+            .expect("dataset should be created");
+        let body = b"DataMax local document fingerprint fixture\n";
+        let object_root =
+            std::env::temp_dir().join(format!("datamax-register-fingerprint-{}", Uuid::new_v4()));
+        fs::create_dir_all(&object_root).expect("temp object root should be created");
+        let object_path = object_root.join("fixture.md");
+        fs::write(&object_path, body).expect("fixture file should be written");
+        let expected_sha256 = sha256_hex([&body[..]]);
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/documents",
+            &RegisterDocumentRequest {
+                dataset_id: dataset.id,
+                title: "Fingerprint fixture".to_string(),
+                object_key: object_path.to_string_lossy().to_string(),
+                content_type: "text/markdown".to_string(),
+                secret_binding_ids: Vec::new(),
+                metadata: json!({}),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let registered: RegisterDocumentResponse = read_json_response(response).await;
+
+        let fingerprint_row = sqlx::query(
+            r#"
+            select content_sha256, content_size_bytes, canonical_document_id, dedup_state
+            from documents
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(harness.tenant_id.0)
+        .bind(registered.document.id.0)
+        .fetch_one(harness.storage.pool())
+        .await
+        .expect("document fingerprint fields should load");
+        assert_eq!(
+            fingerprint_row.get::<Option<String>, _>("content_sha256"),
+            Some(expected_sha256.clone())
+        );
+        assert_eq!(
+            fingerprint_row.get::<Option<i64>, _>("content_size_bytes"),
+            Some(body.len() as i64)
+        );
+        assert_eq!(
+            fingerprint_row.get::<Option<Uuid>, _>("canonical_document_id"),
+            Some(registered.document.id.0)
+        );
+        assert_eq!(
+            fingerprint_row.get::<Option<String>, _>("dedup_state"),
+            Some("canonical".to_string())
+        );
+
+        let canonical_document_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            select canonical_document_id
+            from document_content_fingerprints
+            where tenant_id = $1 and content_sha256 = $2
+            "#,
+        )
+        .bind(harness.tenant_id.0)
+        .bind(&expected_sha256)
+        .fetch_one(harness.storage.pool())
+        .await
+        .expect("content fingerprint should be recorded");
+        assert_eq!(canonical_document_id, registered.document.id.0);
+    }
+
+    #[tokio::test]
     async fn create_document_ingest_starts_workflow_and_enqueues_task() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let Some(harness) = build_auth_api_test_harness().await else {
@@ -133960,6 +134131,121 @@ retrieve_evidence:
         assert_eq!(tasks[0].queue, "ingest");
         assert_eq!(tasks[0].task_key, "ingest_uploaded_document");
         assert_eq!(tasks[0].status.as_str(), "queued");
+    }
+
+    #[tokio::test]
+    async fn create_zip_document_ingest_records_child_content_fingerprint() {
+        use zip::{write::SimpleFileOptions, ZipWriter};
+
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("zip-fingerprint-{}", Uuid::new_v4()),
+                    title: "Zip Fingerprint Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": "public",
+                    "default_secret_binding_ids": []
+                }),
+            )
+            .await
+            .expect("dataset should be created");
+        let root = std::env::temp_dir().join(format!("datamax-zip-fingerprint-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("zip temp root should be created");
+        let zip_path = root.join("bundle.zip");
+        let file = File::create(&zip_path).expect("zip file should be created");
+        let entry_body = b"# Zip child fingerprint\n";
+        let mut writer = ZipWriter::new(file);
+        writer
+            .start_file("docs/child.md", SimpleFileOptions::default())
+            .expect("zip entry should start");
+        writer
+            .write_all(entry_body)
+            .expect("zip entry should write");
+        writer.finish().expect("zip should finish");
+        let expected_sha256 = sha256_hex([&entry_body[..]]);
+
+        let parent = harness
+            .storage
+            .documents()
+            .create(
+                harness.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "bundle.zip".to_string(),
+                    object_key: zip_path.to_string_lossy().to_string(),
+                    content_type: "application/zip".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("parent zip document should be created");
+
+        let response = post_json_request(
+            harness.app.clone(),
+            &format!("/v1/documents/{}/ingest", parent.id),
+            &json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response: CreateDocumentIngestResponse = read_json_response(response).await;
+        assert_eq!(response.child_documents.len(), 1);
+        let child = &response.child_documents[0];
+
+        let fingerprint_row = sqlx::query(
+            r#"
+            select content_sha256, content_size_bytes, canonical_document_id, dedup_state
+            from documents
+            where tenant_id = $1 and id = $2
+            "#,
+        )
+        .bind(harness.tenant_id.0)
+        .bind(child.id.0)
+        .fetch_one(harness.storage.pool())
+        .await
+        .expect("child fingerprint fields should load");
+        assert_eq!(
+            fingerprint_row.get::<Option<String>, _>("content_sha256"),
+            Some(expected_sha256.clone())
+        );
+        assert_eq!(
+            fingerprint_row.get::<Option<i64>, _>("content_size_bytes"),
+            Some(entry_body.len() as i64)
+        );
+        assert_eq!(
+            fingerprint_row.get::<Option<Uuid>, _>("canonical_document_id"),
+            Some(child.id.0)
+        );
+        assert_eq!(
+            fingerprint_row.get::<Option<String>, _>("dedup_state"),
+            Some("canonical".to_string())
+        );
+
+        let canonical_document_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            select canonical_document_id
+            from document_content_fingerprints
+            where tenant_id = $1 and content_sha256 = $2
+            "#,
+        )
+        .bind(harness.tenant_id.0)
+        .bind(&expected_sha256)
+        .fetch_one(harness.storage.pool())
+        .await
+        .expect("child content fingerprint should be recorded");
+        assert_eq!(canonical_document_id, child.id.0);
     }
 
     #[tokio::test]
