@@ -4671,11 +4671,20 @@ impl PgStaticPageDraftRepository {
                  or draft_payload #>> '{artifactStability,datasetArtifactKey}' = $2
                  or draft_payload #>> '{artifact_stability,dataset_artifact_key}' = $2
               )
-              and (
-                    source_refs #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
-                 or draft_payload #>> '{artifactStability,baselineStatus}' in ('accepted', 'published_baseline')
-                 or draft_payload #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
-              )
+              and coalesce(
+                    nullif(source_refs #>> '{artifact_stability,baseline_status}', ''),
+                    nullif(source_refs #>> '{artifact_stability,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{artifact_stability,baseline_status}', ''),
+                    nullif(draft_payload #>> '{artifact_stability,baselineStatus}', ''),
+                    nullif(draft_payload ->> 'baseline_status', ''),
+                    nullif(draft_payload ->> 'baselineStatus', ''),
+                    nullif(draft_payload #>> '{artifactStability,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{artifactStability,baseline_status}', ''),
+                    nullif(draft_payload #>> '{finalPage,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{finalPage,baseline_status}', ''),
+                    nullif(draft_payload #>> '{final_page,baseline_status}', ''),
+                    nullif(draft_payload #>> '{final_page,baselineStatus}', '')
+              ) = 'accepted'
             order by updated_at desc, created_at desc
             limit 1
             "#,
@@ -4699,11 +4708,20 @@ impl PgStaticPageDraftRepository {
                    visibility_snapshot, source_refs, draft_payload, created_at, updated_at
             from static_page_drafts
             where tenant_id = $1
-              and (
-                    source_refs #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
-                 or draft_payload #>> '{artifactStability,baselineStatus}' in ('accepted', 'published_baseline')
-                 or draft_payload #>> '{artifact_stability,baseline_status}' in ('accepted', 'published_baseline')
-              )
+              and coalesce(
+                    nullif(source_refs #>> '{artifact_stability,baseline_status}', ''),
+                    nullif(source_refs #>> '{artifact_stability,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{artifact_stability,baseline_status}', ''),
+                    nullif(draft_payload #>> '{artifact_stability,baselineStatus}', ''),
+                    nullif(draft_payload ->> 'baseline_status', ''),
+                    nullif(draft_payload ->> 'baselineStatus', ''),
+                    nullif(draft_payload #>> '{artifactStability,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{artifactStability,baseline_status}', ''),
+                    nullif(draft_payload #>> '{finalPage,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{finalPage,baseline_status}', ''),
+                    nullif(draft_payload #>> '{final_page,baseline_status}', ''),
+                    nullif(draft_payload #>> '{final_page,baselineStatus}', '')
+              ) = 'accepted'
             order by updated_at desc, created_at desc
             limit $2
             "#,

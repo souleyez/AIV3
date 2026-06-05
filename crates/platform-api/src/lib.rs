@@ -31945,6 +31945,9 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>()
         .to_ascii_lowercase();
+    if external_channel_prompt_requests_business_report_module_workflow(&compact, prompt) {
+        return true;
+    }
     let asks_for_report_artifact = external_channel_text_has_any(
         &compact,
         prompt,
@@ -31982,6 +31985,14 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
             "渲染",
             "出页面",
             "出报表",
+            "出来",
+            "列报表",
+            "列一个",
+            "列一份",
+            "列个",
+            "列一下",
+            "整理成",
+            "相关报表",
             "出图",
             "生图",
             "做成",
@@ -32008,6 +32019,88 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
     }
 
     external_channel_prompt_is_short_report_artifact_request(&compact, prompt)
+}
+
+fn external_channel_prompt_requests_business_report_module_workflow(
+    compact: &str,
+    prompt: &str,
+) -> bool {
+    if external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "什么",
+            "哪些",
+            "怎么",
+            "如何",
+            "为什么",
+            "是否",
+            "能不能",
+            "可不可以",
+            "吗",
+            "？",
+            "?",
+            "介绍",
+            "说明",
+            "含义",
+            "口径",
+            "问题",
+            "原因",
+        ],
+    ) {
+        return false;
+    }
+    let has_business_report_module = external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "取高机会",
+            "可取高",
+            "取高门店",
+            "高分成",
+            "高分成线",
+            "低销售额风险",
+            "低销售风险",
+            "风险店铺",
+            "风险门店",
+            "门店低销售",
+            "月租金",
+            "租金机会",
+            "提成租金",
+            "销售额缺口",
+            "需增销售",
+            "经营驾驶仓",
+            "经营月报",
+            "新百经营",
+        ],
+    );
+    if !has_business_report_module {
+        return false;
+    }
+    external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "看看",
+            "看一下",
+            "查看",
+            "查一下",
+            "列",
+            "列出",
+            "报表",
+            "月报",
+            "生成",
+            "制作",
+            "整理",
+            "做成",
+            "做个",
+            "输出",
+            "最新",
+            "本月",
+            "五月",
+            "5月",
+        ],
+    )
 }
 
 fn external_channel_prompt_is_short_report_artifact_request(compact: &str, prompt: &str) -> bool {
@@ -33022,10 +33115,13 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
         .list_accepted_baselines(state.tenant_id, 100)
         .await
         .map_err(ApiError::from_storage)?;
-    outcome.accepted_baseline_count = baselines.len();
 
     let mut best_match: Option<(StaticPageDraft, StaticPageTemplateBaselineScore)> = None;
     for draft in baselines {
+        if !static_page_draft_is_accepted_template_baseline(&draft) {
+            continue;
+        }
+        outcome.accepted_baseline_count += 1;
         let draft_connection_id = external_channel_static_page_source_ref_string(
             &draft.source_refs,
             "channel_connection_id",
@@ -33349,7 +33445,8 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
             .await
             .map_err(ApiError::from_storage)?
             .as_ref()
-            .and_then(static_page_published_public_url_from_draft)
+            .filter(|draft| static_page_draft_is_accepted_template_baseline(draft))
+            .and_then(|draft| static_page_published_public_url_from_draft(draft))
             .is_some()
         {
             return Ok(());
@@ -33834,6 +33931,67 @@ fn static_page_published_public_url_from_draft(draft: &StaticPageDraft) -> Optio
     .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
     .map(ToOwned::to_owned)
     .next()
+}
+
+fn static_page_draft_effective_baseline_status(draft: &StaticPageDraft) -> Option<&str> {
+    [
+        draft
+            .source_refs
+            .pointer("/artifact_stability/baseline_status")
+            .and_then(Value::as_str),
+        draft
+            .source_refs
+            .pointer("/artifact_stability/baselineStatus")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/artifact_stability/baseline_status")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/artifact_stability/baselineStatus")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .get("baseline_status")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .get("baselineStatus")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/artifactStability/baselineStatus")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/artifactStability/baseline_status")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/finalPage/baselineStatus")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/finalPage/baseline_status")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/final_page/baseline_status")
+            .and_then(Value::as_str),
+        draft
+            .draft_payload
+            .pointer("/final_page/baselineStatus")
+            .and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+}
+
+fn static_page_draft_is_accepted_template_baseline(draft: &StaticPageDraft) -> bool {
+    static_page_draft_effective_baseline_status(draft) == Some("accepted")
 }
 
 fn static_page_draft_is_template_fallback_baseline(draft: &StaticPageDraft) -> bool {
@@ -36869,6 +37027,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 )
                 .await
                 .map_err(ApiError::from_storage)?
+                .filter(|draft| static_page_draft_is_accepted_template_baseline(draft))
                 .filter(|draft| !static_page_draft_is_template_fallback_baseline(draft))
             {
                 if let Some(public_url) =
@@ -42791,6 +42950,7 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
                 )
                 .await
                 .map_err(ApiError::from_storage)?
+                .filter(|draft| static_page_draft_is_accepted_template_baseline(draft))
                 .filter(|draft| static_page_owner_is_visible(draft.owner_user_id, owner_user_id))
                 .filter(|draft| !static_page_draft_is_template_fallback_baseline(draft))
             {
@@ -43059,6 +43219,7 @@ async fn list_static_page_templates(
         .map_err(ApiError::from_storage)?;
     let templates = drafts
         .into_iter()
+        .filter(|draft| static_page_draft_is_accepted_template_baseline(draft))
         .filter(|draft| static_page_owner_is_visible(draft.owner_user_id, current_user_id))
         .filter(|draft| {
             dataset_artifact_key.as_deref().is_none_or(|key| {
@@ -90912,6 +91073,61 @@ mod tests {
     }
 
     #[test]
+    fn static_page_template_baseline_effective_status_prefers_current_retired_metadata() {
+        let mut draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: Some(UserId::new()),
+            title: "静态页：旧版新百经营分析报表".to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "artifact_stability": {
+                    "baseline_status": "retired"
+                }
+            }),
+            draft_payload: json!({
+                "artifactStability": {
+                    "baselineStatus": "accepted"
+                },
+                "artifact_stability": {
+                    "baseline_status": "retired"
+                },
+                "finalPage": {
+                    "baselineStatus": "accepted",
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/old/index.html"
+                }
+            }),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        assert_eq!(
+            static_page_draft_effective_baseline_status(&draft),
+            Some("retired")
+        );
+        assert!(!static_page_draft_is_accepted_template_baseline(&draft));
+
+        draft.source_refs = json!({
+            "artifact_stability": {
+                "baseline_status": "accepted"
+            }
+        });
+        draft.draft_payload = json!({
+            "artifact_stability": {
+                "baseline_status": "accepted"
+            },
+            "finalPage": {
+                "baselineStatus": "accepted",
+                "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/current/index.html"
+            }
+        });
+        assert!(static_page_draft_is_accepted_template_baseline(&draft));
+    }
+
+    #[test]
     fn static_page_template_score_prefers_sales_store_report_over_generic_health_page() {
         let selected_scope = json!({
             "type": "external_channel",
@@ -95416,6 +95632,38 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_artifact_detects_short_report_listing_request() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for prompt in ["可以列一个报表出来吗", "相关报表"] {
+            assert!(
+                external_channel_message_requests_static_page_artifact(&message, prompt),
+                "prompt should request a static-page report workflow: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_detects_xinbai_business_report_modules() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for prompt in [
+            "我想看看五月份最新的取高机会",
+            "我想看看关于门店低销售额风险",
+            "看看最新的风险店铺",
+        ] {
+            assert!(
+                external_channel_message_requests_static_page_artifact(&message, prompt),
+                "prompt should request a focused business-report module: {prompt}"
+            );
+        }
+    }
+
+    #[test]
     fn external_channel_static_page_artifact_ignores_short_report_question() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
@@ -95436,6 +95684,18 @@ mod tests {
         assert!(!external_channel_message_requests_static_page_artifact(
             &message,
             "帮我分析这份报表口径有哪些问题"
+        ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_ignores_business_metric_explanation_question() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        assert!(!external_channel_message_requests_static_page_artifact(
+            &message,
+            "取高是什么意思"
         ));
     }
 
