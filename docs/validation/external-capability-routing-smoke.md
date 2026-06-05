@@ -30,6 +30,11 @@ Follow-up local channel polish before the next rollout:
 - Verified with `cargo test -p platform-api feishu_reply --lib` and `cargo test -p platform-api wecom_reply --lib`.
 - Regenerated the third-party integration HTML/public Markdown copies after the report-card export-field docs changed, and updated the guide-renderer tests to assert `DataMax` naming instead of stale `V3` titles.
 
+Deployed the channel polish to `8服务器` at commit `4b15a36d2`; `aiv3-platform-api.service` remained `active`. Post-rollout smoke passed:
+
+- Strict focused-report capability routing: 12/12 selected cases passed; 9/9 Xinbai report triggers emitted one focused artifact link and 3/3 ordinary-Q&A guards emitted no artifact links.
+- Export smoke: `okCount=2`, `failedCount=0`, receipt `target/external-report-export-smoke/20260605154722.json`.
+
 ## 2026-06-05 8 Server Focus/Export Regression
 
 - Host: `8服务器`
