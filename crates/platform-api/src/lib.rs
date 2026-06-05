@@ -9704,6 +9704,11 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
                 .and_then(Value::as_str)
         })
         .unwrap_or("processing");
+    let phase = object
+        .get("phase")
+        .and_then(Value::as_str)
+        .or_else(|| raw_data.get("phase").and_then(Value::as_str))
+        .unwrap_or_default();
     let raw_card = object
         .get("card")
         .cloned()
@@ -9715,8 +9720,14 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
                 .and_then(|reply| reply.get("card"))
                 .cloned()
         });
+    let direct_artifact_url = external_channel_public_artifact_url_from_links_value(
+        object
+            .get("artifact_links")
+            .or_else(|| raw_data.get("artifact_links")),
+    );
     let include_artifact_link =
-        external_channel_public_status_allows_artifact_link_for_card(status, raw_card.as_ref());
+        external_channel_public_status_allows_artifact_link_for_card(status, raw_card.as_ref())
+            || (phase == "completed" && direct_artifact_url.is_some());
     let include_preview_link = external_channel_public_status_allows_preview_link(status);
     let display_text = object
         .get("display_text")
@@ -9751,6 +9762,7 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
         raw_card
             .as_ref()
             .and_then(external_channel_public_artifact_url_from_value)
+            .or_else(|| direct_artifact_url.clone())
             .or_else(|| {
                 raw_data
                     .get("response")
@@ -9842,6 +9854,17 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
     ] {
         object.remove(key);
     }
+}
+
+fn external_channel_public_artifact_url_from_links_value(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_array).and_then(|links| {
+        links.iter().find_map(|link| {
+            link.as_str()
+                .map(str::trim)
+                .filter(|url| codex_host_fixed_task_public_artifact_url_allowed(url))
+                .map(ToOwned::to_owned)
+        })
+    })
 }
 
 fn external_channel_public_stream_card_summary(
@@ -93408,6 +93431,40 @@ mod tests {
         assert!(provisional_completed
             .pointer("/data/card/public_url")
             .is_none());
+
+        let completed_answer_with_report_link = external_channel_sse_public_payload(
+            Some(run_id),
+            "generic:tenant:stream-001",
+            "room-1",
+            100,
+            "completed",
+            "answered",
+            "本轮处理已返回当前结果。",
+            None,
+            None,
+            json!({
+                "text": "已按客户需求整理取高门店排行。",
+                "artifact_links": [
+                    "https://v3.elepcloud.com/generated-artifacts/demo/index.html"
+                ]
+            }),
+        );
+        let completed_answer_with_report_link =
+            external_channel_public_stream_payload(completed_answer_with_report_link);
+        assert_eq!(
+            completed_answer_with_report_link["artifact_links"],
+            json!(["https://v3.elepcloud.com/generated-artifacts/demo/index.html"])
+        );
+        assert_eq!(
+            completed_answer_with_report_link["public_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/demo/index.html")
+        );
+        assert_eq!(
+            completed_answer_with_report_link.pointer("/data/artifact_links"),
+            Some(&json!([
+                "https://v3.elepcloud.com/generated-artifacts/demo/index.html"
+            ]))
+        );
 
         let preview_ready = external_channel_sse_public_payload(
             Some(run_id),
