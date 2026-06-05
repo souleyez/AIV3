@@ -20782,7 +20782,7 @@ async fn ingest_external_channel_message_with_connection_inner(
             external_channel_search_evidence_required_reply(&message, plan)
         }
         None => {
-            if let Some(reply) = maybe_enqueue_external_channel_static_page_pipeline(
+            let static_page_side_reply = maybe_enqueue_external_channel_static_page_pipeline(
                 state,
                 connection_id,
                 connection,
@@ -20791,10 +20791,8 @@ async fn ingest_external_channel_message_with_connection_inner(
                 &message,
                 now,
             )
-            .await?
-            {
-                reply
-            } else if let Some(reply) = maybe_enqueue_external_channel_data_ingestion_analysis(
+            .await?;
+            if let Some(reply) = maybe_enqueue_external_channel_data_ingestion_analysis(
                 state,
                 connection_id,
                 connection,
@@ -20808,7 +20806,7 @@ async fn ingest_external_channel_message_with_connection_inner(
             {
                 reply
             } else {
-                external_channel_chat_model_or_acceptance_reply(
+                match external_channel_chat_model_or_acceptance_reply(
                     state,
                     connection_id,
                     connection,
@@ -20820,7 +20818,18 @@ async fn ingest_external_channel_message_with_connection_inner(
                     now,
                     answer_delta_sink,
                 )
-                .await?
+                .await
+                {
+                    Ok(reply) => reply,
+                    Err(error)
+                        if static_page_side_reply.is_some()
+                            && error.payload.code
+                                == "external_channel_model_direct_reply_unavailable" =>
+                    {
+                        static_page_side_reply.expect("checked static page side reply")
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
     };
@@ -28805,30 +28814,64 @@ fn external_channel_reply_from_run_and_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,
 ) -> Option<ExternalBotReplyView> {
+    let static_page_reply = external_channel_static_page_reply_candidate_from_run_and_events(
+        run,
+        events,
+        conversation_external_id,
+    );
+    if let Some(reply) = external_channel_assistant_reply_from_run(run).map(|reply| {
+        external_channel_assistant_text_reply_for_conversation(run, conversation_external_id, reply)
+    }) {
+        return Some(external_channel_reply_with_static_page_artifact_links(
+            reply,
+            static_page_reply.as_ref(),
+        ));
+    }
+    static_page_reply
+        .or_else(|| {
+            external_channel_data_ingestion_analysis_reply_from_events(
+                events,
+                conversation_external_id,
+            )
+        })
+        .or_else(|| external_channel_fixed_task_reply_from_events(events, conversation_external_id))
+        .or_else(|| {
+            external_channel_image_structured_extract_reply_from_events(
+                events,
+                conversation_external_id,
+            )
+        })
+}
+
+fn external_channel_static_page_reply_candidate_from_run_and_events(
+    run: &AssistantRun,
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
     external_channel_static_page_artifact_reply_from_output_artifacts(
         &run.output_artifacts,
         conversation_external_id,
     )
     .or_else(|| external_channel_static_page_reply_from_events(events, conversation_external_id))
-    .or_else(|| {
-        external_channel_data_ingestion_analysis_reply_from_events(events, conversation_external_id)
-    })
-    .or_else(|| external_channel_fixed_task_reply_from_events(events, conversation_external_id))
-    .or_else(|| {
-        external_channel_image_structured_extract_reply_from_events(
-            events,
-            conversation_external_id,
-        )
-    })
-    .or_else(|| {
-        external_channel_assistant_reply_from_run(run).map(|reply| {
-            external_channel_assistant_text_reply_for_conversation(
-                run,
-                conversation_external_id,
-                reply,
-            )
-        })
-    })
+}
+
+fn external_channel_reply_with_static_page_artifact_links(
+    mut reply: ExternalBotReplyView,
+    static_page_reply: Option<&ExternalBotReplyView>,
+) -> ExternalBotReplyView {
+    let Some(static_page_reply) = static_page_reply else {
+        return reply;
+    };
+    for link in &static_page_reply.artifact_links {
+        let link = link.trim();
+        if link.is_empty() || !codex_host_fixed_task_public_artifact_url_allowed(link) {
+            continue;
+        }
+        if !reply.artifact_links.iter().any(|existing| existing == link) {
+            reply.artifact_links.push(link.to_string());
+        }
+    }
+    reply
 }
 
 const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_EVENT_NAME: &str =
@@ -41912,11 +41955,24 @@ async fn external_channel_chat_model_or_acceptance_reply(
             .update_execution_trail(state.tenant_id, run_id, &execution_trail_value)
             .await
             .map_err(ApiError::from_storage)?;
-        let output_artifacts = json!([assistant_artifact]);
+        let mut output_artifacts = match state
+            .storage
+            .assistant_runs()
+            .get_by_id(state.tenant_id, run_id)
+            .await
+            .map_err(ApiError::from_storage)?
+        {
+            Some(run) => value_array(run.output_artifacts),
+            None => Vec::new(),
+        };
+        output_artifacts.push(assistant_artifact);
+        output_artifacts =
+            assistant_run_sanitize_customer_facing_output_artifacts(output_artifacts);
+        let output_artifacts_value = Value::Array(output_artifacts.clone());
         state
             .storage
             .assistant_runs()
-            .attach_output_artifacts(state.tenant_id, run_id, &output_artifacts)
+            .attach_output_artifacts(state.tenant_id, run_id, &output_artifacts_value)
             .await
             .map_err(ApiError::from_storage)?;
         state
@@ -41971,6 +42027,17 @@ async fn external_channel_chat_model_or_acceptance_reply(
         .await?;
 
         let mut reply = external_channel_text_reply(message, output_text, "answered");
+        if let Some(static_page_reply) =
+            external_channel_static_page_artifact_reply_from_output_artifacts(
+                &output_artifacts_value,
+                &message.conversation_external_id,
+            )
+        {
+            reply = external_channel_reply_with_static_page_artifact_links(
+                reply,
+                Some(&static_page_reply),
+            );
+        }
         if let Some(artifact) = template_html_artifact {
             reply.artifact_links.push(artifact.download_url);
         }
@@ -53350,6 +53417,22 @@ async fn mark_external_static_page_local_generated_artifact_published(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    if let Err(error) = maybe_dispatch_external_channel_outbound_reply(
+        storage,
+        tenant_id,
+        run.id,
+        "assistant_run.external_channel_static_page_publish_completed",
+        &completed_payload,
+        now,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = ?error,
+            assistant_run_id = %run.id,
+            "external channel outbound reply dispatch failed after local static-page publish completion"
+        );
+    }
     Ok(completed_payload)
 }
 
@@ -106083,6 +106166,40 @@ retrieve_evidence:
             created_at: at,
             updated_at: at,
         }
+    }
+
+    #[test]
+    fn external_channel_reply_prefers_model_answer_and_keeps_static_page_link() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html";
+        let mut run = test_external_channel_assistant_run(
+            "分析经营情况并生成报表",
+            None,
+            "external_channel",
+            Utc::now(),
+        );
+        run.output_artifacts = json!([
+            {
+                "type": "external_channel_static_page_artifact",
+                "artifact_type": "static_page",
+                "public_url": public_url
+            },
+            {
+                "type": "assistant_message",
+                "source": "external_channel_model_reply",
+                "content": "这是模型对客户问题的正常回答。"
+            }
+        ]);
+
+        let reply = external_channel_reply_from_run_and_events(&run, &[], "conv-1")
+            .expect("reply should be restored");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(
+            reply.text.as_deref(),
+            Some("这是模型对客户问题的正常回答。")
+        );
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
     }
 
     #[tokio::test]
