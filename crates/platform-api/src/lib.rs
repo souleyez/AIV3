@@ -97636,6 +97636,7 @@ mod tests {
         expected_confirmation: bool,
         expected_card_type: Option<String>,
         deterministic_route: Option<String>,
+        expected_focus: Option<String>,
         notes: Option<String>,
     }
 
@@ -97746,6 +97747,8 @@ mod tests {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
         message.output_format = Some("rich_text".to_string());
+        let static_page_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html";
 
         for case in external_channel_capability_routing_fixture_cases() {
             match case.deterministic_route.as_deref() {
@@ -97781,6 +97784,22 @@ mod tests {
                 }
                 Some(other) => panic!("unexpected deterministic route {other}"),
                 None => {}
+            }
+            if let Some(expected_focus) = case.expected_focus.as_deref() {
+                let focused =
+                    static_page_public_url_with_prompt_focus(static_page_url, &case.prompt);
+                let url =
+                    reqwest::Url::parse(&focused).expect("focused static page URL should parse");
+                let focus = url
+                    .query_pairs()
+                    .find(|(key, _)| key == "focus")
+                    .map(|(_, value)| value.into_owned());
+                assert_eq!(
+                    focus.as_deref(),
+                    Some(expected_focus),
+                    "case {} should map to expected static-page focus",
+                    case.case_id
+                );
             }
         }
     }

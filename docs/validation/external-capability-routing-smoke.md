@@ -32,6 +32,8 @@ Local checks passed before rollout:
 | ordinary care question | Passed; returned normal text answer, no artifact/data-ingestion card |
 | dark mobile report redesign | Passed for routing/progress; returned `v3_static_page_pipeline`, preview ready and `static_page_publish_running`; final generated page was still queued/running in Cloudflare Codex at validation time |
 
+The local fixture now also covers the high-frequency Xinbai report prompts `取高`, `经营状况`, `风险识别`, `销售缺口统计一下，哪些门店需要助推？`, `看月度销售趋势`, and `客流降低预警`, including expected `?focus=` values for the accepted default template. These should be selected for live 8-server smoke when report routing or static-page template reuse changes.
+
 Event inspection:
 
 - Data ingestion event chain included `assistant_run.data_ingestion_analysis_queued`.

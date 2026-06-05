@@ -174,6 +174,9 @@
   - Prompt focus routing now maps `经营状况/经营情况/经营状态/销售趋势/收入趋势/计划完成` to `经营总览`, and `助推门店/需助推` wording to `取高机会`.
   - Default customer-ready module summaries were aligned to the current Xinbai monthly report modules: 取高线距离排行, 当前/预测/取高线/需助推, 经营健康度, 月度销售趋势, 机会/风险品类占比, 持续/最新低活跃品牌, and 客流降低预警.
   - Local verification passed for focused trigger/focus regressions, false-positive guard cases, `cargo test -p platform-api external_channel_static_page --lib`, `cargo fmt --package platform-api --check`, `cargo check -p platform-api`, and `git diff --check`.
+- Continued by adding the same high-frequency Xinbai report prompts to `fixtures/external-channel-capability-routing/cases.jsonl`, including `expected_focus` checks for `取高机会`, `经营总览`, `风险店铺`, and `低活跃`.
+  - Added negative fixture coverage for `取高是什么意思？` and `风险识别系统有哪些项目经历？` so metric explanations and resume/project-name questions stay ordinary Q&A.
+  - Local verification passed for `cargo test -p platform-api external_channel_capability_routing_fixture --lib`, the focused static-page trigger test, and the prompt-focus URL test.
 
 ## Immediate Execution Queue
 
