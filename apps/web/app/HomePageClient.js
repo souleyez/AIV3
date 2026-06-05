@@ -1340,7 +1340,20 @@ export default function HomePageClient() {
   }
 
   function promptRequestsStaticPage(prompt) {
-    return /静态页|静态页面|页面规划|一页|生成页面|落地页|效果图|网页|html|HTML|可视化页/.test(String(prompt || ''));
+    const text = String(prompt || '');
+    const compact = text.replace(/\s+/g, '');
+    const hasCreateAction = /生成|制作|创建|输出|发布|渲染|出页面|出报表|做成|做个|做一个|做一份|改成|修改|调整/.test(compact);
+    if (/是什么意思|什么含义|怎么计算|如何计算|为什么|口径|有哪些问题|什么问题/.test(compact) && !hasCreateAction) {
+      return false;
+    }
+    if (/静态页|静态页面|页面规划|一页|生成页面|落地页|效果图|网页|html|HTML|可视化页|报表|看板/.test(text)) {
+      return true;
+    }
+    const hasRiskIdentificationTopic = /风险识别/.test(compact) && !/风险识别系统/.test(compact);
+    const hasBusinessReportTopic = /取高|经营状况|经营情况|经营状态|经营健康度|销售缺口|销售额缺口|需要助推|需助推|助推门店|门店助推|销售统计|门店统计|品牌统计|经营统计|风险门店|风险店铺/.test(compact)
+      || hasRiskIdentificationTopic;
+    const hasReportAction = /看看|看一下|查看|查一下|哪些|列|列出|统计|汇总|排行|排名|最新|本月|五月|5月|取高|经营状况|经营情况|销售缺口|销售额缺口|需要助推/.test(compact);
+    return hasBusinessReportTopic && hasReportAction;
   }
 
   function buildStaticPageConversationSummary(prompt = '', options = {}) {

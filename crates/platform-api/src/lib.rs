@@ -32659,7 +32659,6 @@ fn external_channel_prompt_requests_business_report_module_workflow(
         prompt,
         &[
             "什么",
-            "哪些",
             "怎么",
             "如何",
             "为什么",
@@ -32676,18 +32675,69 @@ fn external_channel_prompt_requests_business_report_module_workflow(
             "问题",
             "原因",
         ],
-    ) {
+    ) || (external_channel_text_has_any(compact, prompt, &["哪些", "有哪些"])
+        && external_channel_text_has_any(
+            compact,
+            prompt,
+            &["问题", "口径", "原因", "含义", "意思", "是什么"],
+        ))
+    {
         return false;
     }
+    let exact_short_business_probe = matches!(
+        compact,
+        "取高"
+            | "经营状况"
+            | "经营情况"
+            | "经营状态"
+            | "销售缺口"
+            | "销售额缺口"
+            | "风险识别"
+            | "助推门店"
+            | "门店助推"
+    );
+    if exact_short_business_probe {
+        return true;
+    }
+    let has_risk_identification_module = !compact.contains("风险识别系统")
+        && external_channel_text_has_any(compact, prompt, &["风险识别"])
+        && external_channel_text_has_any(
+            compact,
+            prompt,
+            &[
+                "经营",
+                "门店",
+                "店铺",
+                "品牌",
+                "销售",
+                "租金",
+                "低活跃",
+                "取高",
+                "报表",
+                "看板",
+                "统计",
+                "汇总",
+                "排行",
+                "排名",
+                "新百",
+                "新世界",
+            ],
+        );
     let has_business_report_module = external_channel_text_has_any(
         compact,
         prompt,
         &[
+            "取高",
             "取高机会",
             "可取高",
             "取高门店",
             "高分成",
             "高分成线",
+            "经营状况",
+            "经营情况",
+            "经营状态",
+            "经营健康",
+            "经营健康度",
             "低销售额风险",
             "低销售风险",
             "风险店铺",
@@ -32697,12 +32747,21 @@ fn external_channel_prompt_requests_business_report_module_workflow(
             "租金机会",
             "提成租金",
             "销售额缺口",
+            "销售缺口",
             "需增销售",
+            "助推",
+            "需要助推",
+            "需助推",
+            "助推门店",
+            "销售统计",
+            "门店统计",
+            "品牌统计",
+            "经营统计",
             "经营驾驶仓",
             "经营月报",
             "新百经营",
         ],
-    );
+    ) || has_risk_identification_module;
     if !has_business_report_module {
         return false;
     }
@@ -32714,8 +32773,13 @@ fn external_channel_prompt_requests_business_report_module_workflow(
             "看一下",
             "查看",
             "查一下",
+            "哪些",
             "列",
             "列出",
+            "统计",
+            "汇总",
+            "排行",
+            "排名",
             "报表",
             "月报",
             "生成",
@@ -39956,7 +40020,8 @@ fn external_channel_model_tool_capability_guidance_lines() -> Vec<String> {
         "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
         "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/表/文件接入需求并生成待确认 staging plan；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
         "客户在线询问“能不能提供报表模板/有没有模板/给一份模板/按这个模板出报表”时，如果上下文指向报表、经营分析、看板、静态页或可视化产物，应视为 `static_page_artifact` 能力请求；不要只回复通用模板清单，宿主会先按客户本轮意向调整模板模块、字段组织和输出重点，再提供草稿或继续生成页面。".to_string(),
-        "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级、事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
+        "经营数据问题中提到取高、经营状况、风险识别、销售缺口、需要助推的门店、统计/汇总/排行时，可能需要同步生成或更新经营报表；如果客户同时在问具体名单、原因或统计结论，仍必须正常回答客户问题，不要用“已收到/正在处理”截断答案，宿主会旁路挂载报表产物。".to_string(),
+        "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级解析或事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
         "当你判断用户不是普通咨询，而是在要求 DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。".to_string(),
         "普通咨询、口径解释、数据问答、已可直接回答的问题仍正常自然语言回答；不要在客户答案中暴露 ReAct、retrieve_evidence、read_document_detail、upgrade_parse_vlm、codex_host_task、原始 connector/API 调用或内部质量门禁名称。".to_string(),
     ]
@@ -96344,6 +96409,7 @@ mod tests {
         assert!(provider_input.contains("collection_setup_analysis"));
         assert!(provider_input.contains("integration_setup_analysis"));
         assert!(provider_input.contains("message_channel_outreach"));
+        assert!(provider_input.contains("不要用“已收到/正在处理”截断答案"));
         assert!(provider_input.contains("不要因为提到附件、PDF、简历、表格或文档就输出"));
         assert!(provider_input.contains("<V3_TOOL_REQUEST>"));
         assert!(provider_input.contains("retrieve_evidence"));
@@ -96996,6 +97062,12 @@ mod tests {
             "我想看看五月份最新的取高机会",
             "我想看看关于门店低销售额风险",
             "看看最新的风险店铺",
+            "取高",
+            "经营状况",
+            "风险识别",
+            "销售缺口统计一下",
+            "哪些需要助推的门店",
+            "按取高统计门店排行",
         ] {
             assert!(
                 external_channel_message_requests_static_page_artifact(&message, prompt),
@@ -97038,6 +97110,27 @@ mod tests {
             &message,
             "取高是什么意思"
         ));
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_ignores_document_statistics_without_business_context()
+    {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for prompt in [
+            "统计一下这份简历的项目经历",
+            "统计一下候选人的能力缺口",
+            "统计一下风险识别系统",
+            "风险识别系统有哪些项目经历",
+            "经营状况有哪些问题",
+        ] {
+            assert!(
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "prompt should stay ordinary QA, not static-page workflow: {prompt}"
+            );
+        }
     }
 
     #[test]
