@@ -7,6 +7,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:3000';
 const DEFAULT_CONNECTION_ID = 'generic-chat-main';
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_EXPECTED_TITLE = '新世界百货经营管理月报表';
+const DEFAULT_EXPECTED_FOCUS = '取高机会';
 const DEFAULT_TEXT = '请根据当前数据集生成新百经营分析月报，重点看取高机会、销售缺口、哪些门店需要助推；正常回答同时推送报表链接。';
 const DEFAULT_PROMPT = '请面向业务用户，优先基于本轮文档和数据源回答。';
 const FILE_CHECKS = [
@@ -35,6 +36,7 @@ function parseArgs(argv) {
     senderExternalId: process.env.EXTERNAL_REPORT_EXPORT_SMOKE_SENDER_EXTERNAL_ID || 'user-report-export-smoke',
     outputDir: process.env.EXTERNAL_REPORT_EXPORT_SMOKE_OUTPUT_DIR || 'target/external-report-export-smoke',
     expectedTitle: process.env.EXTERNAL_REPORT_EXPORT_SMOKE_EXPECTED_TITLE || DEFAULT_EXPECTED_TITLE,
+    expectedFocus: process.env.EXTERNAL_REPORT_EXPORT_SMOKE_EXPECTED_FOCUS || DEFAULT_EXPECTED_FOCUS,
     allowEmptyScope: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_ALLOW_EMPTY_SCOPE),
     allowMissingBearer: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_ALLOW_MISSING_BEARER),
     skipJson: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_SKIP_JSON),
@@ -90,6 +92,11 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--no-expected-title') {
       args.expectedTitle = '';
+    } else if (arg === '--expected-focus') {
+      args.expectedFocus = requireValue(arg, next);
+      index += 1;
+    } else if (arg === '--no-expected-focus') {
+      args.expectedFocus = '';
     } else if (arg === '--allow-empty-scope') {
       args.allowEmptyScope = true;
     } else if (arg === '--allow-missing-bearer') {
@@ -158,6 +165,7 @@ Checks:
   - JSON /v1/external/channels/:id/events returns one report link and report card
   - SSE /v1/external/channels/:id/events/stream publishes the same report surface
   - card title defaults to "${DEFAULT_EXPECTED_TITLE}"
+  - report URL focus defaults to "${DEFAULT_EXPECTED_FOCUS}" for the default prompt
   - card exposes table_data_url, ppt_download_url, markdown/text download URL
   - download_exports has at least three entries
   - index.html, data.json, data-snapshot.json, table-data.csv, report.ppt, report.md are HTTP 200
@@ -169,6 +177,7 @@ Environment aliases:
   EXTERNAL_REPORT_EXPORT_SMOKE_BEARER
   EXTERNAL_REPORT_EXPORT_SMOKE_DATASET_EXTERNAL_IDS
   EXTERNAL_REPORT_EXPORT_SMOKE_DOCUMENT_EXTERNAL_IDS
+  EXTERNAL_REPORT_EXPORT_SMOKE_EXPECTED_FOCUS
 `);
 }
 
@@ -396,6 +405,7 @@ function failedResult(mode, payload, latencyMs, error, extras = {}) {
     taskStatus: null,
     title: null,
     publicUrl: null,
+    publicUrlFocus: null,
     artifactLinkCount: 0,
     downloadExportsCount: 0,
     exportUrls: {},
@@ -436,6 +446,7 @@ async function analyzeReportSurface(args, values, metadata) {
     ], args.baseUrl),
   ]);
   const publicUrl = artifactLinks.find((item) => /\/index\.html(\?|#|$)/.test(item)) || artifactLinks[0] || null;
+  const publicUrlFocus = focusFromUrl(publicUrl);
   const exportUrls = inferExportUrls(args.baseUrl, publicUrl, allValues);
   const downloadExports = collectDownloadExports(allValues, args.baseUrl);
   const answerText = firstString([
@@ -471,6 +482,9 @@ async function analyzeReportSurface(args, values, metadata) {
   if (args.expectedTitle) {
     addCheck(checks, 'expected_title', title === args.expectedTitle);
   }
+  if (args.expectedFocus) {
+    addCheck(checks, 'expected_focus', publicUrlFocus === args.expectedFocus);
+  }
   for (const check of fileChecks) {
     addCheck(checks, `${check.kind}_file_ok`, check.ok);
   }
@@ -482,6 +496,7 @@ async function analyzeReportSurface(args, values, metadata) {
     taskStatus: reply.task_status || reply.taskStatus || null,
     title,
     publicUrl,
+    publicUrlFocus,
     artifactLinkCount: artifactLinks.length,
     downloadExportsCount: downloadExports.length,
     exportUrls,
@@ -783,6 +798,19 @@ function normalizeUrl(value, baseUrl) {
   return null;
 }
 
+function focusFromUrl(value) {
+  if (!value) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    const focus = url.searchParams.get('focus');
+    return focus && focus.trim() ? focus.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function siblingUrl(publicUrl, fileName) {
   try {
     const url = new URL(publicUrl);
@@ -829,6 +857,7 @@ async function main() {
     documentExternalIdCount: args.documentExternalIds.length,
     bearerConfigured: Boolean(args.bearer),
     expectedTitle: args.expectedTitle || null,
+    expectedFocus: args.expectedFocus || null,
     p50LatencyMs: percentile(latencies, 0.5),
     p95LatencyMs: percentile(latencies, 0.95),
     maxLatencyMs: latencies.length ? Math.max(...latencies) : null,

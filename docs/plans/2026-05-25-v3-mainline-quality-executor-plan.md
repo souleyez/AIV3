@@ -178,6 +178,7 @@
   - Added negative fixture coverage for `取高是什么意思？` and `风险识别系统有哪些项目经历？` so metric explanations and resume/project-name questions stay ordinary Q&A.
   - Local verification passed for `cargo test -p platform-api external_channel_capability_routing_fixture --lib`, the focused static-page trigger test, and the prompt-focus URL test.
   - The live `run-external-capability-routing-smoke.ps1` now also collects report-card URL fields and validates `expected_focus` whenever a report link is returned by 8-server SSE.
+  - `npm run smoke:external-report-export` now also validates the published report URL `focus` query value. The default expected focus is `取高机会`, matching the default take-high/sales-gap/assist prompt; operators can override with `--expected-focus` or disable with `--no-expected-focus`.
 
 ## Immediate Execution Queue
 

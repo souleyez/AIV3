@@ -8,6 +8,7 @@ The contract is:
 - The SSE endpoint can publish the same report surface.
 - The customer-facing answer contains a single clickable report link rather than repeated raw URLs.
 - The card title is `新世界百货经营管理月报表` by default.
+- The default report prompt returns a report URL whose `focus` query value is `取高机会`; pass `--expected-focus <focus>` for another prompt or `--no-expected-focus` to disable this check.
 - The card exposes `table_data_url`, `ppt_download_url`, `markdown_download_url` / `text_download_url`, and at least three `download_exports[]` entries.
 - The published artifact directory serves `index.html`, `data.json`, `data-snapshot.json`, `table-data.csv`, `report.ppt`, and `report.md` with non-empty 200 responses.
 
@@ -43,6 +44,7 @@ Results:
 - SSE `/v1/external/channels/generic-chat-main/events/stream`: passed.
 - Report title: `新世界百货经营管理月报表`.
 - Public URL: `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A`.
+- Public URL focus: `取高机会`.
 - `download_exports[]`: 3 entries.
 - Assistant answer report-link mentions: one.
 - Artifact files checked: `index.html`, `data.json`, `data-snapshot.json`, `table-data.csv`, `report.ppt`, `report.md`; all returned HTTP 200 with non-empty bodies.
