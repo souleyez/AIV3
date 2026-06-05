@@ -20113,8 +20113,10 @@ async fn ingest_external_channel_event_stream(
     ensure_external_channel_inbound_bearer_auth(&headers, &connection)?;
     let resume_since_sequence =
         parse_external_channel_stream_resume_sequence(&headers, &query, &payload);
-    let message = parse_external_bot_message_payload(payload, &connection)?;
-    let payload_summary = external_bot_message_payload_summary(&message);
+    let mut message = parse_external_bot_message_payload(payload, &connection)?;
+    let mut payload_summary = external_bot_message_payload_summary(&message);
+    prepare_external_channel_image_variant_idempotency(&state, &mut message, &mut payload_summary)
+        .await?;
     let started_data = json!({
         "connection_id": connection_id.clone(),
         "conversation_external_id": message.conversation_external_id.clone(),
@@ -20398,7 +20400,10 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
-    let payload_summary = external_bot_message_payload_summary(&message);
+    let mut message = message;
+    let mut payload_summary = external_bot_message_payload_summary(&message);
+    prepare_external_channel_image_variant_idempotency(state, &mut message, &mut payload_summary)
+        .await?;
     if let Some(existing) =
         load_external_message_event_by_idempotency(&state, &message.idempotency_key).await?
     {
@@ -25168,7 +25173,10 @@ fn ensure_external_message_event_payload_matches(
     existing_payload_summary: &Value,
     current_payload_summary: &Value,
 ) -> std::result::Result<(), ApiError> {
-    if existing_payload_summary == current_payload_summary {
+    if external_message_payload_summaries_match_for_idempotency(
+        existing_payload_summary,
+        current_payload_summary,
+    ) {
         return Ok(());
     }
     Err(ApiError {
@@ -25183,6 +25191,124 @@ fn ensure_external_message_event_payload_matches(
             })),
         },
     })
+}
+
+async fn prepare_external_channel_image_variant_idempotency(
+    state: &AppState,
+    message: &mut ExternalBotMessageView,
+    payload_summary: &mut Value,
+) -> std::result::Result<(), ApiError> {
+    let original_idempotency_key = message.idempotency_key.clone();
+    let Some(existing) =
+        load_external_message_event_by_idempotency(state, &original_idempotency_key).await?
+    else {
+        return Ok(());
+    };
+    if external_message_payload_summaries_match_for_idempotency(
+        &existing.payload_summary,
+        payload_summary,
+    ) {
+        return Ok(());
+    }
+    if !external_channel_message_allows_image_variant_idempotency(
+        message,
+        &existing.payload_summary,
+        payload_summary,
+    ) {
+        return Ok(());
+    }
+    let Some(variant_key) =
+        external_channel_image_variant_idempotency_key(&original_idempotency_key, payload_summary)
+    else {
+        return Ok(());
+    };
+    message.idempotency_key = variant_key;
+    *payload_summary = external_bot_message_payload_summary(message);
+    Ok(())
+}
+
+fn external_channel_message_allows_image_variant_idempotency(
+    message: &ExternalBotMessageView,
+    existing_payload_summary: &Value,
+    current_payload_summary: &Value,
+) -> bool {
+    if !external_channel_message_requests_image_structured_extract(
+        message,
+        &external_bot_message_prompt(message),
+    ) {
+        return false;
+    }
+    external_message_payload_summaries_match_except_attachments(
+        existing_payload_summary,
+        current_payload_summary,
+    ) && external_channel_image_variant_fingerprint(current_payload_summary).is_some()
+}
+
+fn external_message_payload_summaries_match_except_attachments(
+    left: &Value,
+    right: &Value,
+) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    if let Some(object) = left.as_object_mut() {
+        object.remove("attachments");
+        object.remove("received_at");
+    }
+    if let Some(object) = right.as_object_mut() {
+        object.remove("attachments");
+        object.remove("received_at");
+    }
+    left == right
+}
+
+fn external_message_payload_summaries_match_for_idempotency(left: &Value, right: &Value) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    if let Some(object) = left.as_object_mut() {
+        object.remove("received_at");
+    }
+    if let Some(object) = right.as_object_mut() {
+        object.remove("received_at");
+    }
+    left == right
+}
+
+fn external_channel_image_variant_idempotency_key(
+    original_idempotency_key: &str,
+    payload_summary: &Value,
+) -> Option<String> {
+    let fingerprint = external_channel_image_variant_fingerprint(payload_summary)?;
+    let hash = sha256_hex([
+        original_idempotency_key.trim().as_bytes(),
+        b":image:",
+        fingerprint.as_bytes(),
+    ]);
+    Some(format!(
+        "{}:image:{}",
+        original_idempotency_key.trim(),
+        &hash[..16]
+    ))
+}
+
+fn external_channel_image_variant_fingerprint(payload_summary: &Value) -> Option<String> {
+    let attachments = payload_summary.get("attachments")?.as_array()?;
+    if attachments.is_empty() {
+        return None;
+    }
+    let parts = attachments
+        .iter()
+        .map(|attachment| {
+            json!({
+                "attachment_external_id": attachment.get("attachment_external_id").cloned().unwrap_or(Value::Null),
+                "filename": attachment.get("filename").cloned().unwrap_or(Value::Null),
+                "content_type": attachment.get("content_type").cloned().unwrap_or(Value::Null),
+                "size_bytes": attachment.get("size_bytes").cloned().unwrap_or(Value::Null),
+                "download_url_fingerprint": attachment.get("download_url_fingerprint").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    let serialized = serde_json::to_string(&parts).ok()?;
+    Some(sha256_hex([serialized.as_bytes()]))
 }
 
 fn external_message_event_conflict_public_summary(summary: &Value) -> Value {
@@ -30918,7 +31044,9 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
         "message_external_id": message.message_external_id,
         "message_type": external_message_type_wire_value(&message.message_type),
         "text_chars": message.text.as_ref().map(|text| text.chars().count()).unwrap_or(0),
+        "text_fingerprint": message.text.as_deref().map(external_message_text_fingerprint),
         "default_prompt_chars": message.default_prompt.as_ref().map(|text| text.chars().count()).unwrap_or(0),
+        "default_prompt_fingerprint": message.default_prompt.as_deref().map(external_message_text_fingerprint),
         "output_format": message.output_format,
         "render_mode": message.render_mode,
         "artifact_type": message.artifact_type,
@@ -30945,6 +31073,11 @@ fn external_bot_message_payload_summary(message: &ExternalBotMessageView) -> Val
         })).collect::<Vec<_>>(),
         "received_at": message.received_at,
     })
+}
+
+fn external_message_text_fingerprint(value: &str) -> String {
+    let hash = sha256_hex([value.trim().as_bytes()]);
+    format!("sha256:{}", &hash[..16])
 }
 
 fn external_attachment_download_url_fingerprint(value: &str) -> String {
@@ -99588,17 +99721,42 @@ mod tests {
         );
 
         let mut changed_image_message = message.clone();
-        changed_image_message.message_external_id = "msg-image-order-002".to_string();
-        changed_image_message.attachment_refs[0].attachment_external_id =
-            "img-order-002".to_string();
-        changed_image_message.attachment_refs[0].filename =
-            Some("different-recharge-orders.png".to_string());
         changed_image_message.attachment_refs[0].download_url_redacted =
             Some("https://third.example.com/private/different-recharge.png".to_string());
+        let changed_image = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &changed_image_message,
+            None,
+        )
+        .await;
+        assert_eq!(changed_image.status(), StatusCode::ACCEPTED);
+        let third: ExternalChannelEventResponse = read_json_response(changed_image).await;
+        assert!(third.assistant_run_id.is_some());
+        assert_ne!(third.assistant_run_id, first.assistant_run_id);
+        assert_ne!(third.idempotency_key, first.idempotency_key);
+        assert!(third.idempotency_key.starts_with(&first.idempotency_key));
+        assert_eq!(third.reply.reply_type, ExternalBotReplyTypeView::Card);
+
+        let changed_image_duplicate = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &changed_image_message,
+            None,
+        )
+        .await;
+        assert_eq!(changed_image_duplicate.status(), StatusCode::OK);
+        let fourth: ExternalChannelEventResponse =
+            read_json_response(changed_image_duplicate).await;
+        assert_eq!(fourth.assistant_run_id, third.assistant_run_id);
+
+        let mut changed_text_message = message.clone();
+        changed_text_message.text =
+            Some("请识别这张退款记录截图，按订单字段返回 JSON。".to_string());
         let conflict = post_json_request(
             app,
             "/v1/external/channels/generic-chat-main/events",
-            &changed_image_message,
+            &changed_text_message,
             None,
         )
         .await;
@@ -99611,7 +99769,7 @@ mod tests {
     }
 
     #[test]
-    fn external_message_idempotency_reuse_rejects_changed_image_payload() {
+    fn external_message_idempotency_reuse_allows_image_variant_key() {
         let mut message = sample_external_bot_message();
         message.message_type = ExternalMessageTypeView::Image;
         message.message_external_id = "msg-image-order-001".to_string();
@@ -99640,17 +99798,36 @@ mod tests {
         );
 
         let mut changed = message.clone();
-        changed.message_external_id = "msg-image-order-002".to_string();
-        changed.attachment_refs[0].attachment_external_id = "img-order-002".to_string();
         changed.attachment_refs[0].download_url_redacted =
             Some("https://third.example.com/private/another-image.png".to_string());
         let changed_summary = external_bot_message_payload_summary(&changed);
+        assert!(external_channel_message_allows_image_variant_idempotency(
+            &changed,
+            &original_summary,
+            &changed_summary
+        ));
+        let variant_key = external_channel_image_variant_idempotency_key(
+            &message.idempotency_key,
+            &changed_summary,
+        )
+        .expect("image variant should have a derived idempotency key");
+        assert_ne!(variant_key, message.idempotency_key);
+        assert!(variant_key.starts_with(&message.idempotency_key));
+
+        let mut changed_text = message.clone();
+        changed_text.text = Some("请识别这张退款记录截图，按订单字段返回 JSON。".to_string());
+        let changed_text_summary = external_bot_message_payload_summary(&changed_text);
+        assert!(!external_channel_message_allows_image_variant_idempotency(
+            &changed_text,
+            &original_summary,
+            &changed_text_summary
+        ));
         let error = ensure_external_message_event_payload_matches(
             &message.idempotency_key,
             &original_summary,
-            &changed_summary,
+            &changed_text_summary,
         )
-        .expect_err("changed image payload should not reuse the same idempotency key");
+        .expect_err("changed text payload should not reuse the same idempotency key");
         assert_eq!(error.status, StatusCode::CONFLICT);
         assert_eq!(
             error.payload.code,
