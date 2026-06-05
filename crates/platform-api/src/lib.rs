@@ -39390,6 +39390,31 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .and_then(|payload| payload.get("data_snapshot_url"))
         .and_then(Value::as_str)
         .map(str::to_string);
+    let generated_artifact_table_data_url = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("table_data_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let generated_artifact_ppt_download_url = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("ppt_download_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let generated_artifact_markdown_download_url = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("markdown_download_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let generated_artifact_download_exports = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("download_exports"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let generated_artifact_report_title = generated_artifact_payload
+        .as_ref()
+        .and_then(|payload| payload.get("report_title"))
+        .and_then(Value::as_str)
+        .unwrap_or(XINBAI_PUBLISHED_REPORT_TITLE);
     let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
     let poll_after_seconds = if auto_publish_after_preview
         && (generated_artifact_url.is_some() || direct_render_output.is_some())
@@ -39450,6 +39475,25 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         .as_ref()
                         .map(|value| Value::String(value.clone()))
                         .unwrap_or(Value::Null),
+                    "table_data_url": generated_artifact_table_data_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
+                    "ppt_download_url": generated_artifact_ppt_download_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
+                    "markdown_download_url": generated_artifact_markdown_download_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
+                    "text_download_url": generated_artifact_markdown_download_url
+                        .as_ref()
+                        .map(|value| Value::String(value.clone()))
+                        .unwrap_or(Value::Null),
+                    "download_exports": generated_artifact_download_exports.clone(),
+                    "report_title": generated_artifact_report_title,
+                    "title": generated_artifact_report_title,
                     "status_url": status_url.clone(),
                     "status_method": "GET",
                     "poll_after_seconds": poll_after_seconds.clone(),
@@ -39574,6 +39618,25 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 .as_ref()
                 .map(|value| Value::String(value.clone()))
                 .unwrap_or(Value::Null),
+            "table_data_url": generated_artifact_table_data_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
+            "ppt_download_url": generated_artifact_ppt_download_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
+            "markdown_download_url": generated_artifact_markdown_download_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
+            "text_download_url": generated_artifact_markdown_download_url
+                .as_ref()
+                .map(|value| Value::String(value.clone()))
+                .unwrap_or(Value::Null),
+            "download_exports": generated_artifact_download_exports,
+            "report_title": generated_artifact_report_title,
+            "title": generated_artifact_report_title,
             "status_url": status_url.clone(),
             "status_method": "GET",
             "poll_after_seconds": poll_after_seconds.clone(),
@@ -51814,12 +51877,402 @@ struct ExternalStaticPageLocalGeneratedArtifact {
     public_url: String,
     data_url: String,
     data_snapshot_url: String,
+    table_data_url: String,
+    ppt_download_url: String,
+    markdown_download_url: String,
+    download_exports: Value,
     local_path: String,
     manifest_path: String,
     data_path: String,
     data_snapshot_path: String,
+    table_data_path: String,
+    ppt_download_path: String,
+    markdown_download_path: String,
     dynamic_page_contract: Value,
     validation_summary: Value,
+}
+
+#[derive(Clone, Debug)]
+struct ExternalStaticPageExportTable {
+    path: String,
+    rows: Vec<BTreeMap<String, String>>,
+    score: usize,
+}
+
+fn collect_external_static_page_export_tables(
+    value: &Value,
+    path: &str,
+    depth: usize,
+    tables: &mut Vec<ExternalStaticPageExportTable>,
+) {
+    const MAX_DEPTH: usize = 8;
+    const MAX_ROWS: usize = 1_000;
+    const MAX_TABLES: usize = 64;
+
+    if depth > MAX_DEPTH || tables.len() >= MAX_TABLES {
+        return;
+    }
+    match value {
+        Value::Array(items) => {
+            let mut rows = Vec::new();
+            for item in items {
+                if rows.len() >= MAX_ROWS {
+                    break;
+                }
+                let Some(object) = item.as_object() else {
+                    continue;
+                };
+                let row = object
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        let cell = external_static_page_export_cell(value);
+                        if cell.trim().is_empty() {
+                            None
+                        } else {
+                            Some((key.clone(), cell))
+                        }
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                if !row.is_empty() {
+                    rows.push(row);
+                }
+            }
+            if !rows.is_empty() {
+                let score = external_static_page_export_table_score(path, &rows);
+                tables.push(ExternalStaticPageExportTable {
+                    path: path.to_string(),
+                    rows,
+                    score,
+                });
+            }
+            for (index, item) in items.iter().take(32).enumerate() {
+                collect_external_static_page_export_tables(
+                    item,
+                    &format!("{path}[{index}]"),
+                    depth + 1,
+                    tables,
+                );
+                if tables.len() >= MAX_TABLES {
+                    break;
+                }
+            }
+        }
+        Value::Object(object) => {
+            for (key, child) in object {
+                collect_external_static_page_export_tables(
+                    child,
+                    &format!("{path}.{key}"),
+                    depth + 1,
+                    tables,
+                );
+                if tables.len() >= MAX_TABLES {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn external_static_page_export_table_score(path: &str, rows: &[BTreeMap<String, String>]) -> usize {
+    let lower_path = path.to_ascii_lowercase();
+    let mut score = rows.len().min(1_000);
+    for term in [
+        "table",
+        "rows",
+        "records",
+        "detail",
+        "rank",
+        "list",
+        "opportunity",
+        "risk",
+        "store",
+        "brand",
+        "sale",
+        "rent",
+        "warning",
+        "门店",
+        "品牌",
+        "销售",
+        "收入",
+        "取高",
+        "风险",
+        "品类",
+        "租金",
+    ] {
+        if lower_path.contains(term) {
+            score += 80;
+        }
+    }
+    if lower_path.contains("module") || lower_path.contains("chart") {
+        score = score.saturating_sub(120);
+    }
+    for key in rows.iter().take(20).flat_map(|row| row.keys()) {
+        let lower_key = key.to_ascii_lowercase();
+        for term in [
+            "store", "brand", "date", "sale", "revenue", "rent", "warning", "gap", "category",
+            "门店", "品牌", "日期", "销售", "收入", "租金", "缺口", "预警", "取高", "品类",
+        ] {
+            if lower_key.contains(term) {
+                score += 12;
+            }
+        }
+    }
+    score
+}
+
+fn external_static_page_best_export_table(
+    data_json: &Value,
+    data_snapshot: &Value,
+) -> ExternalStaticPageExportTable {
+    let mut tables = Vec::new();
+    collect_external_static_page_export_tables(data_snapshot, "data_snapshot", 0, &mut tables);
+    collect_external_static_page_export_tables(data_json, "data", 0, &mut tables);
+    tables
+        .into_iter()
+        .max_by_key(|table| table.score)
+        .unwrap_or_else(|| ExternalStaticPageExportTable {
+            path: "summary".to_string(),
+            rows: Vec::new(),
+            score: 0,
+        })
+}
+
+fn external_static_page_export_cell(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.trim().to_string(),
+        Value::Array(items) => {
+            let scalar_items = items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::Null => None,
+                    Value::Bool(value) => Some(value.to_string()),
+                    Value::Number(value) => Some(value.to_string()),
+                    Value::String(value) => Some(value.trim().to_string()),
+                    _ => None,
+                })
+                .filter(|value| !value.is_empty())
+                .take(8)
+                .collect::<Vec<_>>();
+            if scalar_items.is_empty() {
+                truncate_external_static_page_export_cell(&value.to_string())
+            } else {
+                scalar_items.join(" / ")
+            }
+        }
+        Value::Object(_) => truncate_external_static_page_export_cell(&value.to_string()),
+    }
+}
+
+fn truncate_external_static_page_export_cell(value: &str) -> String {
+    const LIMIT: usize = 240;
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+    let mut output = trimmed.chars().take(LIMIT).collect::<String>();
+    output.push_str("...");
+    output
+}
+
+fn external_static_page_csv_escape(value: &str) -> String {
+    let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.contains([',', '"', '\n']) {
+        format!("\"{}\"", normalized.replace('"', "\"\""))
+    } else {
+        normalized
+    }
+}
+
+fn external_static_page_export_headers(rows: &[BTreeMap<String, String>]) -> Vec<String> {
+    const MAX_COLUMNS: usize = 48;
+    let mut headers = BTreeSet::new();
+    for row in rows.iter().take(200) {
+        for key in row.keys() {
+            if headers.len() >= MAX_COLUMNS {
+                break;
+            }
+            headers.insert(key.clone());
+        }
+        if headers.len() >= MAX_COLUMNS {
+            break;
+        }
+    }
+    headers.into_iter().collect()
+}
+
+fn external_static_page_table_csv(table: &ExternalStaticPageExportTable) -> String {
+    let rows = if table.rows.is_empty() {
+        vec![
+            BTreeMap::from([
+                ("字段".to_string(), "状态".to_string()),
+                ("值".to_string(), "已生成".to_string()),
+            ]),
+            BTreeMap::from([
+                ("字段".to_string(), "来源".to_string()),
+                ("值".to_string(), table.path.clone()),
+            ]),
+        ]
+    } else {
+        table.rows.clone()
+    };
+    let headers = external_static_page_export_headers(&rows);
+    let mut output = String::from("\u{feff}");
+    output.push_str(
+        &headers
+            .iter()
+            .map(|header| external_static_page_csv_escape(header))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    output.push('\n');
+    for row in rows {
+        output.push_str(
+            &headers
+                .iter()
+                .map(|header| {
+                    row.get(header)
+                        .map(|value| external_static_page_csv_escape(value))
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        output.push('\n');
+    }
+    output
+}
+
+fn external_static_page_markdown_export(
+    report_title: &str,
+    public_url: &str,
+    data_url: &str,
+    table: &ExternalStaticPageExportTable,
+    validation_summary: &Value,
+    now: DateTime<Utc>,
+) -> String {
+    const PREVIEW_ROWS: usize = 12;
+    let mut output = String::new();
+    output.push_str("# ");
+    output.push_str(report_title);
+    output.push_str("\n\n");
+    output.push_str(&format!(
+        "- 页面链接：{}\n- 数据文件：{}\n- 生成时间：{}\n- 数据表来源：{}\n",
+        public_url,
+        data_url,
+        now.to_rfc3339_opts(SecondsFormat::Secs, true),
+        table.path
+    ));
+    if !validation_summary.is_null() {
+        output.push_str("- 校验摘要：");
+        output.push_str(&truncate_external_static_page_export_cell(
+            &validation_summary.to_string(),
+        ));
+        output.push('\n');
+    }
+    if !table.rows.is_empty() {
+        let headers = external_static_page_export_headers(&table.rows)
+            .into_iter()
+            .take(8)
+            .collect::<Vec<_>>();
+        if !headers.is_empty() {
+            output.push_str("\n## 表格数据预览\n\n");
+            output.push('|');
+            output.push_str(
+                &headers
+                    .iter()
+                    .map(|header| escape_markdown_table_cell(header))
+                    .collect::<Vec<_>>()
+                    .join("|"),
+            );
+            output.push_str("|\n|");
+            output.push_str(&vec!["---"; headers.len()].join("|"));
+            output.push_str("|\n");
+            for row in table.rows.iter().take(PREVIEW_ROWS) {
+                output.push('|');
+                output.push_str(
+                    &headers
+                        .iter()
+                        .map(|header| {
+                            row.get(header)
+                                .map(|value| escape_markdown_table_cell(value))
+                                .unwrap_or_default()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("|"),
+                );
+                output.push_str("|\n");
+            }
+        }
+    }
+    output
+}
+
+fn external_static_page_escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn external_static_page_ppt_html_export(
+    report_title: &str,
+    public_url: &str,
+    table: &ExternalStaticPageExportTable,
+    now: DateTime<Utc>,
+) -> String {
+    let headers = external_static_page_export_headers(&table.rows)
+        .into_iter()
+        .take(6)
+        .collect::<Vec<_>>();
+    let mut table_html = String::new();
+    if !headers.is_empty() {
+        table_html.push_str("<table><thead><tr>");
+        for header in &headers {
+            table_html.push_str("<th>");
+            table_html.push_str(&external_static_page_escape_html(header));
+            table_html.push_str("</th>");
+        }
+        table_html.push_str("</tr></thead><tbody>");
+        for row in table.rows.iter().take(10) {
+            table_html.push_str("<tr>");
+            for header in &headers {
+                table_html.push_str("<td>");
+                table_html.push_str(&external_static_page_escape_html(
+                    row.get(header).map(String::as_str).unwrap_or_default(),
+                ));
+                table_html.push_str("</td>");
+            }
+            table_html.push_str("</tr>");
+        }
+        table_html.push_str("</tbody></table>");
+    }
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title><style>body{{font-family:Arial,'Microsoft YaHei',sans-serif;background:#0b1020;color:#f8fafc;margin:0;padding:42px}}h1{{font-size:34px;margin:0 0 16px}}.meta{{color:#94a3b8;margin-bottom:28px}}table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border:1px solid #334155;padding:8px 10px;text-align:left}}th{{background:#1e293b}}</style></head><body><h1>{title}</h1><div class=\"meta\">生成时间：{created_at}<br>页面链接：{public_url}<br>数据表来源：{source_path}</div>{table_html}</body></html>",
+        title = external_static_page_escape_html(report_title),
+        created_at = now.to_rfc3339_opts(SecondsFormat::Secs, true),
+        public_url = external_static_page_escape_html(public_url),
+        source_path = external_static_page_escape_html(&table.path),
+        table_html = table_html,
+    )
+}
+
+fn write_external_static_page_generated_artifact_file(
+    path: &StdPath,
+    contents: &[u8],
+    label: &str,
+) -> std::result::Result<(), ApiError> {
+    fs::write(path, contents).map_err(|error| {
+        ApiError::internal(
+            "static_page_local_generated_artifact_publish_failed",
+            format!("failed to write local static-page {label}: {error}"),
+        )
+    })
 }
 
 fn publish_external_static_page_render_output_as_generated_artifact(
@@ -51929,6 +52382,12 @@ fn publish_external_static_page_render_output_as_generated_artifact(
     let data_url = external_channel_generated_artifact_public_file_url(&relative_dir, "data.json");
     let data_snapshot_url =
         external_channel_generated_artifact_public_file_url(&relative_dir, "data-snapshot.json");
+    let table_data_url =
+        external_channel_generated_artifact_public_file_url(&relative_dir, "table-data.csv");
+    let ppt_download_url =
+        external_channel_generated_artifact_public_file_url(&relative_dir, "report.ppt");
+    let markdown_download_url =
+        external_channel_generated_artifact_public_file_url(&relative_dir, "report.md");
     let validation_summary = data_snapshot
         .get("validation_summary")
         .or_else(|| data_snapshot.get("validationSummary"))
@@ -51939,6 +52398,40 @@ fn publish_external_static_page_render_output_as_generated_artifact(
                 "reason": "local_static_page_render_published",
             })
         });
+    let report_title = XINBAI_PUBLISHED_REPORT_TITLE;
+    let export_table = external_static_page_best_export_table(&data_json, &data_snapshot);
+    let table_data_path = artifact_dir.join("table-data.csv");
+    write_external_static_page_generated_artifact_file(
+        &table_data_path,
+        external_static_page_table_csv(&export_table).as_bytes(),
+        "table-data.csv",
+    )?;
+    let markdown_download_path = artifact_dir.join("report.md");
+    write_external_static_page_generated_artifact_file(
+        &markdown_download_path,
+        external_static_page_markdown_export(
+            report_title,
+            &public_url,
+            &data_url,
+            &export_table,
+            &validation_summary,
+            now,
+        )
+        .as_bytes(),
+        "report.md",
+    )?;
+    let ppt_download_path = artifact_dir.join("report.ppt");
+    write_external_static_page_generated_artifact_file(
+        &ppt_download_path,
+        external_static_page_ppt_html_export(report_title, &public_url, &export_table, now)
+            .as_bytes(),
+        "report.ppt",
+    )?;
+    let download_exports = external_channel_static_page_download_exports(
+        &public_url,
+        json!(data_url.clone()),
+        Some(report_title),
+    );
     let manifest_path = artifact_dir.join("manifest.json");
     let manifest = json!({
         "kind": "v3_external_channel_static_page_local_generated_artifact",
@@ -51949,6 +52442,13 @@ fn publish_external_static_page_render_output_as_generated_artifact(
         "public_url": public_url.clone(),
         "data_url": data_url.clone(),
         "data_snapshot_url": data_snapshot_url.clone(),
+        "table_data_url": table_data_url.clone(),
+        "ppt_download_url": ppt_download_url.clone(),
+        "markdown_download_url": markdown_download_url.clone(),
+        "text_download_url": markdown_download_url.clone(),
+        "download_exports": download_exports.clone(),
+        "report_title": report_title,
+        "export_table_path": export_table.path,
         "dynamic_page_contract": dynamic_page_contract.clone(),
         "validation_summary": validation_summary.clone(),
         "source_refs": source_refs.clone(),
@@ -51974,10 +52474,17 @@ fn publish_external_static_page_render_output_as_generated_artifact(
         public_url,
         data_url,
         data_snapshot_url,
+        table_data_url,
+        ppt_download_url,
+        markdown_download_url,
+        download_exports,
         local_path: index_path.display().to_string(),
         manifest_path: manifest_path.display().to_string(),
         data_path: data_path.display().to_string(),
         data_snapshot_path: data_snapshot_path.display().to_string(),
+        table_data_path: table_data_path.display().to_string(),
+        ppt_download_path: ppt_download_path.display().to_string(),
+        markdown_download_path: markdown_download_path.display().to_string(),
         dynamic_page_contract,
         validation_summary,
     })
@@ -53645,6 +54152,30 @@ async fn mark_external_static_page_local_generated_artifact_published(
         json!(published.data_snapshot_url.clone()),
     );
     asset_manifest.insert(
+        "table_data_url".to_string(),
+        json!(published.table_data_url.clone()),
+    );
+    asset_manifest.insert(
+        "ppt_download_url".to_string(),
+        json!(published.ppt_download_url.clone()),
+    );
+    asset_manifest.insert(
+        "markdown_download_url".to_string(),
+        json!(published.markdown_download_url.clone()),
+    );
+    asset_manifest.insert(
+        "text_download_url".to_string(),
+        json!(published.markdown_download_url.clone()),
+    );
+    asset_manifest.insert(
+        "download_exports".to_string(),
+        published.download_exports.clone(),
+    );
+    asset_manifest.insert(
+        "report_title".to_string(),
+        json!(XINBAI_PUBLISHED_REPORT_TITLE),
+    );
+    asset_manifest.insert(
         "dynamic_page_contract".to_string(),
         published.dynamic_page_contract.clone(),
     );
@@ -53696,6 +54227,54 @@ async fn mark_external_static_page_local_generated_artifact_published(
     final_page.insert(
         "data_snapshot_url".to_string(),
         json!(published.data_snapshot_url.clone()),
+    );
+    final_page.insert(
+        "tableDataUrl".to_string(),
+        json!(published.table_data_url.clone()),
+    );
+    final_page.insert(
+        "table_data_url".to_string(),
+        json!(published.table_data_url.clone()),
+    );
+    final_page.insert(
+        "pptDownloadUrl".to_string(),
+        json!(published.ppt_download_url.clone()),
+    );
+    final_page.insert(
+        "ppt_download_url".to_string(),
+        json!(published.ppt_download_url.clone()),
+    );
+    final_page.insert(
+        "markdownDownloadUrl".to_string(),
+        json!(published.markdown_download_url.clone()),
+    );
+    final_page.insert(
+        "markdown_download_url".to_string(),
+        json!(published.markdown_download_url.clone()),
+    );
+    final_page.insert(
+        "textDownloadUrl".to_string(),
+        json!(published.markdown_download_url.clone()),
+    );
+    final_page.insert(
+        "text_download_url".to_string(),
+        json!(published.markdown_download_url.clone()),
+    );
+    final_page.insert(
+        "downloadExports".to_string(),
+        published.download_exports.clone(),
+    );
+    final_page.insert(
+        "download_exports".to_string(),
+        published.download_exports.clone(),
+    );
+    final_page.insert(
+        "reportTitle".to_string(),
+        json!(XINBAI_PUBLISHED_REPORT_TITLE),
+    );
+    final_page.insert(
+        "report_title".to_string(),
+        json!(XINBAI_PUBLISHED_REPORT_TITLE),
     );
     final_page.insert("assetManifest".to_string(), Value::Object(asset_manifest));
     if let Some(object) = payload.as_object_mut() {
@@ -53750,6 +54329,16 @@ async fn mark_external_static_page_local_generated_artifact_published(
         "data_snapshot_path": published.data_snapshot_path.clone(),
         "data_url": published.data_url.clone(),
         "data_snapshot_url": published.data_snapshot_url.clone(),
+        "table_data_path": published.table_data_path.clone(),
+        "ppt_download_path": published.ppt_download_path.clone(),
+        "markdown_download_path": published.markdown_download_path.clone(),
+        "table_data_url": published.table_data_url.clone(),
+        "ppt_download_url": published.ppt_download_url.clone(),
+        "markdown_download_url": published.markdown_download_url.clone(),
+        "text_download_url": published.markdown_download_url.clone(),
+        "download_exports": published.download_exports.clone(),
+        "report_title": XINBAI_PUBLISHED_REPORT_TITLE,
+        "title": XINBAI_PUBLISHED_REPORT_TITLE,
         "dynamic_page_contract": published.dynamic_page_contract.clone(),
         "validation_summary": published.validation_summary.clone(),
         "direct_html_fallback": true,
@@ -96353,6 +96942,112 @@ mod tests {
         );
     }
 
+    #[test]
+    fn external_static_page_local_generated_artifact_writes_download_exports() {
+        let now = Utc::now();
+        let artifact_root = std::env::temp_dir()
+            .join("ai-data-platform-v3-tests")
+            .join(format!("generated-artifacts-{}", Uuid::new_v4()));
+        let artifact_root_value = artifact_root.display().to_string();
+        let _artifact_root =
+            TestEnvVarRestore::set("V3_GENERATED_ARTIFACT_ROOT", &artifact_root_value);
+        let _public_base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let run = AssistantRun {
+            id: AssistantRunId::new(),
+            tenant_id: TenantId::new(),
+            user_id: None,
+            local_thread_id: Some("external-static-page-export-test".to_string()),
+            user_prompt: "生成新百经营报表".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({"status": "supplied"}),
+            service_lane: "external_channel".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let render_output = StaticPageRenderOutputView {
+            id: StaticPageRenderOutputId::new(),
+            draft_id: StaticPageDraftId::new(),
+            assistant_run_id: run.id,
+            image_job_id: None,
+            status: contracts::StaticPageRenderOutputStatusView::Rendered,
+            html: "<!doctype html><html><body>report</body></html>".to_string(),
+            html_download_url: None,
+            html_download_url_camel: None,
+            download_url: None,
+            download_url_camel: None,
+            html_preview_url: None,
+            html_preview_url_camel: None,
+            retryable_error_reason: None,
+            retryable_error_reason_camel: None,
+            asset_manifest: json!({
+                "data_snapshot": {
+                    "validation_summary": {"status": "ok"},
+                    "tables": {
+                        "opportunities": [
+                            {"门店": "新街口店", "品牌": "咖啡品牌", "销售额": 12345, "取高缺口": 320}
+                        ]
+                    }
+                },
+                "dynamic_page_contract": {"data_file": "data.json"},
+                "modules": []
+            }),
+            created_at: now,
+        };
+
+        let published = publish_external_static_page_render_output_as_generated_artifact(
+            &run,
+            &render_output,
+            &json!({"source": "unit_test"}),
+            now,
+        )
+        .expect("local generated artifact should publish");
+
+        assert!(StdPath::new(&published.local_path).exists());
+        assert!(StdPath::new(&published.data_path).exists());
+        assert!(StdPath::new(&published.table_data_path).exists());
+        assert!(StdPath::new(&published.markdown_download_path).exists());
+        assert!(StdPath::new(&published.ppt_download_path).exists());
+        assert_eq!(
+            published.table_data_url,
+            static_page_artifact_sibling_url(&published.public_url, "table-data.csv")
+                .expect("table sibling url")
+        );
+        assert_eq!(
+            published.download_exports[0]["url"],
+            json!(published.table_data_url.clone())
+        );
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(&published.manifest_path).expect("manifest should read"),
+        )
+        .expect("manifest should parse");
+        assert_eq!(manifest["table_data_url"], json!(published.table_data_url));
+        assert_eq!(
+            manifest["ppt_download_url"],
+            json!(published.ppt_download_url)
+        );
+        assert_eq!(
+            manifest["markdown_download_url"],
+            json!(published.markdown_download_url)
+        );
+        let csv = fs::read_to_string(&published.table_data_path).expect("csv should read");
+        assert!(csv.contains("门店"));
+        assert!(csv.contains("咖啡品牌"));
+        let md = fs::read_to_string(&published.markdown_download_path).expect("md should read");
+        assert!(md.contains(XINBAI_PUBLISHED_REPORT_TITLE));
+        let ppt = fs::read_to_string(&published.ppt_download_path).expect("ppt should read");
+        assert!(ppt.contains("<!doctype html>"));
+        assert!(ppt.contains("新街口店"));
+    }
+
     #[tokio::test]
     async fn external_channel_static_page_pipeline_returns_local_artifact_when_codex_publish_ready()
     {
@@ -96472,6 +97167,21 @@ mod tests {
         assert_eq!(card["public_url"], json!(public_url));
         assert_eq!(card["generated_artifact_url"], json!(public_url));
         assert_eq!(card["artifact_links"], json!([public_url]));
+        let table_data_url = static_page_artifact_sibling_url(&public_url, "table-data.csv")
+            .expect("table data sibling url");
+        let ppt_download_url =
+            static_page_artifact_sibling_url(&public_url, "report.ppt").expect("ppt sibling url");
+        let markdown_download_url =
+            static_page_artifact_sibling_url(&public_url, "report.md").expect("md sibling url");
+        assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(card["table_data_url"], json!(table_data_url.clone()));
+        assert_eq!(card["ppt_download_url"], json!(ppt_download_url.clone()));
+        assert_eq!(
+            card["markdown_download_url"],
+            json!(markdown_download_url.clone())
+        );
+        assert_eq!(card["download_exports"][0]["label"], json!("表格数据"));
         assert_eq!(card["codex_auto_publish_ready"], json!(true));
         assert_eq!(card["auto_publish_after_preview"], json!(true));
         assert_eq!(card["direct_html_fallback"], json!(true));
@@ -96507,6 +97217,13 @@ mod tests {
             card["generated_artifact_url"]
         );
         assert_eq!(queued.payload["artifact_links"], card["artifact_links"]);
+        assert_eq!(queued.payload["table_data_url"], card["table_data_url"]);
+        assert_eq!(queued.payload["ppt_download_url"], card["ppt_download_url"]);
+        assert_eq!(
+            queued.payload["markdown_download_url"],
+            card["markdown_download_url"]
+        );
+        assert_eq!(queued.payload["download_exports"], card["download_exports"]);
         assert_eq!(queued.payload["codex_auto_publish_ready"], json!(true));
         assert_eq!(queued.payload["direct_html_fallback"], json!(true));
         assert_eq!(queued.payload["provisional_direct_html"], json!(false));
@@ -96528,12 +97245,40 @@ mod tests {
         assert_eq!(restored.artifact_links, vec![public_url.clone()]);
         let restored_card = restored.card.expect("restored card should be returned");
         assert_eq!(restored_card["public_url"], json!(public_url));
+        assert_eq!(restored_card["table_data_url"], json!(table_data_url));
+        assert_eq!(restored_card["ppt_download_url"], json!(ppt_download_url));
+        assert_eq!(
+            restored_card["markdown_download_url"],
+            json!(markdown_download_url)
+        );
+        assert_eq!(
+            restored_card["download_exports"][2]["label"],
+            json!("文本下载（MD）")
+        );
         assert_eq!(restored_card["provisional_direct_html"], json!(false));
         assert!(restored
             .text
             .as_deref()
             .unwrap_or_default()
             .contains("页面链接：[点击查看报表]"));
+
+        let completed = events
+            .iter()
+            .find(|event| {
+                event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+            })
+            .expect("completed publish event should be recorded");
+        for key in [
+            "table_data_path",
+            "ppt_download_path",
+            "markdown_download_path",
+            "manifest_path",
+        ] {
+            let path = completed.payload[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} should be present"));
+            assert!(StdPath::new(path).exists(), "{key} should exist: {path}");
+        }
     }
 
     #[test]
