@@ -24,6 +24,12 @@ Export smoke also passed:
 - Result: `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, expected focus `取高机会`.
 - Export files remained accessible: `table-data.csv`, `report.ppt`, and `report.md`.
 
+Follow-up local channel polish before the next rollout:
+
+- Feishu and WeCom outbound text builders now append only artifact links missing from the visible text, preventing `页面链接：[点击查看报表](...)` plus a duplicate naked URL in the same message.
+- Verified with `cargo test -p platform-api feishu_reply --lib` and `cargo test -p platform-api wecom_reply --lib`.
+- Regenerated the third-party integration HTML/public Markdown copies after the report-card export-field docs changed, and updated the guide-renderer tests to assert `DataMax` naming instead of stale `V3` titles.
+
 ## 2026-06-05 8 Server Focus/Export Regression
 
 - Host: `8服务器`

@@ -8,7 +8,7 @@ import {
   renderPureThirdPartyGuideHtml,
 } from './render-pure-third-party-guide-html.mjs';
 
-const sampleMarkdown = `# V3 纯第三方简单版接口文档
+const sampleMarkdown = `# DataMax 纯第三方简单版接口文档
 
 文档状态：对外草案。
 
@@ -19,7 +19,7 @@ const sampleMarkdown = `# V3 纯第三方简单版接口文档
 #### 1.1.1 连接测试
 
 - 用户在第三方页面提问；
-- V3 按本轮文档范围供料。
+- DataMax 按本轮文档范围供料。
 
 | 接口面 | 用途 |
 | --- | --- |
@@ -27,7 +27,7 @@ const sampleMarkdown = `# V3 纯第三方简单版接口文档
 
 \`\`\`mermaid
 flowchart LR
-  User --> V3
+  User --> DataMax
 \`\`\`
 
 \`\`\`http
@@ -53,7 +53,7 @@ test('renderPureThirdPartyGuideHtml renders a review-friendly HTML document', ()
   assert.equal(result.checked, false);
   assert.ok(result.bytes > 0);
   const html = fs.readFileSync(paths.output, 'utf8');
-  assert.match(html, /<title>V3 纯第三方简单版接口文档<\/title>/);
+  assert.match(html, /<title>DataMax 纯第三方简单版接口文档<\/title>/);
   assert.match(html, /<nav aria-label="文档目录">/);
   assert.match(html, /class="nav-depth-2" href="#section-01">1\. 对接目标<\/a>/);
   assert.match(html, /class="nav-depth-3" href="#section-02">1\.1 数据库对接<\/a>/);
@@ -104,14 +104,14 @@ test('renderPureThirdPartyGuideHtml publishes explicit public HTML and Markdown 
 
 test('renderFullThirdPartyGuideHtml renders complete integration docs without pure flow substitution', () => {
   const paths = tempPaths();
-  const markdown = sampleMarkdown.replace('V3 纯第三方简单版接口文档', 'V3 第三方接入说明书');
+  const markdown = sampleMarkdown.replace('DataMax 纯第三方简单版接口文档', 'DataMax 第三方接入说明书');
   fs.writeFileSync(paths.source, markdown);
 
   renderFullThirdPartyGuideHtml(paths);
 
   const html = fs.readFileSync(paths.output, 'utf8');
-  assert.match(html, /<title>V3 第三方完整对接文档<\/title>/);
-  assert.match(html, /V3 \/ THIRD PARTY API/);
+  assert.match(html, /<title>DataMax 第三方完整对接文档<\/title>/);
+  assert.match(html, /DataMax \/ THIRD PARTY API/);
   assert.match(html, /<span>mermaid<\/span>/);
   assert.doesNotMatch(html, /<div class="flow-board"/);
 });

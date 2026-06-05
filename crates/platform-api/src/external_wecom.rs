@@ -521,11 +521,17 @@ fn wecom_reply_text(reply: &ExternalBotReplyView) -> String {
     {
         text.push_str("\nConfirmation state unavailable.");
     }
-    if !reply.artifact_links.is_empty() {
+    let missing_links = reply
+        .artifact_links
+        .iter()
+        .map(|link| link.trim())
+        .filter(|link| !link.is_empty() && !text.contains(*link))
+        .collect::<Vec<_>>();
+    if !missing_links.is_empty() {
         if !text.is_empty() {
             text.push('\n');
         }
-        text.push_str(&reply.artifact_links.join("\n"));
+        text.push_str(&missing_links.join("\n"));
     }
     text
 }
@@ -639,5 +645,25 @@ mod tests {
         assert_eq!(payload["agentid"], json!("1000002"));
         assert_eq!(payload["msgtype"], json!("text"));
         assert_eq!(payload["text"]["content"], json!("accepted"));
+    }
+
+    #[test]
+    fn wecom_reply_does_not_duplicate_artifact_link_already_in_text() {
+        let link = "https://example.invalid/report";
+        let reply = ExternalBotReplyView {
+            target_conversation_external_id: "user_alpha".to_string(),
+            reply_type: ExternalBotReplyTypeView::ArtifactLink,
+            text: Some(format!("页面链接：[点击查看报表]({link})")),
+            card: None,
+            artifact_links: vec![link.to_string()],
+            task_status: Some("static_page_published".to_string()),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        };
+
+        let text = wecom_reply_text(&reply);
+
+        assert_eq!(text.matches(link).count(), 1);
     }
 }

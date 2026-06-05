@@ -1030,6 +1030,7 @@ data: {&quot;ok&quot;:true}</code></pre>
 <li>按 <code>conversation_external_id</code> 找到第三方会话并追加助手消息；</li>
 <li><code>reply</code> 结构与 <code>/events</code>、<code>/events/stream</code> 最终响应一致；</li>
 <li><code>reply.artifact_links[0]</code>、<code>reply.card.public_url</code>、<code>reply.card.generated_artifact_url</code> 可作为页面或报表链接；</li>
+<li>报表卡片展示名优先读取 <code>reply.card.title</code> / <code>reply.card.report_title</code> / <code>reply.card.display_title</code>；下载按钮可按需读取 <code>reply.card.table_data_url</code>、<code>reply.card.ppt_download_url</code>、<code>reply.card.markdown_download_url</code> / <code>reply.card.text_download_url</code>，或遍历 <code>reply.card.download_exports[]</code>；</li>
 <li>回推失败不会改变 DataMax 原任务结果，DataMax 会记录脱敏审计；第三方仍可通过状态接口补拉结果。</li>
 </ul>
 <p>任务状态响应示例：</p>
