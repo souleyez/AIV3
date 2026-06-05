@@ -111813,10 +111813,7 @@ retrieve_evidence:
         assert!(text.contains("报表会优先呈现：销售/租金/取高口径、门店/区域维度"));
         let card = reply.card.as_ref().expect("completed reply has card");
         assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
-        assert_eq!(
-            card["report_title"],
-            json!(XINBAI_PUBLISHED_REPORT_TITLE)
-        );
+        assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
         assert_eq!(card["public_url"], json!(payload["public_url"]));
         assert_eq!(card["generated_artifact_url"], json!(payload["public_url"]));
         assert_eq!(card["download_url"], json!(payload["public_url"]));
@@ -111904,10 +111901,7 @@ retrieve_evidence:
         let card = reply.card.as_ref().expect("reuse card");
         assert_eq!(card["status"], json!("static_page_published"));
         assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
-        assert_eq!(
-            card["report_title"],
-            json!(XINBAI_PUBLISHED_REPORT_TITLE)
-        );
+        assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
         assert_eq!(card["public_url"], json!(public_url));
         assert_eq!(card["generated_artifact_url"], json!(public_url));
         assert_eq!(card["download_url"], json!(public_url));
@@ -111917,7 +111911,10 @@ retrieve_evidence:
             card["text_download_url"],
             json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/report.md")
         );
-        assert_eq!(card["download_exports"][2]["label"], json!("文本下载（MD）"));
+        assert_eq!(
+            card["download_exports"][2]["label"],
+            json!("文本下载（MD）")
+        );
         assert_eq!(
             card["template_reference_id"],
             json!("generated-static-page:template-003")

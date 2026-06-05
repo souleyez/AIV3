@@ -792,6 +792,7 @@ POST
 - 按 `conversation_external_id` 找到第三方会话并追加助手消息；
 - `reply` 结构与 `/events`、`/events/stream` 最终响应一致；
 - `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 可作为页面或报表链接；
+- 报表卡片展示名优先读取 `reply.card.title` / `reply.card.report_title` / `reply.card.display_title`；下载按钮可按需读取 `reply.card.table_data_url`、`reply.card.ppt_download_url`、`reply.card.markdown_download_url` / `reply.card.text_download_url`，或遍历 `reply.card.download_exports[]`；
 - 回推失败不会改变 DataMax 原任务结果，DataMax 会记录脱敏审计；第三方仍可通过状态接口补拉结果。
 
 任务状态响应示例：
