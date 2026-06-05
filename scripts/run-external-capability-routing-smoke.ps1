@@ -87,6 +87,27 @@ function Test-UrlFocus {
     return $decodedFocus -eq $ExpectedFocus
 }
 
+function Test-SseDeltaInternalLeak {
+    param([string]$EventName, [string]$Data)
+    if (-not "$EventName".EndsWith(".delta")) {
+        return $false
+    }
+    foreach ($marker in @(
+        '"assistant_run_id"',
+        '"conversation_external_id"',
+        '"idempotency_key"',
+        '"poll_after_seconds"',
+        '"status_url"',
+        '<V3_TOOL_REQUEST>',
+        'observation JSON'
+    )) {
+        if ($Data.Contains($marker)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Read-SseFrame {
     param([string[]]$Lines)
     $eventName = "message"
@@ -181,6 +202,9 @@ function Invoke-RoutingCase {
                 $frameLines.Clear()
                 if ($frame.Data.Contains("<V3_TOOL_REQUEST>")) {
                     throw "Raw V3_TOOL_REQUEST leaked in SSE frame for case $($Case.case_id)"
+                }
+                if (Test-SseDeltaInternalLeak -EventName $frame.Event -Data $frame.Data) {
+                    throw "Internal JSON/control payload leaked in SSE delta for case $($Case.case_id): $($frame.Data)"
                 }
                 [void]$rawFrames.Add("$($frame.Event):$($frame.Data)")
                 if ($frame.Data.Length -eq 0 -or $frame.Data -eq "[DONE]") {
@@ -287,15 +311,14 @@ function Invoke-RoutingCase {
     $expectedFocus = Get-JsonProp $Case "expected_focus"
     $focusCheck = "not_configured"
     if ($null -ne $expectedFocus -and "$expectedFocus" -ne "") {
-        if ($artifactLinks.Count -gt 0) {
-            $focusMatched = ($artifactLinks | Where-Object { Test-UrlFocus -Url "$_" -ExpectedFocus "$expectedFocus" }).Count -gt 0
-            if (-not $focusMatched) {
-                throw "Case $($Case.case_id) expected static page focus $expectedFocus, links: $($artifactLinks -join ', ')"
-            }
-            $focusCheck = "matched"
-        } else {
-            $focusCheck = "skipped_no_artifact_link"
+        if ($artifactLinks.Count -eq 0) {
+            throw "Case $($Case.case_id) expected a static page artifact link with focus $expectedFocus, but no artifact link was emitted"
         }
+        $focusMatched = ($artifactLinks | Where-Object { Test-UrlFocus -Url "$_" -ExpectedFocus "$expectedFocus" }).Count -gt 0
+        if (-not $focusMatched) {
+            throw "Case $($Case.case_id) expected static page focus $expectedFocus, links: $($artifactLinks -join ', ')"
+        }
+        $focusCheck = "matched"
     }
 
     [pscustomobject]@{

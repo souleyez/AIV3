@@ -10621,6 +10621,19 @@ fn external_channel_static_page_provisional_existing_artifact(card: Option<&Valu
         == Some(true)
 }
 
+fn external_channel_static_page_accepted_template_baseline(card: Option<&Value>) -> bool {
+    let Some(card) = card else {
+        return false;
+    };
+    external_channel_static_page_provisional_existing_artifact(Some(card))
+        && card
+            .get("provisional_existing_artifact_reason")
+            .or_else(|| card.get("image2_skip_reason"))
+            .and_then(Value::as_str)
+            == Some("accepted_dataset_overlap_template_baseline")
+        && external_channel_public_artifact_url_from_value(card).is_some()
+}
+
 fn external_channel_text_with_public_artifact_link(
     text: impl Into<String>,
     public_url: &str,
@@ -10825,15 +10838,22 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         .to_string();
     let provisional_existing_artifact =
         external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
-    if provisional_existing_artifact && raw_status != "static_page_stable_artifact_reused" {
+    let accepted_template_baseline =
+        external_channel_static_page_accepted_template_baseline(reply.card.as_ref());
+    if provisional_existing_artifact
+        && !accepted_template_baseline
+        && raw_status != "static_page_stable_artifact_reused"
+    {
         return reply;
     }
     let terminal_artifact_status = external_channel_public_status_allows_artifact_link(&raw_status);
-    let final_publish_with_artifact_url = raw_status == "static_page_publish_running";
+    let final_publish_with_artifact_url =
+        raw_status == "static_page_publish_running" || accepted_template_baseline;
     if !terminal_artifact_status && !final_publish_with_artifact_url {
         return reply;
     }
     if provisional_existing_artifact
+        && !accepted_template_baseline
         && !terminal_artifact_status
         && reply.reply_type != ExternalBotReplyTypeView::ArtifactLink
     {
@@ -10858,6 +10878,16 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         ));
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
+    } else if accepted_template_baseline {
+        let pending_text = external_channel_static_page_customer_ready_text_for_payload(
+            "已依据客户需求生成可查看的报表页面，DataMax 会继续刷新并同步最新结果。",
+            reply.card.as_ref(),
+            &public_url,
+        );
+        reply.text = Some(external_channel_text_with_public_artifact_link(
+            pending_text,
+            &public_url,
+        ));
     } else {
         let pending_text = external_channel_static_page_customer_ready_text_for_payload(
             "已依据客户需求准备好可查看的报表页面，页面更新完成后会继续同步最新结果。",
@@ -10960,7 +10990,13 @@ fn external_channel_public_text(text: &str) -> String {
 }
 
 fn external_channel_public_reply_text(text: &str) -> String {
-    let value = external_channel_public_readable_text(&external_channel_public_text(text));
+    let public_text = external_channel_public_text(text);
+    let value = external_channel_public_readable_text(&public_text);
+    if value.trim().is_empty()
+        && external_channel_text_looks_like_internal_context_leak(&public_text)
+    {
+        return "本轮回复包含内部处理上下文，DataMax 已拦截该部分。请继续提问或指定需要查看的结论，我会重新基于已授权资料回答。".to_string();
+    }
     if external_channel_text_looks_like_internal_context_leak(&value) {
         return "本轮回复包含内部处理上下文，DataMax 已拦截该部分。请继续提问或指定需要查看的结论，我会重新基于已授权资料回答。".to_string();
     }
@@ -10968,7 +11004,13 @@ fn external_channel_public_reply_text(text: &str) -> String {
 }
 
 fn external_channel_public_stream_text(text: &str) -> String {
-    let value = external_channel_public_readable_text(&external_channel_public_text(text));
+    let public_text = external_channel_public_text(text);
+    let value = external_channel_public_readable_text(&public_text);
+    if value.trim().is_empty()
+        && external_channel_text_looks_like_internal_context_leak(&public_text)
+    {
+        return "DataMax 正在处理，本轮内部上下文不会对外展示。".to_string();
+    }
     if external_channel_text_looks_like_internal_context_leak(&value) {
         return "DataMax 正在处理，本轮内部上下文不会对外展示。".to_string();
     }
@@ -10989,8 +11031,10 @@ fn external_channel_public_readable_text(text: &str) -> String {
 fn strip_embedded_external_channel_json_envelope(text: &str) -> String {
     let markers = [
         "{\"assistant_run_id\"",
+        "\"assistant_run_id\"",
         "{\"card\"",
         "{\"conversation_external_id\"",
+        "\"conversation_external_id\"",
         "{\"data\":{\"assistant_run_id\"",
         "\"idempotency_key\"",
         "\"poll_after_seconds\"",
@@ -10999,20 +11043,14 @@ fn strip_embedded_external_channel_json_envelope(text: &str) -> String {
     let mut cut_at: Option<usize> = None;
     for marker in markers {
         if let Some(index) = text.find(marker) {
-            let candidate = if marker.starts_with("{\"") {
-                index
-            } else {
-                text[..index].rfind('{').unwrap_or(index)
-            };
+            let candidate = text[..index].rfind('{').unwrap_or(index);
             cut_at = Some(cut_at.map_or(candidate, |current| current.min(candidate)));
         }
     }
-    let cleaned = cut_at
-        .and_then(|index| {
-            let prefix = text[..index].trim();
-            (!prefix.is_empty()).then(|| prefix.to_string())
-        })
-        .unwrap_or_else(|| text.to_string());
+    let cleaned = cut_at.map_or_else(
+        || text.to_string(),
+        |index| text[..index].trim().to_string(),
+    );
     cleaned
         .lines()
         .filter(|line| {
@@ -11093,6 +11131,11 @@ fn external_channel_text_looks_like_internal_context_leak(text: &str) -> bool {
         || text_lc.contains("modelguidance")
         || text_lc.contains("data_snapshot")
         || text_lc.contains("module_bindings")
+        || text_lc.contains("\"assistant_run_id\"")
+        || text_lc.contains("\"conversation_external_id\"")
+        || text_lc.contains("\"idempotency_key\"")
+        || text_lc.contains("\"poll_after_seconds\"")
+        || text_lc.contains("\"status_url\"")
 }
 
 fn external_channel_public_status_allows_artifact_link(status: &str) -> bool {
@@ -11106,7 +11149,11 @@ fn external_channel_public_status_allows_artifact_link_for_card(
     status: &str,
     card: Option<&Value>,
 ) -> bool {
+    if external_channel_static_page_accepted_template_baseline(card) {
+        return true;
+    }
     if external_channel_static_page_provisional_existing_artifact(card)
+        && !external_channel_static_page_accepted_template_baseline(card)
         && external_channel_public_status(status) != "static_page_stable_artifact_reused"
     {
         return false;
@@ -29137,12 +29184,7 @@ fn external_channel_static_page_event_artifact_link_reply_from_events(
         let payload = &event.payload;
         let template_baseline_link = event_name
             == "assistant_run.external_channel_static_page_pipeline_queued"
-            && external_channel_static_page_provisional_existing_artifact(Some(payload))
-            && payload
-                .get("provisional_existing_artifact_reason")
-                .or_else(|| payload.get("image2_skip_reason"))
-                .and_then(Value::as_str)
-                == Some("accepted_dataset_overlap_template_baseline");
+            && external_channel_static_page_accepted_template_baseline(Some(payload));
         let terminal_or_stable_link = matches!(
             event_name,
             "assistant_run.external_channel_static_page_stable_artifact_reused"
@@ -29172,8 +29214,25 @@ fn external_channel_reply_with_static_page_artifact_links(
     let Some(static_page_reply) = static_page_reply else {
         return reply;
     };
-    if reply.card.is_none() {
+    let static_page_public_url = external_channel_public_artifact_url_from_reply(static_page_reply);
+    let reply_card_allows_artifact = reply
+        .card
+        .as_ref()
+        .map(|card| {
+            let status = card
+                .get("status")
+                .and_then(Value::as_str)
+                .or(reply.task_status.as_deref())
+                .unwrap_or_default();
+            external_channel_public_status_allows_artifact_link_for_card(status, Some(card))
+        })
+        .unwrap_or(false);
+    if reply.card.is_none() || (static_page_public_url.is_some() && !reply_card_allows_artifact) {
         reply.card = static_page_reply.card.clone();
+        if reply.reply_type != ExternalBotReplyTypeView::Text {
+            reply.reply_type = static_page_reply.reply_type.clone();
+            reply.task_status = static_page_reply.task_status.clone();
+        }
     }
     let mut first_public_link: Option<String> = None;
     for link in &static_page_reply.artifact_links {
@@ -29193,6 +29252,8 @@ fn external_channel_reply_with_static_page_artifact_links(
             reply.text = Some(external_channel_text_with_public_artifact_link(
                 text, public_url,
             ));
+        } else {
+            reply.text = static_page_reply.text.clone();
         }
     }
     reply
@@ -30590,15 +30651,15 @@ fn external_channel_static_page_reply_from_events(
             return Some(reply);
         }
     }
-    if let Some(reply) =
-        external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
-    {
-        return Some(reply);
-    }
     if let Some(reply) = external_channel_static_page_existing_artifact_reply_from_events(
         events,
         conversation_external_id,
     ) {
+        return Some(reply);
+    }
+    if let Some(reply) =
+        external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
+    {
         return Some(reply);
     }
     for event in events.iter().rev() {
@@ -31071,12 +31132,7 @@ fn external_channel_static_page_existing_artifact_reply_from_events(
     let event = events.iter().rev().find(|event| {
         event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
             || (event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
-                && external_channel_static_page_provisional_existing_artifact(Some(&event.payload))
-                && event
-                    .payload
-                    .get("image2_skip_reason")
-                    .and_then(Value::as_str)
-                    == Some("accepted_dataset_overlap_template_baseline")
+                && external_channel_static_page_accepted_template_baseline(Some(&event.payload))
                 && event
                     .payload
                     .get("public_url")
@@ -95567,6 +95623,30 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_public_reply_text_strips_pretty_internal_json_tail() {
+        let raw = "固定提成取高风险识别，可以从三个层级来做。\n\n一、已触发取高。\n二、建议关注字段。\n{ \"assistant_run_id\": \"ef19a7bd-b45a-4971-b590-511852f4d371\", \"card\": null, \"conversation_external_id\": \"conv-1\", \"data\": { \"idempotency_key\": \"third-party:test\", \"text\": \"内部重复正文不应展示\" } }";
+
+        let text = external_channel_public_reply_text(raw);
+
+        assert!(text.contains("固定提成取高风险识别"));
+        assert!(text.contains("二、建议关注字段。"));
+        assert!(!text.contains("assistant_run_id"));
+        assert!(!text.contains("conversation_external_id"));
+        assert!(!text.contains("内部重复正文不应展示"));
+    }
+
+    #[test]
+    fn external_channel_public_reply_text_replaces_pure_internal_json() {
+        let raw = r#"{ "assistant_run_id": "run-1", "conversation_external_id": "conv-1", "idempotency_key": "third-party:test", "poll_after_seconds": null, "status_url": null, "text": "内部重复正文不应展示" }"#;
+
+        let text = external_channel_public_reply_text(raw);
+
+        assert!(text.contains("DataMax 已拦截"));
+        assert!(!text.contains("assistant_run_id"));
+        assert!(!text.contains("内部重复正文不应展示"));
+    }
+
+    #[test]
     fn external_channel_static_page_provisional_existing_artifact_keeps_processing_status() {
         let public_url =
             "https://v3.elepcloud.com/generated-artifacts/database-static-pages/demo/index.html";
@@ -95596,7 +95676,9 @@ mod tests {
             ExternalBotReplyTypeView::TaskStatus
         );
         assert_eq!(public_reply.task_status.as_deref(), Some("processing"));
-        assert!(public_reply.artifact_links.is_empty());
+        assert_eq!(public_reply.artifact_links, vec![public_url.to_string()]);
+        let public_card = public_reply.card.as_ref().expect("public card");
+        assert_eq!(public_card["public_url"], json!(public_url));
 
         let response = ExternalChannelEventResponse {
             accepted: true,
@@ -96003,8 +96085,7 @@ mod tests {
     }
 
     #[test]
-    fn external_channel_static_page_reply_reports_fixed_task_queue_over_provisional_template_link()
-    {
+    fn external_channel_static_page_reply_prefers_accepted_template_link_over_fixed_task_queue() {
         let run_id = AssistantRunId::new();
         let draft_id = StaticPageDraftId::new();
         let image_job_id = StaticPageImageJobId::new();
@@ -96049,21 +96130,18 @@ mod tests {
         ];
 
         let reply = external_channel_static_page_reply_from_events(&events, "conv-static-page")
-            .expect("fixed task queue reply");
+            .expect("accepted template reply");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(reply.task_status.as_deref(), Some("processing"));
-        assert!(reply.artifact_links.is_empty());
-        let card = reply.card.expect("fixed task status card");
-        assert_eq!(card["type"], json!("v3_static_page_image2_publish_status"));
-        assert_eq!(card["status"], json!("static_page_publish_queued"));
-        assert_eq!(
-            card["template_id"],
-            json!("static_page_image2_data_publish")
-        );
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        let card = reply.card.expect("accepted template card");
+        assert_eq!(card["type"], json!("v3_static_page_stable_artifact"));
+        assert_eq!(card["status"], json!("static_page_published"));
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         assert_eq!(card["status_url"], json!(status_url));
         assert_eq!(card["status_method"], json!("GET"));
-        assert_eq!(card["poll_after_seconds"], json!(15));
     }
 
     #[test]
@@ -99481,6 +99559,64 @@ mod tests {
         assert_eq!(card["artifact_links"], json!([public_url]));
         let text = merged.text.as_deref().expect("merged text");
         assert!(text.contains("这是正常业务回答。"));
+        assert!(text.contains("页面链接：[点击查看报表]"));
+        assert_eq!(text.matches(public_url).count(), 1);
+    }
+
+    #[test]
+    fn external_channel_public_reply_keeps_template_link_over_publish_queue_card() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A";
+        let status_url =
+            "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply";
+        let queue_reply = ExternalBotReplyView {
+            target_conversation_external_id: "room-1".to_string(),
+            reply_type: ExternalBotReplyTypeView::TaskStatus,
+            text: Some("DataMax 正在整理数据证据并生成最终静态页。".to_string()),
+            card: Some(json!({
+                "type": "v3_static_page_image2_publish_status",
+                "status": "static_page_publish_queued",
+                "status_url": status_url,
+                "poll_after_seconds": 15
+            })),
+            artifact_links: Vec::new(),
+            task_status: Some("processing".to_string()),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        };
+        let template_reply = external_channel_static_page_stable_artifact_reused_reply(
+            "room-1",
+            &json!({
+                "public_url": public_url,
+                "generated_artifact_url": public_url,
+                "artifact_links": [public_url],
+                "status_url": status_url,
+                "provisional_existing_artifact": true,
+                "provisional_existing_artifact_reason": "accepted_dataset_overlap_template_baseline",
+                "template_match_policy": "dataset_overlap"
+            }),
+        );
+
+        let merged = external_channel_reply_with_static_page_artifact_links(
+            queue_reply,
+            Some(&template_reply),
+        );
+        let public_reply = external_channel_public_reply(merged);
+
+        assert_eq!(
+            public_reply.reply_type,
+            ExternalBotReplyTypeView::ArtifactLink
+        );
+        assert_eq!(
+            public_reply.task_status.as_deref(),
+            Some("static_page_published")
+        );
+        assert_eq!(public_reply.artifact_links, vec![public_url.to_string()]);
+        let card = public_reply.card.as_ref().expect("public card");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["status_url"], json!(status_url));
+        let text = public_reply.text.as_deref().expect("public text");
         assert!(text.contains("页面链接：[点击查看报表]"));
         assert_eq!(text.matches(public_url).count(), 1);
     }

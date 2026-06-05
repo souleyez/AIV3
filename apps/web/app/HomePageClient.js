@@ -383,7 +383,7 @@ async function fetchSseJson(url, options = {}, handlers = {}) {
         handlers.onDelta?.(delta, payload, parsed.event);
       }
     } else if (parsed.event.endsWith('.completed')) {
-      completedPayload = payload?.response || payload;
+      completedPayload = payload?.response || payload?.data?.response || payload;
     } else if (parsed.event === 'error') {
       terminalError = payload;
     }
@@ -495,8 +495,10 @@ function cleanAssistantVisibleContent(content) {
     .replaceAll('\\t', ' ');
   const markers = [
     '{"assistant_run_id"',
+    '"assistant_run_id"',
     '{"card"',
     '{"conversation_external_id"',
+    '"conversation_external_id"',
     '{"data":{"assistant_run_id"',
     '"idempotency_key"',
     '"poll_after_seconds"',
@@ -507,16 +509,12 @@ function cleanAssistantVisibleContent(content) {
     .filter((index) => index >= 0);
   if (markerIndexes.length) {
     let cutAt = Math.min(...markerIndexes);
-    if (!value.slice(cutAt).startsWith('{')) {
-      const objectStart = value.slice(0, cutAt).lastIndexOf('{');
-      if (objectStart >= 0) {
-        cutAt = objectStart;
-      }
+    const objectStart = value.slice(0, cutAt).lastIndexOf('{');
+    if (objectStart >= 0) {
+      cutAt = objectStart;
     }
     const prefix = value.slice(0, cutAt).trim();
-    if (prefix) {
-      value = prefix;
-    }
+    value = prefix;
   }
   const seenLinks = new Set();
   const lines = value.split(/\r?\n/).filter((line) => {

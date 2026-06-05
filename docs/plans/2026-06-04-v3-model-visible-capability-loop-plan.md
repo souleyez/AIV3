@@ -854,6 +854,10 @@ git commit -m "Add external capability routing regression corpus"
 
 ### Task 10: 8-Server Rollout And Smoke
 
+**2026-06-05 follow-up:** The live capability-routing smoke harness now treats focused Xinbai report cases as link-required. If a fixture has `expected_focus`, `/events/stream` must emit an immediate generated-artifact link and that link must carry the expected `?focus=` value; queued progress without a clickable report link no longer passes these high-frequency report cases.
+
+**2026-06-05 strict-smoke fix:** The tightened smoke caught an 8-server regression where `取高` recorded an accepted dataset-overlap template URL internally but public SSE completed without a link because the fixed-task queue card won the response merge. The local fix prefers accepted template baseline links over queue cards and keeps top-level `artifact_links[]` while preserving background refresh status fields.
+
 **Files:**
 - Modify only if needed: `docs/validation/**`
 - Do not modify public API contracts unless explicitly approved.

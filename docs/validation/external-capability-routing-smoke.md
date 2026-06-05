@@ -29,6 +29,18 @@ Regression covered:
 - Ordinary metric-definition and project-experience questions remain normal Q&A and do not trigger report artifacts.
 - The report export smoke for the same deployment passed with `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, and three export files exposed through response fields.
 
+Follow-up strict smoke on the same 8-server environment intentionally tightened focused Xinbai report cases to require an immediate generated-artifact link. The stricter smoke caught a regression for `取高`: the AssistantRun had already recorded an accepted dataset-overlap template URL with `focus=取高机会`, but the public completed card was still reduced to `static_page_publish_queued` without a customer-clickable link. The local fix now prefers accepted template baseline links over fixed-task queue cards and keeps the top-level `artifact_links[]` while background refresh remains traceable through `status_url`.
+
+Local verification for the fix:
+
+- `cargo check -p platform-api`
+- `cargo test -p platform-api external_channel_static_page --lib`
+- `cargo test -p platform-api external_channel_public_reply_keeps_template_link_over_publish_queue_card --lib`
+- `cargo test -p platform-api external_channel_public_reply_text --lib`
+- `cargo test -p platform-api external_channel_capability_routing_fixture --lib`
+- `npm --prefix apps/web run build`
+- PowerShell parser check for `scripts/run-external-capability-routing-smoke.ps1`
+
 ## 2026-06-05 8 Server Rollout
 
 - Host: `8服务器`
@@ -63,6 +75,7 @@ Script hardening from this rollout:
 
 - `scripts/run-external-capability-routing-smoke.ps1` now accepts `-DatasetExternalIds` and `-DefaultPrompt`, so live report-routing smoke can match a real third-party Xinbai scope instead of using an empty dataset scope.
 - The SSE reader tolerates .NET `ResponseEnded` / premature response close after already-received frames, preventing a successful server stream from being misreported as a client read failure.
+- Focused report cases with `expected_focus` must now emit a generated-artifact link immediately and that link must carry the expected `?focus=` value. This prevents "entered queue but no clickable report link" from passing high-frequency Xinbai report smoke.
 
 ## 2026-06-04 8 Server Rollout
 
@@ -96,7 +109,7 @@ Local checks passed before rollout:
 | ordinary care question | Passed; returned normal text answer, no artifact/data-ingestion card |
 | dark mobile report redesign | Passed for routing/progress; returned `v3_static_page_pipeline`, preview ready and `static_page_publish_running`; final generated page was still queued/running in Cloudflare Codex at validation time |
 
-The local fixture now also covers the high-frequency Xinbai report prompts `取高`, `经营状况`, `经营健康度`, `看看整体经营情况`, `风险识别`, `看看新街口店经营风险`, `销售缺口统计一下，哪些门店需要助推？`, `看月度销售趋势`, and `客流降低预警`, including expected `?focus=` values for the accepted default template. The live smoke script collects report links from both `artifact_links[]` and report-card URL fields; when a selected fixture has `expected_focus` and a report link is returned, the script verifies that the returned URL carries the expected focus. These cases should be selected for live 8-server smoke when report routing or static-page template reuse changes.
+The local fixture now also covers the high-frequency Xinbai report prompts `取高`, `经营状况`, `经营健康度`, `看看整体经营情况`, `风险识别`, `看看新街口店经营风险`, `销售缺口统计一下，哪些门店需要助推？`, `看月度销售趋势`, and `客流降低预警`, including expected `?focus=` values for the accepted default template. The live smoke script collects report links from both `artifact_links[]` and report-card URL fields; when a selected fixture has `expected_focus`, the script requires an immediate report link and verifies that the returned URL carries the expected focus. These cases should be selected for live 8-server smoke when report routing or static-page template reuse changes.
 
 Event inspection:
 
