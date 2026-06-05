@@ -29038,7 +29038,7 @@ async fn external_channel_response_with_event_static_page_artifact_links(
     let Some(run_id) = response.assistant_run_id else {
         return Ok(response);
     };
-    if !response.reply.artifact_links.is_empty() {
+    if !response.reply.artifact_links.is_empty() && response.reply.card.is_some() {
         return Ok(response);
     }
     let events = state
@@ -29105,6 +29105,9 @@ fn external_channel_reply_with_static_page_artifact_links(
     let Some(static_page_reply) = static_page_reply else {
         return reply;
     };
+    if reply.card.is_none() {
+        reply.card = static_page_reply.card.clone();
+    }
     let mut first_public_link: Option<String> = None;
     for link in &static_page_reply.artifact_links {
         let link = link.trim();
@@ -98099,6 +98102,9 @@ mod tests {
         assert_eq!(merged.reply_type, ExternalBotReplyTypeView::Text);
         assert_eq!(merged.task_status.as_deref(), Some("answered"));
         assert_eq!(merged.artifact_links, vec![public_url.to_string()]);
+        let card = merged.card.as_ref().expect("static page card should merge");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         let text = merged.text.as_deref().expect("merged text");
         assert!(text.contains("这是正常业务回答。"));
         assert!(text.contains("页面链接：[点击查看报表]"));
@@ -98155,6 +98161,9 @@ mod tests {
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Text);
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        let card = reply.card.as_ref().expect("static page card should merge");
+        assert_eq!(card["public_url"], json!(public_url));
+        assert_eq!(card["artifact_links"], json!([public_url]));
         let text = reply.text.as_deref().expect("reply text");
         assert!(text.contains("这是正常业务回答。"));
         assert!(text.contains("页面链接：[点击查看报表]"));
