@@ -9872,7 +9872,9 @@ fn external_channel_public_stream_card_summary(
     include_artifact_link: bool,
     include_preview_link: bool,
 ) -> Value {
-    let mut sanitized = external_channel_public_card_value(card.clone());
+    let mut enriched = card.clone();
+    external_channel_static_page_enrich_report_card(&mut enriched);
+    let mut sanitized = external_channel_public_card_value(enriched);
     prune_external_channel_public_card_links(
         &mut sanitized,
         include_artifact_link,
@@ -10444,6 +10446,9 @@ fn external_channel_public_response(
 fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBotReplyView {
     reply = external_channel_static_page_reply_with_public_artifact_terminal(reply);
     let static_page_like = external_channel_reply_is_static_page_like(&reply);
+    if static_page_like {
+        external_channel_static_page_enrich_reply_card(&mut reply);
+    }
     let public_status = external_channel_reply_public_status(&reply);
     let provisional_existing_artifact =
         external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
@@ -55640,6 +55645,7 @@ fn external_channel_static_page_is_xinbai_primary_report(
 ) -> bool {
     let lower_url = public_url.to_ascii_lowercase();
     if lower_url.contains("xinbai-functional-modular-template-20260604")
+        || lower_url.contains("xinbai-functional-modular-report")
         || lower_url.contains("/xinbai/")
     {
         return true;
@@ -55662,6 +55668,13 @@ fn external_channel_static_page_is_xinbai_primary_report(
         || template_reference_text.contains("新世界百货")
 }
 
+fn external_channel_static_page_report_title_is_generic(title: &str) -> bool {
+    matches!(
+        title.trim(),
+        "" | "static_page_image2_data_publish" | "DataMax 静态页" | "DataMax 经营分析报表"
+    )
+}
+
 fn external_channel_static_page_report_title(payload: &Value, public_url: &str) -> String {
     if let Some(title) = external_channel_static_page_artifact_payload_string(
         payload,
@@ -55675,14 +55688,119 @@ fn external_channel_static_page_report_title(payload: &Value, public_url: &str) 
             "title",
         ],
     ) {
-        if title != "static_page_image2_data_publish" && title != "DataMax 静态页" {
+        if !external_channel_static_page_report_title_is_generic(&title) {
             return title;
+        }
+        if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
+            return XINBAI_PUBLISHED_REPORT_TITLE.to_string();
         }
     }
     if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
         return XINBAI_PUBLISHED_REPORT_TITLE.to_string();
     }
     "DataMax 经营分析报表".to_string()
+}
+
+fn external_channel_static_page_card_value_missing(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => true,
+        Some(Value::String(value)) => value.trim().is_empty(),
+        Some(Value::Array(items)) => items.is_empty(),
+        _ => false,
+    }
+}
+
+fn external_channel_static_page_card_title_missing_or_generic(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .map(external_channel_static_page_report_title_is_generic)
+        .unwrap_or(true)
+}
+
+fn external_channel_static_page_card_insert_if_missing(
+    object: &mut Map<String, Value>,
+    key: &str,
+    value: Value,
+) {
+    if external_channel_static_page_card_value_missing(object.get(key)) {
+        object.insert(key.to_string(), value);
+    }
+}
+
+fn external_channel_static_page_enrich_reply_card(reply: &mut ExternalBotReplyView) {
+    if let Some(card) = reply.card.as_mut() {
+        external_channel_static_page_enrich_report_card(card);
+    }
+}
+
+fn external_channel_static_page_enrich_report_card(card: &mut Value) {
+    let Some(public_url) = external_channel_public_artifact_url_from_value(card) else {
+        return;
+    };
+    let report_title = external_channel_static_page_report_title(card, &public_url);
+    let data_url = external_channel_static_page_data_url(card, &public_url);
+    let table_data_url = external_channel_static_page_export_url(
+        card,
+        &public_url,
+        &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
+        "table-data.csv",
+    );
+    let ppt_download_url = external_channel_static_page_export_url(
+        card,
+        &public_url,
+        &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
+        "report.ppt",
+    );
+    let markdown_download_url = external_channel_static_page_export_url(
+        card,
+        &public_url,
+        &[
+            "markdown_download_url",
+            "markdownDownloadUrl",
+            "text_download_url",
+            "textDownloadUrl",
+            "md_url",
+            "mdUrl",
+        ],
+        "report.md",
+    );
+    let download_exports = external_channel_static_page_download_exports_from_payload(
+        card,
+        &public_url,
+        data_url.clone(),
+        &report_title,
+    );
+
+    let Some(object) = card.as_object_mut() else {
+        return;
+    };
+    for key in ["title", "report_title", "display_title"] {
+        if external_channel_static_page_card_title_missing_or_generic(object.get(key)) {
+            object.insert(key.to_string(), Value::String(report_title.clone()));
+        }
+    }
+    external_channel_static_page_card_insert_if_missing(object, "data_url", data_url);
+    external_channel_static_page_card_insert_if_missing(object, "table_data_url", table_data_url);
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "ppt_download_url",
+        ppt_download_url,
+    );
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "markdown_download_url",
+        markdown_download_url.clone(),
+    );
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "text_download_url",
+        markdown_download_url,
+    );
+    external_channel_static_page_card_insert_if_missing(
+        object,
+        "download_exports",
+        download_exports,
+    );
 }
 
 fn external_channel_static_page_export_url(
@@ -55769,7 +55887,12 @@ fn external_channel_static_page_download_exports_from_payload(
         .get("download_exports")
         .or_else(|| payload.get("downloadExports"))
         .cloned()
-        .filter(|value| value.is_array())
+        .filter(|value| {
+            value
+                .as_array()
+                .map(|items| !items.is_empty())
+                .unwrap_or(false)
+        })
     {
         return exports;
     }
@@ -94581,6 +94704,51 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_public_response_enriches_xinbai_report_card_exports() {
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A";
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(AssistantRunId::new()),
+            idempotency_key: "generic:tenant:xinbai-report-card".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "room-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::ArtifactLink,
+                text: Some("DataMax 静态页已生成。".to_string()),
+                card: Some(json!({
+                    "type": "v3_static_page_image2_pipeline",
+                    "status": "static_page_published",
+                    "public_url": public_url,
+                    "title": "DataMax 经营分析报表",
+                    "download_exports": [],
+                })),
+                artifact_links: vec![public_url.to_string()],
+                task_status: Some("static_page_published".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        let public = external_channel_public_response(response);
+        let card = public.reply.card.as_ref().expect("public report card");
+
+        assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(
+            card["download_exports"][0]["url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/table-data.csv")
+        );
+        assert_eq!(
+            card["download_exports"][1]["url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/report.ppt")
+        );
+        assert_eq!(
+            card["download_exports"][2]["url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/report.md")
+        );
+    }
+
+    #[test]
     fn external_channel_recovery_followup_becomes_needs_input_reply_and_sse_event() {
         let evidence_state = json!({
             "recovery_followup": {
@@ -95525,6 +95693,42 @@ mod tests {
         assert!(!body.contains("已复用"));
         assert!(!body.contains("未重新发起"));
         assert!(body.contains("event: done"));
+    }
+
+    #[test]
+    fn external_channel_sse_completed_surfaces_xinbai_report_exports() {
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A";
+        let response = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: Some(AssistantRunId::new()),
+            idempotency_key: "generic:tenant:xinbai-report-stream".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "room-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::ArtifactLink,
+                text: Some("报表页面已生成。".to_string()),
+                card: Some(json!({
+                    "type": "v3_static_page_pipeline",
+                    "status": "static_page_published",
+                    "public_url": public_url,
+                    "title": "DataMax 经营分析报表",
+                    "download_exports": [],
+                })),
+                artifact_links: vec![public_url.to_string()],
+                task_status: Some("static_page_published".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        let body = external_channel_sse_completion(response);
+
+        assert!(body.contains("event: external_channel.completed"));
+        assert!(body.contains(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert!(body.contains("\"download_exports\""));
+        assert!(body.contains("table-data.csv"));
+        assert!(body.contains("report.ppt"));
+        assert!(body.contains("report.md"));
     }
 
     #[test]
