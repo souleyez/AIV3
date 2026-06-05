@@ -10426,8 +10426,8 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
         true
     };
     let include_preview_link = if static_page_like {
-        public_status
-            .as_deref()
+        external_channel_reply_static_page_card_status(&reply)
+            .or(reply.task_status.as_deref())
             .map(external_channel_public_status_allows_preview_link)
             .unwrap_or(false)
     } else {
@@ -10758,7 +10758,10 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
         return reply;
     }
     let terminal_artifact_status = external_channel_public_status_allows_artifact_link(&raw_status);
-    if !terminal_artifact_status && reply.reply_type != ExternalBotReplyTypeView::ArtifactLink {
+    if provisional_existing_artifact
+        && !terminal_artifact_status
+        && reply.reply_type != ExternalBotReplyTypeView::ArtifactLink
+    {
         return reply;
     }
     let ready_text = external_channel_static_page_customer_ready_text_for_payload(
@@ -29938,15 +29941,15 @@ fn external_channel_static_page_reply_from_events(
             return Some(reply);
         }
     }
+    if let Some(reply) =
+        external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
+    {
+        return Some(reply);
+    }
     if let Some(reply) = external_channel_static_page_existing_artifact_reply_from_events(
         events,
         conversation_external_id,
     ) {
-        return Some(reply);
-    }
-    if let Some(reply) =
-        external_channel_static_page_fixed_task_reply_from_events(events, conversation_external_id)
-    {
         return Some(reply);
     }
     for event in events.iter().rev() {
@@ -30472,6 +30475,14 @@ fn external_channel_static_page_fixed_task_reply_from_events(
     if let Some(failed) =
         latest_exec_failed.filter(|failed| failed.sequence_no > latest_fixed.sequence_no)
     {
+        if external_channel_static_page_existing_artifact_reply_from_events(
+            events,
+            conversation_external_id,
+        )
+        .is_some()
+        {
+            return None;
+        }
         return Some(external_channel_fixed_task_processing_reply(
             conversation_external_id,
             "static_page_image2_data_publish",
@@ -92813,7 +92824,7 @@ mod tests {
             ExternalBotReplyTypeView::TaskStatus
         );
         assert_eq!(public_reply.task_status.as_deref(), Some("processing"));
-        assert_eq!(public_reply.artifact_links, vec![public_url.to_string()]);
+        assert!(public_reply.artifact_links.is_empty());
 
         let response = ExternalChannelEventResponse {
             accepted: true,
@@ -93000,7 +93011,7 @@ mod tests {
         assert!(body.contains("event: external_channel.static_page_issue"));
         assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
         assert!(body.contains("\"sequence\":80"));
-        assert!(body.contains("provider_timeout"));
+        assert!(!body.contains("provider_timeout"));
         assert!(body.contains("最终静态页暂未完成"));
     }
 
