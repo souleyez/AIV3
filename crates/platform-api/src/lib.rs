@@ -30453,6 +30453,8 @@ fn external_channel_static_page_fixed_task_reply_from_events(
     if latest_publish_terminal > latest_fixed.sequence_no {
         return None;
     }
+    let fixed_event =
+        external_channel_static_page_fixed_task_event_with_status_context(events, latest_fixed);
     let latest_cancelled = events
         .iter()
         .rev()
@@ -30464,7 +30466,7 @@ fn external_channel_static_page_fixed_task_reply_from_events(
             conversation_external_id,
             "static_page_image2_data_publish",
             "cancelled",
-            latest_fixed,
+            &fixed_event,
             Some(cancelled),
         ));
     }
@@ -30487,7 +30489,7 @@ fn external_channel_static_page_fixed_task_reply_from_events(
             conversation_external_id,
             "static_page_image2_data_publish",
             "failed",
-            latest_fixed,
+            &fixed_event,
             Some(failed),
         ));
     }
@@ -30508,7 +30510,7 @@ fn external_channel_static_page_fixed_task_reply_from_events(
             conversation_external_id,
             "static_page_image2_data_publish",
             retry_state,
-            latest_fixed,
+            &fixed_event,
             Some(retry),
         ));
     }
@@ -30525,15 +30527,52 @@ fn external_channel_static_page_fixed_task_reply_from_events(
             conversation_external_id,
             "static_page_image2_data_publish",
             "running",
-            latest_fixed,
+            &fixed_event,
             Some(heartbeat),
         ));
     }
     Some(external_channel_fixed_task_terminal_or_queued_reply(
         conversation_external_id,
-        latest_fixed,
+        &fixed_event,
         "static_page_image2_data_publish",
     ))
+}
+
+fn external_channel_static_page_fixed_task_event_with_status_context(
+    events: &[AssistantRunEvent],
+    fixed_event: &AssistantRunEvent,
+) -> AssistantRunEvent {
+    let mut event = fixed_event.clone();
+    let Some(context) = events.iter().rev().find(|candidate| {
+        candidate.sequence_no <= fixed_event.sequence_no
+            && matches!(
+                candidate.event_name.as_str(),
+                "assistant_run.external_channel_static_page_pipeline_queued"
+                    | "assistant_run.external_channel_static_page_publish_queued"
+            )
+    }) else {
+        return event;
+    };
+    let Some(target) = event.payload.as_object_mut() else {
+        return event;
+    };
+    for key in [
+        "status_url",
+        "status_method",
+        "draft_id",
+        "image_job_id",
+        "poll_after_seconds",
+        "recipient_delivery",
+        "permission_review_status",
+        "editable_after_publish",
+    ] {
+        if target.get(key).is_none_or(Value::is_null) {
+            if let Some(value) = context.payload.get(key) {
+                target.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    event
 }
 
 fn external_channel_data_ingestion_analysis_reply_from_events(
@@ -93192,6 +93231,8 @@ mod tests {
         let image_job_id = StaticPageImageJobId::new();
         let public_url =
             "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/index.html";
+        let status_url =
+            "https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-1/reply";
         let events = vec![
             static_page_reply_test_event(
                 run_id,
@@ -93211,7 +93252,9 @@ mod tests {
                     "relaxed_template_match": {
                         "policy": "dataset_overlap",
                         "baseline_public_url": public_url
-                    }
+                    },
+                    "status_url": status_url,
+                    "status_method": "GET"
                 }),
             ),
             static_page_reply_test_event(
@@ -93239,6 +93282,8 @@ mod tests {
             card["template_id"],
             json!("static_page_image2_data_publish")
         );
+        assert_eq!(card["status_url"], json!(status_url));
+        assert_eq!(card["status_method"], json!("GET"));
         assert_eq!(card["poll_after_seconds"], json!(15));
     }
 
