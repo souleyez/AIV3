@@ -163,6 +163,12 @@
   - 8 server fast-forwarded `/srv/aiv3/repo` to `3980545`, built `platform-api` release with `CC=clang CXX=clang++`, built `apps/web` with `pnpm build`, and restarted `aiv3-platform-api.service` / `aiv3-web.service`.
   - Services active after restart: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-static-page-worker.service`, and `aiv3-codex-host-agent.service`.
   - Read-only smoke passed: public simple/full third-party docs returned HTTP 200 and include `template_match_policy`; `run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm,data-ingestion-analysis -Json` passed docs/auth-guard/queue-stats checks with mutation cases intentionally skipped.
+- Continued on 2026-06-05 by making third-party report export regression repeatable:
+  - Added `npm run smoke:external-report-export` for live external-channel report/static-page delivery checks.
+  - The smoke runs both JSON `/events` and SSE `/events/stream`, requires an operator-provided bearer and document/dataset scope, verifies a single customer-facing report link, validates report card export fields and `download_exports[]`, then fetches `index.html`, `data.json`, `data-snapshot.json`, `table-data.csv`, `report.ppt`, and `report.md`.
+  - Recorded the prior 8-server manual receipt in `docs/validation/external-report-export-smoke.md`: deployed commit `51e22fbbc`, public endpoint `https://v3.elepcloud.com`, Xinbai report title/link, three download exports, and six artifact files all HTTP 200 with non-empty bodies.
+  - Local verification passed for script syntax, help output, npm entrypoint help, diff whitespace, and a mock JSON/SSE artifact server.
+  - This smoke is now part of the fixed post-deploy regression list whenever a change touches third-party report/static-page delivery.
 
 ## Immediate Execution Queue
 
@@ -255,6 +261,16 @@ cargo test -p contracts external_bot_message --lib
 npm run build:pure-third-party-guide-html
 npm run test:pure-third-party-guide-html
 npm run check:pure-third-party-guide-html
+```
+
+Third-party report/static-page delivery smoke after an approved 8-server deploy:
+
+```powershell
+npm run smoke:external-report-export -- `
+  --base-url https://v3.elepcloud.com `
+  --connection-id generic-chat-main `
+  --bearer $env:EXTERNAL_REPORT_EXPORT_SMOKE_BEARER `
+  --dataset-external-ids $env:EXTERNAL_REPORT_EXPORT_SMOKE_DATASET_EXTERNAL_IDS
 ```
 
 8-server deploy build reminder:

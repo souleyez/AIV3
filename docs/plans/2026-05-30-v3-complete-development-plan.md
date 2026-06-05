@@ -399,7 +399,8 @@ Before 8-server deploy:
 After 8-server deploy:
 
 - Run the private smoke cases relevant to the change.
-- Record the deployed commit and smoke result in `docs/plans/2026-05-25-DataMax-mainline-quality-executor-plan.md`.
+- If the change affects third-party report/static-page delivery, run `npm run smoke:external-report-export` against the public endpoint with the active private bearer and dataset scope.
+- Record the deployed commit and smoke result in `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`.
 - If smoke fails, keep a rollback note and do not hide the failure behind customer-facing fallback copy.
 
 ## Immediate Next Execution Order

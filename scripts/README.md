@@ -25,4 +25,5 @@ Static-page handoff checks:
 External integration checks:
 
 - `bash scripts/run-external-direct-reply-smoke.sh`: Rust smoke coverage for the external ordinary-chat direct-reply contract, provider fallback/timeout behavior, SSE started/delta/completed semantics, and low-quality PDF parse gating.
+- `npm run smoke:external-report-export`: live external-channel smoke for report/static-page delivery. It checks JSON and SSE report cards, one customer-facing report link, export fields, `download_exports[]`, and non-empty generated artifact files.
 - `npm run test:pure-third-party-guide-html`: checks the current public HTML/Markdown integration guides and their published `/external-integrations/...` copies.
