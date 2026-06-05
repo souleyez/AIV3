@@ -64,7 +64,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
-| P1 Gate C: background enterprise memory | pending | Existing fact tables and snapshots exist, but fingerprint/dedup/background enrichment plan tasks are not implemented in this ledger yet. |
+| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Ingest-time fingerprint capture, canonical read-through, and 8-server migration rollout remain pending. |
 | P1 Gate D: low-quality answer recovery | pending | Hard gate remains disabled; passive fixed-scope autofix loop needs implementation and validation. |
 | P1 Gate E: confirmed data ingestion | pending | `data_ingestion_analysis` terminal smoke exists; confirmed staging-to-dataset sync still needs closure and validation. |
 
@@ -132,3 +132,26 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - Accepted-template matching/reuse and prewarm task construction are implemented and tested.
   - The accepted Xinbai report template remains valid locally and publicly.
   - Silent low-load template prewarm is not active in production until `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` is configured and a low-load execution smoke is recorded.
+
+### 2026-06-06 Background Document Enrichment Schema Phase 1
+
+- Files changed:
+  - `crates/storage/migrations/0013_document_canonical_enrichment.sql`;
+  - `crates/storage/src/lib.rs`.
+- Schema additions:
+  - document fingerprint fields on `documents`;
+  - `canonical_document_id`, `dedup_state`, and `deduped_at` fields on `documents`;
+  - `document_content_fingerprints`;
+  - `document_enrichment_runs`;
+  - idempotency index on `(tenant_id, document_id, enrichment_kind, input_fingerprint)`;
+  - status/priority index for background enrichment scheduling.
+- Local verification:
+  - `cargo fmt --check -p storage` passed.
+  - `cargo test -p storage document_canonical_enrichment --lib` passed.
+  - `cargo test -p storage auth_migrations_are_registered_in_order --lib` passed.
+  - `cargo check -p platform-api` passed.
+- Remaining:
+  - apply migration on 8 server during deployment;
+  - compute SHA-256/size during local upload and third-party parse;
+  - register canonical document aliases without changing external document IDs;
+  - add canonical read-through for retrieval/facts.

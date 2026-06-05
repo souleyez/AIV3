@@ -32,7 +32,7 @@ Make document understanding a background capability of DataMax instead of a one-
 
 ## Task 1: Add Fingerprint And Enrichment Schema
 
-Status: `pending`
+Status: `phase-1-schema-completed-locally-2026-06-06`
 
 Files:
 
@@ -75,6 +75,22 @@ Acceptance:
 - Migrations run locally and on 8 server.
 - Existing documents remain readable.
 - No public API contract changes.
+
+Progress 2026-06-06:
+
+- Added storage migration `0013_document_canonical_enrichment.sql`.
+- Registered `DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA` in storage migrations.
+- Added table names for `document_content_fingerprints` and `document_enrichment_runs`.
+- Added a schema regression for document fingerprint fields, canonical aliases, enrichment-run idempotency, and status/priority indexes.
+- Verified locally with:
+  - `cargo fmt --check -p storage`;
+  - `cargo test -p storage document_canonical_enrichment --lib`;
+  - `cargo test -p storage auth_migrations_are_registered_in_order --lib`;
+  - `cargo check -p platform-api`.
+- Not done yet:
+  - applying the migration on 8 server;
+  - computing fingerprints during upload/third-party parse;
+  - canonical read-through in retrieval/facts.
 
 ## Task 2: Capture Content Fingerprints During Ingest
 

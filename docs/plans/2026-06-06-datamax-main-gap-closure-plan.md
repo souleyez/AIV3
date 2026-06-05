@@ -376,7 +376,7 @@ git commit -m "Lock DataMax production concurrency profile"
 
 ## Task 4: Close Static-Page Template Operations And Prewarm
 
-**Status:** pending
+**Status:** in progress as of 2026-06-06. Phase 1 storage schema for fingerprints, canonical document aliases, and enrichment runs is implemented locally; ingest-time fingerprint capture is still pending.
 
 **Files:**
 

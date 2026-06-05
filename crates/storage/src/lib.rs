@@ -101,6 +101,12 @@ pub const DOCUMENT_FACT_INDEX_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0012_document_fact_index.sql"),
 };
 
+pub const DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA: Migration = Migration {
+    version: "0013",
+    description: "document canonical enrichment",
+    sql: include_str!("../migrations/0013_document_canonical_enrichment.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -113,6 +119,7 @@ pub const MIGRATIONS: &[Migration] = &[
     DATASET_DOCUMENT_MEMBERSHIPS_SCHEMA,
     MODEL_GATEWAY_PROFILES_SCHEMA,
     DOCUMENT_FACT_INDEX_SCHEMA,
+    DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -128,6 +135,8 @@ pub const TABLES: &[&str] = &[
     "document_facts",
     "document_fact_sources",
     "dataset_fact_snapshots",
+    "document_content_fingerprints",
+    "document_enrichment_runs",
     "secret_bindings",
     "secret_grants",
     "workflow_definitions",
@@ -7843,7 +7852,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
-                "0012"
+                "0012", "0013"
             ]
         );
         assert!(MIGRATIONS
@@ -7873,6 +7882,9 @@ mod tests {
         assert!(MIGRATIONS
             .iter()
             .any(|migration| migration.description == "document fact index"));
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.description == "document canonical enrichment"));
         assert!(TABLES.contains(&"published_video_ppt_packages"));
         assert!(TABLES.contains(&"published_video_ppt_versions"));
         assert!(VIDEO_PPT_PUBLISHED_VERSIONS_SCHEMA
@@ -7912,6 +7924,51 @@ mod tests {
         assert!(DOCUMENT_FACT_INDEX_SCHEMA
             .sql
             .contains("primary key (tenant_id, dataset_id, snapshot_kind, snapshot_key)"));
+    }
+
+    #[test]
+    fn document_canonical_enrichment_schema_mentions_tables_fields_and_indexes() {
+        assert!(TABLES.contains(&"document_content_fingerprints"));
+        assert!(TABLES.contains(&"document_enrichment_runs"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("add column if not exists content_sha256 text"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("add column if not exists content_size_bytes bigint"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("add column if not exists canonical_document_id uuid references documents"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("add column if not exists dedup_state text not null default 'unknown'"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("add column if not exists deduped_at timestamptz"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("create table if not exists document_content_fingerprints"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("primary key (tenant_id, content_sha256)"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("create table if not exists document_enrichment_runs"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("enrichment_kind text not null"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("input_fingerprint text not null"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("document_enrichment_runs_idempotency_idx"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("(tenant_id, document_id, enrichment_kind, input_fingerprint)"));
+        assert!(DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA
+            .sql
+            .contains("document_enrichment_runs_status_priority_idx"));
     }
 
     #[test]
