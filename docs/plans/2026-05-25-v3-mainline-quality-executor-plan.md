@@ -182,6 +182,13 @@
 - Continued by narrowly relaxing Xinbai/third-party business-report triggers for `经营健康度`, `整体经营情况/整体经营状况`, and store-specific `经营风险` prompts such as `看看新街口店经营风险`.
   - The relaxation stays inside the external-channel business-report module workflow and does not broaden ordinary global Q&A; `经营风险是什么意思？` remains an ordinary answer case.
   - Local verification passed for focused static-page trigger/focus tests and `external_channel_capability_routing_fixture`.
+- Deployed the third-party report trigger/export batch to 8服务器 on 2026-06-05:
+  - `/srv/aiv3/repo` fast-forwarded to `eb10153a8`; `aiv3-platform-api.service` was restarted and remained `active`.
+  - The first build attempt with the server default `cc` failed on the `aws-lc-sys` memcmp compiler guard; the release build passed with `CC=clang CXX=clang++`.
+  - `npm run smoke:external-report-export` against `https://v3.elepcloud.com` passed for JSON and SSE with Xinbai dataset scope `64fff6c8-10e2-4ee8-8243-23166cce3abc`: `focus=取高机会`, one SSE artifact link, three export fields, and `table-data.csv` / `report.ppt` / `report.md` all HTTP 200.
+  - Live external-channel routing smoke passed for report triggers `取高`, `经营状况`, `经营健康度`, `整体经营情况`, `风险识别`, `新街口店经营风险`, and `销售缺口/助推`; returned report URLs carried the expected `focus` values.
+  - False-positive guards passed for `取高是什么意思？` and `风险识别系统有哪些项目经历？`; ordinary care Q&A returned a streamed text answer and no artifact.
+  - Smoke scripts were aligned to the current third-party contract: report links are primarily delivered through artifact/card fields without repeating raw URLs in text, and routing smoke can now pass dataset scope and default prompt.
 
 ## Immediate Execution Queue
 
@@ -284,6 +291,18 @@ npm run smoke:external-report-export -- `
   --connection-id generic-chat-main `
   --bearer $env:EXTERNAL_REPORT_EXPORT_SMOKE_BEARER `
   --dataset-external-ids $env:EXTERNAL_REPORT_EXPORT_SMOKE_DATASET_EXTERNAL_IDS
+```
+
+Third-party Xinbai report routing smoke after an approved 8-server deploy:
+
+```powershell
+.\scripts\run-external-capability-routing-smoke.ps1 `
+  -BaseUrl https://v3.elepcloud.com `
+  -Bearer $env:EXTERNAL_REPORT_EXPORT_SMOKE_BEARER `
+  -ConnectionId generic-chat-main `
+  -DatasetExternalIds 64fff6c8-10e2-4ee8-8243-23166cce3abc `
+  -DefaultPrompt '新百经营分析月报；若用户在新百经营数据范围内提出经营报表、取高、风险、销售缺口、助推等需求，可生成并返回报表产物链接。' `
+  -CaseId static_page_xinbai_take_high_short,static_page_xinbai_business_overview,static_page_xinbai_health,static_page_xinbai_overall_operation,static_page_xinbai_risk_identification,static_page_xinbai_store_operation_risk,static_page_xinbai_sales_gap_assist,plain_metric_meaning_question,plain_resume_risk_system_question,plain_qa_bedridden_turning
 ```
 
 8-server deploy build reminder:

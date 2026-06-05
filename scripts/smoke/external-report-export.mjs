@@ -42,7 +42,7 @@ function parseArgs(argv) {
     skipJson: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_SKIP_JSON),
     skipStream: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_SKIP_STREAM),
     skipFileChecks: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_SKIP_FILE_CHECKS),
-    requireTextLink: !parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_NO_REQUIRE_TEXT_LINK),
+    requireTextLink: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_REQUIRE_TEXT_LINK),
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -109,6 +109,8 @@ function parseArgs(argv) {
       args.skipFileChecks = true;
     } else if (arg === '--no-require-text-link') {
       args.requireTextLink = false;
+    } else if (arg === '--require-text-link') {
+      args.requireTextLink = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -169,7 +171,7 @@ Checks:
   - card exposes table_data_url, ppt_download_url, markdown/text download URL
   - download_exports has at least three entries
   - index.html, data.json, data-snapshot.json, table-data.csv, report.ppt, report.md are HTTP 200
-  - assistant text has at most one report URL and, by default, at least one clickable report link
+  - assistant text has at most one report URL; the customer report link is delivered through artifact/card fields
 
 Environment aliases:
   EXTERNAL_REPORT_EXPORT_SMOKE_BASE_URL
@@ -178,6 +180,7 @@ Environment aliases:
   EXTERNAL_REPORT_EXPORT_SMOKE_DATASET_EXTERNAL_IDS
   EXTERNAL_REPORT_EXPORT_SMOKE_DOCUMENT_EXTERNAL_IDS
   EXTERNAL_REPORT_EXPORT_SMOKE_EXPECTED_FOCUS
+  EXTERNAL_REPORT_EXPORT_SMOKE_REQUIRE_TEXT_LINK
 `);
 }
 

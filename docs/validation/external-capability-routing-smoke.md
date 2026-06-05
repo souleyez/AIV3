@@ -1,5 +1,40 @@
 # External Capability Routing Smoke
 
+## 2026-06-05 8 Server Rollout
+
+- Host: `8服务器`
+- Public endpoint: `https://v3.elepcloud.com`
+- Deployed commit: `eb10153a8`
+- Service: `aiv3-platform-api.service`
+- Service status: `active`
+- Rollout command: `git pull --ff-only`, `CC=clang CXX=clang++ cargo build --release -p platform-api`, restart service.
+- Dataset scope for Xinbai report cases: `64fff6c8-10e2-4ee8-8243-23166cce3abc`
+- Default prompt for live report-routing smoke: `新百经营分析月报；若用户在新百经营数据范围内提出经营报表、取高、风险、销售缺口、助推等需求，可生成并返回报表产物链接。`
+
+8 server SSE smoke results:
+
+| Case | Expected | Result |
+| --- | --- | --- |
+| `取高` | report, focus `取高机会` | Passed; 1 artifact link, focus matched |
+| `经营状况` | report, focus `经营总览` | Passed; 1 artifact link, focus matched |
+| `经营健康度` | report, focus `经营总览` | Passed; 1 artifact link, focus matched |
+| `看看整体经营情况` | report, focus `经营总览` | Passed; 1 artifact link, focus matched |
+| `风险识别` | report, focus `风险店铺` | Passed; 1 artifact link, focus matched |
+| `看看新街口店经营风险` | report, focus `风险店铺` | Passed; 1 artifact link, focus matched |
+| `销售缺口统计一下，哪些门店需要助推？` | report, focus `取高机会` | Passed; 1 artifact link, focus matched |
+| `长期卧床老人多长时间翻身一次？` | ordinary Q&A | Passed; completed text answer, no artifact link |
+| `取高是什么意思？` | ordinary Q&A | Passed; completed text answer, no artifact link |
+| `风险识别系统有哪些项目经历？` | ordinary Q&A | Passed; completed text answer, no artifact link |
+
+Additional ordinary-Q&A sanity:
+
+- `长期卧床老人多长时间翻身一次？` returned `completed`, 295 streamed answer characters, and 0 generated-artifact mentions.
+
+Script hardening from this rollout:
+
+- `scripts/run-external-capability-routing-smoke.ps1` now accepts `-DatasetExternalIds` and `-DefaultPrompt`, so live report-routing smoke can match a real third-party Xinbai scope instead of using an empty dataset scope.
+- The SSE reader tolerates .NET `ResponseEnded` / premature response close after already-received frames, preventing a successful server stream from being misreported as a client read failure.
+
 ## 2026-06-04 8 Server Rollout
 
 - Host: `8服务器`

@@ -7,6 +7,8 @@ param(
     [string]$CasesPath = (Join-Path $PSScriptRoot "..\fixtures\external-channel-capability-routing\cases.jsonl"),
     [string[]]$CaseId = @(),
     [string]$AvailableDocumentSourceId = "third-party-source-main",
+    [string[]]$DatasetExternalIds = @(),
+    [string]$DefaultPrompt = "DataMax external capability routing smoke. Return customer-safe status or answer only.",
     [int]$TimeoutSeconds = 180
 )
 
@@ -116,12 +118,12 @@ function Invoke-RoutingCase {
         message_external_id = $messageId
         message_type = "text"
         text = $Case.prompt
-        default_prompt = "V3 external capability routing smoke. Return customer-safe status or answer only."
+        default_prompt = $DefaultPrompt
         output_format = "rich_text"
         render_mode = "normal"
         available_document_source_id = $AvailableDocumentSourceId
         available_document_external_ids = @()
-        dataset_external_ids = @()
+        dataset_external_ids = @($DatasetExternalIds)
         requested_skills = @()
         mention_external_user_ids = @()
         attachment_refs = @()
@@ -156,8 +158,18 @@ function Invoke-RoutingCase {
         $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
         $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8)
         $frameLines = New-Object System.Collections.Generic.List[string]
-        while (-not $reader.EndOfStream) {
-            $line = $reader.ReadLine()
+        while ($true) {
+            try {
+                if ($reader.EndOfStream) {
+                    break
+                }
+                $line = $reader.ReadLine()
+            } catch {
+                if ($_.Exception.Message -like "*ResponseEnded*" -or $_.Exception.Message -like "*response ended prematurely*") {
+                    break
+                }
+                throw
+            }
             if ($null -eq $line) {
                 break
             }
