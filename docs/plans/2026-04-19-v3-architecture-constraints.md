@@ -1,8 +1,8 @@
-# AI Data Platform V3 Architecture Constraints
+# DataMax Architecture Constraints
 
 ## Purpose
 
-这份文档不是替代主计划，而是把 V3 重构过程中必须持续遵守的架构约束单独固定下来。
+这份文档不是替代主计划，而是把 DataMax 重构过程中必须持续遵守的架构约束单独固定下来。
 
 适用范围：
 

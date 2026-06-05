@@ -174,7 +174,7 @@ pub(crate) fn build_assistant_run_react_planning_catalog(
             "codex_host": {
                 "available": false,
                 "actions": ["codex_host_task"],
-                "note": "disabled-by-default execution-kernel bridge; V3 validates task scope, memory, and allowlist before any external execution"
+                "note": "disabled-by-default execution-kernel bridge; DataMax validates task scope, memory, and allowlist before any external execution"
             }
         }
     })

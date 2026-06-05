@@ -1,8 +1,8 @@
-# AI Data Platform V3 Development Execution Plan
+# DataMax Development Execution Plan
 
 ## Purpose
 
-本计划不是替代架构蓝图或 ADR，而是把 V3 的目标架构拆成可以连续执行、连续验收的开发切片。
+本计划不是替代架构蓝图或 ADR，而是把 DataMax 的目标架构拆成可以连续执行、连续验收的开发切片。
 
 当前执行时还应同时遵守：
 
@@ -14,7 +14,7 @@
 
 适用范围：
 
-- V3 Rust 平台核心
+- DataMax Rust 平台核心
 - PostgreSQL 主状态建设
 - workflow engine 到 worker runtime 的执行链
 - 报表规划、渲染、发布主链
@@ -22,7 +22,7 @@
 
 ## System Goal Recap
 
-V3 不是旧系统代码翻译，而是保留已验证业务闭环后重建新的平台核心。目标能力保持一致：
+DataMax 不是旧系统代码翻译，而是保留已验证业务闭环后重建新的平台核心。目标能力保持一致：
 
 - 多数据集、多文档、多用户的 AI 问答与知识检索
 - 数据集 / 文档 / 会话作用域下的密钥与权限控制
@@ -44,15 +44,15 @@ V3 不是旧系统代码翻译，而是保留已验证业务闭环后重建新�
 
 ## Planning Inputs
 
-`2026-04-21-model-facing-platform-capability-spec.md` 对当前 V3 有帮助，但它的角色应被明确为：
+`2026-04-21-model-facing-platform-capability-spec.md` 对当前 DataMax 有帮助，但它的角色应被明确为：
 
 - 上游产品与模型侧协议方向
-- 对 V3 capability surface / evidence protocol / bounded continuation 的设计输入
-- 可迭代、可回写、可调整的 draft，而不是直接要求 Rust V3 逐字段硬编码对齐的冻结规范
+- 对 DataMax capability surface / evidence protocol / bounded continuation 的设计输入
+- 可迭代、可回写、可调整的 draft，而不是直接要求 Rust DataMax 逐字段硬编码对齐的冻结规范
 
 因此当前计划的执行原则是：
 
-- V3 先稳定主状态、artifact、runtime、recovery、inspect 真相面
+- DataMax 先稳定主状态、artifact、runtime、recovery、inspect 真相面
 - 再把这些真相面映射成模型可消费的 capability class / evidence state
 - 如果 Rust 真实执行链与上游文档存在偏差，应优先修改 spec 或补充 mapping，而不是为了追文档表述而破坏当前稳定实现
 
@@ -205,7 +205,7 @@ V3 不是旧系统代码翻译，而是保留已验证业务闭环后重建新�
 
 本阶段接下来建议按以下顺序推进：
 
-1. 先把“模型侧 capability spec 如何映射到 V3 真实执行面”固定成内部计划，而不是直接进入更多行为重构
+1. 先把“模型侧 capability spec 如何映射到 DataMax 真实执行面”固定成内部计划，而不是直接进入更多行为重构
 2. 在现有 runtime / artifact / inspect 基础上补 `capability_class` 与 `evidence_state` 一类模型侧协议字段
 3. 再把 dataset output / chat session 从“typed view 已收紧”推进到“真实 provider / tool / streaming runtime 语义已稳定”
 4. 继续减少对 `session_manifest.runtime` 一类重复摘要字段的依赖，让 artifact 聚合读模型成为主消费面
@@ -310,7 +310,7 @@ V3 不是旧系统代码翻译，而是保留已验证业务闭环后重建新�
 
 当前建议的近端执行顺序：
 
-1. 先在 V3 内部固定一份“可调整的模型侧映射计划”：
+1. 先在 DataMax 内部固定一份“可调整的模型侧映射计划”：
    - 哪些现有 runtime truth 对应上游 spec 里的 `Material Service / Report Service`
    - 哪些现有运行事实可先映射到 `catalog_memory / supply_only / live_detail / mixed / degraded`
    - 哪些字段应只是读模型映射，哪些才值得进入持久化 contract
@@ -332,7 +332,7 @@ V3 不是旧系统代码翻译，而是保留已验证业务闭环后重建新�
 当前建议的执行顺序应理解为：
 
 1. 不把外部 capability spec 当成冻结实现，而是当成可调整的对齐目标
-2. 先在 V3 内部做最小映射与命名统一
+2. 先在 DataMax 内部做最小映射与命名统一
 3. 再补真实 provider / tool / streaming 语义
 4. 最后再根据真实运行结果，回头收紧 capability surface 和连续执行协议
 

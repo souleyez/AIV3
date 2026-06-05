@@ -4,8 +4,8 @@ This smoke validates the minimum user-facing chat contract before static-page qu
 
 The contract is:
 
-- Plain ordinary chat remains a normal model conversation. V3 awareness is additive, not a capability limit.
-- V3-only facts require supplied V3 evidence. When that evidence is absent, answers should mark the V3 fact boundary as currently invisible or unsupplied.
+- Plain ordinary chat remains a normal model conversation. DataMax awareness is additive, not a capability limit.
+- DataMax-only facts require supplied DataMax evidence. When that evidence is absent, answers should mark the DataMax fact boundary as currently invisible or unsupplied.
 - ReAct invalid-action and step-limit paths must not surface observation JSON, execution trails, runtime manifests, tool traces, provider raw payloads, or similar internal observability fields as the final user answer.
 - External-channel callbacks expose task/action/search status through public redacted fields only.
 - Ordinary external chat events can return provider model-authored text when the AssistantRun runtime is configured, while placeholder deployments keep a safe acceptance reply.
@@ -40,7 +40,7 @@ For the advanced static-page chain specifically:
 .\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case static-page-no-confirm
 ```
 
-This case asserts that customers can see the Image2 effect card while V3 continues to publish the generated page, with `effect_image_confirmation_required=false`, no public API field additions, and the final result delivered as the existing `artifact_link` reply shape.
+This case asserts that customers can see the Image2 effect card while DataMax continues to publish the generated page, with `effect_image_confirmation_required=false`, no public API field additions, and the final result delivered as the existing `artifact_link` reply shape.
 
 Remote mode is guarded. Use `-BaseUrl https://v3.elepcloud.com -PlanOnly` for a read-only readiness check covering the public guide, external API auth guard, and workflow queue diagnostics. Server mutation cases require deployment review plus `-AllowServerMutation`; they must still create only new generated artifacts and must not deploy answer-quality patches automatically.
 
@@ -58,12 +58,12 @@ Remote mode is guarded. Use `-BaseUrl https://v3.elepcloud.com -PlanOnly` for a 
   - `cargo test -p platform-api codex_host_fixed_task --lib`
   - `cargo test -p codex-host-agent static_page --lib`
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T034437Z.json`
-- Customer confirmation: not required; the effect image is a viewable status card while V3 continues to publish
+- Customer confirmation: not required; the effect image is a viewable status card while DataMax continues to publish
 - Public response shape: unchanged; final success is exposed through the existing `artifact_link` reply
 
 Read-only deployment readiness:
 
-- Environment: `8服务器` public V3 endpoint, plan-only
+- Environment: `8服务器` public DataMax endpoint, plan-only
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm -Json`
 - Result: passed read-only readiness checks; mutation skipped by guard
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T021620Z.json`
@@ -71,7 +71,7 @@ Read-only deployment readiness:
 
 Guarded mutation dry run:
 
-- Environment: `8服务器` public V3 endpoint, no token configured
+- Environment: `8服务器` public DataMax endpoint, no token configured
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case static-page-no-confirm -Json`
 - Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=false`
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043121Z.json`

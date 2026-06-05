@@ -904,7 +904,7 @@ function downloadStaticPagePpt(draft) {
 </head>
 <body>
   <section class="slide cover">
-    <p class="eyebrow">AIV3 Static Page Export</p>
+    <p class="eyebrow">DataMax Static Page Export</p>
     <h1>${escapeHtml(staticPageProjectTitle(draft))}</h1>
     <p>${escapeHtml(draft?.modelSummary || '由静态页项目导出的演示稿。')}</p>
   </section>

@@ -1,8 +1,8 @@
-# AI数据平台 V3 Rust 重构方案
+# AI数据平台 DataMax Rust 重构方案
 
 ## 一句话结论
 
-本次建议采用“`Next.js 前端 + Rust 平台核心 + PostgreSQL 主状态 + MCP 工具面 + Qdrant 检索 + Parquet/DataFusion 报表层`”的 V3 架构，直接以绿地方式重建，不再延续旧运行时负担。
+本次建议采用“`Next.js 前端 + Rust 平台核心 + PostgreSQL 主状态 + MCP 工具面 + Qdrant 检索 + Parquet/DataFusion 报表层`”的 DataMax 架构，直接以绿地方式重建，不再延续旧运行时负担。
 
 ## 为什么值得一次性重构
 
@@ -20,7 +20,7 @@
 
 因此继续修补旧架构的收益已经明显低于重建收益。
 
-## V3 的核心设计
+## DataMax 的核心设计
 
 ### 体验层
 
@@ -80,8 +80,8 @@
 
 ### Temporal 要不要上
 
-方向对，但当前 Rust SDK 还不适合作为 V3 第一版核心依赖。
-V3 应先自建显式 workflow engine，未来再视 Rust SDK 成熟度决定是否替换。
+方向对，但当前 Rust SDK 还不适合作为 DataMax 第一版核心依赖。
+DataMax 应先自建显式 workflow engine，未来再视 Rust SDK 成熟度决定是否替换。
 
 ## 最终目标形态
 
@@ -110,4 +110,4 @@ flowchart LR
 - `docs/adr/README.md`
 - `docs/adr/0001` 到 `0005`
 
-这套文档已经可以作为 V3 重构的正式蓝图使用。
+这套文档已经可以作为 DataMax 重构的正式蓝图使用。

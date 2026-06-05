@@ -1,8 +1,8 @@
 # Jump Host MiniMax Smoke Notes
 
-**Scope:** AI Data Platform V3 Rust assistant Codex-kernel work only.
+**Scope:** DataMax Rust assistant Codex-kernel work only.
 
-This note deliberately excludes the abandoned `codex-web` remote bridge direction. Jump-host validation here means private MiniMax/Codex Host validation for V3, not public remote Codex routing.
+This note deliberately excludes the abandoned `codex-web` remote bridge direction. Jump-host validation here means private MiniMax/Codex Host validation for DataMax, not public remote Codex routing.
 
 ## Host Snapshot
 
@@ -46,7 +46,7 @@ Observed behavior:
 MiniMax-M2.7 can return leading <think>...</think> text inside message.content.
 ```
 
-V3 must normalize this before user-facing answer rendering. `llm-gateway` should strip or isolate leading reasoning blocks for OpenAI-compatible provider output.
+DataMax must normalize this before user-facing answer rendering. `llm-gateway` should strip or isolate leading reasoning blocks for OpenAI-compatible provider output.
 
 ## Codex Provider Smoke Result
 
@@ -118,7 +118,7 @@ The smoke tool exits non-zero if Codex does not call the shim or if stdout does 
 - Use `windows-jump` now, and later the dedicated Mac host.
 - Do not write MiniMax keys into browser local storage or Codex task prompts.
 - Do not expose MiniMax provider endpoints to browsers.
-- Do not reuse abandoned public remote bridge routes for V3.
+- Do not reuse abandoned public remote bridge routes for DataMax.
 - If Codex itself needs MiniMax later, build a private Responses-compatible shim and validate it separately.
 
 ## Codex Host Agent Smoke Procedure
@@ -127,7 +127,7 @@ Use this only on the jump host or later Mac host. Do not run these commands on t
 
 The smoke has two stages:
 
-1. `plan_only`: verifies the V3 workflow context, profile allowlist, task memory isolation, workspace label, and redacted command plan without launching Codex.
+1. `plan_only`: verifies the DataMax workflow context, profile allowlist, task memory isolation, workspace label, and redacted command plan without launching Codex.
 2. `codex_exec`: launches Codex only after `plan_only` is clean and the host has an isolated workspace root plus an explicit real-exec allow flag.
 
 Minimal `plan_only` environment:
@@ -159,13 +159,13 @@ Expected Host-side guardrails:
 - Profile kind must be `codex-native` or `codex-compatible-shim`.
 - Capability must be in `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES`.
 
-Expected V3 diagnostic closure:
+Expected DataMax diagnostic closure:
 
 - AssistantRun detail diagnostics should keep `codex_executor.shadow_gate.host_validation.ready_for_jump_host_validation=true` only after stable matched shadow runs.
 - Browser-facing AssistantRun diagnostics should show any requested real transport downgrade in `codex_executor.latest.transport_policy` until both `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE=enabled` and `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED=approved` are enabled after promotion review.
 - Completed jump-host output should appear under `codex_executor.host_validation_results`.
 - A successful smoke result should have `mode=codex_exec`, `status=completed`, `host_kind=windows_jump` or `host_kind=mac_host`, `host_validation_completed=true`, `codex_invoked=true`, `command_plan.workspace_configured=true`, and `process.exit_code=0`.
-- V3 now treats the following as required validation guards, not optional diagnostics: `codex_invoked=true`, `command_plan.workspace_configured=true`, `command_plan.prompt_redacted=true`, `process.exit_code=0`, `task_memory_isolated=true`, and `task_memory_space_configured=true`.
+- DataMax now treats the following as required validation guards, not optional diagnostics: `codex_invoked=true`, `command_plan.workspace_configured=true`, `command_plan.prompt_redacted=true`, `process.exit_code=0`, `task_memory_isolated=true`, and `task_memory_space_configured=true`.
 - Even when shadow comparison and jump-host smoke pass, `codex_executor.model_gateway_gate.status` must be `ready` before `codex_executor.promotion_gate.status` can become `eligible_for_feature_gate_review`. If the latest diagnostics show `profile_missing`, `auth_not_configured`, or `unsupported_codex_surface`, fix the Codex conversation model profile before requesting promotion review.
 - A `codex_exec` output that says `status=completed` but misses any required validation guard must remain `failed` with `guard_failed_count > 0`; it must not make `promotion_gate.status=eligible_for_feature_gate_review`.
 - A completed `codex_exec` result from `developer_workstation` or an unknown host kind must be treated as `invalid_host`, not as a valid promotion signal.

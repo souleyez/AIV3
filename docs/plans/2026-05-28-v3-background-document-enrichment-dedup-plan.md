@@ -1,10 +1,10 @@
-# V3 Background Document Enrichment And Dedup Implementation Plan
+# DataMax Background Document Enrichment And Dedup Implementation Plan
 
 This plan is a living document. Update the checkboxes as work lands.
 
 ## Goal
 
-Make document understanding a background capability of V3 instead of a one-shot parse result:
+Make document understanding a background capability of DataMax instead of a one-shot parse result:
 
 - After a document enters the system, keep enriching its parsed content during idle time.
 - Reuse parsed content for identical files across datasets and local/third-party uploads.
@@ -274,7 +274,7 @@ Acceptance:
 
 - Existing third-party and local documents remain reachable.
 - Duplicate exact-content documents no longer require duplicate parsing/fact extraction.
-- Existing V3 answers improve without requiring users to re-upload files.
+- Existing DataMax answers improve without requiring users to re-upload files.
 
 ## Task 8: Observability
 

@@ -1,6 +1,6 @@
 # Static Page Image2 Data Publish
 
-**Scope:** V3 static-page generation, data binding, quality repair, and generated-artifact publishing.
+**Scope:** DataMax static-page generation, data binding, quality repair, and generated-artifact publishing.
 
 ## Learned Workflow
 
@@ -10,7 +10,7 @@ The Xinbai static-page delivery showed that high-quality customer pages need a t
 requirements -> GPT-Image2 visual contract -> read image/layout -> bind real data -> validate口径 -> publish artifact
 ```
 
-Do not treat early static-page modules as a fixed editing canvas when the user asks for a polished customer-facing page. The prompt sent to Image2 is the design brief; the final HTML is produced after reading the image and binding real V3 data.
+Do not treat early static-page modules as a fixed editing canvas when the user asks for a polished customer-facing page. The prompt sent to Image2 is the design brief; the final HTML is produced after reading the image and binding real DataMax data.
 
 ## Required Data Policy
 
@@ -32,15 +32,15 @@ The first artifact summed 40 `bi_contract_warning` snapshots and inflated the op
 - top opportunity: 上浦建店 2701.1万
 - published URL prefix: `https://v3.elepcloud.com/generated-artifacts/`
 
-## V3 Capability Shape
+## DataMax Capability Shape
 
-V3 should expose this as an advanced static-page workflow:
+DataMax should expose this as an advanced static-page workflow:
 
 1. Confirm or generate the Image2 prompt text.
 2. Queue Cloudflare Image2 `static-page-visual`.
 3. Store the image preview as a visual contract.
 4. Render final HTML only after real data is bound and口径 checks pass.
-5. Publish the first customer-visible page to generated artifacts on 8服务器 through the local V3 renderer when possible.
+5. Publish the first customer-visible page to generated artifacts on 8服务器 through the local DataMax renderer when possible.
 6. Return the public link and the口径 summary.
 
 The current frontend prompt payload now carries production rules:
@@ -59,12 +59,12 @@ It is feasible, but it should be an execution extension rather than a new author
 Recommended boundary:
 
 ```text
-V3 Assistant/ReAct
+DataMax Assistant/ReAct
   -> validates user intent, dataset scope, capability, and allowlist
   -> packages a bounded advanced static-page task
   -> queues Codex Host / Cloudflare Codex orchestrator
   -> receives structured artifact output or standalone HTML
-  -> V3 validates, publishes, and audits
+  -> DataMax validates, publishes, and audits
 ```
 
 Safe first phase:
@@ -76,16 +76,16 @@ Safe first phase:
 Fixed-template phase:
 
 - Promote advanced static-page work to the fixed template `static_page_image2_data_publish`.
-- V3 production should prefer the local generated-artifact path for the first customer-visible static page. The local renderer writes `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json` under V3-owned `/generated-artifacts/`, returns `public_url`/`artifact_links`, and marks the draft as an accepted dataset-combination baseline.
-- Allow the fixed Cloudflare Codex executor to create a higher-fidelity follow-up generated artifact without per-task human confirmation when the package uses V3-selected scope, publish mode is `new_generated_artifact_only`, and the output includes a validated snapshot/date/unit口径 report.
-- `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator` is an optional advanced executor route, not the first customer-visible delivery dependency. If the orchestrator is unavailable, expired, or queued for too long, V3 must still return the local generated-artifact link and keep Cloudflare work as background optimization or retry.
+- DataMax production should prefer the local generated-artifact path for the first customer-visible static page. The local renderer writes `index.html`, `data.json`, `data-snapshot.json`, and `manifest.json` under DataMax-owned `/generated-artifacts/`, returns `public_url`/`artifact_links`, and marks the draft as an accepted dataset-combination baseline.
+- Allow the fixed Cloudflare Codex executor to create a higher-fidelity follow-up generated artifact without per-task human confirmation when the package uses DataMax-selected scope, publish mode is `new_generated_artifact_only`, and the output includes a validated snapshot/date/unit口径 report.
+- `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator` is an optional advanced executor route, not the first customer-visible delivery dependency. If the orchestrator is unavailable, expired, or queued for too long, DataMax must still return the local generated-artifact link and keep Cloudflare work as background optimization or retry.
 - Continue requiring human confirmation for overwrite, stable customer URL replacement, source-code changes, scope/credential expansion, customer-channel sending, or uncertain口径.
 - For the legacy `codex_exec` mode, enable write-capable artifact edits only in isolated workspaces.
-- Store output as V3 artifacts, not raw Codex HTML.
+- Store output as DataMax artifacts, not raw Codex HTML.
 
 ## Fixed-Task Preconditions
 
-V3 may stream the Image2 effect-card to the customer immediately, but it must not enqueue `static_page_image2_data_publish` until the Image2 workflow has succeeded and the image job has a non-empty `preview_asset_key`.
+DataMax may stream the Image2 effect-card to the customer immediately, but it must not enqueue `static_page_image2_data_publish` until the Image2 workflow has succeeded and the image job has a non-empty `preview_asset_key`.
 
 The host task package must include:
 
@@ -98,7 +98,7 @@ The host task package must include:
 - at least one selected dataset, document, or database source
 - snapshot, trend, unit, and detail-table policies
 
-If any item is missing, V3 should keep the draft/image job state visible, record a preflight rejection when appropriate, and avoid starting Codex Host.
+If any item is missing, DataMax should keep the draft/image job state visible, record a preflight rejection when appropriate, and avoid starting Codex Host.
 
 Do not allow:
 

@@ -1,12 +1,12 @@
-# V3 Complete Development Plan Implementation Plan
+# DataMax Complete Development Plan Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Keep one complete product-and-engineering plan for V3 so daily feature work, quality fixes, third-party integration, static-page/report generation, database-source ingestion, Codex executor work, and 8-server release smoke all follow the same priority order.
+**Goal:** Keep one complete product-and-engineering plan for DataMax so daily feature work, quality fixes, third-party integration, static-page/report generation, database-source ingestion, Codex executor work, and 8-server release smoke all follow the same priority order.
 
-**Architecture:** V3 remains the system of record for tenants, datasets, document visibility, AssistantRun state, workflow state, artifacts, generated pages, third-party contracts, and audit. Documents, databases, user history, and generated artifacts all enter the same dataset-centered evidence chain before they can affect answers, reports, or static pages. Codex/Cloudflare executors are bounded workers that return artifacts and diagnostics through V3; they do not own permissions, credentials, dataset mutation, third-party API contracts, or release configuration.
+**Architecture:** DataMax remains the system of record for tenants, datasets, document visibility, AssistantRun state, workflow state, artifacts, generated pages, third-party contracts, and audit. Documents, databases, user history, and generated artifacts all enter the same dataset-centered evidence chain before they can affect answers, reports, or static pages. Codex/Cloudflare executors are bounded workers that return artifacts and diagnostics through DataMax; they do not own permissions, credentials, dataset mutation, third-party API contracts, or release configuration.
 
-**Tech Stack:** Rust `platform-api`, `contracts`, `storage`, `assistant-runtime`, `llm-gateway`, `ingest-worker`, `retrieval-worker`, `static-page-worker`, `codex-host-agent`; PostgreSQL; Next.js V3 web app; third-party integration docs; Cloudflare Codex/Image2; 8-server deployment and smoke scripts.
+**Tech Stack:** Rust `platform-api`, `contracts`, `storage`, `assistant-runtime`, `llm-gateway`, `ingest-worker`, `retrieval-worker`, `static-page-worker`, `codex-host-agent`; PostgreSQL; Next.js DataMax web app; third-party integration docs; Cloudflare Codex/Image2; 8-server deployment and smoke scripts.
 
 ---
 
@@ -14,14 +14,14 @@
 
 This is the top-level development plan. Use it as the first document when deciding what to do next.
 
-- Daily execution detail stays in `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`.
+- Daily execution detail stays in `docs/plans/2026-05-25-DataMax-mainline-quality-executor-plan.md`.
 - Codex executor closure detail stays in `docs/plans/2026-05-26-codex-executor-gap-closure-plan.md`.
 - Database-source detail stays in `docs/plans/2026-05-21-database-source-integration-plan.md`.
-- Parser/document-understanding detail stays in `docs/plans/2026-05-20-v3-context-document-understanding-p0.md`.
+- Parser/document-understanding detail stays in `docs/plans/2026-05-20-DataMax-context-document-understanding-p0.md`.
 - Model-pool concurrency detail stays in `docs/plans/2026-05-21-model-gateway-concurrency-plan.md`.
-- Background enrichment/dedup detail stays in `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`.
+- Background enrichment/dedup detail stays in `docs/plans/2026-05-28-DataMax-background-document-enrichment-dedup-plan.md`.
 - Cloudflare Codex production bridge detail stays in `docs/plans/2026-05-26-cloudflare-codex-production-bridge-dev-doc.md`.
-- Model-visible capability routing and Host-controlled tool request closure stays in `docs/plans/2026-06-04-v3-model-visible-capability-loop-plan.md`.
+- Model-visible capability routing and Host-controlled tool request closure stays in `docs/plans/2026-06-04-DataMax-model-visible-capability-loop-plan.md`.
 
 When these documents conflict, follow this plan for priority and product boundary, then update the lower-level plan that contains the implementation detail.
 
@@ -29,7 +29,7 @@ When these documents conflict, follow this plan for priority and product boundar
 
 - Local branch is ahead of `origin/main` by one commit: `bdd8497 Tighten static page data readiness smoke`.
 - Main active plan exists, but previous work was spread across multiple specialist plans.
-- 8 server remains the active production/demo target for V3 智能助手.
+- 8 server remains the active production/demo target for DataMax 智能助手.
 - 120 server is no longer a sync target.
 - Third-party public contracts must remain backward-compatible unless the operator explicitly approves a breaking change.
 - Recent work has already landed around:
@@ -47,15 +47,15 @@ When these documents conflict, follow this plan for priority and product boundar
 
 ## Non-Negotiable Product Rules
 
-- V3 answers must be model-authored. Do not return fixed orchestration copy as the final user answer.
+- DataMax answers must be model-authored. Do not return fixed orchestration copy as the final user answer.
 - If an answer cannot be completed, the assistant must either produce the best evidence-backed answer or ask a concrete follow-up that can actually change the next retrieval/tool action.
-- Dataset selection is a supply preference and speed hint, not a hard global exclusion. If the selected dataset is missing or irrelevant, V3 may broaden within the current user's visible permissions.
-- Third-party document scope is authoritative for that conversation. If a third party passes document IDs or dataset IDs once for the same conversation, V3 should retain the effective scope unless the third party changes it.
+- Dataset selection is a supply preference and speed hint, not a hard global exclusion. If the selected dataset is missing or irrelevant, DataMax may broaden within the current user's visible permissions.
+- Third-party document scope is authoritative for that conversation. If a third party passes document IDs or dataset IDs once for the same conversation, DataMax should retain the effective scope unless the third party changes it.
 - Third-party enterprise documents are private by default and must not become visible in the public/main dataset surface unless an authorized operator explicitly moves or shares them.
-- Database sources are external inputs, not live model tools. Rows must be synchronized into a V3 dataset or summarized into V3-owned evidence before chat/report/static-page use.
-- Static-page Image2 is a visual contract. Final pages must be generated from V3 structured data snapshots and validated artifacts.
+- Database sources are external inputs, not live model tools. Rows must be synchronized into a DataMax dataset or summarized into DataMax-owned evidence before chat/report/static-page use.
+- Static-page Image2 is a visual contract. Final pages must be generated from DataMax structured data snapshots and validated artifacts.
 - Static-page generation should not block on customer confirmation after the initial prompt/template stage unless the user explicitly asks for review.
-- Accepted static-page templates are reuse defaults. For a customer/data-domain with one accepted default template, V3 should update data and focus rather than starting a new style from scratch unless the user explicitly requests a redesign.
+- Accepted static-page templates are reuse defaults. For a customer/data-domain with one accepted default template, DataMax should update data and focus rather than starting a new style from scratch unless the user explicitly requests a redesign.
 - Codex executor can generate or repair artifacts, but it must not mutate datasets, permissions, credentials, deployment config, or public integration contracts.
 - VLM fallback is premium and budget-gated. PaddleOCR/structured parsing remains the preferred low-quality parse recovery path.
 - No raw credentials, database URLs, API keys, source cursors, full customer dumps, or raw provider logs in prompts, docs, events, or generated artifacts.
@@ -80,7 +80,7 @@ When these documents conflict, follow this plan for priority and product boundar
 
 1. Keep 8 server deployable and smokeable after every meaningful batch.
 2. Ensure static-page/report requests from third-party return a final `public_url` or a truthful processing status that later resolves to a URL.
-3. Remove user-visible dead ends such as "needs_sample_rows" when V3 can fetch more rows, repair bindings, or generate a partial page with follow-up adjustment guidance.
+3. Remove user-visible dead ends such as "needs_sample_rows" when DataMax can fetch more rows, repair bindings, or generate a partial page with follow-up adjustment guidance.
 4. Stabilize selected dataset behavior in the main assistant: selected means selected; no separate "preselected" state in the user mental model.
 5. Keep third-party document and dataset scopes persistent per conversation.
 6. Fix dataset document membership operations from the data page: add document to dataset, remove document from dataset, and show all current dataset memberships.
@@ -116,11 +116,11 @@ When these documents conflict, follow this plan for priority and product boundar
 
 ### P2: Data Source And Enterprise Understanding
 
-1. Bring database sources forward as first-class V3 data sources.
+1. Bring database sources forward as first-class DataMax data sources.
 2. Support managed mode first:
    - operator configures source;
    - raw credential stays server-side;
-   - schema/profile/sync creates V3 dataset documents;
+   - schema/profile/sync creates DataMax dataset documents;
    - questions/reports/static pages consume synced evidence.
 3. Later add third-party self-service database source APIs only after auth, credential storage, rate limits, and tenant isolation are explicit.
 4. Generate customer-ready reports from mixed document + database datasets.
@@ -149,10 +149,10 @@ When these documents conflict, follow this plan for priority and product boundar
 ### Workstream A: 8 Server Release And Smoke
 
 **Files:**
-- Modify as needed: `scripts/run-v3-quality-gate-smoke.ps1`
+- Modify as needed: `scripts/run-DataMax-quality-gate-smoke.ps1`
 - Modify as needed: `scripts/run-data-ingestion-staging-sync-smoke.sh`
 - Modify as needed: `scripts/run-data-ingestion-staging-live-smoke.sh`
-- Modify as needed: `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`
+- Modify as needed: `docs/plans/2026-05-25-DataMax-mainline-quality-executor-plan.md`
 
 **Tasks:**
 1. Run local focused tests for the touched area.
@@ -269,7 +269,7 @@ When these documents conflict, follow this plan for priority and product boundar
 1. Treat template documents as skill inputs for structure, layout, and field organization.
 2. Generate or repair `dataSnapshot` before Image2/final HTML when modules need rows or field matching.
 3. Do not stop the user at the image stage by default.
-4. Publish final HTML as a V3 generated artifact.
+4. Publish final HTML as a DataMax generated artifact.
 5. Include `data.json`, `data-snapshot.json`, validation summary, unit hints, row counts, and refresh metadata.
 6. For role-specific pages, create separate views or links from the same validated data snapshot.
 7. Prefer an accepted template for the same dataset/domain before starting a new style. For Xinbai, the default accepted template is the modular monthly report with a compact time/range filter, single KPI summary card, right-middle customer detail panel, and URL focus parameters for the user's current conversation emphasis.
@@ -293,7 +293,7 @@ When these documents conflict, follow this plan for priority and product boundar
 1. Keep managed mode as P0.
 2. Store only redacted config and environment/secret references.
 3. Support schema inspection, semantic profile, mapping, sync, status, and readiness.
-4. Sync rows into explicit V3 datasets.
+4. Sync rows into explicit DataMax datasets.
 5. Feed synced datasets into Q&A, reports, templates, and static pages.
 6. Delay public third-party database registration APIs until credentials and tenant isolation are fully specified.
 
@@ -318,13 +318,13 @@ When these documents conflict, follow this plan for priority and product boundar
    - `answer_quality_autofix`.
 2. Keep readiness gates explicit.
 3. Surface safe task status to model and operator.
-4. Treat slow Cloudflare tasks as processing/retrying, not failed, unless remote state or V3 validation says failed.
+4. Treat slow Cloudflare tasks as processing/retrying, not failed, unless remote state or DataMax validation says failed.
 5. Keep runtime inspection lazy and selected-task-only.
 
 **Acceptance:**
 - 8 server can call the fixed Cloudflare Codex runtime for static-page demos.
 - Task status never exposes raw prompt, credentials, stdout/stderr, or customer dumps.
-- Final artifacts return through V3 publication.
+- Final artifacts return through DataMax publication.
 
 ### Workstream I: Model Pool And Concurrency
 
@@ -399,7 +399,7 @@ Before 8-server deploy:
 After 8-server deploy:
 
 - Run the private smoke cases relevant to the change.
-- Record the deployed commit and smoke result in `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`.
+- Record the deployed commit and smoke result in `docs/plans/2026-05-25-DataMax-mainline-quality-executor-plan.md`.
 - If smoke fails, keep a rollback note and do not hide the failure behind customer-facing fallback copy.
 
 ## Immediate Next Execution Order

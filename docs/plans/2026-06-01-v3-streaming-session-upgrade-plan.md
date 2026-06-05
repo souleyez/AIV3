@@ -1,6 +1,6 @@
-# V3 Streaming Session Upgrade Implementation Plan
+# DataMax Streaming Session Upgrade Implementation Plan
 
-**Goal:** Upgrade V3 external and main-site streaming sessions so users can see meaningful progress, receive token-level answers where possible, reconnect safely after interruptions, and always get a final answer, follow-up question, or artifact link without exposing internal generation details.
+**Goal:** Upgrade DataMax external and main-site streaming sessions so users can see meaningful progress, receive token-level answers where possible, reconnect safely after interruptions, and always get a final answer, follow-up question, or artifact link without exposing internal generation details.
 
 **Architecture:** Keep `/v1/external/channels/{connection_id}/events`, `/events/stream`, and `/assistant-runs/{assistant_run_id}/reply` as the public surface, but make them share one sanitized response/status contract. Persist stream events on `assistant_run_events` so short SSE connections, reconnects, and polling all read from the same event timeline. Add real model token streaming for normal Q&A while long-running artifact/database/static-page work continues to emit phase events and `status_url` updates.
 
@@ -64,7 +64,7 @@ Every public event should have this common shape:
   "conversation_external_id": "conv-001",
   "phase": "retrieval|answering|artifact|database|static_page|completed|issue",
   "status": "processing|completed|needs_input|retrying|failed",
-  "display_text": "V3 正在扩展检索范围...",
+  "display_text": "DataMax 正在扩展检索范围...",
   "status_url": "https://v3.elepcloud.com/v1/external/channels/.../assistant-runs/.../reply",
   "poll_after_seconds": 15,
   "data": {}
@@ -262,11 +262,11 @@ cargo test -p platform-api external_channel_streaming_answer --lib
 cargo test -p llm-gateway --lib
 ```
 
-**2026-06-02 status:** Initial fallback progress completed. External `/events/stream` emits `external_channel.retrieval_started` immediately after `external_channel.started`, so third-party clients can show visible progress while V3 prepares visible documents, data sources, and conversation context. This was later superseded by the gateway streaming contract and platform live SSE wiring below. Verified the fallback progress path with `cargo test -p platform-api generic_chat_page_event_stream_does_not_emit_accepted_as_answer_state --lib`, `cargo check -p platform-api`, and third-party docs checks.
+**2026-06-02 status:** Initial fallback progress completed. External `/events/stream` emits `external_channel.retrieval_started` immediately after `external_channel.started`, so third-party clients can show visible progress while DataMax prepares visible documents, data sources, and conversation context. This was later superseded by the gateway streaming contract and platform live SSE wiring below. Verified the fallback progress path with `cargo test -p platform-api generic_chat_page_event_stream_does_not_emit_accepted_as_answer_state --lib`, `cargo check -p platform-api`, and third-party docs checks.
 
 **2026-06-02 status:** Gateway streaming contract completed locally. `llm-gateway::LlmProvider` now exposes `complete_streaming`, with a default buffered fallback for providers that do not support native streaming and an OpenAI-compatible SSE implementation that sends `stream=true`, parses `data:` chunks, returns usage/finish metadata, and calls back per delta. Platform live SSE wiring remains the next batch because the external ordinary-chat path still needs a background task/channel bridge to preserve model-pool retry, answer rejection, artifact persistence, and user-memory side effects. Verified with `cargo test -p llm-gateway --lib` and `cargo check -p platform-api`.
 
-**2026-06-02 status:** Platform live SSE wiring completed locally behind the default-off `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` flag. When enabled for `/v1/external/channels/{connection_id}/events/stream`, V3 runs the existing external ordinary-chat processing in a background task and emits answer deltas before `external_channel.completed`. Provider deltas are buffered per model attempt until the final text passes display-quality rejection checks, so generic orchestration acknowledgements are not streamed to third-party clients. Model-pool limit/error/timeout/rejection paths emit `external_channel.answer_retrying` with public `phase=answering`, `status=retrying`, sanitized display text, and `status_url`. Static-page/report follow-up logic and JSON `/events` remain on the existing path. Verified with `cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib`, `cargo test -p platform-api generic_chat_page_event_stream_retries_without_leaking_rejected_live_delta --lib`, the existing stream endpoint test, `cargo check -p platform-api`, and `cargo test -p llm-gateway --lib`.
+**2026-06-02 status:** Platform live SSE wiring completed locally behind the default-off `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` flag. When enabled for `/v1/external/channels/{connection_id}/events/stream`, DataMax runs the existing external ordinary-chat processing in a background task and emits answer deltas before `external_channel.completed`. Provider deltas are buffered per model attempt until the final text passes display-quality rejection checks, so generic orchestration acknowledgements are not streamed to third-party clients. Model-pool limit/error/timeout/rejection paths emit `external_channel.answer_retrying` with public `phase=answering`, `status=retrying`, sanitized display text, and `status_url`. Static-page/report follow-up logic and JSON `/events` remain on the existing path. Verified with `cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib`, `cargo test -p platform-api generic_chat_page_event_stream_retries_without_leaking_rejected_live_delta --lib`, the existing stream endpoint test, `cargo check -p platform-api`, and `cargo test -p llm-gateway --lib`.
 
 ### Task 5: Unify Status Mapping Across Three Exits
 
@@ -345,7 +345,7 @@ cargo test -p platform-api external_channel_static_page_sse_progress --lib
 
 **Behavior:**
 
-When V3 lacks required information, it should return:
+When DataMax lacks required information, it should return:
 
 ```json
 {

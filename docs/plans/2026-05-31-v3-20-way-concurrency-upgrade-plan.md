@@ -1,8 +1,8 @@
-# V3 20-Way Concurrency Upgrade Implementation Plan
+# DataMax 20-Way Concurrency Upgrade Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make both V3 main site and third-party external channels reliably support 20 concurrent ordinary conversations, while allowing heavy jobs such as Image2-to-HTML/static-page generation to run at 5-way concurrency, or 2-way concurrency when Cloudflare Codex fallback is used.
+**Goal:** Make both DataMax main site and third-party external channels reliably support 20 concurrent ordinary conversations, while allowing heavy jobs such as Image2-to-HTML/static-page generation to run at 5-way concurrency, or 2-way concurrency when Cloudflare Codex fallback is used.
 
 **Architecture:** Keep public third-party URLs, authentication, and request/response fields stable. Add internal concurrency control, per-conversation ordering, faster model fallback, worker scaling, and queue observability around the existing `platform-api`, model gateway profiles, `workflow_tasks`, and worker binaries. Ordinary chat stays latency-prioritized; heavy jobs are queued and isolated from chat capacity.
 
@@ -276,7 +276,7 @@
 
 **Acceptance:**
 
-- Third-party ordinary chat: 20 concurrent conversations complete without 429 from V3 local limiter.
+- Third-party ordinary chat: 20 concurrent conversations complete without 429 from DataMax local limiter.
 - Main site ordinary chat: 20 concurrent turns complete without single-worker serialization.
 - Heavy jobs: 5 concurrent local heavy jobs, 2 concurrent Cloudflare fallback jobs.
 
@@ -333,6 +333,6 @@
 ## Open Questions
 
 - Whether main-site chat should enforce strict per-thread ordering or allow multiple in-flight turns per local thread.
-- Whether Right account-level `50` concurrency is shared with other systems outside V3.
+- Whether Right account-level `50` concurrency is shared with other systems outside DataMax.
 - Whether Cloudflare Codex fallback concurrency should be global across tenants or per connection.
 - Whether third-party requires synchronous `/events` responses for all ordinary chat, or can standardize on `/events/stream`.

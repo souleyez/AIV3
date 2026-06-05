@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**2026-05-07 master-plan note:** Use `docs/plans/2026-05-07-v3-master-development-plan.md` as the active next-thread execution entry. This document remains the detailed source record for static-page, assistant shell, parsing, visibility, AssistantRun, and renderer decisions.
+**2026-05-07 master-plan note:** Use `docs/plans/2026-05-07-DataMax-master-development-plan.md` as the active next-thread execution entry. This document remains the detailed source record for static-page, assistant shell, parsing, visibility, AssistantRun, and renderer decisions.
 
-**Goal:** Build static page generation, report creation, and knowledge-augmented chat inside the V3 intelligent assistant, matching the original assistant UI 1:1 on desktop and mobile, while allowing users to drive planning, layout, data binding, style choice, image preview, final page generation, and report outputs mainly through natural language.
+**Goal:** Build static page generation, report creation, and knowledge-augmented chat inside the DataMax intelligent assistant, matching the original assistant UI 1:1 on desktop and mobile, while allowing users to drive planning, layout, data binding, style choice, image preview, final page generation, and report outputs mainly through natural language.
 
-**Architecture:** The assistant is chat-first and dataset-enhanced. If no dataset is selected, chat behaves like normal model chat with a concise platform/database briefing. A lightweight scope planner can preselect relevant visible datasets and conversation memory as supply candidates, then the host retrieves evidence/detail and feeds the model without locally composing the final answer. Static page and report work is embedded in the same assistant page: the main chat area becomes the active report/static-page workspace, while the right panel always remains the finished-output and draft shelf. Draft state is schema-first, model-operated, and later persisted through V3 Rust APIs and queued image/static-page workers.
+**Architecture:** The assistant is chat-first and dataset-enhanced. If no dataset is selected, chat behaves like normal model chat with a concise platform/database briefing. A lightweight scope planner can preselect relevant visible datasets and conversation memory as supply candidates, then the host retrieves evidence/detail and feeds the model without locally composing the final answer. Static page and report work is embedded in the same assistant page: the main chat area becomes the active report/static-page workspace, while the right panel always remains the finished-output and draft shelf. Draft state is schema-first, model-operated, and later persisted through DataMax Rust APIs and queued image/static-page workers.
 
 **Tech Stack:** Next.js 16 / React 19 in `apps/web`, existing `/api/v3/*` proxy, Rust `platform-api`, `contracts`, `domain-model`, `storage`, PostgreSQL 17.9 as the target server version for fresh/production-like environments, future static-page runtime/worker/renderer crates, future media parse worker using authorization-free OSS tools plus configured MiniMax capability probes where verified, original MiniMax VLM document fallback for image/PDF/presentation visual parsing, `react-grid-layout` for desktop planning canvas, `@dnd-kit/core` and `@dnd-kit/sortable` for mobile vertical ordering, `@puckeditor/core` as a future component-render adapter, deterministic HTML/SVG renderer for export-safe first charts, Apache ECharts for advanced chart/runtime parity, Cloudflare/Codex image queue integration.
 
@@ -22,7 +22,7 @@ Finding:
 - Its timestamp was `2026-04-27 14:06:04`, after the first draft work.
 - The content was not the latest intended direction: it still said `Isolated Popup Studio Route`, `Hard-Coded Style Presets`, and `clean single-purpose generation studio`.
 - It did not include the latest decisions: original assistant UI 1:1, mobile parity, model-operated global editing, `react-grid-layout`, `dnd-kit`, Puck capability, commercial-risk notes, and replacing hard-coded styles with three business style directions.
-- Java 8 static-page parity was checked again on 2026-05-07: the Java/Vue refactor used `gridstack` for module layout and `echarts` for chart rendering. V3 should keep `react-grid-layout` as the React-native layout equivalent, but must add ECharts as an explicit advanced chart runtime instead of leaving it as a vague later option.
+- Java 8 static-page parity was checked again on 2026-05-07: the Java/Vue refactor used `gridstack` for module layout and `echarts` for chart rendering. DataMax should keep `react-grid-layout` as the React-native layout equivalent, but must add ECharts as an explicit advanced chart runtime instead of leaving it as a vague later option.
 
 Conclusion:
 
@@ -56,7 +56,7 @@ Conclusion:
 
 - Compared the original `ai-data-platform` document pipeline and confirmed the mature path was `saveMultipartFiles -> ingestDocumentFiles -> parseDocument(quick) -> detailed parse queue -> knowledge/vector sync`.
 - Identified the original parser capabilities: `pdf-parse`/`pypdf`/OCR fallback, `mammoth` for DOCX, `xlsx` sheet reader with table summaries, PPT/PPTX extraction, Tesseract image OCR, MarkItDown canonical markdown, VLM fallback, structured profile, evidence chunks, and library grouping.
-- Added a local V3 upload route that saves browser files into ignored `storage/uploads` and returns a worker-readable `object_key`.
+- Added a local DataMax upload route that saves browser files into ignored `storage/uploads` and returns a worker-readable `object_key`.
 - Updated the web upload flow so documents now point at saved local files instead of metadata-only placeholder keys.
 - Updated `ingest-worker` from pure placeholder output to local parsing first: direct text extraction for text/markdown/csv/json/html/xml, MarkItDown command fallback for richer file types, chunk splitting, parse method metadata, and explicit placeholder fallback only when extraction fails.
 - This is the first migration slice, not parity with the original parser yet. Remaining parity work is old binary Office support, high-fidelity table/document structure, MiniMax VLM fallback, detailed parse queue semantics, structured profiles, and vector/memory sync.
@@ -314,11 +314,11 @@ Conclusion:
 - Backend image job hydration now maps `preview_ready` into the local draft state, carries the real `preview_asset_key`, and uses a customer-facing "effect image generated" queue message.
 - The effect-preview component now renders real remote image artifacts when the asset key is an HTTP URL, data image, blob URL, or same-origin API path.
 - Backend image jobs no longer expose the local "view mock effect image" shortcut while they are still running, preventing accidental confirmation of a simulated preview when a real Codex image is pending.
-- The static-page worker now normalizes relative codex-web artifact paths such as `/api/codex/artifacts/...` against `CODEX_ORCHESTRATOR_BASE_URL` before storing `preview_asset_key`, so the browser can load images from the orchestrator host instead of the V3 API host.
+- The static-page worker now normalizes relative codex-web artifact paths such as `/api/codex/artifacts/...` against `CODEX_ORCHESTRATOR_BASE_URL` before storing `preview_asset_key`, so the browser can load images from the orchestrator host instead of the DataMax API host.
 - Failed image jobs now return the draft to an editable planning state, show the failure reason in the effect-preview panel, and allow the user to submit a fresh image job from the same draft.
 - Re-generating an effect image clears stale preview/final-render state so a new job cannot accidentally reuse an old confirmed image or rendered page.
 - A live Cloudflare Codex Orchestrator smoke test against `https://souleye.cc` completed with task `task_524ec187-c6df-4e37-9c01-bb21bc481a0b`, `artifactStatus=available`, one PNG image artifact, and a locally downloaded verification copy under ignored `.storage/static-page-smoke-tests/`.
-- Remaining work is wiring the deployed V3 worker process to the provided production env file, cancel UX, queue-position fidelity against remote runtime guardrails, and final workerized static-page render/export packaging.
+- Remaining work is wiring the deployed DataMax worker process to the provided production env file, cancel UX, queue-position fidelity against remote runtime guardrails, and final workerized static-page render/export packaging.
 
 2026-04-28 static page DesignSpec / visual-contract slice completed:
 
@@ -475,7 +475,7 @@ Verification:
 
 ## Original Product Capability Memory
 
-These original project decisions are treated as product memory for V3:
+These original project decisions are treated as product memory for DataMax:
 
 - The home workbench is the main interaction surface for normal cloud answers and knowledge-grounded answers.
 - The March 2026 original chat design correctly identified the product direction: cloud/model-led answers with local knowledge supply. Its weakness was a coarse `intent/output/references` protocol and too much keyword/special-case behavior over time.
@@ -485,7 +485,7 @@ These original project decisions are treated as product memory for V3:
 - Local conversation memory is terminal/browser scoped and is useful for recent upload, collection, grouping, and document-summary feedback.
 - Document center owns document operation: upload, grouping, quick parse, deep parse status, document details, and manual grouping corrections.
 - Data source workbench owns ongoing collection: web public, web login, discovery, database, ERP, public upload, run records, and target knowledge-library binding.
-- Report center owns output templates and finished reports. The original project placed natural-language report adjustment in the home right-side current report workspace; V3 updates this pattern so the active draft opens in the main workspace and the right side stays a draft/output shelf.
+- Report center owns output templates and finished reports. The original project placed natural-language report adjustment in the home right-side current report workspace; DataMax updates this pattern so the active draft opens in the main workspace and the right side stays a draft/output shelf.
 - Template output uses shared template assets and a structured envelope: fixed structure, variable zones, output hints, and later normalization.
 - Model-facing architecture follows the historical rule: memory knows what exists, skills define task behavior and evidence requirements, host execution performs real actions and returns trusted results.
 
@@ -584,9 +584,9 @@ Static page behavior:
 
 Target server version:
 
-- Fresh and production-like V3 environments should use PostgreSQL `17.9`.
+- Fresh and production-like DataMax environments should use PostgreSQL `17.9`.
 - Pin container images to `postgres:17.9` instead of floating `postgres:17`.
-- Current local V3 and Java client containers were observed on PostgreSQL `16.13`; do not reuse a PostgreSQL 16 data volume directly with a PostgreSQL 17 container.
+- Current local DataMax and Java client containers were observed on PostgreSQL `16.13`; do not reuse a PostgreSQL 16 data volume directly with a PostgreSQL 17 container.
 - Upgrade existing local data with an explicit backup/restore or `pg_upgrade` path, not by swapping the image over the same volume.
 - Keep Java client compatibility wording aligned: local can remain 16 only for old reusable verification volumes, while target compatibility is PostgreSQL 17.9.
 - Update README/compose only when the migration path is ready, or create a separate `compose.postgres17.yml` for fresh verification first.
@@ -621,7 +621,7 @@ This updates the earlier plan in three ways:
 
 ## Overall Architecture Rebaseline
 
-V3 should be organized around five layers. This section supersedes older assumptions that static-page/report APIs can hang directly from dataset chat sessions.
+DataMax should be organized around five layers. This section supersedes older assumptions that static-page/report APIs can hang directly from dataset chat sessions.
 
 ### Layer 1: Assistant Shell
 
@@ -645,7 +645,7 @@ Responsibility:
 
 Why this layer exists:
 
-- Current V3 `chat_session` is dataset-bound. That is too narrow for ordinary chat and for model-selected supply.
+- Current DataMax `chat_session` is dataset-bound. That is too narrow for ordinary chat and for model-selected supply.
 - Static page/report generation needs a request-level context that may contain no dataset, one selected dataset, multiple candidate datasets, and hidden conversation memory.
 - The model should see platform capabilities and evidence state consistently across Q&A, reports, static pages, and uploads.
 
@@ -709,11 +709,11 @@ Replacement assumptions:
 
 ## Visual Design Contract
 
-The V3 assistant should borrow the quieter parts of Codex's own interface language while preserving the original assistant identity:
+The DataMax assistant should borrow the quieter parts of Codex's own interface language while preserving the original assistant identity:
 
 - Remove visible border-heavy card styling. Lines should be absent or nearly invisible.
 - Separate modules by background color, surface tone, spacing, and subtle elevation instead of outlines.
-- Use smaller typography than the current V3 shell where density is too high.
+- Use smaller typography than the current DataMax shell where density is too high.
 - Empty states must be compact. Placeholder pages should take as little vertical space as possible.
 - Prefer calm dark surfaces, muted color blocks, and low-contrast separators.
 - Avoid large framed forms. Inline controls should feel like lightweight chips, pills, or compact actions.
@@ -982,7 +982,7 @@ Puck positioning:
 **Files:**
 
 - Modify: `docs/plans/2026-04-27-static-page-generation-studio-plan.md`
-- Keep reference: `docs/plans/2026-04-25-static-page-visual-workbench-v3-plan.md`
+- Keep reference: `docs/plans/2026-04-25-static-page-visual-workbench-DataMax-plan.md`
 - Keep reference: `docs/prototypes/static-page-studio-original-assistant-shell.html`
 
 **Steps:**
@@ -1005,14 +1005,14 @@ Puck positioning:
 
 **Steps:**
 
-1. Compare V3 shell with original `C:\Users\soulzyn\Desktop\codex\ai-data-platform\apps\web\app\HomePageClient.js`.
+1. Compare DataMax shell with original `C:\Users\soulzyn\Desktop\codex\ai-data-platform\apps\web\app\HomePageClient.js`.
 2. Add a top workspace toolbar matching the original desktop toolbar.
 3. Keep original nav labels: `智能会话`, `数据集`, `采集源`, `静态页`, `成员`, `审计`.
 4. Keep original status pill style for system/data/model status.
-5. Move V3 current dataset/status summary into the original toolbar visual language.
+5. Move DataMax current dataset/status summary into the original toolbar visual language.
 6. Add `HomeMobileShell` behavior matching the original mobile assistant: topbar, single active panel, bottom composer, drawer-style dataset/results access.
 7. Move dataset creation above the dataset list in the left rail.
-8. Preserve current V3 data fetching and report-service behavior.
+8. Preserve current DataMax data fetching and report-service behavior.
 9. Apply the visual design contract: borderless surfaces, color-block separation, smaller typography, compact empty states, and low-contrast separators.
 10. Run `pnpm --filter @ai-data-platform-v3/web build`.
 11. Manual check desktop at `http://localhost:3100`.

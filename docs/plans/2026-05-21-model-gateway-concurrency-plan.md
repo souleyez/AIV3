@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Enhance the V3 model gateway so operators can add model API profiles in the UI, run different models concurrently across different requests, and see each model's usage and health without implementing P3 racing/hedged requests.
+**Goal:** Enhance the DataMax model gateway so operators can add model API profiles in the UI, run different models concurrently across different requests, and see each model's usage and health without implementing P3 racing/hedged requests.
 
-**Architecture:** Keep V3 request handling synchronous for normal chat, but put a model gateway scheduler in front of provider calls. Model provider profiles are managed from a dedicated "模型池" page in the main V3 system, placed after "审计" in the top workspace navigation, and stored in PostgreSQL; env config stays as a bootstrap/fallback path. The scheduler selects one available profile per request, enforces lane/profile concurrency, queues briefly when saturated, falls back sequentially on retryable failures, and exposes per-profile usage/health.
+**Architecture:** Keep DataMax request handling synchronous for normal chat, but put a model gateway scheduler in front of provider calls. Model provider profiles are managed from a dedicated "模型池" page in the main DataMax system, placed after "审计" in the top workspace navigation, and stored in PostgreSQL; env config stays as a bootstrap/fallback path. The scheduler selects one available profile per request, enforces lane/profile concurrency, queues briefly when saturated, falls back sequentially on retryable failures, and exposes per-profile usage/health.
 
 **Tech Stack:** Rust, Axum, Tokio, `crates/llm-gateway`, `crates/platform-api`, Next.js main system model pool page, PostgreSQL assistant run events.
 
@@ -26,7 +26,7 @@ Excluded:
 ## Profile Configuration Model
 
 Primary path:
-- The main V3 system provides a dedicated "模型池" page after "审计" in the workspace navigation.
+- The main DataMax system provides a dedicated "模型池" page after "审计" in the workspace navigation.
 - Operators can add, edit, disable, and test model profiles.
 - Profiles are stored in PostgreSQL and loaded by platform-api at runtime.
 - Env config remains available for bootstrap and emergency rollback.
@@ -78,7 +78,7 @@ Important concurrency rule:
 
 ## Non-Disruptive Quality Optimization Rules
 
-Quality optimization must not affect unrelated V3 processes by default.
+Quality optimization must not affect unrelated DataMax processes by default.
 
 Rules:
 - Additive migrations only; do not rewrite existing assistant, dataset, parse, or artifact tables unless required.
@@ -963,7 +963,7 @@ git commit -m "Add shadow quality evaluation for model pool"
 
 ## Final Acceptance Criteria
 
-- V3 can configure multiple model API profiles for one lane from the main system "模型池" page.
+- DataMax can configure multiple model API profiles for one lane from the main system "模型池" page.
 - The "模型池" page appears immediately after "审计" in the main workspace navigation.
 - The UI provides recommended presets for common provider/model combinations.
 - Operators can add, edit, disable, and test a model profile without exposing raw API keys.

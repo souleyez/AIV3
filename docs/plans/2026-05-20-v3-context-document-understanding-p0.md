@@ -1,12 +1,12 @@
-# V3 Context And Document Understanding P0 Implementation Plan
+# DataMax Context And Document Understanding P0 Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
 > 2026-05-25 note: parsing quality, document understanding, retrieval quality, fact aggregation, answer reliability, and Codex executor boundaries are now consolidated in the active plan `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`. Keep this older P0 document as context for third-party scope/user-context behavior and historical gaps.
 
-**Goal:** Close the remaining V3 P0 gaps around third-party document scope, direct replies, async parsing, document understanding, and global intent-gated user context.
+**Goal:** Close the remaining DataMax P0 gaps around third-party document scope, direct replies, async parsing, document understanding, and global intent-gated user context.
 
-**Architecture:** Treat V3 context as explicit, typed scopes: selected document datasets, temporary external document scopes, global hidden user-context scopes, current conversation history, parser status, and artifact state. The model should receive only the scopes selected by the planner or explicitly requested by the user; user history and cross-conversation context must be intent-gated. Parsing should become asynchronous and quality-aware, with PaddleOCR as the preferred structured parser when available and MiniMax VLM as the low-quality fallback.
+**Architecture:** Treat DataMax context as explicit, typed scopes: selected document datasets, temporary external document scopes, global hidden user-context scopes, current conversation history, parser status, and artifact state. The model should receive only the scopes selected by the planner or explicitly requested by the user; user history and cross-conversation context must be intent-gated. Parsing should become asynchronous and quality-aware, with PaddleOCR as the preferred structured parser when available and MiniMax VLM as the low-quality fallback.
 
 **Tech Stack:** Rust `platform-api`, `assistant-runtime`, `storage`, `ingest-worker`, PostgreSQL, PaddleOCR PP-StructureV3 sidecar, MiniMax VLM lane, shell smoke scripts, 8 server deployment.
 
@@ -26,9 +26,9 @@
 ## Product Rules
 
 1. Third-party ordinary chat must return a model-authored answer, not orchestration copy, accepted copy, or the old fixed "已收到指令..." fallback.
-2. Third-party document ids are a scope request. V3 must bind them to a dataset/scope on our side before answer-time retrieval.
+2. Third-party document ids are a scope request. DataMax must bind them to a dataset/scope on our side before answer-time retrieval.
 3. Current conversation history may remain short-turn continuity. Cross-conversation user history is a hidden user-context dataset and must not be supplied by default.
-4. If global user-context dataset support does not already exist, build it as a global V3 capability. Third-party `sender_external_id` becomes one identity source for that global capability.
+4. If global user-context dataset support does not already exist, build it as a global DataMax capability. Third-party `sender_external_id` becomes one identity source for that global capability.
 5. Document parsing must not report low-quality extraction as success. One-character PDFs, empty chunks, and obvious OCR misses must trigger fallback or explicit parser status supply.
 6. Parsing must not block normal upload, classification, or third-party reply flow longer than the public sync budget.
 7. Parser status, retrying state, failed state, and available partial context must be supplied to the model so it can answer honestly.
@@ -40,7 +40,7 @@
 - **Global user dataset:** there is no first-class product abstraction for a hidden user-context dataset; only thread-scoped `conversation_memory_items`.
 - **External temp dataset strictness:** selected scope still keeps canonical dataset ids in some places while temporary dataset metadata is nested.
 - **Document list/detail visibility:** `/v1/documents` and `/v1/documents/{id}` still need membership-aware access for temporary document scopes.
-- **Third-party parse request lifecycle:** when a third party requests parsing, V3 must create/resolve the corresponding dataset/scope and not rely on the third party to infer internal ids.
+- **Third-party parse request lifecycle:** when a third party requests parsing, DataMax must create/resolve the corresponding dataset/scope and not rely on the third party to infer internal ids.
 - **Async parse:** upload should return quickly after basic classification; detailed parse/OCR/VLM should continue asynchronously.
 - **Parse quality:** one-character or empty extraction must trigger PaddleOCR/MiniMax fallback and status metadata.
 - **Document understanding:** paragraph segmentation, section structure, entity scan, and noun-term extraction need to feed retrieval and planner hints.
@@ -86,7 +86,7 @@ Expected:
 Commit message:
 
 ```text
-test: capture v3 context and parse p0 gaps
+test: capture DataMax context and parse p0 gaps
 ```
 
 ## Phase 1: Global User Context Dataset
@@ -278,9 +278,9 @@ cargo test -p platform-api external_channel --lib
 When a third party requests document parsing:
 
 - resolve `available_document_source_id` or equivalent source key;
-- create a V3 internal dataset if one does not exist;
+- create a DataMax internal dataset if one does not exist;
 - attach parsed documents to that dataset;
-- return both third-party ids and V3 internal ids in status/detail responses.
+- return both third-party ids and DataMax internal ids in status/detail responses.
 
 **Step 2: Preserve repeated request idempotency**
 
@@ -566,7 +566,7 @@ Replay:
 
 ## Definition Of Done
 
-- Third-party document ids always resolve to an internal V3 scope/dataset before retrieval.
+- Third-party document ids always resolve to an internal DataMax scope/dataset before retrieval.
 - Temporary external document scopes are honored by retrieval, detail reads, list reads, parse status supply, and entity scan.
 - User history exists as a global hidden user-context dataset/scope, not a third-party-only special case.
 - User history is not supplied by default and only appears when the planner selects conversation memory for historical intent.

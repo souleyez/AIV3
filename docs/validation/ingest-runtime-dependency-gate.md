@@ -4,7 +4,7 @@ This gate validates the deployment-target runtime dependency needed for the gene
 
 ## Contract
 
-- V3 local ingest parsers remain the primary parsing path.
+- DataMax local ingest parsers remain the primary parsing path.
 - MarkItDown is pinned and enabled only as the fallback parser.
 - Deployment targets must pass `PYTHON_BIN -m markitdown --version` before MarkItDown fallback parsing is considered ready.
 - PaddleOCR PP-StructureV3 is the default PDF parser when `DOCUMENT_PADDLEOCR_PYTHON_BIN` is configured, when the deployment default `/srv/aiv3/venv/paddleocr/bin/python` exists, or when `DOCUMENT_PDF_PARSE_ENGINE=paddleocr_first`. Set `DOCUMENT_PADDLEOCR_ENABLED=false` or `DOCUMENT_PDF_PARSE_ENGINE=native_first` to opt out.
@@ -55,4 +55,4 @@ target/ingest-runtime-gate/
 - Installed fallback: `markitdown 0.1.5`
 - Service state checked: `aiv3-ingest-worker.service` active
 
-Future A/B parsing quality comparisons for DOCX/PDF/PPTX should run as a separate evidence smoke using representative documents. That comparison should inspect headings, paragraph order, table retention, chunk quality, and retrieval usefulness before moving any individual format ahead of the current V3 parser chain.
+Future A/B parsing quality comparisons for DOCX/PDF/PPTX should run as a separate evidence smoke using representative documents. That comparison should inspect headings, paragraph order, table retention, chunk quality, and retrieval usefulness before moving any individual format ahead of the current DataMax parser chain.

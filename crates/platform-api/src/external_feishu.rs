@@ -518,7 +518,7 @@ fn feishu_reply_text(reply: &ExternalBotReplyView) -> String {
         .text
         .clone()
         .or_else(|| reply.task_status.clone())
-        .unwrap_or_else(|| "V3 task accepted.".to_string());
+        .unwrap_or_else(|| "DataMax task accepted.".to_string());
     if !reply.artifact_links.is_empty() {
         if !text.is_empty() {
             text.push('\n');

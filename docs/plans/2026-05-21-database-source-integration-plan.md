@@ -1,8 +1,8 @@
 # Database Source Integration Implementation Plan
 
-**Goal:** Add a safe database-source connector to V3 so an external MySQL database can be inspected, mapped, synchronized into an explicit V3 dataset, parsed, indexed, and then used through the existing dataset question-answering, report, template, and static-page workflows.
+**Goal:** Add a safe database-source connector to DataMax so an external MySQL database can be inspected, mapped, synchronized into an explicit DataMax dataset, parsed, indexed, and then used through the existing dataset question-answering, report, template, and static-page workflows.
 
-**Architecture:** Extend the existing `external_source_connections` and `external-source-worker` pipeline instead of adding database logic to chat or document parse endpoints. A database source is only a data-source input: each real sync must resolve an effective target V3 dataset from the sync request or a configured default dataset, then create/update normal dataset documents that flow through parse, retrieval, question-answering, report, template, and static-page chains. Store only redacted connection metadata and environment variable names in V3; keep raw database credentials in server-side environment or secret files. Add a main-system database source UI for connection testing, schema inspection, target-dataset binding, table-to-document mapping, sync launch, and sync observability.
+**Architecture:** Extend the existing `external_source_connections` and `external-source-worker` pipeline instead of adding database logic to chat or document parse endpoints. A database source is only a data-source input: each real sync must resolve an effective target DataMax dataset from the sync request or a configured default dataset, then create/update normal dataset documents that flow through parse, retrieval, question-answering, report, template, and static-page chains. Store only redacted connection metadata and environment variable names in DataMax; keep raw database credentials in server-side environment or secret files. Add a main-system database source UI for connection testing, schema inspection, target-dataset binding, table-to-document mapping, sync launch, and sync observability.
 
 **Tech Stack:** Rust, Axum, Tokio, SQLx MySQL, PostgreSQL storage, existing `external-source-worker`, Next.js main system data source page.
 
@@ -40,15 +40,15 @@ Excluded for MVP:
 - Cross-database joins.
 - Automatic semantic inference of all business objects.
 - CDC/binlog streaming.
-- Direct vector indexing from MySQL without V3 document ingestion.
+- Direct vector indexing from MySQL without DataMax document ingestion.
 - Answering questions or generating reports directly from live MySQL rows without dataset ingestion and visibility checks.
-- Storing raw database credentials in V3 PostgreSQL.
+- Storing raw database credentials in DataMax PostgreSQL.
 
 ## Security Rules
 
-- Never store raw database passwords in repository files, migration files, V3 PostgreSQL rows, logs, browser state, workflow events, or assistant messages.
-- Database config stored in V3 may include only `connection_env`, host/port/database redacted summary, table allowlist, and mapping rules.
-- Database-derived content may enter model context only after it has become visible V3 dataset documents, retrieval evidence, report evidence, or static-page evidence.
+- Never store raw database passwords in repository files, migration files, DataMax PostgreSQL rows, logs, browser state, workflow events, or assistant messages.
+- Database config stored in DataMax may include only `connection_env`, host/port/database redacted summary, table allowlist, and mapping rules.
+- Database-derived content may enter model context only after it has become visible DataMax dataset documents, retrieval evidence, report evidence, or static-page evidence.
 - The connector must run `START TRANSACTION READ ONLY` or equivalent before source reads when the server supports it.
 - Only allow `SELECT` against whitelisted tables and columns.
 - Do not accept arbitrary SQL in the first version.
@@ -110,7 +110,7 @@ Sync request:
 }
 ```
 
-Generated V3 external document shape:
+Generated DataMax external document shape:
 
 ```json
 {
@@ -132,7 +132,7 @@ Dataset binding contract:
 - `CreateExternalSourceSyncRequest.dataset_id` is the preferred target dataset binding.
 - A database source may also carry `config_redacted.database_source.default_dataset_id`; sync may use it when the request omits `dataset_id`.
 - MySQL sync must fail with `target_dataset_required` when neither request nor source config resolves an effective visible dataset.
-- The effective dataset id is written to the workflow execution, and `ingest-worker` remains responsible for creating/updating V3 documents under that dataset.
+- The effective dataset id is written to the workflow execution, and `ingest-worker` remains responsible for creating/updating DataMax documents under that dataset.
 - `document_external_id` stays source-stable across datasets, but document identity is scoped by `(tenant_id, dataset_id, source_id, document_external_id)` so the same source row can be synced into different datasets when required.
 - AssistantRun, report generation, template skills, and static-page planning must not receive live database rows; they only receive indexed chunks, detail evidence, report data, or artifact inputs supplied through selected/visible datasets.
 
@@ -145,8 +145,8 @@ Third-party database access should reuse the same source-to-dataset architecture
 Target rule:
 
 - A third-party database is an external source, not a model tool.
-- Database credentials are configured once, tested, profiled, and synchronized into one or more V3 datasets.
-- Third-party conversations pass dataset scope or source-derived dataset scope; AssistantRun, reports, template skills, and static pages consume only V3 dataset evidence, aggregate evidence, or persisted semantic profiles.
+- Database credentials are configured once, tested, profiled, and synchronized into one or more DataMax datasets.
+- Third-party conversations pass dataset scope or source-derived dataset scope; AssistantRun, reports, template skills, and static pages consume only DataMax dataset evidence, aggregate evidence, or persisted semantic profiles.
 - The model must never receive raw database connection strings, passwords, tokens, arbitrary SQL, or permission to query customer databases directly.
 
 ### Current Boundary
@@ -172,20 +172,20 @@ Currently available:
 - The centralized observability page can export the currently selected database source status as a redacted JSON summary. The export includes dataset readiness, sync readiness, health findings, table readiness, semantic profile counts, recent sync summaries, and row-failure groups without raw credentials, SQL, or source cursors.
 - Database source sync now accepts `dataset_external_id` / `dataset_title` on the main-system sync request and can auto-create/reuse a source-scoped target dataset before enqueueing the external-source workflow. This matches the document parse dataset binding semantics without exposing a new third-party public API.
 - A third-party-safe read-only database source status endpoint now exists at `/v1/external/channels/{connection_id}/database-sources/{source_external_id}/status`. It uses the channel inbound bearer token, only allows sources listed on the channel config or its default source, and returns the same secret-free readiness/status summary as the internal selected-source route without exposing credentials, raw SQL, or source cursors.
-- Added a deployment-target live smoke, `scripts/run-data-ingestion-staging-live-smoke.sh`, that reads only V3 PostgreSQL/internal status state for a stored database source. It separates source existence/config, latest sync failure, historical succeeded syncs, default dataset readiness, alternate ready datasets, chunks, and retrieval evidence without opening the customer/source database.
+- Added a deployment-target live smoke, `scripts/run-data-ingestion-staging-live-smoke.sh`, that reads only DataMax PostgreSQL/internal status state for a stored database source. It separates source existence/config, latest sync failure, historical succeeded syncs, default dataset readiness, alternate ready datasets, chunks, and retrieval evidence without opening the customer/source database.
 
 Important limitation:
 
-- Most database routes are main-system/admin-facing today. They use normal V3 source access checks, not external channel inbound bearer auth. The only current pure-third-party database route is the read-only status endpoint; source registration, schema inspection, profiling, sync launch, and aggregate APIs still need a separate credential, tenant, dataset-binding, and rate-limit contract.
+- Most database routes are main-system/admin-facing today. They use normal DataMax source access checks, not external channel inbound bearer auth. The only current pure-third-party database route is the read-only status endpoint; source registration, schema inspection, profiling, sync launch, and aggregate APIs still need a separate credential, tenant, dataset-binding, and rate-limit contract.
 
 ### Recommended Integration Modes
 
 P0 managed mode:
 
-1. V3 operator or trusted admin creates a database `external_source_connection`.
+1. DataMax operator or trusted admin creates a database `external_source_connection`.
 2. Raw credentials stay in server-side secrets or encrypted credential storage; source config stores only `connection_env`, redacted host/database summary, table allowlist, mapping, and `default_dataset_id`.
 3. The source is tested, schema-inspected, profiled, and mapped in the main system.
-4. Sync writes database rows into the bound V3 dataset as normal external documents.
+4. Sync writes database rows into the bound DataMax dataset as normal external documents.
 5. Third-party chat starts with dataset scope, dataset external id, or source-derived dataset scope.
 6. AssistantRun, report generation, template skills, and static-page generation answer only from selected/visible dataset evidence and aggregate/profile evidence.
 
@@ -230,7 +230,7 @@ The P1 API should mirror document parse semantics where possible:
 - Sync status now has a third-party-safe read-only query surface for sources explicitly allowed by a channel, and the internal observability page can export a redacted selected-source status summary. Remaining status work: field-level compatibility review with customer clients and optional per-sync-id detail once sync launch becomes public.
 - The `hy-sql-traffic-area` live readiness probe shows a real product gap: the source can have an older explicit dataset ready while the currently configured default dataset is still empty and the latest sync run failed. Status UI/API must keep those signals distinct so operators know whether to ask/report from an existing ready dataset, trigger a new sync into the default dataset, or fix the failed sync.
 - Incremental sync has a basic high-water loop for mapped `updated_at`, version, and numeric single-column id checkpoints. It still needs delete handling, cross-table dedupe policy, richer checkpoint conflict handling, resumable page-level recovery, and production tuning on large tables.
-- Chat scope needs a stable contract: third-party should pass dataset scope, not raw database ids, unless V3 resolves those ids to visible datasets first.
+- Chat scope needs a stable contract: third-party should pass dataset scope, not raw database ids, unless DataMax resolves those ids to visible datasets first.
 - Aggregate/profile evidence needs stricter limits for third-party callers: allowlisted tables/columns, scan limits, timeout limits, no arbitrary SQL, and audit events.
 - Field glossary, business metrics, table relationships, and richer report-ready semantic profile still need deeper persistence on the source/dataset. A compact source-level semantic summary is now persisted and observable, but it is not yet a full business dictionary or relationship graph.
 - Integration observability still needs deeper database drilldowns after the selected-source summary: live table/schema drift against latest inspected schema, richer incremental conflict/detail views, and third-party-safe status views.
@@ -238,12 +238,12 @@ The P1 API should mirror document parse semantics where possible:
 
 ### Third-Party Acceptance Criteria
 
-- A third-party database can be represented as a V3 external source and safely synchronized into an explicit V3 dataset.
+- A third-party database can be represented as a DataMax external source and safely synchronized into an explicit DataMax dataset.
 - Third-party conversations can use database-derived knowledge by passing dataset scope, with no direct model/database access.
 - The same database source can be synced into different datasets when explicitly configured and permission-checked.
 - Raw credentials never appear in API responses, logs, browser state, assistant messages, workflow events, or docs examples.
-- The third party can observe whether database data is ready for Q&A/reporting without needing V3 internal admin access.
-- Report/template/static-page generation can reuse database-derived dataset evidence, schema profile, and aggregates through the normal V3 artifact chain.
+- The third party can observe whether database data is ready for Q&A/reporting without needing DataMax internal admin access.
+- Report/template/static-page generation can reuse database-derived dataset evidence, schema profile, and aggregates through the normal DataMax artifact chain.
 
 ---
 
@@ -470,7 +470,7 @@ POST /v1/external/sources/{source_id}/database/schema
 POST /v1/external/sources/{source_id}/database/preview
 ```
 
-Use normal authenticated V3 access, not external third-party bearer auth.
+Use normal authenticated DataMax access, not external third-party bearer auth.
 
 **Step 5: Implement route behavior**
 
@@ -672,7 +672,7 @@ Mapping logic:
 - `body` joins configured content columns with section headers;
 - `revision_external_id` from version column, updated_at, or hash of mapped content;
 - `metadata` includes table, primary key, and configured metadata columns.
-- dataset membership is not encoded in the row document payload; it comes from the workflow execution `dataset_id` so the same database row can be synced into different V3 datasets.
+- dataset membership is not encoded in the row document payload; it comes from the workflow execution `dataset_id` so the same database row can be synced into different DataMax datasets.
 
 **Step 6: Add incremental checkpoint**
 
@@ -927,7 +927,7 @@ After third party imports real test tables:
 - inspect schema;
 - configure mapping;
 - preview first 5 rows;
-- run full sync into a test V3 dataset;
+- run full sync into a test DataMax dataset;
 - confirm documents parse and become `indexed`;
 - test chat over selected dataset.
 - generate a simple report/table from the selected dataset to confirm the report path sees database-derived evidence.
@@ -945,12 +945,12 @@ After third party imports real test tables:
 
 ## Final Acceptance Criteria
 
-- V3 can store a MySQL source connection without storing raw credentials.
+- DataMax can store a MySQL source connection without storing raw credentials.
 - Main system data source page can test connection and inspect schema.
-- Main system data source page can bind/select the target V3 dataset before sync.
+- Main system data source page can bind/select the target DataMax dataset before sync.
 - Unsafe raw secrets and arbitrary SQL are rejected.
-- Operators can map one or more MySQL tables to V3 external documents.
-- Full sync can create V3 external documents and pass them into existing parse/index workflow.
+- Operators can map one or more MySQL tables to DataMax external documents.
+- Full sync can create DataMax external documents and pass them into existing parse/index workflow.
 - Incremental sync can use `updated_at`, numeric id, or version columns.
 - Database-derived content can answer questions and generate reports only through selected/visible datasets after indexing.
 - MySQL sync fails clearly when no effective target dataset is supplied or configured.

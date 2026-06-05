@@ -1,12 +1,12 @@
 # Model Gateway Rollout Runbook
 
-**Scope:** V3 main-system model pool for ordinary assistant and third-party channel replies.
+**Scope:** DataMax main-system model pool for ordinary assistant and third-party channel replies.
 
 This runbook keeps observation lightweight. The goal is to make the model pool usable in production without changing document parsing, indexed state, datasets, reports, or HTML artifact flows.
 
 ## Operator Access
 
-The model pool routes require a logged-in V3 user plus one of these server-side allowances:
+The model pool routes require a logged-in DataMax user plus one of these server-side allowances:
 
 ```text
 MODEL_GATEWAY_OPERATOR_EMAILS=ops@example.com,owner@example.com
@@ -69,7 +69,7 @@ STATIC_PAGE_IMAGE2_HTML_CONCURRENCY=5
 CODEX_HOST_CLOUDFLARE_CONCURRENCY=2
 ```
 
-The attempt timeout is intentionally shorter than the total budget. If Right stalls, V3 should move to the fallback profile while the third-party caller is still waiting, instead of holding the whole request for a long provider timeout.
+The attempt timeout is intentionally shorter than the total budget. If Right stalls, DataMax should move to the fallback profile while the third-party caller is still waiting, instead of holding the whole request for a long provider timeout.
 
 `CHAT_SESSION_WORKER_CONCURRENCY` controls the main-site chat task worker only. It defaults to `1` for compatibility and can be raised to `20` once the database pool and model profile capacity are sized for the same deployment.
 

@@ -1,6 +1,6 @@
 # apps/web
 
-Next.js experience layer for AI Data Platform V3.
+Next.js experience layer for DataMax.
 
 Current scope:
 

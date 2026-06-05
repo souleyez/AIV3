@@ -783,7 +783,7 @@ fn codex_executor_action_output_schema(package: &AssistantRunCodexContextPackage
         "properties": {
             "assistant_message": {
                 "type": "string",
-                "description": "User-facing answer text when no V3 action is needed."
+                "description": "User-facing answer text when no DataMax action is needed."
             },
             "suggested_action": {
                 "type": ["object", "null"],
@@ -795,7 +795,7 @@ fn codex_executor_action_output_schema(package: &AssistantRunCodexContextPackage
                     },
                     "arguments": {
                         "type": "object",
-                        "description": "Arguments must match the selected V3 action contract and remain subject to V3 validation."
+                        "description": "Arguments must match the selected DataMax action contract and remain subject to DataMax validation."
                     },
                     "reason": {"type": "string"},
                     "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
@@ -1039,7 +1039,7 @@ fn codex_executor_suggestion_arguments(
                 .get("detail_targets")
                 .cloned()
                 .unwrap_or_else(|| json!([])),
-            "reason": "detail-first supply requested by V3 context",
+            "reason": "detail-first supply requested by DataMax context",
         }),
         "retrieve_evidence" => json!({
             "query": package.user_prompt,
@@ -1048,7 +1048,7 @@ fn codex_executor_suggestion_arguments(
         }),
         "web_search" => json!({
             "query": package.user_prompt,
-            "reason": "user requested current, live, or web-sourced information outside supplied V3 evidence",
+            "reason": "user requested current, live, or web-sourced information outside supplied DataMax evidence",
             "freshness": codex_executor_web_search_freshness(&package.user_prompt),
             "language": "auto",
             "evidence_contract": {
@@ -1144,12 +1144,12 @@ fn codex_executor_final_answer_arguments(package: &AssistantRunCodexContextPacka
         "mode": "model_authored_answer",
         "source": "codex_plan_only_shadow",
         "v3_context_contract": {
-            "identity": "AI Data Platform V3 supplies product, permission, dataset, evidence, tool, report, and static-page context.",
+            "identity": "DataMax supplies product, permission, dataset, evidence, tool, report, and static-page context.",
             "additive_context_not_capability_limit": true,
             "ordinary_chat_allowed_without_v3_evidence": true,
             "unavailable_evidence_phrase": "当前不可见/未供料",
-            "unavailable_evidence_rule": "Use the phrase only when the answer depends on V3 data, documents, permissions, tool results, artifact state, or live/search evidence that V3 has not supplied; after that, the model may continue with clearly labeled general knowledge or assumptions.",
-            "external_search_rule": "Do not claim web search, current news, or cite live web results unless V3 supplied audited search evidence with source and retrieved_at metadata.",
+            "unavailable_evidence_rule": "Use the phrase only when the answer depends on DataMax data, documents, permissions, tool results, artifact state, or live/search evidence that DataMax has not supplied; after that, the model may continue with clearly labeled general knowledge or assumptions.",
+            "external_search_rule": "Do not claim web search, current news, or cite live web results unless DataMax supplied audited search evidence with source and retrieved_at metadata.",
             "no_host_composed_answer": true,
         },
         "v3_context_state": {
@@ -1368,41 +1368,41 @@ fn codex_executor_suggestion_reason(action_type: &str) -> &'static str {
         "read_document_detail" => {
             "partial supply prefers detail read before high-confidence claims"
         }
-        "retrieve_evidence" => "selected scope needs V3 retrieval before grounded answer",
+        "retrieve_evidence" => "selected scope needs DataMax retrieval before grounded answer",
         "web_search" => {
-            "user requested live or web-sourced information; V3 search evidence is required before citation"
+            "user requested live or web-sourced information; DataMax search evidence is required before citation"
         }
         "create_static_page_draft" => "static-page intent has no current draft in context",
         "submit_static_page_image_preview" => {
             "user prompt asks for effect preview from current draft"
         }
         "submit_html_artifact_event" => {
-            "current HTML artifact change must go through V3 validated artifact event"
+            "current HTML artifact change must go through DataMax validated artifact event"
         }
         "update_static_page_module" => {
-            "current static-page draft can be revised through V3 operations"
+            "current static-page draft can be revised through DataMax operations"
         }
-        "create_report_draft" => "report intent can be handled by V3 report draft flow",
+        "create_report_draft" => "report intent can be handled by DataMax report draft flow",
         "resolve_video_url" => {
-            "video PPT extraction starts with V3-controlled public/direct video resolution"
+            "video PPT extraction starts with DataMax-controlled public/direct video resolution"
         }
         "extract_video_ppt_transcript" => {
             "video asset is the required input for transcript and PPT extraction"
         }
         "external_artifact.status" => {
-            "external artifact status is a read-only V3-controlled action"
+            "external artifact status is a read-only DataMax-controlled action"
         }
         "external_artifact.publish" => {
-            "external artifact publication must be issued through the V3 action boundary"
+            "external artifact publication must be issued through the DataMax action boundary"
         }
         "external_artifact.revoke" => {
             "external artifact revocation is high-risk and requires channel confirmation"
         }
         "external_business_action.invoke" => {
-            "cross-system external business actions require V3 validation and confirmation"
+            "cross-system external business actions require DataMax validation and confirmation"
         }
         "final_answer" => "no platform action is required for this turn",
-        _ => "available V3 action contract selected by plan-only executor",
+        _ => "available DataMax action contract selected by plan-only executor",
     }
 }
 
@@ -2447,7 +2447,7 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "external_artifact.publish",
                 "发布第三方产物",
-                "通过 V3 受控边界发布产物。",
+                "通过 DataMax 受控边界发布产物。",
                 json!({"type": "object"}),
                 true,
             ),
@@ -2631,7 +2631,7 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "submit_static_page_image_preview",
                 "提交静态页效果图",
-                "只能提交 V3 校验后的当前草稿效果图请求",
+                "只能提交 DataMax 校验后的当前草稿效果图请求",
                 json!({"type": "object"}),
                 true,
             ),
@@ -2707,7 +2707,7 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "submit_static_page_image_preview",
                 "提交静态页效果图",
-                "只能提交 V3 校验后的当前草稿效果图请求",
+                "只能提交 DataMax 校验后的当前草稿效果图请求",
                 json!({"type": "object"}),
                 true,
             ),
@@ -2753,7 +2753,7 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "create_static_page_draft",
                 "创建静态页草稿",
-                "只能请求 V3 创建草稿",
+                "只能请求 DataMax 创建草稿",
                 json!({"type": "object"}),
                 true,
             ),
@@ -2796,7 +2796,7 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "retrieve_evidence",
                 "检索供料证据",
-                "只能请求 V3 在可见范围内检索",
+                "只能请求 DataMax 在可见范围内检索",
                 json!({"type": "object"}),
                 false,
             ),
@@ -2855,14 +2855,14 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "resolve_video_url",
                 "解析公开视频地址",
-                "只能请求 V3 解析直接或公开页面视频地址",
+                "只能请求 DataMax 解析直接或公开页面视频地址",
                 json!({"type": "object"}),
                 true,
             ),
             AssistantRunCodexActionContractView::new(
                 "extract_video_ppt_transcript",
                 "提取视频 PPT 和原文",
-                "只能在 V3 已登记视频素材后排后台解析",
+                "只能在 DataMax 已登记视频素材后排后台解析",
                 json!({"type": "object"}),
                 true,
             ),
@@ -3043,7 +3043,7 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "web_search",
                 "请求外部/网页搜索",
-                "只读请求 V3 搜索证据",
+                "只读请求 DataMax 搜索证据",
                 json!({"type": "object"}),
                 false,
             ),
@@ -3087,14 +3087,14 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "retrieve_evidence",
                 "检索供料证据",
-                "只能请求 V3 在可见范围内检索",
+                "只能请求 DataMax 在可见范围内检索",
                 json!({"type": "object"}),
                 false,
             ),
             AssistantRunCodexActionContractView::new(
                 "create_static_page_draft",
                 "创建静态页草稿",
-                "只能请求 V3 创建草稿",
+                "只能请求 DataMax 创建草稿",
                 json!({"type": "object"}),
                 true,
             ),
@@ -3233,7 +3233,7 @@ mod tests {
             AssistantRunCodexActionContractView::new(
                 "submit_html_artifact_event",
                 "提交 HTML 产物事件",
-                "只能提交 V3 校验后的 HTML artifact 事件",
+                "只能提交 DataMax 校验后的 HTML artifact 事件",
                 json!({"type": "object"}),
                 true,
             ),

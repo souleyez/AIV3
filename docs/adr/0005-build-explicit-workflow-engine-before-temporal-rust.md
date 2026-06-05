@@ -1,17 +1,17 @@
-# ADR-0005: 先构建显式工作流引擎，不将 Temporal Rust SDK 作为 V3 核心依赖
+# ADR-0005: 先构建显式工作流引擎，不将 Temporal Rust SDK 作为 DataMax 核心依赖
 
 ## Status
 Accepted
 
 ## Context
 
-V3 需要 durable execution、任务恢复、显式状态机和可回放能力。Temporal 在 durable execution 领域是正确方向，但当前 Temporal Rust SDK 官方文档仍明确标记为 alpha-stage，workflow worker API 仍不稳定。
+DataMax 需要 durable execution、任务恢复、显式状态机和可回放能力。Temporal 在 durable execution 领域是正确方向，但当前 Temporal Rust SDK 官方文档仍明确标记为 alpha-stage，workflow worker API 仍不稳定。
 
 本次重构是一次性全量重建，不能把核心执行层建立在当前不稳定 SDK 上。
 
 ## Decision
 
-V3 先自建显式工作流引擎：
+DataMax 先自建显式工作流引擎：
 
 - workflow definition
 - state transition
@@ -19,7 +19,7 @@ V3 先自建显式工作流引擎：
 - event persistence
 - replay validation
 
-保留未来接入 Temporal 的演化空间，但 V3 第一版不把 Temporal Rust SDK 作为硬依赖。
+保留未来接入 Temporal 的演化空间，但 DataMax 第一版不把 Temporal Rust SDK 作为硬依赖。
 
 ## Consequences
 

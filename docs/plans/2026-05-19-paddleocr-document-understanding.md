@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Upgrade V3 document ingest from plain text extraction toward structured document understanding, using PaddleOCR as the primary PDF/image parser and MiniMax VLM as the low-quality fallback.
+**Goal:** Upgrade DataMax document ingest from plain text extraction toward structured document understanding, using PaddleOCR as the primary PDF/image parser and MiniMax VLM as the low-quality fallback.
 
 **Architecture:** Keep the existing Rust ingest pipeline authoritative, but add a parser sidecar boundary that can call PaddleOCR PP-StructureV3 when configured. The first phase stores PaddleOCR-derived Markdown and structured parse metadata in existing document/chunk metadata so retrieval and entity scans can improve without a schema migration. Later phases promote structure, entities, terms, and hybrid retrieval into first-class durable tables.
 

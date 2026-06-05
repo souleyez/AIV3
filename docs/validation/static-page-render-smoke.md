@@ -73,7 +73,7 @@ The optional private config can supply `connection_id`, `tenant_external_id`, `b
 
 Read-only deployment readiness:
 
-- Environment: `8服务器` public V3 endpoint, plan-only, no mutation
+- Environment: `8服务器` public DataMax endpoint, plan-only, no mutation
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case static-page-no-confirm -Json`
 - Result: passed read-only readiness checks; static-page mutation case skipped by guard
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T021620Z.json`
@@ -84,14 +84,14 @@ Read-only deployment readiness:
 
 Guarded mutation dry run:
 
-- Environment: `8服务器` public V3 endpoint, no token configured
+- Environment: `8服务器` public DataMax endpoint, no token configured
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case static-page-no-confirm -Json`
 - Result: failed by design before mutation; `mutation_attempted=false`, `bearer_configured=false`
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T043121Z.json`
 
 Reviewed real mutation smoke:
 
-- Environment: `8服务器` public V3 endpoint, bearer loaded from the active `local-dev` external-channel connection without printing it
+- Environment: `8服务器` public DataMax endpoint, bearer loaded from the active `local-dev` external-channel connection without printing it
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case static-page-no-confirm -ServerPollTimeoutSec 60 -ServerPollIntervalSec 10 -Json`
 - Result: passed; `POST /events` returned `reply.reply_type=artifact_link`, `reply.task_status=static_page_published`, and a generated-artifact URL
 - Assistant run: `e2d3c77f-f59c-46d0-90b7-2d1c979a42b0`

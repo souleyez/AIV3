@@ -1,12 +1,12 @@
 # Codex Host Bridge Contract
 
-**Scope:** V3 Rust assistant execution-kernel integration.
+**Scope:** DataMax Rust assistant execution-kernel integration.
 
-Codex Host is an external execution kernel controlled by V3. It is not a browser-facing API, not a dataset visibility authority, and not the system memory source of truth.
+Codex Host is an external execution kernel controlled by DataMax. It is not a browser-facing API, not a dataset visibility authority, and not the system memory source of truth.
 
 ## OpenAI Codex OSS Alignment
 
-V3 should align with upstream `openai/codex` instead of inventing a parallel execution kernel.
+DataMax should align with upstream `openai/codex` instead of inventing a parallel execution kernel.
 
 Checked reference on 2026-05-10:
 
@@ -18,9 +18,9 @@ Checked reference on 2026-05-10:
 
 Integration decision:
 
-- Do not vendor or fork Codex in V3 first.
+- Do not vendor or fork Codex in DataMax first.
 - Use official runtime surfaces as the contract boundary.
-- Keep V3's Rust `codex-host-agent` as the queue/worker wrapper that prepares a task workspace, generates Codex config/profile, launches or controls Codex, and returns redacted structured output.
+- Keep DataMax's Rust `codex-host-agent` as the queue/worker wrapper that prepares a task workspace, generates Codex config/profile, launches or controls Codex, and returns redacted structured output.
 - Keep a local checkout of `openai/codex` only for debugging SDK/app-server behavior, building a pinned binary on a host, or evaluating a patch before upstreaming.
 
 ## CoDeepSeedeX Alignment
@@ -36,39 +36,39 @@ Checked reference on 2026-05-10:
 
 Boundary decision:
 
-- V3 can borrow the provider-shim pattern for MiniMax, DeepSeek, or other non-native providers.
-- V3 should not copy the monolithic proxy architecture wholesale.
-- A provider shim only normalizes model API traffic for Codex. It is not a V3 API, not an execution worker, not a database reader, not a queue owner, and not a tool permission authority.
-- MCP and V3 tool execution remain controlled by Codex/V3 action contracts and allowlists. Do not map arbitrary MCP namespace tools into plain provider function tools as a shortcut.
-- Shim-local debug files and usage ledgers are diagnostics only; V3 PostgreSQL/runtime inspect remains the durable audit source.
+- DataMax can borrow the provider-shim pattern for MiniMax, DeepSeek, or other non-native providers.
+- DataMax should not copy the monolithic proxy architecture wholesale.
+- A provider shim only normalizes model API traffic for Codex. It is not a DataMax API, not an execution worker, not a database reader, not a queue owner, and not a tool permission authority.
+- MCP and DataMax tool execution remain controlled by Codex/DataMax action contracts and allowlists. Do not map arbitrary MCP namespace tools into plain provider function tools as a shortcut.
+- Shim-local debug files and usage ledgers are diagnostics only; DataMax PostgreSQL/runtime inspect remains the durable audit source.
 
 ## Boundary
 
 ```text
-V3 AssistantRun/ReAct
-  -> V3 validates scope, memory space, capability, and allowlist
-  -> V3 creates an audited task context
+DataMax AssistantRun/ReAct
+  -> DataMax validates scope, memory space, capability, and allowlist
+  -> DataMax creates an audited task context
   -> Codex Host Agent runs Codex in an isolated task workspace
-  -> artifacts, summaries, and redacted logs return to V3
+  -> artifacts, summaries, and redacted logs return to DataMax
 ```
 
 First implementation stays disabled by default.
 
 ## Current Implementation
 
-The first V3-side implementation is intentionally only a queue bridge plus dry-run worker:
+The first DataMax-side implementation is intentionally only a queue bridge plus dry-run worker:
 
 - ReAct can emit `codex_host_task`, but `CODEX_HOST_TASK_ENABLED` defaults to false.
-- When enabled and allowlisted, V3 creates `codex_host_task_workflow` and enqueues `codex_host/run_codex_host_task`.
+- When enabled and allowlisted, DataMax creates `codex_host_task_workflow` and enqueues `codex_host/run_codex_host_task`.
 - `crates/codex-host-agent` can claim that queue task and complete it in `dry_run` mode.
 - `plan_only` mode can build a redacted Codex command plan without launching Codex.
 - Shared request/result wire shapes live in `crates/contracts`, not in `platform-api`.
 - `crates/codex-host-agent` advances workflow state through storage, workflow definitions, and event bus dependencies. It must not depend on the browser-facing API crate.
 - AssistantRun events are mode-specific: `codex_host_task.dry_run_completed`, `codex_host_task.plan_only_completed`, or `codex_host_task.exec_completed`.
 - AssistantRun detail responses now expose safe diagnostics for Codex executor shadow events, jump-host/Mac-host validation readiness, completed Codex Host validation outputs, and provider usage, so runtime/audit surfaces can show status without exposing raw prompts, provider keys, command arguments, or verbose host logs.
-- Browser-facing AssistantRun execution treats `codex_exec_schema`, `codex_sdk_thread`, `codex_app_server`, and `codex_mcp_server` as requested transports only. Until both the manual real-transport feature gate and the manual promotion-review gate are explicitly enabled after shadow plus allowed-host validation, V3 records fixed-field `transport_policy`, `host_invocation`, and `suggested_action` summaries and downgrades the effective transport to `codex_plan_only`.
+- Browser-facing AssistantRun execution treats `codex_exec_schema`, `codex_sdk_thread`, `codex_app_server`, and `codex_mcp_server` as requested transports only. Until both the manual real-transport feature gate and the manual promotion-review gate are explicitly enabled after shadow plus allowed-host validation, DataMax records fixed-field `transport_policy`, `host_invocation`, and `suggested_action` summaries and downgrades the effective transport to `codex_plan_only`.
 - No local Codex process is launched unless the worker is explicitly switched to `codex_exec` and passes the host/profile safety preflight.
-- Real `codex_exec` also requires a configured task workspace root. The agent creates a task-scoped workspace from the V3 `task_memory_space_id` and runs Codex from that directory instead of the agent's current working directory.
+- Real `codex_exec` also requires a configured task workspace root. The agent creates a task-scoped workspace from the DataMax `task_memory_space_id` and runs Codex from that directory instead of the agent's current working directory.
 - Real `codex_exec` is bounded by runtime controls:
   - `CODEX_HOST_AGENT_TASK_TIMEOUT_MS`, default `900000`
   - `CODEX_HOST_AGENT_HEARTBEAT_MS`, default `15000`
@@ -77,16 +77,16 @@ The first V3-side implementation is intentionally only a queue bridge plus dry-r
 - The worker uses async process execution with timeout. Timeout, launch errors, non-zero exits, fixed-output parse failures, and cancellation-before/during-run are mapped to bounded failure reasons. Raw stdout/stderr are never written into AssistantRun events; only character counts and redacted report manifests are retained.
 - While a real process is running, the worker may append `codex_host_task.exec_heartbeat` events. Heartbeats include status, elapsed time, profile/command summaries, and redaction flags, but no raw prompts, stdout, stderr, provider logs, or secrets.
 
-This lets us verify V3 audit, task isolation, queue wakeup, and workflow completion before adding real host execution.
+This lets us verify DataMax audit, task isolation, queue wakeup, and workflow completion before adding real host execution.
 
 Next implementation should add explicit transports:
 
-- `exec_schema`: one-shot `codex exec` with `--output-schema` so V3 receives stable JSON summaries/action intents.
+- `exec_schema`: one-shot `codex exec` with `--output-schema` so DataMax receives stable JSON summaries/action intents.
 - `sdk_thread`: server-side `@openai/codex-sdk` control for continuing Codex threads when a long-lived AssistantRun needs continuity.
 - `app_server`: local app-server JSON-RPC for richer local control where SDK coverage is insufficient.
-- `mcp_server`: only if V3 needs to expose Codex as a tool inside another MCP/agent framework.
+- `mcp_server`: only if DataMax needs to expose Codex as a tool inside another MCP/agent framework.
 
-Transport choice is a V3 policy field, not user text.
+Transport choice is a DataMax policy field, not user text.
 
 ## Shared Contract Types
 
@@ -115,7 +115,7 @@ The output contract owns these fields:
 - optional `local_thread_id`
 - `task_memory_isolated`
 - optional `task_memory_space_id`
-- optional `html_artifacts` for safe V3-owned review surfaces such as `codex_execution_report`
+- optional `html_artifacts` for safe DataMax-owned review surfaces such as `codex_execution_report`
 
 AssistantRun diagnostics may summarize this output as `codex_executor.host_validation_results`, but that summary must stay bounded and redacted:
 
@@ -127,7 +127,7 @@ AssistantRun diagnostics may summarize this output as `codex_executor.host_valid
 
 All worker modes must serialize their successful output through `CodexHostTaskOutputView`. This includes `codex_exec`; real process output is represented only by safe profile, command-plan, process summaries, and sandboxable HTML artifact manifests.
 
-`html_artifacts` are not raw model HTML. They are V3-owned manifests with a template id, owner scope, provenance, interaction mode, and sanitized payload. The browser renders them through the safe HTML artifact viewer, not as arbitrary app code. Platform API persists trusted manifests into the `html_artifacts` table and still reads AssistantRun event payloads as a compatibility fallback/backfill path. Interactive static-page planning handoffs execute only by translating safe JSON Patch payloads into existing static-page operations or by sending a natural-language action intent through the static-page intent interpreter; they do not mutate arbitrary JSON paths or database rows.
+`html_artifacts` are not raw model HTML. They are DataMax-owned manifests with a template id, owner scope, provenance, interaction mode, and sanitized payload. The browser renders them through the safe HTML artifact viewer, not as arbitrary app code. Platform API persists trusted manifests into the `html_artifacts` table and still reads AssistantRun event payloads as a compatibility fallback/backfill path. Interactive static-page planning handoffs execute only by translating safe JSON Patch payloads into existing static-page operations or by sending a natural-language action intent through the static-page intent interpreter; they do not mutate arbitrary JSON paths or database rows.
 
 `task_memory_space_id` is intentionally duplicated at the top level and inside `task_memory_policy.memory_space_id` so queue workers, UI observations, and future memory storage do not need to parse nested policy JSON just to route task-local recall.
 
@@ -156,7 +156,7 @@ The queued workflow context carries:
 - top-level `task_memory_space_id`
 - safety flags forbidding user-controlled CLI flags and secrets in prompts
 
-Advanced static-page work can use this bridge with `capability=static_page_advanced_publish` after allowlisting. The task should receive only a bounded V3 static-page package: requirement summary, draft/render ids, safe data-source summaries, artifact paths or generated-artifact URLs, and the expected output schema. The host may propose口径 repairs, HTML artifact edits, or publish steps, but V3 remains responsible for applying writes, publishing to `/generated-artifacts/`, and recording audit.
+Advanced static-page work can use this bridge with `capability=static_page_advanced_publish` after allowlisting. The task should receive only a bounded DataMax static-page package: requirement summary, draft/render ids, safe data-source summaries, artifact paths or generated-artifact URLs, and the expected output schema. The host may propose口径 repairs, HTML artifact edits, or publish steps, but DataMax remains responsible for applying writes, publishing to `/generated-artifacts/`, and recording audit.
 
 ## Fixed Task Templates
 
@@ -170,10 +170,10 @@ Current fixed templates:
 Fixed-template rules:
 
 - `template_id` is mandatory in the workflow context.
-- `capability` must match the template id and be allowlisted by both V3 and the host profile.
-- Raw task text is optional and bounded; V3-owned structured fields are authoritative.
+- `capability` must match the template id and be allowlisted by both DataMax and the host profile.
+- Raw task text is optional and bounded; DataMax-owned structured fields are authoritative.
 - Host output is accepted only when it matches the template output schema.
-- Direct host permissions to V3 or the 8 server do not bypass V3 validation, artifact path checks, write-scope checks, or audit.
+- Direct host permissions to DataMax or the 8 server do not bypass DataMax validation, artifact path checks, write-scope checks, or audit.
 - Human confirmation is still required when a template instance requests actions outside its no-confirm policy.
 
 `static_page_image2_data_publish` may create and publish a new generated artifact only when `publish_mode=new_generated_artifact_only`, the artifact path is under `/generated-artifacts/`, and the output contains snapshot/date/unit口径 validation. It must not overwrite stable URLs or alter source code without human confirmation.
@@ -213,12 +213,12 @@ Default observation:
 - A task must name a capability before any host execution can be considered.
 - User text cannot set Codex CLI flags directly.
 - Codex task memory is isolated from normal conversation memory.
-- Every queued Codex Host task gets a task-scoped memory space id. Summaries can be promoted later only through V3 policy, not by the host process.
+- Every queued Codex Host task gets a task-scoped memory space id. Summaries can be promoted later only through DataMax policy, not by the host process.
 - Provider keys and local access keys are never sent to the Codex task prompt.
 - Raw stdout/stderr must be redacted and truncated before being shown in runtime inspect.
-- The first transport should be a V3 task queue plus host agent launching `codex exec --output-schema`, not a browser-visible app-server.
-- App-server, SDK, and MCP transports must bind only to host-local/private surfaces and remain hidden behind V3 APIs.
-- Codex config is generated from approved V3 profiles. User text must not set `sandbox_mode`, `approval-policy`, model profile, writable roots, MCP servers, or environment policy.
+- The first transport should be a DataMax task queue plus host agent launching `codex exec --output-schema`, not a browser-visible app-server.
+- App-server, SDK, and MCP transports must bind only to host-local/private surfaces and remain hidden behind DataMax APIs.
+- Codex config is generated from approved DataMax profiles. User text must not set `sandbox_mode`, `approval-policy`, model profile, writable roots, MCP servers, or environment policy.
 
 ## Jump Host Rule
 
@@ -250,14 +250,14 @@ Supported safe modes right now:
 
 Planned transport modes:
 
-- `exec_schema`: launch `codex exec` with a V3-owned output schema and parse only the final JSON response as actionable data.
+- `exec_schema`: launch `codex exec` with a DataMax-owned output schema and parse only the final JSON response as actionable data.
 - `sdk_thread`: use Codex SDK thread control for continuing runs; persist the Codex thread id only as internal worker metadata.
 - `app_server`: use local app-server JSON-RPC for richer control; never expose app-server to browser traffic.
-- `mcp_server`: use `codex mcp-server` only for controlled framework integration, not as the primary V3 browser API.
+- `mcp_server`: use `codex mcp-server` only for controlled framework integration, not as the primary DataMax browser API.
 
 `codex_exec` can launch `codex exec` only after the safety preflight passes. It requires `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=true`, an approved host kind (`windows_jump` or `mac_host`), an execution-capable profile kind, and `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT` pointing at a host-local task workspace root. The returned process output is truncated and redacted before it enters workflow output or AssistantRun events.
 
-Browser traffic still goes only through V3 APIs. The host agent is a worker attached to the internal workflow queue; it is not a new browser-visible service surface.
+Browser traffic still goes only through DataMax APIs. The host agent is a worker attached to the internal workflow queue; it is not a new browser-visible service surface.
 
 ## MiniMax Provider Rule
 
@@ -273,14 +273,14 @@ The shim must be local/private, must not expose provider keys to browser traffic
 
 ## Provider Shim Rule
 
-Any future V3-owned Responses-compatible shim must obey the same bridge boundary:
+Any future DataMax-owned Responses-compatible shim must obey the same bridge boundary:
 
 ```text
 Codex CLI/SDK/app-server -> private provider shim -> upstream provider API
-V3 API/workers          -> AssistantRun, datasets, memory, workflows, artifacts, audit
+DataMax API/workers          -> AssistantRun, datasets, memory, workflows, artifacts, audit
 ```
 
-The shim may expose redacted diagnostics to V3:
+The shim may expose redacted diagnostics to DataMax:
 
 - health and provider status
 - profile/capability snapshot
@@ -288,14 +288,14 @@ The shim may expose redacted diagnostics to V3:
 - context-budget and tool-output budget reports
 - liveness/protocol-repair events
 
-The shared V3 contract for this exists as `ProviderShimObservabilitySnapshotView` in `crates/contracts`. `llm-gateway` can already derive the safe profile portion from `ModelProviderProfile`; future shim/host endpoints should fill runtime health, usage, balance, debug trace, budget, and liveness fields from bounded/redacted local diagnostics. AssistantRun Codex packages also carry a tool-output budget policy so oversized execution payloads can be bounded without dropping retrieval evidence, refs, media timestamps, or failure details.
+The shared DataMax contract for this exists as `ProviderShimObservabilitySnapshotView` in `crates/contracts`. `llm-gateway` can already derive the safe profile portion from `ModelProviderProfile`; future shim/host endpoints should fill runtime health, usage, balance, debug trace, budget, and liveness fields from bounded/redacted local diagnostics. AssistantRun Codex packages also carry a tool-output budget policy so oversized execution payloads can be bounded without dropping retrieval evidence, refs, media timestamps, or failure details.
 
 The shim must not expose:
 
 - provider keys
 - raw prompts containing user secrets
 - raw tool outputs beyond bounded/redacted excerpts
-- direct V3 database access
+- direct DataMax database access
 - direct queue submission
 - direct dataset/file access
 - browser-visible endpoints

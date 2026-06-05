@@ -1,10 +1,10 @@
-# V3 ReAct Agent Refinement Implementation Plan
+# DataMax ReAct Agent Refinement Implementation Plan
 
 > **For Codex:** REQUIRED SKILL: Use `executing-plans` to implement this plan task-by-task.
 
-**Goal:** Refine V3 AssistantRun ReAct from the current product-action loop into a Java-reference-aligned model-tool protocol while preserving V3 static-page/report/product actions.
+**Goal:** Refine DataMax AssistantRun ReAct from the current product-action loop into a Java-reference-aligned model-tool protocol while preserving DataMax static-page/report/product actions.
 
-**Architecture:** Keep V3 as the enforcement boundary and keep the model as owner of intent, next action, and final wording. Port the Java client's stronger ReAct discipline into Rust: weak planning catalog, typed decision contract, protocol repair, tool registry, trace redaction, and report handoff invariant. Do not replace the current AssistantRun and static-page integration; gradually extract the current `platform-api` ReAct `match` into reusable tools.
+**Architecture:** Keep DataMax as the enforcement boundary and keep the model as owner of intent, next action, and final wording. Port the Java client's stronger ReAct discipline into Rust: weak planning catalog, typed decision contract, protocol repair, tool registry, trace redaction, and report handoff invariant. Do not replace the current AssistantRun and static-page integration; gradually extract the current `platform-api` ReAct `match` into reusable tools.
 
 **Tech Stack:** Rust `platform-api`, `contracts`, `domain-model`, `storage`, `static-page-runtime`, `static-page-renderer`; PostgreSQL 17.9 target; Next.js 16 frontend; optional OpenClaw provider via `llm-gateway`.
 
@@ -29,7 +29,7 @@ Completed:
 
 Remaining future hardening:
 
-- Apply model-requested `update_static_page_module` operations to the active draft through V3 draft mutation rules in Slice 4.
+- Apply model-requested `update_static_page_module` operations to the active draft through DataMax draft mutation rules in Slice 4.
 - Replace OpenClaw stubs with real sidecar adapters only behind explicit gates and allowlists.
 - Add deeper end-to-end UI tests once AssistantRun progress and static-page mutation are more stable.
 
@@ -37,13 +37,13 @@ Remaining future hardening:
 
 ## 0. Current State And Source References
 
-Current V3 state:
+Current DataMax state:
 
 - `crates/platform-api/src/lib.rs` already has config-gated AssistantRun ReAct create/continue loops.
-- V3 already validates selected dataset scope for retrieval.
-- V3 already sanitizes static-page module operations through `static-page-runtime`.
-- V3 already persists ReAct events as `AssistantRunEvent` and concise execution trail steps.
-- V3 now repairs premature `final_answer` for scoped dataset/conversation-memory runs with a `policy_observation`.
+- DataMax already validates selected dataset scope for retrieval.
+- DataMax already sanitizes static-page module operations through `static-page-runtime`.
+- DataMax already persists ReAct events as `AssistantRunEvent` and concise execution trail steps.
+- DataMax now repairs premature `final_answer` for scoped dataset/conversation-memory runs with a `policy_observation`.
 
 Reference implementations:
 
@@ -57,12 +57,12 @@ Reference implementations:
 Design decision:
 
 - Java client has the better generic ReAct architecture.
-- V3 has the better product-action integration.
-- Implement the hybrid: Java discipline + V3 product tools.
+- DataMax has the better product-action integration.
+- Implement the hybrid: Java discipline + DataMax product tools.
 
 ## 1. Target Contract
 
-V3 should converge on this model-facing shape:
+DataMax should converge on this model-facing shape:
 
 ```json
 {
@@ -81,7 +81,7 @@ V3 should converge on this model-facing shape:
 
 Compatibility rule:
 
-- During migration, still accept current V3 `action_type/reason_summary/arguments/requires_confirmation`.
+- During migration, still accept current DataMax `action_type/reason_summary/arguments/requires_confirmation`.
 - Normalize both shapes into one internal `AssistantRunReActDecision`.
 - After migration, prefer `status=act` with `action.type` for all non-terminal actions.
 
@@ -106,7 +106,7 @@ Terminal rules:
 
 Add tests for:
 
-- Current V3 shape parses:
+- Current DataMax shape parses:
 
 ```json
 {"action_type":"retrieve_evidence","reason_summary":"检索资料","arguments":{"query":"订单风险"},"requires_confirmation":false}
@@ -600,9 +600,9 @@ Environment gates:
 
 Rules:
 
-- V3 selected scope still decides whether memory is relevant.
+- DataMax selected scope still decides whether memory is relevant.
 - OpenClaw memory is labeled `openclaw_memory`.
-- It never replaces V3 memory.
+- It never replaces DataMax memory.
 - It is capped.
 
 **Step 3: Implement readonly execution stub**
@@ -666,7 +666,7 @@ Expected:
 - No whitespace errors.
 - ReAct behavior remains feature-flagged and rollback-safe.
 
-**Commit:** `docs: finalize v3 react refinement handoff`
+**Commit:** `docs: finalize DataMax react refinement handoff`
 
 ## 3. Risk Register
 
@@ -690,16 +690,16 @@ Expected:
 9. Task 9 OpenClaw bridge.
 10. Task 10 cleanup.
 
-This order avoids blocking current static-page work while steadily moving V3 toward the Java-reference architecture.
+This order avoids blocking current static-page work while steadily moving DataMax toward the Java-reference architecture.
 
 ## 5. Acceptance Criteria
 
-- V3 accepts both old `action_type` and new `status/action.type` ReAct shapes during migration.
+- DataMax accepts both old `action_type` and new `status/action.type` ReAct shapes during migration.
 - Planning catalog cannot be used as evidence.
 - Final answers over selected data require observations.
 - Report handoff always follows `list_report_options` and returns exact product choices.
 - Static-page actions stay model-operable through the same ReAct loop.
-- Tool execution remains V3-scoped, allowlisted, capped, and audited.
+- Tool execution remains DataMax-scoped, allowlisted, capped, and audited.
 - Frontend shows progress without chain-of-thought.
-- OpenClaw remains optional and cannot bypass V3 policy.
+- OpenClaw remains optional and cannot bypass DataMax policy.
 - Existing ordinary chat and deterministic fallback still work.

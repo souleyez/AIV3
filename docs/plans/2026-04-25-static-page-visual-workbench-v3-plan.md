@@ -1,12 +1,12 @@
-# Static Page Visual Workbench V3 Implementation Plan
+# Static Page Visual Workbench DataMax Implementation Plan
 
 > Status: Deferred as of 2026-04-26.
 >
-> Product decision: do not clone the original `ai-data-platform` static page workbench and do not plan a gradual replacement. The original workbench was not good enough as a product surface and has not been formally delivered to customers. Keep this plan as technical reference only. When static page work resumes, redesign it around the V3 platform model and a fresh product workflow.
+> Product decision: do not clone the original `ai-data-platform` static page workbench and do not plan a gradual replacement. The original workbench was not good enough as a product surface and has not been formally delivered to customers. Keep this plan as technical reference only. When static page work resumes, redesign it around the DataMax platform model and a fresh product workflow.
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a V3-native static page visual workbench where the first customer-visible artifact is a polished visual draft image, followed by an editable/static report render from the same report plan and dataset evidence.
+**Goal:** Build a DataMax-native static page visual workbench where the first customer-visible artifact is a polished visual draft image, followed by an editable/static report render from the same report plan and dataset evidence.
 
 **Architecture:** Keep `ReportPlan`, report AST versions, retrieval evidence, and report render outputs as the source of truth. Add a new durable `ReportVisualDraft` layer in front of report rendering, with mock generation locally and real GPT image generation delegated to the user's Cloudflare remote Codex endpoint. The visual draft guides layout and style only; it must never become the factual source or a publishable report version by itself.
 
@@ -16,9 +16,9 @@
 
 ## Positioning
 
-This plan adapts the old `ai-data-platform` static page visual workbench idea to the current V3 architecture.
+This plan adapts the old `ai-data-platform` static page visual workbench idea to the current DataMax architecture.
 
-Do not copy the old Fastify / TypeScript API shape. V3 uses Rust host surfaces, workflow tasks, typed contracts, model-facing summaries, and durable runtime inspect rows.
+Do not copy the old Fastify / TypeScript API shape. DataMax uses Rust host surfaces, workflow tasks, typed contracts, model-facing summaries, and durable runtime inspect rows.
 
 The first implementation target is a mock-only MVP:
 
@@ -28,7 +28,7 @@ The first implementation target is a mock-only MVP:
 - It can render a deterministic mock image preview from local bytes.
 - The web UI shows the image before asking the user to render/publish the editable report.
 
-Real image generation is intentionally a Cloudflare-side second step. V3 must not call OpenAI image APIs directly in production; it calls a protected Cloudflare remote Codex image endpoint. Do not hard-code a current OpenAI image model in V3; forward a configurable `model` string to Cloudflare and verify the correct provider API shape against official docs when implementing the Cloudflare worker.
+Real image generation is intentionally a Cloudflare-side second step. DataMax must not call OpenAI image APIs directly in production; it calls a protected Cloudflare remote Codex image endpoint. Do not hard-code a current OpenAI image model in DataMax; forward a configurable `model` string to Cloudflare and verify the correct provider API shape against official docs when implementing the Cloudflare worker.
 
 ## Non-Negotiable Product Rules
 
@@ -37,12 +37,12 @@ Real image generation is intentionally a Cloudflare-side second step. V3 must no
 - Visual drafts are not publishable report versions.
 - Mock provider must be shippable and testable without image credits.
 - Any real provider must be `cloudflare-codex` behind `STATIC_PAGE_VISUAL_DRAFT_ENABLED=true`.
-- Browser code and V3 Rust services must never see the OpenAI image API key.
+- Browser code and DataMax Rust services must never see the OpenAI image API key.
 - Cloudflare stores image-provider secrets and handles provider-specific request/response parsing.
 - If visual generation fails, the report plan remains usable.
 - If editable report rendering fails after visual success, the image remains visible.
 
-## Proposed V3 Data Shape
+## Proposed DataMax Data Shape
 
 Add a new domain object instead of reusing `report_render_outputs`. Reusing render outputs would make visual drafts look publishable because publishing currently checks asset paths on render outputs.
 
@@ -135,7 +135,7 @@ Use object keys in persisted state so this can move to R2/S3/MinIO later without
 
 ## Cloudflare Remote Codex Image Boundary
 
-Real GPT image generation belongs in the Cloudflare remote Codex layer, not in the V3 Rust platform.
+Real GPT image generation belongs in the Cloudflare remote Codex layer, not in the DataMax Rust platform.
 
 Existing Cloudflare projects:
 
@@ -154,13 +154,13 @@ Workstation direct endpoint:
 POST https://cf-codex-workstation.soulzyn.workers.dev/api/image/static-page-draft
 ```
 
-V3 request shape:
+DataMax request shape:
 
 ```json
 {
   "requestId": "report_visual_draft_uuid",
   "prompt": "Chinese enterprise static page visual draft...",
-  "model": "configured-by-v3-or-cloudflare",
+  "model": "configured-by-DataMax-or-cloudflare",
   "size": "1536x1024",
   "quality": "high",
   "responseFormat": "b64_json",
@@ -173,7 +173,7 @@ V3 request shape:
 }
 ```
 
-V3 response shape:
+DataMax response shape:
 
 ```json
 {
@@ -192,7 +192,7 @@ V3 response shape:
 
 Security rules:
 
-- V3 calls Cloudflare with `Authorization: Bearer <STATIC_PAGE_VISUAL_DRAFT_REMOTE_TOKEN>`.
+- DataMax calls Cloudflare with `Authorization: Bearer <STATIC_PAGE_VISUAL_DRAFT_REMOTE_TOKEN>`.
 - Cloudflare stores image provider keys as Worker secrets.
 - The browser never calls Cloudflare image generation directly.
 - The browser never receives provider credentials.
@@ -205,8 +205,8 @@ Cloudflare implementation notes:
 - Add optional frontdoor pass-through only after workstation tests pass.
 - Keep this endpoint independent of any generic Codex Responses proxy.
 - Validate request size and prompt length before calling the image provider.
-- Return base64 image bytes for V3 local persistence first.
-- Later, Cloudflare may save the image to R2 and return `remoteAssetUrl`; V3 should still persist durable metadata.
+- Return base64 image bytes for DataMax local persistence first.
+- Later, Cloudflare may save the image to R2 and return `remoteAssetUrl`; DataMax should still persist durable metadata.
 
 ## Task 1: Add Visual Draft Domain And Contract Types
 
@@ -417,7 +417,7 @@ pub fn visual_draft_image_url_path(draft_id: ReportVisualDraftId) -> String;
 pub fn write_visual_draft_image(root: &Path, draft_id: ReportVisualDraftId, bytes: &[u8]) -> Result<String>;
 ```
 
-The local asset store is still needed even when Cloudflare returns the image. V3 stores a local copy for stable `/v1/static-page-visual-drafts/{draft_id}/image` reads; `remote_asset_url` is metadata, not the primary browser image source in MVP.
+The local asset store is still needed even when Cloudflare returns the image. DataMax stores a local copy for stable `/v1/static-page-visual-drafts/{draft_id}/image` reads; `remote_asset_url` is metadata, not the primary browser image source in MVP.
 
 **Step 3: Run tests**
 
@@ -730,7 +730,7 @@ The workstation endpoint owns:
 - provider response parsing
 - provider latency/error classification
 
-V3 owns:
+DataMax owns:
 
 - visual brief construction
 - Cloudflare request metadata
@@ -1035,7 +1035,7 @@ git commit -m "Add static page workbench web API helpers"
 
 **Step 1: Create the route**
 
-The page should load inside the same V3 visual language, not the old report draft screen.
+The page should load inside the same DataMax visual language, not the old report draft screen.
 
 First viewport:
 
@@ -1186,7 +1186,7 @@ git commit -m "Add chat handoff to static page workbench"
 
 **Step 1: Verify the Cloudflare endpoint contract**
 
-Before writing V3 provider code, confirm the Cloudflare endpoint is available:
+Before writing DataMax provider code, confirm the Cloudflare endpoint is available:
 
 ```text
 POST https://codex.souleye.cc/api/image/static-page-draft
@@ -1198,7 +1198,7 @@ or direct workstation:
 POST https://cf-codex-workstation.soulzyn.workers.dev/api/image/static-page-draft
 ```
 
-V3 should not verify the upstream OpenAI image API directly. Cloudflare owns that provider-specific integration.
+DataMax should not verify the upstream OpenAI image API directly. Cloudflare owns that provider-specific integration.
 
 **Step 2: Write tests with injected HTTP client**
 
@@ -1226,7 +1226,7 @@ Support env:
 - `STATIC_PAGE_VISUAL_IMAGE_SIZE`
 - `STATIC_PAGE_VISUAL_IMAGE_QUALITY`
 
-Do not support `openai-direct` in V3 production code. If a local direct provider is ever needed for debugging, keep it behind a separate explicitly named feature flag and do not document it as the normal route.
+Do not support `openai-direct` in DataMax production code. If a local direct provider is ever needed for debugging, keep it behind a separate explicitly named feature flag and do not document it as the normal route.
 
 **Step 4: Persist Cloudflare metadata**
 
@@ -1259,7 +1259,7 @@ git commit -m "Add Cloudflare visual image provider"
 **Files:**
 
 - Modify: `README.md`
-- Modify: `docs/plans/2026-04-23-v3-development-plan.md`
+- Modify: `docs/plans/2026-04-23-DataMax-development-plan.md`
 - Create: `docs/validation/static-page-visual-workbench-smoke.md`
 
 **Step 1: Add README worker command**
@@ -1287,7 +1287,7 @@ $env:STATIC_PAGE_VISUAL_DRAFT_REMOTE_TOKEN = "<token>"
 $env:STATIC_PAGE_VISUAL_IMAGE_MODEL = "<configured-on-cloudflare>"
 ```
 
-Make clear that `OPENAI_IMAGE_API_KEY` belongs in the Cloudflare Worker secret store, not in the V3 platform environment.
+Make clear that `OPENAI_IMAGE_API_KEY` belongs in the Cloudflare Worker secret store, not in the DataMax platform environment.
 
 **Step 2: Add smoke checklist**
 
@@ -1299,7 +1299,7 @@ Checklist:
 - workbench loads context
 - visual draft starts
 - mock image appears
-- Cloudflare provider can be smoke-tested from V3 with a non-customer prompt after workstation deployment
+- Cloudflare provider can be smoke-tested from DataMax with a non-customer prompt after workstation deployment
 - report render can be requested after image
 - visual draft failure does not block existing Report Service controls
 
@@ -1316,7 +1316,7 @@ git diff --check
 **Step 4: Commit**
 
 ```powershell
-git add README.md docs/plans/2026-04-23-v3-development-plan.md docs/validation/static-page-visual-workbench-smoke.md
+git add README.md docs/plans/2026-04-23-DataMax-development-plan.md docs/validation/static-page-visual-workbench-smoke.md
 git commit -m "Document static page visual workbench"
 ```
 
@@ -1324,7 +1324,7 @@ git commit -m "Document static page visual workbench"
 
 1. Ship mock provider UI first.
 2. Add and deploy the Cloudflare remote Codex image endpoint in `cf-codex-workstation`.
-3. Connect V3 with `STATIC_PAGE_VISUAL_DRAFT_PROVIDER=cloudflare-codex`.
+3. Connect DataMax with `STATIC_PAGE_VISUAL_DRAFT_PROVIDER=cloudflare-codex`.
 4. Keep OpenAI image keys only in Cloudflare Worker secrets.
 5. Review visual workbench UX with deterministic mock images and one controlled Cloudflare image smoke test.
 6. Keep existing Report Service control panel as the reliable fallback.

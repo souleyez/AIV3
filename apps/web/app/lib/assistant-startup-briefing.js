@@ -438,9 +438,22 @@ function summarizeStaticPageWorkspace(activeDraft, drafts) {
     .filter((module) => module?.visualization?.chartRuntime === 'echarts')
     .length;
   const finalStatus = active?.finalPage?.status || '';
+  const finalPage = active?.finalPage || {};
+  const finalArtifactUrl = finalPage.publicUrl
+    || finalPage.public_url
+    || finalPage.generatedArtifactUrl
+    || finalPage.generated_artifact_url
+    || finalPage.htmlPreviewUrl
+    || finalPage.html_preview_url
+    || finalPage.htmlDownloadUrl
+    || finalPage.html_download_url
+    || finalPage.downloadUrl
+    || finalPage.download_url
+    || '';
   const previewStatus = active?.previewContract?.status || active?.imageJob?.status || '';
   const previewStale = previewStatus === 'stale' || active?.imageJob?.status === 'stale';
   const dataQuality = summarizeStaticPageDataQuality(active);
+  const canExportFinal = finalStatus === 'rendered' && !previewStale;
   return {
     activeDraftId: active?.backendDraftId || active?.id || '',
     activeDraftStatus: active?.status || '',
@@ -452,8 +465,10 @@ function summarizeStaticPageWorkspace(activeDraft, drafts) {
     previewStatus,
     previewStale,
     finalRenderStatus: finalStatus,
+    finalArtifactUrl: String(finalArtifactUrl || '').slice(0, 240),
     canEditModules: Boolean(active && activeModules.length),
-    canExportFinal: finalStatus === 'rendered' && !previewStale,
+    canExportFinal,
+    canReviseFinalArtifact: canExportFinal && Boolean(finalArtifactUrl),
     dataQuality,
     latestDrafts: draftList.slice(0, 5).map((draft) => ({
       id: draft?.backendDraftId || draft?.id || '',
@@ -486,6 +501,9 @@ function formatStaticPageWorkspaceForModel(workspace) {
     }
     if (workspace.canExportFinal) {
       parts.push('当前静态页已可导出 index.html 和 ZIP 交付包。');
+    }
+    if (workspace.canReviseFinalArtifact) {
+      parts.push('当前静态页已有可访问成品；用户要求修改、调整、突出模块、变更文案或刷新数据时，优先在现有成品基础上增量修改并发布新链接，除非用户明确要求重新设计。');
     }
     const dataQualityText = formatStaticPageDataQualityForModel(workspace.dataQuality);
     if (dataQualityText) {

@@ -5,7 +5,7 @@ This smoke validates the fixed Cloudflare Codex `data_ingestion_analysis` path w
 The contract is:
 
 - Customer requests for data接入, 入库, 建表, 字段映射, 清洗, schema, ETL, 导入, or database analysis are detected from existing chat text.
-- V3 packages only selected datasets, documents, files, tables, or configured database-source previews.
+- DataMax packages only selected datasets, documents, files, tables, or configured database-source previews.
 - Local plan-only execution validates the fixed template contract, host preflight, platform output validation, and audit validation path.
 - Analysis outputs require source summary, data-quality report, validation checks, and recommended next actions.
 - Staging-spec outputs must include a bounded staging specification.
@@ -56,14 +56,14 @@ The private config must include at least one external-channel source selector: `
 - Result: passed
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T040306Z.json`
 - Markdown summary: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260525T040306Z.md`
-- Source type: V3-selected datasets/documents/files/database-source previews only
+- Source type: DataMax-selected datasets/documents/files/database-source previews only
 - Workflow id: not created in local plan-only smoke
 - Risk decision: unsafe credential/schema/API/production-write cases route to `needs_human`
 - Rollback: set `CODEX_HOST_TASK_ENABLED=false` or remove `data_ingestion_analysis` from `CODEX_HOST_TASK_ALLOWLIST`
 
 Read-only deployment readiness:
 
-- Environment: `8服务器` public V3 endpoint, plan-only, no mutation
+- Environment: `8服务器` public DataMax endpoint, plan-only, no mutation
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -PlanOnly -Case data-ingestion-analysis -Json`
 - Result: passed read-only readiness checks; mutation skipped by guard
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T021620Z.json`
@@ -84,9 +84,9 @@ Guarded mutation dry runs:
 
 Reviewed real mutation smoke:
 
-- Environment: `8服务器` public V3 endpoint, bearer loaded from the active `local-dev` external-channel connection without printing it
+- Environment: `8服务器` public DataMax endpoint, bearer loaded from the active `local-dev` external-channel connection without printing it
 - Config: private ignored case file with one `dataset_external_ids` entry and no credentials
-- Before config fix: the first run reached V3 and was rejected by preflight with `codex_host_task_not_allowlisted`
+- Before config fix: the first run reached DataMax and was rejected by preflight with `codex_host_task_not_allowlisted`
 - Config fix: added `data_ingestion_analysis` to `CODEX_HOST_TASK_ALLOWLIST` and `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES`, then restarted `aiv3-platform-api.service` and `aiv3-codex-host-agent.service`
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case data-ingestion-analysis -ServerCaseConfigPath target\private-smoke\data-ingestion-smoke.case.json -ServerPollTimeoutSec 90 -ServerPollIntervalSec 10 -Json`
 - Result: passed as accepted processing; initial status `data_ingestion_analysis_queued`, later status `data_ingestion_analysis_running` / `data_ingestion_analysis_retrying`, no terminal failure/source-required state
@@ -96,7 +96,7 @@ Reviewed real mutation smoke:
 
 Post-fix terminal smoke:
 
-- Fix: host-agent now preserves the Cloudflare orchestrator `task_id` across retry payload updates, so one V3 workflow polls one remote Codex task instead of submitting a new task on every retry.
+- Fix: host-agent now preserves the Cloudflare orchestrator `task_id` across retry payload updates, so one DataMax workflow polls one remote Codex task instead of submitting a new task on every retry.
 - Fix: host-agent now records external data-ingestion terminal events directly from fixed-task output, so `/assistant-runs/{id}/reply` can return `data_ingestion_analysis_completed`, `data_ingestion_analysis_needs_human`, or `data_ingestion_analysis_failed`.
 - Command: `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -BaseUrl https://v3.elepcloud.com -AllowServerMutation -Case data-ingestion-analysis -ServerCaseConfigPath target\private-smoke\data-ingestion-smoke.case.json -ServerPollTimeoutSec 240 -ServerPollIntervalSec 10 -Json`
 - Result: passed terminal smoke with `data_ingestion_analysis_needs_human` after six polls; no terminal failure.

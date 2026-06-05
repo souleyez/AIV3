@@ -1983,7 +1983,7 @@ DataMax 派发到第三方产物 endpoint 的请求会采用统一外部动作�
   "title": "采购审批风险分析",
   "owner_external_user_id": "user-10001",
   "visibility": "same_as_source_permissions",
-  "download_url": "https://v3.example.com/artifacts/artifact-001",
+  "download_url": "https://datamax.example.com/artifacts/artifact-001",
   "expires_at": "2026-06-13T00:00:00Z",
   "idempotency_key": "artifact:artifact-001:publish"
 }

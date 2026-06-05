@@ -2,13 +2,13 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**2026-04-29 consolidation note:** Use `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md` as the active next-thread execution entry. This document remains the detailed source plan for the optional OpenClaw sidecar.
+**2026-04-29 consolidation note:** Use `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md` as the active next-thread execution entry. This document remains the detailed source plan for the optional OpenClaw sidecar.
 
-**Goal:** Add OpenClaw back to V3 as an optional extension layer for model configuration, memory augmentation, and local execution, without making V3 depend on OpenClaw for normal operation.
+**Goal:** Add OpenClaw back to DataMax as an optional extension layer for model configuration, memory augmentation, and local execution, without making DataMax depend on OpenClaw for normal operation.
 
-**Architecture:** V3 remains the host system for data permissions, dataset selection, RAG supply, AssistantRun state, static-page drafts, report artifacts, and persistence. OpenClaw is attached behind explicit provider/capability adapters: if configured, it can serve model calls, contribute optional memory context, and run explicitly allowed local execution tasks; if unavailable, V3 keeps running through existing placeholder/OpenAI-compatible/deterministic paths. OpenClaw never becomes a second source of truth and never bypasses V3 visibility or secret-binding rules.
+**Architecture:** DataMax remains the host system for data permissions, dataset selection, RAG supply, AssistantRun state, static-page drafts, report artifacts, and persistence. OpenClaw is attached behind explicit provider/capability adapters: if configured, it can serve model calls, contribute optional memory context, and run explicitly allowed local execution tasks; if unavailable, DataMax keeps running through existing placeholder/OpenAI-compatible/deterministic paths. OpenClaw never becomes a second source of truth and never bypasses DataMax visibility or secret-binding rules.
 
-**Tech Stack:** Rust `llm-gateway`, `platform-api`, `static-page-runtime`, `chat-session-worker`, `storage`; existing V3 PostgreSQL 17.9 target; original project reference adapter at `C:/Users/soulzyn/Desktop/codex/ai-data-platform/apps/api/src/lib/openclaw-adapter.ts`; OpenClaw Gateway `/v1/responses` and `/v1/chat/completions`; environment-based runtime configuration; fake HTTP gateway tests.
+**Tech Stack:** Rust `llm-gateway`, `platform-api`, `static-page-runtime`, `chat-session-worker`, `storage`; existing DataMax PostgreSQL 17.9 target; original project reference adapter at `C:/Users/soulzyn/Desktop/codex/ai-data-platform/apps/api/src/lib/openclaw-adapter.ts`; OpenClaw Gateway `/v1/responses` and `/v1/chat/completions`; environment-based runtime configuration; fake HTTP gateway tests.
 
 ---
 
@@ -16,34 +16,34 @@
 
 OpenClaw is an optional external capability pack, not a replacement runtime.
 
-V3 owns:
+DataMax owns:
 
 - Tenant and dataset visibility.
 - Public/private dataset filtering by local key binding.
 - AssistantRun lifecycle and execution trail.
-- Conversation memory stored by V3.
+- Conversation memory stored by DataMax.
 - Document chunks, evidence state, report/static-page drafts, image jobs, and final artifacts.
 - Platform write actions such as creating datasets, uploading files, retrieving evidence, saving drafts, and queueing render/image work.
 
 OpenClaw may provide:
 
-- Model gateway calls for selected V3 runtime lanes.
+- Model gateway calls for selected DataMax runtime lanes.
 - Model configuration indirection such as active model, model override, agent id, and gateway-level model routing.
-- Optional memory suggestions or recalled snippets that V3 can treat as evidence candidates.
-- Optional local execution tools, only through a V3-controlled capability bridge.
+- Optional memory suggestions or recalled snippets that DataMax can treat as evidence candidates.
+- Optional local execution tools, only through a DataMax-controlled capability bridge.
 
 OpenClaw must not:
 
 - Become required for startup, upload, ordinary chat, static-page deterministic fallback, or existing workers.
-- Read raw V3 secrets from browser storage or database rows.
-- See datasets that V3 has not already filtered as visible for the current local key.
-- Write directly to V3 database tables.
-- Execute platform actions without V3 validating and recording the action.
-- Replace V3's conversation memory or dataset memory with the old OpenClaw memory catalog.
+- Read raw DataMax secrets from browser storage or database rows.
+- See datasets that DataMax has not already filtered as visible for the current local key.
+- Write directly to DataMax database tables.
+- Execute platform actions without DataMax validating and recording the action.
+- Replace DataMax's conversation memory or dataset memory with the old OpenClaw memory catalog.
 
 ## Runtime Modes
 
-The main runtime mode remains existing V3 config:
+The main runtime mode remains existing DataMax config:
 
 ```text
 ASSISTANT_RUN_RUNTIME_MODE=placeholder|provider
@@ -89,15 +89,15 @@ CHAT_SESSION_OPENCLAW_MODEL=
 ```mermaid
 flowchart LR
   User["User"]
-  Web["V3 Web UI"]
+  Web["DataMax Web UI"]
   API["platform-api / AssistantRun"]
-  Host["V3 Host Logic: visibility, scope, RAG, drafts, actions"]
+  Host["DataMax Host Logic: visibility, scope, RAG, drafts, actions"]
   Gateway["llm-gateway::OpenClawProvider"]
   MemoryBridge["OpenClaw Memory Bridge optional"]
   ExecBridge["OpenClaw Local Execution Bridge optional"]
   OpenClaw["OpenClaw Gateway"]
-  DB["V3 PostgreSQL"]
-  Workers["V3 Workers"]
+  DB["DataMax PostgreSQL"]
+  Workers["DataMax Workers"]
 
   User --> Web
   Web --> API
@@ -221,7 +221,7 @@ For Responses API send:
 ```json
 {
   "model": "<request.model or OPENCLAW_MODEL>",
-  "user": "v3",
+  "user": "DataMax",
   "input": "<request.input>",
   "instructions": "<resolved system prompt if present>",
   "temperature": 0.2,
@@ -359,7 +359,7 @@ cargo test -p llm-gateway openclaw_retry
 
 Expected: PASS.
 
-## Phase 2: V3 Runtime Lane Adoption
+## Phase 2: DataMax Runtime Lane Adoption
 
 ### Task 5: AssistantRun ordinary chat provider smoke path
 
@@ -383,7 +383,7 @@ Use fake gateway and assert:
 
 - AssistantRun completes.
 - Runtime manifest provider is `openclaw`.
-- Evidence state still comes from V3 host before provider call.
+- Evidence state still comes from DataMax host before provider call.
 - No dataset outside visible scope appears in provider input.
 
 Run:
@@ -436,7 +436,7 @@ When `STATIC_PAGE_INTENT_RUNTIME_PROVIDER=openclaw`, fake gateway returns strict
 Assert:
 
 - Strict JSON is parsed.
-- Operations still pass V3 sanitizer.
+- Operations still pass DataMax sanitizer.
 - Invalid OpenClaw JSON falls back to deterministic intent, matching current behavior.
 
 Run:
@@ -449,7 +449,7 @@ Expected: FAIL before adapter support, PASS after Phase 1.
 
 **Step 2: Do not add OpenClaw-specific schema**
 
-Static-page operation schema remains V3-owned. OpenClaw only produces the same JSON operations that any provider must produce.
+Static-page operation schema remains DataMax-owned. OpenClaw only produces the same JSON operations that any provider must produce.
 
 **Step 3: Run tests**
 
@@ -504,8 +504,8 @@ Expected: PASS.
 Decision:
 
 - OpenClaw memory is optional evidence augmentation.
-- V3 conversation memory and document evidence remain authoritative.
-- OpenClaw memory may be included only after V3 intent/scope planning decides it is relevant.
+- DataMax conversation memory and document evidence remain authoritative.
+- OpenClaw memory may be included only after DataMax intent/scope planning decides it is relevant.
 
 Consequences:
 
@@ -515,7 +515,7 @@ Consequences:
 
 **Step 2: Link from static-page plan**
 
-Add a short section to the existing static-page plan saying OpenClaw memory can augment AssistantRun context but cannot replace V3 conversation memory.
+Add a short section to the existing static-page plan saying OpenClaw memory can augment AssistantRun context but cannot replace DataMax conversation memory.
 
 ### Task 9: Add memory bridge interface
 
@@ -588,7 +588,7 @@ Expected: FAIL.
 
 **Step 2: Add gated injection**
 
-After V3 scope/evidence planning and before provider input build, optionally append OpenClaw memory items.
+After DataMax scope/evidence planning and before provider input build, optionally append OpenClaw memory items.
 
 Rules:
 
@@ -641,7 +641,7 @@ Test:
 
 - Disabled bridge rejects all execution.
 - Enabled bridge rejects unknown capability.
-- Enabled bridge rejects write actions unless V3 provides explicit allowlist.
+- Enabled bridge rejects write actions unless DataMax provides explicit allowlist.
 
 Run:
 
@@ -680,9 +680,9 @@ Expected: PASS.
 
 When OpenClaw execution is requested by model/capability bridge:
 
-- V3 records an execution trail item before calling the bridge.
-- V3 records result summary after bridge returns.
-- Failed bridge call does not fail the whole AssistantRun unless the V3 action requires it.
+- DataMax records an execution trail item before calling the bridge.
+- DataMax records result summary after bridge returns.
+- Failed bridge call does not fail the whole AssistantRun unless the DataMax action requires it.
 - User-visible assistant text remains model-authored, not host-composed.
 
 Run:
@@ -804,7 +804,7 @@ Include:
 State clearly:
 
 - OpenClaw is not required.
-- OpenClaw does not replace V3 storage.
+- OpenClaw does not replace DataMax storage.
 - OpenClaw does not get unfiltered dataset access.
 - OpenClaw local execution starts readonly/limited.
 
@@ -860,7 +860,7 @@ DATASET_OUTPUT_RUNTIME_PROVIDER=placeholder
 
 Expected behavior after rollback:
 
-- Ordinary chat still works through existing V3 placeholder/provider fallback.
+- Ordinary chat still works through existing DataMax placeholder/provider fallback.
 - Static-page intent falls back to deterministic operation generation.
 - Upload, parsing, evidence retrieval, drafts, image queue, and renderer remain unaffected.
 - Existing OpenClaw memory/execution metadata stays as historical runtime evidence only.
@@ -869,9 +869,9 @@ Expected behavior after rollback:
 
 | Risk | Severity | Mitigation |
 | --- | --- | --- |
-| OpenClaw gateway unavailable | Medium | Provider failure metadata plus V3 fallback lanes; no hard dependency. |
-| Model/tool leakage from OpenClaw | Medium | Port original corrective retry detectors and keep V3 action validation. |
-| Dataset permission bypass | High | V3 filters visible datasets before provider input; never let OpenClaw query DB directly. |
+| OpenClaw gateway unavailable | Medium | Provider failure metadata plus DataMax fallback lanes; no hard dependency. |
+| Model/tool leakage from OpenClaw | Medium | Port original corrective retry detectors and keep DataMax action validation. |
+| Dataset permission bypass | High | DataMax filters visible datasets before provider input; never let OpenClaw query DB directly. |
 | Memory duplication/conflict | Medium | Treat OpenClaw memory as labeled evidence candidate, not source of truth. |
 | Local execution overreach | High | Disabled by default; readonly allowlist first; every action recorded in AssistantRun trail. |
 | Secret leakage in status/errors | High | Redacted endpoint and sanitized provider error messages only. |
@@ -890,9 +890,9 @@ Expected behavior after rollback:
 
 ## Acceptance Criteria
 
-- With no OpenClaw env configured, all existing V3 tests and UI behavior are unchanged.
+- With no OpenClaw env configured, all existing DataMax tests and UI behavior are unchanged.
 - With OpenClaw configured for AssistantRun, ordinary chat returns model output through OpenClaw and records runtime provider `openclaw`.
-- With OpenClaw configured for static-page intent, model-generated operations are sanitized by V3 and invalid output falls back to deterministic handling.
+- With OpenClaw configured for static-page intent, model-generated operations are sanitized by DataMax and invalid output falls back to deterministic handling.
 - OpenClaw memory appears only as labeled evidence and only when enabled.
 - OpenClaw local execution is disabled by default and readonly/allowlisted when enabled.
 - No raw token, local key, dataset secret binding, or hidden dataset content appears in UI status, runtime error messages, or logs.

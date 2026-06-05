@@ -1,11 +1,11 @@
-# AI Data Platform V3 Development Plan
+# DataMax Development Plan
 
 Date: 2026-04-23
 Status: Working plan
 
 ## Positioning
 
-V3 is past the compile-oriented skeleton stage. The platform now has a durable
+DataMax is past the compile-oriented skeleton stage. The platform now has a durable
 workflow/task runtime, worker slices, report host surfaces, runtime inspect,
 tool registry entries, and a first web assistant shell.
 

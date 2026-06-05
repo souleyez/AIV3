@@ -1,6 +1,6 @@
 # Video/PPT Deliverable Smoke
 
-Use this checklist for controlled video/PPT extraction validation. It is meant to prove the V3 deliverable contract, not to bypass video-platform access limits.
+Use this checklist for controlled video/PPT extraction validation. It is meant to prove the DataMax deliverable contract, not to bypass video-platform access limits.
 
 ## Scope
 

@@ -1,8 +1,8 @@
 # Codex Host Model Profiles
 
-**Scope:** V3 Rust assistant Codex Host integration.
+**Scope:** DataMax Rust assistant Codex Host integration.
 
-Codex Host model selection is a V3 policy decision, not a free-form user prompt field. Users can ask for capability and quality, but V3 maps that request to an approved profile.
+Codex Host model selection is a DataMax policy decision, not a free-form user prompt field. Users can ask for capability and quality, but DataMax maps that request to an approved profile.
 
 ## Upstream Codex OSS Baseline
 
@@ -13,11 +13,11 @@ Use upstream `openai/codex` as the execution-kernel baseline:
 - Current observed release on 2026-05-10: `0.130.0`.
 - Supported operational surfaces to prefer: `codex exec` for non-interactive work, `--output-schema` for structured final JSON, `@openai/codex-sdk` for server-side TypeScript thread control, app-server JSON-RPC for richer local control, and `codex mcp-server` for tool-style integration.
 
-Do not fork Codex into V3 unless a specific upstream gap blocks these surfaces. Treat a fork as a last-resort patch set, not the main integration path.
+Do not fork Codex into DataMax unless a specific upstream gap blocks these surfaces. Treat a fork as a last-resort patch set, not the main integration path.
 
 ## CoDeepSeedeX Reference Pattern
 
-`CoDeepSeedeX` is a useful reference for provider adaptation, not a runtime dependency for V3.
+`CoDeepSeedeX` is a useful reference for provider adaptation, not a runtime dependency for DataMax.
 
 - Repository: `https://github.com/Awenforever/CoDeepSeedeX/tree/master`
 - License: MIT.
@@ -26,14 +26,14 @@ Do not fork Codex into V3 unless a specific upstream gap blocks these surfaces. 
 - Valuable operations surface: `/healthz`, provider status, balance when available, usage summary/events, debug trace status, and context-budget diagnostics.
 - Valuable hardening surface: context trimming, semantic/persistent compaction experiments, tool-output budget reports, protocol repair for tool calls, and liveness recovery when a model stalls mid-tool loop.
 
-V3 should borrow these ideas into its own model-gateway/Codex profile system:
+DataMax should borrow these ideas into its own model-gateway/Codex profile system:
 
-- Implement V3-owned shims only where Codex cannot call a provider natively.
+- Implement DataMax-owned shims only where Codex cannot call a provider natively.
 - Keep shims bound to local/private interfaces such as `127.0.0.1`.
 - Keep provider keys outside task prompts, browser APIs, user-visible logs, and artifact payloads.
 - Persist product-grade usage/audit in PostgreSQL/runtime inspect. Shim-local SQLite or JSONL files are host diagnostics only.
 - Treat debug traces as sensitive because they can contain request summaries, paths, tool-output summaries, and usage details.
-- Do not let the provider shim execute V3 tools, access datasets, own memory, write queues, or bypass V3 action validation.
+- Do not let the provider shim execute DataMax tools, access datasets, own memory, write queues, or bypass DataMax action validation.
 
 ## Profile Rules
 
@@ -44,7 +44,7 @@ V3 should borrow these ideas into its own model-gateway/Codex profile system:
 - Real execution profiles stay disabled until tested on `windows-jump` or the later Mac host.
 - The local developer workstation must not be used for Codex execution tests.
 - Task prompts must not include provider keys, browser-local keys, or raw secrets.
-- Each host task runs under a V3-created `task_memory_space_id`; the host can return summaries, but V3 decides whether anything is promoted into conversation or project memory.
+- Each host task runs under a DataMax-created `task_memory_space_id`; the host can return summaries, but DataMax decides whether anything is promoted into conversation or project memory.
 - Codex transport is an explicit profile field. User prompts cannot switch between CLI, SDK, app-server, or MCP.
 
 ## Initial Profiles
@@ -108,7 +108,7 @@ allowed_capabilities = ["inspect_project", "summarize_runtime"]
 Allowed transport values:
 
 ```text
-exec_schema -> codex exec with a V3-owned output schema for one-shot worker tasks
+exec_schema -> codex exec with a DataMax-owned output schema for one-shot worker tasks
 sdk_thread  -> @openai/codex-sdk thread control for continuing AssistantRun conversations
 app_server  -> host-local app-server JSON-RPC for richer control
 mcp_server  -> codex mcp-server when Codex should be exposed as a controlled tool
@@ -138,11 +138,11 @@ codex_exec -> launch `codex exec` only after host/profile/allowlist safety prefl
 First production-leaning path:
 
 ```text
-assistant chat / static-page action -> V3 AssistantRun context package
+assistant chat / static-page action -> DataMax AssistantRun context package
   -> profile transport=exec_schema or sdk_thread
-  -> Codex receives only V3-supplied context/tool contracts
+  -> Codex receives only DataMax-supplied context/tool contracts
   -> Codex returns structured response/action intent
-  -> V3 validates and executes requested action
+  -> DataMax validates and executes requested action
 ```
 
 `codex_exec` must require all of these before it can be wired:
@@ -153,7 +153,7 @@ CODEX_HOST_AGENT_HOST_KIND=windows_jump|mac_host|linux_host|aiv3_server
 CODEX_HOST_AGENT_PROFILE_KIND=codex-native|codex-compatible-shim
 CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT=<host-local task workspace root>
 profile capability allowlist contains the requested capability
-task context includes a V3-created assistant_run_id and task_memory_space_id
+task context includes a DataMax-created assistant_run_id and task_memory_space_id
 ```
 
 `codex_exec` output policy:
@@ -202,7 +202,7 @@ capability=static_page_advanced_publish
 purpose=inspect static-page requirements, identify data口径 risks, propose real-data HTML/artifact edits, and summarize publish steps
 default_mode=plan_only
 write_access=false until isolated workspace and human confirmation are enabled
-publish_access=false until V3 validates artifact output and records audit
+publish_access=false until DataMax validates artifact output and records audit
 ```
 
 Cloudflare Codex fixed templates are a narrower execution profile, not a free-form prompt profile:
@@ -215,11 +215,11 @@ task_source=server_owned_template_package_only
 user_prompt_cli_flags_allowed=false
 ```
 
-`static_page_image2_data_publish` may publish a new generated artifact without per-task human confirmation only when V3 validates `publish_mode=new_generated_artifact_only`, artifact path is under `/generated-artifacts/`, and the output contains a snapshot/date/unit validation report. Overwrite, stable URL replacement, source-code changes, credential/scope expansion, and uncertain口径 still require human confirmation.
+`static_page_image2_data_publish` may publish a new generated artifact without per-task human confirmation only when DataMax validates `publish_mode=new_generated_artifact_only`, artifact path is under `/generated-artifacts/`, and the output contains a snapshot/date/unit validation report. Overwrite, stable URL replacement, source-code changes, credential/scope expansion, and uncertain口径 still require human confirmation.
 
 `answer_quality_autofix` may diagnose and propose low-risk answer-quality patches without per-task confirmation only inside the fixed answer-quality allowlist. It must not deploy automatically and must not touch public API, auth, schema, static-page product code, third-party contracts, or unrelated files.
 
-`data_ingestion_analysis` may run without per-task confirmation only as read-only profiling or a staging/import-spec proposal over V3-selected sources. It must not request or emit credentials/database URLs, write production tables, migrate schema, change public API/auth/third-party fields, or expand source permissions. Any such request returns `needs_human`.
+`data_ingestion_analysis` may run without per-task confirmation only as read-only profiling or a staging/import-spec proposal over DataMax-selected sources. It must not request or emit credentials/database URLs, write production tables, migrate schema, change public API/auth/third-party fields, or expand source permissions. Any such request returns `needs_human`.
 
 ## MiniMax Experiment Boundary
 
@@ -237,16 +237,16 @@ Codex can use a local Responses-compatible shim, and that shim can call MiniMax 
 To make MiniMax valid for Codex Host, one of these must be true:
 
 - Codex natively supports the configured provider shape.
-- V3 exposes a private, local-only Codex-compatible provider shim.
-- Codex task uses V3 tools that call `llm-gateway`, while Codex itself keeps its native model.
+- DataMax exposes a private, local-only Codex-compatible provider shim.
+- Codex task uses DataMax tools that call `llm-gateway`, while Codex itself keeps its native model.
 
-The first production path should prefer V3-owned `llm-gateway` for MiniMax and keep Codex Host focused on execution.
+The first production path should prefer DataMax-owned `llm-gateway` for MiniMax and keep Codex Host focused on execution.
 
 If MiniMax must be used as the Codex model itself, the profile must target a private Responses-compatible shim. Do not configure MiniMax Chat Completions directly as a Codex provider until upstream Codex supports that provider shape.
 
 ## Provider-Shim Observability Contract
 
-Every V3-owned Codex-compatible provider shim should expose enough diagnostics for the platform to decide whether a profile is healthy before routing a conversation through it:
+Every DataMax-owned Codex-compatible provider shim should expose enough diagnostics for the platform to decide whether a profile is healthy before routing a conversation through it:
 
 ```text
 health                  -> process and upstream reachability
@@ -260,20 +260,20 @@ tool_output_budget      -> largest tool outputs and trimming decisions
 liveness_events         -> retry/continue decisions for incomplete tool-call loops
 ```
 
-These diagnostics must be redacted, bounded, and linked to V3 `AssistantRun` or workflow ids when possible. They are for operations and quality control; they are not user-facing answer content.
+These diagnostics must be redacted, bounded, and linked to DataMax `AssistantRun` or workflow ids when possible. They are for operations and quality control; they are not user-facing answer content.
 
-Current V3-side foundation:
+Current DataMax-side foundation:
 
 - `contracts` defines a Provider Shim observability snapshot with health, profile/capability snapshot, usage summary/events, optional balance, debug-trace status, context-budget report, tool-output budget, and liveness events.
 - `llm-gateway` can build a safe profile/status snapshot from `ModelProviderProfile` without exposing raw provider keys or raw base URLs.
-- `llm-gateway` can also convert provider runtime metadata into redacted Provider Shim usage events and summaries, ready for V3 runtime inspect or future PostgreSQL audit persistence.
-- AssistantRun detail responses now include safe diagnostics for the latest Codex shadow comparison, context-budget pressure, jump-host/Mac-host validation readiness, completed Codex Host validation output summaries with `host_kind`, and redacted provider usage events. V3 treats completed host validation as valid only when it comes from `windows_jump` or `mac_host`, giving audit/runtime views a stable read path without scanning raw event payloads in the browser.
-- Real Codex conversation transports are now triple-gated in practice: without `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE=enabled`, V3 records the requested transport but runs the effective Codex executor in `codex_plan_only`; even with that feature gate enabled, V3 still requires `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED=approved` before the requested real transport can reach `assistant-runtime`. Current runtime behavior still returns an unsupported-transport blueprint with `codex_invoked=false` until host validation and real transport wiring are implemented. The separate promotion-review gate is intentionally manual and should only be enabled after the `promotion_gate` diagnostics show stable shadow comparison plus valid jump-host/Mac-host smoke output.
-- Promotion review also depends on the read-only `codex_executor.model_gateway_gate`. This gate must report `status=ready` before `promotion_gate.status` can become `eligible_for_feature_gate_review`; otherwise V3 blocks with `blocked_by_model_gateway`. The gate checks that the Codex conversation model profile is present, auth is configured, and the wire/capability surface supports either Codex-compatible execution or JSON action output. Typical blocking statuses are `profile_missing`, `auth_not_configured`, and `unsupported_codex_surface`.
-- AssistantRun Codex context packages now carry a tool-output budget policy; V3 only trims oversized `tool_outputs` payload fields and preserves evidence refs, source locators, media timestamps, and error/status details.
+- `llm-gateway` can also convert provider runtime metadata into redacted Provider Shim usage events and summaries, ready for DataMax runtime inspect or future PostgreSQL audit persistence.
+- AssistantRun detail responses now include safe diagnostics for the latest Codex shadow comparison, context-budget pressure, jump-host/Mac-host validation readiness, completed Codex Host validation output summaries with `host_kind`, and redacted provider usage events. DataMax treats completed host validation as valid only when it comes from `windows_jump` or `mac_host`, giving audit/runtime views a stable read path without scanning raw event payloads in the browser.
+- Real Codex conversation transports are now triple-gated in practice: without `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_FEATURE_GATE=enabled`, DataMax records the requested transport but runs the effective Codex executor in `codex_plan_only`; even with that feature gate enabled, DataMax still requires `ASSISTANT_RUN_CODEX_REAL_TRANSPORT_PROMOTION_REVIEW_APPROVED=approved` before the requested real transport can reach `assistant-runtime`. Current runtime behavior still returns an unsupported-transport blueprint with `codex_invoked=false` until host validation and real transport wiring are implemented. The separate promotion-review gate is intentionally manual and should only be enabled after the `promotion_gate` diagnostics show stable shadow comparison plus valid jump-host/Mac-host smoke output.
+- Promotion review also depends on the read-only `codex_executor.model_gateway_gate`. This gate must report `status=ready` before `promotion_gate.status` can become `eligible_for_feature_gate_review`; otherwise DataMax blocks with `blocked_by_model_gateway`. The gate checks that the Codex conversation model profile is present, auth is configured, and the wire/capability surface supports either Codex-compatible execution or JSON action output. Typical blocking statuses are `profile_missing`, `auth_not_configured`, and `unsupported_codex_surface`.
+- AssistantRun Codex context packages now carry a tool-output budget policy; DataMax only trims oversized `tool_outputs` payload fields and preserves evidence refs, source locators, media timestamps, and error/status details.
 - AssistantRun Codex diagnostics can now summarize a supplied provider-shim observability snapshot through a fixed safe field set: health status, profile/model/wire API, usage counts, context-budget pressure, tool-output trimming counts, and liveness event status. It intentionally does not expose auth env names, raw provider errors, raw request ids, trace ids, raw balance amounts, debug notes, or raw request/response payloads.
-- For `codex_compatible_shim` profiles, V3 also synthesizes a conservative provider-shim observability snapshot inside Codex diagnostic event payloads and execution trail entries before a real shim process reports health. This gives runtime inspect a stable field shape while keeping health `unknown`, usage zeroed, and profile/auth details redacted.
-- The snapshot remains a contract for local shim/host diagnostics and does not grant the shim access to V3 tools, datasets, queues, or memory.
+- For `codex_compatible_shim` profiles, DataMax also synthesizes a conservative provider-shim observability snapshot inside Codex diagnostic event payloads and execution trail entries before a real shim process reports health. This gives runtime inspect a stable field shape while keeping health `unknown`, usage zeroed, and profile/auth details redacted.
+- The snapshot remains a contract for local shim/host diagnostics and does not grant the shim access to DataMax tools, datasets, queues, or memory.
 
 Before enabling any real Codex conversation transport, confirm the three diagnostics together:
 
@@ -297,4 +297,4 @@ codex-host-agent -X-> platform-api
 browser -X-> codex-host-agent
 ```
 
-This keeps browser authentication, dataset visibility, report/static-page APIs, and user-facing orchestration inside V3 while allowing Codex Host to remain an optional execution extension.
+This keeps browser authentication, dataset visibility, report/static-page APIs, and user-facing orchestration inside DataMax while allowing Codex Host to remain an optional execution extension.

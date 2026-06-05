@@ -9,7 +9,7 @@
 - `ai-data-platform-v3`: system of record, third-party assistant, static-page image jobs, workflow tasks, status snapshots, final artifact publishing.
 - `codex-web`: Codex orchestrator, Cloudflare Codex runtime target, image artifacts, fixed Codex execution, runtime usage and queue policy.
 
-**Core product decision:** The formal high-quality static-page path remains image-first. V3 should generate a visual/effect image first, persist it, and then ask Cloudflare Codex to generate the final static page from the visual plus structured data. A fast direct renderer may exist only as a fallback preview or low-requirement draft path. It must not replace the formal image-first delivery path.
+**Core product decision:** The formal high-quality static-page path remains image-first. DataMax should generate a visual/effect image first, persist it, and then ask Cloudflare Codex to generate the final static page from the visual plus structured data. A fast direct renderer may exist only as a fallback preview or low-requirement draft path. It must not replace the formal image-first delivery path.
 
 **Progress update 2026-05-30:** P0 status backfill has started in `crates/platform-api/src/lib.rs`. Static-page publish rejection now writes `assistant_run.external_channel_static_page_publish_failed`, status replies prefer that business event over the raw fixed-task event, and targeted tests cover failed-event priority plus failed-event append/dedupe.
 
@@ -21,7 +21,7 @@
 
 **Progress update 2026-05-30 P2 UI slice:** The external integrations Codex executor panel now loads `/api/v3/external/codex-executor-tasks/queue-stats` on demand and shows a queue snapshot above the task list. The web helper layer normalizes logical queue/task-key counts and treats submitted/pending remote Cloudflare tasks as active poll states, so operators can see whether time is being spent in effect-image generation, final page publishing, or generic Codex fixed tasks.
 
-**Progress update 2026-05-30 P4 asset provenance slice:** Static-page effect images now keep a stable V3 preview asset as the render-facing URL and attach a safe provenance summary to the image job payload and preview-ready artifact manifest. The provenance records the source asset kind, redacted source reference, persisted preview URL, byte size, mime type, dimensions, storage status, and orchestrator task id without leaking embedded data URLs or signed query tokens.
+**Progress update 2026-05-30 P4 asset provenance slice:** Static-page effect images now keep a stable DataMax preview asset as the render-facing URL and attach a safe provenance summary to the image job payload and preview-ready artifact manifest. The provenance records the source asset kind, redacted source reference, persisted preview URL, byte size, mime type, dimensions, storage status, and orchestrator task id without leaking embedded data URLs or signed query tokens.
 
 **Progress update 2026-05-30 P4 fixed-task handoff slice:** The third-party `static_page_image2_data_publish` fixed-task context now includes `render_asset_url` and a compact `asset_provenance` block for Codex Host. Platform API and Codex Host both strip signed query strings and embedded image refs before the final executor prompt is built, and `prompt_text` is sourced from the safe Image2 summary instead of the raw payload.
 
@@ -35,7 +35,7 @@
 
 **Progress update 2026-05-31 P2 success-latency slice:** Workflow queue stats now also expose success-only P50/P95 runtime metrics, and the observability page prefers those values when present. This keeps old failed/stale tasks from making the normal Image2/Codex runtime look worse than successful jobs.
 
-**Progress update 2026-05-31 P0 auto-repair slice:** Static-page preview/final-render entry points now refresh the V3 data contract before gating or rendering, including third-party supplied image prompt payloads. Database aggregate rows are carried into field-candidate sample data, and chart `dataKey` / binding-quality field paths are treated as repairable bindings so V3 can generate a page first and keep data warnings/adjustment paths visible instead of stopping on `needs_sample_rows`.
+**Progress update 2026-05-31 P0 auto-repair slice:** Static-page preview/final-render entry points now refresh the DataMax data contract before gating or rendering, including third-party supplied image prompt payloads. Database aggregate rows are carried into field-candidate sample data, and chart `dataKey` / binding-quality field paths are treated as repairable bindings so DataMax can generate a page first and keep data warnings/adjustment paths visible instead of stopping on `needs_sample_rows`.
 
 **Progress update 2026-05-31 smoke-mutation-readiness slice:** `run-cloudflare-codex-fixed-task-smoke.ps1` now supports a reviewed real `static-page-no-confirm` third-party mutation smoke with private bearer/config input, polling of the returned status URL, and redacted artifact/status reporting. The guard was verified against 8服务器 without a bearer: the script fails before mutation with `mutation_attempted=false`.
 
@@ -43,7 +43,7 @@
 
 **Progress update 2026-05-31 real smoke slice:** The real 8-server third-party static-page mutation smoke passed and returned a generated-artifact URL immediately. The data-ingestion mutation smoke reached real execution after adding `data_ingestion_analysis` to the platform and Codex Host agent allowlists; it now reports queued/running/retrying instead of auth/source/allowlist failure, with terminal polling still outstanding.
 
-**Progress update 2026-06-02 template-library visibility slice:** V3 now surfaces generated static-page template reuse decisions in third-party status cards and final replies. Exact dataset-combination reuse reports `template_match_policy=exact_dataset_artifact_key`; relaxed dataset-overlap reuse reports `template_match_policy=dataset_overlap` plus `relaxed_template_match`; normal explicit/inferred templates report `explicit_or_inferred_template`. The same fields are preserved when status replies are reconstructed from AssistantRun events, and the pure/full third-party integration docs now describe the template-library reuse policy and response fields.
+**Progress update 2026-06-02 template-library visibility slice:** DataMax now surfaces generated static-page template reuse decisions in third-party status cards and final replies. Exact dataset-combination reuse reports `template_match_policy=exact_dataset_artifact_key`; relaxed dataset-overlap reuse reports `template_match_policy=dataset_overlap` plus `relaxed_template_match`; normal explicit/inferred templates report `explicit_or_inferred_template`. The same fields are preserved when status replies are reconstructed from AssistantRun events, and the pure/full third-party integration docs now describe the template-library reuse policy and response fields.
 
 **Progress update 2026-06-05 Xinbai default-template convergence:** The Xinbai report template library has been narrowed to one accepted default: `xinbai-functional-modular-template-20260604`. Historical Xinbai pages remain as published artifacts but are not accepted defaults. The accepted monthly report template uses refreshed same-directory `data.json`, a compact time/range filter, one summary KPI card, a right-middle customer detail panel without extra explanatory header copy, and prompt-focused reuse links such as `?focus=风险店铺`, `?focus=取高机会`, `?focus=低活跃`, and `?focus=品牌明细`.
 
@@ -84,13 +84,13 @@ Observed from 8 server PostgreSQL events, worker logs, and 1 server orchestrator
 
 ```text
 User / third-party assistant request
-  -> V3 creates assistant_run and static_page_draft
-  -> V3 queues image_preview job
+  -> DataMax creates assistant_run and static_page_draft
+  -> DataMax queues image_preview job
   -> 1 server / Cloudflare Codex generates visual image
-  -> V3 persists preview asset and marks preview_ready
-  -> V3 queues static_page_publish job
+  -> DataMax persists preview asset and marks preview_ready
+  -> DataMax queues static_page_publish job
   -> 1 server / Cloudflare Codex generates final HTML from visual + uiSpec/modelOutput/data snapshot
-  -> V3 validates and publishes generated artifact
+  -> DataMax validates and publishes generated artifact
   -> User sees final URL, with accurate status snapshots throughout
 ```
 
@@ -105,7 +105,7 @@ Important behavior:
 
 ## Status Model
 
-Use a unified status vocabulary across V3, mini program/web clients, and `codex-web`.
+Use a unified status vocabulary across DataMax, mini program/web clients, and `codex-web`.
 
 | Stage | Internal examples | User-facing meaning |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ poll_retry
 Terminal failure should require one of:
 
 - Cloudflare orchestrator task explicitly returns `failed`/`cancelled`.
-- V3 validation rejects a completed artifact.
+- DataMax validation rejects a completed artifact.
 - User cancels.
 - Stale lease cleanup expires an abandoned local worker task.
 
@@ -221,7 +221,7 @@ The physical implementation can still use existing `workflow_tasks` first. The i
 
 Requirements:
 
-- Send explicit `User-Agent` and `X-Client-Name` from every V3 caller.
+- Send explicit `User-Agent` and `X-Client-Name` from every DataMax caller.
 - Add Cloudflare WAF/Access rules that allow known service calls from 8 server or trusted service keys.
 - Do not rely on browser-signature behavior for server jobs.
 - Treat 500/503 and empty/invalid JSON as transient unless repeated past retry policy.
@@ -230,7 +230,7 @@ Requirements:
 
 When the effect image is ready:
 
-- Persist it in V3 generated-artifacts/static-page preview storage.
+- Persist it in DataMax generated-artifacts/static-page preview storage.
 - Store stable `preview_asset_key`.
 - Avoid passing temporary or expiring remote image URLs into final Codex generation.
 - Continue to keep retention generous on 1 server until storage reaches the configured threshold.
@@ -347,11 +347,11 @@ Done when:
 
 Tasks:
 
-1. Ensure all V3 orchestrator requests include:
+1. Ensure all DataMax orchestrator requests include:
 
 ```text
-User-Agent: AIDataPlatformV3StaticPageWorker/1.0 or v3-codex-host-agent
-X-Client-Name: ai-data-platform-static-pages or v3-codex-host-agent
+User-Agent: AIDataPlatformV3StaticPageWorker/1.0 or DataMax-codex-host-agent
+X-Client-Name: ai-data-platform-static-pages or DataMax-codex-host-agent
 Authorization: Bearer <service key>
 ```
 
@@ -381,17 +381,17 @@ Done when:
 
 Tasks:
 
-1. Import every successful effect image into V3 stable storage.
-2. Use the stable V3 preview URL for final Codex generation.
+1. Import every successful effect image into DataMax stable storage.
+2. Use the stable DataMax preview URL for final Codex generation.
 3. Track image provenance:
    - remote orchestrator task id;
    - original artifact URL;
-   - persisted V3 asset key;
+   - persisted DataMax asset key;
    - mime type and size;
    - created time.
 4. Align retention:
    - 1 server can keep generated images until storage reaches configured threshold.
-   - V3 should retain artifacts needed by active assistant runs and published pages.
+   - DataMax should retain artifacts needed by active assistant runs and published pages.
 
 Done when:
 
@@ -426,7 +426,7 @@ Data sources:
 
 Suggested surfaces:
 
-- operator-only V3 page;
+- operator-only DataMax page;
 - lightweight CLI/report query first;
 - later add admin UI.
 
@@ -505,7 +505,7 @@ This order prioritizes "do not look stuck" and "do not block the queue" before r
 2. What is the default maximum wait shown to users for formal high-quality static pages: 10 minutes, 20 minutes, or "will notify when done"?
 3. Should effect images be retained as part of the published page artifact bundle, or only as audit/source assets?
 4. Should product images and static-page effect images share the same Cloudflare image queue long term, or be split at the runtime target level?
-5. Which admin surface should own the observability dashboard: V3 main admin, external integrations page, or `codex-web` admin?
+5. Which admin surface should own the observability dashboard: DataMax main admin, external integrations page, or `codex-web` admin?
 
 ---
 

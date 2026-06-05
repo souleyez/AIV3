@@ -224,7 +224,10 @@ test('startup briefing includes compact static page workspace context', () => {
       status: 'rendered',
       styleDirection: 'data-command',
       previewContract: { status: 'confirmed' },
-      finalPage: { status: 'rendered' },
+      finalPage: {
+        status: 'rendered',
+        publicUrl: '/generated-artifacts/database-static-pages/customer-report/index.html',
+      },
       modules: [
         {
           id: 'trend',
@@ -255,9 +258,12 @@ test('startup briefing includes compact static page workspace context', () => {
   assert.equal(briefing.staticPageWorkspace.activeModuleCount, 2);
   assert.equal(briefing.staticPageWorkspace.activeEchartsModuleCount, 1);
   assert.equal(briefing.staticPageWorkspace.canExportFinal, true);
+  assert.equal(briefing.staticPageWorkspace.canReviseFinalArtifact, true);
   assert.match(formatted, /当前静态页：客户经营分析静态页/);
   assert.match(formatted, /ECharts 1 个/);
   assert.match(formatted, /已可导出 index\.html/);
+  assert.match(formatted, /现有成品基础上增量修改/);
+  assert.match(formatted, /除非用户明确要求重新设计/);
   assert.doesNotMatch(formatted, /不应该完整依赖 content/);
 });
 

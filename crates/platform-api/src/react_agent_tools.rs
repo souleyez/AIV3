@@ -360,11 +360,11 @@ fn web_search_evidence_required_result(
             },
             "no_live_search_claim": true,
             "allow_general_model_answer": true,
-            "next_step": "等待 V3 搜索证据供料；未收到 search evidence 前，回答需说明当前不可见/未供料，并把通用知识或判断清楚标注为非 V3 搜索证据。",
+            "next_step": "等待 DataMax 搜索证据供料；未收到 search evidence 前，回答需说明当前不可见/未供料，并把通用知识或判断清楚标注为非 DataMax 搜索证据。",
         }),
         trail_step: json!({
             "status": "completed",
-            "label": "等待 V3 搜索证据",
+            "label": "等待 DataMax 搜索证据",
             "react_action": action.action_type.as_str(),
             "task_status": "v3_search_evidence_required",
             "search_evidence_required": true,
@@ -1654,7 +1654,7 @@ fn video_ppt_extraction_placeholder_result(
             "reason": "uploaded_or_resolved_video_required",
             "required_asset_state": "uploaded_or_resolved_video",
             "deliverables": ["transcript_text", "slide_image_candidates", "ppt_outline_or_pptx", "timestamp_map"],
-            "next_step": "先通过上传或公开视频地址解析拿到 V3 登记的视频素材，再排后台任务提取原文和 PPT。",
+            "next_step": "先通过上传或公开视频地址解析拿到 DataMax 登记的视频素材，再排后台任务提取原文和 PPT。",
         }),
         trail_step: json!({
             "status": "rejected",
@@ -1869,7 +1869,7 @@ fn public_video_page_resolution_unregistered_result(
             "source_present": true,
             "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
             "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
-            "next_step": "已解析到公开视频直连地址；选择一个可见数据集后，V3 可以登记该视频并排后台解析。",
+            "next_step": "已解析到公开视频直连地址；选择一个可见数据集后，DataMax 可以登记该视频并排后台解析。",
         }),
         trail_step: json!({
             "status": "completed",
@@ -4864,7 +4864,7 @@ mod tests {
     fn web_search_returns_pending_evidence_without_raw_query() {
         let mut action = test_action(AssistantRunReactActionType::WebSearch);
         action.arguments = json!({
-            "query": "2026 年 V3 对外集成最新状态",
+            "query": "2026 年 DataMax 对外集成最新状态",
             "reason": "用户询问最新进展",
             "freshness": "latest",
             "language": "zh-CN"
@@ -4887,7 +4887,7 @@ mod tests {
         );
         assert_eq!(result.observation["query_present"], json!(true));
         assert!(result.observation["query_chars"].as_u64().unwrap_or(0) > 0);
-        assert_eq!(result.trail_step["label"], json!("等待 V3 搜索证据"));
+        assert_eq!(result.trail_step["label"], json!("等待 DataMax 搜索证据"));
         assert!(result.final_answer.is_none());
         assert!(!serialized.contains("对外集成最新状态"));
         assert!(!serialized.contains("用户询问最新进展"));

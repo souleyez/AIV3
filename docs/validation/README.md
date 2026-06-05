@@ -1,6 +1,6 @@
 # Validation
 
-Place workflow replay fixtures, API contract checks, and system validation reports here as the V3 runtime becomes executable.
+Place workflow replay fixtures, API contract checks, and system validation reports here as the DataMax runtime becomes executable.
 
 Current operator-facing references:
 

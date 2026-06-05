@@ -1,10 +1,10 @@
-# V3 Model-Visible Capability Loop Implementation Plan
+# DataMax Model-Visible Capability Loop Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Close the loop between DataMax/V3 platform capabilities, model-visible capability awareness, Host-controlled execution, customer-facing status, proactive message-channel outreach, and regression smoke.
+**Goal:** Close the loop between DataMax platform capabilities, model-visible capability awareness, Host-controlled execution, customer-facing status, proactive message-channel outreach, and regression smoke.
 
-**Architecture:** V3 remains the system of record for documents, datasets, permissions, AssistantRun state, workflow state, generated artifacts, third-party contracts, outbound message actions, and audit events. Models may only request product-level capabilities through a bounded `<V3_TOOL_REQUEST>` protocol; V3 Host parses, validates, routes, records, and returns stable text/task/card/artifact responses. Low-level tools such as retrieval, document detail reads, VLM reparse, Codex Host execution, web search, permission resolution, message sending, and raw connector calls stay Host-owned and are never exposed as direct third-party powers.
+**Architecture:** DataMax remains the system of record for documents, datasets, permissions, AssistantRun state, workflow state, generated artifacts, third-party contracts, outbound message actions, and audit events. Models may only request product-level capabilities through a bounded `<V3_TOOL_REQUEST>` protocol; DataMax Host parses, validates, routes, records, and returns stable text/task/card/artifact responses. Low-level tools such as retrieval, document detail reads, VLM reparse, Codex Host execution, web search, permission resolution, message sending, and raw connector calls stay Host-owned and are never exposed as direct third-party powers.
 
 **Tech Stack:** Rust `platform-api`, `ingest-worker`, `retrieval-worker`, `codex-host-agent`, `workflow-definitions`; PostgreSQL AssistantRun/workflow/document state; third-party SSE/status cards; Cloudflare Codex/Image2 fixed tasks; docs and 8-server private smoke scripts.
 
@@ -14,18 +14,18 @@
 
 - Main ReAct already exposes internal actions such as `retrieve_evidence`, `read_document_detail`, `upgrade_parse_vlm`, static-page draft/render actions, report actions, and `codex_host_task`.
 - Third-party direct model prompting currently exposes only one product-level capability: `static_page_artifact`.
-- The third-party direct model can output `<V3_TOOL_REQUEST>{"tool":"static_page_artifact",...}</V3_TOOL_REQUEST>`, and V3 intercepts it before customer delivery.
+- The third-party direct model can output `<V3_TOOL_REQUEST>{"tool":"static_page_artifact",...}</V3_TOOL_REQUEST>`, and DataMax intercepts it before customer delivery.
 - Data ingestion / building tables / staging plans already has a fixed Codex task, safe card/status response, operator confirmation routes, and sync-status restoration, but it is triggered mostly by deterministic keywords.
 - Document parse status, degraded parse detection, auto-reparse metadata, and ReAct `upgrade_parse_vlm` exist. VLM reparse is budget-gated, visible-document-gated, and can queue an upload-ingest reparse workflow when configured.
 - `answer_quality_autofix` exists as an asynchronous fixed task. It must remain passive and must not become a customer-facing hard quality gate.
 - Background document enrichment and canonical dedup are planned but not fully implemented as a single background capability.
-- Proactive message-channel outreach is a desired system capability: V3 may need to notify a user, ask a follow-up, report task completion, request confirmation, or start a new conversation through an already configured channel. This is not yet closed as a model-visible capability.
+- Proactive message-channel outreach is a desired system capability: DataMax may need to notify a user, ask a follow-up, report task completion, request confirmation, or start a new conversation through an already configured channel. This is not yet closed as a model-visible capability.
 
 ## Non-Negotiable Guardrails
 
 - Do not change third-party public URLs, auth, request fields, or response fields. Additive card/status metadata is allowed only when existing clients can ignore it.
 - Do not expose low-level tool names, raw provider payloads, raw stdout/stderr, database URLs, credentials, full table dumps, full documents, source cursors, or private filesystem paths to the model or customer.
-- Do not let the model expand document, dataset, database-source, user, tenant, or conversation permissions. Scope is calculated and enforced by V3 only.
+- Do not let the model expand document, dataset, database-source, user, tenant, or conversation permissions. Scope is calculated and enforced by DataMax only.
 - Do not auto-write production data, migrate schema, overwrite stable customer URLs, change auth, or alter public integration contracts through a model request.
 - Do not use VLM by default. VLM/deep reparse is premium recovery only, controlled by parse quality, budget, visible-document scope, active-workflow checks, and operator/runtime configuration.
 - Do not re-enable a hard customer-facing quality gate. Low-quality answer handling remains retry/controlled-fallback/passive-autofix unless a separate regression-proven gate is approved.
@@ -37,7 +37,7 @@
 
 | Capability | Purpose | Default Action | Confirmation Policy |
 | --- | --- | --- | --- |
-| `static_page_artifact` | Static page, visualization report, dashboard, mobile report, published page link, style/template revision | Queue or reuse V3 static-page pipeline and return task/status/artifact link | No confirmation for new generated artifacts; confirmation for overwrite/stable URL replacement/scope expansion |
+| `static_page_artifact` | Static page, visualization report, dashboard, mobile report, published page link, style/template revision | Queue or reuse DataMax static-page pipeline and return task/status/artifact link | No confirmation for new generated artifacts; confirmation for overwrite/stable URL replacement/scope expansion |
 | `data_ingestion_analysis` | Data ingestion, table creation analysis, field mapping, cleaning, schema/profile/staging plan | Queue existing fixed Codex task and return `data_ingestion_analysis_*` status/card | No production writes; staging plan needs operator confirmation before sync/import |
 | `document_processing` | Document parse status, document入库状态, deep parse/reparse request, low-quality parse recovery | Return parse-status summary or queue gated reparse when safe | VLM/reparse requires Host gates; otherwise return review/needs-input status |
 | `collection_setup_analysis` | Collection/crawling setup, source采集规划, public-source or configured-source collection request | Produce analysis/confirmation card only in first phase | Any new source, login state, credential, external write, or crawler execution needs confirmation |
@@ -62,7 +62,7 @@ These stay invisible as direct third-party model-requested tools:
 
 ### Model Responsibility, Not A Tool
 
-`answer_composition` is the model's job, not a tool. Once V3 supplies scoped evidence, facts, statuses, and task results, the model should organize a fluent, useful, customer-ready answer. It must not expose internal tool traces, raw JSON, or "system will analyze later" as a final answer.
+`answer_composition` is the model's job, not a tool. Once DataMax supplies scoped evidence, facts, statuses, and task results, the model should organize a fluent, useful, customer-ready answer. It must not expose internal tool traces, raw JSON, or "system will analyze later" as a final answer.
 
 ## Closed-Loop Definition
 
@@ -71,7 +71,7 @@ A capability is closed only when all of these exist:
 1. Model-facing capability guidance with clear trigger and non-trigger examples.
 2. Strict parser for the internal `<V3_TOOL_REQUEST>` line.
 3. Host preflight validation for scope, capability, allowlist, confirmation policy, and runtime readiness.
-4. Deterministic dispatch to an existing V3 workflow, fixed task, status card, or confirmation card.
+4. Deterministic dispatch to an existing DataMax workflow, fixed task, status card, or confirmation card.
 5. Customer-facing reply shape using existing `reply.text`, `reply.task_status`, `reply.card`, `reply.artifact_links`, `requires_confirmation`, `action_id`, and `confirmation_id`.
 6. AssistantRun/workflow events for observability.
 7. Unit tests, negative tests, and a small real-prompt regression corpus.
@@ -258,7 +258,7 @@ The guidance must say:
 - use natural answer for ordinary Q&A and口径解释;
 - `answer_composition` is model-authored natural language, not a tool;
 - `document_processing`, `collection_setup_analysis`, `integration_setup_analysis`, and `message_channel_outreach` may return confirmation/status rather than immediate execution;
-- proactive messages are requests to V3 Host, not direct model-sent messages.
+- proactive messages are requests to DataMax Host, not direct model-sent messages.
 
 **Step 3: Run tests**
 
@@ -762,7 +762,7 @@ git commit -m "Add message channel outreach capability routing"
 
 **Step 1: Add a capability explanation section**
 
-Document that third-party clients do not call internal capabilities. They send ordinary messages, document scopes, dataset scopes, templates, or business source IDs. V3 may internally classify requests into product capabilities and return existing reply/card/status fields.
+Document that third-party clients do not call internal capabilities. They send ordinary messages, document scopes, dataset scopes, templates, or business source IDs. DataMax may internally classify requests into product capabilities and return existing reply/card/status fields.
 
 **Step 2: Add a non-breaking status table**
 
@@ -921,7 +921,7 @@ Update a validation doc or append a short dated note to this plan with:
 
 - The model knows DataMax can handle documents, parsing/reparse, reports/static pages, answer organization, data ingestion, collection planning, integration planning, proactive message-channel outreach, and permission-scoped enterprise work.
 - The model only requests product-level capabilities; it does not call low-level Host tools.
-- V3 Host can parse and route product-level capability requests without leaking internal tags to customers.
+- DataMax Host can parse and route product-level capability requests without leaking internal tags to customers.
 - Static pages and data ingestion are executable closed loops.
 - Document processing is at least a safe status/review loop, with gated reparse where runtime and policy allow it.
 - Collection and integration are confirmation-first loops, not hidden external execution.

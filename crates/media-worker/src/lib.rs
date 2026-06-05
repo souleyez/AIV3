@@ -2658,7 +2658,7 @@ fn render_video_slides_markdown(document: &Document, selected_slides_manifest: &
         .cloned()
         .unwrap_or_default();
     let mut output = format!("# Video Slides: {}\n\n", document.title);
-    output.push_str("This Markdown deck mirrors the screenshot-based PPTX using only V3-observed evidence. It is safe to share for review because local frame paths, source URLs, tokens, and provider secrets are not included.\n\n");
+    output.push_str("This Markdown deck mirrors the screenshot-based PPTX using only DataMax-observed evidence. It is safe to share for review because local frame paths, source URLs, tokens, and provider secrets are not included.\n\n");
     output.push_str("## Package Summary\n\n");
     let selected_count = selected_slides_manifest
         .get("selected_count")
@@ -3054,7 +3054,7 @@ fn render_pptx_app_props(slide_count: usize) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-<Application>AI Data Platform V3</Application>
+<Application>DataMax</Application>
 <PresentationFormat>On-screen Show (16:9)</PresentationFormat>
 <Slides>{slide_count}</Slides>
 <Company>AI Data Platform</Company>
@@ -3068,7 +3068,7 @@ fn render_pptx_core_props(document: &Document) -> String {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 <dc:title>{}</dc:title>
-<dc:creator>AI Data Platform V3</dc:creator>
+<dc:creator>DataMax</dc:creator>
 <cp:keywords>video,ppt,selected-slides</cp:keywords>
 <dcterms:created xsi:type="dcterms:W3CDTF">{}</dcterms:created>
 <dcterms:modified xsi:type="dcterms:W3CDTF">{}</dcterms:modified>
@@ -5257,13 +5257,13 @@ fn video_selected_slide_dedupe_warning(files: &[Value]) -> Option<Value> {
         .and_then(Value::as_str)
         .unwrap_or("selected_keep_list_order_deduped");
     let message = if visual_duplicate_count > 0 && exact_duplicate_count > 0 {
-        "Selected slide candidates included exact duplicate frames and conservative visual near-duplicates; V3 removed them before rectangle promotion and PPTX generation."
+        "Selected slide candidates included exact duplicate frames and conservative visual near-duplicates; DataMax removed them before rectangle promotion and PPTX generation."
     } else if visual_duplicate_count > 0 {
-        "Selected slide candidates included conservative visual near-duplicates; V3 removed them before rectangle promotion and PPTX generation."
+        "Selected slide candidates included conservative visual near-duplicates; DataMax removed them before rectangle promotion and PPTX generation."
     } else if exact_duplicate_count > 0 {
-        "Selected slide candidates included exact duplicate frame bytes; V3 removed them before rectangle promotion and PPTX generation."
+        "Selected slide candidates included exact duplicate frame bytes; DataMax removed them before rectangle promotion and PPTX generation."
     } else {
-        "Selected slide candidates included duplicates; V3 removed them before rectangle promotion and PPTX generation."
+        "Selected slide candidates included duplicates; DataMax removed them before rectangle promotion and PPTX generation."
     };
     Some(json!({
         "code": "selected_slide_duplicates_removed",
@@ -6032,7 +6032,7 @@ fn render_video_source_text_markdown(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let mut output = format!("# Source Text: {}\n\n", document.title);
-    output.push_str("This file contains only evidence extracted or observed by V3. Missing evidence is left explicit rather than fabricated.\n\n");
+    output.push_str("This file contains only evidence extracted or observed by DataMax. Missing evidence is left explicit rather than fabricated.\n\n");
     output.push_str("## Counts\n\n");
     output.push_str(&format!(
         "- Transcript segments: {}\n- Scenes: {}\n- Keyframe OCR snippets: {}\n- Raw frames: {}\n\n",

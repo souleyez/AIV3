@@ -4,7 +4,7 @@
 
 **Goal:** Replace the old OpenClaw-as-main-execution direction with a Codex Mac Host execution-kernel direction, while adding first-class separated memory so browser chats, datasets, projects, Codex task threads, and future external tools cannot leak context into each other accidentally.
 
-**Architecture:** V3 remains the control plane and source of truth: PostgreSQL owns tenants, local-key visibility, datasets, AssistantRun state, memory boundaries, ReAct validation, runtime audit, and artifacts. Codex Mac Host becomes the preferred execution kernel behind a disabled-by-default external host bridge; OpenClaw stays as an optional provider/legacy sidecar. Memory is split into explicit memory spaces, and every model/tool/Codex task receives only the memory spaces V3 selected and audited for that run.
+**Architecture:** DataMax remains the control plane and source of truth: PostgreSQL owns tenants, local-key visibility, datasets, AssistantRun state, memory boundaries, ReAct validation, runtime audit, and artifacts. Codex Mac Host becomes the preferred execution kernel behind a disabled-by-default external host bridge; OpenClaw stays as an optional provider/legacy sidecar. Memory is split into explicit memory spaces, and every model/tool/Codex task receives only the memory spaces DataMax selected and audited for that run.
 
 **Tech Stack:** Rust crates `domain-model`, `contracts`, `storage`, `platform-api`, `assistant-runtime`, `llm-gateway`, existing ReAct modules, workflow/runtime inspect; Next.js 16 / React 19 in `apps/web`; PostgreSQL 17.9 target; Mac-hosted Codex execution daemon later; optional OpenClaw provider remains fallback-safe.
 
@@ -23,22 +23,22 @@ That is enough. OpenClaw should not become the main execution kernel.
 The new mainline is:
 
 ```text
-V3 Web/API
+DataMax Web/API
   -> AssistantRun / Host-Controlled ReAct
-  -> V3 memory-space policy
-  -> V3 workflow/task/audit
+  -> DataMax memory-space policy
+  -> DataMax workflow/task/audit
   -> Codex Mac Host execution kernel
-  -> artifacts and redacted runtime logs back into V3
+  -> artifacts and redacted runtime logs back into DataMax
 ```
 
-Model routing is a separate V3-owned concern. Codex is not assumed to provide a production model gateway. Use `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md` for the detailed boundary between Codex Host, `llm-gateway`, and a future internal `model-proxy`.
+Model routing is a separate DataMax-owned concern. Codex is not assumed to provide a production model gateway. Use `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md` for the detailed boundary between Codex Host, `llm-gateway`, and a future internal `model-proxy`.
 
 The key product feature added by this plan is separated memory:
 
 - Users can run normal chat without selecting a dataset.
 - The model knows the system and visible database summary, but not unrelated private/project/thread memory.
 - Data-source RAG, conversation memory, project memory, and Codex task working memory are separate scopes.
-- The model can ask V3 to recall or write memory, but V3 validates the memory space first.
+- The model can ask DataMax to recall or write memory, but DataMax validates the memory space first.
 - Codex multi-thread execution uses one isolated task context per task.
 - Cross-thread or cross-project memory is never implicit.
 
@@ -60,7 +60,7 @@ Important gaps:
 - Old `chat_sessions` are still dataset-bound, while new AssistantRun is the real ordinary-chat path.
 - Dataset visibility is mostly enforced by API helpers, but still deserves stronger tests and clearer memory-space interaction.
 - OpenClaw provider errors may expose raw upstream body and need redaction before any wider external-provider rollout.
-- Codex Host execution has not been modeled as a V3-owned, allowlisted, audited runtime capability yet.
+- Codex Host execution has not been modeled as a DataMax-owned, allowlisted, audited runtime capability yet.
 
 ## Product Semantics
 
@@ -83,7 +83,7 @@ Do not add general team/corporate sharing yet. The local-key model is still inte
 - A new conversation can get a new `local_thread_id` and memory space without deleting old memory.
 - A static-page draft inherits the AssistantRun memory space at creation.
 - A Codex host task always gets a separate `task` memory space, linked back to the parent AssistantRun.
-- The model can see memory-space summaries, not raw memory, until V3 decides recall is relevant.
+- The model can see memory-space summaries, not raw memory, until DataMax decides recall is relevant.
 - Generated artifacts are not added to memory by default.
 - User utterances may be memory candidates; assistant outputs and generated artifacts are excluded unless explicitly promoted.
 
@@ -102,15 +102,15 @@ OpenClaw memory -> optional evidence only, never a source of truth.
 
 ```mermaid
 flowchart LR
-  "Browser Terminal" --> "V3 Web"
-  "V3 Web" --> "AssistantRun API"
+  "Browser Terminal" --> "DataMax Web"
+  "DataMax Web" --> "AssistantRun API"
   "AssistantRun API" --> "Memory Policy"
   "Memory Policy" --> "Memory Spaces"
   "Memory Policy" --> "Dataset Visibility"
   "AssistantRun API" --> "Host-Controlled ReAct"
-  "Host-Controlled ReAct" --> "V3 Tool Registry"
-  "V3 Tool Registry" --> "Retrieval / Documents / Reports / Static Pages"
-  "V3 Tool Registry" --> "External Host Bridge"
+  "Host-Controlled ReAct" --> "DataMax Tool Registry"
+  "DataMax Tool Registry" --> "Retrieval / Documents / Reports / Static Pages"
+  "DataMax Tool Registry" --> "External Host Bridge"
   "External Host Bridge" --> "Codex Mac Host"
   "Codex Mac Host" --> "Task Memory Space"
   "Codex Mac Host" --> "Artifacts / Logs"
@@ -134,9 +134,9 @@ Do not let multiple workers edit `crates/platform-api/src/lib.rs` at the same ti
 
 **Files:**
 
-- Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
+- Modify: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
 - Reference: `docs/plans/2026-04-29-openclaw-extension-adapter-plan.md`
-- Reference: `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md`
+- Reference: `docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md`
 
 **Step 1: Mark OpenClaw mainline as completed and downgraded**
 
@@ -168,7 +168,7 @@ Expected: no whitespace errors.
 **Step 4: Commit**
 
 ```powershell
-git add docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md
+git add docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md
 git commit -m "docs: plan codex kernel separated memory"
 ```
 
@@ -712,7 +712,7 @@ Advertise:
       "recall_memory_space",
       "write_memory_note"
     ],
-    "policy": "V3 validates memory-space visibility; model cannot read cross-thread memory implicitly."
+    "policy": "DataMax validates memory-space visibility; model cannot read cross-thread memory implicitly."
   }
 }
 ```
@@ -789,8 +789,8 @@ Expected: ReAct tests pass; existing OpenClaw gated tests still pass.
 Add:
 
 ```javascript
-const LOCAL_MEMORY_SPACE_ID_STORAGE_KEY = 'aidp-v3-memory-space-id';
-const LOCAL_MEMORY_SPACE_CACHE_STORAGE_KEY = 'aidp-v3-memory-space-cache';
+const LOCAL_MEMORY_SPACE_ID_STORAGE_KEY = 'aidp-DataMax-memory-space-id';
+const LOCAL_MEMORY_SPACE_CACHE_STORAGE_KEY = 'aidp-DataMax-memory-space-cache';
 ```
 
 **Step 2: Add helper module**
@@ -896,7 +896,7 @@ Expected: tests and build pass.
 **Files:**
 
 - Create: `docs/architecture/codex-host-execution-kernel.md`
-- Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
+- Modify: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
 - Modify: `crates/platform-api/src/react_agent_contract.rs`
 - Modify: `crates/platform-api/src/react_agent_catalog.rs`
 - Modify: `crates/platform-api/src/react_agent_tools.rs`
@@ -908,10 +908,10 @@ Create architecture doc with:
 
 ```text
 Codex Host is an execution worker, not a data authority.
-V3 signs and scopes every task.
+DataMax signs and scopes every task.
 Codex Host receives a task memory space and explicit artifact workspace.
 Codex Host cannot see browser local secret values.
-Codex Host cannot read private datasets except through V3-supplied evidence/artifacts.
+Codex Host cannot read private datasets except through DataMax-supplied evidence/artifacts.
 Codex Host task logs are redacted before UI display.
 ```
 
@@ -1251,7 +1251,7 @@ When memory is created from dataset-derived material, metadata must include:
 }
 ```
 
-Before supplying a memory item, V3 must verify current active secret binding ids still satisfy the source visibility.
+Before supplying a memory item, DataMax must verify current active secret binding ids still satisfy the source visibility.
 
 **Step 3: Do not over-implement sharing**
 
@@ -1298,7 +1298,7 @@ Frontend briefing should include:
 Provider input must state:
 
 ```text
-V3 uses separated memory spaces. You may request memory recall through host actions, but you must not assume unrelated thread/project memory.
+DataMax uses separated memory spaces. You may request memory recall through host actions, but you must not assume unrelated thread/project memory.
 ```
 
 **Step 3: Tests**
@@ -1326,7 +1326,7 @@ Expected: model-facing briefing is concise and does not leak raw memory content.
 
 - Create: `docs/architecture/codex-host-daemon-contract.md`
 - Create: `docs/operations/codex-host-mac-setup.md`
-- Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
+- Modify: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
 
 **Step 1: Define daemon contract**
 
@@ -1334,12 +1334,12 @@ Document a future daemon:
 
 ```text
 codex-runtime-agent
-  - polls V3/Cloudflare queue
+  - polls DataMax/Cloudflare queue
   - leases one task
   - starts one Codex execution thread
   - receives scoped prompt/materials only
   - writes logs/artifacts into a task workspace
-  - redacts and reports summary back to V3
+  - redacts and reports summary back to DataMax
 ```
 
 **Step 2: Define task payload**
@@ -1370,7 +1370,7 @@ Rules:
 
 - No public unauthenticated port.
 - No browser local secret extraction.
-- No direct PostgreSQL credentials unless running a V3-owned worker role.
+- No direct PostgreSQL credentials unless running a DataMax-owned worker role.
 - No arbitrary command execution from user text.
 - Workspace cleanup must follow local backup-first deletion policy.
 
@@ -1451,7 +1451,7 @@ Expected: all focused checks pass.
 
 **Files:**
 
-- Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
+- Modify: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
 - Add/modify implementation files from previous tasks
 - Add: this plan file
 
@@ -1493,7 +1493,7 @@ At the end of implementation, add a status block to this plan and to the consoli
 ```markdown
 **Status 2026-05-xx:** separated memory first pass completed.
 Conversation memory now has first-class memory spaces, AssistantRun stores active memory space,
-ReAct can recall/write/select memory through V3 validation, and Codex host task stubs allocate isolated task memory.
+ReAct can recall/write/select memory through DataMax validation, and Codex host task stubs allocate isolated task memory.
 ```
 
 ## Acceptance Criteria
@@ -1502,7 +1502,7 @@ ReAct can recall/write/select memory through V3 validation, and Codex host task 
 - Existing selected dataset/RAG semantics are unchanged.
 - A browser thread has a default conversation memory space.
 - Two browser threads cannot see each other's conversation memory unless explicitly linked through a project memory space.
-- ReAct can request memory recall, but V3 validates the memory space before returning items.
+- ReAct can request memory recall, but DataMax validates the memory space before returning items.
 - Codex host task stubs create isolated task memory spaces and do not leak into conversation memory.
 - Runtime inspect shows memory-space decisions and denied cross-space requests.
 - OpenClaw remains optional and disabled/fallback-safe.
@@ -1513,16 +1513,16 @@ ReAct can recall/write/select memory through V3 validation, and Codex host task 
 
 - No full team permission system in this slice.
 - No arbitrary shared memory graph in this slice.
-- No direct Codex daemon implementation before the disabled V3 host-action contract is safe.
+- No direct Codex daemon implementation before the disabled DataMax host-action contract is safe.
 - No automatic promotion of generated artifacts into memory.
 - No direct model access to PostgreSQL, browser local secret values, or raw host logs.
 
 ## Recommended Next Thread Prompt
 
 ```text
-Continue AI Data Platform V3 from docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md.
+Continue DataMax from docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md.
 OpenClaw provider/stubs already completed their optional first pass; do not continue OpenClaw as the main execution kernel.
 Start with Task 0 and Task 1: update the consolidated handoff, then add memory-space domain/storage foundation.
-Keep V3 as the control plane. Codex Host is the future execution kernel, but first implementation must be disabled-by-default and audited.
+Keep DataMax as the control plane. Codex Host is the future execution kernel, but first implementation must be disabled-by-default and audited.
 Use separated memory rules: conversation/project/task/dataset/system memory must not leak across scopes.
 ```

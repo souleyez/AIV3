@@ -1,10 +1,10 @@
-# V3 Codex Host Architecture Alignment Implementation Plan
+# DataMax Codex Host Architecture Alignment Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Align the Codex Host, model proxy, separated memory, workers, and existing V3 Rust architecture into one non-overlapping module plan.
+**Goal:** Align the Codex Host, model proxy, separated memory, workers, and existing DataMax Rust architecture into one non-overlapping module plan.
 
-**Architecture:** V3 remains the control plane and source of truth. `llm-gateway` remains the provider abstraction and is the seed of a future internal `model-proxy`; Codex Host is an external execution worker, not a model gateway or data authority. Existing workers, tool registry, workflow engine, runtime inspect, PostgreSQL, and artifact publishing stay as reusable V3 infrastructure instead of being duplicated in the Codex Host path.
+**Architecture:** DataMax remains the control plane and source of truth. `llm-gateway` remains the provider abstraction and is the seed of a future internal `model-proxy`; Codex Host is an external execution worker, not a model gateway or data authority. Existing workers, tool registry, workflow engine, runtime inspect, PostgreSQL, and artifact publishing stay as reusable DataMax infrastructure instead of being duplicated in the Codex Host path.
 
 **Tech Stack:** Rust workspace crates `platform-api`, `llm-gateway`, `tool-registry`, `mcp-gateway`, `workflow-engine`, `workflow-definitions`, `event-bus`, `storage`, `codex-host-agent`; Next.js web shell in `apps/web`; PostgreSQL 17.9; NATS/worker queue; private Responses-compatible shim only for Codex-to-MiniMax experiments.
 
@@ -17,19 +17,19 @@ The Codex substrate plan is frozen until the operator explicitly resumes it.
 Current verified production status:
 
 - 8 server has Codex CLI installed (`/usr/local/bin/codex`, `codex-cli 0.130.0`) but is not logged in (`codex login status` reports `Not logged in`).
-- V3 ordinary AssistantRun answers still use the provider path, currently `ASSISTANT_RUN_RUNTIME_PROVIDER=minimax` with `MiniMax-M2.7`.
+- DataMax ordinary AssistantRun answers still use the provider path, currently `ASSISTANT_RUN_RUNTIME_PROVIDER=minimax` with `MiniMax-M2.7`.
 - `aiv3-codex-host-agent` and the local Codex-compatible responses shim are deployed, but the host agent is configured as `CODEX_HOST_AGENT_EXECUTION_MODE=plan_only`, `CODEX_HOST_AGENT_PROFILE_KIND=codex-compatible-shim`, and `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC=false`.
 - AssistantRun Codex diagnostics remain shadow/plan-only. Real Codex transports are not the authoritative answer path.
 
 Freeze means:
 
 - Do not switch ordinary AssistantRun, external bot, or third-party chat answers from MiniMax/provider routing to Codex-backed routing.
-- Do not log the 8 server Codex CLI into the operator's GPT account or store GPT account credentials for V3 service use.
+- Do not log the 8 server Codex CLI into the operator's GPT account or store GPT account credentials for DataMax service use.
 - Do not enable `CODEX_HOST_AGENT_ALLOW_REAL_CODEX_EXEC`, promote `codex_exec_schema`, SDK, app-server, or MCP transports, or add Linux-server real execution support.
 - Do not build a new Codex-backed model proxy unless the operator explicitly reopens this track.
 - Keep the existing code, services, diagnostics, and documents as a dormant reference. Bug fixes that prevent leakage or accidental execution are allowed; feature work should move back to the current mainline.
 
-If resumed later, restart from three explicit gates: account/login decision, isolated host smoke, and V3 promotion review. Until then, Codex remains an optional future execution-host design, not the current model gateway.
+If resumed later, restart from three explicit gates: account/login decision, isolated host smoke, and DataMax promotion review. Until then, Codex remains an optional future execution-host design, not the current model gateway.
 
 ---
 
@@ -39,9 +39,9 @@ The current discussion split the future system into three rough areas:
 
 - Model proxy.
 - Codex client / host.
-- V3 project for permissions, datasets, and artifacts.
+- DataMax project for permissions, datasets, and artifacts.
 
-That direction is right, but V3 already has a more precise architecture:
+That direction is right, but DataMax already has a more precise architecture:
 
 - Platform Control Plane.
 - Integration Plane: `llm-gateway`, `mcp-gateway`, `tool-registry`, `prompt-registry`.
@@ -50,7 +50,7 @@ That direction is right, but V3 already has a more precise architecture:
 - Data / Artifact Plane.
 - Experience Layer.
 
-The implementation risk is not that Codex Host is wrong. The risk is accidentally building a second platform around Codex Host and duplicating V3's existing control, memory, queue, provider, and artifact responsibilities.
+The implementation risk is not that Codex Host is wrong. The risk is accidentally building a second platform around Codex Host and duplicating DataMax's existing control, memory, queue, provider, and artifact responsibilities.
 
 ## Final Module Boundary
 
@@ -74,7 +74,7 @@ Does not own:
 - Codex Host flags.
 - Direct queue or database access.
 
-### 2. V3 Control Plane
+### 2. DataMax Control Plane
 
 Owns:
 
@@ -144,7 +144,7 @@ Does not own:
 - Local-key policy.
 - System memory.
 - Provider credential authority.
-- V3 task scheduler.
+- DataMax task scheduler.
 
 ### 6. Data / Artifact Plane
 
@@ -174,14 +174,14 @@ Decision:
 
 Reason:
 
-- V3 already has provider abstraction, model lanes, provider error redaction, and output normalization in `llm-gateway`.
+- DataMax already has provider abstraction, model lanes, provider error redaction, and output normalization in `llm-gateway`.
 - A premature proxy will duplicate model route logic and credential handling.
 
 ### Conflict 2: Codex Host vs Worker Plane
 
 Decision:
 
-- Codex Host is one external worker class, not a replacement for V3 workers.
+- Codex Host is one external worker class, not a replacement for DataMax workers.
 - Codex tasks must be represented as workflow definitions and queue tasks.
 
 Reason:
@@ -217,7 +217,7 @@ Decision:
 
 Reason:
 
-- The original V3 rule says workers should depend on domain/contracts/storage/event-bus, not web/API handlers.
+- The original DataMax rule says workers should depend on domain/contracts/storage/event-bus, not web/API handlers.
 - This is a creeping giant-module risk.
 
 ### Conflict 5: `tool-registry` Depending On `llm-gateway`
@@ -250,9 +250,9 @@ Reason:
 - These three solve different problems.
 - Blending them creates unclear ownership of credentials, memory, and provider compatibility.
 
-## Borrowing Rules From V3 Original Architecture
+## Borrowing Rules From DataMax Original Architecture
 
-Borrow these existing V3 mechanisms before adding anything new:
+Borrow these existing DataMax mechanisms before adding anything new:
 
 - Use `workflow-definitions` for every Codex Host task kind.
 - Use `workflow-engine` and `event-bus` for task lifecycle instead of a custom Codex scheduler.
@@ -265,12 +265,12 @@ Borrow these existing V3 mechanisms before adding anything new:
 
 ## Strong Architecture Rules
 
-- Browser traffic only talks to V3 APIs.
+- Browser traffic only talks to DataMax APIs.
 - Codex app-server and exec-server are never browser-facing.
 - Provider keys are never exposed to browser local storage or Codex task prompts.
 - Codex Host receives scoped task materials, not database credentials.
-- V3 validates memory spaces before recall/write/promote.
-- V3 validates dataset visibility before retrieval or Codex task materialization.
+- DataMax validates memory spaces before recall/write/promote.
+- DataMax validates dataset visibility before retrieval or Codex task materialization.
 - Generated artifacts are not memory unless explicitly promoted.
 - `model-proxy` receives already-scoped model input; it does not run RAG or permission checks.
 - `codex-host-agent` returns redacted logs and artifact refs; it does not stream raw stdout into UI.
@@ -281,15 +281,15 @@ Borrow these existing V3 mechanisms before adding anything new:
 
 **Files:**
 
-- Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
-- Create: `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`
+- Modify: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
+- Create: `docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md`
 
 **Step 1: Add this plan to Source Plans**
 
 Add:
 
 ```markdown
-- `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: frozen architecture boundary plan aligning V3's original control/integration/workflow/worker planes with Codex Host and future model proxy.
+- `docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md`: frozen architecture boundary plan aligning DataMax's original control/integration/workflow/worker planes with Codex Host and future model proxy.
 ```
 
 **Step 2: Add an architecture alignment section**
@@ -314,15 +314,15 @@ Expected: no whitespace errors.
 **Step 4: Commit**
 
 ```powershell
-git add docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md
-git commit -m "docs: align codex host with v3 architecture"
+git add docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md
+git commit -m "docs: align codex host with DataMax architecture"
 ```
 
 ## Task 1: Add Dependency Boundary Audit
 
 **Files:**
 
-- Create: `docs/architecture/v3-dependency-boundary-audit.md`
+- Create: `docs/architecture/DataMax-dependency-boundary-audit.md`
 - Optionally create later: `tools/audit-crate-boundaries.ps1`
 
 **Step 1: Record current dependency exceptions**
@@ -371,8 +371,8 @@ Expected: no whitespace errors.
 **Step 5: Commit**
 
 ```powershell
-git add docs/architecture/v3-dependency-boundary-audit.md
-git commit -m "docs: audit v3 crate dependency boundaries"
+git add docs/architecture/DataMax-dependency-boundary-audit.md
+git commit -m "docs: audit DataMax crate dependency boundaries"
 ```
 
 ## Task 2: Extract Codex Host Shared Contract From `platform-api`
@@ -505,7 +505,7 @@ git commit -m "refactor: decouple codex host agent from platform api"
 
 **Files:**
 
-- Modify: `docs/architecture/v3-dependency-boundary-audit.md`
+- Modify: `docs/architecture/DataMax-dependency-boundary-audit.md`
 - Modify if needed: `crates/tool-registry/Cargo.toml`
 - Modify if needed: `crates/tool-registry/src/lib.rs`
 - Modify if needed: `crates/llm-gateway/src/lib.rs`
@@ -542,7 +542,7 @@ Expected: all pass.
 **Step 5: Commit**
 
 ```powershell
-git add docs/architecture/v3-dependency-boundary-audit.md crates/tool-registry crates/llm-gateway crates/contracts
+git add docs/architecture/DataMax-dependency-boundary-audit.md crates/tool-registry crates/llm-gateway crates/contracts
 git commit -m "refactor: clarify tool registry model boundaries"
 ```
 
@@ -666,8 +666,8 @@ git commit -m "feat: harden codex host execution readiness"
 
 **Files:**
 
-- Create: `docs/plans/2026-05-07-v3-worker-boundary-cleanup-plan.md`
-- Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
+- Create: `docs/plans/2026-05-07-DataMax-worker-boundary-cleanup-plan.md`
+- Modify: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
 
 **Step 1: List worker imports**
 
@@ -724,8 +724,8 @@ Expected: no whitespace errors.
 **Step 5: Commit**
 
 ```powershell
-git add docs/plans/2026-05-07-v3-worker-boundary-cleanup-plan.md docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md
-git commit -m "docs: plan v3 worker boundary cleanup"
+git add docs/plans/2026-05-07-DataMax-worker-boundary-cleanup-plan.md docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md
+git commit -m "docs: plan DataMax worker boundary cleanup"
 ```
 
 ## Task 8: End-To-End Architecture Smoke
@@ -783,18 +783,18 @@ Expected: pass.
 - A fresh thread can explain the six final modules without reading chat history.
 - `model-proxy` is clearly a future service facade over `llm-gateway`, not a new model stack.
 - Codex Host is clearly an external execution worker, not a model gateway or control plane.
-- Existing workers remain first-class V3 worker plane components.
+- Existing workers remain first-class DataMax worker plane components.
 - Current dependency exceptions are documented and prioritized.
-- No browser path can bypass V3 API, scope policy, or runtime audit.
+- No browser path can bypass DataMax API, scope policy, or runtime audit.
 - MiniMax/non-GPT Codex experiments are routed through private Responses-compatible shim policy only.
 - The plan names exact implementation tasks, files, tests, and commit slices.
 
 ## Recommended Next Thread Prompt
 
 ```text
-Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md.
+Continue DataMax from docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md.
 Treat this plan as frozen as of 2026-05-18 unless the operator explicitly resumes the Codex substrate track.
 Do not promote Codex, log the 8 server Codex CLI into the operator GPT account, enable real transports, or route ordinary AssistantRun/external-bot/third-party chat answers through Codex.
-Keep V3 as the control plane, llm-gateway/provider routing as the active answer path, and Codex Host as dormant diagnostic/reference infrastructure.
+Keep DataMax as the control plane, llm-gateway/provider routing as the active answer path, and Codex Host as dormant diagnostic/reference infrastructure.
 Only touch this track for leakage prevention, accidental-execution prevention, or documentation updates while frozen.
 ```

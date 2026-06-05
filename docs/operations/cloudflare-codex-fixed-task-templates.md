@@ -1,12 +1,12 @@
 # Cloudflare Codex Fixed Task Templates
 
-**Scope:** V3 advanced workflows delegated to Cloudflare Codex through Codex Host.
+**Scope:** DataMax advanced workflows delegated to Cloudflare Codex through Codex Host.
 
-Cloudflare Codex is an execution host, not a new product authority. V3 owns user scope, dataset visibility, task packaging, output validation, publication, audit, and rollback. The host may have operational access to V3 and the 8 server, but routine no-confirm execution is allowed only for server-owned fixed task templates.
+Cloudflare Codex is an execution host, not a new product authority. DataMax owns user scope, dataset visibility, task packaging, output validation, publication, audit, and rollback. The host may have operational access to DataMax and the 8 server, but routine no-confirm execution is allowed only for server-owned fixed task templates.
 
-The first customer-visible static page should be produced by V3's local generated-artifact path when possible. Cloudflare Codex is an optional advanced executor for higher-fidelity Image2-driven revisions, heavy repair, or fallback work; it must not be the only path that can produce a customer link.
+The first customer-visible static page should be produced by DataMax's local generated-artifact path when possible. Cloudflare Codex is an optional advanced executor for higher-fidelity Image2-driven revisions, heavy repair, or fallback work; it must not be the only path that can produce a customer link.
 
-When using the Cloudflare route, configure the host agent with `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator`, `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex`, `CODEX_ORCHESTRATOR_BASE_URL=https://souleye.cc`, `CODEX_ORCHESTRATOR_API_PATH=/api/codex/orchestrator/v1`, `CODEX_ORCHESTRATOR_RUNTIME_TARGET=cloudflare`, and either `CODEX_ORCHESTRATOR_ACCESS_KEY` or `CODEX_ORCHESTRATOR_KEY_FILE`. In this mode the remote executor returns structured output or standalone HTML, and the V3 host-agent publishes final static-page HTML into V3-owned `/generated-artifacts/` paths.
+When using the Cloudflare route, configure the host agent with `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator`, `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex`, `CODEX_ORCHESTRATOR_BASE_URL=https://souleye.cc`, `CODEX_ORCHESTRATOR_API_PATH=/api/codex/orchestrator/v1`, `CODEX_ORCHESTRATOR_RUNTIME_TARGET=cloudflare`, and either `CODEX_ORCHESTRATOR_ACCESS_KEY` or `CODEX_ORCHESTRATOR_KEY_FILE`. In this mode the remote executor returns structured output or standalone HTML, and the DataMax host-agent publishes final static-page HTML into DataMax-owned `/generated-artifacts/` paths.
 
 ## Policy
 
@@ -14,9 +14,9 @@ Use template-level approval:
 
 ```text
 operator approves a fixed template once
-  -> V3 allowlists the template capability
+  -> DataMax allowlists the template capability
   -> routine instances run without per-task human confirmation
-  -> V3 validates the structured output
+  -> DataMax validates the structured output
   -> exceptions request human review
 ```
 
@@ -27,27 +27,27 @@ Never allow user text to set Codex CLI flags, model profiles, workspace roots, c
 Purpose:
 
 - Turn an advanced static-page request into an Image2 visual contract.
-- Bind real V3 data after the visual direction is available.
+- Bind real DataMax data after the visual direction is available.
 - Validate snapshot, date-series, unit, and detail-table口径.
-- Publish a higher-fidelity generated artifact under the V3 generated-artifacts surface on the 8 server after the local first page is already available, or when explicitly requested by the operator/user.
+- Publish a higher-fidelity generated artifact under the DataMax generated-artifacts surface on the 8 server after the local first page is already available, or when explicitly requested by the operator/user.
 
 No-confirm conditions:
 
 - The task creates a new artifact path under `/generated-artifacts/`.
-- The data scope comes from V3-selected datasets, documents, or database sources.
-- V3 has already produced an Image2 effect preview or preview asset for the same draft.
-- The customer may view the effect image in the stream/status card, but no customer confirmation is required before V3 continues to Codex execution.
+- The data scope comes from DataMax-selected datasets, documents, or database sources.
+- DataMax has already produced an Image2 effect preview or preview asset for the same draft.
+- The customer may view the effect image in the stream/status card, but no customer confirmation is required before DataMax continues to Codex execution.
 - The fixed task declares `effect_image_confirmation_required=false` and `continue_to_publish_after_effect_image=true`.
 - The output includes a validation report with latest snapshot, row counts, unit policy, and warnings.
 - The task does not overwrite, revoke, or replace an existing customer artifact.
-- The task does not change V3 source code, public API, auth, schema, deployment config, or third-party integration contracts.
+- The task does not change DataMax source code, public API, auth, schema, deployment config, or third-party integration contracts.
 
 Human confirmation is required when:
 
 - An existing artifact or stable customer URL would be overwritten.
 - Data permissions, credentials, source scope, or server write scope need to expand.
 - The generated page cannot prove snapshot/date/unit口径.
-- The task wants to send the page to a customer channel outside the normal V3 artifact link.
+- The task wants to send the page to a customer channel outside the normal DataMax artifact link.
 - The task proposes source-code, schema, auth, deploy, or public-interface changes.
 
 Fixed input package:
@@ -124,7 +124,7 @@ Purpose:
 
 No-confirm conditions:
 
-- The case package is generated by V3 from low-quality signals and compact traces.
+- The case package is generated by DataMax from low-quality signals and compact traces.
 - The host writes only inside the answer-quality allowlist.
 - The output adds or updates regression tests before behavior changes.
 - The output reports changed files, tests, risk level, and rollback notes.
@@ -165,7 +165,7 @@ Fixed input package:
       "crates/platform-api/src/lib.rs",
       "fixtures/document-quality/**",
       "scripts/run-document-quality-smoke.ps1",
-      "scripts/run-v3-quality-gate-smoke.ps1",
+      "scripts/run-DataMax-quality-gate-smoke.ps1",
       "docs/validation/**"
     ],
     "symbols": [
@@ -199,14 +199,14 @@ Fixed output schema:
 Purpose:
 
 - Analyze customer requests for data接入, 入库, 建表, 字段映射, 清洗, schema, ETL, or database/source analysis.
-- Profile only V3-selected files, documents, datasets, tables, or configured database-source previews.
+- Profile only DataMax-selected files, documents, datasets, tables, or configured database-source previews.
 - Produce a data-quality report, field mapping plan, validation checks, and recommended next actions.
-- Optionally produce a staging/import specification when the target remains V3-managed and non-production.
+- Optionally produce a staging/import specification when the target remains DataMax-managed and non-production.
 
 No-confirm conditions:
 
 - The task is read-only analysis or a staging-spec proposal.
-- The source scope comes from V3-selected materials only.
+- The source scope comes from DataMax-selected materials only.
 - The task never requests or emits credentials, database URLs, provider logs, or raw customer documents.
 - The task does not change public API, auth, third-party request/response fields, database schema, deploy config, or production data.
 - The output contains source summary, data-quality report, validation checks, and recommended next actions.
@@ -297,7 +297,7 @@ Fixed output schema:
 
 ## Audit Events
 
-V3 should record bounded, redacted events for fixed template work:
+DataMax should record bounded, redacted events for fixed template work:
 
 - `codex_host.fixed_task.queued`
 - `codex_host.fixed_task.completed`
@@ -318,16 +318,16 @@ Do not record raw prompts, raw diffs, provider keys, database URLs, server crede
 
 ## Human Exception Email
 
-V3 sends an operational exception email to `soulzyn@qq.com` only when a fixed template needs review:
+DataMax sends an operational exception email to `soulzyn@qq.com` only when a fixed template needs review:
 
 - fixed output status is `needs_human`;
-- fixed output validation fails and V3 records `codex_host.fixed_task.rejected`;
+- fixed output validation fails and DataMax records `codex_host.fixed_task.rejected`;
 - Codex Host preflight rejects a fixed task that was packaged for no-confirm execution;
 - `answer_quality_autofix` proposes a medium/high-risk patch or an out-of-scope change.
 
 Routine `queued` and `completed` events do not send email. The email body contains only the same bounded audit summary: template id, status, workflow execution id, safe artifact URL or changed-file count, test-command summary, and human-review reason. It must not include raw prompts, diffs, provider logs, secrets, database URLs, or customer documents.
 
-The default recipient is `soulzyn@qq.com`; operators may override it with `CODEX_HOST_FIXED_TASK_EXCEPTION_EMAIL_TO`. If Cloudflare Email Service is not configured, V3 uses the logging sender so local/private smokes remain non-networked.
+The default recipient is `soulzyn@qq.com`; operators may override it with `CODEX_HOST_FIXED_TASK_EXCEPTION_EMAIL_TO`. If Cloudflare Email Service is not configured, DataMax uses the logging sender so local/private smokes remain non-networked.
 
 ## Rollback
 
@@ -339,7 +339,7 @@ CODEX_HOST_TASK_ALLOWLIST=
 CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES=
 ```
 
-Disable a single template by removing its capability from both V3 `CODEX_HOST_TASK_ALLOWLIST` and the host profile `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES`.
+Disable a single template by removing its capability from both DataMax `CODEX_HOST_TASK_ALLOWLIST` and the host profile `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES`.
 
 ## Smoke
 
@@ -365,11 +365,11 @@ Run the local data-ingestion analysis smoke before enabling the template for cus
 .\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case data-ingestion-analysis
 ```
 
-It exercises customer intent detection, V3-selected source packaging, host preflight, fixed output validation, and unsafe credential/schema/API/production-write guards. It does not contact the 8 server or write any database.
+It exercises customer intent detection, DataMax-selected source packaging, host preflight, fixed output validation, and unsafe credential/schema/API/production-write guards. It does not contact the 8 server or write any database.
 
 Rollback must preserve these fallbacks:
 
 - static-page direct generation still works when Codex Host is disabled;
 - low-quality case collection can continue without patch generation;
-- data-ingestion requests fall back to normal V3 chat behavior or source-required status when fixed execution is disabled;
+- data-ingestion requests fall back to normal DataMax chat behavior or source-required status when fixed execution is disabled;
 - no customer-facing answer is blocked by this asynchronous autofix path.

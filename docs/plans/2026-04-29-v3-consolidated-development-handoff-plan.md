@@ -1,12 +1,12 @@
-# AI Data Platform V3 Consolidated Development Handoff Plan
+# DataMax Consolidated Development Handoff Plan
 
-> **2026-05-07 master-plan note:** Use `docs/plans/2026-05-07-v3-master-development-plan.md` as the active master plan. This file is now a historical consolidated handoff and detailed status reference.
+> **2026-05-07 master-plan note:** Use `docs/plans/2026-05-07-DataMax-master-development-plan.md` as the active master plan. This file is now a historical consolidated handoff and detailed status reference.
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Consolidate the V3 assistant, static-page generation, document/media parsing, report outputs, separated memory, historical Codex Host substrate direction, and optional OpenClaw extension into one reference plan that a fresh development thread can use without re-reading the whole project history. The active plan is now `docs/plans/2026-05-07-v3-master-development-plan.md`.
+**Goal:** Consolidate the DataMax assistant, static-page generation, document/media parsing, report outputs, separated memory, historical Codex Host substrate direction, and optional OpenClaw extension into one reference plan that a fresh development thread can use without re-reading the whole project history. The active plan is now `docs/plans/2026-05-07-DataMax-master-development-plan.md`.
 
-**Architecture:** V3 remains a host-controlled data platform: PostgreSQL is the source of truth, the assistant supplies model context rather than composing answers locally, and all data visibility, AssistantRun state, memory-space policy, draft state, queue state, and output artifacts are owned by V3. Static-page generation remains the core product loop. As of 2026-05-18 the Codex substrate / Mac Host execution-kernel direction is frozen and kept as historical reference only. OpenClaw has completed its first optional provider/stub pass and stays as a removable sidecar, not the main execution route.
+**Architecture:** DataMax remains a host-controlled data platform: PostgreSQL is the source of truth, the assistant supplies model context rather than composing answers locally, and all data visibility, AssistantRun state, memory-space policy, draft state, queue state, and output artifacts are owned by DataMax. Static-page generation remains the core product loop. As of 2026-05-18 the Codex substrate / Mac Host execution-kernel direction is frozen and kept as historical reference only. OpenClaw has completed its first optional provider/stub pass and stays as a removable sidecar, not the main execution route.
 
 **Tech Stack:** Next.js 16 / React 19 in `apps/web`; `react-grid-layout` plus `@dnd-kit` for static-page module layout/reordering; Apache ECharts as the planned advanced chart runtime while deterministic HTML/SVG rendering remains the export-safe fallback; Rust crates including `platform-api`, `llm-gateway`, `static-page-runtime`, `static-page-worker`, `static-page-renderer`, `ingest-worker`, `retrieval-worker`, `memory-worker`, `document-vlm-runtime`; PostgreSQL 17.9 target; Cloudflare/Codex image queue endpoint; optional OpenClaw Gateway `/v1/responses` and `/v1/chat/completions`; local-first parsers plus configured MiniMax VLM/media capability probes.
 
@@ -20,13 +20,13 @@ Detailed source documents remain valid as references:
 
 - `docs/plans/2026-04-27-static-page-generation-studio-plan.md`: detailed static-page, assistant shell, ingestion, visibility, AssistantRun, and renderer plan/history.
 - `docs/plans/2026-04-29-openclaw-extension-adapter-plan.md`: detailed optional OpenClaw adapter plan.
-- `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md`: detailed ReAct refinement plan comparing the Java reference, the original TS contract, and current V3 AssistantRun implementation.
+- `docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md`: detailed ReAct refinement plan comparing the Java reference, the original TS contract, and current DataMax AssistantRun implementation.
 - `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`: historical plan for Codex Mac Host as future execution kernel and first-class separated memory spaces; frozen as of 2026-05-18 unless explicitly resumed.
-- `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`: detailed boundary plan for Codex host integration versus V3-owned model gateway/proxy.
-- `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`: frozen architecture boundary plan aligning V3's original control/integration/workflow/worker planes with Codex Host and future model proxy.
-- `docs/plans/2026-05-07-v3-email-account-auth-plan.md`: account/email authentication plan that upgrades local-key visibility into email-bound user ownership and verification-code login.
-- `docs/plans/2026-04-23-v3-development-plan.md`: older high-level V3 phase baseline.
-- `docs/plans/2026-04-25-static-page-visual-workbench-v3-plan.md`: older visual-workbench plan; keep only as Cloudflare image-provider and visual-contract reference. Do not revive the separate popup/workbench direction unless explicitly requested.
+- `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`: detailed boundary plan for Codex host integration versus DataMax-owned model gateway/proxy.
+- `docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md`: frozen architecture boundary plan aligning DataMax's original control/integration/workflow/worker planes with Codex Host and future model proxy.
+- `docs/plans/2026-05-07-DataMax-email-account-auth-plan.md`: account/email authentication plan that upgrades local-key visibility into email-bound user ownership and verification-code login.
+- `docs/plans/2026-04-23-DataMax-development-plan.md`: older high-level DataMax phase baseline.
+- `docs/plans/2026-04-25-static-page-visual-workbench-DataMax-plan.md`: older visual-workbench plan; keep only as Cloudflare image-provider and visual-contract reference. Do not revive the separate popup/workbench direction unless explicitly requested.
 
 ## Current Baseline
 
@@ -41,12 +41,12 @@ Plan files in this consolidation slice:
 ```text
 docs/plans/2026-04-27-static-page-generation-studio-plan.md
 docs/plans/2026-04-29-openclaw-extension-adapter-plan.md
-docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md
-docs/plans/2026-04-29-v3-react-agent-refinement-plan.md
+docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md
+docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md
 docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md
 docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md
-docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md
-docs/plans/2026-05-07-v3-email-account-auth-plan.md
+docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md
+docs/plans/2026-05-07-DataMax-email-account-auth-plan.md
 ```
 
 Recent verified capabilities:
@@ -66,22 +66,22 @@ Recent verified capabilities:
 - Static-page image worker can call the Cloudflare/Codex queue, poll artifact status, normalize artifact URLs, and record failures.
 - Static-page renderer is layout-aware and can render core module types into HTML/SVG with design contract data.
 - Frontend supports static-page draft planning, image preview display, final render display, durable right shelf, and per-module micro-adjustment editors.
-- Java 8 static-page parity audit completed: the Java/Vue refactor used `gridstack` for draggable/resizable module layout and `echarts` for chart rendering. V3 intentionally keeps `react-grid-layout` instead of reintroducing GridStack, because the React layout data already matches `StaticPageDraft.modules[].layout`. ECharts is not yet wired in V3 and is now tracked as the advanced chart runtime for complex dashboards, with the existing renderer kept as deterministic export fallback.
+- Java 8 static-page parity audit completed: the Java/Vue refactor used `gridstack` for draggable/resizable module layout and `echarts` for chart rendering. DataMax intentionally keeps `react-grid-layout` instead of reintroducing GridStack, because the React layout data already matches `StaticPageDraft.modules[].layout`. ECharts is not yet wired in DataMax and is now tracked as the advanced chart runtime for complex dashboards, with the existing renderer kept as deterministic export fallback.
 
 ## Locked Product Decisions
 
 - Ordinary chat without selected dataset behaves like normal model chat, but the model still receives a concise system/product/database briefing.
 - Dataset selection means supply preference, not a hard UI mode. User-selected and model-preselected datasets follow the same selected-scope semantics.
 - If no dataset is selected or inferred, do not fake data. Answer normally.
-- When a relevant dataset is selected or inferred, V3 should retrieve and supply as much useful evidence as practical. Token thrift is not the first priority.
+- When a relevant dataset is selected or inferred, DataMax should retrieve and supply as much useful evidence as practical. Token thrift is not the first priority.
 - Conversation history is a hidden dataset. It enters context only when intent/context policy says it helps.
-- V3 should not locally compose the final answer from evidence. V3 supplies evidence, tools, and state; the model answers.
+- DataMax should not locally compose the final answer from evidence. DataMax supplies evidence, tools, and state; the model answers.
 - Static-page planning lives in the main assistant workspace, not in a separate popup. The right panel remains drafts and finished outputs.
 - Users should mostly talk naturally. UI forms are secondary affordances and should not become the main workflow.
 - Module-level edits are part of the core sell point and must remain first-class.
 - OpenClaw is optional. Its absence must not break startup, upload, chat, static-page deterministic flow, reports, parsing, rendering, or workers.
-- Memory must be separated by explicit scope. Conversation, project, task, dataset, and system memory cannot leak across scopes unless V3 selects and audits that scope.
-- Codex Host tasks must get isolated task memory. Task memory is not recalled into ordinary conversation unless V3 explicitly promotes a safe summary.
+- Memory must be separated by explicit scope. Conversation, project, task, dataset, and system memory cannot leak across scopes unless DataMax selects and audits that scope.
+- Codex Host tasks must get isolated task memory. Task memory is not recalled into ordinary conversation unless DataMax explicitly promotes a safe summary.
 - Email account auth upgrades the current local-key model. Email proves account ownership, local key remains an access factor, and verification-code login can restore account access without ever emailing or storing the raw key.
 - Datasets, robots, conversations, memory spaces, reports, static pages, and artifacts should follow `user_id` ownership while public datasets remain visible to unsigned users.
 
@@ -97,7 +97,7 @@ This is now considered enough for the OpenClaw line unless a specific compatibil
 
 ```text
 Historical only while frozen:
-V3 Web/API -> AssistantRun/ReAct -> V3 memory-space policy -> Workflow/task audit -> Codex Mac Host -> artifacts/logs back to V3
+DataMax Web/API -> AssistantRun/ReAct -> DataMax memory-space policy -> Workflow/task audit -> Codex Mac Host -> artifacts/logs back to DataMax
 ```
 
 The separated memory plan remains useful as a permission/scope reference, but it is not a prerequisite for real Codex host daemon work while the Codex substrate is frozen:
@@ -110,20 +110,20 @@ The separated memory plan remains useful as a permission/scope reference, but it
 
 Use `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md` as the active implementation plan for this direction.
 
-Use `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md` for the separate model gateway/proxy boundary. Codex CLI/app-server/exec-server are execution/runtime surfaces, not the V3 model gateway. V3 must own provider routing, credentials, redaction, model capability policy, and audit through `llm-gateway` or a future internal `model-proxy`.
+Use `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md` for the separate model gateway/proxy boundary. Codex CLI/app-server/exec-server are execution/runtime surfaces, not the DataMax model gateway. DataMax must own provider routing, credentials, redaction, model capability policy, and audit through `llm-gateway` or a future internal `model-proxy`.
 
-## 2026-05-07 Architecture Alignment: V3 Planes, Codex Host, And Model Proxy
+## 2026-05-07 Architecture Alignment: DataMax Planes, Codex Host, And Model Proxy
 
 The rough product split remains useful:
 
 - Model proxy.
 - Codex execution host.
-- V3 permissions, datasets, memory, workflows, and artifacts.
+- DataMax permissions, datasets, memory, workflows, and artifacts.
 
-But the implementation must follow V3's original architecture planes, not a new three-service rewrite. Treat the system as six logical modules:
+But the implementation must follow DataMax's original architecture planes, not a new three-service rewrite. Treat the system as six logical modules:
 
 - Experience UI: web shell, main workspace, mobile interaction, and right-side draft/output shelf.
-- V3 Control Plane: `platform-api`, auth/scope, local-key visibility, AssistantRun state, draft/output ownership, and runtime inspect.
+- DataMax Control Plane: `platform-api`, auth/scope, local-key visibility, AssistantRun state, draft/output ownership, and runtime inspect.
 - Integration Plane: `llm-gateway`, future internal `model-proxy`, `tool-registry`, `mcp-gateway`, and `prompt-registry`.
 - Workflow / Worker Plane: explicit workflow definitions, queue claiming, ingest/retrieval/memory/report/static-page/media workers.
 - External Execution Host: `codex-host-agent`, isolated host workspace, Codex execution safety gates, redacted logs, and returned artifacts.
@@ -133,11 +133,11 @@ Current architecture decisions:
 
 - `llm-gateway` is the model gateway seed. A future `model-proxy` should wrap or extract it, not duplicate provider routing.
 - `codex-host-agent` is an external execution worker. It must not become a browser API, model gateway, permission authority, or memory source of truth.
-- Existing workers remain V3 worker-plane components. Do not move routine parsing, retrieval, static-page rendering, report rendering, or memory refresh into Codex Host.
+- Existing workers remain DataMax worker-plane components. Do not move routine parsing, retrieval, static-page rendering, report rendering, or memory refresh into Codex Host.
 - Codex Host tasks should reuse `workflow-definitions`, `workflow-engine`, `event-bus`, PostgreSQL task/artifact state, and runtime inspect.
 - The current crate dependency exceptions are known: `codex-host-agent -> platform-api`, several workers -> `platform-api`, and `tool-registry -> llm-gateway`. Treat these as short-term seams to document and gradually clean, not as a reason to block product work immediately.
 
-Use `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md` before continuing Codex Host or model-proxy implementation. That plan is the active boundary checklist and dependency cleanup roadmap.
+Use `docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md` before continuing Codex Host or model-proxy implementation. That plan is the active boundary checklist and dependency cleanup roadmap.
 
 ## Architecture Evaluation
 
@@ -146,25 +146,25 @@ The static-page plan and OpenClaw plan do not conflict if the boundary is kept s
 Compatible points:
 
 - Static-page provider-backed intent already goes through `llm-gateway::LlmProvider`; OpenClaw can slot in as another provider.
-- AssistantRun ordinary chat already builds V3 evidence state before calling a provider; OpenClaw can receive the same already-filtered context.
-- Hidden conversation memory exists in V3; OpenClaw memory can be an additional labeled evidence candidate.
-- Continuous execution exists as AssistantRun continuation; future Codex Host execution should be a bounded V3-owned capability bridge recorded in the same trail.
+- AssistantRun ordinary chat already builds DataMax evidence state before calling a provider; OpenClaw can receive the same already-filtered context.
+- Hidden conversation memory exists in DataMax; OpenClaw memory can be an additional labeled evidence candidate.
+- Continuous execution exists as AssistantRun continuation; future Codex Host execution should be a bounded DataMax-owned capability bridge recorded in the same trail.
 
 Potential conflicts and decisions:
 
-- OpenClaw memory vs V3 memory: V3 remains source of truth. OpenClaw memory is only optional evidence.
-- External local execution vs V3 host actions: V3 validates, records, and owns actions. Codex Host may run allowlisted tasks only through V3-issued task contexts. OpenClaw readonly bridge remains optional and lower priority.
-- OpenClaw model routing vs model config: OpenClaw can route model/agent choices, but runtime manifests must still record provider/model/request id in V3.
+- OpenClaw memory vs DataMax memory: DataMax remains source of truth. OpenClaw memory is only optional evidence.
+- External local execution vs DataMax host actions: DataMax validates, records, and owns actions. Codex Host may run allowlisted tasks only through DataMax-issued task contexts. OpenClaw readonly bridge remains optional and lower priority.
+- OpenClaw model routing vs model config: OpenClaw can route model/agent choices, but runtime manifests must still record provider/model/request id in DataMax.
 - OpenClaw availability vs production reliability: all OpenClaw lanes must be config-gated and fallback-safe.
 
 ## Host-Controlled ReAct Decision
 
-V3 should adopt ReAct as a controlled AssistantRun execution pattern, not as a free-form autonomous agent.
+DataMax should adopt ReAct as a controlled AssistantRun execution pattern, not as a free-form autonomous agent.
 
 Definition:
 
 ```text
-Observation -> Model proposes next_action -> V3 validates action -> V3 executes host tool -> Observation persisted -> Model continues or final_answer
+Observation -> Model proposes next_action -> DataMax validates action -> DataMax executes host tool -> Observation persisted -> Model continues or final_answer
 ```
 
 Allowed first-version action types:
@@ -183,18 +183,18 @@ Allowed first-version action types:
 
 Rules:
 
-- The model may propose actions, but V3 validates and executes them.
-- V3 must apply dataset visibility, local-key matching, tool allowlists, operation schemas, and confirmation gates before any action runs.
+- The model may propose actions, but DataMax validates and executes them.
+- DataMax must apply dataset visibility, local-key matching, tool allowlists, operation schemas, and confirmation gates before any action runs.
 - Planning catalog, startup briefing, visible library lists, and system capability summaries are not evidence. They only help the model choose the next tool.
 - When selected datasets or conversation memory are in scope, `final_answer` requires a prior supply observation or already supplied evidence state. Premature terminal answers should receive a `policy_observation` and continue the loop.
 - Protocol repair is different from fallback: repairable mistakes stay inside the same ReAct loop; fallback is reserved for runtime outage, malformed JSON that cannot be parsed safely, infrastructure failure, or step-limit exhaustion.
 - ReAct observations are persisted as AssistantRun events and concise execution-trail steps.
 - The UI shows brief user-facing steps, not full hidden chain-of-thought.
 - Each run has a bounded step limit, default 3 and max 5 for the first implementation.
-- If the model emits invalid action JSON, V3 records the failure and asks for a corrected action or uses clearly labeled runtime fallback only when safe.
-- OpenClaw can participate as a provider or optional capability bridge, but ReAct state remains V3-owned.
+- If the model emits invalid action JSON, DataMax records the failure and asks for a corrected action or uses clearly labeled runtime fallback only when safe.
+- OpenClaw can participate as a provider or optional capability bridge, but ReAct state remains DataMax-owned.
 
-Detailed refinement handoff: use `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` when continuing AssistantRun/ReAct work. That document is the stricter implementation checklist for moving from the first V3 product-action loop toward the Java-reference-aligned model-tool protocol.
+Detailed refinement handoff: use `docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md` when continuing AssistantRun/ReAct work. That document is the stricter implementation checklist for moving from the first DataMax product-action loop toward the Java-reference-aligned model-tool protocol.
 
 ## Workstreams
 
@@ -224,25 +224,25 @@ Next outcomes:
 - Scope planning can become provider-backed while keeping deterministic fallback.
 - Static-page intent provider prompt gets stricter schema and better examples.
 - Provider failures are visible as runtime facts, not silent UI confusion.
-- Host-Controlled ReAct lets the model request retrieval, draft updates, preview generation, report actions, or final answers through V3-validated action steps instead of one-shot prompting.
+- Host-Controlled ReAct lets the model request retrieval, draft updates, preview generation, report actions, or final answers through DataMax-validated action steps instead of one-shot prompting.
 
 ### Workstream C: Codex Host Kernel And Separated Memory
 
 Priority: frozen as of 2026-05-18; historical architecture reference only unless the operator explicitly resumes it.
 
-Goal: preserve the existing Codex Host/kernel design record without advancing it into production routing. V3's active answer path remains provider/model-gateway routing; Codex Host is dormant diagnostic/reference infrastructure while frozen.
+Goal: preserve the existing Codex Host/kernel design record without advancing it into production routing. DataMax's active answer path remains provider/model-gateway routing; Codex Host is dormant diagnostic/reference infrastructure while frozen.
 
 Frozen record / resume-only outcomes:
 
-- `conversation`, `project`, `task`, `dataset`, and `system` memory spaces exist as first-class V3 concepts.
+- `conversation`, `project`, `task`, `dataset`, and `system` memory spaces exist as first-class DataMax concepts.
 - AssistantRun stores the active memory space and never recalls unrelated thread/project memory implicitly.
-- ReAct can select, recall, and write memory only through V3 validation.
+- ReAct can select, recall, and write memory only through DataMax validation.
 - Codex Host task actions remain disabled by default, allowlisted, audited, and routed through a dedicated queue before any real host execution if the track is resumed.
 - Runtime inspect shows memory-space decisions, recalled counts, denied counts, and Codex task context summaries.
 
-Current Codex Host status: the V3 queue bridge, dry-run worker, and plan-only command policy are implemented. The 8 server has Codex CLI installed but not logged in, online AssistantRun remains on the MiniMax/provider path, and real Codex execution/promotion is frozen. Do not continue account login, real transport, or ordinary-chat routing work unless the operator reopens the track.
+Current Codex Host status: the DataMax queue bridge, dry-run worker, and plan-only command policy are implemented. The 8 server has Codex CLI installed but not logged in, online AssistantRun remains on the MiniMax/provider path, and real Codex execution/promotion is frozen. Do not continue account login, real transport, or ordinary-chat routing work unless the operator reopens the track.
 
-Detailed plans: `docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md`, `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`, and `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`.
+Detailed plans: `docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md`, `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`, and `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`.
 
 ### Workstream C2: Optional OpenClaw Extension
 
@@ -300,7 +300,7 @@ Next outcomes:
 - PostgreSQL 17.9 remains the target server version for fresh environments.
 - Runtime status endpoints are redacted and useful.
 
-Detailed plan: `docs/plans/2026-05-07-v3-email-account-auth-plan.md`.
+Detailed plan: `docs/plans/2026-05-07-DataMax-email-account-auth-plan.md`.
 
 ## Recommended Execution Order
 
@@ -308,9 +308,9 @@ Detailed plan: `docs/plans/2026-05-07-v3-email-account-auth-plan.md`.
 
 **Files:**
 
-- Add: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
+- Add: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
 - Add: `docs/plans/2026-04-29-openclaw-extension-adapter-plan.md`
-- Add: `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md`
+- Add: `docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md`
 - Modify: `docs/plans/2026-04-27-static-page-generation-studio-plan.md`
 
 **Steps:**
@@ -318,7 +318,7 @@ Detailed plan: `docs/plans/2026-05-07-v3-email-account-auth-plan.md`.
 1. Add consolidation notes to old source plans.
 2. Add the ReAct refinement sub-plan if AssistantRun/ReAct work is active.
 3. Run `git diff --check`.
-4. Commit as `docs: consolidate v3 development handoff plan`.
+4. Commit as `docs: consolidate DataMax development handoff plan`.
 
 **Why first:** the next thread needs one source of truth.
 
@@ -367,19 +367,19 @@ Detailed plan: `docs/plans/2026-05-07-v3-email-account-auth-plan.md`.
 
 **Acceptance:**
 
-- AssistantRun evidence is built by V3 before OpenClaw receives input.
-- Static-page operations are still V3-sanitized.
+- AssistantRun evidence is built by DataMax before OpenClaw receives input.
+- Static-page operations are still DataMax-sanitized.
 - OpenClaw failure does not break deterministic static-page fallback.
 
 ### Slice 3: Host-Controlled ReAct AssistantRun Loop
 
 **Status 2026-04-29:** first ReAct refinement pass completed.
-AssistantRun create and continue paths now support a config-gated Host-Controlled ReAct loop with strict typed action JSON parsing, weak planning catalog, step limits, V3-owned retrieval/visibility checks, bounded `read_document_detail`, report handoff invariants, static-page module operation sanitization, redacted ReAct trace summaries, safe frontend progress display, and gated OpenClaw bridge stubs. Contracts/storage migrations were not required for this pass because existing AssistantRun events, output artifacts, runtime manifest, and execution-trail fields were sufficient. Static-page write actions are still returned as sanitized operations/observations rather than silently mutating arbitrary drafts; applying them to the selected current draft belongs to Slice 4.
+AssistantRun create and continue paths now support a config-gated Host-Controlled ReAct loop with strict typed action JSON parsing, weak planning catalog, step limits, DataMax-owned retrieval/visibility checks, bounded `read_document_detail`, report handoff invariants, static-page module operation sanitization, redacted ReAct trace summaries, safe frontend progress display, and gated OpenClaw bridge stubs. Contracts/storage migrations were not required for this pass because existing AssistantRun events, output artifacts, runtime manifest, and execution-trail fields were sufficient. Static-page write actions are still returned as sanitized operations/observations rather than silently mutating arbitrary drafts; applying them to the selected current draft belongs to Slice 4.
 
 **Reference alignment 2026-04-29:** compared with `C:/Users/soulzyn/Desktop/codex/ai-data-platform-java-client/docs/architecture/react-agent-architecture-reference.md`.
-The Java reference confirms the same boundary: model owns intent/next action/final wording, while V3 owns identity, scope, permission checks, whitelisted tool execution, limits, and audit. The implemented V3 pass now keeps planning catalogs weak, treats observations/evidence state as answerable supply, repairs premature terminal answers and report choices with `policy_observation`, returns denied IDs only, avoids raw observations in persisted ReAct events, and reserves fallback for runtime degradation rather than normal protocol steering.
+The Java reference confirms the same boundary: model owns intent/next action/final wording, while DataMax owns identity, scope, permission checks, whitelisted tool execution, limits, and audit. The implemented DataMax pass now keeps planning catalogs weak, treats observations/evidence state as answerable supply, repairs premature terminal answers and report choices with `policy_observation`, returns denied IDs only, avoids raw observations in persisted ReAct events, and reserves fallback for runtime degradation rather than normal protocol steering.
 
-**Detailed refinement plan 2026-04-29:** `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` records the completed first refinement pass and remains the reference for future hardening.
+**Detailed refinement plan 2026-04-29:** `docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md` records the completed first refinement pass and remains the reference for future hardening.
 
 **Files:**
 
@@ -401,12 +401,12 @@ The Java reference confirms the same boundary: model owns intent/next action/fin
 7. Add protocol repair observations for premature terminal answers, report-choice-before-options, denied IDs, and repairable policy violations.
 8. Keep deterministic fallback only for runtime outage, malformed JSON that cannot be parsed safely, infrastructure failure, explicit ReAct disablement, or step-limit exhaustion.
 9. Add tests for valid retrieval action, invalid action rejection, hidden dataset denial, static-page module update action, final answer, premature final-answer repair, and step-limit stop.
-10. For post-first-slice cleanup, follow the task order in `docs/plans/2026-04-29-v3-react-agent-refinement-plan.md` instead of expanding the monolithic `crates/platform-api/src/lib.rs` implementation further.
+10. For post-first-slice cleanup, follow the task order in `docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md` instead of expanding the monolithic `crates/platform-api/src/lib.rs` implementation further.
 11. Completed refinement pass added `read_document_detail`, `list_report_options`, `report_choice`, redacted `react_trace`, safe frontend progress, and gated `openclaw_memory_recall` / `openclaw_readonly_execution` stubs.
 
 **Acceptance:**
 
-- ReAct never bypasses V3 visibility or tool allowlists.
+- ReAct never bypasses DataMax visibility or tool allowlists.
 - AssistantRun can continue through multiple model-requested action steps.
 - UI-facing trail contains concise steps without exposing hidden chain-of-thought.
 - Static-page module updates can be requested by the model through the same action contract used by user micro-adjustments.
@@ -438,7 +438,7 @@ Static-page data snapshots now derive `field_candidates` from selected scope, As
 Static-page creation and backend-synced static-page edits now prefer AssistantRun even when a dataset is selected, so selected scope is supplied to the model and module edits can use the ReAct tool path. The local prompt interpreter remains only as a fallback when there is no backend draft/run or AssistantRun is unavailable.
 
 **Status 2026-04-29 ReAct preview/render action batch:** completed locally.
-`submit_static_page_image_preview` and `render_static_page` now execute real V3 backend actions for the current persisted static-page draft only. The Host verifies the draft belongs to the active AssistantRun before queueing image preview generation or creating the final static-page render. Rendering before preview confirmation is rejected as a structured ReAct observation instead of aborting the loop.
+`submit_static_page_image_preview` and `render_static_page` now execute real DataMax backend actions for the current persisted static-page draft only. The Host verifies the draft belongs to the active AssistantRun before queueing image preview generation or creating the final static-page render. Rendering before preview confirmation is rejected as a structured ReAct observation instead of aborting the loop.
 
 **Files:**
 
@@ -552,7 +552,7 @@ Static-page data snapshots now also prefer user/model-edited module data before 
 
 **Java 8 parity follow-up 2026-05-07:**
 
-- The Java/Vue refactor used Apache ECharts for static-page charts. V3 has not ported that chart runtime yet.
+- The Java/Vue refactor used Apache ECharts for static-page charts. DataMax has not ported that chart runtime yet.
 - Keep current Rust HTML/SVG rendering for core chart/export determinism, but add ECharts as the explicit advanced runtime when a module needs complex dashboard charts, richer composition, large datasets, or Java 8 visual parity.
 - Runtime selection should be module-level, for example basic charts use the deterministic renderer while modules with `visualization.runtime = "echarts"` or advanced `chartOptions` use the ECharts adapter.
 - ECharts output must degrade cleanly to static HTML/SVG/manifest data for final export and must not invent data when snapshots are missing.
@@ -626,7 +626,7 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 1. Add `memory_spaces` and attach conversation memory to memory spaces.
 2. Ensure each browser `local_thread_id` gets an isolated conversation memory space.
 3. Attach AssistantRun to an active memory space and return memory candidates without raw content.
-4. Add ReAct memory actions for selecting, recalling, writing, and archiving memory through V3 validation.
+4. Add ReAct memory actions for selecting, recalling, writing, and archiving memory through DataMax validation.
 5. Add minimal frontend memory status and new-conversation handling.
 6. Add Codex Host disabled-by-default task action and isolated task memory semantics.
 7. Extend runtime inspect with memory-space decisions and denied cross-scope access.
@@ -652,13 +652,13 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 
 1. Create disabled-by-default memory bridge trait.
 2. Add fake bridge tests.
-3. Inject recalled OpenClaw memory only after V3 scope policy says memory is relevant.
+3. Inject recalled OpenClaw memory only after DataMax scope policy says memory is relevant.
 4. Label evidence source as `openclaw_memory`.
 5. Cap memory count with `OPENCLAW_MEMORY_LIMIT`.
 
 **Acceptance:**
 
-- OpenClaw memory never replaces V3 memory.
+- OpenClaw memory never replaces DataMax memory.
 - OpenClaw memory never exposes hidden datasets.
 - Runtime evidence explains when OpenClaw memory was supplied.
 
@@ -683,7 +683,7 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 **Acceptance:**
 
 - OpenClaw execution is useful but not dangerous.
-- V3 can continue if bridge fails.
+- DataMax can continue if bridge fails.
 - User sees concise execution steps in the conversation/runtime trail.
 
 **Status 2026-05-03:** deprioritized. The first external execution bridge should target Codex Host disabled-by-default task actions, not OpenClaw local execution.
@@ -745,7 +745,7 @@ The domain/workflow contracts now include `static_page_render_workflow` and rend
 
 **Steps:**
 
-1. Implement email account auth from `docs/plans/2026-05-07-v3-email-account-auth-plan.md`.
+1. Implement email account auth from `docs/plans/2026-05-07-DataMax-email-account-auth-plan.md`.
 2. Add redacted OpenClaw/provider status endpoint where still relevant.
 3. Add provider/runtime/email-auth status to operator docs.
 4. Improve local key create/switch/revoke/recovery UX.
@@ -767,10 +767,10 @@ Current 2026-05-18 transition note: OpenClaw provider/stub work has completed it
 Recommended next prompt:
 
 ```text
-Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-codex-host-architecture-alignment-plan.md.
+Continue DataMax from docs/plans/2026-05-07-DataMax-codex-host-architecture-alignment-plan.md.
 OpenClaw provider/stubs already completed their optional first pass; do not continue OpenClaw as the main execution kernel.
 Codex Host queue/dry-run/plan-only bridge is implemented, but the Codex substrate is frozen as of 2026-05-18. Do not promote Codex, log the 8 server Codex CLI into the operator GPT account, enable real transports, or route ordinary AssistantRun/external-bot/third-party chat through Codex.
-Keep V3 as the control plane and llm-gateway/provider routing as the active answer path. Browser/API traffic must still go only through V3.
+Keep DataMax as the control plane and llm-gateway/provider routing as the active answer path. Browser/API traffic must still go only through DataMax.
 Do not run or validate real Codex execution while frozen.
 Use separated memory rules: conversation/project/task/dataset/system memory must not leak across scopes.
 ```
@@ -785,7 +785,7 @@ If Slice 0 is already committed but Slice 1 and Slice 2 are not yet committed, s
 
 ```text
 Implement optional OpenClawProvider in crates/llm-gateway.
-Use docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md as the active plan.
+Use docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md as the active plan.
 Do not change static-page behavior while adding the provider.
 Keep OpenClaw disabled by default and fully fallback-safe.
 ```
@@ -794,17 +794,17 @@ If Slice 1 and Slice 2 are already committed but Slice 3 is not, start with Slic
 
 ```text
 Implement Host-Controlled ReAct inside AssistantRun.
-Use docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md as the active plan.
-The model may propose actions, but V3 validates, executes, records, and limits every action.
+Use docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md as the active plan.
+The model may propose actions, but DataMax validates, executes, records, and limits every action.
 Keep ordinary chat and deterministic static-page fallback working when ReAct is disabled.
 ```
 
 If Slice 3 first backend slice is committed but the detailed ReAct refinement is not complete, start with the ReAct refinement sub-plan:
 
 ```text
-Refine Host-Controlled ReAct using docs/plans/2026-04-29-v3-react-agent-refinement-plan.md.
+Refine Host-Controlled ReAct using docs/plans/2026-04-29-DataMax-react-agent-refinement-plan.md.
 Begin at the first incomplete task: typed contract module, weak planning catalog, tool registry, protocol repair, report handoff, document detail, trace, frontend progress, or OpenClaw bridge.
-Keep current V3 product actions working while extracting structure from crates/platform-api/src/lib.rs.
+Keep current DataMax product actions working while extracting structure from crates/platform-api/src/lib.rs.
 Do not add OpenClaw bridge actions until the registry and protocol repair matrix are in place.
 ```
 
@@ -812,8 +812,8 @@ If the first ReAct refinement pass is complete, continue Slice 4:
 
 ```text
 Implement static-page module editing and data binding.
-Use docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md as the active plan.
-Let model-requested update_static_page_module operations target the current draft only through V3 schemas.
+Use docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md as the active plan.
+Let model-requested update_static_page_module operations target the current draft only through DataMax schemas.
 Keep draft mutation behind visibility checks, confirmation/staleness rules, and sanitized operation contracts.
 Add tests for title/content edits, visualization switch, chart/data binding patches, and stale preview/final render markers.
 ```
@@ -874,7 +874,7 @@ wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 ## Acceptance Criteria For This Consolidated Plan
 
 - A fresh thread can identify the active plan in under one minute.
-- OpenClaw's optional role is clear and does not threaten V3's host architecture.
+- OpenClaw's optional role is clear and does not threaten DataMax's host architecture.
 - Static-page module editing remains explicitly prioritized.
 - Parser/media parity remains planned as background, not foreground UI-blocking work.
 - Report and static-page outputs converge into the right-side shelf and main workspace flow.

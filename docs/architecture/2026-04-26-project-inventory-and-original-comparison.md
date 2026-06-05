@@ -4,11 +4,11 @@ Date: 2026-04-26
 
 ## Scope
 
-This note inventories the current V3 project and compares it with the original `ai-data-platform` project, focused on the static page visual workbench and image-generation path.
+This note inventories the current DataMax project and compares it with the original `ai-data-platform` project, focused on the static page visual workbench and image-generation path.
 
 Repos inspected:
 
-- Current V3: `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3`
+- Current DataMax: `C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3`
 - Original app: `C:\Users\soulzyn\Desktop\codex\ai-data-platform`
 - Orchestrator dependency: `C:\Users\soulzyn\Desktop\codex-web`
 - Cloudflare Codex dependency: `C:\Users\soulzyn\Desktop\codex\cf-codex-workstation`
@@ -16,9 +16,9 @@ Repos inspected:
 
 ## Executive Summary
 
-V3 is the stronger long-term platform foundation. It has Rust crate boundaries, durable workflow/runtime records, report plan/render/publish surfaces, retrieval search traces, model-facing runtime summaries, and a first web shell. It is designed to make report planning, rendering, runtime inspection, and recovery explicit.
+DataMax is the stronger long-term platform foundation. It has Rust crate boundaries, durable workflow/runtime records, report plan/render/publish surfaces, retrieval search traces, model-facing runtime summaries, and a first web shell. It is designed to make report planning, rendering, runtime inspection, and recovery explicit.
 
-The original `ai-data-platform` has more static page workbench code, but that workbench should not be treated as the V3 target UI. It already has a `/static-pages` UI, Fastify routes under `/reports/static-page/*`, deterministic objective drafting, visual brief generation, and a `codex-web` orchestrator client that expects image artifacts. However, the product direction is to redesign this area later instead of cloning or gradually replacing the original workbench.
+The original `ai-data-platform` has more static page workbench code, but that workbench should not be treated as the DataMax target UI. It already has a `/static-pages` UI, Fastify routes under `/reports/static-page/*`, deterministic objective drafting, visual brief generation, and a `codex-web` orchestrator client that expects image artifacts. However, the product direction is to redesign this area later instead of cloning or gradually replacing the original workbench.
 
 The current blocker is not the queue key. The 8-server orchestrator key is valid and can submit tasks. The blocker is execution capability: the runner currently completes image tasks without returning an image artifact or `imageBase64`. Direct Cloudflare image endpoint `/api/image/static-page-draft` is also not implemented in `cf-codex-workstation` yet.
 
@@ -26,13 +26,13 @@ The current blocker is not the queue key. The 8-server orchestrator key is valid
 
 As of 2026-04-26, the original static page workbench is not a migration target:
 
-- Do not spend effort making the V3 frontend match the original static page workbench one-to-one.
+- Do not spend effort making the DataMax frontend match the original static page workbench one-to-one.
 - Do not plan a gradual replacement of the original static page workbench.
 - Treat the original implementation as reference material only: useful for lessons, API shape examples, and parts that may be extracted later.
 - Static page workbench work is not urgent because it has not been formally delivered to customers.
-- When this area is resumed, it should be redesigned around the V3 platform model instead of ported from the original UI.
+- When this area is resumed, it should be redesigned around the DataMax platform model instead of ported from the original UI.
 
-## Current V3 State
+## Current DataMax State
 
 Repository state:
 
@@ -54,20 +54,20 @@ Implemented platform baseline:
 - Model-facing runtime summaries through `runtime.inspect`.
 - Web shell that can drive report plan continuation, render, publish, and read surfaces.
 
-Deferred or not implemented yet in V3:
+Deferred or not implemented yet in DataMax:
 
 - `ReportVisualDraft` domain object/table/repository.
 - `static-page-visual-runtime` crate.
 - `static-page-visual-worker` crate.
 - `POST /v1/static-pages/context`.
 - `POST /v1/report-plans/{plan_id}/visual-drafts`.
-- `/static-pages` V3 web workbench.
-- Direct V3 provider client for `cloudflare-codex`.
+- `/static-pages` DataMax web workbench.
+- Direct DataMax provider client for `cloudflare-codex`.
 
-The V3 static page visual workbench currently exists as a detailed implementation plan at:
+The DataMax static page visual workbench currently exists as a detailed implementation plan at:
 
 ```text
-C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3\docs\plans\2026-04-25-static-page-visual-workbench-v3-plan.md
+C:\Users\soulzyn\Desktop\codex\ai-data-platform-v3\docs\plans\2026-04-25-static-page-visual-workbench-DataMax-plan.md
 ```
 
 ## Original Project State
@@ -105,7 +105,7 @@ Original architecture:
 
 ## Key Architecture Difference
 
-| Area | Original `ai-data-platform` | Current V3 direction |
+| Area | Original `ai-data-platform` | Current DataMax direction |
 |---|---|---|
 | Backend | Fastify + TypeScript app backend | Axum + Rust platform API |
 | State model | Report center state / `ReportOutputRecord.visualDraft` | Dedicated `ReportVisualDraft` domain object and table planned |
@@ -219,16 +219,16 @@ Short-term path:
    - Alternative execution path: update the Codex runner prompt/tool environment so `imagegen` actually runs and writes an image artifact.
 4. Resume static page design only when there is a concrete customer-facing workflow and redesigned product direction.
 
-Long-term V3 path:
+Long-term DataMax path:
 
-1. Continue prioritizing the V3 core platform: dataset workflows, report planning/render/publish, runtime inspection, retrieval traces, and operational reliability.
+1. Continue prioritizing the DataMax core platform: dataset workflows, report planning/render/publish, runtime inspection, retrieval traces, and operational reliability.
 2. Keep visual generation as an isolated provider capability until there is a redesigned static page product surface.
-3. Connect V3 to Cloudflare only after the Cloudflare endpoint or orchestrator artifact path has passed a real smoke test.
-4. Keep direct OpenAI keys out of browser and V3 platform services; place provider credentials only in Cloudflare Worker secrets or server-side orchestrator runtime.
+3. Connect DataMax to Cloudflare only after the Cloudflare endpoint or orchestrator artifact path has passed a real smoke test.
+4. Keep direct OpenAI keys out of browser and DataMax platform services; place provider credentials only in Cloudflare Worker secrets or server-side orchestrator runtime.
 
 ## Decision Point
 
-The next implementation should not be a V3 static page UI clone. If image generation becomes necessary for an active surface, start at the image execution seam, because any UI would otherwise only surface the same failure:
+The next implementation should not be a DataMax static page UI clone. If image generation becomes necessary for an active surface, start at the image execution seam, because any UI would otherwise only surface the same failure:
 
 ```text
 accepted task -> completed task -> no image artifact
@@ -240,4 +240,4 @@ The cleanest image-related task remains:
 Implement and deploy cf-codex-workstation POST /api/image/static-page-draft with tests.
 ```
 
-After that endpoint returns a real PNG/base64 payload, V3 can safely implement a `cloudflare-codex` provider. Static page UI/workbench work should wait for a fresh product redesign.
+After that endpoint returns a real PNG/base64 payload, DataMax can safely implement a `cloudflare-codex` provider. Static page UI/workbench work should wait for a fresh product redesign.

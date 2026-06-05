@@ -11809,6 +11809,22 @@ async fn external_channel_event_sse_next(
             Some(ExternalChannelEventSseWorkerMessage::Finished(result)) => {
                 let body = match result {
                     Ok((_, response)) => {
+                        let response =
+                            match external_channel_response_with_event_static_page_artifact_links(
+                                &state,
+                                response.clone(),
+                            )
+                            .await
+                            {
+                                Ok(response) => response,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        %error,
+                                        "external channel live stream static-page event link merge failed"
+                                    );
+                                    response
+                                }
+                            };
                         let should_follow = response.assistant_run_id.is_some()
                             && external_channel_response_is_static_page_pipeline(&response);
                         let terminal_static_page = should_follow
@@ -28927,19 +28943,25 @@ fn external_channel_reply_from_run_and_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,
 ) -> Option<ExternalBotReplyView> {
-    let static_page_reply = external_channel_static_page_reply_candidate_from_run_and_events(
-        run,
-        events,
-        conversation_external_id,
-    );
     if let Some(reply) = external_channel_assistant_reply_from_run(run).map(|reply| {
         external_channel_assistant_text_reply_for_conversation(run, conversation_external_id, reply)
     }) {
+        let static_page_reply =
+            external_channel_static_page_reply_candidate_from_run_and_events_for_answer(
+                run,
+                events,
+                conversation_external_id,
+            );
         return Some(external_channel_reply_with_static_page_artifact_links(
             reply,
             static_page_reply.as_ref(),
         ));
     }
+    let static_page_reply = external_channel_static_page_reply_candidate_from_run_and_events(
+        run,
+        events,
+        conversation_external_id,
+    );
     static_page_reply
         .or_else(|| {
             external_channel_data_ingestion_analysis_reply_from_events(
@@ -28956,6 +28978,24 @@ fn external_channel_reply_from_run_and_events(
         })
 }
 
+fn external_channel_static_page_reply_candidate_from_run_and_events_for_answer(
+    run: &AssistantRun,
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    external_channel_static_page_artifact_reply_from_output_artifacts(
+        &run.output_artifacts,
+        conversation_external_id,
+    )
+    .or_else(|| {
+        external_channel_static_page_event_artifact_link_reply_from_events(
+            events,
+            conversation_external_id,
+        )
+    })
+    .or_else(|| external_channel_static_page_reply_from_events(events, conversation_external_id))
+}
+
 fn external_channel_static_page_reply_candidate_from_run_and_events(
     run: &AssistantRun,
     events: &[AssistantRunEvent],
@@ -28966,6 +29006,73 @@ fn external_channel_static_page_reply_candidate_from_run_and_events(
         conversation_external_id,
     )
     .or_else(|| external_channel_static_page_reply_from_events(events, conversation_external_id))
+}
+
+async fn external_channel_response_with_event_static_page_artifact_links(
+    state: &AppState,
+    mut response: ExternalChannelEventResponse,
+) -> std::result::Result<ExternalChannelEventResponse, ApiError> {
+    let Some(run_id) = response.assistant_run_id else {
+        return Ok(response);
+    };
+    if !response.reply.artifact_links.is_empty() {
+        return Ok(response);
+    }
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    if let Some(static_page_reply) =
+        external_channel_static_page_event_artifact_link_reply_from_events(
+            &events,
+            &response.reply.target_conversation_external_id,
+        )
+    {
+        response.reply = external_channel_reply_with_static_page_artifact_links(
+            response.reply,
+            Some(&static_page_reply),
+        );
+    }
+    Ok(response)
+}
+
+fn external_channel_static_page_event_artifact_link_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    for event in events.iter().rev() {
+        let event_name = event.event_name.as_str();
+        let payload = &event.payload;
+        let template_baseline_link = event_name
+            == "assistant_run.external_channel_static_page_pipeline_queued"
+            && external_channel_static_page_provisional_existing_artifact(Some(payload))
+            && payload
+                .get("provisional_existing_artifact_reason")
+                .or_else(|| payload.get("image2_skip_reason"))
+                .and_then(Value::as_str)
+                == Some("accepted_dataset_overlap_template_baseline");
+        let terminal_or_stable_link = matches!(
+            event_name,
+            "assistant_run.external_channel_static_page_stable_artifact_reused"
+                | "assistant_run.external_channel_static_page_publish_completed"
+                | "assistant_run.external_channel_static_page_pipeline_queued"
+        )
+            && !external_channel_static_page_provisional_existing_artifact(Some(payload));
+        if !template_baseline_link && !terminal_or_stable_link {
+            continue;
+        }
+        let Some(public_url) = external_channel_public_artifact_url_from_value(payload) else {
+            continue;
+        };
+        return Some(external_channel_static_page_published_reply(
+            conversation_external_id,
+            &public_url,
+            payload,
+        ));
+    }
+    None
 }
 
 fn external_channel_reply_with_static_page_artifact_links(
@@ -97194,6 +97301,61 @@ mod tests {
         assert!(text.contains("这是正常业务回答。"));
         assert!(text.contains("页面链接：[点击查看报表]"));
         assert_eq!(text.matches(public_url).count(), 1);
+    }
+
+    #[test]
+    fn external_channel_run_reply_uses_template_event_link_with_answer() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html";
+        let run = AssistantRun {
+            id: run_id,
+            tenant_id,
+            user_id: None,
+            local_thread_id: None,
+            user_prompt: "取高".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({}),
+            service_lane: "external_channel".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([{
+                "type": "assistant_message",
+                "role": "assistant",
+                "content": "这是正常业务回答。",
+            }]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id,
+            run_id,
+            sequence_no: 1,
+            event_name: "assistant_run.external_channel_static_page_pipeline_queued".to_string(),
+            payload: json!({
+                "status": "static_page_image2_auto_publish_pending",
+                "public_url": public_url,
+                "artifact_links": [public_url],
+                "provisional_existing_artifact": true,
+                "provisional_existing_artifact_reason": "accepted_dataset_overlap_template_baseline",
+            }),
+            created_at: now,
+        }];
+
+        let reply = external_channel_reply_from_run_and_events(&run, &events, "room-1")
+            .expect("answer reply");
+
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
+        let text = reply.text.as_deref().expect("reply text");
+        assert!(text.contains("这是正常业务回答。"));
+        assert!(text.contains("页面链接：[点击查看报表]"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# AI Data Platform V3 Development Summary
+# DataMax Development Summary
 
 ## Purpose
 
@@ -6,13 +6,13 @@
 
 适用场景：
 
-- 回顾当前 V3 Rust 重构到底已经做到哪里
+- 回顾当前 DataMax Rust 重构到底已经做到哪里
 - 判断主计划中的 Phase 6 现状，而不是只看最初 skeleton 描述
 - 在新线程继续开发前快速恢复对“已完成 / 未完成 / 为什么这样做”的理解
 
 ## One-Page Status
 
-截至 `2026-04-21`，V3 已经不是“Phase 6 skeleton 刚打通”的状态，而是进入了“Phase 6 已完成最小闭环，并把 runtime / typed view / CLI inspect 面进一步收口，同时开始把 model-facing capability spec 落成真实 host 协议”的状态。
+截至 `2026-04-21`，DataMax 已经不是“Phase 6 skeleton 刚打通”的状态，而是进入了“Phase 6 已完成最小闭环，并把 runtime / typed view / CLI inspect 面进一步收口，同时开始把 model-facing capability spec 落成真实 host 协议”的状态。
 
 当前可视为已经稳定的部分：
 
@@ -50,7 +50,7 @@
 - `report.plan` 现在也已有对应 library 入口、本地 CLI 与默认 `tool registry` 条目，可对已有 `draft` plan 重开 planning execution
 - `report.publish` 现在也已有对应 library 入口、本地 CLI 与默认 `tool registry` 条目，会复用最近一次成功 render 的资产并持久化 `published_reports / published_report_versions`
 - `report.read_published` 现在也已有对应 library 入口、本地 CLI 与默认 `tool registry` 条目，可按 `plan_id` 回读 `published report detail`，并同时补上通用 list/detail route
-- `apps/web` 现在也已有第一版 V3 智能助手壳子：复用老版助手的页面结构和视觉方向，但控制器改成直接消费 V3 host surface，并已显式支持左侧数据集切换
+- `apps/web` 现在也已有第一版 DataMax 智能助手壳子：复用老版助手的页面结构和视觉方向，但控制器改成直接消费 DataMax host surface，并已显式支持左侧数据集切换
 - `WorkflowModelFacingSummaryView` 现在也会直接派生 `recommended_tool_key / allowed_tool_keys`，当前已先覆盖 `request_report_entry_confirmation -> chat_session.report_entry`、`read_document_detail -> document.read_detail`、`compare_documents -> document.compare`、`retry_execution -> workflow.retry`、`continue_report_planning -> report.plan`、`refresh_directory -> memory_directory.refresh`、`generate_report_output -> report.render` 与 `publish_report -> report.publish`
 - `memory_directory.refresh` 现在也已有对应 library 入口、本地 CLI 与默认 tool registry 条目，因此目录感知场景不再只给动作枚举，不给可执行 host surface
 - `document.read_detail` 现在也已有对应 library 入口、本地 CLI、默认 tool registry 条目和聚合 detail route，因此 retrieval/detail 场景不再只暴露 `ReadDocumentDetail` 动作名
@@ -62,11 +62,11 @@
 
 ## How To Treat The 2026-04-21 Capability Spec
 
-`C:/Users/soulzyn/Desktop/codex/ai-data-platform/docs/plans/2026-04-21-model-facing-platform-capability-spec.md` 对当前 V3 的价值主要在于“重新校正模型侧能力面应该长什么样”，但它不应被当成 Rust V3 当前实现的冻结真相。
+`C:/Users/soulzyn/Desktop/codex/ai-data-platform/docs/plans/2026-04-21-model-facing-platform-capability-spec.md` 对当前 DataMax 的价值主要在于“重新校正模型侧能力面应该长什么样”，但它不应被当成 Rust DataMax 当前实现的冻结真相。
 
 这里需要明确三层关系：
 
-- Rust V3 当前已经在做的 runtime / artifact / recovery / inspect 收口，是平台真实执行面的建设
+- Rust DataMax 当前已经在做的 runtime / artifact / recovery / inspect 收口，是平台真实执行面的建设
 - capability spec 主要定义“模型应该看到怎样的服务语言、证据级别和连续执行边界”
 - 两者之间需要的是 mapping layer，而不是让任一侧直接吞并另一侧
 
@@ -275,9 +275,9 @@
 
 这一步的意义不是“chat 已经变成重业务编排器”，而是先把最关键的服务切换点从隐式语言约定收成协议事实。
 
-### 7. Initial Web Assistant Shell Now Consumes V3 Host Surfaces
+### 7. Initial Web Assistant Shell Now Consumes DataMax Host Surfaces
 
-`apps/web` 当前已经不再是空目录，而是有了第一版可运行的 V3 Web 壳子。这里刻意没有照搬旧版整套 controller，而是保留旧版智能助手的 shell / sidebar / chat / insight 结构，再把控制器和 API 对接改成直接消费 V3 已经落地的 host surface。
+`apps/web` 当前已经不再是空目录，而是有了第一版可运行的 DataMax Web 壳子。这里刻意没有照搬旧版整套 controller，而是保留旧版智能助手的 shell / sidebar / chat / insight 结构，再把控制器和 API 对接改成直接消费 DataMax 已经落地的 host surface。
 
 当前这一版前端已覆盖：
 
@@ -391,16 +391,16 @@
 
 主计划：
 
-- [2026-04-18-v3-development-execution-plan.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-18-v3-development-execution-plan.md>)
+- [2026-04-18-DataMax-development-execution-plan.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-18-DataMax-development-execution-plan.md>)
 
 架构约束：
 
-- [2026-04-19-v3-architecture-constraints.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-v3-architecture-constraints.md>)
+- [2026-04-19-DataMax-architecture-constraints.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-DataMax-architecture-constraints.md>)
 
 上一轮交接：
 
-- [2026-04-19-v3-phase6-handoff.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-v3-phase6-handoff.md>)
+- [2026-04-19-DataMax-phase6-handoff.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-DataMax-phase6-handoff.md>)
 
 本轮总结：
 
-- [2026-04-20-v3-development-summary.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-20-v3-development-summary.md>)
+- [2026-04-20-DataMax-development-summary.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-20-DataMax-development-summary.md>)

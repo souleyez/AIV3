@@ -1,8 +1,8 @@
-# AI Data Platform V3 Repository and Module Layout
+# DataMax Repository and Module Layout
 
 ## Purpose
 
-本文件定义 V3 全量重构后的仓库结构、Rust crate 边界、前端应用边界，以及共享契约的组织方式。原则是：
+本文件定义 DataMax 全量重构后的仓库结构、Rust crate 边界、前端应用边界，以及共享契约的组织方式。原则是：
 
 - 仓库结构直接映射架构层
 - 核心领域与框架实现分离
@@ -366,7 +366,7 @@ ai-data-platform-v3/
 
 ## Validation Gates
 
-V3 仓库必须自带以下门禁：
+DataMax 仓库必须自带以下门禁：
 
 - Rust format + clippy + deny warnings
 - OpenAPI contract diff

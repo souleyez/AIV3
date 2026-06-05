@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }, {
                 "id": "answer-trend",
                 "title": "最近问答命中趋势",
-                "content": "按最近三轮测试样本展示模型基于 V3 资料回答的命中变化。",
+                "content": "按最近三轮测试样本展示模型基于 DataMax 资料回答的命中变化。",
                 "dataBinding": {
                     "label": "问答命中率",
                     "sourceId": "dataset-ioa-qa",

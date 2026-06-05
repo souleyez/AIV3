@@ -1,4 +1,4 @@
-# V3 HTML Anything Absorption Plan
+# DataMax HTML Anything Absorption Plan
 
 **Date:** 2026-05-18
 
@@ -6,7 +6,7 @@
 
 ## Goal
 
-Absorb `html-anything` as a V3-owned rapid-output capability without importing its execution model. `html-anything` becomes a template source and design-reference library. V3 remains the authority for model routing, permissions, dataset visibility, retrieval supply, artifact ownership, renderer behavior, and export packaging.
+Absorb `html-anything` as a DataMax-owned rapid-output capability without importing its execution model. `html-anything` becomes a template source and design-reference library. DataMax remains the authority for model routing, permissions, dataset visibility, retrieval supply, artifact ownership, renderer behavior, and export packaging.
 
 ## Decision
 
@@ -20,29 +20,29 @@ Use `html-anything` for:
 Do not use `html-anything` for:
 
 - Local coding-agent CLI execution.
-- Reusing ChatGPT/Codex/Claude subscription sessions as V3 service credentials.
+- Reusing ChatGPT/Codex/Claude subscription sessions as DataMax service credentials.
 - Arbitrary model-written HTML as trusted final output.
-- Remote scripts, remote CSS, provider secrets, queue credentials, or private paths inside V3 artifacts.
-- PPT/video/frame surfaces while those V3 tracks are paused.
+- Remote scripts, remote CSS, provider secrets, queue credentials, or private paths inside DataMax artifacts.
+- PPT/video/frame surfaces while those DataMax tracks are paused.
 
 ## Product Shape
 
-The V3 capability should be called a template-assisted rapid output path:
+The DataMax capability should be called a template-assisted rapid output path:
 
 1. The user asks for a report, dashboard, one-pager, prototype, or card.
-2. V3 resolves visible datasets, document evidence, conversation memory, and current artifact context.
-3. V3 selects an enabled template reference from explicit choice, existing draft/source metadata, or safe intent inference.
-4. V3 routes the planning turn through `llm-gateway` using normal provider profiles.
-5. The model receives a template reference and V3-supplied evidence boundaries, then returns structured JSON.
-6. V3 compiles that JSON into `StaticPageDraft.modules`, `dataSnapshot`, `visualSpec`, and `renderSpec`.
-7. The draft can be rendered quickly as a V3 static page, then optionally upgraded through the existing effect-image and final-render path.
-8. Output ownership stays in V3 static-page drafts, render outputs, HTML artifacts, and the right shelf.
+2. DataMax resolves visible datasets, document evidence, conversation memory, and current artifact context.
+3. DataMax selects an enabled template reference from explicit choice, existing draft/source metadata, or safe intent inference.
+4. DataMax routes the planning turn through `llm-gateway` using normal provider profiles.
+5. The model receives a template reference and DataMax-supplied evidence boundaries, then returns structured JSON.
+6. DataMax compiles that JSON into `StaticPageDraft.modules`, `dataSnapshot`, `visualSpec`, and `renderSpec`.
+7. The draft can be rendered quickly as a DataMax static page, then optionally upgraded through the existing effect-image and final-render path.
+8. Output ownership stays in DataMax static-page drafts, render outputs, HTML artifacts, and the right shelf.
 
 ## P0 Scope
 
 Start with metadata and draft seeding:
 
-- Add a V3 template-reference registry for a small allowed subset of `html-anything`.
+- Add a DataMax template-reference registry for a small allowed subset of `html-anything`.
 - Enable static-page draft creation to carry a safe `designReferences` array.
 - Seed static-page modules from three non-frozen references:
   - `data-report`
@@ -52,7 +52,7 @@ Start with metadata and draft seeding:
 - Include design references in image/final-render payloads as guardrails, not as raw HTML.
 - Add `template_reference_id` to the AssistantRun static-page draft creation contract.
 - Keep template ids behind a backend allowlist and reject paused PPT/video references.
-- When the backend receives a template id without a full draft payload, seed the V3 draft with structured modules and mobile order.
+- When the backend receives a template id without a full draft payload, seed the DataMax draft with structured modules and mobile order.
 - Infer `data-report`, `dashboard`, or `docs-page` from user intent on the frontend draft path.
 - Infer the same three references on the backend default-payload path, while preserving full caller-supplied draft payloads unless they explicitly carry a template id.
 - ReAct `create_static_page_draft` uses the same backend creation path, so template selection, draft payload seeding, events, and evidence reporting stay consistent.
@@ -89,9 +89,9 @@ This does not add a new UI selector yet. The current frontend draft sync passes 
 ## Guardrails
 
 - Template references may influence style and module recipes only.
-- All model-facing facts still come from V3 visible context or clearly labeled general knowledge.
+- All model-facing facts still come from DataMax visible context or clearly labeled general knowledge.
 - Missing evidence must remain visible; no template may hide partial or missing data.
-- Final HTML comes from V3 renderers or trusted HTML artifact templates, not raw provider HTML.
+- Final HTML comes from DataMax renderers or trusted HTML artifact templates, not raw provider HTML.
 - `deck-*`, `frame-*`, `video-*`, and Remotion/Hyperframes references remain paused while PPT/video work is frozen.
 
 ## Verification

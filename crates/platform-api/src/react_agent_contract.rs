@@ -457,13 +457,13 @@ mod tests {
     #[test]
     fn parses_web_search_action() {
         let decision = parse_assistant_run_react_decision(
-            r#"{"status":"act","intent":"current_info","reason":"需要外部搜索证据","action":{"type":"web_search","arguments":{"query":"V3 最新发布状态","reason":"用户询问最新情况","freshness":"latest"}}}"#,
+            r#"{"status":"act","intent":"current_info","reason":"需要外部搜索证据","action":{"type":"web_search","arguments":{"query":"DataMax 最新发布状态","reason":"用户询问最新情况","freshness":"latest"}}}"#,
         )
         .expect("web search action should parse");
 
         assert_eq!(decision.status, AssistantRunReActStatus::Act);
         assert_eq!(decision.action_type, AssistantRunReActActionType::WebSearch);
-        assert_eq!(decision.arguments["query"], json!("V3 最新发布状态"));
+        assert_eq!(decision.arguments["query"], json!("DataMax 最新发布状态"));
         assert_eq!(decision.arguments["freshness"], json!("latest"));
     }
 

@@ -1,10 +1,10 @@
-# V3 Email Account Auth Implementation Plan
+# DataMax Email Account Auth Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Upgrade the current local-key visibility model into an email account system where users can sign in with email plus local key or email verification code, and datasets, robots, conversations, memory, reports, and static-page artifacts follow the user.
 
-**Architecture:** V3 remains the identity, authorization, and data ownership source of truth in PostgreSQL. The existing local secret-binding model becomes an account-bound access factor instead of the only identity mechanism. Cloudflare Email Service is used as the verification-code delivery channel through a dedicated sender address; V3 stores verification challenges, sessions, user ownership, grants, and audit records.
+**Architecture:** DataMax remains the identity, authorization, and data ownership source of truth in PostgreSQL. The existing local secret-binding model becomes an account-bound access factor instead of the only identity mechanism. Cloudflare Email Service is used as the verification-code delivery channel through a dedicated sender address; DataMax stores verification challenges, sessions, user ownership, grants, and audit records.
 
 **Tech Stack:** Rust `platform-api`, `contracts`, `domain-model`, `storage`, future `auth-scope`; Next.js web secret/account panel; PostgreSQL 17.9 migrations; Cloudflare Email Service Workers binding or REST API for OTP email delivery; optional Email Routing/Email Worker for inbound operational mailbox handling.
 
@@ -264,7 +264,7 @@ Do not implement this in the first pass unless the storage encryption model is e
 Preferred first version:
 
 ```text
-V3 platform-api
+DataMax platform-api
   -> EmailSender trait
   -> Cloudflare Email Service REST API or Worker endpoint
   -> dedicated sender such as verify@<domain>
@@ -274,7 +274,7 @@ V3 platform-api
 Alternative when keeping Cloudflare logic isolated:
 
 ```text
-V3 platform-api
+DataMax platform-api
   -> internal HTTPS call with service token
   -> Cloudflare Worker /v1/send-verification-code
   -> Email Service Workers binding
@@ -283,7 +283,7 @@ V3 platform-api
 
 Recommended:
 
-- Keep V3 responsible for generating and storing OTP challenges.
+- Keep DataMax responsible for generating and storing OTP challenges.
 - Let Cloudflare only send a rendered message.
 - Do not let the Worker generate login state or decide users.
 - Use queue/background sending if provider latency becomes visible.
@@ -365,7 +365,7 @@ First-pass implemented behavior:
 
 **Files:**
 
-- Create: `docs/plans/2026-05-07-v3-email-account-auth-plan.md`
+- Create: `docs/plans/2026-05-07-DataMax-email-account-auth-plan.md`
 - Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
 
 **Step 1: Add this plan to Source Plans**
@@ -373,7 +373,7 @@ First-pass implemented behavior:
 Add:
 
 ```markdown
-- `docs/plans/2026-05-07-v3-email-account-auth-plan.md`: account/email authentication plan that upgrades local-key visibility into email-bound user ownership and verification-code login.
+- `docs/plans/2026-05-07-DataMax-email-account-auth-plan.md`: account/email authentication plan that upgrades local-key visibility into email-bound user ownership and verification-code login.
 ```
 
 **Step 2: Add account auth to security workstream**
@@ -784,11 +784,11 @@ Document:
 - create dedicated sender such as `verify@<domain>`;
 - configure DNS/domain verification;
 - create API token or Worker binding;
-- configure V3 env vars.
+- configure DataMax env vars.
 
 **Step 2: Choose first integration mode**
 
-Preferred for V3 simplicity:
+Preferred for DataMax simplicity:
 
 ```text
 platform-api -> Cloudflare Email Service REST API
@@ -892,9 +892,9 @@ Expected: pass.
 ## Recommended Next Thread Prompt
 
 ```text
-Continue AI Data Platform V3 from docs/plans/2026-05-07-v3-email-account-auth-plan.md.
+Continue DataMax from docs/plans/2026-05-07-DataMax-email-account-auth-plan.md.
 Implement account/email auth as an upgrade to the existing local-key model, not a replacement that breaks current public/local usage.
 Start with Task 0 and Task 1: link the plan, then add domain and contract types.
-Use Cloudflare Email Service only as the verification-code delivery channel; V3 owns users, sessions, OTP challenges, data ownership, grants, and audit.
+Use Cloudflare Email Service only as the verification-code delivery channel; DataMax owns users, sessions, OTP challenges, data ownership, grants, and audit.
 Never email or store raw local keys.
 ```

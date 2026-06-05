@@ -924,7 +924,7 @@ fn static_page_provider_template_reference_summary(draft_payload: &Value) -> Val
                     "templateId": template_id,
                     "policy": [
                         "template reference can guide style and module recipe only",
-                        "V3 evidence and permissions remain authoritative"
+                        "DataMax evidence and permissions remain authoritative"
                     ],
                 })
             })
@@ -933,7 +933,7 @@ fn static_page_provider_template_reference_summary(draft_payload: &Value) -> Val
             json!({
                 "status": "none",
                 "policy": [
-                    "No template reference is selected; use V3 draft and evidence only"
+                    "No template reference is selected; use DataMax draft and evidence only"
                 ],
             })
         })
@@ -971,7 +971,7 @@ fn static_page_provider_compact_template_reference(reference: &Value) -> Value {
         },
         "policy": [
             "template reference controls style and module recipe only",
-            "V3 model routing, permissions, datasets, evidence, and artifacts remain authoritative",
+            "DataMax model routing, permissions, datasets, evidence, and artifacts remain authoritative",
             "provider output must be structured StaticPageDraft operations, never raw final HTML"
         ],
     })

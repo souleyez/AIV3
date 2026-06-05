@@ -83,7 +83,7 @@
 - `confirmation_required`
 - `confirmed`
 
-当前 V3 已经在 `chat_session` 上落了第一版最小 host-side `2选1` gate，因此当前更常见的是：
+当前 DataMax 已经在 `chat_session` 上落了第一版最小 host-side `2选1` gate，因此当前更常见的是：
 
 - 资料链路：`report_entry_state=not_applicable`
 - chat session 已触发进入报表链确认：`report_entry_state=confirmation_required`

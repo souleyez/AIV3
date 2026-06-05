@@ -1,4 +1,4 @@
-# AI Data Platform V3 Phase 6 Handoff
+# DataMax Phase 6 Handoff
 
 ## Purpose
 
@@ -6,7 +6,7 @@
 
 适用场景：
 
-- 新开线程继续执行 V3 Rust 重构
+- 新开线程继续执行 DataMax Rust 重构
 - 回顾当前已经完成的垂直切片
 - 快速恢复本地可运行环境
 - 明确下一步应该从哪里接着做
@@ -19,7 +19,7 @@
 
 当前阶段：
 
-- 已进入 V3 代码骨架落地阶段，不再是纯文档规划
+- 已进入 DataMax 代码骨架落地阶段，不再是纯文档规划
 - Phase 1 到 Phase 5 的基础骨架已可用
 - Phase 6 的五条最小垂直切片已打通
 - Phase 6 已进一步完成 typed runtime / inspect capability 收口
@@ -128,13 +128,13 @@ wsl bash -lc 'cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 
 主计划文档：
 
-- [2026-04-18-v3-development-execution-plan.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-18-v3-development-execution-plan.md>)
+- [2026-04-18-DataMax-development-execution-plan.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-18-DataMax-development-execution-plan.md>)
 
 本次交接文档：
 
-- [2026-04-19-v3-phase6-handoff.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-v3-phase6-handoff.md>)
-- [2026-04-19-v3-architecture-constraints.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-v3-architecture-constraints.md>)
-- [2026-04-20-v3-development-summary.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-20-v3-development-summary.md>)
+- [2026-04-19-DataMax-phase6-handoff.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-DataMax-phase6-handoff.md>)
+- [2026-04-19-DataMax-architecture-constraints.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-19-DataMax-architecture-constraints.md>)
+- [2026-04-20-DataMax-development-summary.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/plans/2026-04-20-DataMax-development-summary.md>)
 
 关键实现入口：
 
@@ -224,7 +224,7 @@ wsl bash -lc 'cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 如果要切新线程，建议直接用下面这段作为开场：
 
 ```text
-继续 AI Data Platform V3 Rust 重构。先读 docs/plans/2026-04-20-v3-development-summary.md、docs/plans/2026-04-19-v3-phase6-handoff.md 和 docs/plans/2026-04-18-v3-development-execution-plan.md。当前 upload_ingest、retrieval、memory_directory、dataset_output、chat_session 五条最小垂直切片都已完成，并且 retrieval evidence typed view、durable llm_invocations/tool_executions、latest assistant aggregate、runtime.inspect API/CLI 都已通过 smoke。下一步按交接文档继续把 dataset_output / chat_session 从 typed view 收紧推进到真实 provider / tool / streaming runtime 语义，保持现有 workflow/task/worker 骨架不变。
+继续 DataMax Rust 重构。先读 docs/plans/2026-04-20-DataMax-development-summary.md、docs/plans/2026-04-19-DataMax-phase6-handoff.md 和 docs/plans/2026-04-18-DataMax-development-execution-plan.md。当前 upload_ingest、retrieval、memory_directory、dataset_output、chat_session 五条最小垂直切片都已完成，并且 retrieval evidence typed view、durable llm_invocations/tool_executions、latest assistant aggregate、runtime.inspect API/CLI 都已通过 smoke。下一步按交接文档继续把 dataset_output / chat_session 从 typed view 收紧推进到真实 provider / tool / streaming runtime 语义，保持现有 workflow/task/worker 骨架不变。
 ```
 
 ## Decision

@@ -4,7 +4,7 @@
 
 **Goal:** Finish the Codex executor integration after the first queue/agent/observability bridge by closing business-result feedback, safety, retry, and smoke gaps.
 
-**Architecture:** V3 remains the system of record for task enqueue, permissions, datasets, artifacts, and third-party responses. Codex Host may execute fixed templates only after platform and agent readiness gates pass, and every result must return through V3 validation, AssistantRun events, artifact manifests, or staged import plans.
+**Architecture:** DataMax remains the system of record for task enqueue, permissions, datasets, artifacts, and third-party responses. Codex Host may execute fixed templates only after platform and agent readiness gates pass, and every result must return through DataMax validation, AssistantRun events, artifact manifests, or staged import plans.
 
 **Tech Stack:** Rust `platform-api`, `contracts`, `workflow-definitions`, `codex-host-agent`; PostgreSQL workflow/AssistantRun events; Next.js external integration observability page; generated third-party integration docs; 8-server smoke scripts.
 
@@ -15,7 +15,7 @@
 - `CodexHostTask` workflow and `codex_host/run_codex_host_task` queue exist.
 - `crates/codex-host-agent` supports `dry_run`, `plan_only`, gated local-host `codex_exec`, and `cloudflare_orchestrator` for the fixed Cloudflare Codex executor.
 - Fixed templates exist for `static_page_image2_data_publish`, `answer_quality_autofix`, and `data_ingestion_analysis`.
-- Static-page auto publish now accepts either old `codex_exec` readiness or the fixed `cloudflare_orchestrator + cloudflare_codex` readiness; otherwise V3 returns direct HTML fallback with `render_output_id`.
+- Static-page auto publish now accepts either old `codex_exec` readiness or the fixed `cloudflare_orchestrator + cloudflare_codex` readiness; otherwise DataMax returns direct HTML fallback with `render_output_id`.
 - Integrated observability page has a protected Codex executor task panel; it only loads the task list when opened and only calls runtime inspect after selecting a task.
 - Third-party AssistantRun reply polling now surfaces fixed-task states for queued/running/retrying/completed/needs-human/failed paths across static-page publish, data-ingestion analysis, and answer-quality diagnostics. Poll retry events are also included in safe Codex diagnostics summaries.
 
@@ -36,7 +36,7 @@
 **Files:**
 - Modify: `docs/operations/codex-host-model-profiles.md`
 - Modify: `docs/operations/codex-jump-host-minimax-smoke.md`
-- Modify: `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`
+- Modify: `docs/plans/2026-05-25-DataMax-mainline-quality-executor-plan.md`
 
 **Step 1: Document the readiness states**
 
@@ -240,7 +240,7 @@ Do not expose database URLs, credentials, or raw table dumps.
 
 **Step 4: Connect to dataset/data-source staging**
 
-Create a staged plan object in V3-owned storage or AssistantRun artifact state. It should be enough for a later operator-approved import to create/update a dataset, but must not mutate production data automatically.
+Create a staged plan object in DataMax-owned storage or AssistantRun artifact state. It should be enough for a later operator-approved import to create/update a dataset, but must not mutate production data automatically.
 
 **Step 5: Run tests**
 
@@ -259,9 +259,9 @@ Expected: pass.
 - Third-party polling now returns `reply.card.type=v3_data_ingestion_analysis_result` with a safe `result_summary` for completed/needs-human/failed data-ingestion analysis.
 - AssistantRun output artifacts now carry `external_channel_data_ingestion_analysis` metadata for staging review, with explicit `production_write_allowed=false`, no credential exposure, and no raw table dump exposure.
 - Completed data-ingestion outputs with mapping/staging content now also carry a reviewable `v3_data_ingestion_staging_plan` draft with stable `plan_id`, source-scope summary, target summary, mapping entries, staging steps, and fixed human-confirmation policy.
-- Confirmed staging plans now create or reuse a private V3 dataset and append `assistant_run.data_ingestion_staging_plan_confirmed`; third-party polling can surface `data_ingestion_staging_dataset_ready` without adding public request fields or importing raw rows automatically.
-- V3 internal operator route `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/confirm` now exposes that confirmation path behind the existing assistant-run visibility check.
-- V3 internal operator route `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/sync` now requires the confirmed plan, selects an in-plan database source, starts ExternalSourceSync into the confirmed staging dataset, records `assistant_run.data_ingestion_staging_sync_started`, and deduplicates repeat clicks by default.
+- Confirmed staging plans now create or reuse a private DataMax dataset and append `assistant_run.data_ingestion_staging_plan_confirmed`; third-party polling can surface `data_ingestion_staging_dataset_ready` without adding public request fields or importing raw rows automatically.
+- DataMax internal operator route `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/confirm` now exposes that confirmation path behind the existing assistant-run visibility check.
+- DataMax internal operator route `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/sync` now requires the confirmed plan, selects an in-plan database source, starts ExternalSourceSync into the confirmed staging dataset, records `assistant_run.data_ingestion_staging_sync_started`, and deduplicates repeat clicks by default.
 - ExternalSourceSync workflow transitions that carry `connector_context.data_ingestion_staging` now append `assistant_run.data_ingestion_staging_sync_updated`, allowing third-party/model-visible status cards to move through running, completed, and failed states with stage/error context.
 - Added `scripts/run-data-ingestion-staging-sync-smoke.sh` and `docs/validation/data-ingestion-staging-sync-smoke.md` as the safe local and 8-server checklist for the confirm/sync/worker materialization path.
 - Verified:
@@ -283,7 +283,7 @@ Expected: pass.
 - Test: `crates/platform-api/src/lib.rs`
 - Test: `crates/codex-host-agent/src/lib.rs`
 - Modify: `docs/validation/static-page-render-smoke.md`
-- Modify: `scripts/run-v3-quality-gate-smoke.ps1`
+- Modify: `scripts/run-DataMax-quality-gate-smoke.ps1`
 
 **Step 1: Classify failures**
 
@@ -301,7 +301,7 @@ Assert patches can only target allowlisted files and smoke fixtures:
 - `crates/platform-api/src/lib.rs`;
 - `fixtures/document-quality/**`;
 - `scripts/run-document-quality-smoke.ps1`;
-- `scripts/run-v3-quality-gate-smoke.ps1`;
+- `scripts/run-DataMax-quality-gate-smoke.ps1`;
 - `docs/validation/**`.
 
 **Step 3: Require test evidence**
@@ -440,8 +440,8 @@ Expected: pass.
 **Files:**
 - Modify: `docs/validation/static-page-render-smoke.md`
 - Modify: `scripts/run-cloudflare-codex-fixed-task-smoke.ps1`
-- Modify: `scripts/run-v3-quality-gate-smoke.ps1`
-- Modify: `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`
+- Modify: `scripts/run-DataMax-quality-gate-smoke.ps1`
+- Modify: `docs/plans/2026-05-25-DataMax-mainline-quality-executor-plan.md`
 
 **Step 1: Local regression**
 
@@ -509,14 +509,14 @@ Update the main plan with:
 - Focused checks passed: `cargo test -p platform-api external_channel_restores_completed_data_ingestion_staging_dataset_for_same_conversation --lib`, `cargo test -p platform-api external_channel --lib`, and `cargo test -p platform-api data_ingestion_staging --lib`.
 
 2026-05-27 artifact manifest follow-up:
-- Static-page generated artifacts and data-ingestion analysis/staging-plan artifacts now both include a safe `artifact_manifest` in AssistantRun `output_artifacts`, using `schema=v3.output_artifact_manifest` and `schema_version=1`.
+- Static-page generated artifacts and data-ingestion analysis/staging-plan artifacts now both include a safe `artifact_manifest` in AssistantRun `output_artifacts`, using `schema=DataMax.output_artifact_manifest` and `schema_version=1`.
 - Report render summary HTML artifacts now expose the same manifest schema through `payload.artifactManifest`, so report outputs can be observed with the same `artifact_type` / `artifact_kind` / refs / safety shape.
 - Static-page manifests expose the final generated-artifact URL through `primary_url` plus `public`/`download` links, and record safety flags such as `generated_artifact_only=true` and `overwrite_allowed=false`.
 - Data-ingestion manifests expose the staging-plan identity and workflow execution refs without credentials, raw logs, or raw table dumps, and keep `production_write_allowed=false`.
 - Focused checks passed: `cargo test -p platform-api external_channel_static_page_fixed_task_completion_appends_final_publish_event --lib`, `cargo test -p platform-api external_channel_data_ingestion_fixed_task_completion_appends_result_event --lib`, `cargo test -p platform-api html_artifact_report_render_summary_from_output_exposes_publishability --lib`, `cargo test -p platform-api external_channel_static_page --lib`, and `cargo test -p platform-api external_channel_data_ingestion --lib`.
 
 2026-05-27 observability follow-up:
-- `WorkflowRuntimeInspectView` now exposes a default-empty `artifact_manifests` list derived from the linked AssistantRun output artifacts. Runtime inspect only returns normalized `v3.output_artifact_manifest` objects and leaves raw artifacts, logs, prompts, credentials, and stdout/stderr out of the detail payload.
+- `WorkflowRuntimeInspectView` now exposes a default-empty `artifact_manifests` list derived from the linked AssistantRun output artifacts. Runtime inspect only returns normalized `DataMax.output_artifact_manifest` objects and leaves raw artifacts, logs, prompts, credentials, and stdout/stderr out of the detail payload.
 - The protected external integrations page renders the manifest list only inside a selected Codex executor task detail, preserving the existing lazy behavior: closed panel does not load tasks, and selecting one task is required before runtime inspect/manifest loading.
 - Focused checks passed: `cargo test -p contracts workflow_runtime_inspect_view_defaults_pretty_summaries_when_missing --lib`, `cargo test -p platform-api output_artifact_manifests_from_output_artifacts_returns_only_safe_manifests --lib`, `cargo test -p platform-api external_channel --lib`, `node --test app/lib/external-integrations.test.mjs`, and `npm run build`.
 

@@ -5,10 +5,10 @@ This smoke validates the reviewed data-ingestion path after `data_ingestion_anal
 The contract is:
 
 - Third-party request fields do not change.
-- A reviewed staging plan can create or reuse a private V3 staging dataset.
+- A reviewed staging plan can create or reuse a private DataMax staging dataset.
 - The confirmed plan can start `ExternalSourceSync` only for database sources listed in the plan.
 - Repeat sync clicks are deduplicated by default.
-- V3 records model-visible AssistantRun events for sync started, running, completed, and failed states.
+- DataMax records model-visible AssistantRun events for sync started, running, completed, and failed states.
 - Raw database URLs, credentials, full table dumps, schema mutation, and production writes remain blocked.
 
 ## Local Verification
@@ -61,9 +61,9 @@ Useful options:
 - `DATA_INGESTION_LIVE_SMOKE_REQUIRE_DEFAULT_READY=true` makes the smoke fail unless the source default dataset is already indexed.
 - `DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000` selects the local platform API used only for the selected-source status snapshot.
 - `DATA_INGESTION_LIVE_SMOKE_REPO_ROOT=/srv/aiv3/repo` can be used when piping the script through SSH before it is deployed.
-- `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true` runs the report builder against synthetic V3 status fixtures without requiring Postgres or the platform API; use this only to verify the smoke/report logic itself.
+- `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true` runs the report builder against synthetic DataMax status fixtures without requiring Postgres or the platform API; use this only to verify the smoke/report logic itself.
 
-The live smoke is non-destructive. It reads only V3 PostgreSQL and the internal selected-source status route. It does not connect to the source/customer database, does not start a sync, does not print raw credentials, and does not dump source rows.
+The live smoke is non-destructive. It reads only DataMax PostgreSQL and the internal selected-source status route. It does not connect to the source/customer database, does not start a sync, does not print raw credentials, and does not dump source rows.
 
 Expected report signals:
 
@@ -77,11 +77,11 @@ Expected report signals:
 
 ## 2026-05-27 8-Server Post-Deploy Probe
 
-Read-only probe against `8服务器` after release showed `/srv/aiv3/repo` at `5b5df7e` with the core V3 services active. The stored MySQL source `hy-sql-traffic-area` exists, has two earlier succeeded content sync runs, and has an older source-derived smoke dataset with 50 indexed database documents, 50 indexed chunks, and 50 retrieval evidence rows. The current default dataset `新百经营分析` is present but has no indexed database-source documents yet, and the latest full sync run is marked failed because a slow metadata query was operator-cancelled. This is exactly why the live smoke separates default dataset readiness, alternate ready datasets, and latest sync failure.
+Read-only probe against `8服务器` after release showed `/srv/aiv3/repo` at `5b5df7e` with the core DataMax services active. The stored MySQL source `hy-sql-traffic-area` exists, has two earlier succeeded content sync runs, and has an older source-derived smoke dataset with 50 indexed database documents, 50 indexed chunks, and 50 retrieval evidence rows. The current default dataset `新百经营分析` is present but has no indexed database-source documents yet, and the latest full sync run is marked failed because a slow metadata query was operator-cancelled. This is exactly why the live smoke separates default dataset readiness, alternate ready datasets, and latest sync failure.
 
 ## Safety Notes
 
-- Use only V3 stored database-source configuration and server-side env references.
+- Use only DataMax stored database-source configuration and server-side env references.
 - Do not paste or store raw database URLs or passwords in smoke notes.
 - Do not enable production table writes or schema mutation for this smoke.
 - If sync fails, capture only `sync_run_id`, `workflow_stage`, `workflow_status`, `failure_kind`, and sanitized `last_error`.

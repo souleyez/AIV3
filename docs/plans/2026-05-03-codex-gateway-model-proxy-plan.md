@@ -2,17 +2,17 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Separate Codex execution-host integration from V3 model routing, so V3 can use Codex as the Mac execution kernel without pretending Codex provides a stable production model gateway.
+**Goal:** Separate Codex execution-host integration from DataMax model routing, so DataMax can use Codex as the Mac execution kernel without pretending Codex provides a stable production model gateway.
 
-**Architecture:** Codex is treated as an execution runtime, not as the product's model gateway. V3 owns model routing, provider credentials, policy, memory scope, audit, and runtime manifests through `llm-gateway` and a future optional `model-proxy` service. Codex Mac Host is controlled through a V3 task bridge, while models are called through V3-owned provider adapters unless a tightly scoped experimental Codex-compatible shim is explicitly enabled.
+**Architecture:** Codex is treated as an execution runtime, not as the product's model gateway. DataMax owns model routing, provider credentials, policy, memory scope, audit, and runtime manifests through `llm-gateway` and a future optional `model-proxy` service. Codex Mac Host is controlled through a DataMax task bridge, while models are called through DataMax-owned provider adapters unless a tightly scoped experimental Codex-compatible shim is explicitly enabled.
 
-**Tech Stack:** Rust `llm-gateway`, `platform-api`, `workflow-definitions`, `workflow-engine`, future `codex-host-agent`; Next.js web only consumes V3 APIs; Codex CLI/app-server/exec-server/MCP surfaces are local host runtime details; PostgreSQL 17.9 stores provider/model/runtime audit.
+**Tech Stack:** Rust `llm-gateway`, `platform-api`, `workflow-definitions`, `workflow-engine`, future `codex-host-agent`; Next.js web only consumes DataMax APIs; Codex CLI/app-server/exec-server/MCP surfaces are local host runtime details; PostgreSQL 17.9 stores provider/model/runtime audit.
 
 ---
 
 ## Direct Answer
 
-Do not assume Codex has a product-grade gateway proxy for V3.
+Do not assume Codex has a product-grade gateway proxy for DataMax.
 
 Local Codex exposes useful runtime surfaces:
 
@@ -23,19 +23,19 @@ Local Codex exposes useful runtime surfaces:
 - `codex --remote`: client connects to a remote app-server WebSocket.
 - `codex --model`, `--oss`, `--local-provider`: model/provider selection at Codex CLI level.
 
-These are not the same thing as a stable V3 model gateway:
+These are not the same thing as a stable DataMax model gateway:
 
 - They are Codex runtime/control surfaces, not a multi-tenant provider gateway.
 - `app-server` and `exec-server` are explicitly experimental.
-- They do not own V3 dataset visibility, separated memory, report/static-page policy, local-key access, or runtime audit.
+- They do not own DataMax dataset visibility, separated memory, report/static-page policy, local-key access, or runtime audit.
 - They should not be exposed directly to browsers or customers.
 
 Therefore the plan is:
 
 ```text
 Codex = execution kernel / Mac workstation runtime
-V3 llm-gateway/model-proxy = model gateway and provider policy
-V3 platform-api/workflows = business state, memory, permissions, audit, artifacts
+DataMax llm-gateway/model-proxy = model gateway and provider policy
+DataMax platform-api/workflows = business state, memory, permissions, audit, artifacts
 ```
 
 ## Boundary Decision
@@ -43,7 +43,7 @@ V3 platform-api/workflows = business state, memory, permissions, audit, artifact
 ### What Codex Should Do
 
 - Execute bounded tasks on the Mac host.
-- Use local files/tools/browser only inside V3-approved task scope.
+- Use local files/tools/browser only inside DataMax-approved task scope.
 - Produce artifacts, logs, summaries, and patches.
 - Run with isolated `task_context_id` and task memory.
 - Optionally use Codex's own model configuration for execution quality.
@@ -57,11 +57,11 @@ V3 platform-api/workflows = business state, memory, permissions, audit, artifact
 - Serve a browser-facing WebSocket/HTTP endpoint.
 - Become the source of truth for memory.
 
-### What V3 Model Gateway Should Do
+### What DataMax Model Gateway Should Do
 
 - Route AssistantRun/static-page/report/parser model calls.
 - Hide provider keys from browser and Codex task prompts.
-- Normalize provider responses into V3 `LlmResponse`.
+- Normalize provider responses into DataMax `LlmResponse`.
 - Record provider, model, request id, token usage, finish reason, and redacted errors.
 - Apply model capability rules: text, vision, audio, video, long-context, JSON reliability, tool-call reliability.
 - Support OpenClaw as optional provider, not main execution kernel.
@@ -70,8 +70,8 @@ V3 platform-api/workflows = business state, memory, permissions, audit, artifact
 
 ```mermaid
 flowchart LR
-  "V3 Web" --> "V3 Platform API"
-  "V3 Platform API" --> "AssistantRun / ReAct"
+  "DataMax Web" --> "DataMax Platform API"
+  "DataMax Platform API" --> "AssistantRun / ReAct"
   "AssistantRun / ReAct" --> "Memory Scope Policy"
   "AssistantRun / ReAct" --> "LLM Gateway"
   "LLM Gateway" --> "OpenAI Provider"
@@ -88,7 +88,7 @@ flowchart LR
 
 ## Three-Layer Plan
 
-### Layer 1: V3 `llm-gateway`
+### Layer 1: DataMax `llm-gateway`
 
 This is the first and safest layer. It already exists.
 
@@ -103,7 +103,7 @@ Responsibilities:
 
 This layer is called directly by `platform-api`, `static-page-runtime`, `document-vlm-runtime`, workers, and later the model proxy service.
 
-### Layer 2: Optional V3 `model-proxy` Service
+### Layer 2: Optional DataMax `model-proxy` Service
 
 Only add this after in-process `llm-gateway` becomes too crowded.
 
@@ -125,7 +125,7 @@ service token required
 all errors redacted
 ```
 
-Do not create a public OpenAI-compatible endpoint in the first version. That encourages accidental bypass of V3 policy.
+Do not create a public OpenAI-compatible endpoint in the first version. That encourages accidental bypass of DataMax policy.
 
 ### Layer 3: Codex Host Bridge
 
@@ -133,16 +133,16 @@ This is not a model gateway.
 
 Responsibilities:
 
-- V3 creates a signed/leased task.
+- DataMax creates a signed/leased task.
 - Codex host agent picks up the task.
 - Codex runs locally with task-specific workspace and memory.
-- Result artifacts return to V3.
+- Result artifacts return to DataMax.
 - Runtime inspect shows safe progress.
 
 If Codex needs to use a different model, prefer one of these routes:
 
 1. Use Codex's supported local/provider flags when launching the task.
-2. Let the task call V3-approved tools that themselves call `llm-gateway`.
+2. Let the task call DataMax-approved tools that themselves call `llm-gateway`.
 3. Only later experiment with a Codex-compatible provider shim if absolutely necessary.
 
 ## Model Proxy Strategy
@@ -201,7 +201,7 @@ POST /v1/model-invocations
 GET  /v1/model-invocations/{id}
 ```
 
-Do not implement customer-facing chat semantics here. It receives already-scoped model input from V3.
+Do not implement customer-facing chat semantics here. It receives already-scoped model input from DataMax.
 
 ### Phase 3: Codex Provider Configuration
 
@@ -219,23 +219,23 @@ codex exec --oss --local-provider ollama ...
 
 Policy:
 
-- V3 chooses allowed model profile.
+- DataMax chooses allowed model profile.
 - Codex Host Agent maps profile to CLI/config.
 - User prompt cannot directly set arbitrary model/provider flags.
 - Logs record the selected profile, not secrets.
 - Real host validation may run on the `windows-jump` machine before the Mac host is ready.
 - Do not use the abandoned `codex-web`/remote bridge direction for this project.
-- Do not use any public or legacy remote front door as the Codex model provider path for V3.
-- First non-GPT validation must use a local-only or private-network MiniMax path controlled by V3.
-- If Codex CLI itself must use a non-OpenAI model through V3, the endpoint must be a real Codex/OpenAI Responses-compatible provider shim, not a workstation-control bridge API.
+- Do not use any public or legacy remote front door as the Codex model provider path for DataMax.
+- First non-GPT validation must use a local-only or private-network MiniMax path controlled by DataMax.
+- If Codex CLI itself must use a non-OpenAI model through DataMax, the endpoint must be a real Codex/OpenAI Responses-compatible provider shim, not a workstation-control bridge API.
 
 ### 2026-05-07 Jump Host Scope Correction And MiniMax Finding
 
 Project boundary:
 
 - `codex-web` and public remote bridge experiments are a separate abandoned project direction.
-- V3 Rust assistant work must not depend on that path.
-- Jump-host validation is only for the V3 assistant Codex-kernel direction.
+- DataMax Rust assistant work must not depend on that path.
+- Jump-host validation is only for the DataMax assistant Codex-kernel direction.
 - The allowed first test path is private MiniMax API access from the jump host.
 
 Read-only checks on `windows-jump` showed:
@@ -245,7 +245,7 @@ Read-only checks on `windows-jump` showed:
 - npm: `10.9.4`.
 - Codex CLI: `codex-cli 0.123.0`.
 - MiniMax `/chat/completions` smoke succeeded from the jump host using `MiniMax-M2.7`.
-- MiniMax may return leading `<think>...</think>` content in `message.content`; V3 must strip or isolate this before user-facing answer rendering.
+- MiniMax may return leading `<think>...</think>` content in `message.content`; DataMax must strip or isolate this before user-facing answer rendering.
 - Codex CLI 0.123.0 rejects `wire_api="chat"` providers.
 - MiniMax native `https://api.minimaxi.com/v1/responses` returned 404.
 - A jump-host local Responses-compatible shim successfully let Codex call MiniMax and return `CODEX_HOST_SMOKE_OK`.
@@ -254,12 +254,12 @@ Interpretation:
 
 - The jump host is a valid place for real-machine Codex CLI and private MiniMax testing.
 - The MiniMax key and base URL should be treated as server-side secrets only.
-- For V3's "Codex as execution kernel" plan, keep using Codex as an execution host and keep model routing in V3.
+- For DataMax's "Codex as execution kernel" plan, keep using Codex as an execution host and keep model routing in DataMax.
 - For the "Codex uses MiniMax/non-GPT" experiment, direct Chat Completions config is not viable on Codex 0.123.0. Build or expose a dedicated private Responses-compatible provider shim.
 
 ### Phase 4: Experimental Codex-Compatible Provider Shim
 
-Only consider this if we really need Codex itself to speak through V3's model proxy.
+Only consider this if we really need Codex itself to speak through DataMax's model proxy.
 
 Risk:
 
@@ -293,7 +293,7 @@ limited model profiles
 
 **Files:**
 
-- Modify: `docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md`
+- Modify: `docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md`
 - Modify: `docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md`
 - Add: `docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md`
 
@@ -314,7 +314,7 @@ Expected: no whitespace errors.
 **Step 3: Commit**
 
 ```powershell
-git add docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md docs/plans/2026-04-29-v3-consolidated-development-handoff-plan.md docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md
+git add docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md docs/plans/2026-04-29-DataMax-consolidated-development-handoff-plan.md docs/plans/2026-05-03-codex-kernel-separated-memory-plan.md
 git commit -m "docs: split codex gateway model proxy plan"
 ```
 
@@ -521,7 +521,7 @@ wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 
 ## Task 4: Define Codex Host Bridge Contract
 
-**Status 2026-05-07:** first safe queue contract implemented. The ReAct contract now recognizes `codex_host_task`, planning catalog exposes Codex Host as disabled, tool execution rejects it by default with `codex_host_execution_disabled`, and allowlist checks are in place. `codex_host_task_workflow` is registered with queue `codex_host` and task key `run_codex_host_task`; when enabled in a continued AssistantRun, V3 creates an audited workflow execution and enqueues the task instead of running Codex inline. `crates/codex-host-agent` now claims that queue, supports `dry_run`, supports `plan_only`, and can launch `codex exec` only when host/profile/real-exec safety gates pass. Local workstation Codex execution remains blocked by default.
+**Status 2026-05-07:** first safe queue contract implemented. The ReAct contract now recognizes `codex_host_task`, planning catalog exposes Codex Host as disabled, tool execution rejects it by default with `codex_host_execution_disabled`, and allowlist checks are in place. `codex_host_task_workflow` is registered with queue `codex_host` and task key `run_codex_host_task`; when enabled in a continued AssistantRun, DataMax creates an audited workflow execution and enqueues the task instead of running Codex inline. `crates/codex-host-agent` now claims that queue, supports `dry_run`, supports `plan_only`, and can launch `codex exec` only when host/profile/real-exec safety gates pass. Local workstation Codex execution remains blocked by default.
 
 **Files:**
 
@@ -536,9 +536,9 @@ wsl bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && cargo
 Document:
 
 ```text
-Preferred first version: V3 task queue + codex-runtime-agent launches codex exec.
+Preferred first version: DataMax task queue + codex-runtime-agent launches codex exec.
 Possible later version: codex app-server over authenticated local/private WebSocket.
-Avoid first version: exposing codex app-server or exec-server directly to V3 Web/browser.
+Avoid first version: exposing codex app-server or exec-server directly to DataMax Web/browser.
 ```
 
 **Step 2: Add disabled ReAct action**
@@ -607,7 +607,7 @@ GET /v1/model-invocations/{id}
 Document:
 
 ```text
-The model proxy accepts only scoped model input from V3 services.
+The model proxy accepts only scoped model input from DataMax services.
 It is not a customer chat API.
 It does not run retrieval.
 It does not decide memory.
@@ -649,7 +649,7 @@ allowed_capabilities = ["inspect_runtime", "run_readonly_check"]
 
 **Step 2: Policy**
 
-- V3 chooses the profile.
+- DataMax chooses the profile.
 - User text cannot set arbitrary CLI flags.
 - Profile choice is recorded in runtime manifest.
 - Secrets are not logged.
@@ -714,7 +714,7 @@ then `llm-gateway` must strip or isolate the leading reasoning block before the 
 
 The MiniMax/non-GPT experiment is only considered valid when:
 
-- Codex CLI can complete the minimal smoke prompt through a V3-owned or private provider endpoint.
+- Codex CLI can complete the minimal smoke prompt through a DataMax-owned or private provider endpoint.
 - The endpoint implements the Responses semantics Codex needs, including streaming/event shape if Codex requires it.
 - The endpoint redacts provider errors.
 - The endpoint records selected model profile, provider, request id, and lane.
@@ -722,13 +722,13 @@ The MiniMax/non-GPT experiment is only considered valid when:
 
 ## Acceptance Criteria
 
-- The plan states clearly that Codex does not replace V3's model gateway.
-- V3 owns model provider routing through `llm-gateway`.
+- The plan states clearly that Codex does not replace DataMax's model gateway.
+- DataMax owns model provider routing through `llm-gateway`.
 - Codex Host is an execution bridge, not a browser-facing gateway.
 - Future `model-proxy` is internal-only and optional.
 - OpenClaw remains provider/legacy sidecar.
 - Provider errors are redacted.
-- Codex model selection is profile-based and controlled by V3.
+- Codex model selection is profile-based and controlled by DataMax.
 
 ## Recommended Next Thread Prompt
 
@@ -737,7 +737,7 @@ Continue from docs/plans/2026-05-03-codex-gateway-model-proxy-plan.md.
 Treat Codex as execution runtime, not as product model gateway.
 Continue Codex Host after the implemented dry-run queue bridge.
 Next: add a real host-execution mode in crates/codex-host-agent behind a disabled-by-default profile allowlist, and validate only on windows-jump or the later Mac host.
-Keep browser traffic going only through V3 APIs.
+Keep browser traffic going only through DataMax APIs.
 Do not expose Codex app-server/exec-server directly to users.
 Do not run local-machine Codex from the developer workstation.
 ```

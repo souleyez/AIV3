@@ -1,11 +1,11 @@
-# AI Data Platform V3 Rust Rebuild Architecture
+# DataMax Rust Rebuild Architecture
 
 ## Status
 Proposed
 
 ## Goal
 
-在不保留旧运行时包袱的前提下，基于当前系统已经验证过的业务闭环，重建一套面向未来 3 到 5 年的 V3 架构。重构目标不是把现有 Node.js 代码逐行翻译成 Rust，而是把系统升级为：
+在不保留旧运行时包袱的前提下，基于当前系统已经验证过的业务闭环，重建一套面向未来 3 到 5 年的 DataMax 架构。重构目标不是把现有 Node.js 代码逐行翻译成 Rust，而是把系统升级为：
 
 - 前端体验层继续使用 `Next.js + TypeScript`
 - 平台核心、编排、数据处理、报表运行时全面 Rust 化
@@ -27,7 +27,7 @@ Proposed
 - 工具调用面不统一，内外能力没有统一协议边界
 - 报表系统尚未形成规划 AST、编辑层、渲染层、发布层的稳定抽象
 
-这决定了 V3 必须是绿地重建，而不是继续在旧运行时上叠补丁。
+这决定了 DataMax 必须是绿地重建，而不是继续在旧运行时上叠补丁。
 
 ## Requirements
 
@@ -184,7 +184,7 @@ flowchart LR
 - 封装内部能力为标准化 tool
 - 对 LLM 统一暴露工具界面
 
-注意：当前 MCP 官方 SDK 页面把 Rust 列为 `Tier 2`，可用但不是生态最成熟的首选 SDK，因此 V3 的对外协议应采用 MCP，但内部仍保留 adapter 层，不与某个 SDK 实现深度耦合。
+注意：当前 MCP 官方 SDK 页面把 Rust 列为 `Tier 2`，可用但不是生态最成熟的首选 SDK，因此 DataMax 的对外协议应采用 MCP，但内部仍保留 adapter 层，不与某个 SDK 实现深度耦合。
 
 #### LLM Gateway
 
@@ -317,7 +317,7 @@ flowchart LR
 
 ## Report Architecture
 
-V3 报表系统分四层：
+DataMax 报表系统分四层：
 
 ### 1. Report Plan AST
 
@@ -365,7 +365,7 @@ V3 报表系统分四层：
 
 ## Observability
 
-V3 强制接入 OpenTelemetry：
+DataMax 强制接入 OpenTelemetry：
 
 - traces：请求、任务、检索、渲染、工具调用
 - metrics：延迟、错误率、队列积压、索引耗时、报表编译耗时
@@ -419,14 +419,14 @@ V3 强制接入 OpenTelemetry：
 | Tool boundary | MCP | 行业标准化方向 |
 | Observability | OpenTelemetry | 标准化可观测体系 |
 
-## What V3 Explicitly Avoids
+## What DataMax Explicitly Avoids
 
 - 不再使用本地 JSON 作为主业务状态
 - 不再使用 DuckDB 承载平台主事务
 - 不再把业务编排藏在路由逻辑内部
 - 不再把 prompt 和 tool 定义散落在应用代码中
 - 不再让前端页面直接承担复杂业务决策
-- 不把 Temporal Rust SDK 作为当前 V3 的关键执行依赖
+- 不把 Temporal Rust SDK 作为当前 DataMax 的关键执行依赖
 
 ## Risks
 
@@ -435,7 +435,7 @@ V3 强制接入 OpenTelemetry：
 Mitigation:
 
 - 先冻结现有 golden scenarios
-- 以真实案例回放校验 V3 输出与状态变化
+- 以真实案例回放校验 DataMax 输出与状态变化
 
 ### Risk 2: Rust ecosystem integration speed is lower than TS/Python
 

@@ -1,10 +1,10 @@
-# V3 Mainline Quality And Executor Plan
+# DataMax Mainline Quality And Executor Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Keep one active V3 mainline plan for parsing/answer quality, queryable facts, third-party static-page generation, data-ingestion analysis, and Codex executor boundaries.
+**Goal:** Keep one active DataMax mainline plan for parsing/answer quality, queryable facts, third-party static-page generation, data-ingestion analysis, and Codex executor boundaries.
 
-**Architecture:** V3 remains the system of record for documents, datasets, permissions, task state, artifacts, and public integration contracts. Internal quality recovery, fact aggregation, Image2/static-page generation, and Codex executor work must feed back through V3-owned evidence, events, and artifact manifests. Customer-facing answer blocking stays conservative until smoke proves low false positives.
+**Architecture:** DataMax remains the system of record for documents, datasets, permissions, task state, artifacts, and public integration contracts. Internal quality recovery, fact aggregation, Image2/static-page generation, and Codex executor work must feed back through DataMax-owned evidence, events, and artifact manifests. Customer-facing answer blocking stays conservative until smoke proves low false positives.
 
 **Tech Stack:** Rust `platform-api`, `contracts`, `storage`, `assistant-runtime`, `codex-host-agent`; PostgreSQL fact tables and AssistantRun events; Next.js external integration docs; Cloudflare/Image2 queue; 8-server private smoke.
 
@@ -36,7 +36,7 @@
 - Do not let Codex executor mutate datasets, document ownership, credentials, deployment config, or public integrations directly.
 - Static-page no-confirm flow may create a new generated artifact only; it must not overwrite an existing customer artifact or stable URL without confirmation.
 - Keep raw credentials, database URLs, provider payloads, full stdout/stderr, and customer file dumps out of prompts, events, docs, and artifact manifests.
-- Keep HTML route selection explicit: chat answers that only need large tables/detail pages use V3 safe rapid HTML artifacts; only explicit static-page/product-page requests enter the Image2/Codex publish pipeline.
+- Keep HTML route selection explicit: chat answers that only need large tables/detail pages use DataMax safe rapid HTML artifacts; only explicit static-page/product-page requests enter the Image2/Codex publish pipeline.
 
 ## Execution Notes - 2026-05-25
 
@@ -66,11 +66,11 @@
   - smart-elevator point-list table query.
 - Smoke script now reads HTTP error bodies through PowerShell `ErrorDetails.Message` / `HttpResponseMessage.Content` compatibility paths, so real server errors are not hidden by local response-object differences.
 - Continued on 2026-05-26 by tightening static-page `static_page_image2_data_publish` auto-publish readiness:
-  - V3 now treats Codex auto-publish as ready only when the platform task switch, platform allowlist, Codex Host agent capability allowlist, real execution mode, real Codex execution permission, trusted host kind, and task workspace root are all present.
+  - DataMax now treats Codex auto-publish as ready only when the platform task switch, platform allowlist, Codex Host agent capability allowlist, real execution mode, real Codex execution permission, trusted host kind, and task workspace root are all present.
   - If readiness is incomplete, the static-page path keeps the existing built-in HTML direct-render fallback instead of leaving users waiting on an effect-image-only task.
   - Static-page cards and SSE payloads expose additive diagnostics `codex_auto_publish_ready` and `codex_auto_publish_disabled_reason`; third parties can ignore these unless they are logging or debugging integration state.
   - Local regression passed for `external_channel_static_page`, full `external_channel`, and third-party guide HTML check.
-- Follow-up on 2026-05-26: the preferred ready state is now `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator` with `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex` and a Codex Web orchestrator key. The old local-host `codex_exec` gate remains supported, but the fixed Cloudflare Codex executor no longer requires a local task workspace because V3 publishes returned HTML into its own generated-artifacts surface.
+- Follow-up on 2026-05-26: the preferred ready state is now `CODEX_HOST_AGENT_EXECUTION_MODE=cloudflare_orchestrator` with `CODEX_HOST_AGENT_HOST_KIND=cloudflare_codex` and a Codex Web orchestrator key. The old local-host `codex_exec` gate remains supported, but the fixed Cloudflare Codex executor no longer requires a local task workspace because DataMax publishes returned HTML into its own generated-artifacts surface.
 - Continued queryable fact aggregation on 2026-05-26:
   - Added scoped fact aggregate regressions proving selected-document scopes and third-party external temporary dataset scopes supply `document_facts_scoped_aggregate`.
   - The regressions prove out-of-scope documents in the same source dataset are excluded from company/organization aggregates.
@@ -85,11 +85,11 @@
   - Tightened local fact extraction so post-ingest cleanup now collects candidates across the full document, filters TOC dot-leader noise, then ranks higher-value care-domain facts before applying the cap.
   - Added a nursing-handover retrieval ranking guard so `护理交接班时，必须交接的内容有哪些？` prefers the concrete `四、交接内容` chunk over generic `交接班制度` / `床旁交接班` references.
   - Focused local regressions passed for fact-index TOC noise, nursing handover, and the neighboring elderly-care retrieval ranking cases for 翻身、发药、跌倒.
-- Continued on 2026-05-29 by turning the Xinbai dynamic static-page lesson into an internal V3 contract:
+- Continued on 2026-05-29 by turning the Xinbai dynamic static-page lesson into an internal DataMax contract:
   - Static-page export packages now declare both `data-snapshot.json` and `data.json`; `data.json` is the client-refresh data entry for generated pages, while `data-snapshot.json` remains the renderer/source-of-truth handoff file.
   - Renderer manifests and queued export manifests now carry a `dynamic_page_contract` with time selector, primary partition selector, manual refresh, auto-refresh, 60-second polling, and snapshot/version change-detection expectations.
   - `static_page_image2_data_publish` fixed-task packages now instruct Cloudflare Codex to produce final HTML that can load local `data.json` and support time/primary-partition controls. This is internal task guidance only; public third-party fields stay unchanged.
-  - V3's Codex Host generated-artifact publisher can persist returned `data_json` as `data.json` / `data-snapshot.json`, strip the large inline data from the fixed-task output, and publish only artifact paths/URLs plus the manifest.
+  - DataMax's Codex Host generated-artifact publisher can persist returned `data_json` as `data.json` / `data-snapshot.json`, strip the large inline data from the fixed-task output, and publish only artifact paths/URLs plus the manifest.
   - Local validation passed for the export-artifact validator, static-page renderer unit, Codex Host publication unit, contracts fixed-task example, platform data-snapshot render regression, and the full static-page render smoke.
 - Continued on 2026-05-30 by tightening the static-page data snapshot itself:
   - Draft `dataSnapshot` now carries `snapshotVersion` / `updatedAt`, a `data.json` refresh policy, module validation summary, sample/detail row counts, and metric/unit hints before the page enters Image2 or final HTML rendering.
@@ -97,8 +97,8 @@
   - Focused local regressions passed for `static_page_data_snapshot_binds_database_aggregate_rows` and the full `static_page_data_snapshot` test slice.
 - Continued the same batch by expanding the read-only database live smoke:
   - `run-data-ingestion-staging-live-smoke.sh` now reports whether a synced database-derived dataset is ready for follow-up Q&A and static-page report generation, including the basis dataset, ready source tables, safe suggested questions, and the report smoke command.
-  - This remains a V3-state-only smoke: it reads stored V3 source/sync/dataset/chunk/evidence status and does not connect to the customer/source database or execute customer-facing questions automatically.
-  - The same script now supports `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true`, which validates the report builder with synthetic V3 status fixtures when Postgres or the 8-server source is not available.
+  - This remains a DataMax-state-only smoke: it reads stored DataMax source/sync/dataset/chunk/evidence status and does not connect to the customer/source database or execute customer-facing questions automatically.
+  - The same script now supports `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true`, which validates the report builder with synthetic DataMax status fixtures when Postgres or the 8-server source is not available.
   - `run-data-ingestion-staging-sync-smoke.sh` now includes that live-source readiness self-test by default, so local staging sync smoke also guards the database Q&A/report readiness report shape.
 - Continued P0 dataset document movement cleanup on 2026-05-30:
   - The main web app now derives document-membership active state from the selected document's own `dataset_ids` / `datasetIds` while editing document归属, rather than reusing ordinary chat selected dataset scope.
@@ -106,7 +106,7 @@
   - AssistantRun response handling no longer unions backend-selected scopes into the left rail when this turn already has an effective selected dataset scope, preventing an explicit 新百/report selection from visually expanding to every visible dataset.
   - Verified with `cargo test -p platform-api document_dataset_membership_endpoints_allow_main_site_public_document_moves --lib`, `cargo test -p platform-api assistant_run_native_empty_preselection_broadens_to_visible_supply --lib`, `npm --prefix apps/web run build`, and `git diff --check`.
 - Continued P0 static-page handoff cleanup on 2026-05-30:
-  - Third-party static-page requests now create a V3 direct HTML/generated-artifact link even when fixed Cloudflare Codex publish is ready, so `public_url` / `artifact_links[0]` can be returned quickly while the Image2 + Codex final page continues in the background.
+  - Third-party static-page requests now create a DataMax direct HTML/generated-artifact link even when fixed Cloudflare Codex publish is ready, so `public_url` / `artifact_links[0]` can be returned quickly while the Image2 + Codex final page continues in the background.
   - The response and status-restored cards preserve `provisional_direct_html=true`, `codex_final_status=static_page_image2_auto_publish_pending`, `poll_after_seconds`, and the same `status_url`, so third parties can send the first page immediately and still poll for the later final publish.
   - The pure third-party and full third-party integration docs describe the provisional-link behavior, new card fields, and no-confirm Image2-to-Codex flow.
 - Continued P0 third-party privacy cleanup on 2026-05-30:
@@ -134,8 +134,8 @@
   - ReAct compact natural fallback now distinguishes customer JSON output from internal JSON leakage, so `output_format=json` no longer conflicts with the internal "do not output observation/execution JSON" guard.
   - Deterministic answer-quality fallback tables now honor `output_format=json` for spreadsheet row analysis and point-list/elevator rows, rather than returning Markdown tables on JSON-only third-party turns.
 - Continued static-page visual asset hardening on 2026-05-30:
-  - Effect-image completion now records a safe preview-asset provenance summary alongside the stable V3 preview URL, including source kind, redacted source reference, persisted URL, byte size, mime type, dimensions, storage status, and orchestrator task id.
-  - Embedded `data:image` payloads and signed remote query strings are redacted from manifests, so final HTML generation can rely on V3-owned preview assets without leaking upstream temporary URLs.
+  - Effect-image completion now records a safe preview-asset provenance summary alongside the stable DataMax preview URL, including source kind, redacted source reference, persisted URL, byte size, mime type, dimensions, storage status, and orchestrator task id.
+  - Embedded `data:image` payloads and signed remote query strings are redacted from manifests, so final HTML generation can rely on DataMax-owned preview assets without leaking upstream temporary URLs.
   - The third-party Image2 fixed task now passes `render_asset_url` plus the safe provenance summary into Codex Host, and `prompt_text` no longer serializes the raw image payload where signed source URLs can appear.
   - Verified with `cargo fmt --package static-page-worker --check`, `cargo test -p static-page-worker`, `cargo test -p platform-api external_channel_static_page_fixed_task_packages_scope_and_policy --lib`, and `cargo test -p codex-host-agent cloudflare_orchestrator_fixed_task_prompt_is_hard_bounded -- --nocapture`.
 - Continued deployment readiness smoke cleanup on 2026-05-31:
@@ -147,7 +147,7 @@
   - The external integrations Codex executor panel now displays those P50/P95 runtime metrics in the lazy-loaded queue snapshot.
   - Queue stats now also expose success-only duration P50/P95, and the observation UI prefers those values when available so old failed/stale workflow tasks do not distort the normal successful-runtime signal.
 - Continued static-page data repair on 2026-05-31:
-  - Static-page生图和最终渲染入口会先刷新 V3 数据合同，第三方传来的旧 image prompt payload 也会用草稿里的最新供料上下文重建快照。
+  - Static-page生图和最终渲染入口会先刷新 DataMax 数据合同，第三方传来的旧 image prompt payload 也会用草稿里的最新供料上下文重建快照。
   - 数据库聚合行现在会随字段候选携带为 sampleData；`chartOptions.dataKey` / `bindingQuality.fieldPath` 被识别为可修复绑定，避免把可先生成再调整的图表误判成阻断。
 - Continued fixed-task smoke hardening on 2026-05-31:
   - `run-cloudflare-codex-fixed-task-smoke.ps1` now supports reviewed real `static-page-no-confirm` third-party mutation smoke against 8服务器, using `-BearerToken`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, or private `ServerCaseConfigPath.bearer_token_env`.
@@ -205,7 +205,7 @@
    - Add version, refresh, unit, snapshot-date, and detail-count smoke before making stable overwrite/publish automatic.
 
 6. **Data ingestion analysis**
-   - Customer data接入/入库/建表/字段映射/schema/ETL/清洗 requests may queue `data_ingestion_analysis` from existing chat/event fields when V3-selected source scope exists.
+   - Customer data接入/入库/建表/字段映射/schema/ETL/清洗 requests may queue `data_ingestion_analysis` from existing chat/event fields when DataMax-selected source scope exists.
    - Missing source scope returns `data_ingestion_analysis_source_required`.
    - Real mutation smoke remains operator-approved and guarded.
 
@@ -214,7 +214,7 @@
 Local priority smoke:
 
 ```powershell
-.\scripts\run-v3-quality-gate-smoke.ps1 -Local -Case @(
+.\scripts\run-DataMax-quality-gate-smoke.ps1 -Local -Case @(
   'one_character_pdf',
   'deng_engineer',
   'resume_company_stats',
@@ -229,7 +229,7 @@ Local priority smoke:
 Private 8-server smoke:
 
 ```powershell
-.\scripts\run-v3-quality-gate-smoke.ps1 `
+.\scripts\run-DataMax-quality-gate-smoke.ps1 `
   -ServerBaseUrl https://v3.elepcloud.com `
   -ServerCaseConfigPath <private-case-config.json> `
   -Case @(
@@ -271,7 +271,7 @@ systemctl restart aiv3-web.service
 
 ## Consolidated Plans
 
-Top-level product and engineering roadmap now lives in `docs/plans/2026-05-30-v3-complete-development-plan.md`. Use that file first for priority, product boundary, release rules, and cross-workstream ordering; use this file for the active mainline execution queue and smoke history.
+Top-level product and engineering roadmap now lives in `docs/plans/2026-05-30-DataMax-complete-development-plan.md`. Use that file first for priority, product boundary, release rules, and cross-workstream ordering; use this file for the active mainline execution queue and smoke history.
 
 This plan supersedes the prior active parsing/answer-quality, quality-gate/ReAct/VLM, queryable-fact-index, fixed Codex escalation, and executor-boundary plans.
 
