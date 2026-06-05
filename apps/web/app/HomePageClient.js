@@ -487,10 +487,76 @@ function assistantRunStreamArtifactLink(eventName, payload) {
   return firstGeneratedArtifactUrlFromPayload(payload);
 }
 
+function cleanAssistantVisibleContent(content) {
+  let value = String(content || '')
+    .trim()
+    .replaceAll('\\r\\n', '\n')
+    .replaceAll('\\n', '\n')
+    .replaceAll('\\t', ' ');
+  const markers = [
+    '{"assistant_run_id"',
+    '{"card"',
+    '{"conversation_external_id"',
+    '{"data":{"assistant_run_id"',
+    '"idempotency_key"',
+    '"poll_after_seconds"',
+    '"status_url"',
+  ];
+  const markerIndexes = markers
+    .map((marker) => value.indexOf(marker))
+    .filter((index) => index >= 0);
+  if (markerIndexes.length) {
+    let cutAt = Math.min(...markerIndexes);
+    if (!value.slice(cutAt).startsWith('{')) {
+      const objectStart = value.slice(0, cutAt).lastIndexOf('{');
+      if (objectStart >= 0) {
+        cutAt = objectStart;
+      }
+    }
+    const prefix = value.slice(0, cutAt).trim();
+    if (prefix) {
+      value = prefix;
+    }
+  }
+  const seenLinks = new Set();
+  const lines = value.split(/\r?\n/).filter((line) => {
+    const trimmed = line.trim();
+    if (
+      trimmed.startsWith('{"assistant_run_id"')
+      || trimmed.startsWith('{"card"')
+      || trimmed.startsWith('{"data":{"assistant_run_id"')
+    ) {
+      return false;
+    }
+    const link = trimmed
+      .split(/\s+/)
+      .find((part) => part.includes('/generated-artifacts/'));
+    if (!link) return true;
+    const normalized = link.replace(/[)\]>。，,;；]+$/u, '');
+    if (seenLinks.has(normalized)) return false;
+    seenLinks.add(normalized);
+    return true;
+  });
+  const compact = [];
+  let blankSeen = false;
+  lines.forEach((line) => {
+    const trimmedEnd = line.trimEnd();
+    if (!trimmedEnd.trim()) {
+      if (!blankSeen) compact.push('');
+      blankSeen = true;
+      return;
+    }
+    compact.push(trimmedEnd);
+    blankSeen = false;
+  });
+  return compact.join('\n').trim();
+}
+
 function appendArtifactLinkText(content, artifactUrl) {
   const url = String(artifactUrl || '').trim();
-  if (!url || String(content || '').includes(url)) return content || '';
-  return `${content || '页面已生成。'}\n\n[打开生成页面](${url})`;
+  const cleanContent = cleanAssistantVisibleContent(content);
+  if (!url || cleanContent.includes(url)) return cleanContent || '';
+  return `${cleanContent || '页面已生成。'}\n\n[打开生成页面](${url})`;
 }
 
 function sortByDateDesc(items, fieldName) {
@@ -768,6 +834,18 @@ function buildStaticPagePublishedHtmlArtifact(draft) {
   if (!previewPath) return null;
   const finalPage = draft.finalPage || {};
   const assetManifest = finalPage.assetManifest || finalPage.asset_manifest || {};
+  const reportTitle = assetManifest.reportTitle
+    || assetManifest.report_title
+    || assetManifest.displayTitle
+    || assetManifest.display_title
+    || assetManifest.title
+    || finalPage.reportTitle
+    || finalPage.report_title
+    || finalPage.displayTitle
+    || finalPage.display_title
+    || draft.objective
+    || draft.title
+    || '静态页';
   const ownerId = staticPagePublishedArtifactOwnerId(draft);
   const renderOutputId = finalPage.renderOutputId || finalPage.render_output_id || '';
   const dataPath = staticPageSafePreviewPath(assetManifest.dataUrl || assetManifest.data_url || '');
@@ -776,7 +854,7 @@ function buildStaticPagePublishedHtmlArtifact(draft) {
     kind: 'html_artifact',
     version: 1,
     id: `html-static-page-published-${safeHtmlArtifactIdSegment(ownerId || draft.id)}-${safeHtmlArtifactIdSegment(renderOutputId || previewPath, 'page')}`,
-    title: `${draft.objective || draft.title || '静态页'} · 成品`,
+    title: `${reportTitle} · 成品`,
     sourceType: 'static_page',
     templateId: 'static_page_published_preview',
     interactionMode: 'read_only',
@@ -804,6 +882,8 @@ function buildStaticPagePublishedHtmlArtifact(draft) {
       dataPath,
       snapshotPath,
       summary: draft.modelSummary || finalPage.notice || '页面已生成，可在主站内预览并继续通过对话修改。',
+      reportTitle,
+      report_title: reportTitle,
     },
   };
 }

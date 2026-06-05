@@ -10885,7 +10885,7 @@ fn external_channel_public_text(text: &str) -> String {
 }
 
 fn external_channel_public_reply_text(text: &str) -> String {
-    let value = external_channel_public_text(text);
+    let value = external_channel_public_readable_text(&external_channel_public_text(text));
     if external_channel_text_looks_like_internal_context_leak(&value) {
         return "本轮回复包含内部处理上下文，DataMax 已拦截该部分。请继续提问或指定需要查看的结论，我会重新基于已授权资料回答。".to_string();
     }
@@ -10893,11 +10893,105 @@ fn external_channel_public_reply_text(text: &str) -> String {
 }
 
 fn external_channel_public_stream_text(text: &str) -> String {
-    let value = external_channel_public_text(text);
+    let value = external_channel_public_readable_text(&external_channel_public_text(text));
     if external_channel_text_looks_like_internal_context_leak(&value) {
         return "DataMax 正在处理，本轮内部上下文不会对外展示。".to_string();
     }
     truncate_external_channel_public_text(&value, EXTERNAL_CHANNEL_PUBLIC_STREAM_TEXT_LIMIT)
+}
+
+fn external_channel_public_readable_text(text: &str) -> String {
+    let mut value = text
+        .trim()
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", " ");
+    value = strip_embedded_external_channel_json_envelope(&value);
+    value = dedupe_public_generated_artifact_links_in_text(&value);
+    collapse_public_text_spacing(&value)
+}
+
+fn strip_embedded_external_channel_json_envelope(text: &str) -> String {
+    let markers = [
+        "{\"assistant_run_id\"",
+        "{\"card\"",
+        "{\"conversation_external_id\"",
+        "{\"data\":{\"assistant_run_id\"",
+        "\"idempotency_key\"",
+        "\"poll_after_seconds\"",
+        "\"status_url\"",
+    ];
+    let mut cut_at: Option<usize> = None;
+    for marker in markers {
+        if let Some(index) = text.find(marker) {
+            let candidate = if marker.starts_with("{\"") {
+                index
+            } else {
+                text[..index].rfind('{').unwrap_or(index)
+            };
+            cut_at = Some(cut_at.map_or(candidate, |current| current.min(candidate)));
+        }
+    }
+    let cleaned = cut_at
+        .and_then(|index| {
+            let prefix = text[..index].trim();
+            (!prefix.is_empty()).then(|| prefix.to_string())
+        })
+        .unwrap_or_else(|| text.to_string());
+    cleaned
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.starts_with("{\"assistant_run_id\"")
+                || trimmed.starts_with("{\"card\"")
+                || trimmed.starts_with("{\"data\":{\"assistant_run_id\""))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn dedupe_public_generated_artifact_links_in_text(text: &str) -> String {
+    let mut seen_links = HashSet::new();
+    text.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            let link = trimmed
+                .split_whitespace()
+                .find(|part| {
+                    part.contains("/generated-artifacts/")
+                        || part.starts_with("https://v3.elepcloud.com/generated-artifacts/")
+                })
+                .map(|part| {
+                    part.trim_matches(|ch: char| {
+                        matches!(ch, ')' | ']' | '>' | '。' | '，' | ',' | ';' | '；')
+                    })
+                    .to_string()
+                });
+            match link {
+                Some(link) if !link.is_empty() => seen_links.insert(link),
+                _ => true,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn collapse_public_text_spacing(text: &str) -> String {
+    let mut output = Vec::new();
+    let mut blank_seen = false;
+    for line in text.lines() {
+        let trimmed_end = line.trim_end();
+        if trimmed_end.trim().is_empty() {
+            if !blank_seen {
+                output.push(String::new());
+            }
+            blank_seen = true;
+            continue;
+        }
+        output.push(trimmed_end.to_string());
+        blank_seen = false;
+    }
+    output.join("\n").trim().to_string()
 }
 
 fn truncate_external_channel_public_text(text: &str, max_chars: usize) -> String {
@@ -20708,12 +20802,24 @@ async fn ingest_external_channel_message_with_connection_inner(
             .await
             .map_err(ApiError::from_storage)?;
         let artifact_payload = json!({
-            "title": "新百经营分析可视化报表",
+            "title": XINBAI_PUBLISHED_REPORT_TITLE,
+            "report_title": XINBAI_PUBLISHED_REPORT_TITLE,
+            "display_title": XINBAI_PUBLISHED_REPORT_TITLE,
             "public_url": public_url,
             "generated_artifact_url": public_url,
             "download_url": public_url,
             "html_download_url": public_url,
             "artifact_links": [public_url],
+            "data_url": assistant_run_xinbai_published_report_sibling_url("data.json"),
+            "table_data_url": assistant_run_xinbai_published_report_sibling_url("table-data.csv"),
+            "ppt_download_url": assistant_run_xinbai_published_report_sibling_url("report.ppt"),
+            "markdown_download_url": assistant_run_xinbai_published_report_sibling_url("report.md"),
+            "text_download_url": assistant_run_xinbai_published_report_sibling_url("report.md"),
+            "download_exports": external_channel_static_page_download_exports(
+                &public_url,
+                json!(assistant_run_xinbai_published_report_sibling_url("data.json")),
+                Some(XINBAI_PUBLISHED_REPORT_TITLE),
+            ),
             "source": "xinbai_published_report_link",
             "editable_after_publish": true,
             "validation_summary": {
@@ -48600,6 +48706,7 @@ fn assistant_run_request_wants_json_output(request: &CreateAssistantRunRequest) 
     assistant_run_request_output_format(request).as_deref() == Some("json")
 }
 
+const XINBAI_PUBLISHED_REPORT_TITLE: &str = "新世界百货经营管理月报表";
 const XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL: &str = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
 
 fn assistant_run_xinbai_published_report_url() -> String {
@@ -48608,6 +48715,11 @@ fn assistant_run_xinbai_published_report_url() -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL.to_string())
+}
+
+fn assistant_run_xinbai_published_report_sibling_url(file_name: &str) -> String {
+    static_page_artifact_sibling_url(&assistant_run_xinbai_published_report_url(), file_name)
+        .unwrap_or_else(|| assistant_run_xinbai_published_report_url())
 }
 
 fn assistant_run_xinbai_published_report_link_answer(prompt: &str) -> Option<String> {
@@ -48710,7 +48822,7 @@ fn assistant_run_xinbai_published_report_link_answer(prompt: &str) -> Option<Str
 
     let public_url = assistant_run_xinbai_published_report_url();
     Some(format!(
-        "新百经营分析可视化报表已生成，可点击查看：[新百经营分析可视化报表]({public_url})\n\n后续如果需要调整指标、门店权限、时间口径或版式，可以在这个页面基础上继续修改。"
+        "{XINBAI_PUBLISHED_REPORT_TITLE}已生成，可点击查看：[{XINBAI_PUBLISHED_REPORT_TITLE}]({public_url})\n\n后续如果需要调整指标、门店权限、时间口径或版式，可以在这个页面基础上继续修改。"
     ))
 }
 
@@ -48739,11 +48851,23 @@ fn assistant_run_xinbai_report_link_output_artifacts(
         json!({
             "type": "generated_artifact",
             "artifact_kind": "static_page",
-            "title": "新百经营分析可视化报表",
+            "title": XINBAI_PUBLISHED_REPORT_TITLE,
+            "report_title": XINBAI_PUBLISHED_REPORT_TITLE,
+            "display_title": XINBAI_PUBLISHED_REPORT_TITLE,
             "public_url": public_url,
             "generated_artifact_url": public_url,
             "download_url": public_url,
             "html_download_url": public_url,
+            "data_url": assistant_run_xinbai_published_report_sibling_url("data.json"),
+            "table_data_url": assistant_run_xinbai_published_report_sibling_url("table-data.csv"),
+            "ppt_download_url": assistant_run_xinbai_published_report_sibling_url("report.ppt"),
+            "markdown_download_url": assistant_run_xinbai_published_report_sibling_url("report.md"),
+            "text_download_url": assistant_run_xinbai_published_report_sibling_url("report.md"),
+            "download_exports": external_channel_static_page_download_exports(
+                &public_url,
+                json!(assistant_run_xinbai_published_report_sibling_url("data.json")),
+                Some(XINBAI_PUBLISHED_REPORT_TITLE),
+            ),
             "source": "xinbai_published_report_link",
             "editable_after_publish": true,
         }),
@@ -48751,12 +48875,24 @@ fn assistant_run_xinbai_report_link_output_artifacts(
     if include_external_channel_artifact {
         artifacts.push(json!({
             "type": "external_channel_static_page_artifact",
-            "title": "新百经营分析可视化报表",
+            "title": XINBAI_PUBLISHED_REPORT_TITLE,
+            "report_title": XINBAI_PUBLISHED_REPORT_TITLE,
+            "display_title": XINBAI_PUBLISHED_REPORT_TITLE,
             "public_url": public_url,
             "generated_artifact_url": public_url,
             "download_url": public_url,
             "html_download_url": public_url,
             "artifact_links": [public_url],
+            "data_url": assistant_run_xinbai_published_report_sibling_url("data.json"),
+            "table_data_url": assistant_run_xinbai_published_report_sibling_url("table-data.csv"),
+            "ppt_download_url": assistant_run_xinbai_published_report_sibling_url("report.ppt"),
+            "markdown_download_url": assistant_run_xinbai_published_report_sibling_url("report.md"),
+            "text_download_url": assistant_run_xinbai_published_report_sibling_url("report.md"),
+            "download_exports": external_channel_static_page_download_exports(
+                &public_url,
+                json!(assistant_run_xinbai_published_report_sibling_url("data.json")),
+                Some(XINBAI_PUBLISHED_REPORT_TITLE),
+            ),
             "source": "xinbai_published_report_link",
             "editable_after_publish": true,
             "validation_summary": {
@@ -53879,6 +54015,168 @@ fn external_channel_static_page_artifact_payload_value(payload: &Value, key: &st
         .unwrap_or(Value::Null)
 }
 
+fn external_channel_static_page_artifact_payload_string(
+    payload: &Value,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        external_channel_static_page_artifact_payload_value(payload, key)
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn external_channel_static_page_is_xinbai_primary_report(
+    payload: &Value,
+    public_url: &str,
+) -> bool {
+    let lower_url = public_url.to_ascii_lowercase();
+    if lower_url.contains("xinbai-functional-modular-template-20260604")
+        || lower_url.contains("/xinbai/")
+    {
+        return true;
+    }
+    let template_reference_id =
+        external_channel_static_page_template_reference_id_from_payload(payload);
+    let template_reference_id = template_reference_id
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if template_reference_id.contains("xinbai-functional-modular-template-20260604")
+        || template_reference_id.contains("xinbai_business_report")
+    {
+        return true;
+    }
+    let template_reference = external_channel_static_page_template_reference_from_payload(payload);
+    let template_reference_text = template_reference.to_string().to_ascii_lowercase();
+    template_reference_text.contains("xinbai")
+        || template_reference_text.contains("新百")
+        || template_reference_text.contains("新世界百货")
+}
+
+fn external_channel_static_page_report_title(payload: &Value, public_url: &str) -> String {
+    if let Some(title) = external_channel_static_page_artifact_payload_string(
+        payload,
+        &[
+            "report_title",
+            "reportTitle",
+            "display_title",
+            "displayTitle",
+            "artifact_title",
+            "artifactTitle",
+            "title",
+        ],
+    ) {
+        if title != "static_page_image2_data_publish" && title != "DataMax 静态页" {
+            return title;
+        }
+    }
+    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
+        return XINBAI_PUBLISHED_REPORT_TITLE.to_string();
+    }
+    "DataMax 经营分析报表".to_string()
+}
+
+fn external_channel_static_page_export_url(
+    payload: &Value,
+    public_url: &str,
+    keys: &[&str],
+    file_name: &str,
+) -> Value {
+    for key in keys {
+        if let Some(url) = external_channel_static_page_artifact_payload_value(payload, key)
+            .as_str()
+            .map(str::trim)
+            .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+            .map(ToOwned::to_owned)
+        {
+            return json!(url);
+        }
+    }
+    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
+        return static_page_artifact_sibling_url(public_url, file_name)
+            .map(Value::String)
+            .unwrap_or(Value::Null);
+    }
+    Value::Null
+}
+
+fn external_channel_static_page_data_url(payload: &Value, public_url: &str) -> Value {
+    external_channel_static_page_export_url(
+        payload,
+        public_url,
+        &["data_url", "dataUrl"],
+        "data.json",
+    )
+}
+
+fn external_channel_static_page_download_exports(
+    public_url: &str,
+    data_url: Value,
+    report_title: Option<&str>,
+) -> Value {
+    let title = report_title.unwrap_or("DataMax 经营分析报表");
+    let table_url = static_page_artifact_sibling_url(public_url, "table-data.csv")
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    let ppt_url = static_page_artifact_sibling_url(public_url, "report.ppt")
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    let md_url = static_page_artifact_sibling_url(public_url, "report.md")
+        .map(Value::String)
+        .unwrap_or(Value::Null);
+    json!([
+        {
+            "kind": "table_data",
+            "label": "表格数据",
+            "format": "csv",
+            "title": title,
+            "url": table_url,
+            "data_url": data_url,
+        },
+        {
+            "kind": "ppt",
+            "label": "导出PPT",
+            "format": "ppt",
+            "title": title,
+            "url": ppt_url,
+        },
+        {
+            "kind": "markdown",
+            "label": "文本下载（MD）",
+            "format": "md",
+            "title": title,
+            "url": md_url,
+        },
+    ])
+}
+
+fn external_channel_static_page_download_exports_from_payload(
+    payload: &Value,
+    public_url: &str,
+    data_url: Value,
+    report_title: &str,
+) -> Value {
+    if let Some(exports) = payload
+        .get("download_exports")
+        .or_else(|| payload.get("downloadExports"))
+        .cloned()
+        .filter(|value| value.is_array())
+    {
+        return exports;
+    }
+    if external_channel_static_page_is_xinbai_primary_report(payload, public_url) {
+        return external_channel_static_page_download_exports(
+            public_url,
+            data_url,
+            Some(report_title),
+        );
+    }
+    json!([])
+}
+
 fn external_static_page_template_reference_id(reference: &Value) -> Option<&str> {
     ["templateId", "template_id", "id"].iter().find_map(|key| {
         normalize_static_page_template_reference_id(reference.get(*key).and_then(Value::as_str))
@@ -54127,6 +54425,39 @@ fn external_channel_static_page_published_reply(
         external_channel_static_page_data_refresh_policy_from_payload(payload);
     let default_template_scope =
         external_channel_static_page_default_template_scope_from_payload(payload);
+    let report_title = external_channel_static_page_report_title(payload, public_url);
+    let data_url = external_channel_static_page_data_url(payload, public_url);
+    let table_data_url = external_channel_static_page_export_url(
+        payload,
+        public_url,
+        &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
+        "table-data.csv",
+    );
+    let ppt_download_url = external_channel_static_page_export_url(
+        payload,
+        public_url,
+        &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
+        "report.ppt",
+    );
+    let markdown_download_url = external_channel_static_page_export_url(
+        payload,
+        public_url,
+        &[
+            "markdown_download_url",
+            "markdownDownloadUrl",
+            "text_download_url",
+            "textDownloadUrl",
+            "md_url",
+            "mdUrl",
+        ],
+        "report.md",
+    );
+    let download_exports = external_channel_static_page_download_exports_from_payload(
+        payload,
+        public_url,
+        data_url.clone(),
+        &report_title,
+    );
     ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
@@ -54134,12 +54465,20 @@ fn external_channel_static_page_published_reply(
         card: Some(json!({
             "type": "v3_static_page_image2_publish_completed",
             "status": "static_page_published",
+            "title": report_title,
+            "report_title": report_title,
+            "display_title": report_title,
             "public_url": public_url,
             "generated_artifact_url": public_url,
             "download_url": public_url,
             "html_download_url": public_url,
             "artifact_links": [public_url],
-            "data_url": external_channel_static_page_artifact_payload_value(payload, "data_url"),
+            "data_url": data_url,
+            "table_data_url": table_data_url,
+            "ppt_download_url": ppt_download_url,
+            "markdown_download_url": markdown_download_url,
+            "text_download_url": markdown_download_url,
+            "download_exports": download_exports,
             "data_snapshot_url": external_channel_static_page_artifact_payload_value(payload, "data_snapshot_url"),
             "dynamic_page_contract": dynamic_page_contract,
             "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
@@ -54259,6 +54598,39 @@ fn external_channel_static_page_stable_artifact_reused_reply(
         external_channel_static_page_data_refresh_policy_from_payload(payload);
     let default_template_scope =
         external_channel_static_page_default_template_scope_from_payload(payload);
+    let report_title = external_channel_static_page_report_title(payload, &public_url);
+    let data_url = external_channel_static_page_data_url(payload, &public_url);
+    let table_data_url = external_channel_static_page_export_url(
+        payload,
+        &public_url,
+        &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
+        "table-data.csv",
+    );
+    let ppt_download_url = external_channel_static_page_export_url(
+        payload,
+        &public_url,
+        &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
+        "report.ppt",
+    );
+    let markdown_download_url = external_channel_static_page_export_url(
+        payload,
+        &public_url,
+        &[
+            "markdown_download_url",
+            "markdownDownloadUrl",
+            "text_download_url",
+            "textDownloadUrl",
+            "md_url",
+            "mdUrl",
+        ],
+        "report.md",
+    );
+    let download_exports = external_channel_static_page_download_exports_from_payload(
+        payload,
+        &public_url,
+        data_url.clone(),
+        &report_title,
+    );
     ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
@@ -54273,11 +54645,20 @@ fn external_channel_static_page_stable_artifact_reused_reply(
         card: Some(json!({
             "type": "v3_static_page_stable_artifact",
             "status": "static_page_published",
+            "title": report_title,
+            "report_title": report_title,
+            "display_title": report_title,
             "public_url": public_url,
             "generated_artifact_url": public_url,
             "download_url": public_url,
             "html_download_url": public_url,
             "artifact_links": [public_url],
+            "data_url": data_url,
+            "table_data_url": table_data_url,
+            "ppt_download_url": ppt_download_url,
+            "markdown_download_url": markdown_download_url,
+            "text_download_url": markdown_download_url,
+            "download_exports": download_exports,
             "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
             "baseline_draft_id": payload
                 .get("baseline_draft_id")
@@ -89207,8 +89588,8 @@ mod tests {
         let answer =
             assistant_run_xinbai_published_report_link_answer("昨天/之前生成的新百报表链接")
                 .expect("customer phrase should reuse published report");
-        assert!(answer.contains("新百经营分析可视化报表已生成"));
-        assert!(answer.contains("[新百经营分析可视化报表]("));
+        assert!(answer.contains("新世界百货经营管理月报表已生成"));
+        assert!(answer.contains("[新世界百货经营管理月报表]("));
         assert!(answer.contains(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL));
     }
 
@@ -93250,6 +93631,20 @@ mod tests {
         assert!(!body.contains("effect_image_confirmation_required"));
         assert!(body.contains("event: external_channel.completed"));
         assert!(body.contains("event: done"));
+    }
+
+    #[test]
+    fn external_channel_public_reply_text_strips_embedded_json_and_formats_lines() {
+        let raw = "固定提成取高风险识别，可以从三个层级来做。\\n\\n一、已触发取高。\\n二、建议关注字段。\\n{\"assistant_run_id\":\"ef19a7bd-b45a-4971-b590-511852f4d371\",\"card\":null,\"conversation_external_id\":\"conv-1\",\"data\":{\"assistant_run_id\":\"ef19a7bd-b45a-4971-b590-511852f4d371\",\"idempotency_key\":\"third-party:test\",\"phase\":\"completed\",\"poll_after_seconds\":null,\"status\":\"completed\",\"status_url\":null,\"text\":\"内部重复正文不应展示\"}}";
+
+        let text = external_channel_public_reply_text(raw);
+
+        assert!(text.contains("固定提成取高风险识别"));
+        assert!(text.contains("\n\n一、已触发取高。"));
+        assert!(!text.contains("assistant_run_id"));
+        assert!(!text.contains("idempotency_key"));
+        assert!(!text.contains("\\n"));
+        assert!(!text.contains("内部重复正文不应展示"));
     }
 
     #[test]
@@ -111417,12 +111812,30 @@ retrieve_evidence:
         assert!(text.contains("系统识别到本轮关注焦点：取高机会"));
         assert!(text.contains("报表会优先呈现：销售/租金/取高口径、门店/区域维度"));
         let card = reply.card.as_ref().expect("completed reply has card");
+        assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(
+            card["report_title"],
+            json!(XINBAI_PUBLISHED_REPORT_TITLE)
+        );
         assert_eq!(card["public_url"], json!(payload["public_url"]));
         assert_eq!(card["generated_artifact_url"], json!(payload["public_url"]));
         assert_eq!(card["download_url"], json!(payload["public_url"]));
         assert_eq!(card["html_download_url"], json!(payload["public_url"]));
         assert_eq!(card["artifact_links"], json!([payload["public_url"]]));
         assert_eq!(card["data_url"], json!(payload["data_url"]));
+        assert_eq!(
+            card["table_data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/table-data.csv")
+        );
+        assert_eq!(
+            card["ppt_download_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/report.ppt")
+        );
+        assert_eq!(
+            card["markdown_download_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/report.md")
+        );
+        assert_eq!(card["download_exports"][0]["label"], json!("表格数据"));
         assert_eq!(
             card["data_snapshot_url"],
             json!(payload["data_snapshot_url"])
@@ -111490,11 +111903,21 @@ retrieve_evidence:
         assert!(!text.contains("复用"));
         let card = reply.card.as_ref().expect("reuse card");
         assert_eq!(card["status"], json!("static_page_published"));
+        assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
+        assert_eq!(
+            card["report_title"],
+            json!(XINBAI_PUBLISHED_REPORT_TITLE)
+        );
         assert_eq!(card["public_url"], json!(public_url));
         assert_eq!(card["generated_artifact_url"], json!(public_url));
         assert_eq!(card["download_url"], json!(public_url));
         assert_eq!(card["html_download_url"], json!(public_url));
         assert_eq!(card["artifact_links"], json!([public_url]));
+        assert_eq!(
+            card["text_download_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/reused/report.md")
+        );
+        assert_eq!(card["download_exports"][2]["label"], json!("文本下载（MD）"));
         assert_eq!(
             card["template_reference_id"],
             json!("generated-static-page:template-003")

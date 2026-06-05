@@ -1253,6 +1253,39 @@ fn external_channel_static_page_published_reply_from_agent_payload(
     }
     let text =
         external_channel_text_with_public_artifact_link("DataMax 静态页已生成并发布。", public_url);
+    let report_title = external_channel_static_page_agent_report_title(payload, public_url);
+    let data_url = external_channel_static_page_agent_data_url(payload, public_url);
+    let table_data_url = external_channel_static_page_agent_export_url(
+        payload,
+        public_url,
+        &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
+        "table-data.csv",
+    );
+    let ppt_download_url = external_channel_static_page_agent_export_url(
+        payload,
+        public_url,
+        &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
+        "report.ppt",
+    );
+    let markdown_download_url = external_channel_static_page_agent_export_url(
+        payload,
+        public_url,
+        &[
+            "markdown_download_url",
+            "markdownDownloadUrl",
+            "text_download_url",
+            "textDownloadUrl",
+            "md_url",
+            "mdUrl",
+        ],
+        "report.md",
+    );
+    let download_exports = external_channel_static_page_agent_download_exports(
+        payload,
+        public_url,
+        data_url.clone(),
+        &report_title,
+    );
     Some(ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
@@ -1260,12 +1293,20 @@ fn external_channel_static_page_published_reply_from_agent_payload(
         card: Some(json!({
             "type": "v3_static_page_image2_publish_completed",
             "status": "static_page_published",
+            "title": report_title,
+            "report_title": report_title,
+            "display_title": report_title,
             "public_url": public_url,
             "generated_artifact_url": public_url,
             "download_url": public_url,
             "html_download_url": public_url,
             "artifact_links": [public_url],
-            "data_url": external_channel_static_page_artifact_payload_value_from_agent(payload, "data_url"),
+            "data_url": data_url,
+            "table_data_url": table_data_url,
+            "ppt_download_url": ppt_download_url,
+            "markdown_download_url": markdown_download_url,
+            "text_download_url": markdown_download_url,
+            "download_exports": download_exports,
             "data_snapshot_url": external_channel_static_page_artifact_payload_value_from_agent(payload, "data_snapshot_url"),
             "dynamic_page_contract": external_channel_static_page_artifact_payload_value_from_agent(payload, "dynamic_page_contract"),
             "draft_id": payload.get("draft_id").cloned().unwrap_or(Value::Null),
@@ -1345,6 +1386,155 @@ fn external_channel_static_page_artifact_payload_value_from_agent(
                 .cloned()
         })
         .unwrap_or(Value::Null)
+}
+
+const XINBAI_PUBLISHED_REPORT_TITLE_FROM_AGENT: &str = "新世界百货经营管理月报表";
+
+fn static_page_artifact_sibling_url_from_agent(
+    public_url: &str,
+    file_name: &str,
+) -> Option<String> {
+    let mut url = reqwest::Url::parse(public_url).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    let mut segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())?;
+    if segments
+        .last()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("index.html"))
+    {
+        segments.pop();
+    }
+    segments.push(file_name);
+    url.set_path(&format!("/{}", segments.join("/")));
+    Some(url.to_string())
+}
+
+fn external_channel_static_page_agent_is_xinbai_report(payload: &Value, public_url: &str) -> bool {
+    let lower_url = public_url.to_ascii_lowercase();
+    if lower_url.contains("xinbai-functional-modular-template-20260604")
+        || lower_url.contains("/xinbai/")
+    {
+        return true;
+    }
+    external_channel_static_page_artifact_payload_value_from_agent(payload, "template_reference_id")
+        .as_str()
+        .map(str::to_ascii_lowercase)
+        .map(|value| {
+            value.contains("xinbai-functional-modular-template-20260604")
+                || value.contains("xinbai_business_report")
+                || value.contains("xinbai")
+                || value.contains("新百")
+                || value.contains("新世界百货")
+        })
+        .unwrap_or(false)
+}
+
+fn external_channel_static_page_agent_report_title(payload: &Value, public_url: &str) -> String {
+    for key in [
+        "report_title",
+        "reportTitle",
+        "display_title",
+        "displayTitle",
+        "artifact_title",
+        "artifactTitle",
+        "title",
+    ] {
+        if let Some(title) =
+            external_channel_static_page_artifact_payload_value_from_agent(payload, key)
+                .as_str()
+                .map(str::trim)
+                .filter(|value| {
+                    !value.is_empty()
+                        && *value != "static_page_image2_data_publish"
+                        && *value != "DataMax 静态页"
+                })
+        {
+            return title.to_string();
+        }
+    }
+    if external_channel_static_page_agent_is_xinbai_report(payload, public_url) {
+        return XINBAI_PUBLISHED_REPORT_TITLE_FROM_AGENT.to_string();
+    }
+    "DataMax 经营分析报表".to_string()
+}
+
+fn external_channel_static_page_agent_export_url(
+    payload: &Value,
+    public_url: &str,
+    keys: &[&str],
+    file_name: &str,
+) -> Value {
+    for key in keys {
+        if let Some(url) =
+            external_channel_static_page_artifact_payload_value_from_agent(payload, key)
+                .as_str()
+                .map(str::trim)
+                .filter(|value| generated_artifact_url_allowed(value))
+                .map(ToOwned::to_owned)
+        {
+            return json!(url);
+        }
+    }
+    if external_channel_static_page_agent_is_xinbai_report(payload, public_url) {
+        return static_page_artifact_sibling_url_from_agent(public_url, file_name)
+            .map(Value::String)
+            .unwrap_or(Value::Null);
+    }
+    Value::Null
+}
+
+fn external_channel_static_page_agent_data_url(payload: &Value, public_url: &str) -> Value {
+    external_channel_static_page_agent_export_url(
+        payload,
+        public_url,
+        &["data_url", "dataUrl"],
+        "data.json",
+    )
+}
+
+fn external_channel_static_page_agent_download_exports(
+    payload: &Value,
+    public_url: &str,
+    data_url: Value,
+    report_title: &str,
+) -> Value {
+    if let Some(exports) = payload
+        .get("download_exports")
+        .or_else(|| payload.get("downloadExports"))
+        .cloned()
+        .filter(|value| value.is_array())
+    {
+        return exports;
+    }
+    if !external_channel_static_page_agent_is_xinbai_report(payload, public_url) {
+        return json!([]);
+    }
+    json!([
+        {
+            "kind": "table_data",
+            "label": "表格数据",
+            "format": "csv",
+            "title": report_title,
+            "url": static_page_artifact_sibling_url_from_agent(public_url, "table-data.csv"),
+            "data_url": data_url,
+        },
+        {
+            "kind": "ppt",
+            "label": "导出PPT",
+            "format": "ppt",
+            "title": report_title,
+            "url": static_page_artifact_sibling_url_from_agent(public_url, "report.ppt"),
+        },
+        {
+            "kind": "markdown",
+            "label": "文本下载（MD）",
+            "format": "md",
+            "title": report_title,
+            "url": static_page_artifact_sibling_url_from_agent(public_url, "report.md"),
+        },
+    ])
 }
 
 fn external_channel_static_page_payload_or_source_ref_value_from_agent(
@@ -2523,12 +2713,57 @@ async fn attach_external_static_page_artifact_to_run(
     }) {
         return Ok(());
     }
+    let report_title =
+        external_channel_static_page_agent_report_title(completed_payload, public_url);
+    let data_url = external_channel_static_page_agent_data_url(completed_payload, public_url);
+    let table_data_url = external_channel_static_page_agent_export_url(
+        completed_payload,
+        public_url,
+        &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
+        "table-data.csv",
+    );
+    let ppt_download_url = external_channel_static_page_agent_export_url(
+        completed_payload,
+        public_url,
+        &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
+        "report.ppt",
+    );
+    let markdown_download_url = external_channel_static_page_agent_export_url(
+        completed_payload,
+        public_url,
+        &[
+            "markdown_download_url",
+            "markdownDownloadUrl",
+            "text_download_url",
+            "textDownloadUrl",
+            "md_url",
+            "mdUrl",
+        ],
+        "report.md",
+    );
+    let download_exports = external_channel_static_page_agent_download_exports(
+        completed_payload,
+        public_url,
+        data_url.clone(),
+        &report_title,
+    );
     output_artifacts.push(json!({
         "type": "external_channel_static_page_artifact",
         "artifact_type": "static_page",
-        "title": "static_page_image2_data_publish",
+        "title": report_title,
+        "report_title": report_title,
+        "display_title": report_title,
         "public_url": public_url,
         "download_url": public_url,
+        "generated_artifact_url": public_url,
+        "html_download_url": public_url,
+        "artifact_links": [public_url],
+        "data_url": data_url,
+        "table_data_url": table_data_url,
+        "ppt_download_url": ppt_download_url,
+        "markdown_download_url": markdown_download_url,
+        "text_download_url": markdown_download_url,
+        "download_exports": download_exports,
         "draft_id": completed_payload.get("draft_id").cloned().unwrap_or(Value::Null),
         "image_job_id": completed_payload.get("image_job_id").cloned().unwrap_or(Value::Null),
         "codex_host_workflow_execution_id": completed_payload

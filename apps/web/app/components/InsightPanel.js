@@ -173,6 +173,72 @@ function staticPageFinalPageUrl(draft) {
     || '';
 }
 
+function staticPageFinalManifest(draft) {
+  const finalPage = draft?.finalPage || {};
+  return finalPage.assetManifest || finalPage.asset_manifest || {};
+}
+
+function staticPageOfficialTitle(draft) {
+  const finalPage = draft?.finalPage || {};
+  const manifest = staticPageFinalManifest(draft);
+  return manifest.reportTitle
+    || manifest.report_title
+    || manifest.displayTitle
+    || manifest.display_title
+    || manifest.title
+    || finalPage.reportTitle
+    || finalPage.report_title
+    || finalPage.displayTitle
+    || finalPage.display_title
+    || '';
+}
+
+function staticPageArtifactSiblingUrl(draft, fileName) {
+  const finalPageUrl = staticPageFinalPageUrl(draft);
+  if (!finalPageUrl) return '';
+  try {
+    const url = new URL(finalPageUrl, typeof window !== 'undefined' ? window.location.origin : 'https://v3.elepcloud.com');
+    url.search = '';
+    url.hash = '';
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts[parts.length - 1]?.toLowerCase() === 'index.html') {
+      parts.pop();
+    }
+    parts.push(fileName);
+    url.pathname = `/${parts.join('/')}`;
+    if (typeof window !== 'undefined' && url.origin === window.location.origin) {
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+function staticPageExportUrl(draft, keys, fallbackFileName = '') {
+  const finalPage = draft?.finalPage || {};
+  const manifest = staticPageFinalManifest(draft);
+  const containers = [finalPage, manifest, manifest.exportPackage, manifest.export_package].filter(Boolean);
+  for (const container of containers) {
+    for (const key of keys) {
+      const value = String(container?.[key] || '').trim();
+      if (value) return value;
+    }
+  }
+  const exports = finalPage.downloadExports || finalPage.download_exports || manifest.downloadExports || manifest.download_exports || [];
+  if (Array.isArray(exports)) {
+    for (const item of exports) {
+      const kind = String(item?.kind || item?.format || '').toLowerCase();
+      const label = String(item?.label || '').toLowerCase();
+      if (keys.some((key) => kind.includes(key.toLowerCase()) || label.includes(key.toLowerCase()))) {
+        const value = String(item?.url || item?.href || '').trim();
+        if (value) return value;
+      }
+    }
+  }
+  return fallbackFileName ? staticPageArtifactSiblingUrl(draft, fallbackFileName) : '';
+}
+
 function downloadStaticPageHtmlFromShelf(draft) {
   const downloadHref = draft?.finalPage?.htmlDownloadUrl || draft?.finalPage?.html_download_url || '';
   if (downloadHref && downloadUrlArtifact({ href: downloadHref })) {
@@ -235,6 +301,9 @@ function htmlArtifactSummary(artifact) {
 
 function artifactKindLabel(kind) {
   const labels = {
+    table_data: '表格数据',
+    report_ppt: '导出PPT',
+    report_markdown: '文本下载（MD）',
     pptx: '下载PPTX',
     final_deliverables_manifest: '交付清单',
     published_deliverable_manifest: '发布清单',
@@ -255,6 +324,26 @@ function artifactKindLabel(kind) {
   return labels[kind] || formatSnakeCaseLabel(kind || '文件');
 }
 
+function staticPagePublishedSiblingPath(path, fileName) {
+  const value = String(path || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value, 'https://v3.elepcloud.com');
+    url.search = '';
+    url.hash = '';
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts[parts.length - 1]?.toLowerCase() === 'index.html') {
+      parts.pop();
+    }
+    parts.push(fileName);
+    url.pathname = `/${parts.join('/')}`;
+    if (value.startsWith('/')) return url.pathname;
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
 function htmlArtifactGeneratedFiles(artifact) {
   const result = normalizeHtmlArtifactManifest(artifact);
   if (result.rejected) return [];
@@ -262,7 +351,7 @@ function htmlArtifactGeneratedFiles(artifact) {
   const files = Array.isArray(generatedArtifacts.files) ? generatedArtifacts.files : [];
   const sourceRunId = result.manifest.provenance?.sourceRunId || '';
   const localThreadId = result.manifest.payload?.localThreadId || result.manifest.payload?.local_thread_id || '';
-  return files.map((file, index) => {
+  const normalizedFiles = files.map((file, index) => {
     const kind = file?.artifactKind || file?.artifact_kind || '';
     const path = file?.path || file?.uri || '';
     const params = new URLSearchParams();
@@ -282,10 +371,34 @@ function htmlArtifactGeneratedFiles(artifact) {
         : '',
     };
   });
+  if (result.manifest.templateId === 'static_page_published_preview') {
+    const payload = result.manifest.payload || {};
+    const previewPath = payload.previewPath || payload.preview_path || '';
+    const virtualFiles = [
+      ['table_data', 'table-data.csv'],
+      ['report_ppt', 'report.ppt'],
+      ['report_markdown', 'report.md'],
+    ].map(([kind, fileName], index) => {
+      const url = staticPagePublishedSiblingPath(previewPath, fileName);
+      return {
+        index: `published-${index}`,
+        kind,
+        label: artifactKindLabel(kind),
+        path: url,
+        downloadable: Boolean(url),
+        url,
+      };
+    }).filter((file) => file.downloadable);
+    return [...virtualFiles, ...normalizedFiles];
+  }
+  return normalizedFiles;
 }
 
 function preferredHtmlArtifactDownloads(artifact) {
   const priority = [
+    'table_data',
+    'report_ppt',
+    'report_markdown',
     'pptx',
     'video_slides_markdown',
     'final_deliverables_manifest',
@@ -700,7 +813,7 @@ function staticPageProjectStage(draft) {
 }
 
 function staticPageProjectTitle(draft) {
-  return truncateText(draft?.objective || draft?.title || '静态页项目', 38);
+  return truncateText(staticPageOfficialTitle(draft) || draft?.objective || draft?.title || '静态页项目', 38);
 }
 
 function staticPageProjectCanExport(draft) {
@@ -730,6 +843,14 @@ function csvCell(value) {
 }
 
 function downloadStaticPageTable(draft) {
+  const exportUrl = staticPageExportUrl(
+    draft,
+    ['table_data_url', 'tableDataUrl', 'table_data', 'csv_url', 'csvUrl', 'csv', '表格数据'],
+    'table-data.csv',
+  );
+  if (exportUrl && downloadUrlArtifact({ href: exportUrl })) {
+    return;
+  }
   const rows = [
     ['阶段', '模块', '标题', '内容', '数据来源', '可视化'],
     ...(draft?.modules || []).map((module) => [
@@ -749,6 +870,14 @@ function downloadStaticPageTable(draft) {
 }
 
 function downloadStaticPagePpt(draft) {
+  const exportUrl = staticPageExportUrl(
+    draft,
+    ['ppt_download_url', 'pptDownloadUrl', 'ppt_url', 'pptUrl', 'ppt', '导出PPT'],
+    'report.ppt',
+  );
+  if (exportUrl && downloadUrlArtifact({ href: exportUrl })) {
+    return;
+  }
   const modules = draft?.modules || [];
   const slideSections = modules.map((module, index) => `
     <section class="slide">
@@ -786,6 +915,41 @@ function downloadStaticPagePpt(draft) {
     content: html,
     filename: `static-page-${safeExportId(draft)}.ppt`,
     mime: 'application/vnd.ms-powerpoint;charset=utf-8',
+  });
+}
+
+function downloadStaticPageMarkdown(draft) {
+  const exportUrl = staticPageExportUrl(
+    draft,
+    ['markdown_download_url', 'markdownDownloadUrl', 'text_download_url', 'textDownloadUrl', 'markdown', 'md', '文本下载'],
+    'report.md',
+  );
+  if (exportUrl && downloadUrlArtifact({ href: exportUrl })) {
+    return;
+  }
+  const title = staticPageOfficialTitle(draft) || draft?.objective || draft?.title || 'DataMax 经营分析报表';
+  const modules = draft?.modules || [];
+  const lines = [
+    `# ${title}`,
+    '',
+    draft?.modelSummary || '页面已生成，可在主站内预览并继续通过对话修改。',
+    '',
+    '## 模块',
+    '',
+    ...modules.map((module, index) => [
+      `### ${index + 1}. ${module.title || module.id || '未命名模块'}`,
+      '',
+      module.content || '',
+      '',
+      `- 数据来源：${module.dataBinding?.label || module.dataBinding?.type || '数据待绑定'}`,
+      `- 可视化：${module.visualization?.label || module.visualization?.type || '页面模块'}`,
+      '',
+    ].join('\n')),
+  ];
+  downloadTextArtifact({
+    content: lines.join('\n'),
+    filename: `static-page-${safeExportId(draft)}.md`,
+    mime: 'text/markdown;charset=utf-8',
   });
 }
 
@@ -900,7 +1064,10 @@ function GeneratedProjectCard({
                 导出PPT
               </button>
               <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageTable(draft)}>
-                表格
+                表格数据
+              </button>
+              <button type="button" className="ghost-btn compact-action-btn" disabled={!exportable} onClick={() => downloadStaticPageMarkdown(draft)}>
+                文本下载（MD）
               </button>
               <button type="button" className="ghost-btn compact-action-btn" onClick={onCopyLink}>
                 {copied ? '已复制' : '复制链接'}
