@@ -14,6 +14,7 @@
     "test:static-page-planning-smoke-html": "node --test tools/render-static-page-planning-smoke-html.test.mjs",
     "test:static-page-export-artifact": "node --test tools/validate-static-page-export-artifact.test.mjs",
     "validate:static-page-export-artifact": "node tools/validate-static-page-export-artifact.mjs",
+    "validate:xinbai-report-template": "node tools/validate-xinbai-report-template.mjs",
     "build:pure-third-party-guide-html": "node tools/render-pure-third-party-guide-html.mjs",
     "build:static-page-planning-smoke-html": "node tools/render-static-page-planning-smoke-html.mjs",
     "check:pure-third-party-guide-html": "node tools/render-pure-third-party-guide-html.mjs --check",

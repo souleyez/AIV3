@@ -25,9 +25,10 @@ use crate::{
     create_static_page_draft_for_assistant_run_id, ensure_react_requested_dataset_is_selected,
     ensure_scope_requests_conversation_memory, html_artifact_safe_summary_text,
     load_visible_dataset_for_user, load_visible_document_for_assistant_scope,
-    react_static_page_operations_from_arguments, status_from_static_page_operations,
-    status_from_static_page_payload, summarize_static_page_operations,
-    to_document_media_detail_view, value_at_any_key, ApiError, AppState,
+    publish_static_page_revision_for_current_artifact, react_static_page_operations_from_arguments,
+    status_from_static_page_operations, status_from_static_page_payload,
+    summarize_static_page_operations, to_document_media_detail_view, value_at_any_key, ApiError,
+    AppState,
 };
 use workflow_engine::WorkflowSignal;
 
@@ -251,6 +252,17 @@ pub(crate) async fn execute_assistant_run_react_action(
             )
             .await
         }
+        AssistantRunReactActionType::PublishStaticPageRevision => {
+            publish_static_page_revision_from_current_artifact(
+                state,
+                action,
+                current_artifact,
+                active_assistant_run_id,
+                prompt,
+                current_user_id,
+            )
+            .await
+        }
         _ => Ok(rejected_react_tool_result(
             action,
             "action_not_implemented_in_first_slice",
@@ -304,6 +316,7 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::UpdateStaticPageModule => "更新静态页模块",
         AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交效果图生成",
         AssistantRunReactActionType::RenderStaticPage => "制作最终静态页",
+        AssistantRunReactActionType::PublishStaticPageRevision => "发布当前静态页修订版",
         AssistantRunReactActionType::CreateReportDraft => "创建报表草稿",
         AssistantRunReactActionType::ReportChoice => "选择报表流向",
         AssistantRunReactActionType::OpenClawMemoryRecall => "调用 OpenClaw 记忆",
@@ -893,6 +906,121 @@ async fn reject_if_static_page_draft_not_current(
         )));
     }
     Ok(None)
+}
+
+async fn publish_static_page_revision_from_current_artifact(
+    state: &AppState,
+    action: &AssistantRunNextAction,
+    current_artifact: Option<&Value>,
+    active_assistant_run_id: Option<AssistantRunId>,
+    prompt: &str,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let Some(current_artifact) = current_artifact else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "current_static_page_artifact_required",
+        ));
+    };
+    let Some(active_assistant_run_id) = active_assistant_run_id else {
+        return Ok(rejected_react_tool_result(
+            action,
+            "active_assistant_run_required",
+        ));
+    };
+    let instruction = static_page_revision_instruction_from_arguments(&action.arguments, prompt);
+    let outcome = match publish_static_page_revision_for_current_artifact(
+        state,
+        active_assistant_run_id,
+        current_artifact,
+        &instruction,
+        current_user_id,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error)
+            if matches!(
+                error.payload.code.as_str(),
+                "current_static_page_draft_required"
+                    | "static_page_existing_artifact_url_required"
+                    | "static_page_revision_explicit_intent_required"
+                    | "static_page_image2_publish_not_ready"
+            ) =>
+        {
+            return Ok(rejected_react_tool_result_with_details(
+                action,
+                error.payload.code.as_str(),
+                json!({
+                    "message": error.payload.message,
+                    "details": error.payload.details,
+                }),
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let image_job_status =
+        serde_json::to_value(&outcome.image_job.status).unwrap_or_else(|_| json!("unknown"));
+    let workflow_execution_id = outcome
+        .codex_execution_id
+        .map(|id| json!(id.to_string()))
+        .unwrap_or(Value::Null);
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "message": "static page revision publish queued",
+            "items": [{
+                "type": "static_page_revision_publish",
+                "draft_id": outcome.draft.id.to_string(),
+                "image_job_id": outcome.image_job.id.to_string(),
+                "image_job_status": image_job_status,
+                "codex_host_workflow_execution_id": workflow_execution_id,
+                "existing_artifact_public_url": outcome.public_url,
+                "status": "static_page_revision_publish_queued",
+            }],
+            "limits": {},
+            "draft_id": outcome.draft.id.to_string(),
+            "image_job_id": outcome.image_job.id.to_string(),
+            "codex_host_workflow_execution_id": workflow_execution_id,
+            "task_status": "static_page_revision_publish_queued",
+            "requires_polling": true,
+            "publish_mode": "new_generated_artifact_only",
+            "existing_artifact": outcome.existing_artifact,
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "发布当前静态页修订版",
+            "react_action": action.action_type.as_str(),
+            "draft_id": outcome.draft.id.to_string(),
+            "image_job_id": outcome.image_job.id.to_string(),
+            "codex_host_workflow_execution_id": workflow_execution_id,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    })
+}
+
+fn static_page_revision_instruction_from_arguments(arguments: &Value, prompt: &str) -> String {
+    [
+        "instruction",
+        "revision_instruction",
+        "revisionInstruction",
+        "objective",
+        "prompt",
+    ]
+    .iter()
+    .find_map(|key| {
+        arguments
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+    .unwrap_or(prompt)
+    .to_string()
 }
 
 fn static_page_image_job_id_from_arguments(

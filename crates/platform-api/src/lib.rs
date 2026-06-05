@@ -37742,6 +37742,7 @@ async fn assistant_run_static_page_image2_enqueue_if_enabled(
     run: &AssistantRun,
     draft: &StaticPageDraft,
     image_job: &StaticPageImageJobView,
+    prompt_override: Option<&str>,
     template_reference: Option<&Value>,
     evidence_summary: &Value,
     missing_evidence: &Value,
@@ -37751,7 +37752,7 @@ async fn assistant_run_static_page_image2_enqueue_if_enabled(
         run,
         draft,
         image_job,
-        &run.user_prompt,
+        prompt_override.unwrap_or(run.user_prompt.as_str()),
         template_reference,
         evidence_summary,
         missing_evidence,
@@ -37802,6 +37803,430 @@ async fn assistant_run_static_page_image2_enqueue_if_enabled(
     ))
     .await?;
     Ok(Some(execution_id))
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StaticPageRevisionPublishOutcome {
+    pub(crate) draft: StaticPageDraft,
+    pub(crate) image_job: StaticPageImageJobView,
+    pub(crate) codex_execution_id: Option<WorkflowExecutionId>,
+    pub(crate) existing_artifact: Value,
+    pub(crate) public_url: String,
+}
+
+pub(crate) async fn publish_static_page_revision_for_current_artifact(
+    state: &AppState,
+    active_assistant_run_id: AssistantRunId,
+    current_artifact: &Value,
+    instruction: &str,
+    current_user_id: Option<UserId>,
+) -> std::result::Result<StaticPageRevisionPublishOutcome, ApiError> {
+    if !static_page_revision_explicit_intent_present(instruction) {
+        return Err(ApiError::bad_request_with_details(
+            "static_page_revision_explicit_intent_required",
+            "publishing a static-page report revision requires an explicit report/page revision intent"
+                .to_string(),
+            json!({
+                "accepted_intent_examples": [
+                    "修改报表",
+                    "修复这个页面",
+                    "改成暗黑移动端风格",
+                    "增加/去掉/移动某个模块",
+                    "刷新当前报表数据并发布新链接"
+                ],
+                "policy": "current_published_static_page_plus_explicit_revision_intent",
+            }),
+        ));
+    }
+    let draft_id = static_page_current_artifact_draft_id(current_artifact).ok_or_else(|| {
+        ApiError::bad_request(
+            "current_static_page_draft_required",
+            "current static page draft id is required to publish a revision".to_string(),
+        )
+    })?;
+    let source_draft = load_visible_static_page_draft(state, draft_id, current_user_id).await?;
+    let run = load_visible_assistant_run_for_user(state, active_assistant_run_id, current_user_id)
+        .await?;
+    let public_url = static_page_public_url_from_current_artifact(current_artifact)
+        .or_else(|| static_page_published_public_url_from_draft(&source_draft))
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "static_page_existing_artifact_url_required",
+                "current static page must have a published public URL before it can be revised"
+                    .to_string(),
+            )
+        })?;
+    let readiness = external_channel_static_page_codex_auto_publish_readiness();
+    if !readiness.ready {
+        return Err(ApiError::bad_request_with_details(
+            "static_page_image2_publish_not_ready",
+            "static-page Codex publish route is not ready".to_string(),
+            json!({
+                "reason": readiness.reason,
+                "template_id": "static_page_image2_data_publish",
+            }),
+        ));
+    }
+
+    let now = Utc::now();
+    let existing_artifact = static_page_existing_artifact_reference_from_public_url(
+        &public_url,
+        "current_static_page_artifact",
+    );
+    let mut source_refs = static_page_revision_source_refs(
+        source_draft.source_refs.clone(),
+        &source_draft,
+        &existing_artifact,
+        instruction,
+        &public_url,
+        now,
+    );
+    source_refs = apply_static_page_artifact_stability_to_source_refs(
+        source_refs,
+        static_page_dataset_artifact_key_from_draft_context(&source_draft).as_deref(),
+        "candidate",
+        Some(&public_url),
+        now,
+    );
+    let selected_scope = if run.selected_scope.is_null()
+        || run
+            .selected_scope
+            .as_object()
+            .is_some_and(|object| object.is_empty())
+    {
+        source_draft.selected_scope.clone()
+    } else {
+        run.selected_scope.clone()
+    };
+    let mut draft_payload = source_draft.draft_payload.clone();
+    set_payload_value(
+        &mut draft_payload,
+        "revisionRequest",
+        json!({
+            "sourceDraftId": source_draft.id.to_string(),
+            "instruction": truncate_assistant_supply_text(instruction, 1200),
+            "existingArtifactPublicUrl": public_url,
+            "preserveStyleUnlessRedesignRequested": !static_page_prompt_requests_explicit_redesign(instruction),
+            "createdAt": now,
+        }),
+    );
+
+    let revision_draft = state
+        .storage
+        .static_page_drafts()
+        .create(
+            state.tenant_id,
+            &NewStaticPageDraft {
+                assistant_run_id: run.id,
+                owner_user_id: run.user_id.or(source_draft.owner_user_id),
+                title: static_page_revision_draft_title(&source_draft.title),
+                status: StaticPageDraftStatus::Draft,
+                selected_scope,
+                visibility_snapshot: source_draft.visibility_snapshot.clone(),
+                source_refs,
+                draft_payload,
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    append_static_page_draft_run_event(
+        state,
+        &revision_draft,
+        "static_page_draft.revision_created",
+        json!({
+            "source_draft_id": source_draft.id,
+            "draft_id": revision_draft.id,
+            "existing_artifact": existing_artifact,
+            "instruction": truncate_assistant_supply_text(instruction, 1200),
+            "publish_mode": "new_generated_artifact_only",
+        }),
+    )
+    .await?;
+
+    let (draft, image_job) = create_static_page_existing_artifact_preview_job(
+        state,
+        revision_draft,
+        instruction,
+        &existing_artifact,
+        &public_url,
+        now,
+    )
+    .await?;
+    let evidence_summary = json!({
+        "status": "revision_from_current_static_page",
+        "source_draft_id": source_draft.id.to_string(),
+        "existing_artifact_public_url": public_url,
+    });
+    let missing_evidence = json!({"status": "best_effort_revision_allowed"});
+    let codex_execution_id = assistant_run_static_page_image2_enqueue_if_enabled(
+        state,
+        &run,
+        &draft,
+        &image_job,
+        Some(instruction),
+        None,
+        &evidence_summary,
+        &missing_evidence,
+    )
+    .await?;
+    if let Some(codex_execution_id) = codex_execution_id {
+        let image_job_id = image_job.id.to_string();
+        mark_static_page_draft_generated_artifact_publish_queued(
+            &state.storage,
+            state.tenant_id,
+            &draft,
+            Some(image_job_id.as_str()),
+            codex_execution_id,
+        )
+        .await?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.main_static_page_revision_publish_queued"
+                        .to_string(),
+                    payload: json!({
+                        "source": "main_static_page_revision_request",
+                        "local_thread_id": run.local_thread_id,
+                        "source_draft_id": source_draft.id,
+                        "draft_id": draft.id,
+                        "image_job_id": image_job.id,
+                        "preview_asset_key": image_job.preview_asset_key,
+                        "codex_host_workflow_execution_id": codex_execution_id,
+                        "template_id": "static_page_image2_data_publish",
+                        "publish_mode": "new_generated_artifact_only",
+                        "existing_artifact": existing_artifact,
+                        "existing_artifact_public_url": public_url,
+                        "image2_skipped": true,
+                        "image2_skip_reason": "current_static_page_artifact_revision",
+                        "effect_image_confirmation_required": false,
+                        "status_method": "GET",
+                        "poll_after_seconds": 15,
+                    }),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+    }
+
+    Ok(StaticPageRevisionPublishOutcome {
+        draft,
+        image_job,
+        codex_execution_id,
+        existing_artifact,
+        public_url,
+    })
+}
+
+fn static_page_current_artifact_draft_id(current_artifact: &Value) -> Option<StaticPageDraftId> {
+    [
+        "backendDraftId",
+        "backend_draft_id",
+        "staticPageDraftId",
+        "static_page_draft_id",
+        "draft_id",
+        "id",
+    ]
+    .iter()
+    .find_map(|key| {
+        current_artifact
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .map(StaticPageDraftId)
+    })
+}
+
+fn static_page_revision_explicit_intent_present(value: &str) -> bool {
+    let text = value.trim();
+    if text.is_empty() {
+        return false;
+    }
+    if text.contains("修改报表") {
+        return true;
+    }
+    let lower = text.to_ascii_lowercase();
+    let subject_terms = [
+        "报表",
+        "页面",
+        "静态页",
+        "图表",
+        "看板",
+        "模板",
+        "模块",
+        "产物",
+        "链接",
+        "html",
+        "dashboard",
+    ];
+    let action_terms = [
+        "修改",
+        "调整",
+        "更改",
+        "改成",
+        "换成",
+        "重做",
+        "重新做",
+        "重新生成",
+        "优化",
+        "修复",
+        "更正",
+        "纠正",
+        "去掉",
+        "删除",
+        "增加",
+        "新增",
+        "加上",
+        "移动",
+        "合并",
+        "拆分",
+        "前置",
+        "置顶",
+        "放到",
+        "提到",
+        "暗黑",
+        "手机端",
+        "风格",
+        "布局",
+        "字段",
+        "颜色",
+        "排序",
+        "筛选",
+        "联动",
+        "刷新数据",
+        "发布新链接",
+        "不喜欢",
+    ];
+    let has_subject = subject_terms
+        .iter()
+        .any(|needle| text.contains(needle) || lower.contains(needle));
+    let has_action = action_terms
+        .iter()
+        .any(|needle| text.contains(needle) || lower.contains(needle));
+    has_subject && has_action
+}
+
+fn static_page_public_url_from_current_artifact(current_artifact: &Value) -> Option<String> {
+    [
+        "/finalPage/publicUrl",
+        "/finalPage/public_url",
+        "/finalPage/generatedArtifactUrl",
+        "/finalPage/generated_artifact_url",
+        "/final_page/publicUrl",
+        "/final_page/public_url",
+        "/final_page/generatedArtifactUrl",
+        "/final_page/generated_artifact_url",
+        "/artifactStability/publicUrl",
+        "/artifactStability/public_url",
+        "/artifact_stability/publicUrl",
+        "/artifact_stability/public_url",
+    ]
+    .into_iter()
+    .filter_map(|pointer| current_artifact.pointer(pointer).and_then(Value::as_str))
+    .chain(
+        [
+            "publicUrl",
+            "public_url",
+            "generatedArtifactUrl",
+            "generated_artifact_url",
+        ]
+        .into_iter()
+        .filter_map(|key| current_artifact.get(key).and_then(Value::as_str)),
+    )
+    .map(str::trim)
+    .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
+    .map(ToOwned::to_owned)
+    .next()
+}
+
+fn static_page_revision_source_refs(
+    mut source_refs: Value,
+    source_draft: &StaticPageDraft,
+    existing_artifact: &Value,
+    instruction: &str,
+    public_url: &str,
+    now: DateTime<Utc>,
+) -> Value {
+    ensure_json_object(&mut source_refs);
+    let generated_reference = json!({
+        "templateId": format!("generated-static-page:{}", source_draft.id),
+        "source": "v3-static-page-template-library",
+        "templateKind": "generated_static_page",
+        "label": source_draft.title,
+        "publicUrl": public_url,
+        "revisionInstruction": truncate_assistant_supply_text(instruction, 1200),
+        "createdAt": now,
+    });
+    if let Some(object) = source_refs.as_object_mut() {
+        let mut template_references = object
+            .get("template_references")
+            .or_else(|| object.get("templateReferences"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|reference| {
+                static_page_generated_template_public_url(reference).as_deref() != Some(public_url)
+            })
+            .collect::<Vec<_>>();
+        template_references.insert(0, generated_reference);
+        object.insert(
+            "template_references".to_string(),
+            Value::Array(template_references.clone()),
+        );
+        object.insert(
+            "templateReferences".to_string(),
+            Value::Array(template_references),
+        );
+        object.insert(
+            "revision_source".to_string(),
+            json!("main_chat_current_static_page_artifact"),
+        );
+        object.insert(
+            "source_draft_id".to_string(),
+            json!(source_draft.id.to_string()),
+        );
+        object.insert("existing_artifact".to_string(), existing_artifact.clone());
+        object.insert(
+            "revision_instruction".to_string(),
+            json!(truncate_assistant_supply_text(instruction, 1200)),
+        );
+        object.insert(
+            "template_match_policy".to_string(),
+            json!("current_artifact_existing_revision"),
+        );
+        object.insert(
+            "style_reuse_policy".to_string(),
+            json!("preserve_existing_artifact_style_unless_explicit_redesign"),
+        );
+        object.insert(
+            "data_refresh_policy".to_string(),
+            json!("refresh_current_authorized_data_against_existing_artifact"),
+        );
+        object.insert(
+            "publish_mode".to_string(),
+            json!("new_generated_artifact_only"),
+        );
+    }
+    source_refs
+}
+
+fn static_page_revision_draft_title(source_title: &str) -> String {
+    let trimmed = source_title.trim();
+    if trimmed.is_empty() {
+        "静态页修订版".to_string()
+    } else if trimmed.contains("修订") {
+        truncate_assistant_supply_text(trimmed, 80)
+    } else {
+        truncate_assistant_supply_text(&format!("{trimmed}（修订）"), 80)
+    }
 }
 
 fn external_channel_static_page_source_ref_string(
@@ -38254,6 +38679,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         &run,
         &draft,
         &image_job_view,
+        None,
         template_reference,
         &evidence_summary,
         &missing_evidence,
@@ -50294,6 +50720,7 @@ fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> boo
         "update_static_page_module:",
         "submit_static_page_image_preview:",
         "render_static_page:",
+        "publish_static_page_revision:",
         "create_report_draft:",
         "\"action_type\"",
         "\"actiontype\"",
@@ -58338,7 +58765,7 @@ fn build_assistant_run_react_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。DataMax Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|publish_static_page_revision|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现 DataMax 可见范围内的候选证据；web_search 用于请求 DataMax 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 DataMax search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
@@ -58346,6 +58773,7 @@ fn build_assistant_run_react_provider_input(
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
+        "静态页修订发布严格受控：只有当当前打开产物是已发布静态页或带 publicUrl/finalPage 的静态页，且用户本轮明确要求修改/调整/修复/优化报表页面、改成某种风格、增加/去掉/移动模块，或刷新当前报表数据并发布新链接时，才允许用 publish_static_page_revision；arguments.instruction 必须保留用户本轮原始修订意图。泛泛查看、解释概念、仅问数据、仅问链接状态不得触发该动作；Host 会复用 existing_artifact 并通过固定 static_page_image2_data_publish 发布新产物，不要自己拼 codex_host_task。".to_string(),
         "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
@@ -58426,7 +58854,7 @@ fn build_assistant_run_react_continue_provider_input(
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
         "你只能提出下一步动作，不能假装已经执行平台动作。DataMax Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
-        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
+        "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|publish_static_page_revision|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
         "工具选择：retrieve_evidence 用于发现 DataMax 可见范围内的候选证据；web_search 用于请求 DataMax 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 DataMax search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
@@ -58434,6 +58862,7 @@ fn build_assistant_run_react_continue_provider_input(
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
+        "静态页修订发布严格受控：只有当当前打开产物是已发布静态页或带 publicUrl/finalPage 的静态页，且用户本轮明确要求修改/调整/修复/优化报表页面、改成某种风格、增加/去掉/移动模块，或刷新当前报表数据并发布新链接时，才允许用 publish_static_page_revision；arguments.instruction 必须保留用户本轮原始修订意图。泛泛查看、解释概念、仅问数据、仅问链接状态不得触发该动作；Host 会复用 existing_artifact 并通过固定 static_page_image2_data_publish 发布新产物，不要自己拼 codex_host_task。".to_string(),
         "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
@@ -60219,6 +60648,21 @@ fn assistant_run_codex_action_contracts(
             true,
         ),
         AssistantRunCodexActionContractView::new(
+            "publish_static_page_revision",
+            "发布当前静态页修订版",
+            "严格仅当当前打开产物是已发布静态页，且用户本轮明确要求修改/调整/修复/优化报表页面或刷新当前报表数据并发布新链接时使用；Host 会复用 existing_artifact 并排队 static_page_image2_data_publish。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "instruction": {"type": "string"},
+                    "preserve_style": {"type": "boolean"},
+                    "redesign": {"type": "boolean"}
+                },
+                "required": ["instruction"]
+            }),
+            true,
+        ),
+        AssistantRunCodexActionContractView::new(
             "list_report_options",
             "列出报表选项",
             "根据当前供料范围列出可创建的报表或静态页方向。",
@@ -60727,6 +61171,10 @@ fn assistant_run_action_type_from_event_name(event_name: &str) -> Option<&'stati
         Some("submit_static_page_image_preview")
     } else if event_name.contains("render_static_page") {
         Some("render_static_page")
+    } else if event_name.contains("static_page_revision_publish")
+        || event_name.contains("publish_static_page_revision")
+    {
+        Some("publish_static_page_revision")
     } else if event_name.contains("create_report_draft") {
         Some("create_report_draft")
     } else if event_name.contains("report_choice") {
@@ -70000,6 +70448,9 @@ fn assistant_run_static_page_artifact_brief(current_artifact: &Value) -> Value {
     }
     if let Some(final_status) = static_page_artifact_final_status(current_artifact) {
         brief.insert("finalRenderStatus".to_string(), json!(final_status));
+    }
+    if let Some(public_url) = static_page_public_url_from_current_artifact(current_artifact) {
+        brief.insert("publicUrl".to_string(), json!(public_url));
     }
     if let Some(template_reference) =
         assistant_run_static_page_template_reference_brief(current_artifact)
@@ -96907,6 +97358,241 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn main_static_page_current_artifact_revision_queues_codex_existing_artifact() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping main static-page revision queue test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish.as_str(),
+        );
+        let _agent_mode =
+            TestEnvVarRestore::set("CODEX_HOST_AGENT_EXECUTION_MODE", "cloudflare_orchestrator");
+        let _agent_host = TestEnvVarRestore::set("CODEX_HOST_AGENT_HOST_KIND", "cloudflare_codex");
+        let _orchestrator_key = TestEnvVarRestore::set("CODEX_ORCHESTRATOR_ACCESS_KEY", "test-key");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("main-static-page-revision-{}", Uuid::new_v4()),
+                "Main Static Page Revision Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let owner_user_id = UserId::new();
+        let now = Utc::now();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "canonical_datasets": [{"type": "dataset", "id": DatasetId::new()}],
+            "database_source_ids": ["hy-sql-traffic-area"],
+            "intent": "static_page"
+        });
+        let source_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: Some(owner_user_id),
+                    local_thread_id: Some("main-static-page-revision-thread".to_string()),
+                    user_prompt: "生成新百门店取高报表".to_string(),
+                    startup_briefing: json!({"surface": "local_chat"}),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "standard".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("source run should be created");
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/image2-real-data-report/index.html";
+        let source_draft = state
+            .storage
+            .static_page_drafts()
+            .create(
+                state.tenant_id,
+                &NewStaticPageDraft {
+                    assistant_run_id: source_run.id,
+                    owner_user_id: Some(owner_user_id),
+                    title: "新百门店取高报表".to_string(),
+                    status: StaticPageDraftStatus::Rendered,
+                    selected_scope: selected_scope.clone(),
+                    visibility_snapshot: json!({"policy": "test"}),
+                    source_refs: json!({"source": "main_static_page_image2_pipeline"}),
+                    draft_payload: json!({
+                        "title": "新百门店取高报表",
+                        "modules": [{"id": "take-high", "title": "门店取高机会"}],
+                        "finalPage": {
+                            "status": "rendered",
+                            "publicUrl": public_url
+                        }
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("source draft should be created");
+        let revision_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: Some(owner_user_id),
+                    local_thread_id: Some("main-static-page-revision-thread".to_string()),
+                    user_prompt: "修改报表：把门店取高风险模块提到最前面，刷新当前数据后给我新链接"
+                        .to_string(),
+                    startup_briefing: json!({"surface": "local_chat"}),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "standard".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("revision run should be created");
+        let current_artifact = json!({
+            "type": "static_page_draft",
+            "backendDraftId": source_draft.id.to_string(),
+            "finalPage": {
+                "status": "rendered",
+                "publicUrl": public_url
+            }
+        });
+        let vague_instruction_error = publish_static_page_revision_for_current_artifact(
+            &state,
+            revision_run.id,
+            &current_artifact,
+            "看一下这个报表现在是否正常",
+            Some(owner_user_id),
+        )
+        .await
+        .expect_err("revision publish should require explicit revision intent");
+        assert_eq!(
+            vague_instruction_error.payload.code,
+            "static_page_revision_explicit_intent_required"
+        );
+
+        let instruction = "把门店取高风险模块提到最前面，刷新当前报表数据后给我新链接";
+
+        let outcome = publish_static_page_revision_for_current_artifact(
+            &state,
+            revision_run.id,
+            &current_artifact,
+            instruction,
+            Some(owner_user_id),
+        )
+        .await
+        .expect("main static-page revision should queue");
+
+        assert_ne!(outcome.draft.id, source_draft.id);
+        assert_eq!(
+            serde_json::to_value(&outcome.image_job.status).expect("status serializes"),
+            json!("preview_ready")
+        );
+        assert_eq!(
+            outcome.image_job.preview_asset_key.as_deref(),
+            Some(public_url)
+        );
+        assert!(outcome.codex_execution_id.is_some());
+        assert_eq!(outcome.existing_artifact["public_url"], json!(public_url));
+        assert_eq!(outcome.draft.assistant_run_id, revision_run.id);
+        assert_eq!(
+            outcome.draft.source_refs["existing_artifact"]["public_url"],
+            json!(public_url)
+        );
+
+        let workflows = state
+            .storage
+            .workflow_executions()
+            .list_by_tenant(state.tenant_id)
+            .await
+            .expect("workflows should list");
+        let codex_workflows = workflows
+            .iter()
+            .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
+            .collect::<Vec<_>>();
+        assert_eq!(codex_workflows.len(), 1);
+        assert_eq!(
+            codex_workflows[0].context["fixed_task"]["requirements"]["existing_artifact"]
+                ["public_url"],
+            json!(public_url)
+        );
+        assert!(
+            codex_workflows[0].context["fixed_task"]["requirements"]["user_goal"]
+                .as_str()
+                .is_some_and(|value| value.contains("门店取高风险模块"))
+        );
+
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, revision_run.id)
+            .await
+            .expect("events should list");
+        assert!(events.iter().any(|event| {
+            event.event_name == "assistant_run.main_static_page_revision_publish_queued"
+                && event.payload["existing_artifact_public_url"] == json!(public_url)
+                && event.payload["publish_mode"] == json!("new_generated_artifact_only")
+        }));
+    }
+
+    #[test]
+    fn static_page_revision_intent_accepts_natural_report_edit_wording() {
+        for prompt in [
+            "修改报表：把门店取高模块放到最前面",
+            "我不喜欢这个风格，报表改成暗黑一点并适合手机端展示",
+            "修复这个页面，切换门店后近7日销售要联动刷新",
+            "去掉风险百分比模块，增加租售比健康度图表",
+            "把门店取高风险模块提到最前面，刷新当前报表数据后给我新链接",
+        ] {
+            assert!(
+                static_page_revision_explicit_intent_present(prompt),
+                "prompt should be accepted: {prompt}"
+            );
+        }
+
+        for prompt in [
+            "",
+            "看一下这个报表现在是否正常",
+            "取高是什么意思？",
+            "风险识别系统有哪些项目经历？",
+            "这个链接还能打开吗？",
+        ] {
+            assert!(
+                !static_page_revision_explicit_intent_present(prompt),
+                "prompt should not be accepted: {prompt}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn external_channel_static_page_dataset_template_overlap_delivers_existing_link_for_view_request(
     ) {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -117418,6 +118104,10 @@ retrieve_evidence:
                     "type": "static_page_draft",
                     "backendDraftId": "draft-1",
                     "previewContract": {"status": "stale"},
+                    "finalPage": {
+                        "status": "rendered",
+                        "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/current/index.html"
+                    },
                     "templateReference": {
                         "source": "html-anything",
                         "importPolicy": "metadata_and_constraints_only",
@@ -117500,11 +118190,16 @@ retrieve_evidence:
         assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("禁止直接 render_static_page"));
         assert!(input.contains("submit_static_page_image_preview"));
+        assert!(input.contains("publish_static_page_revision"));
+        assert!(input.contains("static_page_image2_data_publish"));
+        assert!(input.contains("明确要求修改/调整/修复/优化报表页面"));
+        assert!(input.contains("不得触发该动作"));
         assert!(input.contains("missingEvidence.status=needs_evidence"));
         assert!(input.contains("recommended_action/recommendedAction"));
         assert!(input.contains("document_id 必须来自选中范围、detailTargets 或 observation"));
         assert!(input.contains("\"previewStale\":true"));
         assert!(input.contains("\"previewStatus\":\"stale\""));
+        assert!(input.contains("\"publicUrl\":\"https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/current/index.html\""));
         assert!(input.contains("\"templateReference\""));
         assert!(input.contains("\"source\":\"html-anything\""));
         assert!(input.contains("\"importPolicy\":\"metadata_and_constraints_only\""));

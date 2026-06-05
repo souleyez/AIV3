@@ -47,6 +47,8 @@
 
 **Progress update 2026-06-05 Xinbai default-template convergence:** The Xinbai report template library has been narrowed to one accepted default: `xinbai-functional-modular-template-20260604`. Historical Xinbai pages remain as published artifacts but are not accepted defaults. The accepted monthly report template uses refreshed same-directory `data.json`, a compact time/range filter, one summary KPI card, a right-middle customer detail panel without extra explanatory header copy, and prompt-focused reuse links such as `?focus=风险店铺`, `?focus=取高机会`, `?focus=低活跃`, and `?focus=品牌明细`.
 
+**Progress update 2026-06-05 Xinbai template contract slice:** The accepted Xinbai monthly report template now has a structural DataMax contract at `docs/static-page-templates/xinbai-functional-modular-template-20260604/template-contract.json` and a reusable validator `tools/validate-xinbai-report-template.mjs`. The contract checks required files, manifest exports, accepted-template features, prompt focus wiring, the store opportunity/risk pie, the rent-sales-ratio health pie, and the health-score average rent-sales-ratio column. Local validation passed against `target/database-static-pages/xinbai-functional-modular-template-20260604`, and public validation passed against `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html`.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection

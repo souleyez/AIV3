@@ -54,6 +54,30 @@ Results:
 - Export fields present: `table_data_url`, `ppt_download_url`, `markdown_download_url`; `download_exports[]` contained 3 entries.
 - Artifact files returned HTTP 200 with non-empty bodies: `index.html` 82810 bytes, `data.json` 327529 bytes, `data-snapshot.json` 327529 bytes, `table-data.csv` 27763 bytes, `report.ppt` 4675 bytes, `report.md` 2957 bytes.
 
+## 2026-06-05 Xinbai Template Contract Receipt
+
+The accepted Xinbai report template is now backed by a structural contract:
+
+```text
+docs/static-page-templates/xinbai-functional-modular-template-20260604/template-contract.json
+```
+
+Validation command:
+
+```bash
+npm run validate:xinbai-report-template
+npm run validate:xinbai-report-template -- --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html
+```
+
+Results:
+
+- Local artifact validation: passed.
+- Public 8-server artifact validation: passed.
+- Required files checked: `index.html`, `data.json`, `data-snapshot.json`, `manifest.json`, `table-data.csv`, `report.ppt`, `report.md`.
+- Required new modules checked: `店铺机会风险结构`, `租售比健康度`, `平均租售比`.
+- Required data arrays checked: `storeList`, `opportunities`, `lowActivity`, `salesSeries`, `riskByStore`, and related report arrays.
+- Public files checked: 7 non-empty files.
+
 ## 2026-06-05 8 Server Manual Receipt
 
 Before this reusable script was added, the same checks were run manually on `8服务器` after deploying commit `51e22fbbc`.

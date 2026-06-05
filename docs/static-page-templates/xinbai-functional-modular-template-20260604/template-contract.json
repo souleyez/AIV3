@@ -1,0 +1,100 @@
+{
+  "schema": "datamax.static_page_template_contract.v1",
+  "templateId": "xinbai-functional-modular-template-20260604",
+  "title": "新世界百货经营管理月报表",
+  "kind": "xinbai_functional_modular_monthly_template",
+  "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html",
+  "reusePolicy": {
+    "primaryTemplate": true,
+    "scope": "xinbai_business_report",
+    "defaultBehavior": "reuse_for_most_matching_business_report_requests_unless_explicit_redesign",
+    "focusQueryParameter": "focus",
+    "acceptedFocusValues": [
+      "经营总览",
+      "取高机会",
+      "低活跃风险",
+      "品类分析",
+      "风险店铺",
+      "品牌明细"
+    ]
+  },
+  "requiredFiles": [
+    "index.html",
+    "data.json",
+    "data-snapshot.json",
+    "manifest.json",
+    "table-data.csv",
+    "report.ppt",
+    "report.md"
+  ],
+  "requiredManifestFeatures": [
+    "primary_default_template",
+    "project_unique_default_template",
+    "xinbai_only_accepted_default_template",
+    "focus_keyword_priority_ordering",
+    "monthly_report_only_default_template",
+    "business_health_score_table",
+    "business_health_score_average_rent_sales_ratio_column",
+    "store_take_high_risk_other_share_pie",
+    "risk_rent_sales_ratio_health_pie",
+    "take_high_store_nearest_over_line_rank",
+    "mobile_compact_layout",
+    "same_directory_data_refresh"
+  ],
+  "requiredHtmlSnippets": [
+    "店铺机会风险结构",
+    "storeRiskMixBody",
+    "renderStoreRiskMix",
+    "取高 中高店铺",
+    "风险店铺",
+    "其他店铺",
+    "租售比健康度",
+    "rentSalesRatioBody",
+    "renderRentSalesRatioPie",
+    "优秀：低于10%",
+    "可接受：10%-12%",
+    "偏紧：12%-15%",
+    "危险：15%以上",
+    "平均租售比",
+    "rentSalesStatsForCodes",
+    "rentSalesStage",
+    "focusAliases",
+    "focusKeywords",
+    "fetch('data.json?refresh='"
+  ],
+  "requiredMarkdownSnippets": [
+    "店铺机会风险结构",
+    "租售比健康度",
+    "平均租售比",
+    "取高临线门店"
+  ],
+  "requiredDataArrays": {
+    "salesSeries": 1,
+    "categoryLatest": 1,
+    "storeSales": 1,
+    "warningDistribution": 1,
+    "riskByStore": 1,
+    "opportunities": 1,
+    "lowActivity": 1,
+    "storeRegions": 1,
+    "storeList": 1,
+    "storeDataAvailability": 1
+  },
+  "requiredManifestExports": [
+    {
+      "kind": "table_data",
+      "label": "表格数据",
+      "path": "table-data.csv"
+    },
+    {
+      "kind": "ppt",
+      "label": "导出PPT",
+      "path": "report.ppt"
+    },
+    {
+      "kind": "markdown",
+      "label": "文本下载（MD）",
+      "path": "report.md"
+    }
+  ]
+}

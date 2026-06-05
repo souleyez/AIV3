@@ -39,6 +39,7 @@ pub(crate) enum AssistantRunReActActionType {
     UpdateStaticPageModule,
     SubmitStaticPageImagePreview,
     RenderStaticPage,
+    PublishStaticPageRevision,
     CreateReportDraft,
     ReportChoice,
     OpenClawMemoryRecall,
@@ -62,6 +63,7 @@ impl AssistantRunReActActionType {
             "update_static_page_module" => Some(Self::UpdateStaticPageModule),
             "submit_static_page_image_preview" => Some(Self::SubmitStaticPageImagePreview),
             "render_static_page" => Some(Self::RenderStaticPage),
+            "publish_static_page_revision" => Some(Self::PublishStaticPageRevision),
             "create_report_draft" => Some(Self::CreateReportDraft),
             "report_choice" => Some(Self::ReportChoice),
             "openclaw_memory_recall" => Some(Self::OpenClawMemoryRecall),
@@ -86,6 +88,7 @@ impl AssistantRunReActActionType {
             Self::UpdateStaticPageModule => "update_static_page_module",
             Self::SubmitStaticPageImagePreview => "submit_static_page_image_preview",
             Self::RenderStaticPage => "render_static_page",
+            Self::PublishStaticPageRevision => "publish_static_page_revision",
             Self::CreateReportDraft => "create_report_draft",
             Self::ReportChoice => "report_choice",
             Self::OpenClawMemoryRecall => "openclaw_memory_recall",
@@ -549,6 +552,24 @@ mod tests {
             AssistantRunReActActionType::CodexHostTask
         );
         assert_eq!(decision.arguments["capability"], json!("inspect_project"));
+    }
+
+    #[test]
+    fn parses_static_page_revision_publish_action() {
+        let decision = parse_assistant_run_react_decision(
+            r#"{"status":"act","intent":"static_page","reason":"基于当前页面修改并发布新版本","action":{"type":"publish_static_page_revision","arguments":{"instruction":"修改报表：把门店取高模块放到前面并刷新数据"}}}"#,
+        )
+        .expect("static page revision publish should parse");
+
+        assert_eq!(decision.status, AssistantRunReActStatus::Act);
+        assert_eq!(
+            decision.action_type,
+            AssistantRunReActActionType::PublishStaticPageRevision
+        );
+        assert_eq!(
+            decision.arguments["instruction"],
+            json!("修改报表：把门店取高模块放到前面并刷新数据")
+        );
     }
 
     #[test]
