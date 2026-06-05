@@ -35857,6 +35857,11 @@ fn external_channel_static_page_image2_fixed_task(
         .get("recipient_delivery")
         .cloned()
         .unwrap_or_else(|| external_channel_static_page_recipient_delivery(message, prompt));
+    let supplemental_metrics_policy = static_page_supplemental_metrics_policy();
+    let supplemental_metrics_summary = evidence_summary
+        .get("supplemental_metrics")
+        .cloned()
+        .unwrap_or(Value::Null);
     CodexHostFixedTaskTemplateContextView {
         template_id: CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish,
         version: 1,
@@ -35895,6 +35900,8 @@ fn external_channel_static_page_image2_fixed_task(
                 .unwrap_or(Value::Null),
             "evidence_summary": evidence_summary,
             "missing_evidence": missing_evidence,
+            "supplemental_metrics_policy": supplemental_metrics_policy.clone(),
+            "supplemental_metrics_summary": supplemental_metrics_summary,
             "time_dimension_required": true,
             "prompt_time_dimension_requested": prompt_time_dimension_requested,
             "operating_report_default_time_grain": "month",
@@ -35933,6 +35940,7 @@ fn external_channel_static_page_image2_fixed_task(
             "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
             "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
             "dynamic_data_contract": "final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh",
+            "supplemental_metrics": "temporary_uploaded_contracts_may_supply_store_area_for_efficiency_and_temporary_traffic_stats_may_supply_traffic_metrics",
             "data_insufficiency_policy": "expand_supplied_evidence_first_then_publish_best_effort_with_visible_gap_notes",
             "publish_mode": "new_generated_artifact_only",
             "effect_image_confirmation_required": false,
@@ -35981,6 +35989,11 @@ fn assistant_run_static_page_image2_fixed_task(
             "时间", "日期", "周期", "今天", "昨日", "本周", "本月", "time", "date", "period",
         ],
     );
+    let supplemental_metrics_policy = static_page_supplemental_metrics_policy();
+    let supplemental_metrics_summary = evidence_summary
+        .get("supplemental_metrics")
+        .cloned()
+        .unwrap_or(Value::Null);
     CodexHostFixedTaskTemplateContextView {
         template_id: CodexHostFixedTaskTemplateIdView::StaticPageImage2DataPublish,
         version: 1,
@@ -36006,6 +36019,8 @@ fn assistant_run_static_page_image2_fixed_task(
                 .unwrap_or(Value::Null),
             "evidence_summary": evidence_summary,
             "missing_evidence": missing_evidence,
+            "supplemental_metrics_policy": supplemental_metrics_policy.clone(),
+            "supplemental_metrics_summary": supplemental_metrics_summary,
             "time_dimension_required": true,
             "prompt_time_dimension_requested": prompt_time_dimension_requested,
             "operating_report_default_time_grain": "month",
@@ -36044,6 +36059,7 @@ fn assistant_run_static_page_image2_fixed_task(
             "unit_rendering": "validate_raw_value_then_choose_wan_or_yi",
             "detail_table_policy": "include_customer_or_brand_detail_when_decision_requires_it",
             "dynamic_data_contract": "final HTML must load local data.json when present and support a required time-range selector, primary partition controls, monthly operating-report default, plus manual/auto refresh",
+            "supplemental_metrics": "temporary_uploaded_contracts_may_supply_store_area_for_efficiency_and_temporary_traffic_stats_may_supply_traffic_metrics",
             "data_insufficiency_policy": "expand_supplied_evidence_first_then_publish_best_effort_with_visible_gap_notes",
             "publish_mode": "new_generated_artifact_only",
             "effect_image_confirmation_required": false,
@@ -36068,6 +36084,67 @@ fn assistant_run_static_page_image2_fixed_task(
         allowed_write_scope: None,
         human_review_policy: CodexHostFixedTaskHumanReviewPolicyView::AutoForNewGeneratedArtifact,
     }
+}
+
+fn static_page_supplemental_metrics_policy() -> Value {
+    json!({
+        "schema": "v3.static_page.supplemental_metrics.v1",
+        "source_scope": "selected_scope_and_temporary_uploaded_documents_only",
+        "contract_area": {
+            "enabled": true,
+            "use_case": "per_square_meter_efficiency",
+            "accepted_fields": [
+                "storecode",
+                "store_code",
+                "store_name",
+                "area",
+                "store_area",
+                "contract_area",
+                "leased_area",
+                "business_area",
+                "经营面积",
+                "租赁面积",
+                "合同面积",
+                "门店面积",
+                "铺位面积",
+                "面积"
+            ],
+            "output_targets": [
+                "data.storeList[].area",
+                "data.supplementalMetrics.storeAreas",
+                "data.supplementalMetrics.storeAreaRows"
+            ],
+            "merge_policy": "temporary_uploaded_contract_area_overrides_missing_or_zero_store_area_only"
+        },
+        "traffic": {
+            "enabled": true,
+            "use_case": "traffic_comparison_and_drop_warning",
+            "accepted_fields": [
+                "storecode",
+                "store_code",
+                "store_name",
+                "txdate",
+                "date",
+                "traffic",
+                "traffic_count",
+                "visitor_count",
+                "customer_flow",
+                "客流",
+                "客流量",
+                "人流",
+                "人流量",
+                "客数",
+                "进店人数",
+                "到店人数"
+            ],
+            "output_targets": [
+                "data.trafficRows",
+                "data.supplementalMetrics.trafficRows"
+            ],
+            "comparison_policy": "compute_only_when_current_and_comparison_ranges_have_rows"
+        },
+        "no_invention": true,
+    })
 }
 
 fn external_static_page_image_asset_provenance_summary(
@@ -83014,6 +83091,102 @@ fn static_page_template_evidence_summary(evidence_state: &Value) -> Value {
             .or_else(|| evidence_state.get("supplyQuality"))
             .cloned()
             .unwrap_or(Value::Null),
+        "supplemental_metrics": build_static_page_supplemental_metrics_summary(evidence_state),
+    })
+}
+
+fn build_static_page_supplemental_metrics_summary(evidence_state: &Value) -> Value {
+    let field_candidates = build_static_page_field_candidates(&json!({}), Some(evidence_state));
+    build_static_page_supplemental_metrics_summary_from_candidates(
+        &field_candidates,
+        Some(evidence_state),
+    )
+}
+
+fn build_static_page_supplemental_metrics_summary_from_candidates(
+    field_candidates: &Value,
+    evidence_state: Option<&Value>,
+) -> Value {
+    let store_area =
+        static_page_supplemental_metric_candidate_summary(field_candidates, "store.area");
+    let traffic =
+        static_page_supplemental_metric_candidate_summary(field_candidates, "traffic.count");
+    let has_store_area = store_area["status"] == json!("candidate_available");
+    let has_traffic = traffic["status"] == json!("candidate_available");
+
+    json!({
+        "schema": "v3.static_page.supplemental_metrics.v1",
+        "status": if has_store_area || has_traffic {
+            "candidate_available"
+        } else {
+            "not_detected"
+        },
+        "store_area": store_area,
+        "traffic": traffic,
+        "supplied_count": evidence_state
+            .map(assistant_run_evidence_supplied_count)
+            .unwrap_or(0),
+        "temporary_upload_policy": "Selected temporary documents can supply these metrics for the current report run only; do not persist them as production master data without confirmation.",
+        "output_contract": {
+            "store_area": [
+                "data.storeList[].area",
+                "data.supplementalMetrics.storeAreas",
+                "data.supplementalMetrics.storeAreaRows"
+            ],
+            "traffic": [
+                "data.trafficRows",
+                "data.supplementalMetrics.trafficRows"
+            ]
+        },
+        "no_invention": true,
+    })
+}
+
+fn static_page_supplemental_metric_candidate_summary(
+    field_candidates: &Value,
+    field_path: &str,
+) -> Value {
+    let mut labels = Vec::<String>::new();
+    let mut evidence_refs = Vec::<Value>::new();
+    let mut confidence = 0.0f64;
+
+    if let Some(candidates) = field_candidates.as_array() {
+        for candidate in candidates {
+            if candidate.get("fieldPath").and_then(Value::as_str) != Some(field_path) {
+                continue;
+            }
+            if let Some(label) = candidate.get("label").and_then(Value::as_str) {
+                push_string_hint(&mut labels, label);
+            }
+            if let Some(value) = candidate.get("confidence").and_then(Value::as_f64) {
+                confidence = confidence.max(value);
+            }
+            let evidence_ref = candidate
+                .get("evidenceRef")
+                .or_else(|| candidate.get("evidence_ref"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            if !evidence_ref.is_null() && evidence_refs.len() < 4 {
+                evidence_refs.push(evidence_ref);
+            }
+        }
+    }
+
+    labels.truncate(4);
+    json!({
+        "status": if labels.is_empty() {
+            "not_detected"
+        } else {
+            "candidate_available"
+        },
+        "field_path": field_path,
+        "labels": labels,
+        "confidence": if confidence > 0.0 {
+            Value::from(confidence)
+        } else {
+            Value::Null
+        },
+        "evidence_refs": evidence_refs,
     })
 }
 
@@ -84992,6 +85165,10 @@ fn build_static_page_data_snapshot_with_evidence(
     let data_source_candidates =
         build_static_page_data_source_candidates(selected_scope, evidence_state);
     let field_candidates = build_static_page_field_candidates(selected_scope, evidence_state);
+    let supplemental_metrics = build_static_page_supplemental_metrics_summary_from_candidates(
+        &field_candidates,
+        evidence_state,
+    );
     let is_docs_page_template =
         static_page_template_reference_id_from_payload(payload) == Some("docs-page");
     let heading_candidate = if is_docs_page_template {
@@ -85114,6 +85291,8 @@ fn build_static_page_data_snapshot_with_evidence(
         "field_candidates": field_candidates,
         "module_bindings": module_bindings,
         "structure_signals": structure_signals,
+        "supplemental_metrics": supplemental_metrics.clone(),
+        "supplementalMetrics": supplemental_metrics,
         "validation_summary": validation_summary,
         "sampleRowCount": validation_summary.get("sampleRowCount").cloned().unwrap_or(Value::Null),
         "detailRowCount": validation_summary.get("detailRowCount").cloned().unwrap_or(Value::Null),
@@ -85730,6 +85909,50 @@ fn build_static_page_field_candidates(
                         Some("count"),
                         &["customer", "customers", "client", "客户", "用户"][..],
                         0.76,
+                    ),
+                    (
+                        "store.area",
+                        "门店/合同面积",
+                        "metric",
+                        Some("sum"),
+                        &[
+                            "area",
+                            "store_area",
+                            "contract_area",
+                            "leased_area",
+                            "business_area",
+                            "合同面积",
+                            "租赁面积",
+                            "建筑面积",
+                            "经营面积",
+                            "门店面积",
+                            "铺位面积",
+                            "面积",
+                            "坪效",
+                        ][..],
+                        0.82,
+                    ),
+                    (
+                        "traffic.count",
+                        "客流/人流统计",
+                        "metric",
+                        Some("sum"),
+                        &[
+                            "traffic",
+                            "visitor",
+                            "visitors",
+                            "customer_flow",
+                            "footfall",
+                            "passenger",
+                            "客流",
+                            "客流量",
+                            "人流",
+                            "人流量",
+                            "客数",
+                            "进店",
+                            "到店",
+                        ][..],
+                        0.82,
                     ),
                     (
                         "profit.margin",
@@ -97184,6 +97407,14 @@ mod tests {
         assert_eq!(
             encoded["policies"]["publish_mode"],
             json!("new_generated_artifact_only")
+        );
+        assert_eq!(
+            encoded["policies"]["supplemental_metrics"],
+            json!("temporary_uploaded_contracts_may_supply_store_area_for_efficiency_and_temporary_traffic_stats_may_supply_traffic_metrics")
+        );
+        assert_eq!(
+            encoded["requirements"]["supplemental_metrics_policy"]["schema"],
+            json!("v3.static_page.supplemental_metrics.v1")
         );
         assert_eq!(
             encoded["dataset_scope"]["dataset_ids"],
@@ -119585,6 +119816,90 @@ retrieve_evidence:
                 .as_f64()
                 .unwrap_or_default()
                 > 0.0
+        );
+    }
+
+    #[test]
+    fn static_page_data_snapshot_detects_temporary_contract_area_and_traffic() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [
+                {
+                    "id": "health",
+                    "title": "经营健康度",
+                    "dataBinding": {
+                        "sourceId": "evidence",
+                        "fieldPath": "store.area"
+                    },
+                    "visualization": {
+                        "type": "metric-grid"
+                    }
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "retrieval_evidence",
+                    "dataset_id": dataset_id.to_string(),
+                    "document_id": Uuid::new_v4().to_string(),
+                    "document_chunk_id": Uuid::new_v4().to_string(),
+                    "retrieval_evidence_id": Uuid::new_v4().to_string(),
+                    "source_locator": "temporary/contracts/store-area.xlsx#row=12",
+                    "summary": "临时上传合同面积与客流统计",
+                    "content_excerpt": "门店 A 合同面积 120 平方米，经营面积 118 平方米；客流统计 customer_flow 显示 2026-05-01 进店人数 860。",
+                    "payload_filter_key": "temporary-upload/store-area-traffic",
+                    "evidence_manifest": {
+                        "embedding": {
+                            "term_weights": {
+                                "合同面积": 1.0,
+                                "坪效": 0.9,
+                                "客流": 0.9
+                            }
+                        }
+                    }
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let candidates = value_array(snapshot["field_candidates"].clone());
+
+        assert!(candidates.iter().any(|candidate| {
+            candidate["fieldPath"] == json!("store.area")
+                && candidate["label"] == json!("门店/合同面积")
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate["fieldPath"] == json!("traffic.count")
+                && candidate["label"] == json!("客流/人流统计")
+        }));
+        assert_eq!(
+            snapshot["supplemental_metrics"]["store_area"]["status"],
+            json!("candidate_available")
+        );
+        assert_eq!(
+            snapshot["supplementalMetrics"]["traffic"]["status"],
+            json!("candidate_available")
+        );
+
+        let summary = static_page_template_evidence_summary(&evidence_state);
+        assert_eq!(
+            summary["supplemental_metrics"]["status"],
+            json!("candidate_available")
+        );
+        assert_eq!(
+            summary["supplemental_metrics"]["output_contract"]["store_area"][0],
+            json!("data.storeList[].area")
         );
     }
 
