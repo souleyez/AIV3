@@ -1,5 +1,29 @@
 # External Capability Routing Smoke
 
+## 2026-06-05 8 Server Strict Focus-Link Rollout
+
+- Host: `8服务器`
+- Public endpoint: `https://v3.elepcloud.com`
+- Deployed commit: `8ba071718`
+- Service: `aiv3-platform-api.service`
+- Service status: `active`
+- Dataset scope for Xinbai report cases: `64fff6c8-10e2-4ee8-8243-23166cce3abc`
+
+Strict focused-report SSE smoke passed for 12 selected cases after rollout:
+
+| Group | Result |
+| --- | --- |
+| Xinbai report triggers | 9/9 returned exactly one generated-artifact link and matched expected `?focus=` |
+| Focuses covered | `取高机会`, `经营总览`, `风险店铺`, `低活跃` |
+| Ordinary-Q&A guards | `取高是什么意思？`, `风险识别系统有哪些项目经历？`, `经营风险是什么意思？` completed with 0 artifact links |
+
+Export smoke also passed:
+
+- Command: `npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --dataset-external-ids 64fff6c8-10e2-4ee8-8243-23166cce3abc`
+- Receipt: `target/external-report-export-smoke/20260605152603.json`
+- Result: `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, expected focus `取高机会`.
+- Export files remained accessible: `table-data.csv`, `report.ppt`, and `report.md`.
+
 ## 2026-06-05 8 Server Focus/Export Regression
 
 - Host: `8服务器`

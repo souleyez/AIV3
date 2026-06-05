@@ -858,6 +858,8 @@ git commit -m "Add external capability routing regression corpus"
 
 **2026-06-05 strict-smoke fix:** The tightened smoke caught an 8-server regression where `取高` recorded an accepted dataset-overlap template URL internally but public SSE completed without a link because the fixed-task queue card won the response merge. The local fix prefers accepted template baseline links over queue cards and keeps top-level `artifact_links[]` while preserving background refresh status fields.
 
+**2026-06-05 rollout:** Deployed commit `8ba071718` to `8服务器`. Strict focused-report smoke passed 12 selected cases: 9/9 Xinbai report triggers returned one generated-artifact link with expected focus, and 3/3 ordinary-Q&A guards returned no artifact links. `external-report-export` also passed with `okCount=2` and export files `table-data.csv`, `report.ppt`, and `report.md` accessible.
+
 **Files:**
 - Modify only if needed: `docs/validation/**`
 - Do not modify public API contracts unless explicitly approved.
