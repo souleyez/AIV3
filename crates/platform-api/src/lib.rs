@@ -10705,19 +10705,24 @@ fn external_channel_static_page_focus_module_labels(payload: Option<&Value>) -> 
 fn external_channel_static_page_default_modules_for_focus(focus: &str) -> Vec<String> {
     match focus {
         "取高机会" => vec![
-            "最近可取高门店机会榜".to_string(),
-            "销售额缺口/需增销售额".to_string(),
-            "门店/品牌行动建议".to_string(),
+            "取高线距离排行".to_string(),
+            "当前/预测/取高线/需助推".to_string(),
+            "预计取高增收".to_string(),
+        ],
+        "经营总览" => vec![
+            "经营健康度".to_string(),
+            "月度销售趋势".to_string(),
+            "机会/风险品类占比".to_string(),
         ],
         "风险店铺" => vec![
-            "低销售风险店铺".to_string(),
-            "销售预警分层".to_string(),
-            "门店跟进动作".to_string(),
+            "持续低活跃品牌".to_string(),
+            "最新低活跃品牌".to_string(),
+            "客流降低预警".to_string(),
         ],
         "低活跃" => vec![
             "低活跃门店".to_string(),
-            "异常销售波动".to_string(),
-            "恢复动作建议".to_string(),
+            "门店/品牌占比".to_string(),
+            "客流降低预警".to_string(),
         ],
         "品牌明细" => vec![
             "品牌/门店明细".to_string(),
@@ -32877,9 +32882,16 @@ fn external_channel_prompt_requests_business_report_module_workflow(
             | "经营状况"
             | "经营情况"
             | "经营状态"
+            | "经营健康度评分"
             | "销售缺口"
             | "销售额缺口"
             | "风险识别"
+            | "经营总览"
+            | "销售趋势"
+            | "月度销售趋势"
+            | "客流降低预警"
+            | "风险提示"
+            | "机会提示"
             | "助推门店"
             | "门店助推"
     );
@@ -32920,11 +32932,22 @@ fn external_channel_prompt_requests_business_report_module_workflow(
             "取高门店",
             "高分成",
             "高分成线",
+            "经营总览",
             "经营状况",
             "经营情况",
             "经营状态",
             "经营健康",
             "经营健康度",
+            "经营评分",
+            "健康度评分",
+            "销售趋势",
+            "月度销售趋势",
+            "收入趋势",
+            "收入总额",
+            "计划完成",
+            "客流下降",
+            "客流降低",
+            "客流预警",
             "低销售额风险",
             "低销售风险",
             "风险店铺",
@@ -32957,6 +32980,7 @@ fn external_channel_prompt_requests_business_report_module_workflow(
         prompt,
         &[
             "看看",
+            "看",
             "看一下",
             "查看",
             "查一下",
@@ -35342,6 +35366,10 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
             "达线",
             "触发取高",
             "机会门店",
+            "助推",
+            "需助推",
+            "需要助推",
+            "助推门店",
             "高预警",
             "中预警",
             "租金",
@@ -35415,11 +35443,20 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
         &lower,
         &[
             "经营总览",
+            "经营状况",
+            "经营情况",
+            "经营状态",
             "经营健康",
             "健康度",
             "评分",
+            "经营评分",
             "坪效",
+            "销售趋势",
+            "月度销售趋势",
+            "收入趋势",
+            "收入总额",
             "收入同比",
+            "计划完成",
             "总览",
             "overview",
             "health",
@@ -92971,6 +93008,12 @@ mod tests {
             ("取高预警门店有哪些", "取高机会"),
             ("客流下降风险门店", "低活跃"),
             ("经营健康度评分表", "经营总览"),
+            ("经营状况", "经营总览"),
+            ("看经营总览", "经营总览"),
+            ("哪些需要助推的门店", "取高机会"),
+            ("销售缺口统计一下，哪些门店需要助推", "取高机会"),
+            ("看月度销售趋势", "经营总览"),
+            ("客流降低预警", "低活跃"),
         ] {
             let focused = static_page_public_url_with_prompt_focus(public_url, prompt);
             let url = reqwest::Url::parse(&focused).expect("focused artifact URL should parse");
@@ -92980,6 +93023,24 @@ mod tests {
                 .map(|(_, value)| value.into_owned());
             assert_eq!(focus.as_deref(), Some(expected_focus));
         }
+    }
+
+    #[test]
+    fn external_channel_static_page_ready_text_uses_default_modules_for_prompt_focus() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html";
+        let text = external_channel_static_page_customer_ready_text_for_payload(
+            external_channel_static_page_customer_ready_text(),
+            Some(&json!({
+                "template_adaptation": {
+                    "userIntent": "看经营状况"
+                }
+            })),
+            public_url,
+        );
+
+        assert!(text.contains("系统识别到本轮关注焦点：经营总览"));
+        assert!(text.contains("报表会优先呈现：经营健康度、月度销售趋势、机会/风险品类占比"));
     }
 
     #[test]
@@ -98108,6 +98169,13 @@ mod tests {
             "销售缺口统计一下，哪些门店需要助推？请同时正常回答重点。",
             "哪些需要助推的门店",
             "按取高统计门店排行",
+            "经营总览",
+            "看经营总览",
+            "月度销售趋势",
+            "看月度销售趋势",
+            "客流降低预警",
+            "经营健康度评分",
+            "看一下收入趋势和计划完成",
         ] {
             assert!(
                 external_channel_message_requests_static_page_artifact(&message, prompt),

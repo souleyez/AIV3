@@ -169,6 +169,11 @@
   - Recorded the prior 8-server manual receipt in `docs/validation/external-report-export-smoke.md`: deployed commit `51e22fbbc`, public endpoint `https://v3.elepcloud.com`, Xinbai report title/link, three download exports, and six artifact files all HTTP 200 with non-empty bodies.
   - Local verification passed for script syntax, help output, npm entrypoint help, diff whitespace, and a mock JSON/SSE artifact server.
   - This smoke is now part of the fixed post-deploy regression list whenever a change touches third-party report/static-page delivery.
+- Continued on 2026-06-05 by tightening third-party Xinbai report trigger/focus routing:
+  - Business-report module prompts now recognize `经营总览`, `销售趋势`, `月度销售趋势`, `经营健康度评分`, `收入趋势`, `计划完成`, `客流降低预警`, `风险提示`, `机会提示`, and `助推门店` variants without requiring explicit `artifact` mode.
+  - Prompt focus routing now maps `经营状况/经营情况/经营状态/销售趋势/收入趋势/计划完成` to `经营总览`, and `助推门店/需助推` wording to `取高机会`.
+  - Default customer-ready module summaries were aligned to the current Xinbai monthly report modules: 取高线距离排行, 当前/预测/取高线/需助推, 经营健康度, 月度销售趋势, 机会/风险品类占比, 持续/最新低活跃品牌, and 客流降低预警.
+  - Local verification passed for focused trigger/focus regressions, false-positive guard cases, `cargo test -p platform-api external_channel_static_page --lib`, `cargo fmt --package platform-api --check`, `cargo check -p platform-api`, and `git diff --check`.
 
 ## Immediate Execution Queue
 
