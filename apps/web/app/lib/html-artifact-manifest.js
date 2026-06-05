@@ -1113,11 +1113,11 @@ function renderActionIntentControls(manifest) {
   if (manifest.interactionMode !== 'action_intent') return '';
   const placeholder = manifest.payload?.intentPlaceholder
     || manifest.payload?.placeholder
-    || '写一句你希望 V3 如何修改这个产物。';
+    || '写一句你希望 DataMax 如何修改这个产物。';
   return `
     <section>
       <h2>修改意图</h2>
-      <p>用自然语言描述要改哪里、怎么改。V3 会把它翻译成受限操作后再更新产物。</p>
+      <p>用自然语言描述要改哪里、怎么改。DataMax 会把它翻译成受限操作后再更新产物。</p>
       <textarea data-artifact-intent rows="4" placeholder="${escapeHtml(placeholder)}"></textarea>
     </section>
   `;
@@ -1202,7 +1202,7 @@ export function renderHtmlArtifactDocument(input = {}) {
     </header>
     ${body}
     ${renderActionIntentControls(manifest)}
-    ${allowScripts && canSubmit ? '<div class="actions"><button type="button" data-artifact-action="submit">提交到 V3</button></div>' : ''}
+    ${allowScripts && canSubmit ? '<div class="actions"><button type="button" data-artifact-action="submit">提交到 DataMax</button></div>' : ''}
     ${allowScripts && !canSubmit ? '<section><p class="empty">此交互产物暂未包含可提交的结构化动作。</p></section>' : ''}
   </main>
   ${script}

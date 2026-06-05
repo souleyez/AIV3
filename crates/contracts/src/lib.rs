@@ -6102,7 +6102,7 @@ mod tests {
                 ]
             },
             "validation_checks": ["date_parse_check", "work_hour_range_check"],
-            "recommended_next_actions": ["生成 staging import spec 后由 V3 审核执行"],
+            "recommended_next_actions": ["生成 staging import spec 后由 DataMax 审核执行"],
             "human_review_reason": null
         }))
         .expect("output");
@@ -6697,7 +6697,7 @@ mod tests {
             kind: "html_artifact".to_string(),
             version: 1,
             id: "html-artifact-third-party-handoff-document".to_string(),
-            title: "V3 纯第三方模式对接文档".to_string(),
+            title: "DataMax 纯第三方模式对接文档".to_string(),
             source_type: HtmlArtifactSourceTypeView::ExternalIntegration,
             template_id: HtmlArtifactTemplateIdView::ThirdPartyHandoffDocument,
             owner_scope: HtmlArtifactOwnerScopeView {

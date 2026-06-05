@@ -15,7 +15,7 @@ export const EXTERNAL_INTEGRATION_MODES = [
     key: 'standard_bot',
     title: '标准机器人模式',
     status: '可选',
-    summary: '飞书、Lark、企业微信等平台事件进入 V3 适配器，再转为统一外部通道事件。',
+    summary: '飞书、Lark、企业微信等平台事件进入 DataMax 适配器，再转为统一外部通道事件。',
     docs: [
       'docs/integrations/third-party-integration-api.zh-CN.html',
       'docs/integrations/third-party-integration-api.zh-CN.md',
@@ -39,14 +39,14 @@ export const EXTERNAL_INTEGRATION_MODES = [
     checklist: [
       '平台事件验签与消息解密',
       '外部用户、会话和机器人 ID 映射',
-      '统一消息事件写入 V3 通道',
+      '统一消息事件写入 DataMax 通道',
       '文档源、文档解析和解析详情查询',
       '默认提示词、输出格式和本轮 skill 策略',
       '模板文档解析和模板生成产物',
       '用户确认、动作派发和结果回调',
       '审计列表、失败阻断和 trace 导出',
     ],
-    guardrail: '按平台官方验签；不要把平台 token 当作 V3 出站派发凭证。',
+    guardrail: '按平台官方验签；不要把平台 token 当作 DataMax 出站派发凭证。',
   },
   {
     key: 'pure_third_party',
@@ -104,7 +104,7 @@ export const EXTERNAL_INTEGRATION_MODES = [
     key: 'database_integration',
     title: '数据库对接',
     status: '联调接入',
-    summary: '适合类似 8 服务器现有数据库源的接入：V3 托管密钥和表映射，数据库行同步入数据集后用于问答和静态页报表。',
+    summary: '适合类似 8 服务器现有数据库源的接入：DataMax 托管密钥和表映射，数据库行同步入数据集后用于问答和静态页报表。',
     docs: [
       'docs/integrations/third-party-integration-api.zh-CN.html#section-26',
       'docs/integrations/third-party-integration-api.zh-CN.md',
@@ -129,7 +129,7 @@ export const EXTERNAL_INTEGRATION_MODES = [
       '数据库源配置：source_id、密钥引用、库名和表白名单',
       '联调验证：连接测试、schema 扫描、表预览',
       '语义画像：识别时间、指标、维度、实体和文本字段',
-      '同步入库：数据库行清洗为 V3 数据集证据',
+      '同步入库：数据库行清洗为 DataMax 数据集证据',
       '状态查询：同步状态、数据集可用性、行转换失败',
       '聊天使用：传同步后的 dataset_external_ids',
       '报表生成：基于数据库数据生成 Image2 和静态页',

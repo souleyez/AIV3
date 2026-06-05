@@ -1,14 +1,14 @@
-# V3 第三方接入说明书
+# DataMax 第三方接入说明书
 
 **文档状态：** 对外草案 v0.1
 **最后更新：** 2026-05-25
 **适用对象：** 第三方系统负责人、客户 IT 团队、渠道/文档/权限/业务系统对接开发人员
 **默认对外域名：** `https://v3.elepcloud.com`
-**说明：** 本文可作为第三方联调前的接口说明材料，只说明 V3 对外开放的能力、接口、字段和使用方式，不展开具体实现细节。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
+**说明：** 本文可作为第三方联调前的接口说明材料，只说明 DataMax 对外开放的能力、接口、字段和使用方式，不展开具体实现细节。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
 
 如果第三方采用自建聊天页面、自建文档库、自建用户 ID、会话 ID、skill、模板、产物或业务接口的“纯第三方模式”，可优先阅读独立对接文档：`docs/integrations/pure-third-party-integration-guide.zh-CN.md`。如果第三方要接入类似 8 服务器现有数据库源的 MySQL/经营库，数据库接口已合并在本文 `11.6 第三方数据库对接`。需要发给业务/技术评审时，可直接打开同目录 HTML 阅读版。
 
-V3 外部集成观测页提供两类公开文档入口：
+DataMax 外部集成观测页提供两类公开文档入口：
 
 - 完整对接文档 HTML：`/external-integrations/third-party-integration-api.zh-CN.html`
 - 完整对接文档 MD：`/external-integrations/third-party-integration-api.zh-CN.md`
@@ -19,22 +19,22 @@ V3 外部集成观测页提供两类公开文档入口：
 
 - `https://v3.elepcloud.com/` 打开外部集成观测面板；
 - 第三方接口默认使用 `https://v3.elepcloud.com/v1/...`；
-- 该观测域名不提供直接跳回 V3 主工作台的导航入口。
-- 连接配置了入站 Bearer Token 时，第三方调用 V3 的聊天事件、用户确认和动作结果回传都必须带 `Authorization: Bearer <V3 inbound token>`；该 token 由 V3 生成并交付给第三方。
-- V3 对外对接文档只保留最新有效版本；HTML 和 MD 都统一发布在外部集成观测页的“对接方式与文档”区域。
-- 外部聊天消息如果需要实时网页信息但当前不可用，V3 会返回 `task_status=v3_search_evidence_required`；第三方页面应把它展示为等待状态，不要展示成已完成搜索。
+- 该观测域名不提供直接跳回 DataMax 主工作台的导航入口。
+- 连接配置了入站 Bearer Token 时，第三方调用 DataMax 的聊天事件、用户确认和动作结果回传都必须带 `Authorization: Bearer <DataMax inbound token>`；该 token 由 DataMax 生成并交付给第三方。
+- DataMax 对外对接文档只保留最新有效版本；HTML 和 MD 都统一发布在外部集成观测页的“对接方式与文档”区域。
+- 外部聊天消息如果需要实时网页信息但当前不可用，DataMax 会返回 `task_status=v3_search_evidence_required`；第三方页面应把它展示为等待状态，不要展示成已完成搜索。
 
 ## 1. 接入目标
 
-V3 支持把智能助手能力接入到第三方系统中，第三方可以按需使用以下能力：
+DataMax 支持把智能助手能力接入到第三方系统中，第三方可以按需使用以下能力：
 
-- 在飞书、Lark、企业微信或第三方自建聊天页面中使用 V3 助手；
-- 接入第三方文档库，让 V3 在授权范围内解析、索引和问答；
+- 在飞书、Lark、企业微信或第三方自建聊天页面中使用 DataMax 助手；
+- 接入第三方文档库，让 DataMax 在授权范围内解析、索引和问答；
 - 接入第三方用户、部门、角色、用户组和文档权限；
-- 将 V3 生成的产物发布回第三方系统；
-- 在用户确认后，由 V3 调用第三方业务接口处理事务。
+- 将 DataMax 生成的产物发布回第三方系统；
+- 在用户确认后，由 DataMax 调用第三方业务接口处理事务。
 
-第三方只需要明确使用哪些 V3 能力，以及按本文接口传递用户、会话、文档、模板、输出格式和动作确认信息。V3 会按接口返回文本、任务状态、确认请求、产物链接或错误码。
+第三方只需要明确使用哪些 DataMax 能力，以及按本文接口传递用户、会话、文档、模板、输出格式和动作确认信息。DataMax 会按接口返回文本、任务状态、确认请求、产物链接或错误码。
 
 ## 2. 接入模式
 
@@ -45,9 +45,9 @@ V3 支持把智能助手能力接入到第三方系统中，第三方可以按�
 在该模式下：
 
 - 第三方平台负责消息投递、事件回调、群聊或单聊入口；
-- V3 适配平台的官方机器人接口；
-- V3 返回文本、卡片、文件、任务状态或确认请求；
-- 平台侧负责把 V3 返回内容展示给用户。
+- DataMax 适配平台的官方机器人接口；
+- DataMax 返回文本、卡片、文件、任务状态或确认请求；
+- 平台侧负责把 DataMax 返回内容展示给用户。
 
 ### 2.2 纯第三方模式
 
@@ -55,14 +55,14 @@ V3 支持把智能助手能力接入到第三方系统中，第三方可以按�
 
 在该模式下，第三方可以分别提供：
 
-- 聊天通道接口：把用户消息发送给 V3；
-- 文档接口：让 V3 拉取或接收文档、附件、版本和正文；
-- 用户接口：让 V3 同步用户、部门、用户组、角色和停用状态；
-- 权限接口：让 V3 获取文档级访问范围；
-- 产物接口：接收 V3 生成的报告、页面、文件或链接；
+- 聊天通道接口：把用户消息发送给 DataMax；
+- 文档接口：让 DataMax 拉取或接收文档、附件、版本和正文；
+- 用户接口：让 DataMax 同步用户、部门、用户组、角色和停用状态；
+- 权限接口：让 DataMax 获取文档级访问范围；
+- 产物接口：接收 DataMax 生成的报告、页面、文件或链接；
 - 事务接口：接收用户确认后的业务动作。
 
-第三方可以搭建自己的聊天页面，并按本文的聊天、文档、模板和产物接口调用 V3。
+第三方可以搭建自己的聊天页面，并按本文的聊天、文档、模板和产物接口调用 DataMax。
 
 ### 2.3 混合模式
 
@@ -74,7 +74,7 @@ V3 支持把智能助手能力接入到第三方系统中，第三方可以按�
 - 文档来自客户门户；
 - 用户和部门来自客户统一身份系统；
 - 审批或工单动作写入客户业务系统；
-- V3 返回问答结果、产物链接、任务状态或用户确认请求。
+- DataMax 返回问答结果、产物链接、任务状态或用户确认请求。
 
 ## 3. 总体流程
 
@@ -82,18 +82,18 @@ V3 支持把智能助手能力接入到第三方系统中，第三方可以按�
 sequenceDiagram
   participant User as "外部用户"
   participant Channel as "聊天通道或第三方页面"
-  participant V3 as "V3 接入网关"
+  participant DataMax as "DataMax 接入网关"
   participant Identity as "第三方用户与权限系统"
   participant Docs as "第三方文档库"
-  participant Capability as "V3 能力服务"
+  participant Capability as "DataMax 能力服务"
   participant Action as "第三方产物或业务系统"
 
   User->>Channel: 发送问题或操作请求
-  Channel->>V3: 提交标准化消息事件
-  V3->>V3: 校验请求和幂等键
-  V3->>Identity: 解析用户身份和有效权限
-  V3->>Docs: 使用已授权的文档证据
-  V3->>Capability: 生成回答、产物或动作请求
+  Channel->>DataMax: 提交标准化消息事件
+  DataMax->>DataMax: 校验请求和幂等键
+  DataMax->>Identity: 解析用户身份和有效权限
+  DataMax->>Docs: 使用已授权的文档证据
+  DataMax->>Capability: 生成回答、产物或动作请求
   Capability->>Action: 发送已确认的发布或业务动作
   Capability->>Channel: 返回回答、状态或确认请求
   Channel->>User: 展示给用户
@@ -101,7 +101,7 @@ sequenceDiagram
 
 ## 4. 双方职责边界
 
-### V3 负责
+### DataMax 负责
 
 - 创建和管理第三方连接；
 - 绑定租户、账号和外部身份；
@@ -120,22 +120,22 @@ sequenceDiagram
 - 提供文档权限或可访问范围；
 - 保证外部用户 ID、文档 ID、消息 ID 等标识稳定；
 - 配合配置签名密钥、访问令牌、IP 白名单或回调地址；
-- 在需要时接收 V3 产物发布和业务动作回调。
+- 在需要时接收 DataMax 产物发布和业务动作回调。
 
 ## 5. 核心原则
 
 - 所有请求必须归属到明确租户和连接。
 - 所有消息、文档和动作回调都必须支持幂等。
-- 第三方应只把本轮允许使用的文档 ID、模板 ID、skill 和输出格式传给 V3。
-- V3 对文档问答只使用本轮可访问、已解析或已提供的文档范围。
-- 如果当前问题需要实时网页信息但不可用，V3 会返回等待或不可用状态，而不是返回未验证的实时网页结论。
+- 第三方应只把本轮允许使用的文档 ID、模板 ID、skill 和输出格式传给 DataMax。
+- DataMax 对文档问答只使用本轮可访问、已解析或已提供的文档范围。
+- 如果当前问题需要实时网页信息但不可用，DataMax 会返回等待或不可用状态，而不是返回未验证的实时网页结论。
 - 高风险写入、跨系统事务、权限变更、外部发布等动作必须经过确认。
 - 日志、观测页面、错误返回和接口响应不得泄露密钥、令牌或未授权正文。
 - 第三方聊天页面可以独立部署，但应通过本文接口完成消息提交、确认、产物查询和动作结果回传。
 
 ## 6. 回答能力与状态返回
 
-V3 接收第三方消息后，会按请求内容返回以下几类结果：
+DataMax 接收第三方消息后，会按请求内容返回以下几类结果：
 
 - `text`：普通文本回答；
 - `card`：结构化卡片；
@@ -145,7 +145,7 @@ V3 接收第三方消息后，会按请求内容返回以下几类结果：
 
 ### 6.1 平台能力路由与状态总览
 
-第三方客户端不需要、也不应直接调用 V3 内部能力。第三方只需按本文接口发送普通消息、文档范围、数据集范围、模板、业务数据源 ID 或确认回调；V3 会在平台侧识别用户意图，并在权限、范围、预算和确认策略校验后，通过现有 `reply.reply_type`、`reply.task_status`、`reply.card`、`reply.artifact_links`、`requires_confirmation`、`action_id` 和 `confirmation_id` 字段返回结果。
+第三方客户端不需要、也不应直接调用 DataMax 内部能力。第三方只需按本文接口发送普通消息、文档范围、数据集范围、模板、业务数据源 ID 或确认回调；DataMax 会在平台侧识别用户意图，并在权限、范围、预算和确认策略校验后，通过现有 `reply.reply_type`、`reply.task_status`、`reply.card`、`reply.artifact_links`、`requires_confirmation`、`action_id` 和 `confirmation_id` 字段返回结果。
 
 | 平台侧能力 | 第三方如何触发 | 常见返回状态/卡片 | 确认策略 |
 | --- | --- | --- | --- |
@@ -156,13 +156,13 @@ V3 接收第三方消息后，会按请求内容返回以下几类结果：
 | 第三方系统对接规划 | 普通消息提出 OA、文档库、数据库、用户/权限、API 或连接器对接 | `needs_confirmation` 或 `capability_analysis_recorded`；卡片 `v3_integration_setup_analysis` | API/鉴权/URL/请求字段/响应字段、权限或 schema 变更需要确认 |
 | 主动消息/主动发起对话 | 普通消息要求完成后通知某人、发给负责人、跨会话确认或消息渠道外发 | `message_outreach_confirmation_required`；卡片 `v3_message_channel_outreach`。后续若启用安全自动派发，可出现 `message_outreach_queued`、`message_outreach_sent`、`message_outreach_failed` | 模型不能直接发送消息；新收件人、跨渠道、敏感报表/文档内容、权限范围不明或未配置外发通道需要确认 |
 
-文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 `dataset_external_ids` 数组。分组字段和文档 ID 可以同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档会自动去重。只有想把本次会话限制为少数具体文档时，才只传文档 ID、不传分组字段。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会再替第三方扩大或缩小第三方内部权限。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。V3 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
+文档问答场景下，第三方应在会话首次提问或文档范围变化时传入可用文档范围：可以传当前问题允许使用的 `available_document_external_ids`/单文档兼容字段 `documentExternalId`，也可以传稳定业务分组 `dataset_external_id` 授权该分组下的全部文档；如果一个工作区需要同时选择多个分组，传 `dataset_external_ids` 数组。分组字段和文档 ID 可以同时传，DataMax 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档会自动去重。只有想把本次会话限制为少数具体文档时，才只传文档 ID、不传分组字段。该授权绑定 `conversation_external_id`，同一会话后续消息会继续复用，直到第三方更换会话 ID 或重新传入新的文档范围。第三方内部读权限由第三方在传入这些范围前完成判断；DataMax 按本轮/本会话传入的文档或分组范围供料，不会再替第三方扩大或缩小第三方内部权限。`available_document_source_id` 只用于限定这些文档所属资料源；连接上的默认资料源只用于补齐资料源 ID，不会在缺少文档 ID 或稳定分组 ID 时自动扩大为整源可用。DataMax 会基于可用文档生成回答；如果文档尚未解析完成、缺少必要输入或当前能力不可用，会返回任务状态或错误码。
 
-当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 V3 可用证据”的状态。
+当标准化聊天消息明显需要实时网页信息而当前不可用时，通道响应可以使用 `reply_type=task_status`、`task_status=v3_search_evidence_required`，并携带 `type=v3_search_evidence_required` 的安全卡片。第三方自建聊天页面应把它展示为“等待 DataMax 可用证据”的状态。
 
 ## 7. 连接与凭证
 
-V3 会为每个第三方通道或数据源创建连接记录。
+DataMax 会为每个第三方通道或数据源创建连接记录。
 
 常见连接类型：
 
@@ -174,10 +174,10 @@ V3 会为每个第三方通道或数据源创建连接记录。
 
 第三方通常会获得：
 
-- `connection_id`：V3 分配的连接 ID；
+- `connection_id`：DataMax 分配的连接 ID；
 - API 域名：由项目交付环境提供；
 - 鉴权方式：签名密钥、Bearer Token、平台签名或双方确认的专用方式；
-- 回调地址：V3 调用第三方接口时使用；
+- 回调地址：DataMax 调用第三方接口时使用；
 - 白名单配置：IP、域名、来源地址或平台事件地址。
 
 ## 8. 鉴权与签名建议
@@ -208,7 +208,7 @@ method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + raw_body_sha256
 - 密钥支持轮换；
 - 失败请求返回明确错误码，但不返回密钥细节。
 
-飞书、Lark、企业微信等标准平台接入时，应优先使用平台官方签名和事件校验机制。自建聊天或纯第三方通道配置入站 Bearer Token 后，第三方请求必须携带 `Authorization` 请求头。V3 向第三方派发业务动作时，若配置了派发 endpoint，应同时配置派发专用 Bearer Token 或签名密钥之一。
+飞书、Lark、企业微信等标准平台接入时，应优先使用平台官方签名和事件校验机制。自建聊天或纯第三方通道配置入站 Bearer Token 后，第三方请求必须携带 `Authorization` 请求头。DataMax 向第三方派发业务动作时，若配置了派发 endpoint，应同时配置派发专用 Bearer Token 或签名密钥之一。
 
 ## 9. 幂等规则
 
@@ -226,7 +226,7 @@ method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + raw_body_sha256
 generic_chat:tenant-001:msg-20260513-0001
 ```
 
-如果 V3 收到相同幂等键：
+如果 DataMax 收到相同幂等键：
 
 - 不重复创建助手任务；
 - 不重复执行业务动作；
@@ -241,10 +241,10 @@ generic_chat:tenant-001:msg-20260513-0001
 POST /v1/external/channels/{connection_id}/events
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
-用途：第三方聊天页面、机器人网关或平台适配器向 V3 提交用户消息。
+用途：第三方聊天页面、机器人网关或平台适配器向 DataMax 提交用户消息。
 
 请直接使用 `https://v3.elepcloud.com/v1/...`；不要先打 `http://` 再依赖重定向，避免调试工具把 `POST` 改成 `GET` 后得到 `405 Method Not Allowed`。
 
@@ -252,7 +252,7 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 说明 |
 | --- | --- |
-| `connection_id` | V3 分配的聊天通道连接 ID |
+| `connection_id` | DataMax 分配的聊天通道连接 ID |
 
 请求示例：
 
@@ -301,18 +301,18 @@ Authorization: Bearer <V3 inbound token>
 | `message_type` | 是 | 消息类型 |
 | `text` | 否 | 文本内容 |
 | `available_document_source_id` | 文档问答建议传 | 本次授权所属资料源 ID；连接配置了默认资料源时可省略，但单独传资料源不会授权整源文档回答 |
-| `available_document_external_ids` | 文档问答建议传 | 允许 V3 使用的第三方文档 ID 列表；首次传入后同一 `conversation_external_id` 后续有效；单文档可用 `documentExternalId` |
+| `available_document_external_ids` | 文档问答建议传 | 允许 DataMax 使用的第三方文档 ID 列表；首次传入后同一 `conversation_external_id` 后续有效；单文档可用 `documentExternalId` |
 | `dataset_external_id` | 文档分组问答建议传 | 第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 `conversation_external_id` 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
 | `dataset_external_ids` | 多分组文档问答建议传 | 第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：`datasetExternalIds`、`availableDatasetExternalIds` |
 | `business_datasource_ids` | 业务库问答/报表建议传 | 本轮指定业务库 ID 数组；值来自 `11.6.1 创建/更新数据库源` 的 `source_external_id`。兼容别名：`businessDatasourceIds`、`businessDataSourceIds`、`databaseSourceIds` |
-| `artifact_type` | 产物生成建议传 | 推荐产物语义字段；静态页传 `static_page` 后，V3 会自动进入报表页面生成流程。兼容别名：`artifactType` |
+| `artifact_type` | 产物生成建议传 | 推荐产物语义字段；静态页传 `static_page` 后，DataMax 会自动进入报表页面生成流程。兼容别名：`artifactType` |
 | `template` | 使用模板时传 | 产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围 |
 | `template.source_id` | 模板建议传 | 模板所属文档源 ID |
 | `template.document_external_id` | 文档模板必填 | 模板文档 ID；兼容 `template_document_external_id`、`documentExternalId` |
 | `template.revision_external_id` | 否 | 模板版本 ID |
 | `template.mode` | 否 | 推荐传 `reference` |
 | `template.output_type` | 否 | `static_page`、`html`、`report`、`document`、`table`、`image` 或 `any` |
-| `template.template_reference_id` | 否 | V3 内置静态页模板引用；使用第三方文档模板时通常不用传 |
+| `template.template_reference_id` | 否 | DataMax 内置静态页模板引用；使用第三方文档模板时通常不用传 |
 | `requested_skills` | 否 | 第三方希望本轮应用的结构化 skill 列表 |
 | `requested_skills[].skill_id` | `requested_skills` 有值时必填 | skill 稳定标识，建议使用英文或业务 slug |
 | `requested_skills[].version` | 否 | skill 版本或策略版本，用于版本选择和问题复现 |
@@ -336,7 +336,7 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-上例表示本次会话可以使用 `workspace-main` 和 `workspace-archive` 两个稳定业务分组下的全部已解析文档，也可以额外使用 `extra-policy-doc-001` 这份显式文档；如果该文档本来就在两个分组内，V3 会去重。后续同一个 `conversation_external_id` 可以不重复传这些范围，V3 会继续复用该授权范围。
+上例表示本次会话可以使用 `workspace-main` 和 `workspace-archive` 两个稳定业务分组下的全部已解析文档，也可以额外使用 `extra-policy-doc-001` 这份显式文档；如果该文档本来就在两个分组内，DataMax 会去重。后续同一个 `conversation_external_id` 可以不重复传这些范围，DataMax 会继续复用该授权范围。
 
 支持的消息类型：
 
@@ -370,10 +370,10 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 说明 |
 | --- | --- |
-| `accepted` | V3 是否已接收本轮消息并完成接口层处理 |
-| `assistant_run_id` | 本轮 V3 任务 ID，用于状态查询、确认动作和问题定位 |
-| `idempotency_key` | V3 回显的幂等键 |
-| `reply` | V3 返回给第三方页面展示或处理的回复对象 |
+| `accepted` | DataMax 是否已接收本轮消息并完成接口层处理 |
+| `assistant_run_id` | 本轮 DataMax 任务 ID，用于状态查询、确认动作和问题定位 |
+| `idempotency_key` | DataMax 回显的幂等键 |
+| `reply` | DataMax 返回给第三方页面展示或处理的回复对象 |
 | `reply.target_conversation_external_id` | 应展示回复的第三方会话 ID |
 | `reply.reply_type` | 回复类型，例如 `text`、`task_status`、`card`、`artifact_link` 或 `requires_confirmation` |
 | `reply.text` | 文本回复内容；静态页/报表发布完成时会包含 Markdown 可点击链接和原始 `页面地址: URL`，第三方页面建议按富文本/Markdown 或 URL 自动链接渲染 |
@@ -386,15 +386,15 @@ Authorization: Bearer <V3 inbound token>
 
 说明：
 
-- 该接口用于接收用户消息并创建或继续 V3 对话任务；
-- 同一个接口响应体中的 `reply` 即为 V3 返回给第三方页面的生成回复、任务状态或确认卡片；
+- 该接口用于接收用户消息并创建或继续 DataMax 对话任务；
+- 同一个接口响应体中的 `reply` 即为 DataMax 返回给第三方页面的生成回复、任务状态或确认卡片；
 - 第三方页面按 `reply.target_conversation_external_id` 把回复展示回原会话；
-- 如果 V3 已接收但暂时无法立即给出最终文本，会返回 `reply_type=task_status`；
+- 如果 DataMax 已接收但暂时无法立即给出最终文本，会返回 `reply_type=task_status`；
 - 如果当前资料不足但同会话可继续，会返回 `reply.task_status=needs_input` 和 `reply.card.type=v3_needs_input`，第三方把 `reply.text` 或 `reply.card.question` 展示给用户，用户补充后继续用同一个 `conversation_external_id` 发下一轮消息即可；
 - 如果需要用户确认动作，会返回 `reply_type=requires_confirmation`；
 - 第一阶段不要求第三方再调用单独的“取回复”接口。
 
-图片订单字段抽取也使用同一个 `/events` 接口。第三方聊天里用户直接发订单、充值、支付记录截图时，推荐传 `message_type: "image"`、`output_format: "json"` 和图片 `attachment_refs`；如需强制该能力，可在 `requested_skills` 里传 `skill_id: "order_screenshot_extract"`。V3 会返回 `reply_type=card`、`reply.card.type=v3_order_screenshot_extract`，并把可入库字段放在 `reply.card.records`。
+图片订单字段抽取也使用同一个 `/events` 接口。第三方聊天里用户直接发订单、充值、支付记录截图时，推荐传 `message_type: "image"`、`output_format: "json"` 和图片 `attachment_refs`；如需强制该能力，可在 `requested_skills` 里传 `skill_id: "order_screenshot_extract"`。DataMax 会返回 `reply_type=card`、`reply.card.type=v3_order_screenshot_extract`，并把可入库字段放在 `reply.card.records`。
 
 请求示例：
 
@@ -477,14 +477,14 @@ Authorization: Bearer <V3 inbound token>
 | `records[].status` | 状态归一值，例如 `success`、`processing`、`failed`、`cancelled` |
 | `reply.card.needs_review` | 是否建议人工复核 |
 | `reply.card.failure_reason` | `needs_review` 时可能存在，说明未完成自动抽取的原因 |
-| `attachment_refs[].download_url_redacted` | 仅供 V3 拉取图片；响应不会回显原始 URL |
-| `idempotency_key` | 同一图片消息重试时保持不变，V3 会返回同一份结构化结果 |
+| `attachment_refs[].download_url_redacted` | 仅供 DataMax 拉取图片；响应不会回显原始 URL |
+| `idempotency_key` | 同一图片消息重试时保持不变，DataMax 会返回同一份结构化结果 |
 
-数据接入/入库分析不新增请求字段。第三方在普通消息里提出接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求即可。若服务端启用 `data_ingestion_analysis` 固定能力，V3 会返回 `task_status`：排队/重试中为 `data_ingestion_analysis_queued` 或 `data_ingestion_analysis_retrying`；完成后为 `data_ingestion_analysis_completed`，卡片 `reply.card.type=v3_data_ingestion_analysis_result`，`reply.card.result_summary` 只包含安全摘要（来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作）。如果可形成导入草稿，卡片还会返回 `reply.card.staging_plan.type=v3_data_ingestion_staging_plan`，该计划只用于人工确认后的数据集/数据源导入，固定 `production_write_allowed=false`。人工确认创建或复用 staging 数据集后，状态为 `data_ingestion_staging_dataset_ready`，卡片 `reply.card.type=v3_data_ingestion_staging_plan_execution`，可返回 `dataset_id`、`dataset_key`、`dataset_title` 和 `imported_row_count=0`。内部人工继续启动数据库源同步后，状态为 `data_ingestion_staging_sync_started`；同步执行中、完成、失败分别为 `data_ingestion_staging_sync_running`、`data_ingestion_staging_sync_completed`、`data_ingestion_staging_sync_failed`，卡片 `reply.card.type=v3_data_ingestion_staging_sync`，可返回 `source_id`、`sync_run_id`、`workflow_stage` 和 `workflow_status`。同步完成后，同一个 `conversation_external_id` 的后续消息会自动复用该 staging 数据集作为可见数据范围，用于继续问答、生成报表或静态页；第三方不需要每轮重复传内部 `dataset_id`。如需要人工确认，状态为 `data_ingestion_analysis_needs_human`；失败为 `data_ingestion_analysis_failed`；人工取消或运行被取消时为 `data_ingestion_analysis_cancelled`，`reply.card.runtime_event.retryable=false`，第三方不需要自动重试取消态。V3 不会在该流程里暴露数据库 URL、凭据、完整表 dump，也不会自动写生产库或修改 schema。
+数据接入/入库分析不新增请求字段。第三方在普通消息里提出接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求即可。若服务端启用 `data_ingestion_analysis` 固定能力，DataMax 会返回 `task_status`：排队/重试中为 `data_ingestion_analysis_queued` 或 `data_ingestion_analysis_retrying`；完成后为 `data_ingestion_analysis_completed`，卡片 `reply.card.type=v3_data_ingestion_analysis_result`，`reply.card.result_summary` 只包含安全摘要（来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作）。如果可形成导入草稿，卡片还会返回 `reply.card.staging_plan.type=v3_data_ingestion_staging_plan`，该计划只用于人工确认后的数据集/数据源导入，固定 `production_write_allowed=false`。人工确认创建或复用 staging 数据集后，状态为 `data_ingestion_staging_dataset_ready`，卡片 `reply.card.type=v3_data_ingestion_staging_plan_execution`，可返回 `dataset_id`、`dataset_key`、`dataset_title` 和 `imported_row_count=0`。内部人工继续启动数据库源同步后，状态为 `data_ingestion_staging_sync_started`；同步执行中、完成、失败分别为 `data_ingestion_staging_sync_running`、`data_ingestion_staging_sync_completed`、`data_ingestion_staging_sync_failed`，卡片 `reply.card.type=v3_data_ingestion_staging_sync`，可返回 `source_id`、`sync_run_id`、`workflow_stage` 和 `workflow_status`。同步完成后，同一个 `conversation_external_id` 的后续消息会自动复用该 staging 数据集作为可见数据范围，用于继续问答、生成报表或静态页；第三方不需要每轮重复传内部 `dataset_id`。如需要人工确认，状态为 `data_ingestion_analysis_needs_human`；失败为 `data_ingestion_analysis_failed`；人工取消或运行被取消时为 `data_ingestion_analysis_cancelled`，`reply.card.runtime_event.retryable=false`，第三方不需要自动重试取消态。DataMax 不会在该流程里暴露数据库 URL、凭据、完整表 dump，也不会自动写生产库或修改 schema。
 
-采集/对接方案分析也不新增请求字段。客户在普通消息里提出资料采集、爬虫规划、外部资料库接入、第三方系统对接、接口字段确认、权限或消息渠道配置等需求时，V3 可能返回 `reply_type=requires_confirmation`、`reply.task_status=needs_confirmation`，并携带 `reply.card.type=v3_collection_setup_analysis` 或 `reply.card.type=v3_integration_setup_analysis`。这类卡片只表示 V3 已识别到平台受控能力请求，并给出 `requested_capability`、`intent`、`reason`、`risk_level`、`review_reason` 和 `next_actions`；第三方应按确认卡展示，不要当作已执行结果。只读状态检查或只读方案分析可返回 `reply_type=task_status`、`reply.task_status=capability_analysis_recorded`。V3 不会在该流程中自动执行爬取、登录、外部写入、凭据收集、公开接口 URL/鉴权/请求字段/响应字段变更，也不会自动扩大文档、数据集或用户权限；这些动作必须由 V3 侧确认后再进入后续流程。
+采集/对接方案分析也不新增请求字段。客户在普通消息里提出资料采集、爬虫规划、外部资料库接入、第三方系统对接、接口字段确认、权限或消息渠道配置等需求时，DataMax 可能返回 `reply_type=requires_confirmation`、`reply.task_status=needs_confirmation`，并携带 `reply.card.type=v3_collection_setup_analysis` 或 `reply.card.type=v3_integration_setup_analysis`。这类卡片只表示 DataMax 已识别到平台受控能力请求，并给出 `requested_capability`、`intent`、`reason`、`risk_level`、`review_reason` 和 `next_actions`；第三方应按确认卡展示，不要当作已执行结果。只读状态检查或只读方案分析可返回 `reply_type=task_status`、`reply.task_status=capability_analysis_recorded`。DataMax 不会在该流程中自动执行爬取、登录、外部写入、凭据收集、公开接口 URL/鉴权/请求字段/响应字段变更，也不会自动扩大文档、数据集或用户权限；这些动作必须由 DataMax 侧确认后再进入后续流程。
 
-主动消息/主动发起对话也不新增请求字段。客户在普通消息里要求“完成后通知某人”“主动发给店总/负责人”“向另一个会话发起确认”等场景时，V3 可能返回 `reply_type=requires_confirmation`、`reply.task_status=message_outreach_confirmation_required`，卡片 `reply.card.type=v3_message_channel_outreach`。卡片只包含安全摘要，例如 `requested_capability`、`intent`、`risk_level`、`review_reason`、`target_summary.recipient_count` 和 `idempotency_key`；不会包含原始资料全文、明文凭据或无限制模型原文。第三方应把它展示为待 V3/人工确认的外发意图。V3 不会让模型直接发送消息；跨渠道、新收件人、敏感报表/文档内容、权限范围不明或未配置外发通道时，都必须先确认后再由宿主消息通道执行。
+主动消息/主动发起对话也不新增请求字段。客户在普通消息里要求“完成后通知某人”“主动发给店总/负责人”“向另一个会话发起确认”等场景时，DataMax 可能返回 `reply_type=requires_confirmation`、`reply.task_status=message_outreach_confirmation_required`，卡片 `reply.card.type=v3_message_channel_outreach`。卡片只包含安全摘要，例如 `requested_capability`、`intent`、`risk_level`、`review_reason`、`target_summary.recipient_count` 和 `idempotency_key`；不会包含原始资料全文、明文凭据或无限制模型原文。第三方应把它展示为待 DataMax/人工确认的外发意图。DataMax 不会让模型直接发送消息；跨渠道、新收件人、敏感报表/文档内容、权限范围不明或未配置外发通道时，都必须先确认后再由宿主消息通道执行。
 
 ### 10.2 流式提交用户消息（SSE）
 
@@ -493,7 +493,7 @@ POST /v1/external/channels/{connection_id}/events/stream
 Host: v3.elepcloud.com
 Content-Type: application/json
 Accept: text/event-stream
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 用途：请求体与 `/events` 完全一致；第三方希望页面边等待边展示生成进度或最终文本时，使用 SSE 流式版本。
@@ -508,7 +508,7 @@ Authorization: Bearer <V3 inbound token>
 | Query | `POST /events/stream?since_sequence=12` |
 | Body | `"stream_since_sequence": 12` 或 `"streamSinceSequence": 12` |
 
-V3 会回放该序号之后的公开事件；如果任务还在处理，会继续跟随原任务输出后续状态，不会因为重复 `idempotency_key` 重新创建运行。
+DataMax 会回放该序号之后的公开事件；如果任务还在处理，会继续跟随原任务输出后续状态，不会因为重复 `idempotency_key` 重新创建运行。
 
 代码示例：
 
@@ -536,7 +536,7 @@ async function streamExternalMessage({ url, token, requestBody, handlers }) {
     body: JSON.stringify(requestBody),
   });
   if (!response.ok || !response.body) {
-    throw new Error(`V3 stream failed: ${response.status}`);
+    throw new Error(`DataMax stream failed: ${response.status}`);
   }
 
   const reader = response.body.getReader();
@@ -627,12 +627,12 @@ source.addEventListener('done', () => source.close());
 
 // 第三方服务端代理逻辑：
 // 1. 根据 message_id 取出原 POST 请求体；
-// 2. 调用 V3 POST /events/stream；
-// 3. 把 V3 返回的 SSE 原样转发给浏览器；
+// 2. 调用 DataMax POST /events/stream；
+// 3. 把 DataMax 返回的 SSE 原样转发给浏览器；
 // 4. 浏览器重连时带上最后 event_id，服务端转成 Last-Event-ID 或 stream_since_sequence。
 ```
 
-生产建议：V3 inbound token 放在第三方服务端，不直接暴露给浏览器；浏览器页面连接第三方自己的代理接口即可。
+生产建议：DataMax inbound token 放在第三方服务端，不直接暴露给浏览器；浏览器页面连接第三方自己的代理接口即可。
 
 结构化事件通用字段：
 
@@ -641,7 +641,7 @@ source.addEventListener('done', () => source.close());
 | `schema` | 固定为 `v3.external_channel.sse.v1` |
 | `event_id` | 事件稳定 ID，可用于去重；格式为 `{assistant_run_id 或 pending}:{sequence}` |
 | `sequence` | 本轮流内单调阶段序号；数值越大越靠后 |
-| `assistant_run_id` | 本轮 V3 任务 ID；开始事件可能为空 |
+| `assistant_run_id` | 本轮 DataMax 任务 ID；开始事件可能为空 |
 | `idempotency_key` | 本轮消息幂等键 |
 | `conversation_external_id` | 第三方会话 ID |
 | `phase` | 阶段，例如 `started`、`static_page`、`completed` |
@@ -655,15 +655,15 @@ SSE 事件：
 
 | event | data 说明 |
 | --- | --- |
-| `external_channel.started` | V3 已通过鉴权和入参解析，开始处理本轮消息；这不是助手回复 |
-| `external_channel.retrieval_started` | V3 正在检索可见文档、数据源和会话上下文；第三方可展示为处理中进度 |
+| `external_channel.started` | DataMax 已通过鉴权和入参解析，开始处理本轮消息；这不是助手回复 |
+| `external_channel.retrieval_started` | DataMax 正在检索可见文档、数据源和会话上下文；第三方可展示为处理中进度 |
 | `external_channel.delta` | 文本增量，字段为 `delta`；第三方可逐段追加到聊天气泡 |
 | `external_channel.static_page_planning` | 静态页/报表页面正在规划；第三方可展示为“正在生成页面方案” |
 | `external_channel.static_page_queued` | 静态页/报表页面已进入生成队列；不需要第三方确认 |
 | `external_channel.static_page_preview_ready` | 过程预览已生成；若返回 `card.preview_url`，可作为生成过程预览展示 |
 | `external_channel.static_page_publish_progress` | 静态页发布进度，例如 queued/running/retrying |
 | `external_channel.static_page_published` | 最终静态页已发布，`artifact_links[0]` 或 `card.public_url` 是页面链接 |
-| `external_channel.static_page_issue` | 发布链路遇到问题，事件会带 `card.error` 说明原因；V3 会尽量重试或保留可接管状态 |
+| `external_channel.static_page_issue` | 发布链路遇到问题，事件会带 `card.error` 说明原因；DataMax 会尽量重试或保留可接管状态 |
 | `external_channel.static_page_continue_polling` | 本次 SSE 等待到达上限但后台任务仍继续，第三方按 `status_url` 或 `card.status_url` 继续轮询 |
 | `external_channel.needs_input` | 当前可见资料不足以完成本轮；展示 `display_text` 或 `card.question`，用户补充后继续同一会话 |
 | `external_channel.heartbeat` | 长任务心跳，表示 SSE 连接仍在等待后续状态 |
@@ -675,7 +675,7 @@ SSE 事件：
 
 ```text
 event: external_channel.started
-data: {"schema":"v3.external_channel.sse.v1","event_id":"pending:000000","sequence":0,"phase":"started","status":"started","display_text":"V3 已开始处理本轮消息。","idempotency_key":"generic_chat:tenant-ext-001:msg-20260513-0001","conversation_external_id":"chat-risk-room","data":{"status":"started","idempotency_key":"generic_chat:tenant-ext-001:msg-20260513-0001"}}
+data: {"schema":"v3.external_channel.sse.v1","event_id":"pending:000000","sequence":0,"phase":"started","status":"started","display_text":"DataMax 已开始处理本轮消息。","idempotency_key":"generic_chat:tenant-ext-001:msg-20260513-0001","conversation_external_id":"chat-risk-room","data":{"status":"started","idempotency_key":"generic_chat:tenant-ext-001:msg-20260513-0001"}}
 
 event: external_channel.delta
 data: {"index":0,"delta":"根据你当前权限可查看的制度文档，"}
@@ -701,21 +701,21 @@ SSE data 字段说明：
 | `external_channel.static_page_preview_ready.data.data` | `card.preview_url` | 过程预览 URL；最终交付仍以 `artifact_links[0]` 或 `card.public_url` 为准 |
 | `external_channel.static_page_publish_progress.data.data` | `card.status` | 发布阶段细分状态，例如 `static_page_publish_queued`、`static_page_publish_running`、`static_page_publish_retrying` |
 | `external_channel.static_page_published.data.data` | `artifact_links` | 最终页面链接数组 |
-| `external_channel.static_page_issue.data.data` | `card.error` | 失败、需人工或重试原因；不要直接把它展示成最终失败，可提示 V3 正在重试或等待接管 |
+| `external_channel.static_page_issue.data.data` | `card.error` | 失败、需人工或重试原因；不要直接把它展示成最终失败，可提示 DataMax 正在重试或等待接管 |
 | `external_channel.static_page_continue_polling.data` | `status_url` | 后续状态查询地址；也可能在 `data.card.status_url` 中出现 |
 | `external_channel.needs_input.data.data` | `card.question` | 需要用户补充的问题；同一会话下一轮会沿用已有文档/数据范围继续 |
-| `external_channel.completed.data` | `assistant_run_id` | 本轮 V3 任务 ID |
+| `external_channel.completed.data` | `assistant_run_id` | 本轮 DataMax 任务 ID |
 | `external_channel.completed.data.data` | `response` | 与 `/events` JSON 响应同结构的最终响应 |
 | `done.data` | `ok` | SSE 流是否正常结束 |
 | `error.data` | `status` | 错误状态或 HTTP 状态 |
 | `error.data` | `error.code` | 稳定错误码 |
 | `error.data` | `error.message` | 错误说明，不包含密钥和敏感正文 |
 
-说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回本轮初始响应；第三方页面不要把 `started` 渲染为助手消息。若返回 `needs_input`，第三方展示问题并让用户补充，下一轮仍用同一个会话 ID。静态页生成时，V3 会继续在同一条 SSE 连接里输出页面规划、生成进度、发布进度、最终页面链接或问题原因；如果第三方连接较短，仍可按 `status_url` 轮询。若出现可继续的超时、重试或后台继续，顶层 `reply.task_status` 仍为 `processing`，可按 `poll_after_seconds` 继续查询；只有顶层 `reply.task_status=failed` 才表示不可继续失败/取消。若 `completed.data.data.response.reply.card.public_url`、`completed.data.data.response.reply.artifact_links[0]`、结构化事件顶层 `card.public_url` 或 `artifact_links[0]` 已存在，第三方可先展示或转存该页面链接。若只返回 `render_output_id`，第三方可按静态页渲染产物接口查询、预览或下载 HTML。第三方不需要为过程预览单独做确认、下载或二次提交。
+说明：SSE 会先返回 `started` 作为传输态，随后按 `delta` 输出文本片段，并在 `completed` 中返回本轮初始响应；第三方页面不要把 `started` 渲染为助手消息。若返回 `needs_input`，第三方展示问题并让用户补充，下一轮仍用同一个会话 ID。静态页生成时，DataMax 会继续在同一条 SSE 连接里输出页面规划、生成进度、发布进度、最终页面链接或问题原因；如果第三方连接较短，仍可按 `status_url` 轮询。若出现可继续的超时、重试或后台继续，顶层 `reply.task_status` 仍为 `processing`，可按 `poll_after_seconds` 继续查询；只有顶层 `reply.task_status=failed` 才表示不可继续失败/取消。若 `completed.data.data.response.reply.card.public_url`、`completed.data.data.response.reply.artifact_links[0]`、结构化事件顶层 `card.public_url` 或 `artifact_links[0]` 已存在，第三方可先展示或转存该页面链接。若只返回 `render_output_id`，第三方可按静态页渲染产物接口查询、预览或下载 HTML。第三方不需要为过程预览单独做确认、下载或二次提交。
 
 ### 10.2.1 可选助手回复主动回推
 
-如果第三方页面等待时间较短、SSE 连接可能中断，或希望后台异步结果完成后自动追加到第三方会话，可在聊天通道配置里提供助手回复回推 endpoint。V3 仍以 `/events` 或 `/events/stream` 接收入站消息；后台结果完成或失败后，V3 会向第三方配置的回推地址 POST 一次最终助手回复。未配置回推地址时，不影响原有响应、SSE 断线续传和 `status_url` 轮询。
+如果第三方页面等待时间较短、SSE 连接可能中断，或希望后台异步结果完成后自动追加到第三方会话，可在聊天通道配置里提供助手回复回推 endpoint。DataMax 仍以 `/events` 或 `/events/stream` 接收入站消息；后台结果完成或失败后，DataMax 会向第三方配置的回推地址 POST 一次最终助手回复。未配置回推地址时，不影响原有响应、SSE 断线续传和 `status_url` 轮询。
 
 回推 endpoint 配置键：
 
@@ -729,14 +729,14 @@ SSE data 字段说明：
 - Bearer Token：`reply_dispatch_bearer_token`、`replyDispatchBearerToken`、`external_reply_bearer_token`、`externalReplyBearerToken`、`outbound_reply_bearer_token`、`outboundReplyBearerToken`；
 - 签名密钥：`reply_dispatch_signing_secret`、`replyDispatchSigningSecret`、`external_reply_signing_secret`、`externalReplySigningSecret`、`outbound_reply_signing_secret`、`outboundReplySigningSecret`。
 
-如果只配置了动作派发鉴权，V3 可复用 `dispatch_bearer_token` / `dispatch_signing_secret` 作为回推鉴权；但回推 endpoint 必须使用回复专用配置键，避免把业务动作 endpoint 误用为聊天回复地址。V3 不会把平台通用 `token`、`callback_token`、`verification_token` 当作回推凭证。
+如果只配置了动作派发鉴权，DataMax 可复用 `dispatch_bearer_token` / `dispatch_signing_secret` 作为回推鉴权；但回推 endpoint 必须使用回复专用配置键，避免把业务动作 endpoint 误用为聊天回复地址。DataMax 不会把平台通用 `token`、`callback_token`、`verification_token` 当作回推凭证。
 
-V3 回推请求头：
+DataMax 回推请求头：
 
 | Header | 说明 |
 | --- | --- |
 | `Authorization` | 配置 Bearer Token 时为 `Bearer <token>` |
-| `x-v3-connection-id` | V3 聊天通道连接 ID |
+| `x-v3-connection-id` | DataMax 聊天通道连接 ID |
 | `x-v3-timestamp` | ISO 8601 时间 |
 | `x-v3-nonce` | 本次请求随机值 |
 | `x-v3-content-sha256` | 请求体 SHA-256 |
@@ -792,7 +792,7 @@ POST
 - 按 `conversation_external_id` 找到第三方会话并追加助手消息；
 - `reply` 结构与 `/events`、`/events/stream` 最终响应一致；
 - `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 可作为页面或报表链接；
-- 回推失败不会改变 V3 原任务结果，V3 会记录脱敏审计；第三方仍可通过状态接口补拉结果。
+- 回推失败不会改变 DataMax 原任务结果，DataMax 会记录脱敏审计；第三方仍可通过状态接口补拉结果。
 
 任务状态响应示例：
 
@@ -813,8 +813,8 @@ POST
 
 | 字段 | 说明 |
 | --- | --- |
-| `accepted` | V3 是否接收该请求 |
-| `assistant_run_id` | 当前 V3 任务 ID |
+| `accepted` | DataMax 是否接收该请求 |
+| `assistant_run_id` | 当前 DataMax 任务 ID |
 | `idempotency_key` | 本轮请求幂等键 |
 | `reply.target_conversation_external_id` | 任务状态应回显到的第三方会话 |
 | `reply.reply_type` | 当前为 `task_status`，表示不是最终自然语言答案 |
@@ -847,7 +847,7 @@ GET /v1/external/runs/{assistant_run_id}
 
 | 字段 | 说明 |
 | --- | --- |
-| `assistant_run_id` | 查询的 V3 任务 ID |
+| `assistant_run_id` | 查询的 DataMax 任务 ID |
 | `status` | 运行状态，例如 `queued`、`running`、`completed`、`failed` 或 `cancelled` |
 | `created_at` | 任务创建时间 |
 | `completed_at` | 任务完成时间；未完成时可能为空 |
@@ -863,10 +863,10 @@ GET /v1/external/runs/{assistant_run_id}
 POST /v1/external/channels/{connection_id}/confirmations
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
-用途：当 V3 判断某个动作需要确认时，第三方页面或机器人把用户确认结果提交给 V3。
+用途：当 DataMax 判断某个动作需要确认时，第三方页面或机器人把用户确认结果提交给 DataMax。
 
 请求示例：
 
@@ -887,21 +887,21 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 说明 |
 | --- | --- |
-| `assistant_run_id` | V3 返回的任务 ID |
-| `action_id` | V3 在需要确认的回复中返回的外部动作 ID；如未传，V3 会兼容使用 `confirmation_external_id` 查找 |
+| `assistant_run_id` | DataMax 返回的任务 ID |
+| `action_id` | DataMax 在需要确认的回复中返回的外部动作 ID；如未传，DataMax 会兼容使用 `confirmation_external_id` 查找 |
 | `confirmation_external_id` | 第三方侧确认记录 ID，便于对账和幂等 |
 | `sender_external_user_id` | 做出确认或拒绝的第三方用户 ID |
 | `decision` | `approved` 或 `rejected` |
-| `comment` | 用户确认备注；V3 仅保存必要摘要 |
+| `comment` | 用户确认备注；DataMax 仅保存必要摘要 |
 | `idempotency_key` | 第三方确认回调的幂等键 |
 | `confirmed_at` | 第三方确认发生时间 |
 
 ## 11. 第三方文档库接口
 
-V3 支持两种文档接入方式：
+DataMax 支持两种文档接入方式：
 
-- 拉取模式：V3 按计划调用第三方文档接口；
-- 推送模式：第三方主动把文档、版本和权限推送给 V3。
+- 拉取模式：DataMax 按计划调用第三方文档接口；
+- 推送模式：第三方主动把文档、版本和权限推送给 DataMax。
 
 新接入项目建议优先采用拉取模式，便于双方处理重试、分页和增量同步。
 
@@ -952,8 +952,8 @@ GET /documents
 | `items[].revision` | 文档版本标识；正文变化时必须变化 |
 | `items[].updated_at` | 第三方文档更新时间，ISO 8601 格式 |
 | `items[].deleted` | 是否已删除 |
-| `items[].content_url` | V3 拉取正文或文件的短期受控 URL |
-| `items[].acl_url` | V3 拉取文档访问范围的短期受控 URL |
+| `items[].content_url` | DataMax 拉取正文或文件的短期受控 URL |
+| `items[].acl_url` | DataMax 拉取文档访问范围的短期受控 URL |
 | `next_cursor` | 下一页游标；没有下一页时传 `null` 或省略 |
 
 ### 11.2 文档正文
@@ -1023,18 +1023,18 @@ GET /documents/{document_external_id}/acl
 - `allow` 表示可访问主体；
 - `deny` 表示明确拒绝主体；
 - 主体可以是用户、部门、用户组、角色或租户；
-- V3 会按第三方提供的访问范围处理文档问答；
-- 文档访问范围变化后，应尽快让 V3 重新同步。
+- DataMax 会按第三方提供的访问范围处理文档问答；
+- 文档访问范围变化后，应尽快让 DataMax 重新同步。
 
-### 11.4 第三方触发 V3 文档解析
+### 11.4 第三方触发 DataMax 文档解析
 
-第三方上传或更新文档后，可以主动通知 V3 下载并解析单个文档：
+第三方上传或更新文档后，可以主动通知 DataMax 下载并解析单个文档：
 
 ```http
 POST /v1/external/channels/{connection_id}/documents/parse
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1061,15 +1061,15 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `source_id` | 是 | V3 资料源 ID，通常由 V3 联调配置给出 |
-| `dataset_id` | 否 | V3 分配的数据集 UUID；传非 UUID 时会被视为无效或返回数据集不存在 |
-| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道 V3 数据集 UUID 时建议传这个字段。UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
+| `source_id` | 是 | DataMax 资料源 ID，通常由 DataMax 联调配置给出 |
+| `dataset_id` | 否 | DataMax 分配的数据集 UUID；传非 UUID 时会被视为无效或返回数据集不存在 |
+| `dataset_external_id` | 否 | 第三方数据集或资料库稳定 ID；不知道 DataMax 数据集 UUID 时建议传这个字段。UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
 | `dataset_title` | 否 | 数据集展示名 |
 | `document_external_id` | 是 | 第三方文档稳定 ID；后续对话用 `available_document_external_ids` 引用同一个值 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；内容更新时建议变化 |
 | `title` | 否 | 文档标题或文件名 |
-| `content_type` | 否 | MIME 类型；不传时 V3 会尝试从文件名或响应头推断 |
-| `content_url` | 是 | V3 可下载原始文件的短期 URL；不要使用长期公开链接 |
+| `content_type` | 否 | MIME 类型；不传时 DataMax 会尝试从文件名或响应头推断 |
+| `content_url` | 是 | DataMax 可下载原始文件的短期 URL；不要使用长期公开链接 |
 | `metadata` | 否 | 非敏感业务元数据对象，用于后续查询、展示或双方对账 |
 | `idempotency_key` | 否 | 本次解析请求幂等键 |
 | `allow_http_loopback` | 否 | 仅本地联调使用，允许 HTTP loopback 下载；生产不要开启 |
@@ -1077,35 +1077,35 @@ Authorization: Bearer <V3 inbound token>
 数据集归属说明：
 
 - `dataset_external_id` 是第三方业务侧稳定的资料库、空间或项目 ID；可以是 UUID，只要同一个业务分组长期复用同一个值。不要传每次请求生成的临时会话 ID、文件 ID 或下载任务 ID。
-- V3 会按稳定 `dataset_external_id` 建立资料库分组；同一分组后续对话传 `dataset_external_id` 或 `dataset_external_ids` 即可授权整组文档。
-- 第三方解析自动创建的 V3 数据集和文档归属于 V3 内部第三方系统账户；系统账户按第三方通道连接区分，同一连接的解析入库、文档分组移动和对话运行使用同一个系统账户，支持多个第三方隔离和审计。
+- DataMax 会按稳定 `dataset_external_id` 建立资料库分组；同一分组后续对话传 `dataset_external_id` 或 `dataset_external_ids` 即可授权整组文档。
+- 第三方解析自动创建的 DataMax 数据集和文档归属于 DataMax 内部第三方系统账户；系统账户按第三方通道连接区分，同一连接的解析入库、文档分组移动和对话运行使用同一个系统账户，支持多个第三方隔离和审计。
 - 这些系统自动解析源默认不出现在普通资料库列表中；第三方问答按会话授权的 `available_document_external_ids`、稳定 `dataset_external_id` 单分组或 `dataset_external_ids` 多分组供料。
 
 解析响应字段说明：
 
 | 字段 | 说明 |
 | --- | --- |
-| `accepted` | V3 是否接收解析请求 |
-| `source_id` | V3 回显的资料源 ID |
-| `document_external_id` | V3 回显的第三方文档 ID |
-| `revision_external_id` | V3 回显的第三方版本 ID |
-| `document.id` | V3 返回的文档 ID，用于状态排查和后续接口关联 |
-| `document.dataset_id` | 文档归属的 V3 数据集 UUID |
-| `document.title` | V3 记录的文档标题 |
-| `document.content_type` | V3 记录或推断的 MIME 类型 |
+| `accepted` | DataMax 是否接收解析请求 |
+| `source_id` | DataMax 回显的资料源 ID |
+| `document_external_id` | DataMax 回显的第三方文档 ID |
+| `revision_external_id` | DataMax 回显的第三方版本 ID |
+| `document.id` | DataMax 返回的文档 ID，用于状态排查和后续接口关联 |
+| `document.dataset_id` | 文档归属的 DataMax 数据集 UUID |
+| `document.title` | DataMax 记录的文档标题 |
+| `document.content_type` | DataMax 记录或推断的 MIME 类型 |
 | `document.lifecycle` | 文档生命周期；`indexed` 表示已经完成索引并可作为检索证据 |
 | `document.parse_status` / `document.parseStatus` | 文档解析状态 |
 | `document.parse_quality_status` / `document.parseQualityStatus` | 解析质量状态 |
 | `document.parse_quality_summary` / `document.parseQualitySummary` | 解析质量摘要对象 |
-| `document.created_at` | V3 文档记录创建时间 |
-| `document.updated_at` | V3 文档记录更新时间 |
+| `document.created_at` | DataMax 文档记录创建时间 |
+| `document.updated_at` | DataMax 文档记录更新时间 |
 | `workflow_execution` | 可选排查信息；正常对接可忽略 |
 
 解析状态查询：
 
 ```http
 GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 解析详情响应字段说明：
@@ -1124,25 +1124,25 @@ Authorization: Bearer <V3 inbound token>
 | `ingest` | 解析入库摘要，例如标题、内容类型和分块数 |
 | `workflow` | 可选排查状态摘要；正常对接可忽略 |
 | `latest` | 最新版本对应的文档详情对象 |
-| `documents` | 与该外部文档 ID 匹配的 V3 文档记录列表 |
-| `documents[].document_id` | V3 返回的文档 ID |
-| `documents[].dataset_id` | V3 数据集 UUID |
-| `documents[].title` | V3 文档标题 |
-| `documents[].content_type` | V3 文档 MIME 类型 |
+| `documents` | 与该外部文档 ID 匹配的 DataMax 文档记录列表 |
+| `documents[].document_id` | DataMax 返回的文档 ID |
+| `documents[].dataset_id` | DataMax 数据集 UUID |
+| `documents[].title` | DataMax 文档标题 |
+| `documents[].content_type` | DataMax 文档 MIME 类型 |
 | `documents[].lifecycle` | 单条文档记录生命周期 |
 | `documents[].revision_external_id` | 第三方版本 ID |
-| `documents[].created_at` | V3 文档记录创建时间 |
-| `documents[].updated_at` | V3 文档记录更新时间 |
+| `documents[].created_at` | DataMax 文档记录创建时间 |
+| `documents[].updated_at` | DataMax 文档记录更新时间 |
 
 ### 11.5 第三方移动文档分组
 
-第三方把文档从一个资料库/分组移动到另一个资料库/分组时，可以按 `document_external_id` 修改 V3 侧归属的数据集。该接口不重新下载文档、不重新解析文档。
+第三方把文档从一个资料库/分组移动到另一个资料库/分组时，可以按 `document_external_id` 修改 DataMax 侧归属的数据集。该接口不重新下载文档、不重新解析文档。
 
 ```http
 PATCH /v1/external/channels/{connection_id}/documents/{document_external_id}/dataset
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1160,39 +1160,39 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `source_id` | 条件必填 | V3 资料源 ID；连接配置了默认资料源或 V3 可从文档记录推断时可省略 |
-| `dataset_external_id` | 条件必填 | 目标第三方数据集或资料库稳定 ID；和 `dataset_id` 二选一。目标不存在时 V3 自动创建。UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
-| `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 二选一 |
+| `source_id` | 条件必填 | DataMax 资料源 ID；连接配置了默认资料源或 DataMax 可从文档记录推断时可省略 |
+| `dataset_external_id` | 条件必填 | 目标第三方数据集或资料库稳定 ID；和 `dataset_id` 二选一。目标不存在时 DataMax 自动创建。UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID；不要传每次请求生成的临时任务 ID 或文件 ID |
+| `dataset_id` | 条件必填 | 目标 DataMax 数据集 UUID；和 `dataset_external_id` 二选一 |
 | `dataset_title` | 否 | 目标数据集展示名；自动创建目标数据集时使用 |
 | `revision_external_id` | 否 | 第三方文档版本 ID；不传则移动同一 `document_external_id` 下的全部版本 |
 
-移动目标说明：`dataset_external_id` 仍应传业务稳定分组。若第三方使用 UUID 作为稳定分组 ID，V3 会按该 UUID 建立或复用对应资料库；响应中的 `dataset_id` 会回显实际归属的数据集。
+移动目标说明：`dataset_external_id` 仍应传业务稳定分组。若第三方使用 UUID 作为稳定分组 ID，DataMax 会按该 UUID 建立或复用对应资料库；响应中的 `dataset_id` 会回显实际归属的数据集。
 
 响应字段说明：
 
 | 字段 | 说明 |
 | --- | --- |
 | `accepted` | 是否完成移动 |
-| `source_id` | V3 回显的资料源 ID |
-| `document_external_id` | V3 回显的第三方文档 ID |
+| `source_id` | DataMax 回显的资料源 ID |
+| `document_external_id` | DataMax 回显的第三方文档 ID |
 | `revision_external_id` | 本次限定的第三方版本 ID；未限定时为空 |
-| `dataset_id` | 移动后的 V3 数据集 UUID |
+| `dataset_id` | 移动后的 DataMax 数据集 UUID |
 | `dataset_external_id` | 移动后的第三方数据集或资料库稳定 ID |
-| `moved_count` | 实际移动的 V3 文档记录数量 |
-| `previous_dataset_ids` | 移动前的 V3 数据集 UUID 列表 |
-| `documents` | 移动后的 V3 文档摘要列表 |
+| `moved_count` | 实际移动的 DataMax 文档记录数量 |
+| `previous_dataset_ids` | 移动前的 DataMax 数据集 UUID 列表 |
+| `documents` | 移动后的 DataMax 文档摘要列表 |
 
 ### 11.6 第三方数据库对接
 
-数据库源可以由 V3 侧先完成连接、表映射、画像和同步配置，也可以由第三方通道先登记业务库。典型方式和 8 服务器现有 `hy-sql-traffic-area` 类似：V3 托管数据库密钥和表白名单，第三方或联调方通过 API 查看状态、触发同步；同步后的数据进入 V3 数据集，再用于问答、分析和静态页报表。
+数据库源可以由 DataMax 侧先完成连接、表映射、画像和同步配置，也可以由第三方通道先登记业务库。典型方式和 8 服务器现有 `hy-sql-traffic-area` 类似：DataMax 托管数据库密钥和表白名单，第三方或联调方通过 API 查看状态、触发同步；同步后的数据进入 DataMax 数据集，再用于问答、分析和静态页报表。
 
-生产建议由 V3 侧把连接串保存为服务端环境变量或密钥绑定，接口里只出现 `connection_env` 这类密钥引用。第三方若只能先传 `connection_url`、`username`、`password`，V3 第一版不会把明文凭据写入 PostgreSQL、日志或模型上下文，只创建 `pending_secret_binding` 状态的业务库记录，后续绑定服务端密钥后再同步。第三方通道只能查询或使用通道配置中允许的数据库源状态：`default_source_id` / `defaultSourceId`，或 `allowed_database_source_ids` / `allowedDatabaseSourceIds` / `database_source_ids` / `databaseSourceIds` / `allowed_source_ids` / `allowedSourceIds` / `database_sources`。
+生产建议由 DataMax 侧把连接串保存为服务端环境变量或密钥绑定，接口里只出现 `connection_env` 这类密钥引用。第三方若只能先传 `connection_url`、`username`、`password`，DataMax 第一版不会把明文凭据写入 PostgreSQL、日志或模型上下文，只创建 `pending_secret_binding` 状态的业务库记录，后续绑定服务端密钥后再同步。第三方通道只能查询或使用通道配置中允许的数据库源状态：`default_source_id` / `defaultSourceId`，或 `allowed_database_source_ids` / `allowedDatabaseSourceIds` / `database_source_ids` / `databaseSourceIds` / `allowed_source_ids` / `allowedSourceIds` / `database_sources`。
 
 最小接入顺序：
 
-1. 创建/配置数据库源：第三方调用通道接口登记 `source_external_id`，或由 V3 运维预先配置 `source_id`、数据库类型、密钥引用、库名、表映射。
+1. 创建/配置数据库源：第三方调用通道接口登记 `source_external_id`，或由 DataMax 运维预先配置 `source_id`、数据库类型、密钥引用、库名、表映射。
 2. 联调验证：调用连接测试、库表扫描、表预览、语义画像。
-3. 同步入库：把数据库行清洗成 V3 文档/数据集。
+3. 同步入库：把数据库行清洗成 DataMax 文档/数据集。
 4. 状态查询：第三方通道查询数据库源和同步结果。
 5. 聊天/报表：在聊天事件里传 `business_datasource_ids` 或同步后的数据集范围，生成问答或静态页报表。
 
@@ -1226,13 +1226,13 @@ Authorization: Bearer <V3 inbound token>
 
 #### 11.6.1 创建/更新数据库源（第三方通道）
 
-第三方创建或更新业务库时调用。第一版外部自助接口只支持 MySQL。若传 `connection_env`，表示 V3 服务器已配置同名数据库连接串环境变量；若只传原始 `connection_url` / `username` / `password`，V3 只登记为 `pending_secret_binding`，不会明文落库。
+第三方创建或更新业务库时调用。第一版外部自助接口只支持 MySQL。若传 `connection_env`，表示 DataMax 服务器已配置同名数据库连接串环境变量；若只传原始 `connection_url` / `username` / `password`，DataMax 只登记为 `pending_secret_binding`，不会明文落库。
 
 ```http
 POST /v1/external/channels/{connection_id}/database-sources
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1258,15 +1258,15 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `connection_id` | 是 | 路径参数；V3 分配的第三方通道 ID |
+| `connection_id` | 是 | 路径参数；DataMax 分配的第三方通道 ID |
 | `source_external_id` | 是 | 第三方稳定业务库 ID；后续聊天可放入 `business_datasource_ids` |
 | `name` | 否 | 业务库展示名 |
 | `connector_kind` | 否 | 第一版只支持 `mysql`；其他类型返回 `unsupported_connector_kind` |
-| `connection_env` | 可用库建议必填 | V3 服务器环境变量名；有它时可进入连接测试、画像和同步链路 |
+| `connection_env` | 可用库建议必填 | DataMax 服务器环境变量名；有它时可进入连接测试、画像和同步链路 |
 | `connection_url` | 否 | 原始连接串；未同时传 `connection_env` 时只创建待密钥绑定记录，不明文落库 |
 | `username` / `password` | 否 | 原始账号密码；不明文落库，不进入模型上下文 |
 | `database` | `connection_env` 模式必填 | MySQL 数据库名 |
-| `tables` | 否 | 表名白名单；为空表示后续由 V3 画像/配置决定 |
+| `tables` | 否 | 表名白名单；为空表示后续由 DataMax 画像/配置决定 |
 | `dataset_external_id` | 否 | 目标稳定数据集/资料库 ID |
 | `dataset_title` | 否 | 自动创建数据集时使用 |
 | `idempotency_key` | 否 | 幂等键 |
@@ -1296,17 +1296,17 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-若未提供 `connection_env` 但提供了原始连接信息，`credential_status` 返回 `pending_secret_binding`。第三方可以先保存 `source_id`，后续由 V3 侧完成密钥绑定后再查询状态或触发同步。
+若未提供 `connection_env` 但提供了原始连接信息，`credential_status` 返回 `pending_secret_binding`。第三方可以先保存 `source_id`，后续由 DataMax 侧完成密钥绑定后再查询状态或触发同步。
 
 #### 11.6.2 连接测试
 
-用于确认 V3 能访问数据库，但不返回密码。
+用于确认 DataMax 能访问数据库，但不返回密码。
 
 ```http
 POST /v1/external/sources/{source_id}/database/test
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1321,8 +1321,8 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `source_id` | 是 | 路径参数；V3 数据库源 ID，例如 `hy-sql-traffic-area` |
-| `database_source` | 否 | 临时覆盖配置；生产通常传空对象，使用 V3 已保存的服务端配置；不能传密码、token、原始连接串等敏感字段 |
+| `source_id` | 是 | 路径参数；DataMax 数据库源 ID，例如 `hy-sql-traffic-area` |
+| `database_source` | 否 | 临时覆盖配置；生产通常传空对象，使用 DataMax 已保存的服务端配置；不能传密码、token、原始连接串等敏感字段 |
 
 #### 11.6.3 扫描库表结构
 
@@ -1332,7 +1332,7 @@ Authorization: Bearer <V3 inbound token>
 POST /v1/external/sources/{source_id}/database/schema
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1375,7 +1375,7 @@ Authorization: Bearer <V3 inbound token>
 POST /v1/external/sources/{source_id}/database/preview
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1398,13 +1398,13 @@ Authorization: Bearer <V3 inbound token>
 
 #### 11.6.5 数据库语义画像
 
-用于让 V3 判断哪些字段像时间、指标、维度、实体或文本，为后续问答和报表做准备。
+用于让 DataMax 判断哪些字段像时间、指标、维度、实体或文本，为后续问答和报表做准备。
 
 ```http
 POST /v1/external/sources/{source_id}/database/profile
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1450,7 +1450,7 @@ Authorization: Bearer <V3 inbound token>
 POST /v1/external/sources/{source_id}/database/apply-profile
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1485,7 +1485,7 @@ Authorization: Bearer <V3 inbound token>
 POST /v1/external/sources/{source_id}/database/aggregate
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1502,15 +1502,15 @@ Authorization: Bearer <V3 inbound token>
 }
 ```
 
-#### 11.6.8 同步数据库到 V3 数据集
+#### 11.6.8 同步数据库到 DataMax 数据集
 
-把数据库行清洗为 V3 文档/证据，后续问答和报表都走数据集链路。
+把数据库行清洗为 DataMax 文档/证据，后续问答和报表都走数据集链路。
 
 ```http
 POST /v1/external/sources/{source_id}/sync
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1539,8 +1539,8 @@ Authorization: Bearer <V3 inbound token>
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `sync_kind` | 否 | `incremental` 增量同步；`full` 全量同步 |
-| `dataset_id` | 条件必填 | 目标 V3 数据集 UUID；和 `dataset_external_id` 至少传一个，或数据库源已配置 `default_dataset_id` |
-| `dataset_external_id` | 条件必填 | 第三方稳定数据集 ID；V3 可自动创建或复用 |
+| `dataset_id` | 条件必填 | 目标 DataMax 数据集 UUID；和 `dataset_external_id` 至少传一个，或数据库源已配置 `default_dataset_id` |
+| `dataset_external_id` | 条件必填 | 第三方稳定数据集 ID；DataMax 可自动创建或复用 |
 | `dataset_title` | 否 | 自动创建数据集时使用 |
 | `checkpoint` | 否 | 增量同步游标；结构由具体表和业务约定决定 |
 | `connector_context.database_source` | 否 | 本次同步的数据库源覆盖项；生产只允许安全字段 |
@@ -1569,15 +1569,15 @@ Authorization: Bearer <V3 inbound token>
 ```http
 GET /v1/external/channels/{connection_id}/database-sources/{source_external_id}/status
 Host: v3.elepcloud.com
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 路径字段说明：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `connection_id` | 是 | V3 分配的第三方通道 ID |
-| `source_external_id` | 是 | 已授权给该通道的 V3 数据库源 ID；通常也是第三方侧登记的数据库源稳定 ID |
+| `connection_id` | 是 | DataMax 分配的第三方通道 ID |
+| `source_external_id` | 是 | 已授权给该通道的 DataMax 数据库源 ID；通常也是第三方侧登记的数据库源稳定 ID |
 
 响应示例：
 
@@ -1645,7 +1645,7 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 说明 |
 | --- | --- |
-| `source_id` | V3 数据库源 ID |
+| `source_id` | DataMax 数据库源 ID |
 | `connector_kind` | 数据源类型；当前主要为 `mysql` |
 | `redacted_summary` | 脱敏连接摘要，只包含数据库名、服务端密钥引用、映射表数量和表名 |
 | `status.config_valid` | 数据库源脱敏配置是否可解析 |
@@ -1664,13 +1664,13 @@ Authorization: Bearer <V3 inbound token>
 
 #### 11.6.10 聊天和报表使用数据库数据
 
-数据库同步完成后，不在聊天里传 SQL，也不传数据库密码。聊天可传 `business_datasource_ids` 指定本轮业务库范围，也可传同步后的 `dataset_external_ids` 指定数据集范围。若两者同时传，V3 会按已授权业务库和数据集范围供料，不会因为只传通道默认源而自动扩大到所有库。
+数据库同步完成后，不在聊天里传 SQL，也不传数据库密码。聊天可传 `business_datasource_ids` 指定本轮业务库范围，也可传同步后的 `dataset_external_ids` 指定数据集范围。若两者同时传，DataMax 会按已授权业务库和数据集范围供料，不会因为只传通道默认源而自动扩大到所有库。
 
 ```http
 POST /v1/external/channels/{connection_id}/events
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -1717,36 +1717,36 @@ Authorization: Bearer <V3 inbound token>
 | `reply.card.public_url` | 最终公开页面 URL；为空表示还在生成或发布失败 |
 | `reply.card.status` | 页面生成/发布细分状态；第三方按不透明状态记录并结合 `status_url` 轮询 |
 | `reply.card.generated_artifact_url` | 已生成产物 URL |
-| `reply.card.template_reference_id` | 本次使用的静态页模板引用；若为 `generated-static-page:{draft_id}`，表示来自 V3 已发布页面模板库 |
+| `reply.card.template_reference_id` | 本次使用的静态页模板引用；若为 `generated-static-page:{draft_id}`，表示来自 DataMax 已发布页面模板库 |
 | `reply.card.template_match_policy` | 模板命中策略：`exact_dataset_artifact_key` 表示相同数据集组合直接复用，`dataset_overlap` 表示按数据集交集套用模板，`explicit_or_inferred_template` 表示显式或意图推断模板 |
 | `reply.card.relaxed_template_match` | 当 `template_match_policy=dataset_overlap` 时返回历史模板匹配摘要；第三方可记录但不需要参与计算 |
 | `reply.card.style_reuse_policy` / `reply.card.data_refresh_policy` | 默认复用模板样式并按本轮授权数据集/业务库刷新数据；客户明确要求换风格时才重新进入新的页面设计流程 |
 | `artifact_links` | 产物链接数组；第三方页面可直接展示 |
 
-已发布并被接受的静态页会进入 V3 模板库。后续同一数据集组合优先复用已有页面；若数据集组合不完全相同但存在交集，V3 可自动套用该模板的视觉风格、布局结构和组件组织，事实数据仍以当前会话授权范围为准。
+已发布并被接受的静态页会进入 DataMax 模板库。后续同一数据集组合优先复用已有页面；若数据集组合不完全相同但存在交集，DataMax 可自动套用该模板的视觉风格、布局结构和组件组织，事实数据仍以当前会话授权范围为准。
 
 #### 11.6.11 状态判断
 
 | 场景 | 判断方式 | 第三方动作 |
 | --- | --- | --- |
-| 连接失败 | `database/test` 返回错误 | 检查网络、白名单、账号权限和 V3 密钥配置 |
+| 连接失败 | `database/test` 返回错误 | 检查网络、白名单、账号权限和 DataMax 密钥配置 |
 | schema 为空 | `schema.table_count=0` | 检查库名、账号权限、表过滤 |
 | 同步中 | `sync_readiness.signal=sync_running` | 页面提示处理中，稍后重查 |
-| 数据集不可问 | `dataset_readiness.signal` 不是 `ready` | 等待同步/索引，或让 V3 重跑同步 |
+| 数据集不可问 | `dataset_readiness.signal` 不是 `ready` | 等待同步/索引，或让 DataMax 重跑同步 |
 | 行转换失败 | `row_failure_groups` 非空 | 根据表名、原因和主键样本修正字段映射 |
-| 报表缺样本行 | `validation_summary.warnings`、`card.missing_evidence` 或页面缺口说明 | V3 会先扩大供料并补充样本；仍不足时按已有数据先出页面，第三方可继续追问要求补充或调整 |
+| 报表缺样本行 | `validation_summary.warnings`、`card.missing_evidence` 或页面缺口说明 | DataMax 会先扩大供料并补充样本；仍不足时按已有数据先出页面，第三方可继续追问要求补充或调整 |
 
 生产注意：
 
 - 第三方不要在公开接口里传数据库密码、连接串、token。
-- V3 只按配置白名单访问表，不执行第三方传入的任意 SQL。
-- 数据库同步后的问答/报表使用 V3 数据集范围，不直接把原始表 dump 给模型。
-- 同一个数据库源可以同步到不同 V3 数据集，用于不同客户、工作区或权限范围。
+- DataMax 只按配置白名单访问表，不执行第三方传入的任意 SQL。
+- 数据库同步后的问答/报表使用 DataMax 数据集范围，不直接把原始表 dump 给模型。
+- 同一个数据库源可以同步到不同 DataMax 数据集，用于不同客户、工作区或权限范围。
 - 数据库字段画像和表映射是报表质量关键；正式接入前至少跑一次 schema、profile、preview 和小范围 sync。
 
 ## 12. 用户与组织接口
 
-第三方需要让 V3 能够识别外部用户是谁，以及该用户属于哪些组织和角色。
+第三方需要让 DataMax 能够识别外部用户是谁，以及该用户属于哪些组织和角色。
 
 建议提供以下接口：
 
@@ -1795,7 +1795,7 @@ GET /users/{user_external_id}/memberships
 | `items[].updated_at` | 用户资料最后更新时间 |
 | `next_cursor` | 下一页游标；没有下一页时传 `null` 或省略 |
 
-V3 计算有效权限时会综合：
+DataMax 计算有效权限时会综合：
 
 - 用户直接权限；
 - 部门权限；
@@ -1808,13 +1808,13 @@ V3 计算有效权限时会综合：
 
 ## 13. 产物发布接口
 
-当 V3 生成报告、页面、文档、表格、图片或其他产物时，可按项目配置发布到第三方系统。
+当 DataMax 生成报告、页面、文档、表格、图片或其他产物时，可按项目配置发布到第三方系统。
 
-V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，必须先完成用户确认；确认后或无需确认的动作，会由 V3 发送到第三方配置的产物 endpoint。观测接口会返回 `artifact_summary`，用于查看发布、撤销、失败和待确认数量。
+DataMax 支持产物发布、状态查询和撤销。撤销属于高风险动作，必须先完成用户确认；确认后或无需确认的动作，会由 DataMax 发送到第三方配置的产物 endpoint。观测接口会返回 `artifact_summary`，用于查看发布、撤销、失败和待确认数量。
 
-页面类产物支持快速 HTML 交付模式：V3 可以按模板和聊天要求生成可浏览器打开的 HTML，并返回预览和下载地址。
+页面类产物支持快速 HTML 交付模式：DataMax 可以按模板和聊天要求生成可浏览器打开的 HTML，并返回预览和下载地址。
 
-对于第三方发起的复杂建表/静态页请求，推荐仍走聊天入口，但新接入可使用更简单的产物语义字段：`artifact_type: "static_page"`，模板用一级字段 `template` 表达。V3 会自动补齐产物模式、图文输出和内部 `document_template_skill`，并把模板文档作为结构/版式/字段组织参考；事实内容仍以本会话已授权资料和检索证据为准。
+对于第三方发起的复杂建表/静态页请求，推荐仍走聊天入口，但新接入可使用更简单的产物语义字段：`artifact_type: "static_page"`，模板用一级字段 `template` 表达。DataMax 会自动补齐产物模式、图文输出和内部 `document_template_skill`，并把模板文档作为结构/版式/字段组织参考；事实内容仍以本会话已授权资料和检索证据为准。
 
 推荐请求片段：
 
@@ -1834,23 +1834,23 @@ V3 支持产物发布、状态查询和撤销。撤销属于高风险动作，�
 }
 ```
 
-兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可继续在 `requested_skills[].arguments.output_type` 中传 `static_page`。若同时传 `template` 和旧 skill，V3 会按模板文档去重。
+兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可继续在 `requested_skills[].arguments.output_type` 中传 `static_page`。若同时传 `template` 和旧 skill，DataMax 会按模板文档去重。
 
-V3 会自动完成页面生成与发布，并通过 SSE/状态卡片展示过程进度。生成过程不作为阻塞确认点，也不要求第三方调用内部生成能力。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 为准。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。第三方不需要做额外确认、下载或二次提交。
+DataMax 会自动完成页面生成与发布，并通过 SSE/状态卡片展示过程进度。生成过程不作为阻塞确认点，也不要求第三方调用内部生成能力。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 为准。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。第三方不需要做额外确认、下载或二次提交。
 
-静态页状态卡和最终发布卡会带 `reply.card.recipient_delivery`、`reply.card.permission_review_status` 和 `reply.card.editable_after_publish`。第三方操作人员可以先发送基础页面链接；若需要给总部、分店店总或指定人员发送不同权限口径的页面，继续传用户-角色-门店/区域范围映射，V3 可基于已生成页面继续调整并产出新的单独链接。
+静态页状态卡和最终发布卡会带 `reply.card.recipient_delivery`、`reply.card.permission_review_status` 和 `reply.card.editable_after_publish`。第三方操作人员可以先发送基础页面链接；若需要给总部、分店店总或指定人员发送不同权限口径的页面，继续传用户-角色-门店/区域范围映射，DataMax 可基于已生成页面继续调整并产出新的单独链接。
 
 第三方拿到 `assistant_run_id` 后，可以查询该运行的最新第三方回复：
 
 ```http
 GET /v1/external/channels/{connection_id}/assistant-runs/{assistant_run_id}/reply
 Host: v3.elepcloud.com
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
-该接口返回与 `/events` 相同的 `ExternalChannelEventResponse`。如果仍在生成、重试或后台继续，`reply.reply_type=task_status` 且顶层 `reply.task_status=processing`，细分阶段读取 `reply.card.status`，此时卡片会带 `reply.card.status_url` 和 `reply.card.poll_after_seconds`，第三方应按建议间隔继续轮询或提示 V3 正在补充处理；如果已发布，`reply.reply_type=artifact_link`，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 为最终页面链接，动态页会额外带 `reply.card.data_url` / `reply.card.data_snapshot_url`；只有顶层 `reply.task_status=failed` 才表示不可继续失败/取消，此时提示稍后重试或等待 V3 人工处理。第三方也可以用原 `/events` 请求体和同一 `idempotency_key` 重试，V3 会在最终产物发布后返回同一个 artifact link。
+该接口返回与 `/events` 相同的 `ExternalChannelEventResponse`。如果仍在生成、重试或后台继续，`reply.reply_type=task_status` 且顶层 `reply.task_status=processing`，细分阶段读取 `reply.card.status`，此时卡片会带 `reply.card.status_url` 和 `reply.card.poll_after_seconds`，第三方应按建议间隔继续轮询或提示 DataMax 正在补充处理；如果已发布，`reply.reply_type=artifact_link`，`reply.task_status=static_page_published`，`reply.artifact_links[0]` 为最终页面链接，动态页会额外带 `reply.card.data_url` / `reply.card.data_snapshot_url`；只有顶层 `reply.task_status=failed` 才表示不可继续失败/取消，此时提示稍后重试或等待 DataMax 人工处理。第三方也可以用原 `/events` 请求体和同一 `idempotency_key` 重试，DataMax 会在最终产物发布后返回同一个 artifact link。
 
-第三方不需要关心 V3 内部生成配置，只需按响应字段判断是否已拿到最终 HTML 页面，或仍在自动发布队列。
+第三方不需要关心 DataMax 内部生成配置，只需按响应字段判断是否已拿到最终 HTML 页面，或仍在自动发布队列。
 
 快速 HTML 生成可使用以下选项：
 
@@ -1873,7 +1873,7 @@ Authorization: Bearer <V3 inbound token>
 ```http
 GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}
 Host: v3.elepcloud.com
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 状态响应返回 `status`、`html_preview_url` / `htmlPreviewUrl`、`html_download_url` / `htmlDownloadUrl`、`download_url` / `downloadUrl`、`retryable_error_reason` / `retryableErrorReason`。`status=rendered` 且存在下载地址时可以下载；`status=queued|rendering` 时继续轮询；`status=failed` 时按 `retryable_error_reason` 决定重试或人工处理。
@@ -1882,9 +1882,9 @@ Authorization: Bearer <V3 inbound token>
 
 | 字段 | 说明 |
 | --- | --- |
-| `id` | V3 静态页渲染输出 ID，即路径中的 `render_output_id` |
+| `id` | DataMax 静态页渲染输出 ID，即路径中的 `render_output_id` |
 | `draft_id` | 对应的静态页草稿 ID |
-| `assistant_run_id` | 触发渲染的 V3 任务 ID |
+| `assistant_run_id` | 触发渲染的 DataMax 任务 ID |
 | `status` | `queued`、`rendering`、`rendered`、`failed` 或 `cancelled` |
 | `html` | HTML 内容；第三方通常优先使用预览或下载 URL |
 | `html_preview_url` / `htmlPreviewUrl` | 浏览器 inline 预览地址 |
@@ -1899,7 +1899,7 @@ Authorization: Bearer <V3 inbound token>
 ```http
 GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/preview
 Host: v3.elepcloud.com
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 第三方下载 HTML：
@@ -1907,10 +1907,10 @@ Authorization: Bearer <V3 inbound token>
 ```http
 GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download
 Host: v3.elepcloud.com
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
-预览响应为 inline `text/html; charset=utf-8`；下载响应为 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存到自己的文件库或下载中心；浏览器页面不得持有 V3 token。`render_output_id` 必须属于对应 `connection_id` 的外部通道任务。
+预览响应为 inline `text/html; charset=utf-8`；下载响应为 `text/html; charset=utf-8` 附件。第三方应由服务器端带 token 下载后转存到自己的文件库或下载中心；浏览器页面不得持有 DataMax token。`render_output_id` 必须属于对应 `connection_id` 的外部通道任务。
 
 如项目配置直接产物接口，可按双方约定使用：
 
@@ -1926,7 +1926,7 @@ POST /artifacts
 POST /artifacts/{artifact_external_id}/revoke
 ```
 
-V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式，例如：
+DataMax 派发到第三方产物 endpoint 的请求会采用统一外部动作格式，例如：
 
 ```json
 {
@@ -1955,13 +1955,13 @@ V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式�
 
 | 字段 | 说明 |
 | --- | --- |
-| `action_id` | V3 外部动作运行 ID |
-| `assistant_run_id` | 触发动作的 V3 任务 ID |
+| `action_id` | DataMax 外部动作运行 ID |
+| `assistant_run_id` | 触发动作的 DataMax 任务 ID |
 | `action_type` | 动作类型，例如 `external_artifact.publish`、`external_artifact.status` 或 `external_artifact.revoke` |
 | `risk_level` | 动作风险级别，例如 `read_only`、`low_risk_write`、`high_risk_write` 或 `cross_system` |
 | `target_system` | 第三方目标系统标识 |
 | `arguments_redacted` | 脱敏后的动作参数摘要，只包含第三方执行所需的安全字段 |
-| `arguments_redacted.artifact_ref` | V3 或业务侧产物引用 |
+| `arguments_redacted.artifact_ref` | DataMax 或业务侧产物引用 |
 | `arguments_redacted.target_system` | 产物发布目标，例如客户门户或下载中心 |
 | `arguments_redacted.visibility` | 产物可见性策略，例如跟随来源权限 |
 | `confirmation_state` | 确认状态，例如 `not_required`、`pending`、`confirmed` 或 `rejected` |
@@ -1972,7 +1972,7 @@ V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式�
 | `requester_summary.sender_external_id` | 发起动作的第三方用户 ID |
 | `raw_arguments_included` | 是否包含原始参数；对外派发应为 `false` |
 
-撤销请求的 `action_type` 为 `external_artifact.revoke`，`confirmation_state` 必须已经是 `confirmed`。第三方响应中可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`，V3 只保存请求 id 和脱敏响应摘要。
+撤销请求的 `action_type` 为 `external_artifact.revoke`，`confirmation_state` 必须已经是 `confirmed`。第三方响应中可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`，DataMax 只保存请求 id 和脱敏响应摘要。
 
 发布请求示例：
 
@@ -1993,12 +1993,12 @@ V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式�
 
 | 字段 | 说明 |
 | --- | --- |
-| `artifact_id` | V3 或业务侧产物 ID |
+| `artifact_id` | DataMax 或业务侧产物 ID |
 | `artifact_type` | 产物类型，例如 `report`、`html`、`document` 或 `package` |
 | `title` | 产物标题 |
 | `owner_external_user_id` | 第三方产物所有者或发起用户 ID |
 | `visibility` | 产物可见性策略，例如 `same_as_source_permissions` |
-| `download_url` | V3 产物下载地址；应短期有效或要求服务端带 token 获取 |
+| `download_url` | DataMax 产物下载地址；应短期有效或要求服务端带 token 获取 |
 | `expires_at` | 下载地址或发布请求有效期 |
 | `idempotency_key` | 产物发布幂等键 |
 
@@ -2012,7 +2012,7 @@ V3 派发到第三方产物 endpoint 的请求会采用统一外部动作格式�
 
 ## 14. 业务动作接口
 
-V3 可以在用户授权和系统校验后调用第三方业务接口，例如：
+DataMax 可以在用户授权和系统校验后调用第三方业务接口，例如：
 
 - 创建或更新工单；
 - 发起审批；
@@ -2031,7 +2031,7 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
 | `high` | 对外发布、变更权限、发起审批 | 必须用户确认 |
 | `critical` | 财务、法务、删除、跨系统重大变更 | 需要更严格的确认和留痕 |
 
-业务动作通过第三方配置的 HTTPS endpoint 接收。高风险和跨系统动作必须等待用户确认；已确认或无需确认的动作，才会发送给第三方。若未配置派发 endpoint，V3 会返回或展示 `dispatch_blocked`，失败原因是 `dispatch_endpoint_missing`。
+业务动作通过第三方配置的 HTTPS endpoint 接收。高风险和跨系统动作必须等待用户确认；已确认或无需确认的动作，才会发送给第三方。若未配置派发 endpoint，DataMax 会返回或展示 `dispatch_blocked`，失败原因是 `dispatch_endpoint_missing`。
 
 派发 endpoint 配置键：
 
@@ -2044,9 +2044,9 @@ V3 可以在用户授权和系统校验后调用第三方业务接口，例如�
 - Bearer Token：`external_action_bearer_token`、`externalActionBearerToken`、`action_bearer_token`、`actionBearerToken`、`dispatch_bearer_token`、`dispatchBearerToken`；
 - 签名密钥：`external_action_signing_secret`、`externalActionSigningSecret`、`action_signing_secret`、`actionSigningSecret`、`dispatch_signing_secret`、`dispatchSigningSecret`。
 
-V3 不会把飞书、企微或第三方回调用的通用 `token`、`callback_token`、`verification_token` 当作外部动作派发凭证复用。若配置了派发 endpoint，但没有配置派发专用 Bearer Token 或签名密钥，V3 会返回或展示 `dispatch_blocked`，失败原因是 `dispatch_auth_missing`。
+DataMax 不会把飞书、企微或第三方回调用的通用 `token`、`callback_token`、`verification_token` 当作外部动作派发凭证复用。若配置了派发 endpoint，但没有配置派发专用 Bearer Token 或签名密钥，DataMax 会返回或展示 `dispatch_blocked`，失败原因是 `dispatch_auth_missing`。
 
-V3 派发给第三方时，只发送脱敏 payload：
+DataMax 派发给第三方时，只发送脱敏 payload：
 
 ```json
 {
@@ -2074,8 +2074,8 @@ V3 派发给第三方时，只发送脱敏 payload：
 
 | 字段 | 说明 |
 | --- | --- |
-| `action_id` | V3 外部动作运行 ID |
-| `assistant_run_id` | 触发动作的 V3 任务 ID |
+| `action_id` | DataMax 外部动作运行 ID |
+| `assistant_run_id` | 触发动作的 DataMax 任务 ID |
 | `action_type` | 业务动作类型，由双方联调约定 |
 | `risk_level` | 风险级别，决定是否必须用户确认 |
 | `target_system` | 第三方业务系统标识 |
@@ -2090,15 +2090,15 @@ V3 派发给第三方时，只发送脱敏 payload：
 | `requester_summary.sender_external_id` | 发起动作的第三方用户 ID |
 | `raw_arguments_included` | 是否包含原始参数；对外派发应为 `false` |
 
-第三方响应可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`。V3 会保存该请求 id 和脱敏后的结果摘要；第三方原始响应正文、令牌、密钥、任意 message 文本不会写入动作摘要。
+第三方响应可返回 `external_request_id`、`externalRequestId`、`request_id` 或 `requestId`。DataMax 会保存该请求 id 和脱敏后的结果摘要；第三方原始响应正文、令牌、密钥、任意 message 文本不会写入动作摘要。
 
-第三方系统异步执行完成后，可以把动作结果回传给 V3：
+第三方系统异步执行完成后，可以把动作结果回传给 DataMax：
 
 ```http
 POST /v1/external/channels/{connection_id}/actions/{action_id}/result
 Host: v3.elepcloud.com
 Content-Type: application/json
-Authorization: Bearer <V3 inbound token>
+Authorization: Bearer <DataMax inbound token>
 ```
 
 请求示例：
@@ -2110,7 +2110,7 @@ Authorization: Bearer <V3 inbound token>
   "idempotency_key": "generic_chat:tenant-ext-001:result-001",
   "completed_at": "2026-05-14T10:30:00Z",
   "code": "OK",
-  "message": "可选说明文本。V3 只记录 message 是否存在。",
+  "message": "可选说明文本。DataMax 只记录 message 是否存在。",
   "result": {
     "artifact_id": "artifact-001",
     "status": "created"
@@ -2127,14 +2127,14 @@ Authorization: Bearer <V3 inbound token>
 | `idempotency_key` | 结果回传幂等键，重复回传必须复用 |
 | `completed_at` | 第三方动作完成或状态更新时间 |
 | `code` | 第三方稳定结果码或错误码 |
-| `message` | 可选说明；V3 只保存是否存在和安全摘要，不保存原文 |
-| `result` | 第三方结果对象；V3 只保存结构摘要和字段数量 |
+| `message` | 可选说明；DataMax 只保存是否存在和安全摘要，不保存原文 |
+| `result` | 第三方结果对象；DataMax 只保存结构摘要和字段数量 |
 | `result.artifact_id` | 示例产物 ID；实际字段按业务动作约定 |
 | `result.status` | 示例结果状态；实际字段按业务动作约定 |
 
-支持的回传状态包括 `succeeded`、`failed`、`cancelled`、`rejected`、`running`、`accepted`。V3 会校验该通道是否拥有对应动作；如果派发时已经记录了 `external_request_id`，回传时不允许传入不一致的请求 ID。`message` 和任意 `result` 值不会原文保存；V3 只保存是否存在、状态/安全错误码，以及对象字段数量等结构化摘要。
+支持的回传状态包括 `succeeded`、`failed`、`cancelled`、`rejected`、`running`、`accepted`。DataMax 会校验该通道是否拥有对应动作；如果派发时已经记录了 `external_request_id`，回传时不允许传入不一致的请求 ID。`message` 和任意 `result` 值不会原文保存；DataMax 只保存是否存在、状态/安全错误码，以及对象字段数量等结构化摘要。
 
-V3 出站派发请求头：
+DataMax 出站派发请求头：
 
 ```http
 Authorization: Bearer <dispatch token>
@@ -2149,18 +2149,18 @@ X-V3-Signature: sha256=<HMAC-SHA256 hex>
 
 | 请求头 | 说明 |
 | --- | --- |
-| `Authorization` | V3 派发动作时使用的专用 Bearer Token；只在配置了派发 token 时发送 |
-| `X-V3-Connection-Id` | V3 外部连接 ID |
-| `X-V3-Timestamp` | V3 发起请求时间，第三方应校验时间窗口 |
+| `Authorization` | DataMax 派发动作时使用的专用 Bearer Token；只在配置了派发 token 时发送 |
+| `X-V3-Connection-Id` | DataMax 外部连接 ID |
+| `X-V3-Timestamp` | DataMax 发起请求时间，第三方应校验时间窗口 |
 | `X-V3-Nonce` | 一次性随机值，第三方应防重放 |
 | `X-V3-Content-SHA256` | JSON 原始请求体的 SHA-256 摘要 |
 | `X-V3-Signature` | 基于签名原文和派发签名密钥生成的 HMAC-SHA256 |
 
-只有配置派发 Bearer Token 时才会发送 `Authorization`。只有配置派发签名密钥时才会发送 `X-V3-Signature`。两者都配置时，V3 会同时发送。
+只有配置派发 Bearer Token 时才会发送 `Authorization`。只有配置派发签名密钥时才会发送 `X-V3-Signature`。两者都配置时，DataMax 会同时发送。
 
 ## 15. 回复格式
 
-V3 返回给第三方通道的内容会统一封装为回复对象。
+DataMax 返回给第三方通道的内容会统一封装为回复对象。
 
 常见回复类型：
 
@@ -2194,7 +2194,7 @@ V3 返回给第三方通道的内容会统一封装为回复对象。
   "reply_type": "requires_confirmation",
   "confirmation_id": "confirm-001",
   "title": "是否创建采购审批跟进工单？",
-  "summary": "V3 将在第三方工单系统中创建一条普通优先级工单。",
+  "summary": "DataMax 将在第三方工单系统中创建一条普通优先级工单。",
   "risk_level": "medium",
   "actions": ["approve", "reject"]
 }
@@ -2213,7 +2213,7 @@ V3 返回给第三方通道的内容会统一封装为回复对象。
 
 ## 16. 管理观测接口
 
-V3 提供观测优先的管理接口，供运营人员和 V3 控制台使用。这些接口不是第三方聊天页面，也不会暴露原始凭证、原始 provider payload 或文档正文。
+DataMax 提供观测优先的管理接口，供运营人员和 DataMax 控制台使用。这些接口不是第三方聊天页面，也不会暴露原始凭证、原始 provider payload 或文档正文。
 
 ```http
 GET /v1/external/integrations
@@ -2329,35 +2329,35 @@ POST /v1/external/integrations/{integration_id}/rotate-secret
 
 ## 18. 数据安全要求
 
-第三方和 V3 联调时，应共同遵守：
+第三方和 DataMax 联调时，应共同遵守：
 
 - 不在 URL 中传递长期有效密钥；
 - 不在日志中打印访问令牌、签名密钥、完整下载地址或敏感正文；
 - 文件下载地址应短期有效，或必须带权限校验；
 - 用户手机号、邮箱等个人信息只在必要字段中传递；
 - 文档正文只用于授权索引、问答和必要问题排查，不对无权用户暴露；
-- 权限撤销后，应让 V3 尽快同步新权限；
+- 权限撤销后，应让 DataMax 尽快同步新权限；
 - 用户停用后，应禁止继续以该用户身份发起问答或动作；
 - 跨租户数据必须物理或逻辑隔离；
 - 错误信息只返回排查所需内容，不返回服务端堆栈和密钥细节。
 
 ## 19. 部署方式
 
-### 19.1 V3 托管接入
+### 19.1 DataMax 托管接入
 
-第三方系统通过公网或专线访问 V3 接口。适用于标准 SaaS 或托管交付。
+第三方系统通过公网或专线访问 DataMax 接口。适用于标准 SaaS 或托管交付。
 
 ### 19.2 第三方网关接入
 
 第三方在自己的网络中部署网关：
 
 - 网关连接文档库、用户系统和业务系统；
-- 网关与 V3 通过 HTTPS 通信；
-- 源系统无需直接暴露给 V3。
+- 网关与 DataMax 通过 HTTPS 通信；
+- 源系统无需直接暴露给 DataMax。
 
 ### 19.3 私有化或混合部署
 
-V3、文档源、聊天通道和业务系统可以部署在同一内网或多个网络区域。具体网络、密钥、证书、回调和留痕策略在项目实施阶段确认。
+DataMax、文档源、聊天通道和业务系统可以部署在同一内网或多个网络区域。具体网络、密钥、证书、回调和留痕策略在项目实施阶段确认。
 
 ## 20. 飞书、Lark、企业微信说明
 
@@ -2371,7 +2371,7 @@ V3、文档源、聊天通道和业务系统可以部署在同一内网或多个
 - 租户、群聊、用户 ID 的映射规则；
 - 平台侧可访问范围和安全策略。
 
-V3 会优先按平台官方规则完成验签、事件解析、消息发送和回调处理，再转换成统一的 V3 事件与回复格式。
+DataMax 会优先按平台官方规则完成验签、事件解析、消息发送和回调处理，再转换成统一的 DataMax 事件与回复格式。
 
 ## 21. 第三方联调准备清单
 
@@ -2394,7 +2394,7 @@ V3 会优先按平台官方规则完成验签、事件解析、消息发送和�
 
 ### 21.1 文档入口与版本规则
 
-联调文档只以 V3 外部集成观测页的“对接方式与文档”区域为准。HTML 用于直接打开评审，Markdown 用于下载留档；旧的第一阶段文档、交接包说明、历史计划和历史验证收据不再作为对外材料维护。
+联调文档只以 DataMax 外部集成观测页的“对接方式与文档”区域为准。HTML 用于直接打开评审，Markdown 用于下载留档；旧的第一阶段文档、交接包说明、历史计划和历史验证收据不再作为对外材料维护。
 
 当前保留的公开入口：
 

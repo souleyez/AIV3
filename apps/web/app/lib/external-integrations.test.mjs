@@ -130,7 +130,7 @@ test('external integration modes are generic customer-facing guidance without se
   assert(standardMode.checklist.includes('用户确认、动作派发和结果回调'));
   assert(pureMode.checklist.includes('文档解析：parse 与 parse-detail'));
   assert(pureMode.checklist.includes('按模板生成产物：artifact_type + template'));
-  assert(databaseMode.checklist.includes('同步入库：数据库行清洗为 V3 数据集证据'));
+  assert(databaseMode.checklist.includes('同步入库：数据库行清洗为 DataMax 数据集证据'));
   assert(databaseMode.checklist.includes('安全边界：不传密码、不执行任意 SQL、不暴露原始表 dump'));
   assert(!modeText.includes('用户权限'));
   assert(!modeText.includes('v3in_live_'));
@@ -885,7 +885,7 @@ test('normalizeExternalConversationTest keeps conversation test fields readable'
     assistant_run_id: 'run-001',
     assistant_status: 'completed',
     assistant_event: 'assistant_run.external_channel_model_reply_completed',
-    question_text: 'V3 怎么解析 docx？',
+    question_text: 'DataMax 怎么解析 docx？',
     answer_text: '调用 documents/parse，等到 indexed 后即可用于问答。',
     duration_ms: 2345,
     payload_summary: {
@@ -899,7 +899,7 @@ test('normalizeExternalConversationTest keeps conversation test fields readable'
   assert.equal(item.senderExternalId, 'user-001');
   assert.equal(item.assistantRunId, 'run-001');
   assert.equal(item.payloadSummary.output_format, 'markdown_table');
-  assert.equal(item.questionText, 'V3 怎么解析 docx？');
+  assert.equal(item.questionText, 'DataMax 怎么解析 docx？');
   assert.equal(item.answerText, '调用 documents/parse，等到 indexed 后即可用于问答。');
   assert.equal(item.durationMs, 2345);
   assert.equal(formatExternalConversationDuration(item.durationMs), '2.3s');

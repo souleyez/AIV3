@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>V3 纯第三方简单版接口文档</title>
+  <title>DataMax 纯第三方简单版接口文档</title>
   <style>
     :root {
       color-scheme: light;
@@ -367,7 +367,7 @@
   <div class="shell">
     <aside>
       <div class="brand">
-        <span>V3 / PURE THIRD PARTY</span>
+        <span>DataMax / PURE THIRD PARTY</span>
         <strong>纯第三方简单版</strong>
         <small>自建页面、文档库、用户 ID、会话 ID、skill、模板、产物与业务动作的接口说明。</small>
       </div>
@@ -400,31 +400,31 @@
     </aside>
     <main>
       <section class="hero">
-        <h1>V3 纯第三方简单版接口文档</h1>
+        <h1>DataMax 纯第三方简单版接口文档</h1>
         <p>把原来的长 Markdown 拆成可浏览的交付页面：左侧目录快速定位，正文保留完整接口细节，代码块可复制，表格和流程更适合发给第三方技术团队评审。</p>
         <div class="hero-metrics">
           <div class="metric"><strong>4</strong><span>核心闭环：问答、文档范围、产物、事务</span></div>
 <div class="metric"><strong>6</strong><span>第三方接口面：聊天、文档、用户标识、skill、产物、动作</span></div>
 <div class="metric"><strong>0</strong><span>无需整库搬迁，支持按需读取与增量索引</span></div>
-<div class="metric"><strong>V3</strong><span>统一处理供料、skill、模板、风控和审计</span></div>
+<div class="metric"><strong>DataMax</strong><span>统一处理供料、skill、模板、风控和审计</span></div>
         </div>
       </section>
       <article>
-        <h1>V3 纯第三方简单版接口文档</h1>
-<p><strong>版本：</strong> 2026-06-01 <strong>Base URL：</strong> <code>https://v3.elepcloud.com</code> <strong>鉴权：</strong> <code>Authorization: Bearer &lt;V3 inbound token&gt;</code> <strong>请求格式：</strong> <code>Content-Type: application/json</code></p>
+        <h1>DataMax 纯第三方简单版接口文档</h1>
+<p><strong>版本：</strong> 2026-06-01 <strong>Base URL：</strong> <code>https://v3.elepcloud.com</code> <strong>鉴权：</strong> <code>Authorization: Bearer &lt;DataMax inbound token&gt;</code> <strong>请求格式：</strong> <code>Content-Type: application/json</code></p>
 <p>最小顺序：</p>
 <ol>
-<li>文档解析：把普通文档和模板文档解析入 V3。</li>
+<li>文档解析：把普通文档和模板文档解析入 DataMax。</li>
 <li>聊天同步：传用户 ID、会话 ID、文档范围、默认提示词和输出格式；文档范围首次传入后同一会话持续有效。</li>
 <li>生成产物：从模板列表选择模板，解析模板，按模板生成报表/HTML 产物。</li>
 </ol>
-<p>可选补充：第三方可通过数据库源接口登记业务库。第一版外部自助接口只支持 MySQL；已配置服务端 <code>connection_env</code> 的业务库可直接进入 V3 数据集同步链路，只传原始连接串/账号/密码时 V3 不明文落库，会先创建待密钥绑定的业务库记录。数据库对接细节已合并进完整 API 文档的 <code>11.6 第三方数据库对接</code>。</p>
+<p>可选补充：第三方可通过数据库源接口登记业务库。第一版外部自助接口只支持 MySQL；已配置服务端 <code>connection_env</code> 的业务库可直接进入 DataMax 数据集同步链路，只传原始连接串/账号/密码时 DataMax 不明文落库，会先创建待密钥绑定的业务库记录。数据库对接细节已合并进完整 API 文档的 <code>11.6 第三方数据库对接</code>。</p>
 <h2 id="section-01">1. 文档解析</h2>
 <h3 id="section-02">1.1 发起解析</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/documents/parse
-Authorization: Bearer &lt;V3 inbound token&gt;
+Authorization: Bearer &lt;DataMax inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <figure class="code-card">
@@ -437,7 +437,7 @@ Content-Type: application/json</code></pre>
   &quot;revision_external_id&quot;: &quot;rev-20260520-01&quot;,       // 文档版本 ID；同一文档更新时传新版本
   &quot;title&quot;: &quot;采购审批制度.docx&quot;,                     // 文档标题；不传则使用 document_external_id
   &quot;content_type&quot;: &quot;application/vnd.openxmlformats-officedocument.wordprocessingml.document&quot;, // 文件 MIME 类型
-  &quot;content_url&quot;: &quot;https://third.example.com/files/doc-20260520-0001.docx&quot;, // V3 下载文件的 HTTPS 地址
+  &quot;content_url&quot;: &quot;https://third.example.com/files/doc-20260520-0001.docx&quot;, // DataMax 下载文件的 HTTPS 地址
   &quot;metadata&quot;: {                                    // 业务元数据；只放非敏感字段
     &quot;category&quot;: &quot;policy&quot;,                          // 文档分类
     &quot;owner&quot;: &quot;采购部&quot;                               // 文档归属部门/人
@@ -446,8 +446,8 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>条件必填</td><td>文档源 ID；连接没有默认文档源时必填</td></tr><tr><td><code>dataset_external_id</code></td><td>否</td><td>第三方稳定数据集/资料库 ID；用于自动归档。UUID 可以使用，只要它在第三方业务侧是长期复用的稳定分组 ID</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>数据集名称；自动创建数据集时使用</td></tr><tr><td><code>document_external_id</code></td><td>是</td><td>第三方文档 ID；聊天时放入 <code>available_document_external_ids</code></td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>文档版本 ID；用于区分同一文档的不同版本</td></tr><tr><td><code>title</code></td><td>否</td><td>文档标题</td></tr><tr><td><code>content_type</code></td><td>否</td><td>文件 MIME 类型；不传时 V3 使用下载响应的 Content-Type</td></tr><tr><td><code>content_url</code></td><td>是</td><td>文件下载地址；生产只接受 HTTPS</td></tr><tr><td><code>metadata</code></td><td>否</td><td>非敏感业务元数据</td></tr><tr><td><code>idempotency_key</code></td><td>否</td><td>幂等键；建议包含文档 ID 和版本 ID</td></tr></tbody></table></div>
-<p><code>dataset_external_id</code> 是业务稳定分组，不是每次上传生成的任务 ID、文件 ID 或下载任务 ID。V3 会为每个第三方通道连接建立对应系统账户；该通道解析入库、文档分组移动和对话运行都归属同一个系统账户，普通资料库列表默认不展示系统解析源。多个第三方接入时，不同通道连接会落到不同系统账户，便于隔离和审计。</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>条件必填</td><td>文档源 ID；连接没有默认文档源时必填</td></tr><tr><td><code>dataset_external_id</code></td><td>否</td><td>第三方稳定数据集/资料库 ID；用于自动归档。UUID 可以使用，只要它在第三方业务侧是长期复用的稳定分组 ID</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>数据集名称；自动创建数据集时使用</td></tr><tr><td><code>document_external_id</code></td><td>是</td><td>第三方文档 ID；聊天时放入 <code>available_document_external_ids</code></td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>文档版本 ID；用于区分同一文档的不同版本</td></tr><tr><td><code>title</code></td><td>否</td><td>文档标题</td></tr><tr><td><code>content_type</code></td><td>否</td><td>文件 MIME 类型；不传时 DataMax 使用下载响应的 Content-Type</td></tr><tr><td><code>content_url</code></td><td>是</td><td>文件下载地址；生产只接受 HTTPS</td></tr><tr><td><code>metadata</code></td><td>否</td><td>非敏感业务元数据</td></tr><tr><td><code>idempotency_key</code></td><td>否</td><td>幂等键；建议包含文档 ID 和版本 ID</td></tr></tbody></table></div>
+<p><code>dataset_external_id</code> 是业务稳定分组，不是每次上传生成的任务 ID、文件 ID 或下载任务 ID。DataMax 会为每个第三方通道连接建立对应系统账户；该通道解析入库、文档分组移动和对话运行都归属同一个系统账户，普通资料库列表默认不展示系统解析源。多个第三方接入时，不同通道连接会落到不同系统账户，便于隔离和审计。</p>
 <p>响应：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -456,9 +456,9 @@ Content-Type: application/json</code></pre>
   &quot;source_id&quot;: &quot;third-party-source-main&quot;,          // 文档源 ID
   &quot;document_external_id&quot;: &quot;doc-20260520-0001&quot;,     // 第三方文档 ID
   &quot;revision_external_id&quot;: &quot;rev-20260520-01&quot;,       // 第三方文档版本 ID
-  &quot;document&quot;: {                                    // V3 文档摘要
-    &quot;id&quot;: &quot;7f4b2c4f-3f64-4f8b-8b9d-111111111111&quot;, // V3 内部文档 ID
-    &quot;dataset_id&quot;: &quot;5af2f8a6-0d3c-4a12-a77a-222222222222&quot;, // V3 内部数据集 ID
+  &quot;document&quot;: {                                    // DataMax 文档摘要
+    &quot;id&quot;: &quot;7f4b2c4f-3f64-4f8b-8b9d-111111111111&quot;, // DataMax 内部文档 ID
+    &quot;dataset_id&quot;: &quot;5af2f8a6-0d3c-4a12-a77a-222222222222&quot;, // DataMax 内部数据集 ID
     &quot;title&quot;: &quot;采购审批制度.docx&quot;,                   // 文档标题
     &quot;content_type&quot;: &quot;application/vnd.openxmlformats-officedocument.wordprocessingml.document&quot;, // 文件 MIME 类型
     &quot;lifecycle&quot;: &quot;created&quot;,                        // 文档生命周期；解析完成后通常变为 indexed
@@ -477,7 +477,7 @@ Content-Type: application/json</code></pre>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail?source_id={source_id}&amp;revision_external_id={revision_external_id}
-Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+Authorization: Bearer &lt;DataMax inbound token&gt;</code></pre>
   </figure>
 <p>响应：</p>
 <figure class="code-card">
@@ -501,25 +501,25 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 <p>可问答条件：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>期望值</th><th>注释</th></tr></thead><tbody><tr><td><code>lifecycle</code></td><td><code>indexed</code></td><td>文档已完成入库</td></tr><tr><td><code>chunk_count</code></td><td><code>&gt; 0</code></td><td>有可供模型读取的文本片段</td></tr><tr><td><code>retrieval_evidence_count</code></td><td><code>&gt; 0</code></td><td>有可检索证据</td></tr><tr><td><code>parse_quality_status</code></td><td><code>ok</code> 或为空</td><td><code>attention_required</code> 表示解析质量需要人工或 VLM 兜底</td></tr><tr><td><code>model_status</code></td><td><code>ready</code></td><td>可供模型使用</td></tr></tbody></table></div>
 <h3 id="section-04">1.3 移动文档分组</h3>
-<p>第三方需要把已解析文档移动到另一个资料库/分组时调用。V3 不重新下载、不重新解析，只修改该 <code>document_external_id</code> 对应文档的归属数据集。</p>
+<p>第三方需要把已解析文档移动到另一个资料库/分组时调用。DataMax 不重新下载、不重新解析，只修改该 <code>document_external_id</code> 对应文档的归属数据集。</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>PATCH /v1/external/channels/{connection_id}/documents/{document_external_id}/dataset
-Authorization: Bearer &lt;V3 inbound token&gt;
+Authorization: Bearer &lt;DataMax inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
   &quot;source_id&quot;: &quot;third-party-source-main&quot;,       // 文档源 ID；连接已配置默认源时可省略
-  &quot;dataset_external_id&quot;: &quot;workspace-docs-new&quot;,  // 目标第三方稳定数据集/资料库 ID；不存在时 V3 自动创建
+  &quot;dataset_external_id&quot;: &quot;workspace-docs-new&quot;,  // 目标第三方稳定数据集/资料库 ID；不存在时 DataMax 自动创建
   &quot;dataset_title&quot;: &quot;新资料库&quot;,                   // 目标数据集展示名；自动创建时使用
   &quot;revision_external_id&quot;: &quot;rev-20260520-01&quot;     // 可选；只移动指定版本。不传则移动同一文档 ID 下所有版本
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>条件必填</td><td>文档源 ID；V3 无法从连接或文档 ID 推断时必填</td></tr><tr><td><code>dataset_external_id</code></td><td>条件必填</td><td>目标第三方稳定数据集/资料库 ID；和 <code>dataset_id</code> 二选一。UUID 可以使用，只要它在第三方业务侧是长期复用的稳定分组 ID</td></tr><tr><td><code>dataset_id</code></td><td>条件必填</td><td>目标 V3 数据集 UUID；和 <code>dataset_external_id</code> 二选一</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>目标数据集名称；自动创建数据集时使用</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>第三方文档版本 ID；不传则移动同一外部文档 ID 的全部版本</td></tr></tbody></table></div>
-<p>移动目标也应是业务稳定分组。若第三方使用 UUID 作为稳定分组 ID，V3 会按该 UUID 建立或复用对应资料库；响应中的 <code>dataset_id</code> 会回显实际归属的数据集。</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>source_id</code></td><td>条件必填</td><td>文档源 ID；DataMax 无法从连接或文档 ID 推断时必填</td></tr><tr><td><code>dataset_external_id</code></td><td>条件必填</td><td>目标第三方稳定数据集/资料库 ID；和 <code>dataset_id</code> 二选一。UUID 可以使用，只要它在第三方业务侧是长期复用的稳定分组 ID</td></tr><tr><td><code>dataset_id</code></td><td>条件必填</td><td>目标 DataMax 数据集 UUID；和 <code>dataset_external_id</code> 二选一</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>目标数据集名称；自动创建数据集时使用</td></tr><tr><td><code>revision_external_id</code></td><td>否</td><td>第三方文档版本 ID；不传则移动同一外部文档 ID 的全部版本</td></tr></tbody></table></div>
+<p>移动目标也应是业务稳定分组。若第三方使用 UUID 作为稳定分组 ID，DataMax 会按该 UUID 建立或复用对应资料库；响应中的 <code>dataset_id</code> 会回显实际归属的数据集。</p>
 <p>响应：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -528,27 +528,27 @@ Content-Type: application/json</code></pre>
   &quot;source_id&quot;: &quot;third-party-source-main&quot;,        // 文档源 ID
   &quot;document_external_id&quot;: &quot;doc-20260520-0001&quot;,   // 第三方文档 ID
   &quot;revision_external_id&quot;: &quot;rev-20260520-01&quot;,     // 本次移动限定的版本 ID；未传则为空
-  &quot;dataset_id&quot;: &quot;5af2f8a6-0d3c-4a12-a77a-333333333333&quot;, // 目标 V3 数据集 ID
+  &quot;dataset_id&quot;: &quot;5af2f8a6-0d3c-4a12-a77a-333333333333&quot;, // 目标 DataMax 数据集 ID
   &quot;dataset_external_id&quot;: &quot;workspace-docs-new&quot;,   // 目标第三方稳定数据集/资料库 ID
-  &quot;moved_count&quot;: 1,                              // 移动的 V3 文档记录数量
-  &quot;previous_dataset_ids&quot;: [                      // 移动前的 V3 数据集 ID 列表
+  &quot;moved_count&quot;: 1,                              // 移动的 DataMax 文档记录数量
+  &quot;previous_dataset_ids&quot;: [                      // 移动前的 DataMax 数据集 ID 列表
     &quot;5af2f8a6-0d3c-4a12-a77a-222222222222&quot;
   ],
   &quot;documents&quot;: []                                // 移动后的文档摘要列表
 }</code></pre>
   </figure>
 <h3 id="section-05">1.4 查询数据库源状态</h3>
-<p>数据库账号、表映射和同步由 V3 侧配置。第三方只用通道 token 查询已授权数据库源的状态，不传数据库密码，不发 SQL。</p>
+<p>数据库账号、表映射和同步由 DataMax 侧配置。第三方只用通道 token 查询已授权数据库源的状态，不传数据库密码，不发 SQL。</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/database-sources/{source_external_id}/status
-Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+Authorization: Bearer &lt;DataMax inbound token&gt;</code></pre>
   </figure>
 <p>响应：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
-  &quot;source_id&quot;: &quot;hy-sql-main&quot;,                     // V3 数据库源 ID；路径中的 source_external_id
+  &quot;source_id&quot;: &quot;hy-sql-main&quot;,                     // DataMax 数据库源 ID；路径中的 source_external_id
   &quot;connector_kind&quot;: &quot;mysql&quot;,                      // 数据库连接类型
   &quot;redacted_summary&quot;: {                           // 脱敏配置摘要
     &quot;kind&quot;: &quot;mysql&quot;,                              // 数据库类型
@@ -573,13 +573,13 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>source_external_id</code></td><td>是</td><td>V3 已授权给该通道的数据库源 ID</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示数据库同步数据可用于问答/报表；<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code> 表示仍需等待或排查</td></tr><tr><td><code>status.sync_readiness.row_failure_groups</code></td><td>否</td><td>数据库行转换失败分组；包含 <code>table</code>、<code>reason</code>、<code>reported_failed_row_count</code>、<code>sample_count</code>、<code>sample_source_primary_keys</code></td></tr><tr><td><code>status.recent_sync_runs[].row_failure_groups</code></td><td>否</td><td>最近同步任务中的失败行分组，便于判断本次同步哪个表/原因失败较多</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示目标数据集已具备可检索证据</td></tr><tr><td><code>status.datasets[].readiness.signal</code></td><td>否</td><td>单个目标数据集的可问状态；用于区分默认数据集为空、但历史显式目标数据集已可问的情况</td></tr><tr><td><code>status.datasets[].indexed_document_count</code></td><td>否</td><td>该目标数据集中来自此数据库源的已索引文档数</td></tr><tr><td><code>status.datasets[].retrieval_evidence_count</code></td><td>否</td><td>该目标数据集中来自此数据库源的检索证据数</td></tr><tr><td><code>status.health_findings.items</code></td><td>否</td><td>配置、同步、索引、行转换失败等问题列表</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>DataMax 分配的第三方通道 ID</td></tr><tr><td><code>source_external_id</code></td><td>是</td><td>DataMax 已授权给该通道的数据库源 ID</td></tr><tr><td><code>status.sync_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示数据库同步数据可用于问答/报表；<code>sync_running</code>、<code>sync_failed</code>、<code>no_documents</code> 表示仍需等待或排查</td></tr><tr><td><code>status.sync_readiness.row_failure_groups</code></td><td>否</td><td>数据库行转换失败分组；包含 <code>table</code>、<code>reason</code>、<code>reported_failed_row_count</code>、<code>sample_count</code>、<code>sample_source_primary_keys</code></td></tr><tr><td><code>status.recent_sync_runs[].row_failure_groups</code></td><td>否</td><td>最近同步任务中的失败行分组，便于判断本次同步哪个表/原因失败较多</td></tr><tr><td><code>status.dataset_readiness.signal</code></td><td>否</td><td><code>ready</code> 表示目标数据集已具备可检索证据</td></tr><tr><td><code>status.datasets[].readiness.signal</code></td><td>否</td><td>单个目标数据集的可问状态；用于区分默认数据集为空、但历史显式目标数据集已可问的情况</td></tr><tr><td><code>status.datasets[].indexed_document_count</code></td><td>否</td><td>该目标数据集中来自此数据库源的已索引文档数</td></tr><tr><td><code>status.datasets[].retrieval_evidence_count</code></td><td>否</td><td>该目标数据集中来自此数据库源的检索证据数</td></tr><tr><td><code>status.health_findings.items</code></td><td>否</td><td>配置、同步、索引、行转换失败等问题列表</td></tr></tbody></table></div>
 <h3 id="section-06">1.5 创建/更新数据库源</h3>
-<p>第三方在本地创建或更新业务库时，同步到 V3。第一版仅支持 <code>mysql</code>。推荐优先传 <code>connection_env</code>：即 V3 服务器上已经配置好的数据库连接串环境变量名。若只传 <code>connection_url</code> / <code>username</code> / <code>password</code>，V3 不会把明文凭据写入 PostgreSQL、日志或模型上下文，只会创建 <code>pending_secret_binding</code> 状态的业务库记录，后续由 V3 侧绑定服务端密钥后再同步。</p>
+<p>第三方在本地创建或更新业务库时，同步到 DataMax。第一版仅支持 <code>mysql</code>。推荐优先传 <code>connection_env</code>：即 DataMax 服务器上已经配置好的数据库连接串环境变量名。若只传 <code>connection_url</code> / <code>username</code> / <code>password</code>，DataMax 不会把明文凭据写入 PostgreSQL、日志或模型上下文，只会创建 <code>pending_secret_binding</code> 状态的业务库记录，后续由 DataMax 侧绑定服务端密钥后再同步。</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/database-sources
-Authorization: Bearer &lt;V3 inbound token&gt;
+Authorization: Bearer &lt;DataMax inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <figure class="code-card">
@@ -588,7 +588,7 @@ Content-Type: application/json</code></pre>
   &quot;source_external_id&quot;: &quot;db-20260601-0001&quot;,      // 第三方业务库 ID；用于幂等创建/更新
   &quot;name&quot;: &quot;生产经营库&quot;,                           // 业务库展示名
   &quot;connector_kind&quot;: &quot;mysql&quot;,                      // 第一版只支持 mysql
-  &quot;connection_env&quot;: &quot;THIRD_PARTY_DB_MAIN_URL&quot;,    // 推荐：V3 服务器环境变量名；不会返回真实连接串
+  &quot;connection_env&quot;: &quot;THIRD_PARTY_DB_MAIN_URL&quot;,    // 推荐：DataMax 服务器环境变量名；不会返回真实连接串
   &quot;connection_url&quot;: null,                         // 可选：原始连接串；若未配置 connection_env，本版只登记为待密钥绑定
   &quot;username&quot;: null,                               // 可选：数据库用户名；不会明文落库
   &quot;password&quot;: null,                               // 可选：数据库密码；不会明文落库
@@ -600,16 +600,16 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>source_external_id</code></td><td>是</td><td>第三方稳定业务库 ID；后续聊天可放入 <code>business_datasource_ids</code></td></tr><tr><td><code>name</code></td><td>否</td><td>展示名；不传时使用业务库 ID</td></tr><tr><td><code>connector_kind</code></td><td>否</td><td>第一版只支持 <code>mysql</code>；其他类型会返回 <code>unsupported_connector_kind</code></td></tr><tr><td><code>connection_env</code></td><td>可用库建议必填</td><td>V3 服务器环境变量名；有它时业务库可进入连接测试、画像和同步链路</td></tr><tr><td><code>connection_url</code></td><td>否</td><td>原始连接串；未同时传 <code>connection_env</code> 时只创建待密钥绑定记录，不明文落库</td></tr><tr><td><code>username</code> / <code>password</code></td><td>否</td><td>原始账号密码；不明文落库，不进入模型上下文</td></tr><tr><td><code>database</code></td><td><code>connection_env</code> 模式必填</td><td>MySQL 数据库名</td></tr><tr><td><code>tables</code></td><td>否</td><td>表名白名单；为空表示后续由 V3 画像/配置决定</td></tr><tr><td><code>dataset_external_id</code></td><td>否</td><td>同步目标稳定数据集/资料库 ID</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>自动创建数据集时使用</td></tr><tr><td><code>idempotency_key</code></td><td>否</td><td>幂等键</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>source_external_id</code></td><td>是</td><td>第三方稳定业务库 ID；后续聊天可放入 <code>business_datasource_ids</code></td></tr><tr><td><code>name</code></td><td>否</td><td>展示名；不传时使用业务库 ID</td></tr><tr><td><code>connector_kind</code></td><td>否</td><td>第一版只支持 <code>mysql</code>；其他类型会返回 <code>unsupported_connector_kind</code></td></tr><tr><td><code>connection_env</code></td><td>可用库建议必填</td><td>DataMax 服务器环境变量名；有它时业务库可进入连接测试、画像和同步链路</td></tr><tr><td><code>connection_url</code></td><td>否</td><td>原始连接串；未同时传 <code>connection_env</code> 时只创建待密钥绑定记录，不明文落库</td></tr><tr><td><code>username</code> / <code>password</code></td><td>否</td><td>原始账号密码；不明文落库，不进入模型上下文</td></tr><tr><td><code>database</code></td><td><code>connection_env</code> 模式必填</td><td>MySQL 数据库名</td></tr><tr><td><code>tables</code></td><td>否</td><td>表名白名单；为空表示后续由 DataMax 画像/配置决定</td></tr><tr><td><code>dataset_external_id</code></td><td>否</td><td>同步目标稳定数据集/资料库 ID</td></tr><tr><td><code>dataset_title</code></td><td>否</td><td>自动创建数据集时使用</td></tr><tr><td><code>idempotency_key</code></td><td>否</td><td>幂等键</td></tr></tbody></table></div>
 <p>响应：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
   &quot;accepted&quot;: true,                              // 是否已接收创建/更新
   &quot;source_external_id&quot;: &quot;db-20260601-0001&quot;,      // 第三方业务库 ID
-  &quot;source_id&quot;: &quot;db-20260601-0001&quot;,               // V3 数据库源 ID；当前与 source_external_id 保持一致
+  &quot;source_id&quot;: &quot;db-20260601-0001&quot;,               // DataMax 数据库源 ID；当前与 source_external_id 保持一致
   &quot;source&quot;: {
-    &quot;id&quot;: &quot;db-20260601-0001&quot;,                   // V3 数据库源 ID
+    &quot;id&quot;: &quot;db-20260601-0001&quot;,                   // DataMax 数据库源 ID
     &quot;name&quot;: &quot;生产经营库&quot;,                         // 展示名
     &quot;connector_kind&quot;: &quot;mysql&quot;,                    // 连接类型
     &quot;status&quot;: &quot;ready&quot;                            // ready 或 pending_secret_binding
@@ -630,7 +630,7 @@ Content-Type: application/json</code></pre>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
-Authorization: Bearer &lt;V3 inbound token&gt;
+Authorization: Bearer &lt;DataMax inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <figure class="code-card">
@@ -667,8 +667,8 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>artifact_type</code></td><td>产物生成建议填</td><td>推荐产物语义字段；静态页传 <code>static_page</code> 后，V3 会自动进入报表页面生成流程</td></tr><tr><td><code>template</code></td><td>使用模板时填</td><td>产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 V3 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>business_datasource_ids</code></td><td>业务库问答/报表建议填</td><td>本轮指定业务库 ID 数组；值来自 1.5 的 <code>source_external_id</code>。兼容别名：<code>businessDatasourceIds</code>、<code>businessDataSourceIds</code>、<code>databaseSourceIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表；推荐对象数组，也兼容 <code>[&quot;https://example.com/a.docx&quot;]</code> 字符串 URL 数组；图片消息可传图片下载 URL</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
-<p><code>dataset_external_id</code> / <code>dataset_external_ids</code> 可以和 <code>available_document_external_ids</code> 同时传，V3 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 <code>available_document_external_ids</code> 或 <code>documentExternalId</code>，不传分组字段。第三方内部读权限由第三方在传入这些范围前完成判断；V3 按本轮/本会话传入的文档或分组范围供料，不会因为只传 <code>available_document_source_id</code> 自动扩大到整源文档。</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>platform</code></td><td>是</td><td>纯第三方默认 <code>generic_chat</code></td></tr><tr><td><code>tenant_external_id</code></td><td>是</td><td>第三方租户/客户 ID</td></tr><tr><td><code>bot_external_id</code></td><td>是</td><td>第三方机器人/应用 ID</td></tr><tr><td><code>conversation_external_id</code></td><td>是</td><td>会话 ID；同一聊天窗口保持不变，用于维持多轮上下文和文档范围授权</td></tr><tr><td><code>thread_external_id</code></td><td>否</td><td>子线程 ID</td></tr><tr><td><code>sender_external_id</code></td><td>是</td><td>用户 ID；同一用户保持稳定</td></tr><tr><td><code>sender_display_name</code></td><td>否</td><td>用户展示名</td></tr><tr><td><code>message_external_id</code></td><td>是</td><td>消息 ID；同一消息重试时保持不变</td></tr><tr><td><code>message_type</code></td><td>是</td><td><code>text</code>、<code>file</code>、<code>image</code>、<code>audio</code>、<code>video</code>、<code>card</code>、<code>event</code>、<code>unknown</code></td></tr><tr><td><code>text</code></td><td>文本必填</td><td>用户输入内容</td></tr><tr><td><code>default_prompt</code></td><td>否</td><td>本轮默认提示词；会供给模型但不越过权限和证据规则</td></tr><tr><td><code>output_format</code></td><td>否</td><td><code>rich_text</code> 富文本；<code>image_text</code> 图文排版；<code>markdown_table</code> MD 表格；<code>json</code> JSON</td></tr><tr><td><code>render_mode</code></td><td>否</td><td><code>normal</code> 普通回答；<code>artifact</code> 生成产物</td></tr><tr><td><code>artifact_type</code></td><td>产物生成建议填</td><td>推荐产物语义字段；静态页传 <code>static_page</code> 后，DataMax 会自动进入报表页面生成流程</td></tr><tr><td><code>template</code></td><td>使用模板时填</td><td>产物模板引用对象；用于结构、版式、字段组织和风格参考，不扩大事实证据范围</td></tr><tr><td><code>available_document_source_id</code></td><td>文档问答建议填</td><td>本次授权所属文档源 ID；连接配置默认文档源时可省略，但单独传此字段不会授权整源文档回答</td></tr><tr><td><code>available_document_external_ids</code></td><td>文档问答建议填</td><td>允许 DataMax 使用的文档 ID；也可用 <code>documentExternalId</code> 传单个文档；首次传入后同一 <code>conversation_external_id</code> 后续有效</td></tr><tr><td><code>dataset_external_id</code></td><td>分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID；传入后表示本会话可使用该分组下的全部文档，同一 <code>conversation_external_id</code> 后续有效；UUID 也可以使用，只要它在第三方业务侧是稳定分组 ID</td></tr><tr><td><code>dataset_external_ids</code></td><td>多分组文档问答建议填</td><td>第三方稳定业务分组/资料库 ID 数组；一个工作区选择多个分组时使用。兼容别名：<code>datasetExternalIds</code>、<code>availableDatasetExternalIds</code></td></tr><tr><td><code>business_datasource_ids</code></td><td>业务库问答/报表建议填</td><td>本轮指定业务库 ID 数组；值来自 1.5 的 <code>source_external_id</code>。兼容别名：<code>businessDatasourceIds</code>、<code>businessDataSourceIds</code>、<code>databaseSourceIds</code></td></tr><tr><td><code>requested_skills</code></td><td>否</td><td>本轮 skill 列表</td></tr><tr><td><code>mention_external_user_ids</code></td><td>否</td><td>被 @ 的第三方用户 ID</td></tr><tr><td><code>attachment_refs</code></td><td>否</td><td>附件引用列表；推荐对象数组，也兼容 <code>[&quot;https://example.com/a.docx&quot;]</code> 字符串 URL 数组；图片消息可传图片下载 URL</td></tr><tr><td><code>idempotency_key</code></td><td>是</td><td>幂等键</td></tr><tr><td><code>received_at</code></td><td>是</td><td>ISO 8601 时间</td></tr></tbody></table></div>
+<p><code>dataset_external_id</code> / <code>dataset_external_ids</code> 可以和 <code>available_document_external_ids</code> 同时传，DataMax 会按并集合并授权：分组内文档整组生效，分组外的显式文档也生效，已经包含在分组内的显式文档自动去重。如果只想授权具体少数文档，应只传 <code>available_document_external_ids</code> 或 <code>documentExternalId</code>，不传分组字段。第三方内部读权限由第三方在传入这些范围前完成判断；DataMax 按本轮/本会话传入的文档或分组范围供料，不会因为只传 <code>available_document_source_id</code> 自动扩大到整源文档。</p>
 <p><code>attachment_refs</code> 推荐对象格式：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -681,9 +681,9 @@ Content-Type: application/json</code></pre>
   }
 ]</code></pre>
   </figure>
-<p>若第三方暂时只能传字符串 URL 数组，V3 会兼容为附件引用对象；文档入库建议走 1.1 文档解析接口，聊天图片结构化抽取可直接在本接口传图片附件。</p>
+<p>若第三方暂时只能传字符串 URL 数组，DataMax 会兼容为附件引用对象；文档入库建议走 1.1 文档解析接口，聊天图片结构化抽取可直接在本接口传图片附件。</p>
 <h3 id="section-09">2.1.1 图片订单字段抽取</h3>
-<p>第三方聊天里用户直接发图片时，可用同一个 <code>POST /events</code> 接口让 V3 识别图片中的订单/充值表格，并返回可入库字段。推荐传 <code>message_type: &quot;image&quot;</code>、<code>output_format: &quot;json&quot;</code> 和图片 <code>attachment_refs</code>。如果要强制走订单截图抽取，可加 <code>requested_skills[].skill_id = &quot;order_screenshot_extract&quot;</code>。</p>
+<p>第三方聊天里用户直接发图片时，可用同一个 <code>POST /events</code> 接口让 DataMax 识别图片中的订单/充值表格，并返回可入库字段。推荐传 <code>message_type: &quot;image&quot;</code>、<code>output_format: &quot;json&quot;</code> 和图片 <code>attachment_refs</code>。如果要强制走订单截图抽取，可加 <code>requested_skills[].skill_id = &quot;order_screenshot_extract&quot;</code>。</p>
 <p>请求示例：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -714,7 +714,7 @@ Content-Type: application/json</code></pre>
       &quot;filename&quot;: &quot;recharge-orders.png&quot;,            // 文件名
       &quot;content_type&quot;: &quot;image/png&quot;,                  // 图片 MIME
       &quot;size_bytes&quot;: 2048,                           // 文件大小；没有可省略
-      &quot;download_url_redacted&quot;: &quot;https://example.com/recharge-orders.png&quot; // V3 拉取图片用 URL；响应不会回显原始 URL
+      &quot;download_url_redacted&quot;: &quot;https://example.com/recharge-orders.png&quot; // DataMax 拉取图片用 URL；响应不会回显原始 URL
     }
   ],
   &quot;idempotency_key&quot;: &quot;chat:tenant-ext-001:msg-order-image-001&quot;, // 幂等键
@@ -726,7 +726,7 @@ Content-Type: application/json</code></pre>
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
   &quot;accepted&quot;: true,                                 // 已接收
-  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,           // V3 运行 ID
+  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,           // DataMax 运行 ID
   &quot;idempotency_key&quot;: &quot;chat:tenant-ext-001:msg-order-image-001&quot;, // 幂等键
   &quot;reply&quot;: {
     &quot;target_conversation_external_id&quot;: &quot;conv-order-001&quot;, // 回写会话 ID
@@ -768,13 +768,13 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.card.type</code></td><td>固定 <code>v3_order_screenshot_extract</code></td></tr><tr><td><code>reply.card.status</code></td><td><code>answered</code> 表示已抽到记录；<code>needs_review</code> 表示图片、配置或识别结果需要复核</td></tr><tr><td><code>reply.card.records</code></td><td>可直接入库的记录数组</td></tr><tr><td><code>records[].*_raw</code> / <code>records[].*_label</code></td><td>图片原文，便于第三方保留展示或复核</td></tr><tr><td><code>records[].payment_method</code></td><td>支付方式归一值；例如 <code>alipay</code>、<code>wechat_pay</code>、<code>bank_card</code></td></tr><tr><td><code>records[].status</code></td><td>状态归一值；例如 <code>success</code>、<code>processing</code>、<code>failed</code>、<code>cancelled</code></td></tr><tr><td><code>reply.card.failure_reason</code></td><td><code>needs_review</code> 时可能存在，说明未完成自动抽取的原因</td></tr><tr><td><code>idempotency_key</code></td><td>同一图片消息重试时保持不变，V3 会返回同一份结构化结果</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.card.type</code></td><td>固定 <code>v3_order_screenshot_extract</code></td></tr><tr><td><code>reply.card.status</code></td><td><code>answered</code> 表示已抽到记录；<code>needs_review</code> 表示图片、配置或识别结果需要复核</td></tr><tr><td><code>reply.card.records</code></td><td>可直接入库的记录数组</td></tr><tr><td><code>records[].*_raw</code> / <code>records[].*_label</code></td><td>图片原文，便于第三方保留展示或复核</td></tr><tr><td><code>records[].payment_method</code></td><td>支付方式归一值；例如 <code>alipay</code>、<code>wechat_pay</code>、<code>bank_card</code></td></tr><tr><td><code>records[].status</code></td><td>状态归一值；例如 <code>success</code>、<code>processing</code>、<code>failed</code>、<code>cancelled</code></td></tr><tr><td><code>reply.card.failure_reason</code></td><td><code>needs_review</code> 时可能存在，说明未完成自动抽取的原因</td></tr><tr><td><code>idempotency_key</code></td><td>同一图片消息重试时保持不变，DataMax 会返回同一份结构化结果</td></tr></tbody></table></div>
 <p>响应：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>{
-  &quot;accepted&quot;: true,                                // V3 是否接收本条消息
-  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,          // V3 本次运行 ID
+  &quot;accepted&quot;: true,                                // DataMax 是否接收本条消息
+  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,          // DataMax 本次运行 ID
   &quot;idempotency_key&quot;: &quot;chat:tenant-ext-001:msg-20260520-0001&quot;, // 幂等键
   &quot;reply&quot;: {                                      // 回复对象
     &quot;target_conversation_external_id&quot;: &quot;conv-20260520-0001&quot;, // 要回写的会话 ID
@@ -790,9 +790,9 @@ Content-Type: application/json</code></pre>
 }</code></pre>
   </figure>
 <h3 id="section-10">2.1.2 可选主动回推</h3>
-<p>如果第三方页面等待时间较短，或 SSE 可能中断，可在 V3 通道配置里提供助手回复回推地址。V3 后台结果完成或失败后，会向该地址主动 POST 一次最终 <code>reply</code>，第三方收到后追加到对应 <code>conversation_external_id</code> 的会话即可。</p>
+<p>如果第三方页面等待时间较短，或 SSE 可能中断，可在 DataMax 通道配置里提供助手回复回推地址。DataMax 后台结果完成或失败后，会向该地址主动 POST 一次最终 <code>reply</code>，第三方收到后追加到对应 <code>conversation_external_id</code> 的会话即可。</p>
 <p>配置项：</p>
-<div class="table-shell"><table><thead><tr><th>配置键</th><th>注释</th></tr></thead><tbody><tr><td><code>reply_dispatch_url</code></td><td>第三方接收助手最终回复的 HTTPS 地址；别名：<code>external_reply_dispatch_url</code>、<code>outbound_reply_url</code>、<code>assistant_reply_dispatch_url</code></td></tr><tr><td><code>reply_dispatch_bearer_token</code></td><td>可选，V3 回推时使用的 Bearer Token；别名：<code>external_reply_bearer_token</code>、<code>outbound_reply_bearer_token</code></td></tr><tr><td><code>reply_dispatch_signing_secret</code></td><td>可选，V3 回推签名密钥；别名：<code>external_reply_signing_secret</code>、<code>outbound_reply_signing_secret</code></td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>配置键</th><th>注释</th></tr></thead><tbody><tr><td><code>reply_dispatch_url</code></td><td>第三方接收助手最终回复的 HTTPS 地址；别名：<code>external_reply_dispatch_url</code>、<code>outbound_reply_url</code>、<code>assistant_reply_dispatch_url</code></td></tr><tr><td><code>reply_dispatch_bearer_token</code></td><td>可选，DataMax 回推时使用的 Bearer Token；别名：<code>external_reply_bearer_token</code>、<code>outbound_reply_bearer_token</code></td></tr><tr><td><code>reply_dispatch_signing_secret</code></td><td>可选，DataMax 回推签名密钥；别名：<code>external_reply_signing_secret</code>、<code>outbound_reply_signing_secret</code></td></tr></tbody></table></div>
 <p>回推载荷：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -800,8 +800,8 @@ Content-Type: application/json</code></pre>
   &quot;schema&quot;: &quot;v3.external_channel.outbound_reply.v1&quot;, // 固定结构版本
   &quot;event_type&quot;: &quot;assistant_reply&quot;,                   // 固定为助手回复
   &quot;trigger&quot;: &quot;async_result_completed&quot;,               // 后台异步结果完成或失败后触发
-  &quot;source_event_name&quot;: &quot;assistant_run.external_channel_static_page_publish_completed&quot;, // V3 内部公开事件名
-  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,             // V3 本次运行 ID
+  &quot;source_event_name&quot;: &quot;assistant_run.external_channel_static_page_publish_completed&quot;, // DataMax 内部公开事件名
+  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,             // DataMax 本次运行 ID
   &quot;idempotency_key&quot;: &quot;outbound:assistant-run-id:hash&quot;,// 回推幂等键
   &quot;conversation_external_id&quot;: &quot;conv-20260520-0001&quot;,  // 目标会话 ID
   &quot;reply&quot;: {},                                       // 结构同 POST /events 响应中的 reply
@@ -810,21 +810,21 @@ Content-Type: application/json</code></pre>
   &quot;requires_confirmation&quot;: false                     // 是否需要用户确认
 }</code></pre>
   </figure>
-<p>V3 回推会带 <code>Authorization: Bearer &lt;reply_dispatch_bearer_token&gt;</code>，并在配置签名密钥时带 <code>x-v3-signature</code>、<code>x-v3-timestamp</code>、<code>x-v3-nonce</code>、<code>x-v3-content-sha256</code>。如果未配置回推地址，第三方仍可继续使用 <code>/events/stream</code> 断线续传或 <code>status_url</code> 轮询。</p>
+<p>DataMax 回推会带 <code>Authorization: Bearer &lt;reply_dispatch_bearer_token&gt;</code>，并在配置签名密钥时带 <code>x-v3-signature</code>、<code>x-v3-timestamp</code>、<code>x-v3-nonce</code>、<code>x-v3-content-sha256</code>。如果未配置回推地址，第三方仍可继续使用 <code>/events/stream</code> 断线续传或 <code>status_url</code> 轮询。</p>
 <h3 id="section-11">2.1.2 平台能力路由与状态总览</h3>
-<p>第三方页面不需要直接调用 V3 内部能力，也不需要解析内部工具名。第三方只需发送普通聊天消息、文档范围、数据集范围、模板、业务数据源 ID 或确认回调；V3 会在平台侧识别用户意图，并通过现有 <code>reply</code> 字段返回文本、状态、确认卡或产物链接。</p>
+<p>第三方页面不需要直接调用 DataMax 内部能力，也不需要解析内部工具名。第三方只需发送普通聊天消息、文档范围、数据集范围、模板、业务数据源 ID 或确认回调；DataMax 会在平台侧识别用户意图，并通过现有 <code>reply</code> 字段返回文本、状态、确认卡或产物链接。</p>
 <div class="table-shell"><table><thead><tr><th>用户意图/平台能力</th><th>第三方请求方式</th><th>前端重点读取</th><th>常见状态</th></tr></thead><tbody><tr><td>普通问答</td><td>普通消息 + 已授权文档/数据集范围</td><td><code>reply.text</code>、<code>reply.task_status</code></td><td><code>answered</code>、<code>needs_input</code>、<code>failed</code></td></tr><tr><td>静态页/报表</td><td>普通消息提出生成/修改报表；推荐传 <code>artifact_type=static_page</code></td><td><code>reply.artifact_links[0]</code>、<code>reply.card.public_url</code>、<code>reply.card.generated_artifact_url</code>、<code>reply.card.status_url</code></td><td><code>processing</code>、<code>static_page_published</code>、<code>failed</code></td></tr><tr><td>数据接入/建表分析</td><td>普通消息提出入库、建表、字段映射、清洗、schema、ETL 或数据库分析</td><td><code>reply.card.type</code>、<code>reply.card.result_summary</code>、<code>reply.card.staging_plan</code>、<code>reply.card.dataset_id</code>、<code>reply.card.sync_run_id</code></td><td><code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_retrying</code>、<code>data_ingestion_analysis_completed</code>、<code>data_ingestion_analysis_needs_human</code>、<code>data_ingestion_analysis_failed</code>、<code>data_ingestion_analysis_cancelled</code></td></tr><tr><td>文档处理/深解析</td><td>普通消息提出解析状态、重解析、深解析、VLM 升级解析或事实抽取</td><td><code>reply.card.type</code>、<code>reply.card.documents</code>、<code>reply.card.status_counts</code></td><td><code>document_processing_status</code>、<code>document_processing_review_required</code>、<code>document_processing_reparse_queued</code></td></tr><tr><td>采集/资料库规划</td><td>普通消息提出资料采集、爬虫规划或来源接入</td><td><code>reply.card.type=v3_collection_setup_analysis</code>、<code>reply.requires_confirmation</code></td><td><code>needs_confirmation</code>、<code>capability_analysis_recorded</code></td></tr><tr><td>第三方系统对接规划</td><td>普通消息提出 OA、文档库、数据库、用户/权限、API 或连接器对接</td><td><code>reply.card.type=v3_integration_setup_analysis</code>、<code>reply.requires_confirmation</code></td><td><code>needs_confirmation</code>、<code>capability_analysis_recorded</code></td></tr><tr><td>主动消息/主动发起对话</td><td>普通消息要求完成后通知某人、发给负责人或跨会话确认</td><td><code>reply.card.type=v3_message_channel_outreach</code>、<code>reply.card.target_summary</code>、<code>reply.requires_confirmation</code></td><td><code>message_outreach_confirmation_required</code>；后续如启用安全自动派发，可出现 <code>message_outreach_queued</code>、<code>message_outreach_sent</code>、<code>message_outreach_failed</code></td></tr></tbody></table></div>
-<p>确认类状态只表示 V3 已识别到受控能力请求，并不表示动作已经执行。第三方应把 <code>requires_confirmation=true</code> 或 <code>reply.reply_type=requires_confirmation</code> 展示为“待 V3/人工确认”，不要自行扩大文档、数据集、用户、消息渠道或公开接口权限。</p>
+<p>确认类状态只表示 DataMax 已识别到受控能力请求，并不表示动作已经执行。第三方应把 <code>requires_confirmation=true</code> 或 <code>reply.reply_type=requires_confirmation</code> 展示为“待 DataMax/人工确认”，不要自行扩大文档、数据集、用户、消息渠道或公开接口权限。</p>
 <h3 id="section-12">2.2 流式聊天</h3>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events/stream
-Authorization: Bearer &lt;V3 inbound token&gt;
+Authorization: Bearer &lt;DataMax inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <p>请求体与 <code>POST /events</code> 相同。</p>
 <p>最小消费规则：</p>
-<div class="table-shell"><table><thead><tr><th>event</th><th>第三方怎么处理</th></tr></thead><tbody><tr><td><code>external_channel.started</code></td><td>只表示 V3 开始处理，不展示为助手回复</td></tr><tr><td><code>external_channel.retrieval_started</code></td><td>展示为“正在检索资料/数据源”；不作为最终回复</td></tr><tr><td><code>external_channel.delta</code></td><td>追加 <code>data.delta</code> 到聊天气泡</td></tr><tr><td>其他 <code>external_channel.*</code></td><td>读取 <code>data.display_text</code> 展示进度；读取 <code>data.status</code> 判断状态；读取 <code>data.status_url</code> 和 <code>data.poll_after_seconds</code> 继续轮询</td></tr><tr><td><code>external_channel.needs_input</code></td><td>展示 <code>data.display_text</code> 或 <code>data.data.card.question</code>，让用户补充后继续同一会话</td></tr><tr><td><code>external_channel.completed</code></td><td>读取 <code>data.data.response.reply</code>；结构与 <code>POST /events</code> 的 <code>reply</code> 相同</td></tr><tr><td><code>done</code></td><td><code>data.ok=true</code> 表示本次 SSE 正常结束</td></tr><tr><td><code>error</code></td><td>展示 <code>data.error.message</code>，并保留 <code>idempotency_key</code> 便于排查</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>event</th><th>第三方怎么处理</th></tr></thead><tbody><tr><td><code>external_channel.started</code></td><td>只表示 DataMax 开始处理，不展示为助手回复</td></tr><tr><td><code>external_channel.retrieval_started</code></td><td>展示为“正在检索资料/数据源”；不作为最终回复</td></tr><tr><td><code>external_channel.delta</code></td><td>追加 <code>data.delta</code> 到聊天气泡</td></tr><tr><td>其他 <code>external_channel.*</code></td><td>读取 <code>data.display_text</code> 展示进度；读取 <code>data.status</code> 判断状态；读取 <code>data.status_url</code> 和 <code>data.poll_after_seconds</code> 继续轮询</td></tr><tr><td><code>external_channel.needs_input</code></td><td>展示 <code>data.display_text</code> 或 <code>data.data.card.question</code>，让用户补充后继续同一会话</td></tr><tr><td><code>external_channel.completed</code></td><td>读取 <code>data.data.response.reply</code>；结构与 <code>POST /events</code> 的 <code>reply</code> 相同</td></tr><tr><td><code>done</code></td><td><code>data.ok=true</code> 表示本次 SSE 正常结束</td></tr><tr><td><code>error</code></td><td>展示 <code>data.error.message</code>，并保留 <code>idempotency_key</code> 便于排查</td></tr></tbody></table></div>
 <p>除 <code>external_channel.delta</code>、<code>done</code>、<code>error</code> 外，结构化事件的 <code>data</code> 都带以下通用字段：</p>
 <figure class="code-card">
     <figcaption><span>jsonc</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -832,12 +832,12 @@ Content-Type: application/json</code></pre>
   &quot;schema&quot;: &quot;v3.external_channel.sse.v1&quot;,          // SSE 结构版本
   &quot;event_id&quot;: &quot;assistant-run-id:000020&quot;,           // 可用于去重
   &quot;sequence&quot;: 20,                                  // 本轮流内阶段序号
-  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,          // V3 本次运行 ID
+  &quot;assistant_run_id&quot;: &quot;assistant-run-id&quot;,          // DataMax 本次运行 ID
   &quot;idempotency_key&quot;: &quot;chat:tenant-ext-001:msg-1&quot;,  // 幂等键
   &quot;conversation_external_id&quot;: &quot;conv-20260520-0001&quot;,// 第三方会话 ID
   &quot;phase&quot;: &quot;static_page&quot;,                          // 阶段
   &quot;status&quot;: &quot;processing&quot;,                          // 公开状态
-  &quot;display_text&quot;: &quot;V3 正在生成页面方案。&quot;,          // 可展示文案
+  &quot;display_text&quot;: &quot;DataMax 正在生成页面方案。&quot;,          // 可展示文案
   &quot;status_url&quot;: &quot;https://v3.elepcloud.com/...&quot;,    // 后续状态查询地址；没有为 null
   &quot;poll_after_seconds&quot;: 15,                        // 建议轮询间隔；没有为 null
   &quot;data&quot;: {}                                       // 该事件的具体业务数据
@@ -850,7 +850,7 @@ Content-Type: application/json</code></pre>
   &quot;stream_since_sequence&quot;: 20 // 只回放 20 之后的公开事件
 }</code></pre>
   </figure>
-<p>也可以用 Query：<code>?since_sequence=20</code>，或 Header：<code>Last-Event-ID: assistant-run-id:000020</code>。V3 会回放未消费的公开事件；任务未完成时会继续输出后续状态。</p>
+<p>也可以用 Query：<code>?since_sequence=20</code>，或 Header：<code>Last-Event-ID: assistant-run-id:000020</code>。DataMax 会回放未消费的公开事件；任务未完成时会继续输出后续状态。</p>
 <p>最小代码示例：</p>
 <figure class="code-card">
     <figcaption><span>js</span><button type="button" class="copy-code">复制</button></figcaption>
@@ -909,7 +909,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   }
 }</code></pre>
   </figure>
-<p>如果前端只能使用原生 <code>EventSource</code>，请在第三方服务端做一个 GET 代理：服务端保存本轮请求体并调用 V3 的 POST <code>/events/stream</code>，浏览器只连接自己的 <code>GET /v3-stream-proxy?message_id=...</code>。浏览器重连时把最后的 <code>event_id</code> 传给服务端，服务端转成 <code>Last-Event-ID</code> 或 <code>stream_since_sequence</code>。</p>
+<p>如果前端只能使用原生 <code>EventSource</code>，请在第三方服务端做一个 GET 代理：服务端保存本轮请求体并调用 DataMax 的 POST <code>/events/stream</code>，浏览器只连接自己的 <code>GET /v3-stream-proxy?message_id=...</code>。浏览器重连时把最后的 <code>event_id</code> 传给服务端，服务端转成 <code>Last-Event-ID</code> 或 <code>stream_since_sequence</code>。</p>
 <p>如果 <code>reply.task_status=needs_input</code> 或收到 <code>external_channel.needs_input</code>，表示当前可见资料不足但可以继续。第三方只需要把 <code>reply.text</code> / <code>reply.card.question</code> 展示给用户；用户补充制度名称、页码、关键词、文档范围或统计口径后，继续用同一个 <code>conversation_external_id</code> 发下一轮消息。</p>
 <h3 id="section-13">2.3 数据接入/入库分析请求</h3>
 <p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出数据接入、入库、建表、字段映射、清洗、schema、ETL、导入或数据库分析需求，例如：</p>
@@ -930,21 +930,21 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
   &quot;received_at&quot;: &quot;2026-05-20T10:20:00Z&quot;
 }</code></pre>
   </figure>
-<p>V3 只会把已由 V3 选中或已授权可见的文档、文件、数据集、数据库源预览交给受控分析任务；不会把原始数据库 URL、凭据、完整表 dump 或无限制本地路径放进任务包。</p>
+<p>DataMax 只会把已由 DataMax 选中或已授权可见的文档、文件、数据集、数据库源预览交给受控分析任务；不会把原始数据库 URL、凭据、完整表 dump 或无限制本地路径放进任务包。</p>
 <p>当服务端启用 <code>data_ingestion_analysis</code> 固定能力时，符合条件的请求会返回现有 <code>task_status</code> 形态：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_retrying</code>、<code>data_ingestion_analysis_completed</code>、<code>data_ingestion_analysis_needs_human</code>、<code>data_ingestion_analysis_failed</code>、<code>data_ingestion_analysis_cancelled</code>、人工确认后的 <code>data_ingestion_staging_dataset_ready</code>，以及同步阶段的 <code>data_ingestion_staging_sync_started</code>、<code>data_ingestion_staging_sync_running</code>、<code>data_ingestion_staging_sync_completed</code>、<code>data_ingestion_staging_sync_failed</code></td></tr><tr><td><code>reply.card.type</code></td><td>排队时为 <code>v3_data_ingestion_analysis</code>；完成后为 <code>v3_data_ingestion_analysis_result</code>；确认创建/复用 staging 数据集后为 <code>v3_data_ingestion_staging_plan_execution</code>；同步启动后为 <code>v3_data_ingestion_staging_sync</code></td></tr><tr><td><code>reply.card.result_summary</code></td><td>完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作</td></tr><tr><td><code>reply.card.staging_plan</code></td><td>完成后可返回 <code>v3_data_ingestion_staging_plan</code>，用于人工确认后的数据集/数据源导入草稿；固定 <code>production_write_allowed=false</code></td></tr><tr><td><code>reply.card.dataset_id</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 V3 创建或复用的 staging 数据集 ID</td></tr><tr><td><code>reply.card.dataset_key</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 staging 数据集 key</td></tr><tr><td><code>reply.card.source_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回本次使用的数据库源 ID</td></tr><tr><td><code>reply.card.sync_run_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回 V3 内部同步任务 ID</td></tr><tr><td><code>reply.card.runtime_event.retryable</code></td><td>固定任务取消时为 <code>false</code>；第三方不需要自动重试取消态</td></tr><tr><td><code>reply.card.workflow_status</code></td><td>同步阶段返回 V3 内部工作流状态，例如 <code>running</code>、<code>succeeded</code>、<code>failed</code></td></tr><tr><td><code>reply.card.workflow_stage</code></td><td>同步阶段返回当前阶段，例如 <code>sync_users</code>、<code>fetch_content</code>、<code>ingest</code>、<code>index</code>、<code>completed</code></td></tr><tr><td><code>reply.card.imported_row_count</code></td><td>当前确认步骤不自动导入原始行，固定为 <code>0</code>；后续导入/数据库同步需走人工确认执行</td></tr></tbody></table></div>
-<p>当 <code>reply.task_status=data_ingestion_staging_sync_completed</code> 后，同一个 <code>conversation_external_id</code> 的后续问题会自动复用该 staging 数据集作为可见数据范围；第三方不必每轮重复传内部 <code>dataset_id</code>。如果第三方更换会话 ID，或希望切换数据范围，应重新传稳定 <code>dataset_external_id</code>、具体文档范围，或由 V3 侧重新确认新的 staging 数据集。</p>
-<p>若没有选中或上传可分析的数据源/表格/文档，V3 会返回 <code>data_ingestion_analysis_source_required</code>，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>data_ingestion_analysis_queued</code>、<code>data_ingestion_analysis_retrying</code>、<code>data_ingestion_analysis_completed</code>、<code>data_ingestion_analysis_needs_human</code>、<code>data_ingestion_analysis_failed</code>、<code>data_ingestion_analysis_cancelled</code>、人工确认后的 <code>data_ingestion_staging_dataset_ready</code>，以及同步阶段的 <code>data_ingestion_staging_sync_started</code>、<code>data_ingestion_staging_sync_running</code>、<code>data_ingestion_staging_sync_completed</code>、<code>data_ingestion_staging_sync_failed</code></td></tr><tr><td><code>reply.card.type</code></td><td>排队时为 <code>v3_data_ingestion_analysis</code>；完成后为 <code>v3_data_ingestion_analysis_result</code>；确认创建/复用 staging 数据集后为 <code>v3_data_ingestion_staging_plan_execution</code>；同步启动后为 <code>v3_data_ingestion_staging_sync</code></td></tr><tr><td><code>reply.card.result_summary</code></td><td>完成后返回安全摘要：来源摘要、行数/告警、字段映射摘要、staging 摘要、校验项和建议动作</td></tr><tr><td><code>reply.card.staging_plan</code></td><td>完成后可返回 <code>v3_data_ingestion_staging_plan</code>，用于人工确认后的数据集/数据源导入草稿；固定 <code>production_write_allowed=false</code></td></tr><tr><td><code>reply.card.dataset_id</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 DataMax 创建或复用的 staging 数据集 ID</td></tr><tr><td><code>reply.card.dataset_key</code></td><td><code>data_ingestion_staging_dataset_ready</code> 时返回 staging 数据集 key</td></tr><tr><td><code>reply.card.source_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回本次使用的数据库源 ID</td></tr><tr><td><code>reply.card.sync_run_id</code></td><td><code>data_ingestion_staging_sync_started</code> 时返回 DataMax 内部同步任务 ID</td></tr><tr><td><code>reply.card.runtime_event.retryable</code></td><td>固定任务取消时为 <code>false</code>；第三方不需要自动重试取消态</td></tr><tr><td><code>reply.card.workflow_status</code></td><td>同步阶段返回 DataMax 内部工作流状态，例如 <code>running</code>、<code>succeeded</code>、<code>failed</code></td></tr><tr><td><code>reply.card.workflow_stage</code></td><td>同步阶段返回当前阶段，例如 <code>sync_users</code>、<code>fetch_content</code>、<code>ingest</code>、<code>index</code>、<code>completed</code></td></tr><tr><td><code>reply.card.imported_row_count</code></td><td>当前确认步骤不自动导入原始行，固定为 <code>0</code>；后续导入/数据库同步需走人工确认执行</td></tr></tbody></table></div>
+<p>当 <code>reply.task_status=data_ingestion_staging_sync_completed</code> 后，同一个 <code>conversation_external_id</code> 的后续问题会自动复用该 staging 数据集作为可见数据范围；第三方不必每轮重复传内部 <code>dataset_id</code>。如果第三方更换会话 ID，或希望切换数据范围，应重新传稳定 <code>dataset_external_id</code>、具体文档范围，或由 DataMax 侧重新确认新的 staging 数据集。</p>
+<p>若没有选中或上传可分析的数据源/表格/文档，DataMax 会返回 <code>data_ingestion_analysis_source_required</code>，提示第三方先补充资料范围。凭据请求、生产表写入、覆盖导入、schema 迁移、公开 API/auth/请求响应字段变更都会转人工确认，不会自动执行。</p>
 <h3 id="section-14">2.4 采集/对接方案分析请求</h3>
-<p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出资料采集、爬虫规划、外部资料库接入、第三方系统对接、接口字段确认、权限配置或消息渠道配置等需求。V3 会先把这类请求识别为平台受控能力，不会直接执行外部动作。</p>
+<p>第三方接口无需新增字段。客户可以在普通聊天消息里直接提出资料采集、爬虫规划、外部资料库接入、第三方系统对接、接口字段确认、权限配置或消息渠道配置等需求。DataMax 会先把这类请求识别为平台受控能力，不会直接执行外部动作。</p>
 <p>常见返回形态：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td>涉及新增外部动作、权限、凭据、接口变更时为 <code>requires_confirmation</code>；只读状态检查或只读方案分析时可为 <code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td>需要确认时为 <code>needs_confirmation</code>；只读分析记录时为 <code>capability_analysis_recorded</code></td></tr><tr><td><code>reply.card.type</code></td><td>采集/资料库规划为 <code>v3_collection_setup_analysis</code>；第三方系统/API/权限对接规划为 <code>v3_integration_setup_analysis</code></td></tr><tr><td><code>reply.card.requested_capability</code></td><td><code>collection_setup_analysis</code> 或 <code>integration_setup_analysis</code></td></tr><tr><td><code>reply.card.risk_level</code></td><td><code>low</code>、<code>medium</code>、<code>high</code> 或 <code>critical</code></td></tr><tr><td><code>reply.card.review_reason</code></td><td>需要确认或只读放行的原因</td></tr><tr><td><code>reply.card.next_actions</code></td><td>V3 建议的下一步，不表示已经执行</td></tr><tr><td><code>reply.card.forbidden_actions</code></td><td>本轮禁止自动执行的动作摘要</td></tr></tbody></table></div>
-<p>第三方应把 <code>requires_confirmation</code> 展示为“待 V3/人工确认”状态。V3 不会在该流程中自动执行爬取、登录、外部写入、凭据收集、公开接口 URL/鉴权/请求字段/响应字段变更，也不会自动扩大文档、数据集或用户权限。</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td>涉及新增外部动作、权限、凭据、接口变更时为 <code>requires_confirmation</code>；只读状态检查或只读方案分析时可为 <code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td>需要确认时为 <code>needs_confirmation</code>；只读分析记录时为 <code>capability_analysis_recorded</code></td></tr><tr><td><code>reply.card.type</code></td><td>采集/资料库规划为 <code>v3_collection_setup_analysis</code>；第三方系统/API/权限对接规划为 <code>v3_integration_setup_analysis</code></td></tr><tr><td><code>reply.card.requested_capability</code></td><td><code>collection_setup_analysis</code> 或 <code>integration_setup_analysis</code></td></tr><tr><td><code>reply.card.risk_level</code></td><td><code>low</code>、<code>medium</code>、<code>high</code> 或 <code>critical</code></td></tr><tr><td><code>reply.card.review_reason</code></td><td>需要确认或只读放行的原因</td></tr><tr><td><code>reply.card.next_actions</code></td><td>DataMax 建议的下一步，不表示已经执行</td></tr><tr><td><code>reply.card.forbidden_actions</code></td><td>本轮禁止自动执行的动作摘要</td></tr></tbody></table></div>
+<p>第三方应把 <code>requires_confirmation</code> 展示为“待 DataMax/人工确认”状态。DataMax 不会在该流程中自动执行爬取、登录、外部写入、凭据收集、公开接口 URL/鉴权/请求字段/响应字段变更，也不会自动扩大文档、数据集或用户权限。</p>
 <h3 id="section-15">2.5 主动消息/主动发起对话请求</h3>
-<p>第三方接口无需新增字段。客户可以在普通聊天消息里要求 V3 在任务完成后通知某人、提醒负责人查看报表、向当前会话继续发起确认，或把结果通过已配置消息渠道发送给指定人员。V3 会先生成受控外发意图，不会让模型直接发送消息。</p>
+<p>第三方接口无需新增字段。客户可以在普通聊天消息里要求 DataMax 在任务完成后通知某人、提醒负责人查看报表、向当前会话继续发起确认，或把结果通过已配置消息渠道发送给指定人员。DataMax 会先生成受控外发意图，不会让模型直接发送消息。</p>
 <p>常见返回形态：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td>通常为 <code>requires_confirmation</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>message_outreach_confirmation_required</code></td></tr><tr><td><code>reply.card.type</code></td><td><code>v3_message_channel_outreach</code></td></tr><tr><td><code>reply.card.status</code></td><td><code>message_outreach_confirmation_required</code></td></tr><tr><td><code>reply.card.requested_capability</code></td><td><code>message_channel_outreach</code></td></tr><tr><td><code>reply.card.risk_level</code></td><td>同会话运营通知通常为 <code>low</code>；新收件人、跨会话或跨渠道为 <code>medium</code>；含报表/文档/权限内容为 <code>high</code></td></tr><tr><td><code>reply.card.target_summary</code></td><td>只返回安全摘要，如当前通道、会话 ID、接收人数和是否同会话</td></tr><tr><td><code>reply.card.idempotency_key</code></td><td>本次外发意图幂等键；第三方可用于确认/审计对账</td></tr></tbody></table></div>
-<p>第三方应把该回复展示为“待 V3/人工确认后发送”。V3 不会自动发送原始模型文本，不会绕过收件人权限，不会跨渠道外发，也不会在消息里携带明文凭据或原始客户资料全文。若后续接入安全的同会话运营通知自动派发，仍会通过 <code>reply.card.status=message_outreach_queued|message_outreach_sent|message_outreach_failed</code> 或对应状态事件明确告知。</p>
+<p>第三方应把该回复展示为“待 DataMax/人工确认后发送”。DataMax 不会自动发送原始模型文本，不会绕过收件人权限，不会跨渠道外发，也不会在消息里携带明文凭据或原始客户资料全文。若后续接入安全的同会话运营通知自动派发，仍会通过 <code>reply.card.status=message_outreach_queued|message_outreach_sent|message_outreach_failed</code> 或对应状态事件明确告知。</p>
 <h2 id="section-16">3. 生成产物（报表）</h2>
 <h3 id="section-17">3.1 模板列表字段</h3>
 <p>第三方页面或第三方 AI 只需要保留下面这些模板字段；生成时把选中的模板带入 3.3。</p>
@@ -989,7 +989,7 @@ async function pollV3Status(statusUrl, token, seconds = 15) {
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>POST /v1/external/channels/{connection_id}/events
-Authorization: Bearer &lt;V3 inbound token&gt;
+Authorization: Bearer &lt;DataMax inbound token&gt;
 Content-Type: application/json</code></pre>
   </figure>
 <figure class="code-card">
@@ -1004,7 +1004,7 @@ Content-Type: application/json</code></pre>
   &quot;message_type&quot;: &quot;text&quot;,                          // 消息类型
   &quot;text&quot;: &quot;根据本轮经营数据和模板生成经营分析静态页。&quot;, // 用户产物生成需求
   &quot;default_prompt&quot;: &quot;按模板结构输出，结论面向业务负责人。&quot;, // 本轮默认提示词
-  &quot;artifact_type&quot;: &quot;static_page&quot;,                  // 推荐：直接声明产物类型；V3 自动进入报表页面生成流程
+  &quot;artifact_type&quot;: &quot;static_page&quot;,                  // 推荐：直接声明产物类型；DataMax 自动进入报表页面生成流程
   &quot;template&quot;: {                                    // 推荐：模板作为一级业务字段传入
     &quot;source_id&quot;: &quot;third-party-source-main&quot;,        // 模板文档源 ID
     &quot;document_external_id&quot;: &quot;tpl-weekly-report-001&quot;, // 模板文档 ID
@@ -1021,20 +1021,20 @@ Content-Type: application/json</code></pre>
   &quot;received_at&quot;: &quot;2026-05-20T10:10:00Z&quot;            // 消息时间
 }</code></pre>
   </figure>
-<p>生成响应字段同 2.1。新接入推荐使用 <code>artifact_type + template</code>：第三方不需要理解内部 <code>render_mode</code>、<code>output_format</code> 和 <code>document_template_skill</code>，V3 会自动映射为现有报表页面发布流程。模板文档只作为页面结构、版式风格和字段组织参考，事实内容仍以本会话授权资料和检索证据为准。</p>
+<p>生成响应字段同 2.1。新接入推荐使用 <code>artifact_type + template</code>：第三方不需要理解内部 <code>render_mode</code>、<code>output_format</code> 和 <code>document_template_skill</code>，DataMax 会自动映射为现有报表页面发布流程。模板文档只作为页面结构、版式风格和字段组织参考，事实内容仍以本会话授权资料和检索证据为准。</p>
 <p><code>template</code> 字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template.source_id</code></td><td>建议填</td><td>模板所属文档源 ID；未单独传 <code>available_document_source_id</code> 时，V3 会用它补齐</td></tr><tr><td><code>template.document_external_id</code></td><td>文档模板必填</td><td>模板文档 ID；兼容 <code>template_document_external_id</code>、<code>documentExternalId</code></td></tr><tr><td><code>template.revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>template.mode</code></td><td>否</td><td>推荐传 <code>reference</code>，表示作为结构/版式/字段参考</td></tr><tr><td><code>template.output_type</code></td><td>否</td><td><code>static_page</code>、<code>html</code>、<code>report</code>、<code>document</code>、<code>table</code>、<code>image</code> 或 <code>any</code>；不传时跟随 <code>artifact_type</code></td></tr><tr><td><code>template.template_reference_id</code></td><td>否</td><td>V3 内置静态页模板引用；使用第三方文档模板时通常不用传</td></tr></tbody></table></div>
-<p>兼容旧写法仍然有效：已接入第三方可以继续传 <code>render_mode: &quot;artifact&quot;</code>、<code>output_format: &quot;image_text&quot;</code>，并在 <code>requested_skills[].arguments.output_type</code> 中传 <code>static_page</code>。如果同时传了 <code>template</code> 和旧 <code>requested_skills</code>，V3 会去重，不重复加载同一模板文档。</p>
-<p>V3 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 <code>artifact_links[0]</code>、<code>card.generated_artifact_url</code> / <code>card.public_url</code>，同时兼容保留 <code>render_output_id</code> 和下载/预览地址。发布完成时，<code>reply.text</code> 也会带 Markdown 形式的可点击链接（如 <code><a href="URL">点击查看报表</a></code>）和一行原始 <code>页面地址: URL</code>，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 <code>artifact_links[0]</code>、<code>card.public_url</code>、<code>card.generated_artifact_url</code> 为准。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。</p>
-<p>V3 会把已经发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 <code>default_prompt</code>，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 <code>default_prompt</code> 相同，V3 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 <code>default_prompt</code> 表达了不同报表口径/主题时，才重新进入新的页面设计流程。</p>
-<p>第三方操作人员可以先把 <code>card.public_url</code> 或 <code>artifact_links[0]</code> 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；V3 会在静态页卡片返回 <code>recipient_delivery</code>，说明当前是否已具备自动配置条件，或还缺哪些权限映射。</p>
-<p>第三方不需要关心 V3 内部生成配置，只需按响应字段判断是否已拿到最终 HTML 页面，或仍在自动发布队列。</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>template.source_id</code></td><td>建议填</td><td>模板所属文档源 ID；未单独传 <code>available_document_source_id</code> 时，DataMax 会用它补齐</td></tr><tr><td><code>template.document_external_id</code></td><td>文档模板必填</td><td>模板文档 ID；兼容 <code>template_document_external_id</code>、<code>documentExternalId</code></td></tr><tr><td><code>template.revision_external_id</code></td><td>否</td><td>模板版本 ID</td></tr><tr><td><code>template.mode</code></td><td>否</td><td>推荐传 <code>reference</code>，表示作为结构/版式/字段参考</td></tr><tr><td><code>template.output_type</code></td><td>否</td><td><code>static_page</code>、<code>html</code>、<code>report</code>、<code>document</code>、<code>table</code>、<code>image</code> 或 <code>any</code>；不传时跟随 <code>artifact_type</code></td></tr><tr><td><code>template.template_reference_id</code></td><td>否</td><td>DataMax 内置静态页模板引用；使用第三方文档模板时通常不用传</td></tr></tbody></table></div>
+<p>兼容旧写法仍然有效：已接入第三方可以继续传 <code>render_mode: &quot;artifact&quot;</code>、<code>output_format: &quot;image_text&quot;</code>，并在 <code>requested_skills[].arguments.output_type</code> 中传 <code>static_page</code>。如果同时传了 <code>template</code> 和旧 <code>requested_skills</code>，DataMax 会去重，不重复加载同一模板文档。</p>
+<p>DataMax 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 <code>artifact_links[0]</code>、<code>card.generated_artifact_url</code> / <code>card.public_url</code>，同时兼容保留 <code>render_output_id</code> 和下载/预览地址。发布完成时，<code>reply.text</code> 也会带 Markdown 形式的可点击链接（如 <code><a href="URL">点击查看报表</a></code>）和一行原始 <code>页面地址: URL</code>，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 <code>artifact_links[0]</code>、<code>card.public_url</code>、<code>card.generated_artifact_url</code> 为准。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。</p>
+<p>DataMax 会把已经发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 <code>default_prompt</code>，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 <code>default_prompt</code> 相同，DataMax 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 <code>default_prompt</code> 表达了不同报表口径/主题时，才重新进入新的页面设计流程。</p>
+<p>第三方操作人员可以先把 <code>card.public_url</code> 或 <code>artifact_links[0]</code> 作为基础页面链接单独发送。若页面需要按人员、角色、门店或区域拆成不同可发送版本，继续在对话里补充用户-角色-范围映射即可；DataMax 会在静态页卡片返回 <code>recipient_delivery</code>，说明当前是否已具备自动配置条件，或还缺哪些权限映射。</p>
+<p>第三方不需要关心 DataMax 内部生成配置，只需按响应字段判断是否已拿到最终 HTML 页面，或仍在自动发布队列。</p>
 <p>若进入静态页/报表生成流程，响应通常为：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code> 或 <code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td>顶层兼容状态；生成中、可重试、后台继续、待人工处理统一为 <code>processing</code>，需要用户补充为 <code>needs_input</code>，最终成功为 <code>static_page_published</code>，只有不可继续的失败/取消才返回 <code>failed</code></td></tr><tr><td><code>reply.card.status</code></td><td>静态页细分阶段；第三方按生成中、发布中、重试中、需人工处理、失败或取消等状态处理即可</td></tr><tr><td><code>reply.text</code></td><td>给用户展示的排队/处理说明；已发布页面会包含 Markdown 可点击链接和原始 <code>页面地址: URL</code>，第三方页面应按富文本/Markdown 或 URL 自动链接渲染</td></tr><tr><td><code>reply.card.type</code></td><td>系统卡片类型；第三方按不透明字符串记录即可</td></tr><tr><td><code>reply.card.draft_id</code></td><td>V3 静态页草稿 ID</td></tr><tr><td><code>reply.card.render_output_id</code></td><td>已直接生成 HTML 时返回；第三方用它查询、预览或下载静态页</td></tr><tr><td><code>reply.card.html_preview_url</code></td><td>已直接生成 HTML 时返回；浏览器 inline 预览地址</td></tr><tr><td><code>reply.card.html_download_url</code></td><td>已直接生成 HTML 时返回；HTML 附件下载地址</td></tr><tr><td><code>reply.card.generated_artifact_url</code> / <code>reply.card.public_url</code></td><td>已发布 generated-artifact 时返回；第三方优先把这个链接展示或转存</td></tr><tr><td><code>reply.card.data_url</code></td><td>已发布动态静态页且存在 <code>data.json</code> 时返回；用于第三方服务端转存页面数据快照</td></tr><tr><td><code>reply.card.data_snapshot_url</code></td><td>已发布动态静态页且存在 <code>data-snapshot.json</code> 时返回；与 <code>data_url</code> 同源，保留为渲染/审计快照</td></tr><tr><td><code>reply.card.dynamic_page_contract</code></td><td>动态静态页数据合同；说明 <code>data.json</code>、<code>data-snapshot.json</code>、刷新间隔、变更检测字段、默认时间范围控件和经营报表按月默认口径</td></tr><tr><td><code>reply.card.template_reference_id</code></td><td>本次使用的静态页模板引用；若为 <code>generated-static-page:{draft_id}</code>，表示来自 V3 已发布页面模板库</td></tr><tr><td><code>reply.card.template_reference</code></td><td>模板摘要；只用于视觉风格、结构和字段组织，不扩大事实证据范围</td></tr><tr><td><code>reply.card.template_match_policy</code></td><td>模板命中策略：<code>exact_dataset_artifact_key</code> 表示相同数据集组合直接复用，<code>dataset_overlap</code> 表示按数据集交集套用模板，<code>explicit_or_inferred_template</code> 表示显式或意图推断模板</td></tr><tr><td><code>reply.card.relaxed_template_match</code></td><td>当 <code>template_match_policy=dataset_overlap</code> 时返回匹配到的历史模板摘要，便于第三方记录为什么可以快速套用</td></tr><tr><td><code>reply.card.style_reuse_policy</code></td><td>默认 <code>reuse_style_unless_explicit_redesign</code>，表示除非明确要求换风格，否则复用模板样式</td></tr><tr><td><code>reply.card.data_refresh_policy</code></td><td>默认 <code>refresh_data_files_from_dataset_sources</code>，表示页面数据按本轮数据集/业务库刷新</td></tr><tr><td><code>reply.card.recipient_delivery</code></td><td>静态页分发辅助信息；包含 <code>can_create_recipient_specific_links</code>、<code>operator_external_user_id</code>、<code>target_external_user_ids</code>、识别到的角色范围和补充映射提示</td></tr><tr><td><code>reply.card.permission_review_status</code></td><td>权限/分发映射状态：<code>provided_for_auto_configuration</code> 表示已传映射可自动配置；<code>needs_user_role_scope_mapping</code> 表示需要补充用户-角色-门店/区域范围；<code>role_requirements_detected</code> 表示只识别到角色要求</td></tr><tr><td><code>reply.card.editable_after_publish</code></td><td><code>true</code> 表示最终页面生成后仍可继续让 V3 按人员、角色或门店范围调整并产出新的单独链接</td></tr><tr><td><code>reply.card.status_url</code></td><td>生成中返回；第三方服务端用 <code>GET</code> 轮询该 URL，直到 <code>reply.reply_type=artifact_link</code> 或顶层 <code>reply.task_status=failed</code></td></tr><tr><td><code>reply.card.poll_after_seconds</code></td><td>建议轮询间隔；生成中通常为 <code>15</code>，重试中通常为 <code>30</code></td></tr><tr><td><code>reply.card.preview_url</code></td><td>若返回过程预览链接，第三方可展示为生成进度预览；最终交付仍以 <code>public_url</code> 或 <code>artifact_links[0]</code> 为准</td></tr></tbody></table></div>
-<p>若调用流式接口，V3 会持续输出静态页中间过程：包括页面规划、生成中、发布中、已发布或问题原因。若本次 SSE 等待到达上限但后台仍在继续，第三方按 <code>status_url</code> 继续轮询。</p>
-<p>静态页生成不应因为样本行、可选维度或局部模块数据不足就直接失败。V3 会先扩大供料并尽量补足；仍不足时，也会按已有数据先生成一版可用页面，并在页面或 <code>validation_summary.warnings</code> 中标出缺口。若 <code>card.public_url</code> 或 <code>artifact_links[0]</code> 已存在，可先把该页面作为可发送链接。若只存在 <code>card.render_output_id</code>，可直接按 3.4 查询/预览/下载；若 <code>card.public_url</code> 为空但 <code>card.status_url</code> 存在，表示当前仍在自动生成、重试或后台继续阶段，第三方继续轮询，或用原 <code>/events</code> 请求体和同一 <code>idempotency_key</code> 重试。若 <code>reply.card.status</code> 进入重试、失败或需人工处理但顶层仍为 <code>processing</code>，第三方继续轮询或提示 V3 正在补充处理；只有顶层 <code>reply.task_status=failed</code> 时，才按不可继续失败/取消提示稍后重试或由 V3 侧人工处理。过程预览不是最终交付物。</p>
-<p>固定发布任务完成后，V3 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 <code>reply</code> 对象：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>static_page_published</code></td></tr><tr><td><code>reply.artifact_links[0]</code></td><td>最终 V3 generated-artifact 页面链接，例如 <code>https://v3.elepcloud.com/generated-artifacts/.../index.html</code></td></tr><tr><td><code>reply.card.type</code></td><td>系统卡片类型；第三方按不透明字符串记录即可</td></tr><tr><td><code>reply.card.data_url</code></td><td>若最终页面带动态数据文件，则为同目录 <code>data.json</code> 链接</td></tr><tr><td><code>reply.card.data_snapshot_url</code></td><td>若最终页面带动态数据文件，则为同目录 <code>data-snapshot.json</code> 链接</td></tr><tr><td><code>reply.card.dynamic_page_contract</code></td><td>动态页合同；第三方通常只需转存，页面会优先按本地 <code>data.json</code> 渲染</td></tr><tr><td><code>reply.card.template_reference_id</code></td><td>最终采用的模板引用；第三方可以记录下来作为后续同类需求的展示或审计信息</td></tr><tr><td><code>reply.card.template_match_policy</code></td><td>最终模板命中策略；用于区分新设计、相同数据集复用和数据集交集套模板</td></tr><tr><td><code>reply.card.style_reuse_policy</code> / <code>reply.card.data_refresh_policy</code></td><td>表示页面样式复用和数据刷新策略；通常保持默认即可</td></tr><tr><td><code>reply.card.recipient_delivery</code></td><td>与生成中卡片一致；第三方可据此判断是否直接发送基础链接，或提示操作人员补充用户-角色-范围映射后再生成分权限链接</td></tr><tr><td><code>reply.card.permission_review_status</code></td><td>与生成中卡片一致</td></tr><tr><td><code>reply.card.editable_after_publish</code></td><td>与生成中卡片一致</td></tr><tr><td><code>reply.card.validation_summary</code></td><td>口径摘要，如最新快照日期、源行数、明细行数、单位策略和告警；不会包含原始明细行或内部检索日志</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code> 或 <code>task_status</code></td></tr><tr><td><code>reply.task_status</code></td><td>顶层兼容状态；生成中、可重试、后台继续、待人工处理统一为 <code>processing</code>，需要用户补充为 <code>needs_input</code>，最终成功为 <code>static_page_published</code>，只有不可继续的失败/取消才返回 <code>failed</code></td></tr><tr><td><code>reply.card.status</code></td><td>静态页细分阶段；第三方按生成中、发布中、重试中、需人工处理、失败或取消等状态处理即可</td></tr><tr><td><code>reply.text</code></td><td>给用户展示的排队/处理说明；已发布页面会包含 Markdown 可点击链接和原始 <code>页面地址: URL</code>，第三方页面应按富文本/Markdown 或 URL 自动链接渲染</td></tr><tr><td><code>reply.card.type</code></td><td>系统卡片类型；第三方按不透明字符串记录即可</td></tr><tr><td><code>reply.card.draft_id</code></td><td>DataMax 静态页草稿 ID</td></tr><tr><td><code>reply.card.render_output_id</code></td><td>已直接生成 HTML 时返回；第三方用它查询、预览或下载静态页</td></tr><tr><td><code>reply.card.html_preview_url</code></td><td>已直接生成 HTML 时返回；浏览器 inline 预览地址</td></tr><tr><td><code>reply.card.html_download_url</code></td><td>已直接生成 HTML 时返回；HTML 附件下载地址</td></tr><tr><td><code>reply.card.generated_artifact_url</code> / <code>reply.card.public_url</code></td><td>已发布 generated-artifact 时返回；第三方优先把这个链接展示或转存</td></tr><tr><td><code>reply.card.data_url</code></td><td>已发布动态静态页且存在 <code>data.json</code> 时返回；用于第三方服务端转存页面数据快照</td></tr><tr><td><code>reply.card.data_snapshot_url</code></td><td>已发布动态静态页且存在 <code>data-snapshot.json</code> 时返回；与 <code>data_url</code> 同源，保留为渲染/审计快照</td></tr><tr><td><code>reply.card.dynamic_page_contract</code></td><td>动态静态页数据合同；说明 <code>data.json</code>、<code>data-snapshot.json</code>、刷新间隔、变更检测字段、默认时间范围控件和经营报表按月默认口径</td></tr><tr><td><code>reply.card.template_reference_id</code></td><td>本次使用的静态页模板引用；若为 <code>generated-static-page:{draft_id}</code>，表示来自 DataMax 已发布页面模板库</td></tr><tr><td><code>reply.card.template_reference</code></td><td>模板摘要；只用于视觉风格、结构和字段组织，不扩大事实证据范围</td></tr><tr><td><code>reply.card.template_match_policy</code></td><td>模板命中策略：<code>exact_dataset_artifact_key</code> 表示相同数据集组合直接复用，<code>dataset_overlap</code> 表示按数据集交集套用模板，<code>explicit_or_inferred_template</code> 表示显式或意图推断模板</td></tr><tr><td><code>reply.card.relaxed_template_match</code></td><td>当 <code>template_match_policy=dataset_overlap</code> 时返回匹配到的历史模板摘要，便于第三方记录为什么可以快速套用</td></tr><tr><td><code>reply.card.style_reuse_policy</code></td><td>默认 <code>reuse_style_unless_explicit_redesign</code>，表示除非明确要求换风格，否则复用模板样式</td></tr><tr><td><code>reply.card.data_refresh_policy</code></td><td>默认 <code>refresh_data_files_from_dataset_sources</code>，表示页面数据按本轮数据集/业务库刷新</td></tr><tr><td><code>reply.card.recipient_delivery</code></td><td>静态页分发辅助信息；包含 <code>can_create_recipient_specific_links</code>、<code>operator_external_user_id</code>、<code>target_external_user_ids</code>、识别到的角色范围和补充映射提示</td></tr><tr><td><code>reply.card.permission_review_status</code></td><td>权限/分发映射状态：<code>provided_for_auto_configuration</code> 表示已传映射可自动配置；<code>needs_user_role_scope_mapping</code> 表示需要补充用户-角色-门店/区域范围；<code>role_requirements_detected</code> 表示只识别到角色要求</td></tr><tr><td><code>reply.card.editable_after_publish</code></td><td><code>true</code> 表示最终页面生成后仍可继续让 DataMax 按人员、角色或门店范围调整并产出新的单独链接</td></tr><tr><td><code>reply.card.status_url</code></td><td>生成中返回；第三方服务端用 <code>GET</code> 轮询该 URL，直到 <code>reply.reply_type=artifact_link</code> 或顶层 <code>reply.task_status=failed</code></td></tr><tr><td><code>reply.card.poll_after_seconds</code></td><td>建议轮询间隔；生成中通常为 <code>15</code>，重试中通常为 <code>30</code></td></tr><tr><td><code>reply.card.preview_url</code></td><td>若返回过程预览链接，第三方可展示为生成进度预览；最终交付仍以 <code>public_url</code> 或 <code>artifact_links[0]</code> 为准</td></tr></tbody></table></div>
+<p>若调用流式接口，DataMax 会持续输出静态页中间过程：包括页面规划、生成中、发布中、已发布或问题原因。若本次 SSE 等待到达上限但后台仍在继续，第三方按 <code>status_url</code> 继续轮询。</p>
+<p>静态页生成不应因为样本行、可选维度或局部模块数据不足就直接失败。DataMax 会先扩大供料并尽量补足；仍不足时，也会按已有数据先生成一版可用页面，并在页面或 <code>validation_summary.warnings</code> 中标出缺口。若 <code>card.public_url</code> 或 <code>artifact_links[0]</code> 已存在，可先把该页面作为可发送链接。若只存在 <code>card.render_output_id</code>，可直接按 3.4 查询/预览/下载；若 <code>card.public_url</code> 为空但 <code>card.status_url</code> 存在，表示当前仍在自动生成、重试或后台继续阶段，第三方继续轮询，或用原 <code>/events</code> 请求体和同一 <code>idempotency_key</code> 重试。若 <code>reply.card.status</code> 进入重试、失败或需人工处理但顶层仍为 <code>processing</code>，第三方继续轮询或提示 DataMax 正在补充处理；只有顶层 <code>reply.task_status=failed</code> 时，才按不可继续失败/取消提示稍后重试或由 DataMax 侧人工处理。过程预览不是最终交付物。</p>
+<p>固定发布任务完成后，DataMax 会在现有运行事件/状态表面记录最终发布结果，不需要第三方补发确认请求。最终回复形态仍使用 2.1 的 <code>reply</code> 对象：</p>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code></td></tr><tr><td><code>reply.task_status</code></td><td><code>static_page_published</code></td></tr><tr><td><code>reply.artifact_links[0]</code></td><td>最终 DataMax generated-artifact 页面链接，例如 <code>https://v3.elepcloud.com/generated-artifacts/.../index.html</code></td></tr><tr><td><code>reply.card.type</code></td><td>系统卡片类型；第三方按不透明字符串记录即可</td></tr><tr><td><code>reply.card.data_url</code></td><td>若最终页面带动态数据文件，则为同目录 <code>data.json</code> 链接</td></tr><tr><td><code>reply.card.data_snapshot_url</code></td><td>若最终页面带动态数据文件，则为同目录 <code>data-snapshot.json</code> 链接</td></tr><tr><td><code>reply.card.dynamic_page_contract</code></td><td>动态页合同；第三方通常只需转存，页面会优先按本地 <code>data.json</code> 渲染</td></tr><tr><td><code>reply.card.template_reference_id</code></td><td>最终采用的模板引用；第三方可以记录下来作为后续同类需求的展示或审计信息</td></tr><tr><td><code>reply.card.template_match_policy</code></td><td>最终模板命中策略；用于区分新设计、相同数据集复用和数据集交集套模板</td></tr><tr><td><code>reply.card.style_reuse_policy</code> / <code>reply.card.data_refresh_policy</code></td><td>表示页面样式复用和数据刷新策略；通常保持默认即可</td></tr><tr><td><code>reply.card.recipient_delivery</code></td><td>与生成中卡片一致；第三方可据此判断是否直接发送基础链接，或提示操作人员补充用户-角色-范围映射后再生成分权限链接</td></tr><tr><td><code>reply.card.permission_review_status</code></td><td>与生成中卡片一致</td></tr><tr><td><code>reply.card.editable_after_publish</code></td><td>与生成中卡片一致</td></tr><tr><td><code>reply.card.validation_summary</code></td><td>口径摘要，如最新快照日期、源行数、明细行数、单位策略和告警；不会包含原始明细行或内部检索日志</td></tr></tbody></table></div>
 <p>如果第三方使用 <code>assistant_run_id</code> 做轮询，推荐直接调用 3.4 的运行结果查询接口；返回仍是 2.1 的 <code>reply</code> 对象。发布完成后，<code>reply.task_status=static_page_published</code>，<code>reply.artifact_links[0]</code> 就是最终页面链接。第三方不需要再做额外确认、下载或二次提交。</p>
 <p>若已生成静态页/报表/HTML 产物，重点读取：</p>
 <div class="table-shell"><table><thead><tr><th>字段</th><th>注释</th></tr></thead><tbody><tr><td><code>reply.reply_type</code></td><td><code>artifact_link</code>、<code>text</code> 或 <code>task_status</code></td></tr><tr><td><code>reply.text</code></td><td>给用户展示的说明；静态页发布完成时会包含 Markdown 链接和原始 <code>页面地址: URL</code></td></tr><tr><td><code>reply.artifact_links</code></td><td>产物链接数组；静态页优先返回 generated-artifact 页面 URL，兼容返回 HTML 下载地址；模板 HTML 产物会返回 <code>/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0</code></td></tr><tr><td><code>reply.card</code></td><td>可能包含 <code>render_output_id</code>、<code>html_preview_url</code>、<code>html_download_url</code>、<code>generated_artifact_url</code>、<code>data_url</code>、<code>dynamic_page_contract</code>、<code>draft_id</code>、产物状态或结构化卡片</td></tr><tr><td><code>assistant_run_id</code></td><td>本次生成运行 ID</td></tr></tbody></table></div>
@@ -1043,33 +1043,33 @@ Content-Type: application/json</code></pre>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/assistant-runs/{assistant_run_id}/reply
-Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+Authorization: Bearer &lt;DataMax inbound token&gt;</code></pre>
   </figure>
-<p>返回字段同 2.1。若页面仍在生成，<code>reply.reply_type=task_status</code> 且 <code>reply.task_status=processing</code>，细分阶段读取 <code>reply.card.status</code>；若已经发布，<code>reply.reply_type=artifact_link</code> 且 <code>reply.artifact_links[0]</code> 为最终页面链接。也可以用原 <code>POST /events</code> 的同一 <code>idempotency_key</code> 重试查询，V3 会在最终产物发布后返回相同的 artifact link。</p>
+<p>返回字段同 2.1。若页面仍在生成，<code>reply.reply_type=task_status</code> 且 <code>reply.task_status=processing</code>，细分阶段读取 <code>reply.card.status</code>；若已经发布，<code>reply.reply_type=artifact_link</code> 且 <code>reply.artifact_links[0]</code> 为最终页面链接。也可以用原 <code>POST /events</code> 的同一 <code>idempotency_key</code> 重试查询，DataMax 会在最终产物发布后返回相同的 artifact link。</p>
 <p>模板 HTML 产物直接下载：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/{file_index}
-Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+Authorization: Bearer &lt;DataMax inbound token&gt;</code></pre>
   </figure>
 <p>静态页/报表渲染产物：</p>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}
-Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+Authorization: Bearer &lt;DataMax inbound token&gt;</code></pre>
   </figure>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/preview
-Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+Authorization: Bearer &lt;DataMax inbound token&gt;</code></pre>
   </figure>
 <figure class="code-card">
     <figcaption><span>http</span><button type="button" class="copy-code">复制</button></figcaption>
     <pre><code>GET /v1/external/channels/{connection_id}/static-page-renders/{render_output_id}/download
-Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
+Authorization: Bearer &lt;DataMax inbound token&gt;</code></pre>
   </figure>
 <p>字段说明：</p>
-<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>V3 分配的第三方通道 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>运行结果查询必填</td><td>2.1 响应返回的 V3 本次运行 ID</td></tr><tr><td><code>artifact_id</code></td><td>HTML 产物下载必填</td><td><code>reply.artifact_links</code> 中的 HTML artifact ID</td></tr><tr><td><code>file_index</code></td><td>HTML 产物下载必填</td><td>文件序号；当前模板 HTML 产物固定传 <code>0</code></td></tr><tr><td><code>render_output_id</code></td><td>静态页/报表必填</td><td>V3 生成的静态页/报表渲染 ID</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th>字段</th><th>必填</th><th>注释</th></tr></thead><tbody><tr><td><code>connection_id</code></td><td>是</td><td>DataMax 分配的第三方通道 ID</td></tr><tr><td><code>assistant_run_id</code></td><td>运行结果查询必填</td><td>2.1 响应返回的 DataMax 本次运行 ID</td></tr><tr><td><code>artifact_id</code></td><td>HTML 产物下载必填</td><td><code>reply.artifact_links</code> 中的 HTML artifact ID</td></tr><tr><td><code>file_index</code></td><td>HTML 产物下载必填</td><td>文件序号；当前模板 HTML 产物固定传 <code>0</code></td></tr><tr><td><code>render_output_id</code></td><td>静态页/报表必填</td><td>DataMax 生成的静态页/报表渲染 ID</td></tr></tbody></table></div>
 <h2 id="section-21">4. 枚举与错误</h2>
 <h3 id="section-22">4.1 <code>output_format</code></h3>
 <div class="table-shell"><table><thead><tr><th>值</th><th>注释</th></tr></thead><tbody><tr><td><code>rich_text</code></td><td>富文本回答</td></tr><tr><td><code>image_text</code></td><td>图文排版回答</td></tr><tr><td><code>markdown_table</code></td><td>MD 表格回答</td></tr><tr><td><code>json</code></td><td>JSON 回答</td></tr></tbody></table></div>
@@ -1088,7 +1088,7 @@ Authorization: Bearer &lt;V3 inbound token&gt;</code></pre>
 }</code></pre>
   </figure>
 <p>常见错误：</p>
-<div class="table-shell"><table><thead><tr><th><code>code</code></th><th>注释</th></tr></thead><tbody><tr><td><code>external_channel_connection_not_found</code></td><td>未找到 <code>connection_id</code></td></tr><tr><td><code>external_channel_disabled</code></td><td>通道已停用</td></tr><tr><td><code>external_channel_event_payload_invalid</code></td><td>聊天请求字段不合法</td></tr><tr><td><code>external_channel_answer_policy_invalid</code></td><td><code>default_prompt</code>、<code>output_format</code> 或 <code>render_mode</code> 不合法</td></tr><tr><td><code>external_document_content_url_invalid</code></td><td>文档下载地址不是合法 URL</td></tr><tr><td><code>external_document_content_url_insecure</code></td><td>文档下载地址不是 HTTPS</td></tr><tr><td><code>external_document_download_failed</code></td><td>V3 下载文档失败</td></tr><tr><td><code>external_document_too_large</code></td><td>文档超过大小限制</td></tr><tr><td><code>html_artifact_not_found</code></td><td>找不到 HTML 产物</td></tr><tr><td><code>html_artifact_file_not_found</code></td><td>找不到 HTML 产物文件</td></tr><tr><td><code>html_artifact_file_unavailable</code></td><td>HTML 产物文件暂不可下载</td></tr><tr><td><code>static_page_render_output_not_found</code></td><td>找不到产物渲染结果</td></tr></tbody></table></div>
+<div class="table-shell"><table><thead><tr><th><code>code</code></th><th>注释</th></tr></thead><tbody><tr><td><code>external_channel_connection_not_found</code></td><td>未找到 <code>connection_id</code></td></tr><tr><td><code>external_channel_disabled</code></td><td>通道已停用</td></tr><tr><td><code>external_channel_event_payload_invalid</code></td><td>聊天请求字段不合法</td></tr><tr><td><code>external_channel_answer_policy_invalid</code></td><td><code>default_prompt</code>、<code>output_format</code> 或 <code>render_mode</code> 不合法</td></tr><tr><td><code>external_document_content_url_invalid</code></td><td>文档下载地址不是合法 URL</td></tr><tr><td><code>external_document_content_url_insecure</code></td><td>文档下载地址不是 HTTPS</td></tr><tr><td><code>external_document_download_failed</code></td><td>DataMax 下载文档失败</td></tr><tr><td><code>external_document_too_large</code></td><td>文档超过大小限制</td></tr><tr><td><code>html_artifact_not_found</code></td><td>找不到 HTML 产物</td></tr><tr><td><code>html_artifact_file_not_found</code></td><td>找不到 HTML 产物文件</td></tr><tr><td><code>html_artifact_file_unavailable</code></td><td>HTML 产物文件暂不可下载</td></tr><tr><td><code>static_page_render_output_not_found</code></td><td>找不到产物渲染结果</td></tr></tbody></table></div>
       </article>
       <p class="doc-footer">Generated from <code>docs/integrations/pure-third-party-integration-guide.zh-CN.md</code>. Keep Markdown as the editable source and HTML as the human-facing review surface.</p>
     </main>

@@ -89,7 +89,7 @@ const PRODUCT_FEATURES = [
 ];
 
 const DATA_PIPELINE_STEPS = [
-  { label: '采集', text: '文档、数据库、网页资料统一进入 V3' },
+  { label: '采集', text: '文档、数据库、网页资料统一进入 DataMax' },
   { label: '处理', text: '解析、索引、问答、模板产物一次串联' },
   { label: '呈现', text: '秒生 HTML、MD、图文和数据可视化报表' },
   { label: '落地', text: '移动端可用，业务动作可确认回传' },
@@ -1009,7 +1009,7 @@ export default function ExternalIntegrationsPageClient() {
     <main className="external-observability-shell">
       <section className="external-product-hero">
         <div className="external-product-copy">
-          <p className="external-kicker">V3 Enterprise Data Assistant</p>
+          <p className="external-kicker">DataMax Enterprise Data Assistant</p>
           <h1>
             <span>V3企业级</span>
             <span>数据处理</span>
@@ -1025,7 +1025,7 @@ export default function ExternalIntegrationsPageClient() {
             <span>在线接口文档</span>
             <span>支持联调</span>
           </div>
-          <div className="external-feature-chips" aria-label="V3 能力标签">
+          <div className="external-feature-chips" aria-label="DataMax 能力标签">
             {PRODUCT_FEATURES.map((feature) => (
               <span key={feature}>{feature}</span>
             ))}
@@ -1043,7 +1043,7 @@ export default function ExternalIntegrationsPageClient() {
         </figure>
       </section>
 
-      <section className="external-capability-strip" aria-label="V3 数据处理流程">
+      <section className="external-capability-strip" aria-label="DataMax 数据处理流程">
         {DATA_PIPELINE_STEPS.map((step) => (
           <article key={step.label}>
             <strong>{step.label}</strong>
@@ -1070,7 +1070,7 @@ export default function ExternalIntegrationsPageClient() {
 
       <section className="external-hero-band" id="external-observability">
         <div>
-          <p className="external-kicker">V3 Observability</p>
+          <p className="external-kicker">DataMax Observability</p>
           <h2>接入状态与运营观测</h2>
           <div className="external-domain-line">
             <span>默认接口域名</span>
@@ -1516,7 +1516,7 @@ export default function ExternalIntegrationsPageClient() {
                   </div>
                   {codexExecutorInspect.poll_retry.active ? (
                     <div className="external-executor-retry-banner">
-                      <strong>Cloudflare Codex 仍在运行，V3 已重新排队继续轮询</strong>
+                      <strong>Cloudflare Codex 仍在运行，DataMax 已重新排队继续轮询</strong>
                       <span>
                         attempt {codexExecutorInspect.poll_retry.attempt}/{codexExecutorInspect.poll_retry.max_attempts || '-'}
                         {codexExecutorInspect.poll_retry.cloudflare_task_id

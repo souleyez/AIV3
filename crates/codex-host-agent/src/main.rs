@@ -1252,7 +1252,7 @@ fn external_channel_static_page_published_reply_from_agent_payload(
         return None;
     }
     let text =
-        external_channel_text_with_public_artifact_link("V3 静态页已生成并发布。", public_url);
+        external_channel_text_with_public_artifact_link("DataMax 静态页已生成并发布。", public_url);
     Some(ExternalBotReplyView {
         target_conversation_external_id: conversation_external_id.to_string(),
         reply_type: ExternalBotReplyTypeView::ArtifactLink,
@@ -3293,14 +3293,14 @@ fn build_cloudflare_orchestrator_prompt(task_context: &CodexHostTaskContext) -> 
         let task_json = fixed_task_json_for_orchestrator_prompt(fixed_task)?;
         let schema_hint = fixed_task_output_schema_hint(fixed_task.template_id.as_str());
         let mut prompt = format!(
-            "Run the V3 fixed Cloudflare Codex task template `{}`.\n\nRules:\n- Return exactly one final JSON object.\n- Do not wrap the final JSON in Markdown fences.\n- Do not expose credentials, provider logs, raw database URLs, or raw customer documents.\n- If the task cannot satisfy the no-confirm policy, return status `needs_human` with a bounded `human_review_reason`.\n\nExpected output schema:\n{}\n\nTask package JSON:\n{}",
+            "Run the DataMax fixed Cloudflare Codex task template `{}`.\n\nRules:\n- Return exactly one final JSON object.\n- Do not wrap the final JSON in Markdown fences.\n- Do not expose credentials, provider logs, raw database URLs, or raw customer documents.\n- If the task cannot satisfy the no-confirm policy, return status `needs_human` with a bounded `human_review_reason`.\n\nExpected output schema:\n{}\n\nTask package JSON:\n{}",
             fixed_task.template_id.as_str(),
             schema_hint,
             task_json
         );
         if fixed_task.template_id.as_str() == "static_page_image2_data_publish" {
             prompt.push_str(
-                "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `requirements.existing_artifact.public_url` is present, treat it as the current published page to revise: preserve its style and module structure unless the user explicitly requests redesign, repair the requested data binding or content issue, and publish a new generated artifact instead of overwriting the old URL.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Cloudflare runtime cannot write V3 server files directly. If you cannot produce an approved V3 `artifact.public_url`, return `artifact.html` as a complete standalone HTML document plus `artifact.data_json`; the V3 host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.\n- The final HTML must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- If selected evidence or temporary uploaded documents contain contract/store area fields, extract them into `data.storeList[].area` or `data.supplementalMetrics.storeAreas/storeAreaRows` and use them for per-square-meter efficiency. If they contain traffic/customer-flow rows, extract them into `data.trafficRows` or `data.supplementalMetrics.trafficRows` with store, date, and value fields for traffic comparisons.\n- Bind real V3 dataset/database/document evidence from the task package. If selected evidence is thin or partially insufficient, first use every supplied dataset/database/document summary and available sample; then still publish a useful page with visible data-gap notes and `validation_report.warnings`. Do not return `needs_human` or `failed` solely because sample rows, optional dimensions, or some modules are incomplete. Do not invent store area or traffic data when absent.",
+                "\n\nStatic-page rules:\n- The GPT-Image-2 preview is the mandatory visual contract. Build the website from that image's layout, hierarchy, density, color, and module composition.\n- If `requirements.existing_artifact.public_url` is present, treat it as the current published page to revise: preserve its style and module structure unless the user explicitly requests redesign, repair the requested data binding or content issue, and publish a new generated artifact instead of overwriting the old URL.\n- Do not return a simplified renderer page, demo-only placeholder, or visual-contract fallback as success.\n- Cloudflare runtime cannot write DataMax server files directly. If you cannot produce an approved DataMax `artifact.public_url`, return `artifact.html` as a complete standalone HTML document plus `artifact.data_json`; the DataMax host-agent will publish it under `/generated-artifacts/` and replace it with `artifact.public_url`.\n- The final HTML must load local `data.json`, preserve time controls, primary partition controls, manual refresh, and auto refresh/change detection so database-backed data can be replaced without rewriting the page.\n- If selected evidence or temporary uploaded documents contain contract/store area fields, extract them into `data.storeList[].area` or `data.supplementalMetrics.storeAreas/storeAreaRows` and use them for per-square-meter efficiency. If they contain traffic/customer-flow rows, extract them into `data.trafficRows` or `data.supplementalMetrics.trafficRows` with store, date, and value fields for traffic comparisons.\n- Bind real DataMax dataset/database/document evidence from the task package. If selected evidence is thin or partially insufficient, first use every supplied dataset/database/document summary and available sample; then still publish a useful page with visible data-gap notes and `validation_report.warnings`. Do not return `needs_human` or `failed` solely because sample rows, optional dimensions, or some modules are incomplete. Do not invent store area or traffic data when absent.",
             );
         }
         return Ok(prompt);
@@ -3788,7 +3788,7 @@ async fn submit_cloudflare_orchestrator_task(
         "source": config.source,
         "prompt": prompt,
         "metadata": {
-            "title": format!("V3 {} {}", task_context.capability, task_context.assistant_run_id),
+            "title": format!("DataMax {} {}", task_context.capability, task_context.assistant_run_id),
             "assistant_run_id": task_context.assistant_run_id.to_string(),
             "workflow_execution_id": execution_id.to_string(),
             "capability": task_context.capability.clone(),
@@ -4135,12 +4135,12 @@ fn publish_existing_static_page_repair_fallback_if_available(
                 .unwrap_or(Value::Null),
             "unit_policy": "preserve_existing_artifact_units",
             "warnings": [
-                "Codex/Cloudflare publish path did not complete; V3 published a deterministic existing-artifact repair fallback.",
+                "Codex/Cloudflare publish path did not complete; DataMax published a deterministic existing-artifact repair fallback.",
                 "Fallback is limited to known filter-linked KPI and insight rebinding; visual redesign was not attempted."
             ]
         },
         "source_summary": [
-            "Existing V3 generated static page was materialized from the published artifact root.",
+            "Existing DataMax generated static page was materialized from the published artifact root.",
             "The fallback copied the page assets and patched filter-bound KPI/trend/insight calculations to use scoped data where present."
         ],
         "human_review_reason": Value::Null
@@ -4332,7 +4332,7 @@ fn publish_static_page_template_fallback_if_available(
                 .cloned()
                 .unwrap_or_else(|| json!("validate_raw_value_then_choose_wan_or_yi")),
             "warnings": [
-                "Local GPT-5.5/Codex and Cloudflare publish path did not complete; V3 published a deterministic data-backed template page so the conversation still receives a URL.",
+                "Local GPT-5.5/Codex and Cloudflare publish path did not complete; DataMax published a deterministic data-backed template page so the conversation still receives a URL.",
                 "This page preserves Image2/task evidence, dynamic data files, time controls, and refresh behavior; continue editing from this URL unless the user asks to redesign."
             ]
         },
@@ -4521,7 +4521,8 @@ fn static_page_template_fallback_data(
         .or_else(|| static_page_safe_generated_asset_url(fixed_task, task_json).map(Value::String))
         .unwrap_or(Value::Null);
     let warnings = vec![
-        "本页为发布链路终端失败后的 V3 本地模板自救产物，可在此链接基础上继续调整。".to_string(),
+        "本页为发布链路终端失败后的 DataMax 本地模板自救产物，可在此链接基础上继续调整。"
+            .to_string(),
         "如果客户明确要求重新设计，再重新走 GPT-Image-2 设计链路；否则后续优先在该页面上修改。"
             .to_string(),
         format!("触发原因：{}", safe_response_excerpt(failure_reason, 180)),
@@ -4530,7 +4531,7 @@ fn static_page_template_fallback_data(
         "snapshotVersion": now.to_rfc3339(),
         "updatedAt": now.to_rfc3339(),
         "title": title,
-        "subtitle": "V3 静态页发布自救版，保留时间筛选、分区筛选、手动刷新和自动刷新能力。",
+        "subtitle": "DataMax 静态页发布自救版，保留时间筛选、分区筛选、手动刷新和自动刷新能力。",
         "userGoal": safe_response_excerpt(&user_goal, 500),
         "defaultMonth": "latest_available_month",
         "timeControls": {
@@ -4616,7 +4617,7 @@ fn static_page_template_fallback_title(
             "/image2/image_prompt_payload/title",
         ],
     )
-    .unwrap_or_else(|| "V3 经营分析报表".to_string());
+    .unwrap_or_else(|| "DataMax 经营分析报表".to_string());
     let trimmed = base.trim();
     if trimmed.contains("报表") || trimmed.contains("分析") {
         safe_response_excerpt(trimmed, 80)
@@ -4948,7 +4949,7 @@ fn static_page_template_fallback_html() -> &'static str {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>V3 经营分析报表</title>
+  <title>DataMax 经营分析报表</title>
   <style>
     :root{color-scheme:light;--ink:#17201d;--muted:#62706b;--line:#dfe7e3;--bg:#f7faf8;--panel:#ffffff;--green:#0d6b57;--gold:#c58b24;--red:#c44b4b;--blue:#2f6fb4}
     *{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);letter-spacing:0}
@@ -4978,7 +4979,7 @@ fn static_page_template_fallback_html() -> &'static str {
 </head>
 <body>
   <header class="top">
-    <div class="eyebrow">V3 static page · monthly operating report</div>
+    <div class="eyebrow">DataMax static page · monthly operating report</div>
     <h1 id="title">经营分析报表</h1>
     <p class="sub" id="subtitle">加载 data.json 中...</p>
     <div class="status">
@@ -5040,7 +5041,7 @@ fn static_page_template_fallback_html() -> &'static str {
     }
     function render(){
       const data = state.data || {};
-      document.title = data.title || 'V3 经营分析报表';
+      document.title = data.title || 'DataMax 经营分析报表';
       $('title').textContent = data.title || '经营分析报表';
       $('subtitle').textContent = data.subtitle || '';
       $('snapshotVersion').textContent = data.snapshotVersion || '-';
@@ -5680,7 +5681,7 @@ fn standalone_html_document(html: &str) -> String {
         trimmed.to_string()
     } else {
         format!(
-            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>V3 Generated Artifact</title></head><body>{}</body></html>",
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>DataMax Generated Artifact</title></head><body>{}</body></html>",
             trimmed
         )
     }

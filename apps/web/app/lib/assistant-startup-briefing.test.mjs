@@ -50,7 +50,7 @@ test('startup briefing summarizes visible datasets and system capability', () =>
   assert.ok(briefing.capabilities.includes('video_url_resolve'));
   assert.ok(briefing.capabilities.includes('video_ppt_extract'));
   assert.ok(briefing.capabilities.includes('continuous_execution'));
-  assert.match(briefing.modelAwarenessPolicy.identity, /AI Data Platform V3/);
+  assert.match(briefing.modelAwarenessPolicy.identity, /DataMax/);
   assert.match(briefing.modelAwarenessPolicy.additiveContextRule, /不是能力限制/);
   assert.match(briefing.modelAwarenessPolicy.unavailableEvidenceRule, /当前不可见\/未供料/);
   assert.match(briefing.modelAwarenessPolicy.externalSearchPolicy.modelRule, /不要声称已联网搜索/);
@@ -101,11 +101,11 @@ test('formatted briefing tells model when no dataset is selected', () => {
 
   assert.match(formatted, /当前未选数据集/);
   assert.match(formatted, /普通模型聊天/);
-  assert.match(formatted, /AI Data Platform V3/);
-  assert.match(formatted, /V3 上下文是附加能力/);
+  assert.match(formatted, /DataMax/);
+  assert.match(formatted, /DataMax 上下文是附加能力/);
   assert.match(formatted, /当前不可见\/未供料/);
   assert.match(formatted, /不要声称已联网搜索/);
-  assert.match(formatted, /只有 V3 supplied_items、observation/);
+  assert.match(formatted, /只有 DataMax supplied_items、observation/);
   assert.match(formatted, /scope candidates、dataset briefs、startup briefing、detail_targets/);
   assert.match(formatted, /不是引用依据/);
   assert.match(formatted, /detail_targets 代表建议深读目标/);
@@ -321,7 +321,7 @@ test('startup briefing surfaces static page data-quality attention without modul
   ]);
   assert.match(formatted, /静态页数据质量：1\/2 个模块需要先补证据或修复绑定/);
   assert.match(formatted, /趋势模块\(matched_field_candidate\/needs_sample_rows\/样本0\/建议repair_module_data\)/);
-  assert.match(formatted, /优先让 V3 检索\/细读\/修复模块数据/);
+  assert.match(formatted, /优先让 DataMax 检索\/细读\/修复模块数据/);
   assert.match(formatted, /当前不可见\/未供料/);
   assert.doesNotMatch(formatted, /这里的正文不能进入模型启动简报/);
   assert.doesNotMatch(formatted, /总结正文也不能泄漏/);

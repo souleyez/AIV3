@@ -52,7 +52,7 @@ export function assistantRunFailureMessage(error, fallbackMessage = '本轮没�
     return `静态页动作链被后端拒绝，本轮没有完成页面生成。错误：${message}。`;
   }
   if (status === 502 || status === 503 || status === 504 || code === 'assistant_run_join_failed') {
-    return `V3 服务可能正在重启或网关暂不可达，本轮没有生成回复。错误：${message}。`;
+    return `DataMax 服务可能正在重启或网关暂不可达，本轮没有生成回复。错误：${message}。`;
   }
   return `AssistantRun 执行失败，本轮没有生成回复。错误：${message}。`;
 }

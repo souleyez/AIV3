@@ -36,22 +36,22 @@ const MEDIA_EXTRACTION_POLICY = {
     'video_slides.md',
     'video_slides_screenshot_based.pptx',
   ],
-  accessRule: '未收到 V3 observation 确认视频源解析、转写、抽帧或 PPT 产物前，不要声称已访问视频或看过视频内容。',
+  accessRule: '未收到 DataMax observation 确认视频源解析、转写、抽帧或 PPT 产物前，不要声称已访问视频或看过视频内容。',
   evidenceRule: '转写、OCR、场景切片、时间戳或 subtitle_page_map 缺失时，保持 partial 并说明缺失项。',
 };
 
 const MODEL_AWARENESS_POLICY = {
-  identity: '你正在服务 AI Data Platform V3。V3 是数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物的统一工作台。',
-  additiveContextRule: 'V3 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。',
-  unavailableEvidenceRule: '涉及 V3 数据、文档、权限、工具结果或产物状态时，只有收到 V3 observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。',
+  identity: '你正在服务 DataMax。DataMax 是数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物的统一工作台。',
+  additiveContextRule: 'DataMax 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。',
+  unavailableEvidenceRule: '涉及 DataMax 数据、文档、权限、工具结果或产物状态时，只有收到 DataMax observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。',
   externalSearchPolicy: {
     status: 'planned_v3_controlled_read_only',
-    modelRule: '外部/网页搜索是计划中的 V3 受控只读能力；未收到带来源和时间的 V3 search evidence 前，不要声称已联网搜索或引用实时网页结果。',
+    modelRule: '外部/网页搜索是计划中的 DataMax 受控只读能力；未收到带来源和时间的 DataMax search evidence 前，不要声称已联网搜索或引用实时网页结果。',
   },
 };
 
 const SUPPLY_EVIDENCE_POLICY = {
-  citableEvidenceRule: '只有 V3 supplied_items、observation、retrieval evidence、document detail 或 search evidence 可以作为可引用事实。',
+  citableEvidenceRule: '只有 DataMax supplied_items、observation、retrieval evidence、document detail 或 search evidence 可以作为可引用事实。',
   planningOnlyRule: 'scope candidates、dataset briefs、startup briefing、detail_targets 只用于规划检索或细读，不是引用依据。',
   detailTargetRule: 'detail_targets 代表建议深读目标；未调用 read_document_detail 或收到 observation 前，不要把目标文档内容当作事实。',
 };
@@ -134,7 +134,7 @@ export function buildAssistantStartupBriefing({
     ],
     mediaExtractionPolicy: buildMediaExtractionPolicy(),
     productCapabilities: {
-      staticPage: '可以在主对话区发起静态页规划、确认生图文案、效果图排队、最终静态页渲染，并导出 index.html 与包含 manifest/data/modules/render-spec/runtime/README 的 ZIP 交付包。高级静态页默认按 Image2 视觉稿 -> 真实数据 HTML -> 快照/单位口径校验 -> V3 产物发布执行；快照表当前状态只取最新快照，趋势图才跨日期展开。',
+      staticPage: '可以在主对话区发起静态页规划、确认生图文案、效果图排队、最终静态页渲染，并导出 index.html 与包含 manifest/data/modules/render-spec/runtime/README 的 ZIP 交付包。高级静态页默认按 Image2 视觉稿 -> 真实数据 HTML -> 快照/单位口径校验 -> DataMax 产物发布执行；快照表当前状态只取最新快照，趋势图才跨日期展开。',
       report: '可以让模型主动发起报表/看板创建，但必须先通过工具列出选项并由宿主执行。',
       retrieval: '选中数据集时，宿主会尽量检索相关证据；命中资料意图的数据集会自动进入已选范围，静态页/报表意图优先深度供料。',
       media: '音视频上传按后台任务解析；支持上传视频文件、直接视频 URL、公开页面可解析视频地址后的 PPT/原文提取；完整视频/PPT 包应输出截图型 PPTX、video_slides.md、讲稿备注、字幕对页和清单类文件；有本地转写、场景或关键帧 OCR 时会以可引用证据供料，缺失时保持 partial 而不编造；登录态、扫码、Cookie 或录屏绕过不在当前自动能力范围。',
@@ -623,14 +623,14 @@ function formatStaticPageDataQualityForModel(quality) {
     return [
       `静态页数据质量：${quality.attentionModuleCount || 0}/${quality.bindingCount || quality.moduleCount || 0} 个模块需要先补证据或修复绑定`,
       modules.length ? `重点模块：${modules.join('、')}` : '',
-      '在提交效果图或最终渲染前，应优先让 V3 检索/细读/修复模块数据；没有 V3 供料时必须说明当前不可见/未供料，不能编造图表数据。',
+      '在提交效果图或最终渲染前，应优先让 DataMax 检索/细读/修复模块数据；没有 DataMax 供料时必须说明当前不可见/未供料，不能编造图表数据。',
     ].filter(Boolean).join('。');
   }
   if (quality.status === 'unknown') {
     return `静态页数据质量：当前有 ${quality.moduleCount || 0} 个模块，但没有模块绑定质量快照；提交效果图前应先刷新 dataSnapshot 或补齐模块数据。`;
   }
   if (quality.status === 'ready') {
-    return `静态页数据质量：当前 ${quality.readyModuleCount || 0} 个模块绑定未发现阻塞，可继续效果图或最终渲染；仍需按 V3 已供料证据回答。`;
+    return `静态页数据质量：当前 ${quality.readyModuleCount || 0} 个模块绑定未发现阻塞，可继续效果图或最终渲染；仍需按 DataMax 已供料证据回答。`;
   }
   return '';
 }

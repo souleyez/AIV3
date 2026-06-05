@@ -18,14 +18,14 @@ test('document detail view model orders chunks and keeps markdown source scroll 
     {
       id: 'chunk-1',
       chunk_index: 1,
-      content: '# 概览\n系统边界保持 V3 控制。',
+      content: '# 概览\n系统边界保持 DataMax 控制。',
       metadata: { section_title_hints: ['概览', '验收'] },
     },
   ];
 
   assert.equal(
     documentRawTextFromChunks(chunks),
-    '## 验收\n上线前完成回归。\n\n# 概览\n系统边界保持 V3 控制。',
+    '## 验收\n上线前完成回归。\n\n# 概览\n系统边界保持 DataMax 控制。',
   );
 
   const viewModel = buildDocumentDetailViewModel({
@@ -42,7 +42,7 @@ test('document detail view model orders chunks and keeps markdown source scroll 
   assert.deepEqual(viewModel.orderedChunks.map((chunk) => chunk.id), ['chunk-1', 'chunk-2']);
   assert.equal(
     viewModel.rawText,
-    '# 概览\n系统边界保持 V3 控制。\n\n## 验收\n上线前完成回归。',
+    '# 概览\n系统边界保持 DataMax 控制。\n\n## 验收\n上线前完成回归。',
   );
   assert.deepEqual(viewModel.markdownSectionHints, ['概览', '验收']);
   assert.equal(viewModel.evidences.length, 1);

@@ -1683,7 +1683,7 @@ export function staticPagePreviewBlockReason(draft = {}) {
   return staticPageDataQualityBlockReason(
     draft,
     '效果图生成要求',
-    '请先调整生图文案，或让 V3 检索/修复内容来源；只有缺少来源的模块会阻断效果图，缺少样本行的图表会先作为设计预览进入出图。',
+    '请先调整生图文案，或让 DataMax 检索/修复内容来源；只有缺少来源的模块会阻断效果图，缺少样本行的图表会先作为设计预览进入出图。',
     { mode: 'preview' },
   );
 }
@@ -2130,7 +2130,7 @@ export function buildStaticPageImagePromptText(draft = {}) {
     ...dataRequirementLines.map((line) => `- ${line}`),
     '后续制作与发布要求：',
     `- 视觉稿生成后，系统应按 ${productionRules.workflow} 制作真实数据 HTML。`,
-    '- 高级取数、口径纠偏、明细补齐或发布类需求，可升级为 V3 受控 Codex Host 固定模板任务；新 generated-artifact 产物发布可自动执行，覆盖旧产物、稳定链接替换、口径不确定或扩大权限仍需人工确认。',
+    '- 高级取数、口径纠偏、明细补齐或发布类需求，可升级为 DataMax 受控 Codex Host 固定模板任务；新 generated-artifact 产物发布可自动执行，覆盖旧产物、稳定链接替换、口径不确定或扩大权限仍需人工确认。',
     '视觉要求：画面像客户汇报页或经营分析页，不要浏览器边框，不要后台管理系统，不要出现可编辑文本框或拖拽编辑框。',
     '重点：中文标题清晰，图表关系可信，适合客户直接看效果；不要生成假数字、假门店、假品牌。',
     '完成后必须返回一张图片 artifact。',

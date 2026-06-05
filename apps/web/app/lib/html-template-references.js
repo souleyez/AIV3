@@ -8,14 +8,14 @@ const TEMPLATE_SOURCE = Object.freeze({
 
 const SAFE_STATIC_PAGE_GUARDRAILS = Object.freeze([
   'template reference controls style and module recipe only',
-  'V3 model routing, permissions, datasets, evidence, and artifacts remain authoritative',
+  'DataMax model routing, permissions, datasets, evidence, and artifacts remain authoritative',
   'model output must become structured draft data, not raw final HTML',
   'missing or partial evidence must stay visible in draft and rendered output',
 ]);
 
 const PAUSED_SURFACE_GUARDRAILS = Object.freeze([
   'reference retained for future design review only',
-  'PPT, video, frame, and motion output tracks are paused in V3',
+  'PPT, video, frame, and motion output tracks are paused in DataMax',
   'do not route this template into quick output until the relevant track is explicitly resumed',
 ]);
 
@@ -90,7 +90,7 @@ const HTML_TEMPLATE_REFERENCES = Object.freeze([
     ],
     promptHints: [
       'prefer KPI cards, trend charts, comparison charts, and evidence notes',
-      'never invent numbers; ask V3 retrieval or data repair when chart rows are missing',
+      'never invent numbers; ask DataMax retrieval or data repair when chart rows are missing',
     ],
   },
   {
@@ -219,7 +219,7 @@ const HTML_TEMPLATE_REFERENCES = Object.freeze([
       },
     ],
     promptHints: [
-      'preserve source headings and section hierarchy when V3 supplied document detail',
+      'preserve source headings and section hierarchy when DataMax supplied document detail',
       'show unavailable interface details as missing evidence instead of guessing',
     ],
   },
@@ -234,7 +234,7 @@ const HTML_TEMPLATE_REFERENCES = Object.freeze([
     quickOutput: false,
     styleDirection: 'client-delivery',
     aspectHint: '16:9-horizontal-deck',
-    designIntent: '保留为未来 PPT/deck 视觉参考，当前不进入 V3 快速产出。',
+    designIntent: '保留为未来 PPT/deck 视觉参考，当前不进入 DataMax 快速产出。',
     objective: '',
     audience: '',
     moduleBlueprints: [],
@@ -252,7 +252,7 @@ const HTML_TEMPLATE_REFERENCES = Object.freeze([
     quickOutput: false,
     styleDirection: 'client-delivery',
     aspectHint: '1920x1080-frame-script',
-    designIntent: '保留为未来 motion/frame 视觉参考，当前不进入 V3 快速产出。',
+    designIntent: '保留为未来 motion/frame 视觉参考，当前不进入 DataMax 快速产出。',
     objective: '',
     audience: '',
     moduleBlueprints: [],

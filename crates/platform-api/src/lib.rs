@@ -9374,7 +9374,7 @@ fn create_assistant_run_sse_accepted_event() -> String {
             0,
             "started",
             "accepted",
-            "V3 已开始处理本轮消息。",
+            "DataMax 已开始处理本轮消息。",
             json!({
                 "entrypoint": "create_assistant_run",
                 "stream": "sse",
@@ -9392,7 +9392,7 @@ fn continue_assistant_run_sse_accepted_event(run_id: AssistantRunId) -> String {
             0,
             "continuing",
             "accepted",
-            "V3 已开始继续处理当前任务。",
+            "DataMax 已开始继续处理当前任务。",
             json!({
                 "entrypoint": "continue_assistant_run",
                 "assistant_run_id": run_id,
@@ -9722,14 +9722,14 @@ fn compact_external_channel_public_stream_payload(payload: &mut Value) {
         .get("display_text")
         .and_then(Value::as_str)
         .or_else(|| raw_data.get("text").and_then(Value::as_str))
-        .unwrap_or("V3 正在处理。");
+        .unwrap_or("DataMax 正在处理。");
     let mut display_text = external_channel_public_stream_text(display_text);
     if !include_artifact_link
         && !include_preview_link
         && display_text.contains("generated-artifacts/")
     {
         display_text =
-            "V3 已返回当前处理状态，页面仍在后台继续生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。".to_string();
+            "DataMax 已返回当前处理状态，页面仍在后台继续生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。".to_string();
     }
     object.insert(
         "display_text".to_string(),
@@ -10863,8 +10863,8 @@ fn external_channel_public_text(text: &str) -> String {
             "已创建报表页面草稿并进入生成队列；无需客户确认，生成后会自动发布最终动态页面。",
         ),
         (
-            "V3 已先生成可发送的静态页链接；最终 Codex 页面仍在后台继续发布。",
-            "V3 已先生成可发送的静态页链接；最终页面仍在后台继续优化发布。",
+            "DataMax 已先生成可发送的静态页链接；最终 Codex 页面仍在后台继续发布。",
+            "DataMax 已先生成可发送的静态页链接；最终页面仍在后台继续优化发布。",
         ),
     ] {
         value = value.replace(raw, replacement);
@@ -10872,9 +10872,9 @@ fn external_channel_public_text(text: &str) -> String {
     for (raw, replacement) in [
         ("GPT-Image-2", "页面生成"),
         ("Image2", "页面生成"),
-        ("Cloudflare Codex", "V3 后台"),
-        ("Cloudflare", "V3 后台"),
-        ("Codex", "V3"),
+        ("Cloudflare Codex", "DataMax 后台"),
+        ("Cloudflare", "DataMax 后台"),
+        ("Codex", "DataMax"),
         ("效果图", "过程预览"),
         ("生图", "页面生成"),
         ("视觉合同", "页面生成"),
@@ -10887,7 +10887,7 @@ fn external_channel_public_text(text: &str) -> String {
 fn external_channel_public_reply_text(text: &str) -> String {
     let value = external_channel_public_text(text);
     if external_channel_text_looks_like_internal_context_leak(&value) {
-        return "本轮回复包含内部处理上下文，V3 已拦截该部分。请继续提问或指定需要查看的结论，我会重新基于已授权资料回答。".to_string();
+        return "本轮回复包含内部处理上下文，DataMax 已拦截该部分。请继续提问或指定需要查看的结论，我会重新基于已授权资料回答。".to_string();
     }
     truncate_external_channel_public_text(&value, EXTERNAL_CHANNEL_PUBLIC_REPLY_TEXT_LIMIT)
 }
@@ -10895,7 +10895,7 @@ fn external_channel_public_reply_text(text: &str) -> String {
 fn external_channel_public_stream_text(text: &str) -> String {
     let value = external_channel_public_text(text);
     if external_channel_text_looks_like_internal_context_leak(&value) {
-        return "V3 正在处理，本轮内部上下文不会对外展示。".to_string();
+        return "DataMax 正在处理，本轮内部上下文不会对外展示。".to_string();
     }
     truncate_external_channel_public_text(&value, EXTERNAL_CHANNEL_PUBLIC_STREAM_TEXT_LIMIT)
 }
@@ -11251,27 +11251,29 @@ fn external_channel_static_page_sse_progress_text(
     }
     match status.as_str() {
         "static_page_effect_image_ready" => {
-            "页面过程预览已生成，V3 将继续生成最终静态页。".to_string()
+            "页面过程预览已生成，DataMax 将继续生成最终静态页。".to_string()
         }
-        "static_page_publish_queued" => "下一步：V3 正在整理数据证据并生成最终静态页。".to_string(),
-        "static_page_publish_running" => "下一步：V3 正在生成可访问的静态页。".to_string(),
+        "static_page_publish_queued" => {
+            "下一步：DataMax 正在整理数据证据并生成最终静态页。".to_string()
+        }
+        "static_page_publish_running" => "下一步：DataMax 正在生成可访问的静态页。".to_string(),
         "static_page_publish_retrying" => {
-            "静态页发布遇到临时波动，V3 会继续重试或切换可用发布链路。".to_string()
+            "静态页发布遇到临时波动，DataMax 会继续重试或切换可用发布链路。".to_string()
         }
         "static_page_published" => external_channel_static_page_customer_ready_text().to_string(),
         "static_page_publish_failed" => {
-            "静态页最终发布暂未完成，V3 已记录原因，可继续重试或人工接管。".to_string()
+            "静态页最终发布暂未完成，DataMax 已记录原因，可继续重试或人工接管。".to_string()
         }
         "static_page_publish_needs_human" => {
-            "静态页发布需要人工处理，V3 已保留当前中间产物和原因。".to_string()
+            "静态页发布需要人工处理，DataMax 已保留当前中间产物和原因。".to_string()
         }
         "static_page_publish_cancelled" => {
-            "静态页发布任务已取消，V3 已保留当前中间状态。".to_string()
+            "静态页发布任务已取消，DataMax 已保留当前中间状态。".to_string()
         }
         "static_page_continue_polling" => {
             "静态页生成仍在后台继续，第三方可按 status_url 继续轮询。".to_string()
         }
-        _ => "V3 静态页任务仍在处理中。".to_string(),
+        _ => "DataMax 静态页任务仍在处理中。".to_string(),
     }
 }
 
@@ -11518,12 +11520,12 @@ impl ExternalChannelAnswerDeltaSink {
 
 fn external_channel_answer_retrying_text(reason: &str) -> &'static str {
     match reason {
-        "gateway_limit" => "模型通道繁忙，V3 正在切换可用通道继续回答。",
-        "provider_timeout" => "本次模型回答较慢，V3 正在重试或切换通道。",
-        "answer_rejected" => "模型回复未达到可展示要求，V3 正在重新生成回答。",
-        "provider_retry" | "provider_error" => "模型通道暂时不可用，V3 正在重试或切换通道。",
-        "runtime_unavailable" => "当前模型通道暂不可用，V3 正在寻找可用通道继续回答。",
-        _ => "V3 正在重试或切换可用通道继续回答。",
+        "gateway_limit" => "模型通道繁忙，DataMax 正在切换可用通道继续回答。",
+        "provider_timeout" => "本次模型回答较慢，DataMax 正在重试或切换通道。",
+        "answer_rejected" => "模型回复未达到可展示要求，DataMax 正在重新生成回答。",
+        "provider_retry" | "provider_error" => "模型通道暂时不可用，DataMax 正在重试或切换通道。",
+        "runtime_unavailable" => "当前模型通道暂不可用，DataMax 正在寻找可用通道继续回答。",
+        _ => "DataMax 正在重试或切换可用通道继续回答。",
     }
 }
 
@@ -11817,7 +11819,7 @@ async fn external_channel_event_sse_next(
                     .await,
                 );
             } else {
-                let text = "V3 正在继续处理，流式连接保持中。";
+                let text = "DataMax 正在继续处理，流式连接保持中。";
                 let data = json!({
                     "assistant_run_id": run_id,
                     "idempotency_key": idempotency_key.clone(),
@@ -12034,7 +12036,7 @@ async fn external_channel_static_page_sse_prompt_events(
     let display_prompt =
         external_channel_public_text(&truncate_assistant_supply_text(&prompt_text, 360));
     let conversation_external_id = response.reply.target_conversation_external_id.clone();
-    let display_text = "V3 正在生成页面方案，并会自动继续发布最终页面。";
+    let display_text = "DataMax 正在生成页面方案，并会自动继续发布最终页面。";
     let mut encoded = sse_text_delta_events("external_channel.delta", display_text);
     let data = json!({
         "assistant_run_id": response.assistant_run_id,
@@ -12088,7 +12090,7 @@ fn external_channel_static_page_sse_continue_polling_payload(
     let status_url = external_channel_card_status_url(public_response.reply.card.as_ref());
     let poll_after_seconds =
         external_channel_card_poll_after_seconds(public_response.reply.card.as_ref());
-    let text = "本次流式连接已达到等待上限，V3 会继续后台生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。";
+    let text = "本次流式连接已达到等待上限，DataMax 会继续后台生成；第三方请按 status_url 继续轮询，完成后会返回最终页面链接。";
     let data = json!({
         "assistant_run_id": public_response.assistant_run_id,
         "idempotency_key": public_response.idempotency_key.clone(),
@@ -12131,7 +12133,7 @@ fn external_channel_static_page_sse_continue_polling_event(
 }
 
 fn external_channel_retrieval_started_sse_event(message: &ExternalBotMessageView) -> String {
-    let text = "V3 正在检索可见文档、数据源和会话上下文。";
+    let text = "DataMax 正在检索可见文档、数据源和会话上下文。";
     let data = json!({
         "conversation_external_id": message.conversation_external_id.clone(),
         "message_external_id": message.message_external_id.clone(),
@@ -17899,7 +17901,7 @@ async fn update_external_document_dataset(
         .ok_or_else(|| {
             ApiError::bad_request(
                 "validation_error",
-                "source_id is required when V3 cannot infer a unique source from document_external_id"
+                "source_id is required when DataMax cannot infer a unique source from document_external_id"
                     .to_string(),
             )
         })?;
@@ -20139,7 +20141,7 @@ async fn ingest_external_channel_event_stream(
             external_channel_static_page_sse_sequence("started"),
             "started",
             "started",
-            "V3 已开始处理本轮消息。",
+            "DataMax 已开始处理本轮消息。",
             None,
             None,
             started_data,
@@ -20334,7 +20336,7 @@ async fn load_external_channel_assistant_run_reply_response(
                 external_channel_task_status_reply_for_conversation(
                     &conversation_external_id,
                     "processing",
-                    Some("V3 正在处理该请求，请稍后再次查询。".to_string()),
+                    Some("DataMax 正在处理该请求，请稍后再次查询。".to_string()),
                     None,
                     Vec::new(),
                 )
@@ -25612,7 +25614,7 @@ async fn enrich_external_channel_document_scope(
                 set_payload_value(
                     selected_scope,
                     "external_document_scope_summary",
-                    json!("dataset_external_id was supplied, but no source_id/default_source_id was provided and V3 could not infer a unique source for that document group."),
+                    json!("dataset_external_id was supplied, but no source_id/default_source_id was provided and DataMax could not infer a unique source for that document group."),
                 );
                 return Ok(());
             };
@@ -25726,7 +25728,7 @@ async fn enrich_external_channel_document_scope(
         set_payload_value(
             selected_scope,
             "external_document_scope_summary",
-            json!("available_document_external_ids were supplied, but no source_id/default_source_id was provided and V3 could not infer a unique source from visible documents."),
+            json!("available_document_external_ids were supplied, but no source_id/default_source_id was provided and DataMax could not infer a unique source from visible documents."),
         );
         return Ok(());
     }
@@ -26049,7 +26051,7 @@ async fn enrich_external_channel_attachment_title_document_scope(
     set_payload_value(
         selected_scope,
         "external_document_scope_summary",
-        json!("The message explicitly mentioned attachment filenames; V3 matched parsed documents from the same external source, merged them into the conversation-scoped temporary range, and prioritized them for this answer."),
+        json!("The message explicitly mentioned attachment filenames; DataMax matched parsed documents from the same external source, merged them into the conversation-scoped temporary range, and prioritized them for this answer."),
     );
     set_payload_value(
         selected_scope,
@@ -26391,7 +26393,7 @@ fn set_external_channel_document_scope_missing_documents(
     set_payload_value(
         selected_scope,
         "external_document_scope_summary",
-        json!("A document source was configured, but this request did not include available_document_external_ids/documentExternalId. V3 will not broaden the request to the whole source."),
+        json!("A document source was configured, but this request did not include available_document_external_ids/documentExternalId. DataMax will not broaden the request to the whole source."),
     );
 }
 
@@ -26450,7 +26452,7 @@ async fn enrich_external_channel_source_document_scope(
         set_payload_value(
             selected_scope,
             "external_document_scope_summary",
-            json!("available_document_source_id was supplied, but V3 has no parsed documents for that source yet."),
+            json!("available_document_source_id was supplied, but DataMax has no parsed documents for that source yet."),
         );
         return Ok(());
     }
@@ -26613,7 +26615,7 @@ async fn enrich_external_channel_v3_dataset_scope(
         set_payload_value(
             selected_scope,
             "external_document_scope_summary",
-            json!("V3 dataset UUIDs were supplied, but no visible parsed documents were found in those datasets."),
+            json!("DataMax dataset UUIDs were supplied, but no visible parsed documents were found in those datasets."),
         );
         set_payload_value(
             selected_scope,
@@ -26671,7 +26673,7 @@ async fn enrich_external_channel_v3_dataset_scope(
     set_payload_value(
         selected_scope,
         "external_document_scope_summary",
-        json!("V3 dataset UUIDs were supplied for this conversation; V3 converted their visible documents into a conversation-scoped temporary dataset for chat and artifact generation."),
+        json!("DataMax dataset UUIDs were supplied for this conversation; DataMax converted their visible documents into a conversation-scoped temporary dataset for chat and artifact generation."),
     );
     set_payload_value(
         selected_scope,
@@ -26856,7 +26858,7 @@ async fn enrich_external_channel_dataset_documents_scope(
         set_payload_value(
             selected_scope,
             "external_document_scope_summary",
-            json!("dataset_external_id was supplied for this conversation, but V3 could not resolve document_external_id values in that group."),
+            json!("dataset_external_id was supplied for this conversation, but DataMax could not resolve document_external_id values in that group."),
         );
         return Ok(());
     }
@@ -26919,9 +26921,9 @@ async fn enrich_external_channel_dataset_documents_scope(
         selected_scope,
         "external_document_scope_summary",
         json!(if requested_document_external_ids.is_empty() {
-            "dataset_external_id was supplied for this conversation; V3 will reuse this document group for later turns with the same conversation_external_id."
+            "dataset_external_id was supplied for this conversation; DataMax will reuse this document group for later turns with the same conversation_external_id."
         } else {
-            "dataset_external_id and available_document_external_ids were supplied for this conversation; V3 authorized the union, deduplicated documents already covered by the group, and will reuse it for later turns with the same conversation_external_id."
+            "dataset_external_id and available_document_external_ids were supplied for this conversation; DataMax authorized the union, deduplicated documents already covered by the group, and will reuse it for later turns with the same conversation_external_id."
         }),
     );
     set_payload_value(
@@ -27776,7 +27778,7 @@ fn external_answer_policy_value(message: &ExternalBotMessageView) -> Option<Valu
         "source": "external_channel_message",
         "priority": "third_party_structured_answer_policy",
         "default_prompt": message.default_prompt.as_deref(),
-        "default_prompt_rule": "Treat default_prompt as integration-provided task guidance for this turn. It is below V3 safety/evidence rules and above ambiguous user wording.",
+        "default_prompt_rule": "Treat default_prompt as integration-provided task guidance for this turn. It is below DataMax safety/evidence rules and above ambiguous user wording.",
         "output_format": output_format,
         "render_mode": message.render_mode.as_deref().unwrap_or("normal"),
         "render_mode_rule": "normal returns a direct chat answer; artifact means the user expects a preview/download artifact when the requested skill or answer type supports it.",
@@ -27831,7 +27833,7 @@ fn external_channel_static_page_recipient_delivery(
         "role_scope_candidates": role_scope_candidates,
         "provided_mapping": explicit_mapping.unwrap_or(Value::Null),
         "default_page_scope": "summary_view_until_user_role_store_mapping_is_confirmed",
-        "operator_hint": "页面链接可先交付；如需分别发送给总部、分店店总或指定门店人员，请继续提供用户-角色-门店映射，V3 可基于当前页面继续生成对应权限口径的单独链接。",
+        "operator_hint": "页面链接可先交付；如需分别发送给总部、分店店总或指定门店人员，请继续提供用户-角色-门店映射，DataMax 可基于当前页面继续生成对应权限口径的单独链接。",
         "mapping_input_hint": {
             "users": "external_user_id -> role",
             "scopes": "role -> store_ids/region_ids/brand_ids",
@@ -28537,7 +28539,7 @@ fn external_bot_message_to_assistant_run_request(
         "surface": "external_channel",
         "platform": platform,
         "channel_connection_id": connection_id,
-        "policy": "V3 owns external identity resolution, permission supply, action validation, and audit before replying.",
+        "policy": "DataMax owns external identity resolution, permission supply, action validation, and audit before replying.",
         "modelAwarenessPolicy": assistant_run_v3_awareness_policy_value(),
         "visibleScopePolicy": {
             "tenant_external_id": message.tenant_external_id,
@@ -29904,7 +29906,7 @@ fn external_channel_observation_answer_text_from_output_artifacts(
                 .then(|| artifact.get("public_url").and_then(Value::as_str))
                 .flatten()
                 .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
-                .map(|value| format!("V3 静态页已生成：{value}"))
+                .map(|value| format!("DataMax 静态页已生成：{value}"))
             })
     })
 }
@@ -29998,16 +30000,16 @@ fn external_channel_static_page_reply_from_events(
                     .and_then(Value::as_str)
                     == Some("prompt_existing_artifact_revision")
                 {
-                    "V3 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
+                    "DataMax 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
                 } else if event
                     .payload
                     .get("image2_skipped")
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                 {
-                    "V3 已复用已发布页面基线，Codex 正在生成最终静态页。"
+                    "DataMax 已复用已发布页面基线，Codex 正在生成最终静态页。"
                 } else {
-                    "V3 已生成效果图，Codex 正在生成最终静态页。"
+                    "DataMax 已生成效果图，Codex 正在生成最终静态页。"
                 };
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
@@ -30055,16 +30057,16 @@ fn external_channel_static_page_reply_from_events(
                 .and_then(Value::as_str)
                 == Some("prompt_existing_artifact_revision")
             {
-                "V3 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
+                "DataMax 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
             } else if event
                 .payload
                 .get("image2_skipped")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                "V3 已复用已发布页面基线，正在通过 Codex 发布静态页。"
+                "DataMax 已复用已发布页面基线，正在通过 Codex 发布静态页。"
             } else {
-                "V3 已生成效果图，正在通过 Codex 发布静态页。"
+                "DataMax 已生成效果图，正在通过 Codex 发布静态页。"
             };
             return Some(external_channel_task_status_reply_for_conversation(
                 conversation_external_id,
@@ -30132,16 +30134,16 @@ fn external_channel_static_page_reply_from_events(
                     .and_then(Value::as_str)
                     == Some("prompt_existing_artifact_revision")
                 {
-                    "V3 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
+                    "DataMax 已识别已有报表页面，正在原页面基础上增量修改并发布新链接。"
                 } else if event
                     .payload
                     .get("image2_skipped")
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                 {
-                    "V3 已复用已发布页面基线，正在准备发布最终静态页。"
+                    "DataMax 已复用已发布页面基线，正在准备发布最终静态页。"
                 } else {
-                    "V3 效果图已生成，正在准备发布最终静态页。"
+                    "DataMax 效果图已生成，正在准备发布最终静态页。"
                 };
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
@@ -30184,7 +30186,10 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
-                    Some("V3 效果图生成遇到临时网络或服务波动，已保持任务并继续轮询。".to_string()),
+                    Some(
+                        "DataMax 效果图生成遇到临时网络或服务波动，已保持任务并继续轮询。"
+                            .to_string(),
+                    ),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_retrying",
@@ -30229,7 +30234,9 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_running",
-                    Some("V3 效果图正在生成，当前不会占用本地 worker 长时间等待。".to_string()),
+                    Some(
+                        "DataMax 效果图正在生成，当前不会占用本地 worker 长时间等待。".to_string(),
+                    ),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_running",
@@ -30263,7 +30270,7 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
-                    Some("V3 效果图生成较慢或遇到临时问题，已自动进入重试队列。".to_string()),
+                    Some("DataMax 效果图生成较慢或遇到临时问题，已自动进入重试队列。".to_string()),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_retrying",
@@ -30296,7 +30303,7 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
-                    Some("V3 效果图生成遇到临时问题，正在等待重试或人工接管。".to_string()),
+                    Some("DataMax 效果图生成遇到临时问题，正在等待重试或人工接管。".to_string()),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_retrying",
@@ -30324,7 +30331,7 @@ fn external_channel_static_page_reply_from_events(
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
                     "static_page_image_preview_queued",
-                    Some("V3 已提交效果图队列，生成后会自动继续发布。".to_string()),
+                    Some("DataMax 已提交效果图队列，生成后会自动继续发布。".to_string()),
                     Some(external_channel_static_page_card_with_template_payload(
                         json!({
                             "type": "v3_static_page_image2_preview_queued",
@@ -30365,7 +30372,7 @@ fn external_channel_static_page_reply_from_events(
             return Some(external_channel_task_status_reply_for_conversation(
                 conversation_external_id,
                 task_status,
-                Some("V3 已接收静态页生成请求，正在生成效果图或发布页面。".to_string()),
+                Some("DataMax 已接收静态页生成请求，正在生成效果图或发布页面。".to_string()),
                 Some(external_channel_static_page_card_with_template_payload(
                     json!({
                         "type": "v3_static_page_image2_pipeline",
@@ -30598,12 +30605,12 @@ fn external_channel_data_ingestion_analysis_reply_from_events(
         };
         let text = match task_status {
             "data_ingestion_staging_sync_completed" => {
-                "V3 已完成 staging 数据集同步，后续可在该数据集上继续问答和生成报表。"
+                "DataMax 已完成 staging 数据集同步，后续可在该数据集上继续问答和生成报表。"
             }
             "data_ingestion_staging_sync_failed" => {
-                "V3 staging 数据集同步未完成，已记录失败阶段和原因，需重试或人工处理。"
+                "DataMax staging 数据集同步未完成，已记录失败阶段和原因，需重试或人工处理。"
             }
-            _ => "V3 staging 数据集同步正在执行，当前阶段已更新。",
+            _ => "DataMax staging 数据集同步正在执行，当前阶段已更新。",
         };
         return Some(external_channel_task_status_reply_for_conversation(
             conversation_external_id,
@@ -30641,7 +30648,7 @@ fn external_channel_data_ingestion_analysis_reply_from_events(
             conversation_external_id,
             "data_ingestion_staging_sync_started",
             Some(
-                "V3 已启动 staging 数据集同步任务，后续会继续进入数据集入库和索引流程。"
+                "DataMax 已启动 staging 数据集同步任务，后续会继续进入数据集入库和索引流程。"
                     .to_string(),
             ),
             Some(json!({
@@ -30673,7 +30680,7 @@ fn external_channel_data_ingestion_analysis_reply_from_events(
             conversation_external_id,
             "data_ingestion_staging_dataset_ready",
             Some(
-                "V3 已按人工确认创建或复用 staging 数据集，后续可继续导入数据或生成报表。"
+                "DataMax 已按人工确认创建或复用 staging 数据集，后续可继续导入数据或生成报表。"
                     .to_string(),
             ),
             Some(json!({
@@ -30710,12 +30717,12 @@ fn external_channel_data_ingestion_analysis_reply_from_events(
     };
     let text = match event.event_name.as_str() {
         "assistant_run.data_ingestion_analysis_completed" => {
-            "V3 已完成数据接入分析，已生成只读质量报告、字段映射和 staging 建议。"
+            "DataMax 已完成数据接入分析，已生成只读质量报告、字段映射和 staging 建议。"
         }
         "assistant_run.data_ingestion_analysis_needs_human" => {
-            "V3 已完成数据接入分析，但继续入库或改 schema 前需要人工确认。"
+            "DataMax 已完成数据接入分析，但继续入库或改 schema 前需要人工确认。"
         }
-        _ => "V3 数据接入分析未完成，已记录失败原因，需重试或人工处理。",
+        _ => "DataMax 数据接入分析未完成，已记录失败原因，需重试或人工处理。",
     };
     let result_summary = event
         .payload
@@ -30848,7 +30855,7 @@ fn external_channel_fixed_task_reply_from_events(
         external_channel_task_status_reply_for_conversation(
             conversation_external_id,
             "data_ingestion_analysis_queued",
-            Some("V3 已提交数据接入分析任务，正在生成只读分析和入库建议。".to_string()),
+            Some("DataMax 已提交数据接入分析任务，正在生成只读分析和入库建议。".to_string()),
             Some(json!({
                 "type": "v3_data_ingestion_analysis",
                 "status": "data_ingestion_analysis_queued",
@@ -30918,33 +30925,39 @@ fn external_channel_fixed_task_processing_reply(
     let task_status = format!("{prefix}_{state}");
     let text = match (template_id, state) {
         ("data_ingestion_analysis", "retrying") => {
-            "V3 数据接入分析仍在执行，Cloudflare Codex 超时后已自动续轮询。"
+            "DataMax 数据接入分析仍在执行，Cloudflare Codex 超时后已自动续轮询。"
         }
         ("data_ingestion_analysis", "cancelled") => {
-            "V3 数据接入分析任务已取消，未写入生产库，也未继续修改数据集。"
+            "DataMax 数据接入分析任务已取消，未写入生产库，也未继续修改数据集。"
         }
         ("data_ingestion_analysis", "failed") => {
-            "V3 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
+            "DataMax 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
         }
-        ("data_ingestion_analysis", _) => "V3 数据接入分析正在执行，请稍后查询结果。",
+        ("data_ingestion_analysis", _) => "DataMax 数据接入分析正在执行，请稍后查询结果。",
         ("static_page_image2_data_publish", "retrying") => {
-            "V3 静态页发布仍在执行，Cloudflare Codex 超时后已自动续轮询。"
+            "DataMax 静态页发布仍在执行，Cloudflare Codex 超时后已自动续轮询。"
         }
         ("static_page_image2_data_publish", "cancelled") => {
-            "V3 静态页发布任务已取消，未生成新的最终发布链接。"
+            "DataMax 静态页发布任务已取消，未生成新的最终发布链接。"
         }
-        ("static_page_image2_data_publish", "failed") => "V3 静态页发布未完成，需重试或人工处理。",
-        ("static_page_image2_data_publish", _) => "V3 已生成效果图，Codex 正在生成最终静态页。",
+        ("static_page_image2_data_publish", "failed") => {
+            "DataMax 静态页发布未完成，需重试或人工处理。"
+        }
+        ("static_page_image2_data_publish", _) => {
+            "DataMax 已生成效果图，Codex 正在生成最终静态页。"
+        }
         ("answer_quality_autofix", "cancelled") => {
-            "V3 回答质量修复诊断任务已取消，未应用任何代码或配置变更。"
+            "DataMax 回答质量修复诊断任务已取消，未应用任何代码或配置变更。"
         }
-        ("answer_quality_autofix", "retrying") => "V3 回答质量修复诊断仍在执行，已自动续轮询。",
-        ("answer_quality_autofix", "failed") => "V3 回答质量修复诊断未完成。",
-        ("answer_quality_autofix", _) => "V3 回答质量修复诊断正在执行。",
-        (_, "cancelled") => "V3 Codex 固定任务已取消。",
-        (_, "retrying") => "V3 Codex 固定任务仍在执行，已自动续轮询。",
-        (_, "failed") => "V3 Codex 固定任务未完成，需重试或人工处理。",
-        _ => "V3 Codex 固定任务正在执行。",
+        ("answer_quality_autofix", "retrying") => {
+            "DataMax 回答质量修复诊断仍在执行，已自动续轮询。"
+        }
+        ("answer_quality_autofix", "failed") => "DataMax 回答质量修复诊断未完成。",
+        ("answer_quality_autofix", _) => "DataMax 回答质量修复诊断正在执行。",
+        (_, "cancelled") => "DataMax Codex 固定任务已取消。",
+        (_, "retrying") => "DataMax Codex 固定任务仍在执行，已自动续轮询。",
+        (_, "failed") => "DataMax Codex 固定任务未完成，需重试或人工处理。",
+        _ => "DataMax Codex 固定任务正在执行。",
     };
     external_channel_task_status_reply_for_conversation(
         conversation_external_id,
@@ -31015,27 +31028,31 @@ fn external_channel_fixed_task_terminal_or_queued_reply(
         .map(str::to_string);
     let text = match (template_id, terminal_state) {
         ("data_ingestion_analysis", "completed") => {
-            "V3 已完成数据接入分析，已生成只读质量报告、字段映射和后续动作建议。"
+            "DataMax 已完成数据接入分析，已生成只读质量报告、字段映射和后续动作建议。"
         }
         ("data_ingestion_analysis", "needs_human") => {
-            "V3 数据接入分析需要人工确认后继续，当前不会自动写库或修改 schema。"
+            "DataMax 数据接入分析需要人工确认后继续，当前不会自动写库或修改 schema。"
         }
         ("data_ingestion_analysis", "failed") => {
-            "V3 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
+            "DataMax 数据接入分析未完成，已记录失败原因，需重试或人工处理。"
         }
-        ("data_ingestion_analysis", _) => "V3 已提交数据接入分析任务。",
-        ("static_page_image2_data_publish", "completed") => "V3 静态页已生成并发布。",
-        ("static_page_image2_data_publish", "needs_human") => "V3 静态页发布需要人工确认或处理。",
-        ("static_page_image2_data_publish", "failed") => "V3 静态页发布未完成，需重试或人工处理。",
-        ("static_page_image2_data_publish", _) => "V3 已提交静态页发布任务。",
-        ("answer_quality_autofix", "completed") => "V3 已完成回答质量修复诊断。",
-        ("answer_quality_autofix", "needs_human") => "V3 回答质量修复诊断需要人工审查后继续。",
-        ("answer_quality_autofix", "failed") => "V3 回答质量修复诊断未完成。",
-        ("answer_quality_autofix", _) => "V3 已提交回答质量修复诊断任务。",
-        (_, "completed") => "V3 Codex 固定任务已完成。",
-        (_, "needs_human") => "V3 Codex 固定任务需要人工处理。",
-        (_, "failed") => "V3 Codex 固定任务未完成，需重试或人工处理。",
-        _ => "V3 Codex 固定任务已提交。",
+        ("data_ingestion_analysis", _) => "DataMax 已提交数据接入分析任务。",
+        ("static_page_image2_data_publish", "completed") => "DataMax 静态页已生成并发布。",
+        ("static_page_image2_data_publish", "needs_human") => {
+            "DataMax 静态页发布需要人工确认或处理。"
+        }
+        ("static_page_image2_data_publish", "failed") => {
+            "DataMax 静态页发布未完成，需重试或人工处理。"
+        }
+        ("static_page_image2_data_publish", _) => "DataMax 已提交静态页发布任务。",
+        ("answer_quality_autofix", "completed") => "DataMax 已完成回答质量修复诊断。",
+        ("answer_quality_autofix", "needs_human") => "DataMax 回答质量修复诊断需要人工审查后继续。",
+        ("answer_quality_autofix", "failed") => "DataMax 回答质量修复诊断未完成。",
+        ("answer_quality_autofix", _) => "DataMax 已提交回答质量修复诊断任务。",
+        (_, "completed") => "DataMax Codex 固定任务已完成。",
+        (_, "needs_human") => "DataMax Codex 固定任务需要人工处理。",
+        (_, "failed") => "DataMax Codex 固定任务未完成，需重试或人工处理。",
+        _ => "DataMax Codex 固定任务已提交。",
     };
     let card = json!({
         "type": external_channel_fixed_task_card_type(template_id),
@@ -35627,7 +35644,7 @@ fn external_channel_data_ingestion_codex_execution(
         assistant_run_id,
         capability: capability.clone(),
         task: Some(
-            "Run the fixed V3 data-ingestion analysis template and return only the fixed output schema."
+            "Run the fixed DataMax data-ingestion analysis template and return only the fixed output schema."
                 .to_string(),
         ),
         local_thread_id,
@@ -36431,7 +36448,7 @@ fn external_channel_static_page_image2_codex_execution(
         assistant_run_id,
         capability: capability.clone(),
         task: Some(
-            "Run the fixed V3 Image2-first static-page publish template and return only the fixed output schema."
+            "Run the fixed DataMax Image2-first static-page publish template and return only the fixed output schema."
                 .to_string(),
         ),
         local_thread_id,
@@ -39791,7 +39808,7 @@ fn external_channel_model_tool_capability_guidance_lines() -> Vec<String> {
         "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/表/文件接入需求并生成待确认 staging plan；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
         "客户在线询问“能不能提供报表模板/有没有模板/给一份模板/按这个模板出报表”时，如果上下文指向报表、经营分析、看板、静态页或可视化产物，应视为 `static_page_artifact` 能力请求；不要只回复通用模板清单，宿主会先按客户本轮意向调整模板模块、字段组织和输出重点，再提供草稿或继续生成页面。".to_string(),
         "重要边界：用户要求基于已授权文档/附件做内容分析、总结、时间线、岗位适配、风险判断、排序、统计、项目经历归纳等，属于普通问答/内容分析，必须直接自然语言回答；不要因为提到附件、PDF、简历、表格或文档就输出 `document_processing`。只有用户明确要求上传入库、查看解析状态、重新解析、深解析、OCR/VLM 升级、事实抽取排队，或明确说资料无法读取/解析失败/问不出来时，才使用 `document_processing`。".to_string(),
-        "当你判断用户不是普通咨询，而是在要求 V3/DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。".to_string(),
+        "当你判断用户不是普通咨询，而是在要求 DataMax 执行上述能力时，不要只给设计建议或说稍后处理；请只输出一行 `<V3_TOOL_REQUEST>{\"tool\":\"static_page_artifact|data_ingestion_analysis|document_processing|collection_setup_analysis|integration_setup_analysis|message_channel_outreach\",\"intent\":\"create_or_update\",\"reason\":\"...\"}</V3_TOOL_REQUEST>`，由宿主决定是否执行、复用、排队或要求确认。".to_string(),
         "普通咨询、口径解释、数据问答、已可直接回答的问题仍正常自然语言回答；不要在客户答案中暴露 ReAct、retrieve_evidence、read_document_detail、upgrade_parse_vlm、codex_host_task、原始 connector/API 调用或内部质量门禁名称。".to_string(),
     ]
 }
@@ -40894,7 +40911,7 @@ fn external_channel_message_outreach_reply_from_tool_request(
     ExternalBotReplyView {
         target_conversation_external_id: message.conversation_external_id.clone(),
         reply_type: ExternalBotReplyTypeView::RequiresConfirmation,
-        text: Some("已识别为需要通过消息渠道主动通知/发起对话的请求；V3 已生成受控外发意图，当前不会直接发送，需确认渠道、接收方和权限后再执行。".to_string()),
+        text: Some("已识别为需要通过消息渠道主动通知/发起对话的请求；DataMax 已生成受控外发意图，当前不会直接发送，需确认渠道、接收方和权限后再执行。".to_string()),
         card: Some(card),
         artifact_links: Vec::new(),
         task_status: Some(status.to_string()),
@@ -42108,12 +42125,12 @@ fn external_channel_action_plan_reply(
     } else {
         let text = match plan.dispatch_failure_kind.as_deref() {
             Some("dispatch_endpoint_missing") => {
-                Some("V3 已识别到第三方动作，但当前通道尚未配置动作接收 endpoint；动作已记录，待配置后可重试。".to_string())
+                Some("DataMax 已识别到第三方动作，但当前通道尚未配置动作接收 endpoint；动作已记录，待配置后可重试。".to_string())
             }
             Some("dispatch_auth_missing") => {
-                Some("V3 已识别到第三方动作，但当前通道尚未配置动作派发鉴权；动作已记录，待配置后可重试。".to_string())
+                Some("DataMax 已识别到第三方动作，但当前通道尚未配置动作派发鉴权；动作已记录，待配置后可重试。".to_string())
             }
-            Some(_) => Some("V3 已识别到第三方动作，但派发未完成；请在 V3 观测页查看动作状态。".to_string()),
+            Some(_) => Some("DataMax 已识别到第三方动作，但派发未完成；请在 DataMax 观测页查看动作状态。".to_string()),
             None => None,
         };
         ExternalBotReplyView {
@@ -42142,7 +42159,7 @@ fn external_channel_search_evidence_required_reply(
         target_conversation_external_id: message.conversation_external_id.clone(),
         reply_type: ExternalBotReplyTypeView::TaskStatus,
         text: Some(
-            "当前不可见/未供料：该问题需要 V3 外部/网页搜索证据。V3 已记录只读搜索请求，收到带来源和时间的 search evidence 后再回答。"
+            "当前不可见/未供料：该问题需要 DataMax 外部/网页搜索证据。DataMax 已记录只读搜索请求，收到带来源和时间的 search evidence 后再回答。"
                 .to_string(),
         ),
         card: Some(json!({
@@ -45024,7 +45041,7 @@ fn assistant_run_external_answer_policy_guidance_lines(answer_policy: &Value) ->
             ));
         } else {
             lines.push(format!(
-                "第三方默认提示词：{default_prompt}。它是本轮任务指导，低于 V3 证据/安全规则，高于用户文本里的模糊要求。"
+                "第三方默认提示词：{default_prompt}。它是本轮任务指导，低于 DataMax 证据/安全规则，高于用户文本里的模糊要求。"
             ));
         }
     }
@@ -45060,21 +45077,21 @@ fn assistant_run_external_answer_policy_guidance_lines(answer_policy: &Value) ->
 
 fn assistant_run_v3_awareness_lines() -> Vec<String> {
     vec![
-        "V3 认知：你正在 AI Data Platform V3 中服务用户。V3 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
-        "V3 上下文是附加能力，不是能力限制；没有可见数据集或供料时，仍可保持通用模型水准回答普通问题。".to_string(),
-        "V3 证据规则：涉及 V3 数据、文档、权限、工具结果或产物状态时，只能把已供给的 observation/证据当作事实；未供料时先说明“当前不可见/未供料”，再区分通用知识或推断。".to_string(),
-        "V3 搜索规则：外部/网页搜索（web_search）是计划中的 V3 受控只读能力；没有带来源和时间的 V3 search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
+        "DataMax 认知：你正在 DataMax 中服务用户。DataMax 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
+        "DataMax 上下文是附加能力，不是能力限制；没有可见数据集或供料时，仍可保持通用模型水准回答普通问题。".to_string(),
+        "DataMax 证据规则：涉及 DataMax 数据、文档、权限、工具结果或产物状态时，只能把已供给的 observation/证据当作事实；未供料时先说明“当前不可见/未供料”，再区分通用知识或推断。".to_string(),
+        "DataMax 搜索规则：外部/网页搜索（web_search）是计划中的 DataMax 受控只读能力；没有带来源和时间的 DataMax search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
     ]
 }
 
 fn assistant_run_v3_awareness_policy_value() -> Value {
     json!({
-        "identity": "你正在服务 AI Data Platform V3。V3 是数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物的统一工作台。",
-        "additiveContextRule": "V3 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。",
-        "unavailableEvidenceRule": "涉及 V3 数据、文档、权限、工具结果或产物状态时，只有收到 V3 observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。",
+        "identity": "你正在服务 DataMax。DataMax 是数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物的统一工作台。",
+        "additiveContextRule": "DataMax 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。",
+        "unavailableEvidenceRule": "涉及 DataMax 数据、文档、权限、工具结果或产物状态时，只有收到 DataMax observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。",
         "externalSearchPolicy": {
             "status": "planned_v3_controlled_read_only",
-            "modelRule": "外部/网页搜索是计划中的 V3 受控只读能力；未收到带来源和时间的 V3 search evidence 前，不要声称已联网搜索或引用实时网页结果。"
+            "modelRule": "外部/网页搜索是计划中的 DataMax 受控只读能力；未收到带来源和时间的 DataMax search evidence 前，不要声称已联网搜索或引用实时网页结果。"
         }
     })
 }
@@ -47516,7 +47533,7 @@ fn assistant_run_resume_project_delivery_artifact_payload(scans: &[Value]) -> Op
         },
         "rows": rendered_rows,
         "notes": [
-            "本页来自 V3 结构化简历扫描结果，用于承载高信息量回答的完整明细。",
+            "本页来自 DataMax 结构化简历扫描结果，用于承载高信息量回答的完整明细。",
             "未识别到项目交付段的候选人会保留占位行，避免只展示检索命中的少数简历。"
         ],
     }))
@@ -49481,7 +49498,7 @@ fn build_assistant_run_react_natural_fallback_input(
     let mut sections = vec![
         base_input,
         "ReAct 自然回答兜底要求：上一轮工具规划没有产出可直接展示给用户的最终回答。请改为面向用户直接自然语言作答；不要输出 JSON、observation、execution_trail、react_trace、tool_trace、runtime_manifest 或 provider 原始载荷。".to_string(),
-        "如果当前没有拿到 V3 可见证据，只在涉及 V3 数据/文档/权限/产物状态时说明“当前不可见/未供料”；普通问题继续用你的通用能力回答。".to_string(),
+        "如果当前没有拿到 DataMax 可见证据，只在涉及 DataMax 数据/文档/权限/产物状态时说明“当前不可见/未供料”；普通问题继续用你的通用能力回答。".to_string(),
         format!("兜底原因：{reason}"),
     ];
     if !observations.is_empty() {
@@ -49520,9 +49537,9 @@ fn build_assistant_run_react_compact_natural_fallback_input(
     let requires_json_output =
         answer_policy.and_then(assistant_run_answer_policy_output_format) == Some("json");
     let output_guard = if requires_json_output {
-        "优先使用 V3 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注资料来源状态。不要输出 observation、execution_trail、react_trace、runtime_manifest 或内部路径；最终客户答案必须遵守本轮 JSON 输出格式要求。".to_string()
+        "优先使用 DataMax 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注资料来源状态。不要输出 observation、execution_trail、react_trace、runtime_manifest 或内部路径；最终客户答案必须遵守本轮 JSON 输出格式要求。".to_string()
     } else {
-        "优先使用 V3 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注“资料中未定位到专门条款/需要补充制度文件”。不要输出 JSON、observation、execution_trail、react_trace、runtime_manifest 或内部路径。".to_string()
+        "优先使用 DataMax 已供料证据；证据不完整时，先给基于已检索材料和通用专业常识的可执行建议，并清楚标注“资料中未定位到专门条款/需要补充制度文件”。不要输出 JSON、observation、execution_trail、react_trace、runtime_manifest 或内部路径。".to_string()
     };
     let answer_shape_requirement = if requires_json_output {
         "输出要求：只输出合法 JSON，不要使用 Markdown 代码围栏；如果是养老/护理应急类问题，可用字段表达现场处置、上报记录、家属沟通、后续复盘/材料。"
@@ -49535,7 +49552,7 @@ fn build_assistant_run_react_compact_natural_fallback_input(
         .cloned()
         .unwrap_or(Value::Null);
     let mut sections = vec![
-        "你是 V3 智能助手。上一轮工具规划没有产出可直接展示给用户的最终回答，现在必须直接给客户可展示答案或提出一个明确追问。".to_string(),
+        "你是 DataMax 智能助手。上一轮工具规划没有产出可直接展示给用户的最终回答，现在必须直接给客户可展示答案或提出一个明确追问。".to_string(),
         output_guard,
         format!("用户问题：{}", user_prompt.trim()),
         format!("兜底原因：{reason}"),
@@ -50121,7 +50138,7 @@ fn assistant_run_answer_quality_autofix_codex_execution(
         assistant_run_id,
         capability: capability.clone(),
         task: Some(
-            "Diagnose this V3 low-quality answer case and produce only the fixed template output."
+            "Diagnose this DataMax low-quality answer case and produce only the fixed template output."
                 .to_string(),
         ),
         local_thread_id: None,
@@ -51350,7 +51367,7 @@ fn external_channel_standalone_html_document(html: &str) -> String {
         trimmed.to_string()
     } else {
         format!(
-            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>V3 Generated Artifact</title></head><body>{}</body></html>",
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>DataMax Generated Artifact</title></head><body>{}</body></html>",
             trimmed
         )
     }
@@ -54284,7 +54301,7 @@ fn external_channel_static_page_publish_failed_reply_from_event_payload(
         conversation_external_id,
         "static_page_publish_failed",
         Some(
-            "V3 已生成效果图，但最终静态页暂未完成，系统已记录原因，可继续补充数据、重试或转人工处理。"
+            "DataMax 已生成效果图，但最终静态页暂未完成，系统已记录原因，可继续补充数据、重试或转人工处理。"
                 .to_string(),
         ),
         Some(external_channel_static_page_card_with_template_payload(json!({
@@ -54425,7 +54442,7 @@ fn send_codex_host_fixed_task_exception_email(event_name: &str, payload: &Value)
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let text = format!(
-        "V3 固定 Codex 任务需要人工处理。\n\n事件：{event_name}\n模板：{template_id}\n状态：{status}\n原因：{reason}\n运行：{}\n公开产物：{}\n变更文件数：{}\n\n该邮件只包含审计摘要，不包含原始 prompt、diff、provider 日志或密钥。",
+        "DataMax 固定 Codex 任务需要人工处理。\n\n事件：{event_name}\n模板：{template_id}\n状态：{status}\n原因：{reason}\n运行：{}\n公开产物：{}\n变更文件数：{}\n\n该邮件只包含审计摘要，不包含原始 prompt、diff、provider 日志或密钥。",
         payload
             .get("workflow_execution_id")
             .and_then(Value::as_str)
@@ -54435,7 +54452,7 @@ fn send_codex_host_fixed_task_exception_email(event_name: &str, payload: &Value)
     );
     let message = OperationalEmailMessage {
         to: recipient,
-        subject: format!("V3 Codex 固定任务需要处理：{template_id}"),
+        subject: format!("DataMax Codex 固定任务需要处理：{template_id}"),
         text,
         html: None,
     };
@@ -55571,7 +55588,7 @@ fn build_assistant_run_answer_quality_judge_input(
         .take(ASSISTANT_RUN_ANSWER_QUALITY_JUDGE_ANSWER_CHARS)
         .collect::<String>();
     [
-        "你是 V3 AssistantRun 的内部回答质量判卷器，只能输出 JSON，不能回答用户。".to_string(),
+        "你是 DataMax AssistantRun 的内部回答质量判卷器，只能输出 JSON，不能回答用户。".to_string(),
         "根据用户问题、供料状态、可回答证据摘要和候选答案，判断候选答案是否可以安全给客户。".to_string(),
         "硬规则：如果已有证据但候选答案推脱、遗漏表格/统计/排序任务、没有回答实体问题、或含内部状态泄露，应 verdict=retry。".to_string(),
         "如果解析质量明显阻塞且可通过升级解析恢复，required_actions 包含 upgrade_parse_vlm；但不要自行回答材料内容。".to_string(),
@@ -56676,12 +56693,12 @@ fn build_assistant_run_react_provider_input(
     );
     let mut sections = vec![
         "你是智能数据工作台里的 Host-Controlled ReAct 运行时。".to_string(),
-        "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
+        "你只能提出下一步动作，不能假装已经执行平台动作。DataMax Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
         "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现 DataMax 可见范围内的候选证据；web_search 用于请求 DataMax 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 DataMax search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
@@ -56690,7 +56707,7 @@ fn build_assistant_run_react_provider_input(
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
         "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
-        "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
+        "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 DataMax 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         "final_answer 面向用户聊天框，只写自然语言结论、必要步骤和简短来源说明；禁止粘贴 observation JSON、execution_trail、react_trace、tool_trace、runtime_manifest、provider 原始载荷、私有路径或内部 URL。".to_string(),
@@ -56764,12 +56781,12 @@ fn build_assistant_run_react_continue_provider_input(
     );
     let mut sections = vec![
         "你是智能数据工作台里的 Host-Controlled ReAct 继续执行运行时。".to_string(),
-        "你只能提出下一步动作，不能假装已经执行平台动作。V3 Host 会验证、执行、记录并返回 observation。".to_string(),
+        "你只能提出下一步动作，不能假装已经执行平台动作。DataMax Host 会验证、执行、记录并返回 observation。".to_string(),
         "只返回一个 JSON 对象，禁止 Markdown，禁止解释 JSON 外的文字。".to_string(),
         "JSON Schema: {\"action_type\":\"retrieve_evidence|web_search|read_document_detail|upgrade_parse_vlm|recall_conversation_memory|list_report_options|report_choice|resolve_video_url|extract_video_ppt_transcript|create_static_page_draft|update_static_page_module|submit_static_page_image_preview|render_static_page|create_report_draft|openclaw_memory_recall|openclaw_readonly_execution|codex_host_task|final_answer\",\"reason_summary\":\"给用户看的简短原因\",\"arguments\":{},\"requires_confirmation\":false}".to_string(),
         "目录、候选列表和系统说明只用于规划下一步，不是可引用证据。".to_string(),
         "选中数据集或对话记忆时，final_answer 必须基于已返回的 observation；否则先选择 retrieve_evidence、read_document_detail 或 recall_conversation_memory。".to_string(),
-        "工具选择：retrieve_evidence 用于发现 V3 可见范围内的候选证据；web_search 用于请求 V3 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 V3 search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
+        "工具选择：retrieve_evidence 用于发现 DataMax 可见范围内的候选证据；web_search 用于请求 DataMax 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 DataMax search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
         "视频 PPT/原文提取：仅支持上传视频文件、直接视频 URL 或公开页面可解析视频地址；先用 resolve_video_url，已有登记视频素材后才用 extract_video_ppt_transcript；不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
@@ -56778,7 +56795,7 @@ fn build_assistant_run_react_continue_provider_input(
         "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
         "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
-        "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 V3 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
+        "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 DataMax 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
         "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         "final_answer 面向用户聊天框，只写自然语言结论、必要步骤和简短来源说明；禁止粘贴 observation JSON、execution_trail、react_trace、tool_trace、runtime_manifest、provider 原始载荷、私有路径或内部 URL。".to_string(),
@@ -58304,7 +58321,7 @@ fn assistant_run_codex_context_budget(
             startup_briefing_chars,
             category_soft_limit,
             0,
-            Some("product and database briefing supplied by V3".to_string()),
+            Some("product and database briefing supplied by DataMax".to_string()),
         ),
         AssistantRunCodexContextBudgetItemView::new(
             "selected_scope",
@@ -58330,7 +58347,7 @@ fn assistant_run_codex_context_budget(
             category_soft_limit,
             trimmed_item_count,
             Some(
-                "V3-visible supplied evidence; high-value ids and citations must survive trimming"
+                "DataMax-visible supplied evidence; high-value ids and citations must survive trimming"
                     .to_string(),
             ),
         ),
@@ -58366,7 +58383,7 @@ fn assistant_run_codex_context_budget(
             artifact_state_chars,
             category_soft_limit,
             0,
-            Some("current static page/report artifact skeleton supplied by V3".to_string()),
+            Some("current static page/report artifact skeleton supplied by DataMax".to_string()),
         ),
         AssistantRunCodexContextBudgetItemView::new(
             "tool_outputs",
@@ -58446,7 +58463,7 @@ fn assistant_run_codex_action_contracts(
         AssistantRunCodexActionContractView::new(
             "retrieve_evidence",
             "检索供料证据",
-            "在 V3 可见范围内检索数据集、文档或对话记忆证据。",
+            "在 DataMax 可见范围内检索数据集、文档或对话记忆证据。",
             json!({
                 "type": "object",
                 "properties": {
@@ -58459,7 +58476,7 @@ fn assistant_run_codex_action_contracts(
         AssistantRunCodexActionContractView::new(
             "web_search",
             "请求外部/网页搜索",
-            "请求 V3 执行受控只读外部/网页搜索；只有 V3 返回带来源和时间的 search evidence 后，模型才可引用搜索结果。",
+            "请求 DataMax 执行受控只读外部/网页搜索；只有 DataMax 返回带来源和时间的 search evidence 后，模型才可引用搜索结果。",
             assistant_run_codex_web_search_schema(),
             false,
         ),
@@ -58480,14 +58497,14 @@ fn assistant_run_codex_action_contracts(
         AssistantRunCodexActionContractView::new(
             "recall_conversation_memory",
             "召回对话记忆",
-            "按 V3 判断召回当前本地会话的隐藏对话记忆。",
+            "按 DataMax 判断召回当前本地会话的隐藏对话记忆。",
             json!({"type": "object", "properties": {"reason": {"type": "string"}}}),
             false,
         ),
         AssistantRunCodexActionContractView::new(
             "resolve_video_url",
             "解析公开视频地址",
-            "只允许 V3 解析直接视频 URL 或公开页面可解析视频地址；不支持登录态、扫码、Cookie 或录屏绕过。",
+            "只允许 DataMax 解析直接视频 URL 或公开页面可解析视频地址；不支持登录态、扫码、Cookie 或录屏绕过。",
             json!({
                 "type": "object",
                 "properties": {
@@ -58508,7 +58525,7 @@ fn assistant_run_codex_action_contracts(
         AssistantRunCodexActionContractView::new(
             "extract_video_ppt_transcript",
             "提取视频 PPT 和原文",
-            "在 V3 已登记的视频素材上排后台任务，生成原文、关键帧/PPT 候选、页面映射和缺失证据说明。",
+            "在 DataMax 已登记的视频素材上排后台任务，生成原文、关键帧/PPT 候选、页面映射和缺失证据说明。",
             json!({
                 "type": "object",
                 "properties": {
@@ -58547,7 +58564,7 @@ fn assistant_run_codex_action_contracts(
         AssistantRunCodexActionContractView::new(
             "submit_static_page_image_preview",
             "提交效果图生成",
-            "把当前静态页草稿提交到 V3 控制的效果图队列。",
+            "把当前静态页草稿提交到 DataMax 控制的效果图队列。",
             json!({"type": "object", "properties": {"draft_id": {"type": "string"}}}),
             true,
         ),
@@ -58568,7 +58585,7 @@ fn assistant_run_codex_action_contracts(
         AssistantRunCodexActionContractView::new(
             "create_report_draft",
             "创建报表草稿",
-            "基于 V3 供料创建报表草稿。",
+            "基于 DataMax 供料创建报表草稿。",
             json!({"type": "object", "properties": {"objective": {"type": "string"}}}),
             true,
         ),
@@ -58582,7 +58599,7 @@ fn assistant_run_codex_action_contracts(
         AssistantRunCodexActionContractView::new(
             "submit_html_artifact_event",
             "提交 HTML 产物事件",
-            "仅通过 V3 校验后的 html_artifact.patch 或 html_artifact.action_intent 更新受支持产物。",
+            "仅通过 DataMax 校验后的 html_artifact.patch 或 html_artifact.action_intent 更新受支持产物。",
             json!({
                 "type": "object",
                 "properties": {
@@ -58620,7 +58637,7 @@ fn assistant_run_codex_action_contracts(
             AssistantRunCodexActionContractView::new(
                 "external_artifact.publish",
                 "发布第三方产物",
-                "通过 V3 校验、审计和幂等边界向第三方产物系统发布当前产物。",
+                "通过 DataMax 校验、审计和幂等边界向第三方产物系统发布当前产物。",
                 assistant_run_codex_external_action_schema(true, false),
                 true,
             ),
@@ -58634,7 +58651,7 @@ fn assistant_run_codex_action_contracts(
             AssistantRunCodexActionContractView::new(
                 "external_business_action.invoke",
                 "执行第三方事务动作",
-                "跨系统业务动作只生成 V3 受控意图；高风险或跨系统写入必须确认后再执行。",
+                "跨系统业务动作只生成 DataMax 受控意图；高风险或跨系统写入必须确认后再执行。",
                 assistant_run_codex_external_business_action_schema(),
                 true,
             ),
@@ -59016,7 +59033,7 @@ fn assistant_run_codex_shadow_comparison(
             "reason": if suggested_action_allowed {
                 "shadow mode only; direct execution remains authoritative"
             } else {
-                "codex suggested action is not in V3-provided action contracts"
+                "codex suggested action is not in DataMax-provided action contracts"
             },
             "next_gate": "enable Codex mutation only after repeated matched shadow runs",
         }
@@ -69139,13 +69156,13 @@ fn assistant_run_evidence_status_label(evidence_state: &Value) -> String {
 fn assistant_run_placeholder_user_message(is_continue: bool, evidence_state: &Value) -> String {
     let status_label = assistant_run_evidence_status_label(evidence_state);
     let supply_note = if status_label.starts_with("未请求") {
-        "当前按普通聊天处理；V3 上下文只作为附加能力，不会限制通用问答。"
+        "当前按普通聊天处理；DataMax 上下文只作为附加能力，不会限制通用问答。"
     } else if status_label.starts_with("已请求") {
-        "本轮没有可引用的 V3 供料；涉及 V3 数据、文档、权限或产物状态时，应说明“当前不可见/未供料”。"
+        "本轮没有可引用的 DataMax 供料；涉及 DataMax 数据、文档、权限或产物状态时，应说明“当前不可见/未供料”。"
     } else if status_label.starts_with("已供料") || status_label.starts_with("已检索") {
         "已有可见供料时，正式模型回答会优先参考供料，并区分供料事实和通用判断。"
     } else {
-        "正式模型回答会遵守 V3 可见供料和权限边界；缺少证据时不编造。"
+        "正式模型回答会遵守 DataMax 可见供料和权限边界；缺少证据时不编造。"
     };
     let opening = if is_continue {
         "我已收到继续指令。"
@@ -75872,7 +75889,7 @@ fn code_review_summary_artifact_from_candidate(
                 .map(|value| html_artifact_safe_summary_text(value, 120))
                 .unwrap_or_default(),
             "sourceSequenceNo": candidate.sequence_no,
-            "modelGuidance": "这是 V3 从结构化代码审查输出中合成的只读摘要；如需执行修改，应重新进入受控 AssistantRun/Codex action 流程。"
+            "modelGuidance": "这是 DataMax 从结构化代码审查输出中合成的只读摘要；如需执行修改，应重新进入受控 AssistantRun/Codex action 流程。"
         }),
     })
 }
@@ -82692,7 +82709,7 @@ struct StaticPageTemplateReferenceSpec {
 
 const STATIC_PAGE_TEMPLATE_REFERENCE_GUARDRAILS: &[&str] = &[
     "template reference controls style and module recipe only",
-    "V3 model routing, permissions, datasets, evidence, and artifacts remain authoritative",
+    "DataMax model routing, permissions, datasets, evidence, and artifacts remain authoritative",
     "model output must become structured draft data, not raw final HTML",
     "missing or partial evidence must stay visible in draft and rendered output",
 ];
@@ -82858,7 +82875,7 @@ fn resolve_static_page_template_reference(
             audience: "业务负责人和客户决策层",
             prompt_hints: &[
                 "prefer KPI cards, trend charts, comparison charts, and evidence notes",
-                "never invent numbers; ask V3 retrieval or data repair when chart rows are missing",
+                "never invent numbers; ask DataMax retrieval or data repair when chart rows are missing",
             ],
         })),
         "dashboard" => Ok(Some(StaticPageTemplateReferenceSpec {
@@ -82887,17 +82904,17 @@ fn resolve_static_page_template_reference(
             objective: "快速生成一页技术文档或交接说明，保留结构、步骤、注意事项和缺失信息。",
             audience: "技术对接人员和项目成员",
             prompt_hints: &[
-                "preserve source headings and section hierarchy when V3 supplied document detail",
+                "preserve source headings and section hierarchy when DataMax supplied document detail",
                 "show unavailable interface details as missing evidence instead of guessing",
             ],
         })),
         "deck-swiss-international" | "video-hyperframes" => Err(ApiError::bad_request(
             "static_page_template_reference_paused",
-            format!("{id} belongs to a paused PPT/video track and cannot create V3 static pages"),
+            format!("{id} belongs to a paused PPT/video track and cannot create DataMax static pages"),
         )),
         _ => Err(ApiError::bad_request(
             "invalid_static_page_template_reference",
-            format!("{id} is not an enabled V3 static page template reference"),
+            format!("{id} is not an enabled DataMax static page template reference"),
         )),
     }
 }
@@ -84738,7 +84755,7 @@ fn static_page_preview_data_quality_message(modules: &[Value]) -> String {
         .join("、");
     let suffix = format!(" {} 个模块", modules.len());
     format!(
-        "当前静态页还有{suffix}的数据绑定未达到效果图生成要求：{labels}。请先让 V3 补充样本行、重新匹配字段，或检索/修复模块数据。"
+        "当前静态页还有{suffix}的数据绑定未达到效果图生成要求：{labels}。请先让 DataMax 补充样本行、重新匹配字段，或检索/修复模块数据。"
     )
 }
 
@@ -89121,7 +89138,7 @@ mod tests {
             assistant_run_xinbai_published_report_link_answer("新百报表怎么重新设计").is_none()
         );
         assert!(assistant_run_xinbai_published_report_link_answer(
-            "请修复这个已经发布的新百经营分析月报静态页：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html 。近7日销售不会随筛选联动变化，生成新的 V3 产物链接，不覆盖旧页面。"
+            "请修复这个已经发布的新百经营分析月报静态页：https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-db-only-live-20260601/data-buddy-image2-report/index.html 。近7日销售不会随筛选联动变化，生成新的 DataMax 产物链接，不覆盖旧页面。"
         )
         .is_none());
     }
@@ -92355,7 +92372,7 @@ mod tests {
         let reply = external_channel_task_status_reply_for_conversation(
             "room-1",
             "static_page_image2_auto_publish_pending",
-            Some("V3 正在生成静态页。".to_string()),
+            Some("DataMax 正在生成静态页。".to_string()),
             Some(json!({
                 "type": "v3_static_page_image2_pipeline",
                 "status": "static_page_image2_auto_publish_pending"
@@ -92376,7 +92393,7 @@ mod tests {
         let reply = external_channel_task_status_reply_for_conversation(
             "room-1",
             "static_page_publish_failed",
-            Some("V3 静态页发布未完成。".to_string()),
+            Some("DataMax 静态页发布未完成。".to_string()),
             Some(json!({
                 "type": "v3_static_page_image2_publish_status",
                 "status": "static_page_publish_failed"
@@ -92403,7 +92420,7 @@ mod tests {
             reply: ExternalBotReplyView {
                 target_conversation_external_id: "room-1".to_string(),
                 reply_type: ExternalBotReplyTypeView::TaskStatus,
-                text: Some("V3 正在生成可访问的静态页。".to_string()),
+                text: Some("DataMax 正在生成可访问的静态页。".to_string()),
                 card: Some(json!({
                     "type": "v3_static_page_image2_publish_status",
                     "status": "static_page_publish_running",
@@ -92516,7 +92533,7 @@ mod tests {
             42,
             "static_page",
             "processing",
-            "V3 正在继续处理。",
+            "DataMax 正在继续处理。",
             Some("https://v3.elepcloud.com/status/run-1".to_string()),
             Some(15),
             json!({
@@ -92534,7 +92551,7 @@ mod tests {
         assert_eq!(payload["conversation_external_id"], json!("room-1"));
         assert_eq!(payload["phase"], json!("static_page"));
         assert_eq!(payload["status"], json!("processing"));
-        assert_eq!(payload["display_text"], json!("V3 正在继续处理。"));
+        assert_eq!(payload["display_text"], json!("DataMax 正在继续处理。"));
         assert_eq!(
             payload["status_url"],
             json!("https://v3.elepcloud.com/status/run-1")
@@ -92617,7 +92634,7 @@ mod tests {
             10,
             "static_page",
             "static_page_generation_pending",
-            "V3 正在生成页面方案，并会自动继续发布最终页面。",
+            "DataMax 正在生成页面方案，并会自动继续发布最终页面。",
             Some("https://v3.elepcloud.com/status/run-1".to_string()),
             Some(30),
             json!({
@@ -93117,7 +93134,7 @@ mod tests {
             reply: ExternalBotReplyView {
                 target_conversation_external_id: "room-1".to_string(),
                 reply_type: ExternalBotReplyTypeView::TaskStatus,
-                text: Some("V3 已提交 Image2 效果图队列，生成后自动继续发布。".to_string()),
+                text: Some("DataMax 已提交 Image2 效果图队列，生成后自动继续发布。".to_string()),
                 card: Some(json!({
                     "type": "v3_static_page_image2_pipeline",
                     "status": "static_page_image2_auto_publish_pending",
@@ -93243,7 +93260,7 @@ mod tests {
             reply: ExternalBotReplyView {
                 target_conversation_external_id: "room-1".to_string(),
                 reply_type: ExternalBotReplyTypeView::ArtifactLink,
-                text: Some("V3 静态页已生成并发布。".to_string()),
+                text: Some("DataMax 静态页已生成并发布。".to_string()),
                 card: Some(json!({
                     "type": "v3_static_page_image2_publish_completed",
                     "status": "static_page_published",
@@ -93279,7 +93296,7 @@ mod tests {
             reply: ExternalBotReplyView {
                 target_conversation_external_id: "room-1".to_string(),
                 reply_type: ExternalBotReplyTypeView::TaskStatus,
-                text: Some("V3 正在生成可访问的静态页。".to_string()),
+                text: Some("DataMax 正在生成可访问的静态页。".to_string()),
                 card: Some(json!({
                     "type": "v3_static_page_image2_publish_status",
                     "status": "static_page_publish_running",
@@ -93346,7 +93363,9 @@ mod tests {
             reply: ExternalBotReplyView {
                 target_conversation_external_id: "room-1".to_string(),
                 reply_type: ExternalBotReplyTypeView::TaskStatus,
-                text: Some("V3 已生成效果图，但最终静态页暂未完成，系统已记录原因。".to_string()),
+                text: Some(
+                    "DataMax 已生成效果图，但最终静态页暂未完成，系统已记录原因。".to_string(),
+                ),
                 card: Some(json!({
                     "type": "v3_static_page_image2_publish_status",
                     "status": "static_page_publish_failed",
@@ -98705,7 +98724,7 @@ mod tests {
             &response,
             json!({
                 "msg_type": "text",
-                "content": {"text": "V3 task accepted."}
+                "content": {"text": "DataMax task accepted."}
             }),
         );
 
@@ -98770,7 +98789,7 @@ mod tests {
             },
             json!({
                 "msg_type": "text",
-                "content": {"text": "等待 V3 搜索证据。"}
+                "content": {"text": "等待 DataMax 搜索证据。"}
             }),
         );
         assert_eq!(
@@ -99955,7 +99974,7 @@ mod tests {
         assert_eq!(first.reply.task_status.as_deref(), Some("answered"));
         let first_reply_text = first.reply.text.as_deref().expect("text reply");
         assert_eq!(first_reply_text, "普通外部直答。");
-        assert!(!first_reply_text.contains("V3 对话处理"));
+        assert!(!first_reply_text.contains("DataMax 对话处理"));
         assert!(!first_reply_text.contains("已收到指令"));
         assert_eq!(
             first.reply.target_conversation_external_id,
@@ -100616,11 +100635,11 @@ mod tests {
         assert!(body.contains("\"schema\":\"v3.external_channel.sse.v1\""));
         assert!(body.contains("\"event_id\":\"pending:000000\""));
         assert!(body.contains("\"phase\":\"started\""));
-        assert!(body.contains("\"display_text\":\"V3 已开始处理本轮消息。\""));
+        assert!(body.contains("\"display_text\":\"DataMax 已开始处理本轮消息。\""));
         assert!(body.contains("event: external_channel.retrieval_started"));
         assert!(body.contains("\"event_id\":\"pending:000005\""));
         assert!(body.contains("\"phase\":\"retrieval\""));
-        assert!(body.contains("V3 正在检索可见文档"));
+        assert!(body.contains("DataMax 正在检索可见文档"));
         assert!(body.contains("event: external_channel.delta"));
         assert!(body.contains("event: external_channel.completed"));
         assert!(body.contains("流式模型直答。"));
@@ -101878,7 +101897,7 @@ mod tests {
         let tenant = storage
             .ensure_tenant(
                 &format!("external-v3-dataset-scope-test-{}", Uuid::new_v4()),
-                "External V3 Dataset Scope Test",
+                "External DataMax Dataset Scope Test",
             )
             .await
             .expect("tenant should exist");
@@ -101895,7 +101914,7 @@ mod tests {
                 state.tenant_id,
                 NewDataset {
                     key: format!("external-v3-dataset-scope-{}", Uuid::new_v4()),
-                    title: "External V3 Dataset Scope".to_string(),
+                    title: "External DataMax Dataset Scope".to_string(),
                     description: None,
                     owner_user_id: None,
                 },
@@ -104767,7 +104786,7 @@ mod tests {
                 ]
             },
             "validation_checks": ["date_parse_check", "work_hour_range_check"],
-            "recommended_next_actions": ["生成 staging import spec 后由 V3 审核执行"],
+            "recommended_next_actions": ["生成 staging import spec 后由 DataMax 审核执行"],
             "human_review_reason": null
         }));
 
@@ -104839,7 +104858,7 @@ mod tests {
                 "steps": ["normalize_date", "dedupe"]
             },
             "validation_checks": ["date_parse_check"],
-            "recommended_next_actions": ["由 V3 审核 staging spec 后再入库"]
+            "recommended_next_actions": ["由 DataMax 审核 staging spec 后再入库"]
         });
 
         let summary = data_ingestion_analysis_result_summary_from_output(
@@ -104903,7 +104922,7 @@ mod tests {
                 ]
             },
             "validation_checks": ["date_parse_check"],
-            "recommended_next_actions": ["由 V3 审核 staging spec 后再入库"]
+            "recommended_next_actions": ["由 DataMax 审核 staging spec 后再入库"]
         });
         let execution = codex_host_fixed_task_test_execution(fixed_task, Some(output.clone()));
         let summary = data_ingestion_analysis_result_summary_from_output(
@@ -105953,7 +105972,7 @@ retrieve_evidence:
             "external_channel_model_direct_reply_unavailable"
         );
         assert!(!error.message.contains("已收到"));
-        assert!(!error.message.contains("V3 对话处理"));
+        assert!(!error.message.contains("DataMax 对话处理"));
 
         let duplicate = post_json_request(
             app,
@@ -111974,7 +111993,7 @@ retrieve_evidence:
                 "steps": ["normalize_date", "dedupe"]
             },
             "validation_checks": ["date_parse_check"],
-            "recommended_next_actions": ["由 V3 审核 staging spec 后再入库"]
+            "recommended_next_actions": ["由 DataMax 审核 staging spec 后再入库"]
         });
         let mut execution = codex_host_fixed_task_test_execution(fixed_task, Some(output));
         execution.tenant_id = state.tenant_id;
@@ -114486,8 +114505,8 @@ retrieve_evidence:
         });
 
         assert!(input.contains("智能数据工作台"));
-        assert!(input.contains("AI Data Platform V3"));
-        assert!(input.contains("V3 上下文是附加能力"));
+        assert!(input.contains("DataMax"));
+        assert!(input.contains("DataMax 上下文是附加能力"));
         assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("不要声称已联网搜索"));
         assert!(input.contains("web_search"));
@@ -114639,7 +114658,7 @@ retrieve_evidence:
         assert!(input.contains("通用模型助手"));
         assert!(input.contains("可以使用你的通用知识、推理和表达能力"));
         assert!(input.contains("不要因为缺少数据集而拒答"));
-        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("DataMax"));
         assert!(input.contains("不是能力限制"));
         assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("不要声称已联网搜索"));
@@ -114734,8 +114753,8 @@ retrieve_evidence:
 
         assert!(input.contains("通用模型助手"));
         assert!(input.contains("不要因为运行在数据智能助手中而限制通用问答能力"));
-        assert!(input.contains("AI Data Platform V3"));
-        assert!(input.contains("V3 上下文是附加能力"));
+        assert!(input.contains("DataMax"));
+        assert!(input.contains("DataMax 上下文是附加能力"));
         assert!(input.contains("不是能力限制"));
         assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("不要声称已联网搜索"));
@@ -114861,7 +114880,7 @@ retrieve_evidence:
         );
 
         assert!(input.contains("AssistantRun 连续执行回答运行时"));
-        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("DataMax"));
         assert!(input.contains("当前选中范围"));
         assert!(input.contains("供料状态"));
         assert!(input.contains("供料提示"));
@@ -115103,8 +115122,8 @@ retrieve_evidence:
         assert!(input.contains("upgrade_parse_vlm 是高成本内部解析修复动作"));
         assert!(input.contains("premium_action_budget > premium_action_used"));
         assert!(input.contains("question_focus"));
-        assert!(input.contains("web_search 用于请求 V3 受控外部/网页搜索证据"));
-        assert!(input.contains("V3 search evidence"));
+        assert!(input.contains("web_search 用于请求 DataMax 受控外部/网页搜索证据"));
+        assert!(input.contains("DataMax search evidence"));
         assert!(input.contains("detailTargets 只是深读目标"));
         assert!(input.contains("静态页或报表意图"));
         assert!(input.contains("resolve_video_url"));
@@ -115222,7 +115241,7 @@ retrieve_evidence:
         );
 
         assert!(input.contains("previewStale=true"));
-        assert!(input.contains("AI Data Platform V3"));
+        assert!(input.contains("DataMax"));
         assert!(input.contains("当前不可见/未供料"));
         assert!(input.contains("禁止直接 render_static_page"));
         assert!(input.contains("submit_static_page_image_preview"));
@@ -117833,7 +117852,7 @@ retrieve_evidence:
         assert_eq!(action.arguments["content"], json!("可以回答"));
 
         let search = parse_assistant_run_next_action(
-            r#"{"action_type":"web_search","reason_summary":"请求 V3 搜索证据","arguments":{"query":"外部集成最新状态","reason":"用户询问最新进展","freshness":"latest"},"requires_confirmation":false}"#,
+            r#"{"action_type":"web_search","reason_summary":"请求 DataMax 搜索证据","arguments":{"query":"外部集成最新状态","reason":"用户询问最新进展","freshness":"latest"},"requires_confirmation":false}"#,
         )
         .expect("web search action should parse");
         assert_eq!(search.action_type, AssistantRunReactActionType::WebSearch);
@@ -119084,7 +119103,7 @@ retrieve_evidence:
         assert!(encoded.contains("\"event_id\":\"pending:000000\""));
         assert!(encoded.contains("\"phase\":\"started\""));
         assert!(encoded.contains("\"status\":\"accepted\""));
-        assert!(encoded.contains("\"display_text\":\"V3 已开始处理本轮消息。\""));
+        assert!(encoded.contains("\"display_text\":\"DataMax 已开始处理本轮消息。\""));
         assert!(encoded.contains("\"entrypoint\":\"create_assistant_run\""));
     }
 
@@ -119211,7 +119230,7 @@ retrieve_evidence:
             assert!(!request.contains("OpenClaw 不可见测试库"));
             let body = json!({
                 "id": "resp_assistant_run_openclaw",
-                "output_text": "OpenClaw 已基于 V3 供料回答。"
+                "output_text": "OpenClaw 已基于 DataMax 供料回答。"
             })
             .to_string();
             write_http_json_response(&mut stream, 200, &body);
@@ -119294,7 +119313,7 @@ retrieve_evidence:
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(
             response.assistant_message.content,
-            "OpenClaw 已基于 V3 供料回答。"
+            "OpenClaw 已基于 DataMax 供料回答。"
         );
         assert_eq!(response.runtime["provider"], json!("openclaw"));
         assert_eq!(
@@ -121537,7 +121556,7 @@ retrieve_evidence:
 
         assert!(
             static_page_final_render_data_quality_gate_for_draft(&draft).is_none(),
-            "chartOptions.dataKey is a repairable binding signal, so V3 should render first and keep warnings in the page data"
+            "chartOptions.dataKey is a repairable binding signal, so DataMax should render first and keep warnings in the page data"
         );
     }
 
@@ -127339,7 +127358,7 @@ retrieve_evidence:
             )])),
         )
         .await
-        .expect("parse detail should accept the V3 document id as a compatibility key");
+        .expect("parse detail should accept the DataMax document id as a compatibility key");
         assert_eq!(
             detail_by_internal_id.latest.as_ref().unwrap().document_id,
             response.document.id
@@ -127451,7 +127470,7 @@ retrieve_evidence:
             let (mut stream, _) = listener.accept().expect("accept");
             let request = read_http_request(&mut stream);
             assert!(request.starts_with("GET /doc-auto.md HTTP/1.1"));
-            let body = "# Auto dataset\n\nThe external parser should create a V3 dataset.";
+            let body = "# Auto dataset\n\nThe external parser should create a DataMax dataset.";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/markdown\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

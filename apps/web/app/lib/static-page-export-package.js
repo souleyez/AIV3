@@ -134,7 +134,7 @@ function buildReadme({ draft, manifest, backendHtml, warnings }) {
   const lines = [
     `# ${draft?.objective || draft?.title || '静态页交付包'}`,
     '',
-    '这个交付包由 AI Data Platform V3 生成，包含最终 HTML、渲染 manifest、数据快照和可编辑模块规划。',
+    '这个交付包由 DataMax 生成，包含最终 HTML、渲染 manifest、数据快照和可编辑模块规划。',
     '',
     `- 草稿 ID：${draft?.backendDraftId || draft?.id || 'unknown'}`,
     `- 渲染状态：${draft?.finalPage?.status || draft?.status || 'unknown'}`,

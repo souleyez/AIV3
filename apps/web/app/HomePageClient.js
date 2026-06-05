@@ -1914,7 +1914,7 @@ export default function HomePageClient() {
     appendStaticPageProgressMessage(
       `${draft.id}:render-requested:${directHtml ? 'direct-html' : imageJobId || 'image-ready'}`,
       directHtml
-        ? '已进入快速 HTML 制作，V3 会先产出一个可打开的页面版本。'
+        ? '已进入快速 HTML 制作，DataMax 会先产出一个可打开的页面版本。'
         : '效果图已接上，正在把视觉稿和数据绑定为可访问静态页。',
     );
     const response = await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/renders`, {
@@ -3523,7 +3523,7 @@ export default function HomePageClient() {
       if (ownerScope?.type === 'static_page_draft' && ownerScope.id) {
         await refreshBackendStaticPageDraft(ownerScope.id, { silent: true });
       }
-      setBanner(`HTML 产物动作已提交并同步到 V3：${eventData?.type || 'unknown'}。`);
+      setBanner(`HTML 产物动作已提交并同步到 DataMax：${eventData?.type || 'unknown'}。`);
     } catch (submitError) {
       setBanner(`HTML 产物动作已拦截：${submitError instanceof Error ? submitError.message : '提交失败'}。`);
     }
@@ -4358,7 +4358,7 @@ export default function HomePageClient() {
     if (preview?.draft) {
       appendStaticPageProgressMessage(
         `${preview.draft.id}:preview-ready:${preview.snapshot.previewAssetKey || 'ready'}`,
-        '效果图已生成，V3 正在继续读取视觉稿并制作最终页面。',
+        '效果图已生成，DataMax 正在继续读取视觉稿并制作最终页面。',
       );
     }
 
