@@ -51,6 +51,8 @@
 
 **Progress update 2026-06-05 report response regression slice:** Third-party Xinbai report responses now defensively enrich public report cards before JSON/SSE delivery. When an upstream static-page card carries a generic title or empty `download_exports`, DataMax restores the default title `新世界百货经营管理月报表`, sibling export URLs, and three export entries. Locally generated Xinbai report URLs now preserve prompt focus such as `?focus=取高机会` and `?focus=经营总览`, matching reused-template URLs. Deployed to `8服务器` at `bd2eefbf7`; `external-report-export` passed with `okCount=2`, and selected capability-routing smoke passed for report triggers plus ordinary-Q&A non-trigger guards.
 
+**Progress update 2026-06-06 template prewarm audit:** Static-page accepted-template reuse and low-load prewarm foundations are present in `platform-api`: dataset-overlap matching, same-default-prompt prewarm keying, silent customer-invisible task payloads, and `assistant_run.static_page_template_prewarm_queued` events. Local checks passed for `cargo test -p platform-api static_page_template_prewarm --lib`, `cargo test -p platform-api static_page_template_match_tokens_allow_dataset_overlap --lib`, and local/public `npm run validate:xinbai-report-template`. 8-server runtime currently has `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` unset, so production prewarm is not active yet; accepted-template reuse remains active for explicit report/static-page requests.
+
 ---
 
 ## Baseline From 2026-05-30 Inspection

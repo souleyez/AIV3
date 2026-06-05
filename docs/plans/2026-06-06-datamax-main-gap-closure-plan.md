@@ -308,7 +308,7 @@ git commit -m "Validate DataMax 20-way concurrency on 8 server"
 
 ## Task 3: Lock Production Concurrency Configuration
 
-**Status:** pending
+**Status:** in progress as of 2026-06-06. Template reuse and prewarm implementation/tests exist; 8-server prewarm env is not enabled yet.
 
 **Files:**
 
