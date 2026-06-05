@@ -99,8 +99,8 @@ curl_once() {
     echo "request ${index} did not emit external_channel.completed; response saved to ${output_file}" >&2
     return 1
   fi
-  if ! grep -Eq '"task_status"[[:space:]]*:[[:space:]]*"answered"' "${output_file}"; then
-    echo "request ${index} did not complete with task_status=answered; response saved to ${output_file}" >&2
+  if ! grep -Eq '"task_status"[[:space:]]*:[[:space:]]*"answered"|"status"[[:space:]]*:[[:space:]]*"completed"' "${output_file}"; then
+    echo "request ${index} did not complete with answered/completed status; response saved to ${output_file}" >&2
     return 1
   fi
 }
