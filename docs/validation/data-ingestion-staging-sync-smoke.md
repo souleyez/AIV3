@@ -35,6 +35,36 @@ Expected:
 - The script writes JSON and Markdown reports under `target/data-ingestion-staging-sync-smoke/`.
 - If Node/npm is not available on a deployment target, set `DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_GUIDE_CHECK=true` to skip only the generated public guide check.
 
+## 2026-06-06 Local Confirmation-And-Sync Contract Smoke
+
+- Command: `bash scripts/run-data-ingestion-staging-sync-smoke.sh`
+- Result: passed.
+- Receipt JSON: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T012507Z.json`
+- Receipt Markdown: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T012507Z.md`
+- Live readiness self-test JSON: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T012938Z.json`
+- Live readiness self-test Markdown: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T012938Z.md`
+
+Passed checks:
+
+- `platform-api data-ingestion analysis, staging plan, confirm, and sync contract`
+- `platform-api ExternalSourceSync contract`
+- `external-source-worker source materialization`
+- `ingest-worker source document ingestion`
+- `retrieval-worker source indexing`
+- `live database-source readiness report self-test`
+- `pure third-party guide HTML contract`
+
+Safety result:
+
+- request fields changed: false;
+- production write allowed: false;
+- schema mutation allowed: false;
+- raw database credentials allowed: false;
+- raw table dump allowed: false;
+- sync requires confirmed plan: true;
+- sync source must be in plan: true;
+- repeat sync clicks deduplicated: true.
+
 ## 8-Server Manual Smoke
 
 After deployment:

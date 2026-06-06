@@ -61,6 +61,71 @@
 - Third-party temporary document scopes and dataset scopes are authoritative for the conversation.
 - DataMax does not depend on model-side memory. Every model call should remain stateless and receive only DataMax-scoped temporary evidence.
 
+## Executable Remaining-Gap Snapshot - 2026-06-06
+
+This section is the current single-page execution sheet. Treat the longer task sections below as implementation detail.
+
+| Gap | Current state | Next executable action | Done when |
+| --- | --- | --- | --- |
+| G1: 8-server private production smoke | Read-only 8-server baseline is recorded. Local shell has no private bearer/cookie for mutating 20-way smoke. | Load private smoke credentials without committing them, then run third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report export, and document-quality smoke against `https://v3.elepcloud.com`. | `docs/validation/datamax-main-gap-closure.md` contains receipts with pass/fail, latency, service status, report links, export URLs, and no secret leakage. |
+| G2: Production concurrency lock | 8 server reports chat concurrency 20, static-page/Image2 concurrency 5, Cloudflare fallback 2, Right `gpt-5.5` assistant profile concurrency 20. Platform API pool cap and starvation behavior are not fully proven by private smoke. | If G1 exposes pool starvation or timeout, adjust only internal env/model-profile/worker concurrency and document rollback. | 20 chat lanes are not starved by 5 heavy page jobs; same-conversation idempotency stays ordered. |
+| G3: Static-page template operations | Xinbai accepted template, focused report links, and exports are locally/publicly validated. Production low-load prewarm is still disabled. | Enable/report prewarm only after confirming low-load guard, accepted-template reuse, and operator status visibility. Keep Xinbai monthly modular report as the default template. | Same dataset/default-prompt/focus requests reuse the accepted template first; expensive Image2/Codex work is background only unless redesign is explicit. |
+| G4: Background enterprise memory rollout | Fingerprint/dedup, enrichment-run storage, worker loop, deterministic enrichment kinds, and aggregate-first local tests are implemented. 8-server migration/backfill/live smoke remain pending. | Deploy migration on 8 server, dry-run fingerprint backfill, run one-shot enrichment worker, then run duplicate read-through and aggregate Q&A smoke. | New and existing documents can enrich asynchronously; duplicate documents read through canonical chunks/facts; resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval. |
+| G5: Low-quality answer recovery | Passive detection and fixed-scope task packaging pass locally. Hard answer gate remains disabled. Production enqueue is config-gated. | Keep hard gate disabled. Enable only passive collection first, then optionally allow `answer_quality_autofix` in the fixed allowlist after live observation. | Weak answers are collected and classified; system-defect fixes remain limited to answer/retrieval optimization files and require tests before deployment. |
+| G6: Confirmed data ingestion | Local staging-plan confirmation, private staging dataset creation/reuse, guarded source sync, dedupe, same-conversation scope restore, and public-doc contract smoke passed on 2026-06-06. | Deploy to 8 server, run the live read-only source readiness smoke, then manually confirm one reviewed staging plan against a stored database source before customer-facing use. | 8-server receipt proves no write before confirmation, sync source is in-plan, confirmed rows become ordinary dataset evidence, and replies reach `dataset_ready`, `sync_started`, `sync_completed`, or truthful failure. |
+| G7: Controlled streaming | Third-party streaming expectations exist; main-site true streaming still needs controlled rollout. | Add/verify `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED` for main-site true stream. Keep third-party final-answer release gated while streaming progress/artifact status. | Main site can show live answer deltas behind flag; third-party sees progress and links but no rejected final-answer fragments. |
+| G8: Operator observability | Validation ledgers exist, but operators still need one compact page for queues, model lane, report tasks, enrichment backlog, low-quality cases, and data-ingestion staging/sync. | Expand the existing external integration/operator page with lazy-loaded health panels and sanitized counts only. | A 20+ conversation incident can be triaged from DataMax without reading raw logs or exposing secrets. |
+| G9: Final release hygiene | Local branch is ahead of origin and several local-only improvements are committed. | Before deployment, run local gate, push, pull on 8 server, build changed binaries, restart only changed services, then rerun private smoke. | 8 server is on latest `main`, service statuses are active, validation docs record every command and result. |
+
+### Current Execution Order
+
+1. Finish G7 next because streaming is customer-visible and must not leak low-quality deltas.
+2. Roll out G4 migration/backfill/enrichment on 8 server with dry-run receipts before enabling background processing broadly.
+3. Run G6 live source readiness and one confirmed staging-plan smoke after deployment.
+4. Run G1/G2 private production smoke after deployment and config verification.
+5. Enable or defer G3 production prewarm based on the smoke result and operator capacity.
+6. Enable G5 passive live collection only after ordinary Q&A and report routing remain stable.
+7. Add G8 observability once the queue/status surfaces have the exact counters proven by smoke.
+8. Close G9 by pushing, deploying, recording receipts, and freezing the next release baseline.
+
+### Required Smoke Set For The Next Deployment
+
+Run locally first when possible, then on or against 8 server:
+
+```powershell
+cargo fmt --check -p platform-api -p storage -p retrieval-worker -p codex-host-agent
+cargo check -p platform-api -p retrieval-worker -p codex-host-agent
+cargo test -p platform-api external_channel_model_tool_request --lib
+cargo test -p platform-api external_channel_static_page --lib
+cargo test -p platform-api external_channel_data_ingestion --lib
+cargo test -p platform-api dataset_fact_snapshot --lib
+cargo test -p platform-api scoped_fact --lib
+cargo test -p platform-api answer_quality --lib
+cargo test -p codex-host-agent
+npm --prefix apps/web run build
+npm run build:pure-third-party-guide-html
+npm run check:pure-third-party-guide-html
+powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local
+powershell -ExecutionPolicy Bypass -File .\scripts\run-external-capability-routing-smoke.ps1 -BaseUrl https://v3.elepcloud.com
+node scripts/smoke/external-channel-20way.mjs --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20
+node scripts/smoke/main-chat-20way.mjs --base-url https://v3.elepcloud.com --concurrency 20
+node scripts/smoke/static-page-5way.mjs --base-url https://v3.elepcloud.com --concurrency 5
+node scripts/smoke/cloudflare-fallback-2way.mjs --base-url https://v3.elepcloud.com
+bash scripts/run-data-ingestion-staging-sync-smoke.sh
+git diff --check
+```
+
+If private credentials are unavailable, record that explicitly in `docs/validation/datamax-main-gap-closure.md` and run only read-only/no-token guard probes. Do not claim a production pass from no-token probes.
+
+### Implementation Boundaries For The Next Slices
+
+- Data ingestion confirmation may add internal/operator endpoints, events, UI actions, and smoke scripts, but must not change public third-party message fields.
+- Report export support may add artifact metadata and downloadable files, but the customer-visible answer should show one primary report link only.
+- Static-page prewarm must never block ordinary Q&A; it should run only when a matching accepted template does not already exist and the low-load guard passes.
+- Background enrichment must be asynchronous, idempotent by document fingerprint and enrichment kind, and safe to retry.
+- Passive answer-quality recovery must collect and diagnose; it must not suppress normal customer answers.
+- Controlled streaming must separate progress/status from final answer release in third-party channels.
+
 ## Priority Gates
 
 ### P0 Gate A: Production Concurrency
@@ -868,7 +933,7 @@ git commit -m "Add passive answer quality autofix loop"
 
 ## Task 9: Close Confirmed Data Ingestion To Dataset Sync
 
-**Status:** pending
+**Status:** completed locally on 2026-06-06; 8-server live source readiness and one confirmed staging-plan smoke remain pending after deployment.
 
 **Files:**
 
@@ -925,6 +990,18 @@ In external integrations observability, show:
 
 Do not expose credentials or raw database rows.
 
+Local progress:
+
+- Internal operator routes are present:
+  - `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/confirm`;
+  - `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/sync`.
+- Confirmation loads only a `v3_data_ingestion_staging_plan` already attached to the AssistantRun output artifacts.
+- Confirmation creates or reuses a private DataMax staging dataset and records `assistant_run.data_ingestion_staging_plan_confirmed`.
+- Sync refuses unconfirmed plans, validates the selected database source is included in the plan, starts `ExternalSourceSync` into the confirmed dataset, records `assistant_run.data_ingestion_staging_sync_started`, and deduplicates repeated sync clicks by default.
+- Workflow progress records sanitized `assistant_run.data_ingestion_staging_sync_updated` events; third-party reply recovery maps them to running/completed/failed states.
+- Same `conversation_external_id` follow-up turns can restore a completed staging dataset as visible scope after sync.
+- Third-party public request fields are unchanged; docs describe only additive statuses/cards.
+
 **Step 4: Verify**
 
 Run:
@@ -937,6 +1014,36 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 bash scripts/run-data-ingestion-staging-live-smoke.sh
 npm --prefix apps/web run build
 ```
+
+Local verification on 2026-06-06:
+
+```powershell
+bash scripts/run-data-ingestion-staging-sync-smoke.sh
+```
+
+Passed checks:
+
+- `cargo test -p platform-api data_ingestion --lib` passed, 13 tests.
+- `cargo test -p platform-api external_source_sync --lib` passed, 6 tests.
+- `cargo test -p external-source-worker` passed, 11 tests.
+- `cargo test -p ingest-worker` passed.
+- `cargo test -p retrieval-worker` passed.
+- `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true bash scripts/run-data-ingestion-staging-live-smoke.sh` passed through the wrapper.
+- `npm run check:pure-third-party-guide-html` passed.
+
+Smoke receipts:
+
+- JSON: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T012507Z.json`.
+- Markdown summary: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T012507Z.md`.
+- Live readiness self-test JSON: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T012938Z.json`.
+- Live readiness self-test Markdown: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T012938Z.md`.
+
+Remaining:
+
+- deploy current code to 8 server;
+- run `bash scripts/run-data-ingestion-staging-live-smoke.sh` on 8 server against the stored source;
+- manually confirm one reviewed staging plan and start sync through the internal operator routes;
+- record that the synced dataset contains source-derived documents, chunks, retrieval evidence, and no raw credentials/table dumps.
 
 **Step 5: Commit**
 
@@ -1178,17 +1285,17 @@ git push
 
 ## Execution Order
 
-1. Task 1: validation ledger.
-2. Task 2: 20-way production validation.
-3. Task 3: config lock only if Task 2 exposes gaps.
-4. Task 4: static-page template operations and prewarm.
-5. Task 10: controlled streaming, because it affects customer-visible behavior and third-party perception.
-6. Task 8: passive answer-quality monitoring, with hard gate still disabled.
-7. Task 5 and Task 6: background enrichment and fact extraction.
-8. Task 7: aggregate-first answer supply after enrichment foundations are present.
-9. Task 9: confirmed data-ingestion sync.
-10. Task 11: operator observability.
-11. Task 12: final 8-server release gate.
+Use `Executable Remaining-Gap Snapshot - 2026-06-06` as the current execution sheet. The detailed task bodies above remain the implementation reference.
+
+1. Task 10: roll out controlled streaming safely.
+2. Task 5 and Task 6: deploy migration/backfill/enrichment on 8 server and validate live read-through.
+3. Task 9: run 8-server live source readiness and one confirmed staging-plan smoke after deployment.
+4. Task 7: rerun private aggregate-first smoke on 8 server after deployment.
+5. Task 2 and Task 3: run 20-way private production smoke and lock config only if smoke exposes gaps.
+6. Task 4: enable or defer static-page low-load prewarm based on smoke and operator readiness.
+7. Task 8: keep passive answer-quality recovery enabled only after core chat/report routes are stable; hard gate remains disabled.
+8. Task 11: expand operator observability using the counters proven in the earlier tasks.
+9. Task 12: final local gate, push, deploy to 8 server, private smoke, and validation commit.
 
 ## Definition Of Done
 

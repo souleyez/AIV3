@@ -66,7 +66,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented locally. Full local document-quality smoke and aggregate-first regressions passed. 8-server migration/backfill rollout, one-shot enrichment worker smoke, live duplicate/enrichment smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
-| P1 Gate E: confirmed data ingestion | pending | `data_ingestion_analysis` terminal smoke exists; confirmed staging-to-dataset sync still needs closure and validation. |
+| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. Internal confirm/sync routes, private staging dataset creation/reuse, source-in-plan validation, sync dedupe, progress events, same-conversation staging dataset restore, and public-doc contract are covered locally. 8-server live source readiness and one reviewed staging-plan confirmation/sync smoke remain pending after deployment. |
 
 ## Rollout Receipts
 
@@ -384,6 +384,41 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - Quality-gate Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.md`.
 - Remaining:
   - after deployment, run 8-server live passive collection/enqueue smoke with production-safe allowlist settings.
+
+### 2026-06-06 Confirmed Data Ingestion Staging Sync Local Coverage
+
+- Existing implementation verified:
+  - internal confirm route: `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/confirm`;
+  - internal sync route: `POST /v1/assistant-runs/{run_id}/data-ingestion-staging-plans/{plan_id}/sync`;
+  - confirmation consumes only an attached `v3_data_ingestion_staging_plan`;
+  - confirmation creates or reuses a private DataMax staging dataset and records a single confirmation event;
+  - sync refuses unconfirmed plans, validates the selected database source is included in the plan, starts `ExternalSourceSync`, and deduplicates repeated clicks by default;
+  - workflow progress is recorded as sanitized AssistantRun sync update events;
+  - completed staging dataset scope can be restored for later turns in the same external conversation.
+- Local verification command:
+  - `bash scripts/run-data-ingestion-staging-sync-smoke.sh`
+- Passed checks:
+  - `cargo test -p platform-api data_ingestion --lib` passed, 13 tests;
+  - `cargo test -p platform-api external_source_sync --lib` passed, 6 tests;
+  - `cargo test -p external-source-worker` passed, 11 tests;
+  - `cargo test -p ingest-worker` passed;
+  - `cargo test -p retrieval-worker` passed;
+  - live database-source readiness report self-test passed through `DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true`;
+  - `npm run check:pure-third-party-guide-html` passed.
+- Smoke receipts:
+  - JSON: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T012507Z.json`;
+  - Markdown summary: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T012507Z.md`;
+  - live readiness self-test JSON: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T012938Z.json`;
+  - live readiness self-test Markdown: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T012938Z.md`.
+- Safety contract:
+  - third-party request fields are unchanged;
+  - production writes, schema mutation, raw database credentials, and raw table dumps remain blocked;
+  - sync requires a confirmed plan and an in-plan source id.
+- Remaining:
+  - deploy current code to 8 server;
+  - run `bash scripts/run-data-ingestion-staging-live-smoke.sh` on 8 server against the stored database source;
+  - manually confirm one reviewed staging plan and start sync through the internal operator routes;
+  - record that source-derived documents, chunks, and retrieval evidence are available before customer-facing reporting from that staging dataset.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
