@@ -26,7 +26,7 @@ This audit maps the final definition of done in `docs/plans/2026-06-06-datamax-m
 | 3 | Third-party ordinary 20-way, main-site 20-way, streaming, static-page 5-way, report/export, data-ingestion, and document-quality smokes pass or have explicit root-cause notes. | Proven with pending | Release gate receipts cover third-party 20-way, main-site streaming, static-page 5-way, report/export, data-ingestion readiness, scoped documents, and document-quality. Main-site scoped 20-way and authenticated Cloudflare/model-gateway checks have explicit credential root-cause notes. | Provide a legitimate main-system/operator credential to turn pending auth-dependent checks into passed checks. |
 | 4 | Xinbai report returns one clickable primary link, exposes export files, preserves normal answer text, and uses modular monthly template by default. | Proven | Focus-link closure and report/export smoke at `0f72ca37fc1e` confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one text report link, and `table-data.csv`, `report.ppt`, `report.md`. Template hygiene keeps `xinbai-functional-modular-template-20260604` as the primary default. | Keep focused report/export smoke in future release gates. |
 | 5 | Temporary documents and dataset/document group scopes work across same third-party conversation and do not leak across conversations. | Proven | `external-scoped-document-chat` smoke passed dataset group plus explicit document union, same-conversation follow-up restore, changed-conversation isolation, and attachment-title scoped document answer. | Keep the smoke in future release gates. |
-| 6 | Historical enrichment has safe summary-only dry-run receipt; real backfill disabled unless reviewed tiny batch is approved. | Proven | General fingerprint summary-only dry-run at `112cc82e8457`: `candidate_count=20`, `recorded_count=0`. One-dataset fingerprint summary-only dry-run on 2026-06-06 for dataset `cd024465-358e-458c-961d-a8894f2358c5`: `candidate_count=20`, `recorded_count=0`, `would_record_count=0`, `summary_only=true`. Fact-index guard rollout at `758be74ef7f5` blocked missing confirmation and broad dataset real-run attempts, then summary-only dry-ran 5 documents with `derived_fact_count=139`, `inserted_fact_count=0`, `snapshot_updated=false`. | Real historical backfill remains disabled until a tiny reviewed batch is explicitly approved. Fingerprint/fact-index tools have dataset/document filters; fact-index real runs require `--confirm-real-run` and dataset-level `--limit <= 5`. |
+| 6 | Historical enrichment has safe summary-only dry-run receipt; real backfill disabled unless reviewed tiny batch is approved. | Proven | General fingerprint summary-only dry-run at `112cc82e8457`: `candidate_count=20`, `recorded_count=0`. One-dataset fingerprint summary-only dry-run on 2026-06-06 for dataset `cd024465-358e-458c-961d-a8894f2358c5`: `candidate_count=20`, `recorded_count=0`, `would_record_count=0`, `summary_only=true`. Fact-index guard rollout at `758be74ef7f5` blocked missing confirmation and broad dataset real-run attempts, then summary-only dry-ran 5 documents with `derived_fact_count=139`, `inserted_fact_count=0`, `snapshot_updated=false`. Enrichment precheck rollout at `30a164da2af2` blocked unsafe real enqueue shapes, then summary-only dry-ran 10 documents with `missing_fingerprint_count=10`, `would_enqueue_count=0`, `enqueued_count=0`. | Real historical backfill remains disabled until a tiny reviewed batch is explicitly approved. Fingerprint/fact-index tools have dataset/document filters; fact-index real runs require `--confirm-real-run` and dataset-level `--limit <= 5`; enrichment enqueue additionally requires proven fingerprint coverage, exactly one kind for dataset-level real enqueue, and explicit `--limit <= 5`. |
 | 7 | Authenticated model-gateway operator smoke passes with legitimate session, or remains clearly marked pending with no bypass. | Proven with pending | Current-head guard returned `401 auth_session_required`; 8-server env audit found no operator smoke cookie/email/local-key or main assistant streaming smoke cookie. No auth bypass, temporary allow-any, fabricated session, or role mutation was added. | Provide a legitimate operator cookie or email plus local-key login, then run `npm run smoke:model-gateway-operator`. |
 | 8 | Data-source row identity semantics are documented for collapsed tables before production mapping change. | Decision pending | `docs/operations/data-source-row-identity-decision.md` documents `bi_contract_warning` and `bi_rentsales_detail`; latest live smoke at `7c2d92c5e8f7` shows question/report readiness plus 193 collapsed latest-sync rows, and Markdown/JSON recommended action says to verify composite identity in staging before relying on row-level reports. | Business must decide entity/latest-snapshot semantics vs row-level detail. If row-level is required, test staging-only discriminator mapping before production. |
 | 9 | Low-quality recovery remains passive and cannot block normal answers. | Proven | Current-head audit at `fc7c37048c76` shows hard gate absent, dedicated live-autofix flag absent, and `answer_quality_autofix` absent from task/capability allowlists. Local answer-quality regressions pass. | Keep disabled unless operator explicitly enables passive collection/manual review and the dedicated gates. |
@@ -41,7 +41,7 @@ These items prevent claiming the broader development objective is fully closed, 
 
 - A legitimate operator credential is still required to convert model-gateway authenticated smoke from `pending` to `passed`.
 - A business decision is still required for the two collapsed database-source tables: entity/latest-snapshot evidence vs row-level materialization.
-- A real historical backfill batch remains intentionally disabled until an operator explicitly approves a tiny reviewed batch and rollback plan. Current fact-index tooling now blocks accidental real runs without `--confirm-real-run` and rejects dataset-level real batches above explicit `--limit 5`.
+- A real historical backfill batch remains intentionally disabled until an operator explicitly approves a tiny reviewed batch and rollback plan. Current fact-index tooling blocks accidental real runs without `--confirm-real-run` and rejects dataset-level real batches above explicit `--limit 5`; current enrichment enqueue tooling blocks missing confirmation, multi-kind dataset real enqueue, and broad dataset real enqueue, and the latest precheck shows fingerprint coverage is still missing in the reviewed sample.
 
 ## Fresh Backfill Dry-Run Receipt
 
@@ -118,3 +118,43 @@ Safety notes:
 - No historical fact records were written.
 - No dataset snapshot was updated.
 - Summary-only output omitted per-document reports and parse-quality warning details.
+
+## Fresh Enrichment Precheck Receipt
+
+8-server commit: `30a164da2af2`.
+
+Guard checks:
+
+- Missing `--confirm-real-run` was blocked.
+- Dataset-level real enqueue with multiple kinds was blocked.
+- Dataset-level real enqueue with `--limit 6` was blocked.
+
+Summary-only dry-run:
+
+```bash
+./target/release/document-enrichment-backfill \
+  --dataset-id cd024465-358e-458c-961d-a8894f2358c5 \
+  --kind procedure_steps,table_structure \
+  --limit 10 \
+  --dry-run \
+  --summary-only \
+  --pretty
+```
+
+Result:
+
+```json
+{
+  "document_count": 10,
+  "missing_fingerprint_count": 10,
+  "already_exists_count": 0,
+  "would_enqueue_count": 0,
+  "enqueued_count": 0
+}
+```
+
+Safety notes:
+
+- No historical enrichment runs were enqueued.
+- The checked scope is not ready for enrichment enqueue until fingerprint coverage is proven.
+- Summary-only output omitted per-document reports and titles.

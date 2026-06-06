@@ -64,7 +64,7 @@ This is the short operator-facing queue for the next execution pass. Use it befo
 | 3 | Xinbai report default governance | Old accepted templates still exist, so runtime matching must keep choosing the modular monthly report. | Keep the runtime guard; avoid filesystem cleanup unless explicitly approved; add new customer phrases as fixtures when a wrong template is observed. | Same Xinbai dataset/default-prompt overlap reuses `xinbai-functional-modular-template-20260604`; old dark/fallback/smoke/prewarm links do not surface by default. |
 | 4 | Third-party report/card contract | Third-party clients need stable fields and one primary link while normal answers continue. | Keep regression for JSON + SSE + `artifact_links`/card URLs + `table-data.csv`/`report.ppt`/`report.md`; update docs only for additive behavior. | Public URL/auth/request fields/existing response fields unchanged; report URL appears once in text and is also present in machine-readable artifact/card fields. |
 | 5 | Data-source row identity | Current-head read-only smoke at `7c2d92c5e8f7` still shows question/report readiness and 193 collapsed latest-sync rows: 94 in `bi_contract_warning`, 99 in `bi_rentsales_detail`. The Markdown report now includes the same per-table recommended action already present in JSON. | Decide business semantics: entity/latest-snapshot is acceptable, or row-level detail is required. If row-level is required, validate discriminator mapping in staging only. | Production mapping stays unchanged until staging proves counts, chunks, evidence, and reports are correct. |
-| 6 | Historical enrichment/backfill | New documents enrich, but historical corpora are not fully backfilled. Current-head fingerprint summary-only dry-runs, including one dataset-scoped run, remain safe and wrote no records. `fact-index-backfill` now has 8-server proven summary-only dry-run and real-run guards. | Keep `--summary-only --dry-run` as default. Only after review, run one small real batch for one dataset; fact-index real runs must use `--confirm-real-run`, and dataset-level real runs must use an explicit `--limit <= 5`. | No titles/content/URLs/secrets printed; no duplicate fact inflation; production backfill remains disabled unless approved. |
+| 6 | Historical enrichment/backfill | New documents enrich, but historical corpora are not fully backfilled. Current-head fingerprint summary-only dry-runs, including one dataset-scoped run, remain safe and wrote no records. `fact-index-backfill` and `document-enrichment-backfill` now have 8-server proven summary-only dry-run and real-run guards. The first enrichment precheck found the reviewed dataset's first 10 candidates lacked content fingerprints, so enrichment enqueue correctly stayed at zero. | Keep `--summary-only --dry-run` as default. Before any enrichment enqueue, prove fingerprint coverage. Only after review, run one small real batch for one dataset; fact-index real runs must use `--confirm-real-run`, and dataset-level real runs must use an explicit `--limit <= 5`; enrichment dataset-level real enqueue must use one kind and explicit `--limit <= 5`. | No titles/content/URLs/secrets printed; no duplicate fact inflation; production backfill remains disabled unless approved. |
 | 7 | Passive low-quality recovery | The hard gate caused normal-answer blocking before; it must stay disabled. | Keep live autofix disabled. If needed, add passive collection/manual review only, then test quality smokes locally before any 8-server rollout. | Weak-answer evidence can be reviewed, but customer answers are not suppressed and Codex autofix cannot run accidentally. |
 | 8 | Capability catalog drift | The model must know platform workflows exist without leaking tool traces or changing contracts. | Maintain routing fixtures for report/static-page, document processing, data ingestion, collection/integration setup, and proactive message routing. | Model can request platform workflows; DataMax keeps auth/scope/queue policy authoritative; customer sees normal answer plus artifact when appropriate. |
 
@@ -114,7 +114,7 @@ If either smoke fails, first check tenant-token selection, deployed commit, serv
 | P0 | Final 8-server release gate | 8 server is at `0f72ca37fc1e`; `aiv3-platform-api.service`, `aiv3-codex-host-agent.service`, `aiv3-static-page-worker.service`, and `aiv3-web.service` are active; known `?? mode` remains untouched. Focused report/export and capability-routing smokes now pass on the deployed focus-link fix. Main-site chat-session 20-way remains auth/scope-dependent and Cloudflare/model-gateway guard remains pending without operator credentials. | Provide a legitimate main-system session/operator credential for auth-dependent gates; keep the focused report/export and capability-routing smokes in every future release gate. | Latest deployed commit has smoke receipts; service status and rollback note are recorded; auth-dependent checks pass or are explicitly pending with no bypass. |
 | P0 | Xinbai report/template contract | Current-head report/export regression is fixed: JSON and SSE both expose one clickable text report link plus export files. | Keep the smoke in the release gate and fix only new regressions. | One clickable report link, correct focus, normal answer not truncated, exports accessible, no false report trigger. |
 | P0 | Third-party scope and temporary attachments | Current-head 8-server smoke passed: dataset group + explicit external doc union, same-conversation follow-up restore, changed conversation isolation, and attachment-title scoped document answer. | Keep `smoke:external-scoped-document-chat` in the release gate and fix only new regressions. | Temporary documents and grouped datasets remain authorized across the same conversation; unrelated sessions cannot see them. |
-| P1 | Historical enrichment/backfill | New documents enrich; full historical backfill disabled. 8-server fingerprint `--summary-only --dry-run` passed for recent and one-dataset scopes. `fact-index-backfill` at `758be74ef7f5` now supports `--summary-only`, rejects real writes unless `--confirm-real-run` is present, rejects dataset-level real writes above explicit `--limit 5`, and passed 8-server dry-run with `document_count=5`, `derived_fact_count=139`, `inserted_fact_count=0`, `snapshot_updated=false`. | Keep production backfill disabled until reviewed. If approved, run only one tiny real batch for one reviewed dataset; note fingerprint/fact-index tools support dataset/document filters, while the enrichment worker supports kind/max-run controls only for already queued runs. | No document titles/content printed in summary-only mode; no production backfill until reviewed. |
+| P1 | Historical enrichment/backfill | New documents enrich; full historical backfill disabled. 8-server fingerprint `--summary-only --dry-run` passed for recent and one-dataset scopes. `fact-index-backfill` at `758be74ef7f5` now supports `--summary-only`, rejects real writes unless `--confirm-real-run` is present, rejects dataset-level real writes above explicit `--limit 5`, and passed 8-server dry-run with `document_count=5`, `derived_fact_count=139`, `inserted_fact_count=0`, `snapshot_updated=false`. `document-enrichment-backfill` at `30a164da2af2` now prechecks historical enrichment enqueue; 8-server smoke blocked missing confirmation, multi-kind dataset real enqueue, and broad limit, then dry-ran 10 documents with `missing_fingerprint_count=10`, `would_enqueue_count=0`, `enqueued_count=0`. | Keep production backfill disabled until reviewed. If approved, run only one tiny real batch for one reviewed dataset after fingerprint coverage is proven; note fingerprint/fact-index tools support dataset/document filters, enrichment precheck supports dataset/document/kind filters, and the enrichment worker supports kind/max-run controls for queued runs. | No document titles/content printed in summary-only mode; no production backfill until reviewed. |
 | P1 | Authenticated model-gateway operator smoke | Current-head `8f84176dc731` unauthenticated guard passes with `401 auth_session_required`; checked 8-server env still has no operator smoke cookie/email/local-key or main assistant streaming smoke cookie. | Run `smoke:model-gateway-operator` with a legitimate operator session or local-key login. | Operator status/profile health is proven without bypasses or leaked secrets. |
 | P1 | Data-source row identity | Current-head `7c2d92c5e8f7` 8-server live audit passed and confirms question/report readiness, but `bi_contract_warning` and `bi_rentsales_detail` still collapse 193 latest-sync rows under current identity. The smoke now shows per-table recommended actions in Markdown and JSON. Decision memo `docs/operations/data-source-row-identity-decision.md` fixes the safe boundary: production stays unchanged, row-level semantics require staging-only discriminator validation first. | Get the business decision: entity/latest-snapshot semantics vs row-level detail. If row-level is required, test staging-only discriminator mapping before production. | Report completeness semantics are documented and validated before production mapping changes. |
 | P1 | Passive low-quality recovery | Current-head `fc7c37048c76` audit confirms the customer-facing hard gate is absent, the dedicated live-autofix flag is absent, and `answer_quality_autofix` is absent from task/capability allowlists even though general Codex Host tasking is enabled. Local answer-quality regressions pass, so the safe-disabled state is proven rather than assumed. | Keep disabled; only enable passive collection/manual review after an explicit operator decision. Do not create live autofix Codex tasks until the dedicated flag and both allowlists are intentionally set. | Weak answers are visible for review without suppressing normal customer answers, and no live autofix task can be created accidentally. |
@@ -134,7 +134,7 @@ Use this order unless a live regression forces a narrower hotfix:
 3. **P0 third-party scope:** keep dataset/document union, same-conversation authorization reuse, changed-conversation isolation, and temporary attachment-title supply in every release gate.
 4. **P1 model gateway:** run the authenticated operator smoke with a legitimate operator session or local-key login; do not bypass auth for validation.
 5. **P1 data-source identity:** decide whether collapsed tables remain entity-level facts or need row-level materialization; test any discriminator change in staging before production mapping changes.
-6. **P1 historical enrichment:** keep summary-only dry-run as the default; only run a tiny real batch after reviewing dataset/document scope, queue load, and rollback behavior. Fingerprint and fact-index maintenance tools support dataset/document filters; `fact-index-backfill` additionally requires explicit real-run confirmation and a tiny dataset-level limit. The enrichment worker supports kind/max-run controls for queued runs, but there is still no broad existing-document enrichment enqueue rollout.
+6. **P1 historical enrichment:** keep summary-only dry-run as the default; only run a tiny real batch after reviewing dataset/document scope, queue load, and rollback behavior. Fingerprint and fact-index maintenance tools support dataset/document filters; `fact-index-backfill` additionally requires explicit real-run confirmation and a tiny dataset-level limit. `document-enrichment-backfill` now provides a safe existing-document enqueue precheck and guarded tiny enqueue path, but it must not enqueue until fingerprint coverage is proven for the reviewed scope.
 7. **P1 passive answer-quality recovery:** keep hard gates disabled; collect weak-answer candidates for manual review or explicitly approved passive Codex tasks only.
 8. **P2 template hygiene:** exclude stale Xinbai templates from normal matching; clean generated artifacts only after explicit approval and path verification.
 9. **P2 capability routing and docs:** keep the model-visible capability catalog synchronized with fixtures and public docs, while preserving all third-party public URLs/auth/request fields/existing response fields.
@@ -232,6 +232,7 @@ git push
 
 - Modify only if a bug is found: `crates/platform-api/src/bin/document-fingerprint-backfill.rs`
 - Modify only if a bug is found: `crates/platform-api/src/bin/fact-index-backfill.rs`
+- Modify only if a bug is found: `crates/retrieval-worker/src/bin/document-enrichment-backfill.rs`
 - Modify only if a bug is found: `crates/storage/src/lib.rs`
 - Update: `docs/validation/datamax-main-gap-closure.md`
 
@@ -243,7 +244,9 @@ Run:
 cargo fmt --check -p platform-api
 cargo test -p platform-api --bin document-fingerprint-backfill
 cargo test -p platform-api --bin fact-index-backfill
+cargo test -p retrieval-worker --bin document-enrichment-backfill
 cargo check -p platform-api
+cargo check -p retrieval-worker --bin document-enrichment-backfill
 git diff --check
 ```
 
@@ -252,6 +255,7 @@ Expected:
 - `--summary-only` tests pass;
 - fact-index real writes require `--confirm-real-run`;
 - fact-index dataset-level real writes require explicit `--limit <= 5`;
+- enrichment dataset-level real enqueue requires `--confirm-real-run`, exactly one `--kind`, and explicit `--limit <= 5`;
 - default behavior stays compatible;
 - no manual formatting changes are needed.
 
@@ -268,6 +272,7 @@ set -a
 set +a
 ./target/release/document-fingerprint-backfill --limit 20 --dry-run --summary-only --pretty
 ./target/release/fact-index-backfill --dataset-id cd024465-358e-458c-961d-a8894f2358c5 --limit 5 --dry-run --summary-only --pretty
+./target/release/document-enrichment-backfill --dataset-id cd024465-358e-458c-961d-a8894f2358c5 --kind procedure_steps,table_structure --limit 10 --dry-run --summary-only --pretty
 '@
 ssh 8服务器 $remote
 ```
@@ -276,6 +281,7 @@ Expected:
 
 - output contains aggregate fields such as `candidate_count`, `dry_run`, `summary_only`, `document_report_count`, `would_record_count`, `skipped_count`, `duplicate_count`, and `recorded_count`;
 - fact-index summary-only output contains aggregate fields such as `document_count`, `derived_fact_count`, `inserted_fact_count`, `parse_quality_warning_count`, and `snapshot_updated=false`;
+- enrichment precheck output contains aggregate fields such as `document_count`, `missing_fingerprint_count`, `already_exists_count`, `would_enqueue_count`, and `enqueued_count=0`;
 - output does not contain a `documents` array;
 - no document title, content, local path, external URL, database URL, or credential is printed.
 
@@ -286,6 +292,7 @@ Do not run a real batch by default. If the operator approves:
 - choose one low-risk dataset;
 - choose one deterministic enrichment or fact-index scope;
 - keep fact-index dataset-level batch size under or equal to 5 unless a later plan explicitly raises the guard;
+- for enrichment enqueue, prove `missing_fingerprint_count=0` for the reviewed scope before any real run;
 - run during low-load window;
 - capture before/after counts only.
 

@@ -435,6 +435,7 @@ Steps:
 - Add dataset memberships for reused canonical content.
 - Run enrichment backfill for priority documents.
 - Run fact-index backfill only through `--dry-run --summary-only` first. Any real fact-index run must use `--confirm-real-run`; dataset-level real runs must use an explicit `--limit <= 5`.
+- Run enrichment enqueue only through `document-enrichment-backfill --dry-run --summary-only` first. Any real dataset-level enrichment enqueue must use `--confirm-real-run`, exactly one `--kind`, an explicit `--limit <= 5`, and a reviewed scope with `missing_fingerprint_count=0`.
 - Do not delete duplicate files in the first pass.
 
 Acceptance:
