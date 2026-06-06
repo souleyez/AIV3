@@ -86,6 +86,14 @@ The optional private config can supply `connection_id`, `tenant_external_id`, `b
   - no old generated artifacts were deleted;
   - no third-party public URL, auth method, request field, or existing response field was changed;
   - no raw customer row, full customer document, source path, credential, bearer token, database URL, or provider payload was recorded.
+- 8-server deployment and focused verification:
+  - latest deployed commit: `0f72ca37fc1e`;
+  - deploy path: `/srv/aiv3/repo` fast-forwarded from GitHub, `CC=clang CXX=clang++ cargo build --release -p platform-api` passed, `aiv3-platform-api.service` restarted and remained active;
+  - the known untracked 8-server `mode` file was observed and not touched;
+  - focused report/export smoke passed with receipt `/srv/aiv3/repo/target/external-report-export-smoke-task8-0f72ca3-localdev/20260606122848.json`;
+  - focused capability-routing smoke passed for `static_page_xinbai_template_reference`, `static_page_xinbai_temp_contract_area`, and `static_page_xinbai_traffic_stats`;
+  - all three routing cases emitted exactly one artifact link and the link carried the expected `focus` query (`取高机会` or `经营总览`);
+  - the fix keeps the customer-facing page URL focused while keeping export sibling files such as `table-data.csv`, `report.ppt`, and `report.md` on the raw artifact directory URL.
 
 ## 2026-05-25 No-Confirm Static-Page Smoke Evidence
 

@@ -63,7 +63,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | Gate | Status | Receipt |
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
-| P0 Gate B: report/static-page operations | passed locally; deploy smoke pending for latest hygiene patch | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Latest local hygiene patch makes `xinbai-functional-modular-template-20260604` the primary default for Xinbai dataset-overlap matching, skips smoke/prewarm/fallback noise baselines, and preserves public report card links after sanitization. 8-server static-page 5-way smoke returned 5/5 artifact links on the prior deployed commit. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Latest patch still needs build/deploy and focused 8-server smoke. |
+| P0 Gate B: report/static-page operations | passed for deployed `0f72ca37fc1e` | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. The deployed hygiene/focus-link patches make `xinbai-functional-modular-template-20260604` the primary default for Xinbai dataset-overlap matching, skip smoke/prewarm/fallback noise baselines, preserve public report card links after sanitization, and carry the current prompt focus into static-page SSE/report artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Focused capability routing smoke passed for template-reference, temporary-contract/area, and traffic-stat report materials. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | passed for post-ingest rollout | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. A tiny live upload/new-parse smoke then proved all five configured deterministic kinds enqueue and succeed for a newly indexed document. Full existing-document backfill remains disabled. |
 | P1 Gate D: low-quality answer recovery | passed for current safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Current-head `1e99281ff695` runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`; local `answer_quality`, `answer_quality_autofix`, `assistant_run_answer_quality_gate`, codex-host-agent, and legacy quality-gate smoke all passed, so live enqueue remains intentionally disabled until an explicit operator decision. |
@@ -1884,6 +1884,34 @@ Data-ingestion external fixed-task smoke:
   - no production data, public API, third-party public URL, auth method, required request field, or existing response field was changed;
   - no credential, bearer token, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
   - 120 server was not touched.
-- Remaining:
-  - build/deploy this patch to 8 server;
-  - rerun focused 8-server report/export and capability-routing smoke to prove the deployed service picks the primary template and keeps export/link fields.
+- Deployment and focused 8-server verification:
+  - initial hygiene deployment: `44f653ff6001`, `aiv3-platform-api.service` active, but focused routing smoke exposed raw static-page artifact URLs without the expected `focus` query;
+  - fix commits:
+    - `aa7a0198b1cd` focused static-page artifact reply URLs while keeping export sibling URLs on the raw artifact base;
+    - `f024006cbb45` enriched static-page publish replies from same-run event context when publish payloads did not carry `template_adaptation.userIntent`;
+    - `0f72ca37fc1e` removed the early artifact-link merge bypass and replaced raw same-path artifact links with the focused link in SSE/final response card fields;
+  - latest deployed commit: `0f72ca37fc1e`;
+  - 8-server deploy: fast-forward pull, `CC=clang CXX=clang++ cargo build --release -p platform-api` passed, `aiv3-platform-api.service` restarted and active;
+  - active services after deploy/smoke: `aiv3-platform-api.service`, `aiv3-codex-host-agent.service`, `aiv3-static-page-worker.service`, and `aiv3-web.service`;
+  - 8-server git status: `## main...origin/main` plus known untracked `?? mode`, left untouched.
+- Latest local verification for the focus-link fix:
+  - `cargo test -p platform-api external_channel_static_page --lib` passed, 62 tests;
+  - `cargo test -p platform-api external_channel_public_response --lib` passed, 2 tests;
+  - `cargo check -p platform-api` passed.
+- Latest 8-server report/export smoke:
+  - command shape: active `local-dev` `generic-chat-main` bearer loaded from server configuration without printing it, Xinbai dataset external id `64fff6c8-10e2-4ee8-8243-23166cce3abc`, text-link requirement enabled;
+  - receipt: `/srv/aiv3/repo/target/external-report-export-smoke-task8-0f72ca3-localdev/20260606122848.json`;
+  - result: `okCount=2`, `failedCount=0`, `modeCount=2`, `datasetExternalIdCount=1`, `expectedTitle=新世界百货经营管理月报表`, `expectedFocus=取高机会`, `p50=6787 ms`, `p95=9188 ms`, `max=9188 ms`;
+  - export file checks passed for `table-data.csv`, `report.ppt`, and `report.md`.
+- Latest focused capability-routing smoke:
+  - command shape: active `local-dev` `generic-chat-main` bearer loaded from server configuration without printing it, Xinbai dataset external id `64fff6c8-10e2-4ee8-8243-23166cce3abc`;
+  - selected cases: `static_page_xinbai_template_reference`, `static_page_xinbai_temp_contract_area`, `static_page_xinbai_traffic_stats`;
+  - result: passed for 3 cases;
+  - `static_page_xinbai_template_reference`: one artifact link with `focus=取高机会`;
+  - `static_page_xinbai_temp_contract_area`: one artifact link with `focus=经营总览`;
+  - `static_page_xinbai_traffic_stats`: one artifact link with `focus=经营总览`.
+- Safety:
+  - no third-party public URL, auth method, required request field, existing response field, or public status value was changed;
+  - no old generated artifact was deleted;
+  - no credential, bearer token, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - 120 server was not touched.
