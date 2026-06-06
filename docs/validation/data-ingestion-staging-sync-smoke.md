@@ -337,6 +337,44 @@ Interpretation:
   - raw credentials printed: false;
   - raw source rows printed: false.
 
+## 2026-06-06 Current-Head Read-Only Row Identity Audit
+
+- Environment: `8服务器`.
+- Repository state:
+  - `/srv/aiv3/repo` at `7be4111eb85a`;
+  - `git status --short --branch` showed `## main...origin/main` and the pre-existing untracked `mode` file.
+- Command shape:
+  - source `/etc/aiv3/aiv3.env`;
+  - pass `PLATFORM_DATABASE_URL` to `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` without printing the value;
+  - run `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000 bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Receipts:
+  - JSON `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T100024Z.json`;
+  - Markdown `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T100024Z.md`.
+- Result:
+  - smoke status passed;
+  - source exists and is enabled;
+  - mapped table count 6;
+  - succeeded sync exists;
+  - latest sync is not failed;
+  - dataset count 5;
+  - ready dataset count 4;
+  - default dataset ready false;
+  - question/report ready true.
+- Latest sync identity audit:
+  - latest sync `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - collapsed table count 2;
+  - collapsed duplicate rows 193;
+  - `bi_contract_warning`: identity columns `parentcode`, `storecode`, `txdate`; source rows 100; unique docs 6; collapsed rows 94; current docs 24;
+  - `bi_rentsales_detail`: identity columns `storecode`, `contract_no`, `contract_startdate`; source rows 100; unique docs 1; collapsed rows 99; current docs 6;
+  - `bi_oa_zulinhetong`, `bi_oa_zulinhetonggudingzujin`, `bi_oa_zulinhetongtichengzujin`, and `nwstore` did not show latest-sync row collapse.
+- Decision point:
+  - if these two tables are meant to represent store/entity snapshots, current mapping can be documented as entity-level;
+  - if row-level report completeness is required, do a staging-only discriminator mapping test first and compare source rows, unique documents, chunks, evidence, and Xinbai report behavior before production adoption.
+- Safety:
+  - reads DataMax PostgreSQL only;
+  - does not query the customer/source database;
+  - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, or public third-party contract change.
+
 ## Safety Notes
 
 - Use only DataMax stored database-source configuration and server-side env references.

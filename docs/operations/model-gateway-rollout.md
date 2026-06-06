@@ -124,6 +124,14 @@ provider probe. Without credentials, `--allow-missing-credentials` records only
 the unauthenticated `401 auth_session_required` guard and leaves authenticated
 checks pending; it is not a production pass.
 
+Current 8-server Task 5 status on 2026-06-06:
+
+- repository head checked: `7be4111eb85a`;
+- unauthenticated guard rerun against `https://v3.elepcloud.com` passed with `401 auth_session_required`;
+- receipt: `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials-current-head/20260606095741.md`;
+- no operator smoke cookie, smoke email, smoke local key, main assistant streaming smoke cookie, or local key was configured in the checked server env files;
+- authenticated profile/status validation remains pending until a legitimate operator session or email plus local-key login is supplied.
+
 After profile tests pass, run local contract smoke tests:
 
 ```bash

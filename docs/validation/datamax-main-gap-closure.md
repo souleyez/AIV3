@@ -1534,3 +1534,85 @@ Data-ingestion external fixed-task smoke:
   - third-party public URL, auth, required request fields, and existing response fields were not changed;
   - no 120 server action was performed;
   - no bearer token, database URL, full customer document, raw customer row, or provider payload was recorded.
+
+### 2026-06-06 Current-Head Model-Gateway Operator Guard Rerun
+
+- Purpose:
+  - keep Task 5 explicit after the current-head scoped-document fixes and docs commits;
+  - prove the operator-only model gateway surface still rejects unauthenticated access;
+  - record why the authenticated operator smoke remains pending rather than silently counting it as passed.
+- 8-server state:
+  - repository `/srv/aiv3/repo` was at `7be4111eb85a`;
+  - `git status --short --branch` showed `## main...origin/main` plus the pre-existing untracked `mode` file;
+  - no service restart was needed for this guard-only smoke.
+- Command:
+  - `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-no-credentials-current-head`.
+- Receipt:
+  - `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials-current-head/20260606095741.json`;
+  - `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials-current-head/20260606095741.md`.
+- Result:
+  - status `pending`, as expected without operator credentials;
+  - unauthenticated check passed with HTTP `401` and code `auth_session_required`;
+  - authenticated operator credential check stayed `pending`;
+  - auth method `none`;
+  - credentials provided `false`.
+- 8-server credential availability audit:
+  - `MODEL_GATEWAY_OPERATOR_SMOKE_COOKIE=false`;
+  - `MODEL_GATEWAY_OPERATOR_SMOKE_EMAIL=false`;
+  - `MODEL_GATEWAY_OPERATOR_SMOKE_LOCAL_KEY=false`;
+  - `MAIN_ASSISTANT_STREAMING_SMOKE_COOKIE=false`;
+  - `AIV3_LOCAL_KEY=false`.
+- Safety:
+  - no auth bypass, temporary allow-any, fabricated session, or role mutation was added;
+  - no cookie, local key, provider key, raw auth env value, provider payload, bearer token, or public third-party contract change was recorded.
+- Remaining action:
+  - provide a legitimate operator cookie or email plus local-key login and rerun the same smoke;
+  - add `--run-profile-test` only if a real provider probe is intentionally approved.
+
+### 2026-06-06 Current-Head Data-Source Identity Audit Rerun
+
+- Purpose:
+  - advance Task 6 with a repeatable 8-server read-only report before deciding whether Xinbai database tables should be materialized at entity level or row level.
+- Script safety review:
+  - `scripts/run-data-ingestion-staging-live-smoke.sh` reads DataMax PostgreSQL metadata, sync counts, document counts, chunk counts, retrieval evidence counts, and mapped identity columns;
+  - it does not connect to the customer/source database;
+  - it writes only JSON/Markdown smoke reports under `target/`;
+  - it does not print raw rows, source table dumps, database URLs, credentials, bearer tokens, or full customer documents.
+- 8-server state:
+  - repository `/srv/aiv3/repo` was at `7be4111eb85a`;
+  - `git status --short --branch` showed `## main...origin/main` plus the pre-existing untracked `mode` file.
+- Command shape:
+  - source `/etc/aiv3/aiv3.env`;
+  - pass `PLATFORM_DATABASE_URL` as `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` without printing it;
+  - run `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000 bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Receipt:
+  - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T100024Z.json`;
+  - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T100024Z.md`.
+- Result:
+  - smoke status `passed`;
+  - source exists/enabled: yes/yes;
+  - mapped table count: 6;
+  - succeeded sync exists: yes;
+  - latest sync failed: no;
+  - dataset count: 5;
+  - ready dataset count: 4;
+  - default dataset ready: no;
+  - question/report ready: yes.
+- Current data-source readiness notes:
+  - ready basis dataset: `external-source-hy-sql-traffic-area-dataset-hy-sql-traffic-area-count-fix-smoke`;
+  - ready basis counts: documents 384, chunks 384, evidence 384;
+  - API status still reports the configured default dataset as `no_documents` / `synced_no_documents`, so default dataset wiring should be reviewed separately from the ready non-default dataset.
+- Latest-sync identity audit:
+  - latest sync `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - collapsed table count: 2;
+  - collapsed duplicate rows: 193;
+  - `bi_contract_warning`: identity columns `parentcode`, `storecode`, `txdate`; source rows 100, unique docs 6, collapsed rows 94, current docs 24;
+  - `bi_rentsales_detail`: identity columns `storecode`, `contract_no`, `contract_startdate`; source rows 100, unique docs 1, collapsed rows 99, current docs 6;
+  - `bi_oa_zulinhetong`, `bi_oa_zulinhetonggudingzujin`, `bi_oa_zulinhetongtichengzujin`, and `nwstore` showed row-level or no-duplicate materialization in the latest sync.
+- Interpretation:
+  - DataMax can currently answer questions and generate static-page reports from an indexed source-derived dataset;
+  - row-level report completeness is not guaranteed for the two collapsed fact/detail tables;
+  - do not change production mapping until the business decision is made: keep entity/store-level semantics, or test finer row discriminators in staging first.
+- Safety:
+  - no third-party public URL, auth, required request field, or existing response field changed;
+  - no source database query, raw customer row, credential, database URL, bearer token, full document, or provider payload was recorded.
