@@ -174,7 +174,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 - Remaining:
   - 8-server migration rollout and live upload/parse smoke;
   - existing-document fingerprint backfill dry-run/execution on 8 server;
-  - canonical read-through in retrieval/facts.
+  - 8-server live duplicate read-through smoke.
 
 ### 2026-06-06 Existing-Document Fingerprint Backfill Tool
 

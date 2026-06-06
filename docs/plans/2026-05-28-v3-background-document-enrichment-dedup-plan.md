@@ -158,7 +158,7 @@ Progress 2026-06-06:
 
 ## Task 3: Canonical Dedup Without Breaking Document IDs
 
-Status: `pending`
+Status: `completed-locally-new-document-aliases-2026-06-06`
 
 Files:
 
@@ -185,9 +185,20 @@ Acceptance:
 - A dataset authorized through the duplicate can still answer from canonical parsed content.
 - No duplicate facts are counted twice in dataset-level aggregation.
 
+Progress 2026-06-06:
+
+- `record_content_fingerprint` records the first seen content fingerprint as canonical and marks later matching documents as `dedup_state=duplicate`.
+- New document IDs and third-party external document IDs remain stable; no object deletion is performed.
+- Dataset authorization through duplicate documents is handled by canonical read-through instead of mutating public document identity.
+- Verified by `canonical_duplicate_read_through_reuses_chunks_evidence_and_facts`.
+
+Remaining:
+
+- 8-server migration/backfill rollout and live duplicate smoke.
+
 ## Task 4: Canonical Read-Through In Retrieval And Facts
 
-Status: `pending`
+Status: `completed-locally-2026-06-06`
 
 Files:
 
@@ -208,6 +219,18 @@ Acceptance:
 - Dataset-scope search finds facts through canonical content.
 - Individual duplicate document authorization still works.
 - Resume/project-experience style queries across many documents do not lose documents due to dedup.
+
+Progress 2026-06-06:
+
+- Added storage read-through methods for document chunks and retrieval evidence.
+- Dataset retrieval evidence and dataset/document fact aggregations resolve duplicate document aliases to canonical content.
+- Platform document detail/media/detail routes and ReAct `read_document_detail` use read-through methods after authorization.
+- Verified by `canonical_duplicate_read_through_reuses_chunks_evidence_and_facts`.
+
+Remaining:
+
+- Skipping full duplicate re-indexing is not enabled yet; current rollout preserves write paths and proves read-through first.
+- 8-server live duplicate read-through smoke remains required.
 
 ## Task 5: Background Enrichment Orchestrator
 
