@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
@@ -142,10 +143,14 @@ async fn run_document_fingerprint_backfill(
     let mut recorded_count = 0usize;
     let mut duplicate_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut action_counts = BTreeMap::<String, usize>::new();
+    let mut skipped_reason_counts = BTreeMap::<String, usize>::new();
 
     for document in candidates {
         let Some(fingerprint) = local_fingerprint_for_object_key(&document.object_key) else {
             skipped_count += 1;
+            increment_count(&mut action_counts, "skipped");
+            increment_count(&mut skipped_reason_counts, "local_file_not_found");
             documents.push(document_report(
                 &document,
                 "skipped",
@@ -166,13 +171,15 @@ async fn run_document_fingerprint_backfill(
 
         if args.dry_run {
             would_record_count += 1;
+            let action = if would_duplicate {
+                "would_record_duplicate"
+            } else {
+                "would_record"
+            };
+            increment_count(&mut action_counts, action);
             documents.push(document_report(
                 &document,
-                if would_duplicate {
-                    "would_record_duplicate"
-                } else {
-                    "would_record"
-                },
+                action,
                 None,
                 Some(fingerprint_report(&fingerprint, existing_canonical, None)),
             ));
@@ -191,13 +198,15 @@ async fn run_document_fingerprint_backfill(
             .await?;
         let final_state = load_document_fingerprint_state(storage, tenant_id, document.id).await?;
         recorded_count += 1;
+        let action = if would_duplicate {
+            "recorded_duplicate"
+        } else {
+            "recorded"
+        };
+        increment_count(&mut action_counts, action);
         documents.push(document_report(
             &document,
-            if would_duplicate {
-                "recorded_duplicate"
-            } else {
-                "recorded"
-            },
+            action,
             None,
             Some(fingerprint_report(
                 &fingerprint,
@@ -221,6 +230,8 @@ async fn run_document_fingerprint_backfill(
         "recorded_count": recorded_count,
         "duplicate_count": duplicate_count,
         "skipped_count": skipped_count,
+        "action_counts": action_counts,
+        "skipped_reason_counts": skipped_reason_counts,
     });
     if !args.summary_only {
         if let Some(object) = summary.as_object_mut() {
@@ -228,6 +239,10 @@ async fn run_document_fingerprint_backfill(
         }
     }
     Ok(summary)
+}
+
+fn increment_count(counts: &mut BTreeMap<String, usize>, key: &str) {
+    *counts.entry(key.to_string()).or_insert(0) += 1;
 }
 
 async fn load_document_candidates(
