@@ -1,7 +1,7 @@
 # DataMax 第三方接入说明书
 
 **文档状态：** 对外草案 v0.1
-**最后更新：** 2026-05-25
+**最后更新：** 2026-06-06
 **适用对象：** 第三方系统负责人、客户 IT 团队、渠道/文档/权限/业务系统对接开发人员
 **默认对外域名：** `https://v3.elepcloud.com`
 **说明：** 本文可作为第三方联调前的接口说明材料，只说明 DataMax 对外开放的能力、接口、字段和使用方式，不展开具体实现细节。默认第三方接口使用 `https://v3.elepcloud.com/v1/...`；具体凭证、白名单、回调地址和开放接口，以项目交付环境和双方确认的联调配置为准。
@@ -23,6 +23,8 @@ DataMax 外部集成观测页提供两类公开文档入口：
 - 连接配置了入站 Bearer Token 时，第三方调用 DataMax 的聊天事件、用户确认和动作结果回传都必须带 `Authorization: Bearer <DataMax inbound token>`；该 token 由 DataMax 生成并交付给第三方。
 - DataMax 对外对接文档只保留最新有效版本；HTML 和 MD 都统一发布在外部集成观测页的“对接方式与文档”区域。
 - 外部聊天消息如果需要实时网页信息但当前不可用，DataMax 会返回 `task_status=v3_search_evidence_required`；第三方页面应把它展示为等待状态，不要展示成已完成搜索。
+
+兼容命名说明：产品、页面和对接说明统一称为 DataMax。为避免已接入第三方重新改造，历史协议字段、状态码、卡片类型和签名头中仍可能保留 `v3_*`、`X-V3-*` 或 `https://v3.elepcloud.com` 等兼容命名；这些是稳定接口名，不代表第三方需要更换字段或重新对接。
 
 ## 1. 接入目标
 
@@ -792,7 +794,7 @@ POST
 - 按 `conversation_external_id` 找到第三方会话并追加助手消息；
 - `reply` 结构与 `/events`、`/events/stream` 最终响应一致；
 - `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 可作为页面或报表链接；
-- 报表卡片展示名优先读取 `reply.card.title` / `reply.card.report_title` / `reply.card.display_title`；下载按钮可按需读取 `reply.card.table_data_url`、`reply.card.ppt_download_url`、`reply.card.markdown_download_url` / `reply.card.text_download_url`，或遍历 `reply.card.download_exports[]`；
+- 报表卡片展示名优先读取 `reply.card.title` / `reply.card.report_title` / `reply.card.display_title`；下载按钮可按需读取 `reply.card.table_data_url`、`reply.card.ppt_download_url`、`reply.card.markdown_download_url` / `reply.card.text_download_url`，或遍历 `reply.card.download_exports[]`；经营报表默认导出文件名为 `table-data.csv`、`report.ppt`、`report.md`，旧客户端可以忽略这些新增下载字段；
 - 回推失败不会改变 DataMax 原任务结果，DataMax 会记录脱敏审计；第三方仍可通过状态接口补拉结果。
 
 任务状态响应示例：
@@ -1837,7 +1839,7 @@ DataMax 支持产物发布、状态查询和撤销。撤销属于高风险动作
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，模板 skill 可继续在 `requested_skills[].arguments.output_type` 中传 `static_page`。若同时传 `template` 和旧 skill，DataMax 会按模板文档去重。
 
-DataMax 会自动完成页面生成与发布，并通过 SSE/状态卡片展示过程进度。生成过程不作为阻塞确认点，也不要求第三方调用内部生成能力。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 为准。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。第三方不需要做额外确认、下载或二次提交。
+DataMax 会自动完成页面生成与发布，并通过 SSE/状态卡片展示过程进度。生成过程不作为阻塞确认点，也不要求第三方调用内部生成能力。本次回复优先返回 `reply.artifact_links[0]`、`reply.card.generated_artifact_url` / `reply.card.public_url`，同时兼容保留 `reply.card.render_output_id`、`reply.card.html_preview_url` 和 `reply.card.html_download_url`。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url` 为准。若最终页面带动态数据文件，最终卡片还会返回 `reply.card.data_url`、`reply.card.data_snapshot_url` 和 `reply.card.dynamic_page_contract`，第三方服务端可按需转存同目录 `data.json`。经营报表类页面还可返回 `reply.card.table_data_url`、`reply.card.ppt_download_url`、`reply.card.markdown_download_url` / `reply.card.text_download_url`，或在 `reply.card.download_exports[]` 中列出 `table-data.csv`、`report.ppt`、`report.md` 三类导出；这些字段为兼容新增字段，老客户端可忽略。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。第三方不需要做额外确认、下载或二次提交。
 
 静态页状态卡和最终发布卡会带 `reply.card.recipient_delivery`、`reply.card.permission_review_status` 和 `reply.card.editable_after_publish`。第三方操作人员可以先发送基础页面链接；若需要给总部、分店店总或指定人员发送不同权限口径的页面，继续传用户-角色-门店/区域范围映射，DataMax 可基于已生成页面继续调整并产出新的单独链接。
 

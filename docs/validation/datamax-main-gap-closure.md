@@ -1735,3 +1735,43 @@ Data-ingestion external fixed-task smoke:
 - Remaining release-gate blockers:
   - main-site chat-session 20-way needs a legitimate main-system session/bearer and dataset scope;
   - authenticated model-gateway and Cloudflare fallback concurrency proof need a legitimate operator cookie or local-key login.
+
+### 2026-06-06 Third-Party Contract Documentation Audit
+
+- Purpose:
+  - close Task 10 documentation drift after recent report-card/export-field and DataMax naming changes;
+  - keep public third-party contract documentation clear without changing public URLs, auth, request fields, response fields, or status values.
+- Files updated:
+  - `docs/integrations/third-party-integration-api.zh-CN.md`;
+  - `docs/integrations/third-party-integration-api.zh-CN.html`;
+  - `docs/integrations/pure-third-party-integration-guide.zh-CN.md`;
+  - `docs/integrations/pure-third-party-integration-guide.zh-CN.html`;
+  - `apps/web/public/external-integrations/third-party-integration-api.zh-CN.md`;
+  - `apps/web/public/external-integrations/third-party-integration-api.zh-CN.html`;
+  - `apps/web/public/external-integrations/pure-third-party-integration-guide.zh-CN.md`;
+  - `apps/web/public/external-integrations/pure-third-party-integration-guide.zh-CN.html`.
+- Documentation changes:
+  - full third-party document `最后更新` moved to `2026-06-06`;
+  - both full and pure third-party docs now explicitly state that product/page naming is DataMax while legacy protocol names such as `v3_*`, `X-V3-*`, and `https://v3.elepcloud.com` remain stable compatibility fields;
+  - full and pure docs now explicitly describe report export fields and filenames: `table-data.csv`, `report.ppt`, and `report.md`;
+  - pure third-party docs now list `reply.card.table_data_url`, `reply.card.ppt_download_url`, `reply.card.markdown_download_url` / `reply.card.text_download_url`, and `reply.card.download_exports[]`.
+- Required Task 10 coverage audit:
+  - `dataset_external_id` and `dataset_external_ids` stable business scopes are present in source and public Markdown copies;
+  - `available_document_external_ids` and `documentExternalId` union with dataset scopes are present;
+  - same-`conversation_external_id` authorization persistence and changed-conversation boundary are documented;
+  - template/reference uploads are documented as structure/style/field references that do not expand fact evidence or automatically become production data;
+  - final report/static-page links are documented through `reply.artifact_links[0]`, `reply.card.public_url`, and `reply.card.generated_artifact_url`;
+  - export fields and filenames are documented for `table-data.csv`, `report.ppt`, and `report.md`;
+  - SSE/progress and final artifact/status polling behavior remain documented;
+  - additive fields are documented as ignorable by old clients.
+- Verification:
+  - `npm run build:pure-third-party-guide-html` passed and regenerated both source HTML files plus both `apps/web/public/external-integrations` Markdown/HTML copies;
+  - `npm run check:pure-third-party-guide-html` passed;
+  - `node --test tools/render-pure-third-party-guide-html.test.mjs` passed, 5 tests;
+  - explicit string audit passed for the four Markdown copies: `dataset_external_id`, `dataset_external_ids`, `available_document_external_ids`, `documentExternalId`, `conversation_external_id`, `table-data.csv`, `report.ppt`, `report.md`, `artifact_links`, `DataMax`, and `兼容命名`;
+  - secret-pattern audit found no OpenAI-style key, long literal Bearer token, password assignment, or `DATABASE_URL=.*://` in `docs/integrations` or `apps/web/public/external-integrations`;
+  - `git diff --check` passed with only Windows LF/CRLF warnings.
+- Safety:
+  - no third-party public URL, auth method, required request field, existing response field, status value, or header name was changed;
+  - existing `v3_*` and `X-V3-*` protocol names were intentionally preserved and documented as compatibility fields;
+  - no credential, bearer token, database URL, raw customer row, provider payload, or full customer document was recorded.

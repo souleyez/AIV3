@@ -5,6 +5,8 @@
 **鉴权：** `Authorization: Bearer <DataMax inbound token>`
 **请求格式：** `Content-Type: application/json`
 
+**兼容命名：** 产品和对接说明统一称为 DataMax。为兼容已接入系统，响应状态、卡片类型、签名头和域名中仍可能保留 `v3_*`、`X-V3-*` 或 `https://v3.elepcloud.com` 等历史协议名；这些字段保持稳定，第三方不需要因此重新改字段或重新对接。
+
 最小顺序：
 
 1. 文档解析：把普通文档和模板文档解析入 DataMax。
@@ -857,7 +859,7 @@ Content-Type: application/json
 
 兼容旧写法仍然有效：已接入第三方可以继续传 `render_mode: "artifact"`、`output_format: "image_text"`，并在 `requested_skills[].arguments.output_type` 中传 `static_page`。如果同时传了 `template` 和旧 `requested_skills`，DataMax 会去重，不重复加载同一模板文档。
 
-DataMax 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `artifact_links[0]`、`card.public_url`、`card.generated_artifact_url` 为准。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。
+DataMax 会创建报表页面草稿并自动完成页面生成与发布。生成过程不要求第三方额外确认，也不要求第三方调用内部生成能力。本次回复优先返回 `artifact_links[0]`、`card.generated_artifact_url` / `card.public_url`，同时兼容保留 `render_output_id` 和下载/预览地址。发布完成时，`reply.text` 也会带 Markdown 形式的可点击链接（如 `[点击查看报表](URL)`）和一行原始 `页面地址: URL`，第三方页面建议渲染 Markdown 链接或自动识别 URL；程序侧仍以结构化字段 `artifact_links[0]`、`card.public_url`、`card.generated_artifact_url` 为准。经营报表类页面还可能返回 `card.table_data_url`、`card.ppt_download_url`、`card.markdown_download_url` / `card.text_download_url`，或在 `card.download_exports[]` 中列出 `table-data.csv`、`report.ppt`、`report.md` 三类导出；这些是兼容新增字段，旧客户端可忽略。报表类静态页默认必须带时间范围选择；经营分析类报表默认按月展示，未指定时间时取最新可用月份，同时保留自定义时间范围能力。
 
 DataMax 会把已经发布且被接受的静态页沉淀为模板库。后续静态页/报表需求如果命中相同数据集组合和相同 `default_prompt`，会优先复用已发布页面并刷新对应数据；如果未完全相同但本轮数据集与历史模板数据集存在交集，且 `default_prompt` 相同，DataMax 也可以套用该模板的视觉风格、页面结构和组件组织，事实数据仍以本轮已授权数据集和业务库为准。只有客户明确要求重新设计、换风格、第三方显式传入新的样式模板，或 `default_prompt` 表达了不同报表口径/主题时，才重新进入新的页面设计流程。
 
@@ -881,6 +883,10 @@ DataMax 会把已经发布且被接受的静态页沉淀为模板库。后续静
 | `reply.card.generated_artifact_url` / `reply.card.public_url` | 已发布 generated-artifact 时返回；第三方优先把这个链接展示或转存 |
 | `reply.card.data_url` | 已发布动态静态页且存在 `data.json` 时返回；用于第三方服务端转存页面数据快照 |
 | `reply.card.data_snapshot_url` | 已发布动态静态页且存在 `data-snapshot.json` 时返回；与 `data_url` 同源，保留为渲染/审计快照 |
+| `reply.card.table_data_url` | 经营报表表格导出；文件名通常为 `table-data.csv` |
+| `reply.card.ppt_download_url` | 经营报表 PPT 导出；文件名通常为 `report.ppt` |
+| `reply.card.markdown_download_url` / `reply.card.text_download_url` | 经营报表 Markdown/文本导出；文件名通常为 `report.md` |
+| `reply.card.download_exports[]` | 导出文件列表；可包含 `table-data.csv`、`report.ppt`、`report.md` |
 | `reply.card.dynamic_page_contract` | 动态静态页数据合同；说明 `data.json`、`data-snapshot.json`、刷新间隔、变更检测字段、默认时间范围控件和经营报表按月默认口径 |
 | `reply.card.template_reference_id` | 本次使用的静态页模板引用；若为 `generated-static-page:{draft_id}`，表示来自 DataMax 已发布页面模板库 |
 | `reply.card.template_reference` | 模板摘要；只用于视觉风格、结构和字段组织，不扩大事实证据范围 |
@@ -909,6 +915,10 @@ DataMax 会把已经发布且被接受的静态页沉淀为模板库。后续静
 | `reply.card.type` | 系统卡片类型；第三方按不透明字符串记录即可 |
 | `reply.card.data_url` | 若最终页面带动态数据文件，则为同目录 `data.json` 链接 |
 | `reply.card.data_snapshot_url` | 若最终页面带动态数据文件，则为同目录 `data-snapshot.json` 链接 |
+| `reply.card.table_data_url` | 若为经营报表且支持表格导出，则为 `table-data.csv` 下载链接 |
+| `reply.card.ppt_download_url` | 若为经营报表且支持 PPT 导出，则为 `report.ppt` 下载链接 |
+| `reply.card.markdown_download_url` / `reply.card.text_download_url` | 若为经营报表且支持 Markdown/文本导出，则为 `report.md` 下载链接 |
+| `reply.card.download_exports[]` | 导出文件列表；旧客户端不需要处理，新客户端可用来生成下载按钮 |
 | `reply.card.dynamic_page_contract` | 动态页合同；第三方通常只需转存，页面会优先按本地 `data.json` 渲染 |
 | `reply.card.template_reference_id` | 最终采用的模板引用；第三方可以记录下来作为后续同类需求的展示或审计信息 |
 | `reply.card.template_match_policy` | 最终模板命中策略；用于区分新设计、相同数据集复用和数据集交集套模板 |
@@ -927,7 +937,7 @@ DataMax 会把已经发布且被接受的静态页沉淀为模板库。后续静
 | `reply.reply_type` | `artifact_link`、`text` 或 `task_status` |
 | `reply.text` | 给用户展示的说明；静态页发布完成时会包含 Markdown 链接和原始 `页面地址: URL` |
 | `reply.artifact_links` | 产物链接数组；静态页优先返回 generated-artifact 页面 URL，兼容返回 HTML 下载地址；模板 HTML 产物会返回 `/v1/external/channels/{connection_id}/html-artifacts/{artifact_id}/files/0` |
-| `reply.card` | 可能包含 `render_output_id`、`html_preview_url`、`html_download_url`、`generated_artifact_url`、`data_url`、`dynamic_page_contract`、`draft_id`、产物状态或结构化卡片 |
+| `reply.card` | 可能包含 `render_output_id`、`html_preview_url`、`html_download_url`、`generated_artifact_url`、`data_url`、`dynamic_page_contract`、`table_data_url`、`ppt_download_url`、`markdown_download_url`、`download_exports`、`draft_id`、产物状态或结构化卡片 |
 | `assistant_run_id` | 本次生成运行 ID |
 
 ### 3.4 查询、预览、下载产物
