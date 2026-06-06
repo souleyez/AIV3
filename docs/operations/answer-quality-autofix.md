@@ -39,6 +39,15 @@ Do not include provider keys, raw provider payloads, server credentials, databas
 
 Collected system-defect cases can be routed to fixed template `answer_quality_autofix`.
 
+Live enqueue is explicit opt-in. It requires all of these runtime conditions:
+
+- `CODEX_HOST_TASK_ENABLED=true`
+- `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`
+- `CODEX_HOST_TASK_ALLOWLIST` contains `answer_quality_autofix`
+- `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES` contains `answer_quality_autofix` before the host agent is allowed to execute it
+
+If the dedicated `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` flag is absent or false, DataMax may still collect passive cases, but it records a preflight rejection instead of creating a Codex Host task.
+
 Allowed write scope:
 
 - `crates/platform-api/src/lib.rs`
@@ -67,6 +76,12 @@ Disable task routing by removing `answer_quality_autofix` from:
 ```text
 CODEX_HOST_TASK_ALLOWLIST
 CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES
+```
+
+or by setting:
+
+```text
+ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=false
 ```
 
 Case collection may remain enabled because it is passive and does not change customer-facing answers.

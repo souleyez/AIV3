@@ -66,7 +66,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate B: report/static-page operations | passed for current contract | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | passed for controlled production batch | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, a reviewed one-document non-dry-run fingerprint backfill recorded a canonical fingerprint, a single `fact_index_v2` enrichment run succeeded, 56 document facts were persisted, and the dataset entity snapshot reported 210 source facts across 6 scanned documents. Local document-quality, duplicate read-through, enrichment-worker, and aggregate regressions passed. Long-running production enrichment and full existing-document backfill remain disabled. |
-| P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
+| P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue now requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Local dedicated opt-in guard tests passed; 8-server runtime audit and any live enqueue decision remain pending. |
 | P1 Gate E: confirmed data ingestion | passed for current contract | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. |
 | P1 Gate F: operator observability | passed for deployed page and queue summary | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. 8-server deploy to `2193e0cd5248` succeeded; local/public `/external-integrations` returned `200` with DataMax/运营总览 SSR text; the web queue-stats proxy returned `200` with the configured observability cookie. Model-gateway status remains protected and returned `401 auth_session_required` without a main-system operator session, so an authenticated model-gateway operator smoke remains pending. |
 
@@ -520,7 +520,37 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - Quality-gate JSON: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.json`.
   - Quality-gate Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.md`.
 - Remaining:
-  - after deployment, run 8-server live passive collection/enqueue smoke with production-safe allowlist settings.
+  - after deployment, run 8-server runtime flag audit and decide whether to explicitly enable live enqueue.
+
+### 2026-06-06 Answer Quality Autofix Dedicated Opt-In Guard
+
+- Files changed:
+  - `crates/platform-api/src/lib.rs`;
+  - `docs/operations/answer-quality-autofix.md`;
+  - `docs/operations/cloudflare-codex-fixed-task-templates.md`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`;
+  - `docs/validation/datamax-main-gap-closure.md`.
+- Behavior:
+  - `answer_quality_autofix` live enqueue now requires the dedicated `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true` flag in addition to the fixed-task global switch and allowlists;
+  - when the dedicated flag is absent or false, passive cases can still be collected but DataMax records a `answer_quality_autofix_disabled` preflight rejection instead of creating a Codex Host task;
+  - the hard customer-facing answer-quality gate remains disabled and no normal answer is suppressed by this path.
+- Local verification:
+  - `cargo fmt --check -p platform-api -p codex-host-agent` passed.
+  - `cargo test -p platform-api answer_quality_autofix --lib` passed, 14 tests including the dedicated opt-in guard.
+  - `cargo test -p codex-host-agent answer_quality --lib` passed, 3 tests.
+  - `cargo test -p platform-api assistant_run_answer_quality_gate --lib` passed, 14 tests.
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case answer_quality_autofix,human_exception,runtime_summary` passed.
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local` passed.
+  - `cargo check -p platform-api -p codex-host-agent` passed.
+- Smoke receipts:
+  - Fixed-task JSON: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T053911Z.json`.
+  - Fixed-task Markdown: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T053911Z.md`.
+  - Quality-gate JSON: `target/document-quality-smoke/document-quality-smoke-20260606T053851Z-5476.json`.
+  - Quality-gate Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T053851Z-5476.md`.
+- Remaining:
+  - deploy to 8 server;
+  - audit 8-server runtime flags without printing secrets;
+  - keep live enqueue disabled unless the operator explicitly sets all required flags and allowlists.
 
 ### 2026-06-06 Confirmed Data Ingestion Staging Sync Local Coverage
 

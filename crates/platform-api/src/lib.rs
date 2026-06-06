@@ -51759,13 +51759,13 @@ async fn assistant_run_answer_quality_autofix_enqueue_if_enabled(
     if !platform_env_flag("CODEX_HOST_TASK_ENABLED", false) {
         return Ok(());
     }
-    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
+    if let Err(reason) = assistant_run_answer_quality_autofix_live_enqueue_preflight(capability) {
         record_codex_host_fixed_task_preflight_rejected(
             state,
             assistant_run_id,
             Some(capability),
             &fixed_task,
-            "codex_host_task_not_allowlisted",
+            reason,
         )
         .await;
         return Ok(());
@@ -51784,6 +51784,18 @@ async fn assistant_run_answer_quality_autofix_enqueue_if_enabled(
         .await
         .map_err(ApiError::from_storage)?;
     apply_workflow_signal(state, execution.id, WorkflowSignal::Start).await?;
+    Ok(())
+}
+
+fn assistant_run_answer_quality_autofix_live_enqueue_preflight(
+    capability: &str,
+) -> std::result::Result<(), &'static str> {
+    if !platform_env_flag("ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED", false) {
+        return Err("answer_quality_autofix_disabled");
+    }
+    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
+        return Err("codex_host_task_not_allowlisted");
+    }
     Ok(())
 }
 
@@ -108805,6 +108817,38 @@ mod tests {
             encoded["human_review_policy"],
             json!("auto_for_diagnosis_and_patch_proposal")
         );
+    }
+
+    #[test]
+    fn answer_quality_autofix_live_enqueue_requires_dedicated_flag() {
+        let _task_enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            "static_page_artifact,answer_quality_autofix",
+        );
+        let _autofix_enabled =
+            TestEnvVarRestore::set("ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED", "false");
+
+        let decision =
+            assistant_run_answer_quality_autofix_live_enqueue_preflight("answer_quality_autofix");
+
+        assert_eq!(decision, Err("answer_quality_autofix_disabled"));
+    }
+
+    #[test]
+    fn answer_quality_autofix_live_enqueue_allows_explicit_opt_in() {
+        let _task_enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            "static_page_artifact,answer_quality_autofix",
+        );
+        let _autofix_enabled =
+            TestEnvVarRestore::set("ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED", "true");
+
+        let decision =
+            assistant_run_answer_quality_autofix_live_enqueue_preflight("answer_quality_autofix");
+
+        assert_eq!(decision, Ok(()));
     }
 
     #[test]

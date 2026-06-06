@@ -84,7 +84,7 @@ Treat this section as the current executable plan. The longer task bodies below 
 | P0 | G3 Xinbai monthly report template operations | Completed for current contract. Accepted template and focused export links work on 8 server; report export smoke confirms title, focus, one report surface, and `table-data.csv`, `report.ppt`, `report.md`. Low-load prewarm is still off. | Decide whether to enable low-load prewarm after controlled streaming remains stable. | Report requests return one clickable report link, correct focus, accessible `table-data.csv`, `report.ppt`, `report.md`, and no duplicate link chatter. |
 | P0 | G7 controlled streaming | Completed for the current contract. Third-party stream path has a production receipt. Main-site new/continue true streaming now has a reusable SSE smoke script and a public 8-server receipt with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`: new run and continue run both emit many live deltas, then one completed event and one done event, without final-text duplication. | Keep `npm run smoke:main-assistant-streaming` as a release gate; next move to G4/G5/G8 rather than reworking the stream contract. | Main-site UI-compatible SSE shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
 | P1 | G4 background enterprise memory | Controlled production batch passed on 8 server: one reviewed local document was fingerprinted as canonical, one `fact_index_v2` enrichment run succeeded, 56 document facts were written, and the dataset entity snapshot now reports 210 source facts across 6 scanned documents. Local duplicate-read-through, enrichment, aggregate, and document-quality smoke passed. Long-running production enrichment and full existing-document backfill remain disabled. | Decide the next staged rollout scope: either enable post-ingest enrichment for newly parsed documents only, or run another reviewed low-volume existing-document backfill batch. Keep all runs idempotent and operator-audited. | Resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval; duplicate documents do not double count. |
-| P1 | G5 passive low-quality recovery | Local passive collection and fixed-scope packaging passed. Hard customer-facing gate remains disabled. Production enqueue is gated. | Enable passive collection only after P0 smokes remain stable; allow `answer_quality_autofix` only for fixed-scope system defects with tests. | Weak answers are collected and classified; no normal answer is suppressed; fixes stay within answer/retrieval optimization scope. |
+| P1 | G5 passive low-quality recovery | Local passive collection and fixed-scope packaging passed. Hard customer-facing gate remains disabled. Production enqueue now requires a dedicated opt-in flag in addition to fixed-task allowlists. | Deploy the dedicated opt-in guard, audit 8-server runtime flags, then decide whether to set `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true` for passive collection plus manual review only. | Weak answers are collected and classified; no normal answer is suppressed; live Codex task creation cannot happen unless the dedicated autofix flag and both allowlists are explicitly enabled; fixes stay within answer/retrieval optimization scope. |
 | P1 | G8 operator observability | Compact operator summary is implemented, pushed, and deployed to 8 server on `2193e0cd5248`. `/external-integrations` returns `200` locally and publicly with DataMax/运营总览 SSR text. The web queue-stats proxy returns `200` with the configured observability cookie. Model-gateway status remains protected and returns `401` without a main-system operator cookie. | Continue with G5 passive low-quality recovery, and later run an authenticated model-gateway operator smoke when an operator session/cookie is available. | A 20+ conversation incident can be triaged from DataMax without raw logs, credentials, or full customer data. |
 | P1 | G9 release hygiene | Commits through `2193e0cd5248` are pushed. 8 server is on latest `main`; `aiv3-web.service` was rebuilt/restarted for the latest web slice and core services were active after deploy. | Keep every future deploy tied to a commit, service status, smoke receipt, and rollback note. | 8 server is on latest `main`, all changed services are active, and validation docs match reality. |
 
@@ -508,7 +508,14 @@ Expected:
 
 **Step 3: Production rollout rule**
 
-Enable live enqueue only after P0 chat/report routes are stable. If enabled, start with passive collection and manual review; do not auto-merge any code change without tests and deployment receipt.
+Live enqueue requires all of these:
+
+- `CODEX_HOST_TASK_ENABLED=true`;
+- `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`;
+- `CODEX_HOST_TASK_ALLOWLIST` contains `answer_quality_autofix`;
+- `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES` contains `answer_quality_autofix`.
+
+If enabled, start with passive collection and manual review only. Do not auto-merge any code change without tests and deployment receipt. If the dedicated autofix flag is absent or false, the system may collect passive cases and record preflight rejection events, but it must not create Codex Host tasks.
 
 ### P1 Task H: Expand Operator Observability
 
@@ -1251,7 +1258,7 @@ git commit -m "Prefer deterministic facts for aggregate answers"
 
 ## Task 8: Add Low-Quality Answer Monitoring And Fixed-Scope Autofix
 
-**Status:** completed locally on 2026-06-06; production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`.
+**Status:** completed locally on 2026-06-06; production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED`, `CODEX_HOST_TASK_ALLOWLIST`, `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES`, and the dedicated `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` opt-in flag.
 
 **Files:**
 
@@ -1301,7 +1308,6 @@ Local progress:
 Use existing `answer_quality_autofix` with strict write scope:
 
 - `crates/platform-api/src/lib.rs`;
-- `crates/platform-api/src/fact_index.rs`;
 - `fixtures/document-quality/**`;
 - `scripts/run-document-quality-smoke.ps1`;
 - `scripts/run-v3-quality-gate-smoke.ps1`.
