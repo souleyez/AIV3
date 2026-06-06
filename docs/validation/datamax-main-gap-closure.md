@@ -64,7 +64,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
-| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, and feature-flagged post-ingest enrichment enqueue are implemented locally. Enrichment worker execution/diagnostics, 8-server migration/backfill rollout, and live smoke remain pending. |
+| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, and document-level enrichment diagnostics are implemented locally. Enrichment worker execution, 8-server migration/backfill rollout, and live smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | pending | Hard gate remains disabled; passive fixed-scope autofix loop needs implementation and validation. |
 | P1 Gate E: confirmed data ingestion | pending | `data_ingestion_analysis` terminal smoke exists; confirmed staging-to-dataset sync still needs closure and validation. |
 
@@ -240,8 +240,10 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - terminal success/failure and list-by-document are available for diagnostics.
   - retrieval worker can enqueue `structure_outline_v1`, `fact_index_v2`, `qa_seed_v1`, and `entity_relation_v1` after post-ingest fact cleanup when `DOCUMENT_ENRICHMENT_ENABLED=true`;
   - enqueue is skipped by default and skipped for documents without `content_sha256`.
+  - platform API exposes `GET /v1/documents/{document_id}/enrichment-runs` after existing document visibility checks.
 - Local verification:
   - `cargo fmt --check -p platform-api -p storage` passed.
+  - `cargo test -p platform-api list_document_enrichment_runs_returns_visible_document_runs --lib` passed.
   - `cargo test -p platform-api document_enrichment_run_repository_claims_requeues_and_succeeds --lib` passed.
   - `cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib` passed.
   - `cargo test -p platform-api external_document_parse --lib` passed.
@@ -252,7 +254,6 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - `cargo check -p platform-api` passed.
 - Remaining:
   - add low-priority worker/idle execution loop;
-  - expose enrichment-run diagnostics;
   - 8-server migration/backfill rollout and live smoke.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture

@@ -3314,6 +3314,31 @@ pub struct DocumentDetailView {
     pub model_facing: Option<WorkflowModelFacingSummaryView>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentEnrichmentRunView {
+    pub id: String,
+    pub document_id: DocumentId,
+    pub enrichment_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_version: Option<String>,
+    pub input_fingerprint: String,
+    pub status: String,
+    pub priority: i32,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub available_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub output_summary: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DocumentParseStatusView {
     #[serde(default)]

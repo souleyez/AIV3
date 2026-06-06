@@ -52,7 +52,7 @@ use contracts::{
     CreateStaticPageDraftRequest, CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
     CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
     CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
-    DocumentDetailView, DocumentMediaDetailView, DocumentSummary,
+    DocumentDetailView, DocumentEnrichmentRunView, DocumentMediaDetailView, DocumentSummary,
     ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
     ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
     ExternalActionResultCallbackResponseView, ExternalArtifactTemplateView,
@@ -158,13 +158,13 @@ use std::{
     time::{Duration as StdDuration, Instant},
 };
 use storage::{
-    configured_database_max_connections, ModelGatewayProfile, ModelGatewayProfileUpdate,
-    ModelGatewayProfileUsageSummary, NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent,
-    NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
-    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfile,
-    NewModelGatewayProfileEvent, NewPublishedReport, NewPublishedReportVersion, NewReportPlan,
-    NewSecretBinding, NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput,
-    NewUserSession, NewWorkflowTask, PgStorage,
+    configured_database_max_connections, DocumentEnrichmentRun, ModelGatewayProfile,
+    ModelGatewayProfileUpdate, ModelGatewayProfileUsageSummary, NewAssistantRun,
+    NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
+    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
+    NewHtmlArtifact, NewModelGatewayProfile, NewModelGatewayProfileEvent, NewPublishedReport,
+    NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
+    NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tool_registry::{
@@ -1608,6 +1608,10 @@ pub fn router(
         .route(
             "/v1/documents/{document_id}/retrieval-evidences",
             get(list_document_retrieval_evidences),
+        )
+        .route(
+            "/v1/documents/{document_id}/enrichment-runs",
+            get(list_document_enrichment_runs),
         )
         .route(
             "/v1/documents/{document_id}/ingest",
@@ -72101,6 +72105,49 @@ async fn list_document_retrieval_evidences(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+struct ListDocumentEnrichmentRunsQuery {
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+async fn list_document_enrichment_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+    Query(query): Query<ListDocumentEnrichmentRunsQuery>,
+) -> std::result::Result<Json<Vec<DocumentEnrichmentRunView>>, ApiError> {
+    let document_id = parse_document_id(&document_id)?;
+    let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+    let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    load_visible_document_for_user_with_local_scope(
+        &state,
+        document_id,
+        &active_secret_binding_ids,
+        current_user_id,
+        local_thread_id.as_deref(),
+    )
+    .await?;
+
+    let runs = state
+        .storage
+        .document_enrichment_runs()
+        .list_by_document(
+            state.tenant_id,
+            document_id,
+            query.limit.unwrap_or(50).clamp(1, 200),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Json(
+        runs.into_iter()
+            .map(to_document_enrichment_run_view)
+            .collect(),
+    ))
+}
+
 async fn load_document_detail_with_state(
     state: &AppState,
     document_id: DocumentId,
@@ -76656,6 +76703,27 @@ fn to_document_chunk_view(chunk: DocumentChunk) -> DocumentChunkView {
         metadata: Value::Object(metadata),
         created_at: chunk.created_at,
         updated_at: chunk.updated_at,
+    }
+}
+
+fn to_document_enrichment_run_view(run: DocumentEnrichmentRun) -> DocumentEnrichmentRunView {
+    DocumentEnrichmentRunView {
+        id: run.id.to_string(),
+        document_id: run.document_id,
+        enrichment_kind: run.enrichment_kind,
+        parse_version: run.parse_version,
+        input_fingerprint: run.input_fingerprint,
+        status: run.status,
+        priority: run.priority,
+        attempt_count: run.attempt_count,
+        max_attempts: run.max_attempts,
+        available_at: run.available_at,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+        error_message: run.error_message,
+        output_summary: run.output_summary,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
     }
 }
 
@@ -134611,6 +134679,88 @@ retrieve_evidence:
             .expect("runs should list");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, created.id);
+    }
+
+    #[tokio::test]
+    async fn list_document_enrichment_runs_returns_visible_document_runs() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("enrichment-run-api-dataset-{}", Uuid::new_v4()),
+                    title: "Enrichment Run API Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": "public",
+                    "default_secret_binding_ids": []
+                }),
+            )
+            .await
+            .expect("dataset should be created");
+        let document = harness
+            .storage
+            .documents()
+            .create(
+                harness.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Enrichment API doc".to_string(),
+                    object_key: "/tmp/enrichment-api-doc.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let now = Utc::now();
+        let created = harness
+            .storage
+            .document_enrichment_runs()
+            .create_or_get(
+                harness.tenant_id,
+                &storage::NewDocumentEnrichmentRun {
+                    document_id: document.id,
+                    enrichment_kind: "structure_outline_v1".to_string(),
+                    parse_version: Some("parse-v1".to_string()),
+                    input_fingerprint: "sha256-api-fixture".to_string(),
+                    priority: 50,
+                    max_attempts: 2,
+                    available_at: now,
+                },
+                now,
+            )
+            .await
+            .expect("enrichment run should create");
+
+        let response = get_request(
+            harness.app.clone(),
+            &format!("/v1/documents/{}/enrichment-runs?limit=5", document.id),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let runs: Vec<DocumentEnrichmentRunView> = read_json_response(response).await;
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, created.id.to_string());
+        assert_eq!(runs[0].document_id, document.id);
+        assert_eq!(runs[0].enrichment_kind, "structure_outline_v1");
+        assert_eq!(runs[0].status, "pending");
+        assert_eq!(runs[0].priority, 50);
+        assert_eq!(runs[0].attempt_count, 0);
+        assert_eq!(runs[0].max_attempts, 2);
+        assert_eq!(runs[0].input_fingerprint, "sha256-api-fixture");
+        assert_eq!(runs[0].parse_version.as_deref(), Some("parse-v1"));
     }
 
     #[tokio::test]

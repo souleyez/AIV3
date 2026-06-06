@@ -277,9 +277,12 @@ Progress 2026-06-06:
 - Retrieval worker post-ingest fact cleanup can enqueue `structure_outline_v1`, `fact_index_v2`, `qa_seed_v1`, and `entity_relation_v1` runs when `DOCUMENT_ENRICHMENT_ENABLED=true`.
 - Enqueue is skipped by default, and skipped when a document has no `content_sha256`.
 - Document metadata records a compact `document_enrichment` enqueue summary after fact cleanup.
+- Added read-only diagnostics endpoint `GET /v1/documents/{document_id}/enrichment-runs`, guarded by the existing document visibility check.
 - Added regression `document_enrichment_run_repository_claims_requeues_and_succeeds`.
+- Added regression `list_document_enrichment_runs_returns_visible_document_runs`.
 - Verified locally with:
   - `cargo fmt --check -p platform-api -p storage`;
+  - `cargo test -p platform-api list_document_enrichment_runs_returns_visible_document_runs --lib`;
   - `cargo test -p platform-api document_enrichment_run_repository_claims_requeues_and_succeeds --lib`;
   - `cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib`;
   - `cargo test -p retrieval-worker`;
@@ -290,7 +293,6 @@ Progress 2026-06-06:
 Remaining:
 
 - Add a low-priority worker/idle execution loop.
-- Add diagnostics surface for pending/running/failed enrichment runs.
 - Wire feature flags before enabling on 8 server.
 
 ## Task 6: Enrichment Outputs For Dense Manuals
