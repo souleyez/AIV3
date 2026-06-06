@@ -67,22 +67,22 @@ This section is the current single-page execution sheet. Treat the longer task s
 
 | Gap | Current state | Next executable action | Done when |
 | --- | --- | --- | --- |
-| G1: 8-server private production smoke | Read-only 8-server baseline is recorded. Local shell has no private bearer/cookie for mutating 20-way smoke. | Load private smoke credentials without committing them, then run third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report export, and document-quality smoke against `https://v3.elepcloud.com`. | `docs/validation/datamax-main-gap-closure.md` contains receipts with pass/fail, latency, service status, report links, export URLs, and no secret leakage. |
+| G1: 8-server private production smoke | Read-only 8-server baseline is recorded. Third-party streaming smoke against `https://v3.elepcloud.com` passed with 10 ordinary, 3 static-page, and 2 reconnect lanes. Full 20-way ordinary chat, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report export, and document-quality smoke remain open. | Load private smoke credentials without committing them, then run the remaining full production smoke set against `https://v3.elepcloud.com`. | `docs/validation/datamax-main-gap-closure.md` contains receipts with pass/fail, latency, service status, report links, export URLs, and no secret leakage. |
 | G2: Production concurrency lock | 8 server reports chat concurrency 20, static-page/Image2 concurrency 5, Cloudflare fallback 2, Right `gpt-5.5` assistant profile concurrency 20. Platform API pool cap and starvation behavior are not fully proven by private smoke. | If G1 exposes pool starvation or timeout, adjust only internal env/model-profile/worker concurrency and document rollback. | 20 chat lanes are not starved by 5 heavy page jobs; same-conversation idempotency stays ordered. |
 | G3: Static-page template operations | Xinbai accepted template, focused report links, and exports are locally/publicly validated. Production low-load prewarm is still disabled. | Enable/report prewarm only after confirming low-load guard, accepted-template reuse, and operator status visibility. Keep Xinbai monthly modular report as the default template. | Same dataset/default-prompt/focus requests reuse the accepted template first; expensive Image2/Codex work is background only unless redesign is explicit. |
 | G4: Background enterprise memory rollout | Fingerprint/dedup, enrichment-run storage, worker loop, deterministic enrichment kinds, and aggregate-first local tests are implemented. 8 server is deployed on `1db91f69c3fd`; schema migration, binary build, dry-run fingerprint backfill, and one-shot worker startup were recorded. Production backfill/enrichment remains disabled because no `DOCUMENT_ENRICHMENT*` runtime flag is configured and `document_enrichment_runs` is empty. | Decide the first controlled live batch: either run a limited non-dry-run fingerprint backfill and enqueue one reviewed document, or keep production enrichment disabled until private document-quality smoke credentials are available. Then run duplicate read-through and aggregate Q&A smoke. | New and existing documents can enrich asynchronously; duplicate documents read through canonical chunks/facts; resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval. |
 | G5: Low-quality answer recovery | Passive detection and fixed-scope task packaging pass locally. Hard answer gate remains disabled. Production enqueue is config-gated. | Keep hard gate disabled. Enable only passive collection first, then optionally allow `answer_quality_autofix` in the fixed allowlist after live observation. | Weak answers are collected and classified; system-defect fixes remain limited to answer/retrieval optimization files and require tests before deployment. |
-| G6: Confirmed data ingestion | Local staging-plan confirmation, private staging dataset creation/reuse, guarded source sync, dedupe, same-conversation scope restore, and public-doc contract smoke passed on 2026-06-06. Code is deployed to 8 server on `1db91f69c3fd`. | Run the live read-only source readiness smoke on 8 server, then manually confirm one reviewed staging plan against a stored database source before customer-facing use. | 8-server receipt proves no write before confirmation, sync source is in-plan, confirmed rows become ordinary dataset evidence, and replies reach `dataset_ready`, `sync_started`, `sync_completed`, or truthful failure. |
-| G7: Controlled streaming | Main-site create and continue SSE paths both support live answer deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`; third-party live answer stream remains separately controlled by `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED`. Local regressions passed on 2026-06-06 and the code is deployed to 8 server. Runtime flags are present on 8 server, but private browser/SSE smoke is still pending. | Run main-site browser/local smoke and 8-server private streaming smoke after deployment. Keep third-party final-answer release gated while streaming progress/artifact status. | Main site can show live answer deltas for new and continued runs behind flag; third-party sees progress and links but no rejected final-answer fragments. |
+| G6: Confirmed data ingestion | Local confirmation/sync contract passed. 8-server live read-only source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis now routes deterministically, completed a Codex Host task, and returned a `v3_data_ingestion_staging_plan` with no raw credential leakage. Live confirm/sync is still blocked because the existing confirm route only loads runs visible to the current operator session; unauthenticated smoke receives `assistant_run_not_found`/HTTP 404. | Add or obtain a controlled operator-auth confirmation path for external-channel staging plans, then confirm one reviewed plan and start one guarded sync. | 8-server receipt proves no write before confirmation, sync source is in-plan, confirmed rows become ordinary dataset evidence, and replies reach `dataset_ready`, `sync_started`, `sync_completed`, or truthful failure. |
+| G7: Controlled streaming | Main-site create and continue SSE paths support live answer deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`. Third-party streaming smoke passed on 8 server/public endpoint: 15/15 tasks OK, no duplicate final messages, 3 artifact links, P95 latency about 6s. Main-site browser/SSE smoke remains open. | Run main-site browser/local smoke for new and continued AssistantRun streaming. Keep third-party final-answer release policy separated from progress/artifact streaming. | Main site can show live answer deltas for new and continued runs behind flag; third-party sees progress and links but no rejected final-answer fragments. |
 | G8: Operator observability | Validation ledgers exist, but operators still need one compact page for queues, model lane, report tasks, enrichment backlog, low-quality cases, and data-ingestion staging/sync. | Expand the existing external integration/operator page with lazy-loaded health panels and sanitized counts only. | A 20+ conversation incident can be triaged from DataMax without reading raw logs or exposing secrets. |
-| G9: Final release hygiene | Local commits through `1db91f6` were pushed and 8 server is on `1db91f69c3fd`; `platform-api` and `retrieval-worker` rebuilt and restarted active. Validation docs still need the final private smoke receipts before this gate closes. | Run the remaining private smoke set and update the validation ledger with pass/fail, latency, and links. | 8 server is on latest `main`, service statuses are active, validation docs record every command and result. |
+| G9: Final release hygiene | Local commits through `eea4f99` were pushed and 8 server is on `eea4f995968a`; `platform-api` was rebuilt and restarted active after the data-ingestion routing fixes. Validation docs still need the final private smoke receipts before this gate closes. | Run the remaining private smoke set and update the validation ledger with pass/fail, latency, and links. | 8 server is on latest `main`, service statuses are active, validation docs record every command and result. |
 
 ### Current Execution Order
 
-1. Run G7 private main-site and third-party streaming smoke on 8 server; code and runtime flags are present, but customer-visible behavior still needs a live receipt.
-2. Run G6 live source readiness and one confirmed staging-plan smoke on 8 server; code is deployed, but no production confirmation receipt exists yet.
+1. Close G6 operator confirmation: make one external-channel staging plan confirmable by an authorized operator path, then run one guarded sync smoke.
+2. Run G7 main-site browser/SSE smoke for new and continued AssistantRun streaming; third-party streaming already has an 8-server receipt.
 3. Decide the G4 first controlled production enrichment batch: limited non-dry-run fingerprint backfill plus one reviewed enqueue, or defer until private document-quality smoke credentials are available.
-4. Run G1/G2 private production smoke after credential/config verification.
+4. Run G1/G2 full private production smoke after credential/config verification: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report export, and document-quality smoke.
 5. Enable or defer G3 production prewarm based on the smoke result and operator capacity.
 6. Enable G5 passive live collection only after ordinary Q&A and report routing remain stable.
 7. Add G8 observability once the queue/status surfaces have the exact counters proven by smoke.
@@ -111,6 +111,7 @@ node scripts/smoke/external-channel-20way.mjs --base-url https://v3.elepcloud.co
 node scripts/smoke/main-chat-20way.mjs --base-url https://v3.elepcloud.com --concurrency 20
 node scripts/smoke/static-page-5way.mjs --base-url https://v3.elepcloud.com --concurrency 5
 node scripts/smoke/cloudflare-fallback-2way.mjs --base-url https://v3.elepcloud.com
+node scripts/smoke/external-channel-streaming-10way.mjs --base-url https://v3.elepcloud.com --connection-id generic-chat-main
 bash scripts/run-data-ingestion-staging-sync-smoke.sh
 git diff --check
 ```
@@ -933,7 +934,7 @@ git commit -m "Add passive answer quality autofix loop"
 
 ## Task 9: Close Confirmed Data Ingestion To Dataset Sync
 
-**Status:** completed locally on 2026-06-06; 8-server live source readiness and one confirmed staging-plan smoke remain pending after deployment.
+**Status:** partially validated on 8 server as of 2026-06-06. Local confirmation/sync contract passed. 8-server live source readiness passed, and an external data-ingestion analysis run completed with a staging plan. Live confirm/sync is still pending because the current internal confirm route is operator-session visible and unauthenticated smoke receives `assistant_run_not_found`/HTTP 404 for the external-channel run.
 
 **Files:**
 
@@ -1040,10 +1041,16 @@ Smoke receipts:
 
 Remaining:
 
-- deploy current code to 8 server;
-- run `bash scripts/run-data-ingestion-staging-live-smoke.sh` on 8 server against the stored source;
-- manually confirm one reviewed staging plan and start sync through the internal operator routes;
+- add or obtain an authenticated operator confirmation path that can see the external-channel staging plan without changing third-party public fields;
+- manually confirm one reviewed staging plan and start sync through the internal operator route;
 - record that the synced dataset contains source-derived documents, chunks, retrieval evidence, and no raw credentials/table dumps.
+
+8-server verification on 2026-06-06:
+
+- `bash scripts/run-data-ingestion-staging-live-smoke.sh` passed against stored source `hy-sql-traffic-area`.
+- External data-ingestion analysis smoke against `https://v3.elepcloud.com` accepted a selected `business_datasource_ids` scope and reached `data_ingestion_analysis_completed`.
+- The returned card contained `staging_plan.type=v3_data_ingestion_staging_plan`, `human_review_required=true`, `staging_spec_available=true`, `source_count=1`, `table_count=1`, and `raw_credentials_present=false`.
+- Attempting the confirm route without an operator-authenticated session returned HTTP 404 with `assistant_run_not_found`, so this is the next concrete implementation gap rather than a public third-party contract problem.
 
 **Step 5: Commit**
 
@@ -1056,7 +1063,7 @@ git commit -m "Close confirmed data ingestion sync flow"
 
 ## Task 10: Roll Out Controlled Streaming Safely
 
-**Status:** in progress as of 2026-06-06. Main-site `continue/stream` now uses the same live-delta worker/channel path as new AssistantRun creation when `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`. Third-party stream behavior was not changed; existing safety/replay regressions still pass. Code is deployed to 8 server and streaming runtime flags are present; 8-server private streaming smoke remains pending.
+**Status:** partially validated on 8 server as of 2026-06-06. Main-site `continue/stream` uses the same live-delta worker/channel path as new AssistantRun creation when `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`. Third-party stream behavior and replay safety passed a private 8-server/public-endpoint smoke with active bearer. Main-site browser/SSE smoke remains pending.
 
 **Files:**
 
@@ -1140,8 +1147,16 @@ Notes:
 Remaining:
 
 - run browser/local smoke for main-site new and continued AssistantRun streaming with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`;
-- run 8-server private external streaming smoke with the active bearer;
-- record whether `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` remains enabled or should be kept as progress-only until the 8-server smoke passes.
+- keep recording whether `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` should release final answer deltas or remain progress/artifact-first for third-party clients.
+
+8-server external streaming verification on 2026-06-06:
+
+- Command shape: `node scripts/smoke/external-channel-streaming-10way.mjs --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000`.
+- Receipt: `/srv/aiv3/repo/target/external-channel-streaming-10way-smoke/20260606020619.json`.
+- Result: 15/15 tasks OK, including 10 ordinary, 3 static-page, and 2 reconnect cases.
+- Duplicate final messages: 0.
+- Artifact links: 3.
+- Latency: P50 3235 ms, P95 6015 ms, max 6015 ms.
 
 **Step 5: Commit**
 

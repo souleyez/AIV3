@@ -109,6 +109,57 @@ Expected report signals:
 
 Read-only probe against `8服务器` after release showed `/srv/aiv3/repo` at `5b5df7e` with the core DataMax services active. The stored MySQL source `hy-sql-traffic-area` exists, has two earlier succeeded content sync runs, and has an older source-derived smoke dataset with 50 indexed database documents, 50 indexed chunks, and 50 retrieval evidence rows. The current default dataset `新百经营分析` is present but has no indexed database-source documents yet, and the latest full sync run is marked failed because a slow metadata query was operator-cancelled. This is exactly why the live smoke separates default dataset readiness, alternate ready datasets, and latest sync failure.
 
+## 2026-06-06 8-Server Live Source Readiness Result
+
+- Environment: `8服务器`.
+- Source key: `hy-sql-traffic-area`.
+- Command shape:
+  - `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL="$PLATFORM_DATABASE_URL" DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY="hy-sql-traffic-area" DATA_INGESTION_LIVE_SMOKE_API_BASE="http://127.0.0.1:3000" bash scripts/run-data-ingestion-staging-live-smoke.sh`
+- Report JSON:
+  - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T020416Z.json`
+- Report Markdown:
+  - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T020416Z.md`
+- Result: passed as a read-only readiness smoke.
+
+Observed safe signals:
+
+- source exists: true;
+- source enabled: true;
+- connection env reference present: true;
+- mapped table count: 6;
+- succeeded sync exists: true;
+- latest sync failed: true;
+- dataset count: 3;
+- ready dataset count: 2;
+- default dataset ready: no;
+- question/report ready: yes.
+
+Ready datasets:
+
+- `hy-sql-traffic-area-smoke-20260521`: documents 50, chunks 50, retrieval evidence 50, default no.
+- `external-source-third-party-source-main-dataset-64fff6c8-10e2-4ee8-8243-23166cce3abc`: documents 1, chunks 1, retrieval evidence 1, default no.
+
+API snapshot:
+
+- dataset signal: `no_documents`;
+- sync signal: `sync_failed`;
+- health: blocking;
+- health codes: `mapped_tables_without_documents`, `latest_sync_failed`.
+
+Safety result:
+
+- reads DataMax PostgreSQL only: true;
+- source database read: false;
+- writes allowed: false;
+- raw credentials printed: false;
+- raw table dump allowed: false.
+
+Interpretation:
+
+- The stored source has enough historical indexed data for question/report smoke.
+- The current default dataset still needs a confirmed sync or rebinding before it can be treated as ready.
+- Latest failed sync should stay visible as an operator attention item and should not erase the fact that alternate ready datasets exist.
+
 ## Safety Notes
 
 - Use only DataMax stored database-source configuration and server-side env references.

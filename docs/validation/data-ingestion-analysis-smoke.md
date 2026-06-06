@@ -105,4 +105,45 @@ Post-fix terminal smoke:
 - Remote Cloudflare task: `task_6761204b-3d17-4dbf-a94d-91daee4dfaad`; all three `codex_host_task.poll_retry` events used this same task id.
 - JSON report: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260531T055420Z.json`
 
+## 2026-06-06 8-Server Source-Scoped Analysis Smoke
+
+- Environment: `8服务器` public DataMax endpoint.
+- Bearer: loaded from the active `generic-chat-main` external-channel connection and not printed.
+- Config: ignored local smoke case with `business_datasource_ids=["hy-sql-traffic-area"]`, no credentials, and ASCII-only prompt text.
+- Deployed code: `eea4f995968a`.
+- Command shape:
+  - `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -AllowServerMutation -Case data-ingestion-analysis -BaseUrl https://v3.elepcloud.com -ServerCaseConfigPath .\target\datamax-smoke-configs\data-ingestion-hy-sql-traffic-area.json -ServerPollTimeoutSec 120 -ServerPollIntervalSec 5 -Json`
+- Report:
+  - `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T023412Z.json`
+  - `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T023412Z.md`
+- Result:
+  - `server_docs` passed;
+  - auth guard passed, missing bearer rejected with HTTP 401 without mutation;
+  - queue stats passed;
+  - `data-ingestion-analysis` passed as accepted processing;
+  - HTTP status `202`;
+  - `accepted=true`;
+  - `business_datasource_ids_count=1`;
+  - initial status included `data_ingestion_analysis_queued`;
+  - polling observed `data_ingestion_analysis_running`;
+  - the run later recorded `assistant_run.data_ingestion_analysis_completed`.
+- Completed run:
+  - AssistantRun `b43c6169-7de8-4430-96ce-8e754824520f`;
+  - workflow task `6bf8b409-6d53-4ec9-b1cf-6a29e2d80ec6`;
+  - execution `544f8303-9a92-4c0d-8a34-10e9ba4ff84f`.
+- Third-party reply after completion:
+  - `reply_type=task_status`;
+  - `task_status=data_ingestion_analysis_completed`;
+  - card type `v3_data_ingestion_analysis_result`;
+  - card status `data_ingestion_analysis_completed`;
+  - `staging_plan.type=v3_data_ingestion_staging_plan`;
+  - plan id `staging-plan-544f8303-9a92-4c0d-8a34-10e9ba4ff84f`;
+  - `human_review_required=true`;
+  - `staging_spec_available=true`;
+  - output artifact count `1`;
+  - raw credentials present: false.
+- Remaining:
+  - confirmation/sync is not yet live-validated because the existing internal confirm route is operator-session visible and an unauthenticated smoke returned HTTP 404 `assistant_run_not_found`;
+  - implement or use a controlled operator-auth confirmation path, then record one guarded sync receipt.
+
 Do not record credentials, database URLs, raw customer data dumps, SSH details, or unrestricted filesystem paths in this validation note.

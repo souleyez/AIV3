@@ -62,11 +62,11 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 
 | Gate | Status | Receipt |
 | --- | --- | --- |
-| P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
+| P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. Full third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, and report/document-quality private smoke remain pending. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
-| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. Internal confirm/sync routes, private staging dataset creation/reuse, source-in-plan validation, sync dedupe, progress events, same-conversation staging dataset restore, and public-doc contract are covered locally. Code is deployed to 8 server on `1db91f69c3fd`; 8-server live source readiness and one reviewed staging-plan confirmation/sync smoke remain pending. |
+| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Confirmation/sync remains pending because unauthenticated smoke cannot see the external-channel run through the current operator route and receives HTTP 404 `assistant_run_not_found`. |
 
 ## Rollout Receipts
 
@@ -489,6 +489,89 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - the deploy, migration, service restart, binary availability, dry-run backfill, and one-shot worker startup are verified on 8 server;
   - production document enrichment is still not enabled and existing documents are not yet backfilled;
   - the next safe step is either a limited non-dry-run fingerprint backfill plus one reviewed enrichment enqueue, or an explicit defer until private document-quality smoke credentials are available.
+
+### 2026-06-06 8-Server Streaming And Data-Ingestion Routing Receipt
+
+- Follow-up pushed/deployed commits:
+  - `c121072 Prioritize data ingestion fixed task routing`;
+  - `eea4f99 Cover data ingestion staging trigger terms`.
+- 8-server deployment command shape:
+  - `ssh 8服务器 "set -e; cd /srv/aiv3/repo; git pull --ff-only; CC=clang CXX=clang++ cargo build --release -p platform-api; sudo systemctl restart aiv3-platform-api.service; sleep 5; systemctl is-active aiv3-platform-api.service; git rev-parse --short=12 HEAD"`.
+- Result:
+  - `platform-api` release build succeeded;
+  - `aiv3-platform-api.service` active;
+  - confirmed remote head: `eea4f995968a`.
+
+Third-party streaming smoke:
+
+- Command shape:
+  - `node scripts/smoke/external-channel-streaming-10way.mjs --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000`.
+- Bearer source:
+  - active `generic-chat-main` external-channel connection, loaded server-side/local shell and not printed.
+- 8-server receipt:
+  - `/srv/aiv3/repo/target/external-channel-streaming-10way-smoke/20260606020619.json`.
+- Result:
+  - ordinary tasks: 10;
+  - static-page tasks: 3;
+  - reconnect tasks: 2;
+  - total tasks: 15;
+  - OK: 15;
+  - failed: 0;
+  - duplicate final messages: 0;
+  - artifact links: 3;
+  - P50 latency: 3235 ms;
+  - P95 latency: 6015 ms;
+  - max latency: 6015 ms.
+
+Data-ingestion live readiness smoke:
+
+- Command shape on 8 server:
+  - `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL="$PLATFORM_DATABASE_URL" DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY="hy-sql-traffic-area" DATA_INGESTION_LIVE_SMOKE_API_BASE="http://127.0.0.1:3000" bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- 8-server receipts:
+  - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T020416Z.json`;
+  - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T020416Z.md`.
+- Result:
+  - source exists and is enabled;
+  - connection env reference is present;
+  - mapped tables: 6;
+  - succeeded sync exists;
+  - latest sync is failed and remains an attention signal;
+  - dataset count: 3;
+  - ready dataset count: 2;
+  - default dataset ready: no;
+  - question/report ready: yes;
+  - safety flags: source database read false, writes allowed false, raw credentials printed false, raw table dump allowed false.
+
+Data-ingestion external fixed-task smoke:
+
+- Local report:
+  - `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T023412Z.json`;
+  - `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T023412Z.md`.
+- AssistantRun:
+  - `b43c6169-7de8-4430-96ce-8e754824520f`.
+- Codex Host task:
+  - `6bf8b409-6d53-4ec9-b1cf-6a29e2d80ec6`.
+- Execution:
+  - `544f8303-9a92-4c0d-8a34-10e9ba4ff84f`.
+- Result:
+  - accepted: true;
+  - selected source count: 1;
+  - initial status included `data_ingestion_analysis_queued`;
+  - later status reached `data_ingestion_analysis_running`;
+  - server events then reached `assistant_run.data_ingestion_analysis_completed`;
+  - third-party reply returned `task_status=data_ingestion_analysis_completed`;
+  - card type `v3_data_ingestion_analysis_result`;
+  - staging plan type `v3_data_ingestion_staging_plan`;
+  - plan id `staging-plan-544f8303-9a92-4c0d-8a34-10e9ba4ff84f`;
+  - `human_review_required=true`;
+  - `staging_spec_available=true`;
+  - output artifact count: 1;
+  - safe plan summary: source count 1, table count 1, field mapping count 1, validation count 1;
+  - raw credentials present: false.
+- Confirmation gap:
+  - unauthenticated internal confirm attempt returned HTTP 404 with `assistant_run_not_found`;
+  - root cause is operator visibility/session scope, not a third-party public-field contract issue;
+  - next implementation slice should add or obtain a controlled operator-auth confirmation path for external-channel staging plans, then run one guarded sync receipt.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
