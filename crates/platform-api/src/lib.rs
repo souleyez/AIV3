@@ -36329,6 +36329,10 @@ fn external_channel_message_requests_data_ingestion_analysis(prompt: &str) -> bo
             "etl",
             "import",
             "mapping",
+            "data ingestion",
+            "data-ingestion",
+            "staging plan",
+            "staging_plan",
         ],
     )
 }
@@ -100678,6 +100682,9 @@ mod tests {
         ));
         assert!(external_channel_message_requests_data_ingestion_analysis(
             "这个数据库怎么建表，字段怎么映射？"
+        ));
+        assert!(external_channel_message_requests_data_ingestion_analysis(
+            "Return read-only data-ingestion analysis plus a staging_plan."
         ));
         assert!(!external_channel_message_requests_data_ingestion_analysis(
             "邓工是谁？"

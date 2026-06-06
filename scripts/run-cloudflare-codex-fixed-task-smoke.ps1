@@ -683,6 +683,7 @@ function Invoke-ServerDataIngestionMutationSmoke {
         idempotency_key = $body.idempotency_key
         dataset_external_ids_count = @($body.dataset_external_ids).Count
         available_document_external_ids_count = @($body.available_document_external_ids).Count
+        business_datasource_ids_count = @($body.business_datasource_ids).Count
     }
     if ($submit.status_code -lt 200 -or $submit.status_code -ge 300 -or $null -eq $submitParsed) {
         return New-SmokeResult -CaseId "data-ingestion-analysis" -Status "failed" -Message "External data-ingestion mutation request did not return a valid success response." -Details $details
