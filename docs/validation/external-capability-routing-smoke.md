@@ -1,5 +1,59 @@
 # External Capability Routing Smoke
 
+## 2026-06-06 Current-Head Report-Material Routing Rollout
+
+- Host: `8服务器`
+- Public endpoint: `https://v3.elepcloud.com`
+- Final deployed commit: `bee7e08`
+- Service: `aiv3-platform-api.service`
+- Service status: `active`
+- Dataset scope for selected Xinbai cases: `64fff6c8-10e2-4ee8-8243-23166cce3abc`
+
+Changes covered:
+
+- Model-visible capability guidance now explicitly distinguishes scoped temporary report materials from permanent document-processing tasks.
+- Template/reference files, temporary contracts, store-area evidence, traffic-stat files, and customer report style requirements can route to the report/static-page workflow.
+- Xinbai report focus routing maps contract area, 坪效, 客流统计, 客流同比, 租售比, and health/trend wording to `经营总览` before generic contract-detail routing.
+- Accepted template-baseline links are returned immediately for report-material updates while background refresh may continue.
+- Explicit existing-page repair prompts still hide the baseline link while the repair/revision task proceeds.
+
+Local checks before final rollout:
+
+- `cargo test -p platform-api external_channel_capability_routing_fixture --lib`
+- `cargo test -p platform-api static_page_public_url_with_prompt_focus_adds_module_query --lib`
+- `cargo test -p platform-api external_channel_static_page_artifact_detects_xinbai_business_report_modules --lib`
+- `cargo test -p platform-api external_channel_model_tool_request --lib`
+- `cargo test -p platform-api external_channel_static_page_reply_restores_visual_contract_template_link --lib`
+- `cargo test -p platform-api external_channel_static_page_reply_prefers_accepted_template_link_over_fixed_task_queue --lib`
+- `cargo test -p platform-api external_channel_static_page_dataset_template_overlap_skips_image2_and_queues_codex --lib`
+- `cargo test -p platform-api static_page_stable_artifact_key_uses_canonical_dataset_not_temporary_dataset --lib`
+- `cargo fmt --check -p platform-api`
+- `cargo check -p platform-api`
+- `git diff --check`
+
+8-server selected SSE smoke passed for 6 cases after rollout:
+
+| Case | Expected | Result |
+| --- | --- | --- |
+| `static_page_xinbai_template_reference` | report/static page, focus `取高机会` | Passed; 1 artifact link, focus matched |
+| `static_page_xinbai_temp_contract_area` | report/static page, focus `经营总览` | Passed; 1 artifact link, focus matched |
+| `static_page_xinbai_traffic_stats` | report/static page, focus `经营总览` | Passed; 1 artifact link, focus matched |
+| `plain_qa_bedridden_turning` | ordinary Q&A | Passed; completed with 0 artifact links |
+| `plain_metric_meaning_question` | ordinary Q&A | Passed; completed with 0 artifact links |
+| `plain_resume_risk_system_question` | ordinary Q&A | Passed; completed with 0 artifact links |
+
+Diagnosis note:
+
+- Before the final fix, `static_page_xinbai_temp_contract_area` entered the static-page pipeline but did not return an immediate customer-clickable artifact link because the prompt contained `补充` and was treated as an existing-artifact revision.
+- The final behavior narrows "hide baseline while revising" to explicit repair/change prompts such as `修复`, `修改`, `更正`, `单位错`, `小数点`, `联动`, and similar existing-page bug wording.
+
+Safety:
+
+- Third-party public URL, auth method, required request fields, and existing response fields were unchanged.
+- The selected live smoke loaded the active bearer from server configuration without printing it.
+- No raw token, database URL, raw customer row, full document, provider payload, or credential value was recorded.
+- A transient untracked `inbound_bearer_token` file caused by a bad shell redirection during diagnosis was removed immediately without reading its content; the known pre-existing untracked `mode` file remained untouched.
+
 ## 2026-06-05 8 Server Strict Focus-Link Rollout
 
 - Host: `8服务器`

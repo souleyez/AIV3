@@ -64,11 +64,25 @@
 | P1 | Data-source row identity | Current-head 8-server live audit passed and confirms question/report readiness, but `bi_contract_warning` and `bi_rentsales_detail` collapse 193 latest-sync rows under current identity. | Decide entity-level vs row-level semantics; if row-level is required, test staging-only discriminator mapping. | Report completeness semantics are documented and validated before production mapping changes. |
 | P1 | Passive low-quality recovery | Hard gate and live autofix are disabled. | Keep disabled; optionally enable passive collection/manual review only. | Weak answers are visible for review without suppressing normal customer answers. |
 | P2 | Template library hygiene | Accepted Xinbai modular report should dominate matching; old artifacts exist historically. | Exclude old/non-default templates from normal matching; clean local generated artifacts only after explicit approval. | Same project/scope/default prompt reuses the accepted modular template; old dark/legacy templates do not pollute links. |
-| P2 | Model-visible capability routing | Some capabilities are already model-guided, but customer prompts still miss report/static-page triggers in edge cases. | Maintain a safe capability catalog and smoke prompts for report, document parse/deep parse, data ingestion, static page, collection, connector, and proactive message routing. | The model can choose supported platform workflows while the platform keeps auth/scope/tool execution authoritative. |
+| P2 | Model-visible capability routing | Current head has an internal capability catalog for report/static-page, document processing, data ingestion, collection/integration setup, and proactive message routing. Temporary template/contract/traffic-stat report materials are now routed to the report/static-page workflow instead of being treated as permanent document-processing tasks; selected 8-server smoke passed. | Keep the full fixture in the release gate, add new customer phrasing as fixtures, and audit docs after any additive artifact/report behavior change. | The model can choose supported platform workflows while the platform keeps auth/scope/tool execution authoritative, normal answers continue, and no public tool traces leak. |
 | P2 | Third-party contract docs | Docs have been updated across the thread, but drift can recur after report-card/export changes. | Audit online Markdown/HTML integration docs and regenerate public copies when behavior changes. | Third parties can understand dataset/document union scope, persisted conversation authorization, template reference uploads, report link fields, and export files without re-integration. |
 | P2 | Observability and runbooks | Operator page and validation docs exist. | Keep runbooks aligned with the current release gate and failures. | Operators can diagnose queue/model/report/enrichment/data-ingestion health without raw logs. |
 
 ---
+
+## Remaining Execution Order
+
+Use this order unless a live regression forces a narrower hotfix:
+
+1. **P0 release gate:** keep 8-server smoke current for third-party ordinary chat, Xinbai report/export, static-page 5-way, main-site 20-way, main-site streaming, and document-quality regression. Auth-dependent main-site/operator checks can be recorded as pending only when legitimate credentials are unavailable.
+2. **P0 report/static-page stability:** keep the Xinbai modular monthly report as the default template, verify one clickable report link, export files, focus routing, no answer truncation, and no false trigger for metric-definition/resume questions.
+3. **P0 third-party scope:** keep dataset/document union, same-conversation authorization reuse, changed-conversation isolation, and temporary attachment-title supply in every release gate.
+4. **P1 model gateway:** run the authenticated operator smoke with a legitimate operator session or local-key login; do not bypass auth for validation.
+5. **P1 data-source identity:** decide whether collapsed tables remain entity-level facts or need row-level materialization; test any discriminator change in staging before production mapping changes.
+6. **P1 historical enrichment:** keep summary-only dry-run as the default; only run a tiny real batch after reviewing dataset, enrichment kind, queue load, and rollback behavior.
+7. **P1 passive answer-quality recovery:** keep hard gates disabled; collect weak-answer candidates for manual review or explicitly approved passive Codex tasks only.
+8. **P2 template hygiene:** exclude stale Xinbai templates from normal matching; clean generated artifacts only after explicit approval and path verification.
+9. **P2 capability routing and docs:** keep the model-visible capability catalog synchronized with fixtures and public docs, while preserving all third-party public URLs/auth/request fields/existing response fields.
 
 ## Task 1: Current-Head 8-Server Release Gate
 
@@ -580,6 +594,13 @@ Expected:
 - platform-side scope/auth/queue policy remains authoritative;
 - no raw tool schema, secret, provider payload, or internal credential path is exposed to customers.
 
+Current 2026-06-06 state:
+
+- `external_channel_model_tool_capability_guidance_lines()` exposes a safe internal capability catalog for ordinary answer composition, static-page/report artifacts, document processing, data ingestion analysis, collection/integration setup, and proactive message routing.
+- The model may request a platform workflow, but DataMax still owns auth, scope, queue policy, artifact publication, and customer-visible response shaping.
+- Temporary templates, contracts, traffic-stat files, and other report reference materials are explicitly described as scoped answer/report material, not automatic permanent dataset changes.
+- VLM/deep reparse remains a premium fallback and is not selected by this report-material routing path.
+
 **Step 2: Tighten routing prompts and guards**
 
 Add or update routing guidance so these customer expressions can choose a workflow without cutting off the normal answer:
@@ -594,6 +615,12 @@ Expected:
 - normal answer continues even when a report/static-page task is queued;
 - third-party clients receive artifact links through existing report/artifact fields;
 - broad routing stays domain-scoped and does not turn generic questions like `取高是什么意思？` or resume project-experience questions into report tasks.
+
+Current 2026-06-06 state:
+
+- Xinbai report wording now includes `坪效`, `门店面积`, `合同面积`, `客流统计`, `客流数据`, `客流同比`, `客流月同比`, `客流年同比`, and common update verbs such as `补充`, `增加`, `加上`.
+- Focus routing maps contract/area/坪效/traffic/rent-sales/health terms to `经营总览` before the generic contract-detail mapping.
+- Accepted template-baseline links are exposed immediately for report-material updates such as "临时上传合同，补充门店面积和坪效"; explicit existing-page repair prompts still hide the baseline while a background revision proceeds.
 
 **Step 3: Add routing smoke cases**
 
@@ -610,6 +637,14 @@ Required cases:
 - report-triggering questions still contain a normal answer body;
 - temporary attachment/template references are acknowledged as answer/report material, not treated as permanent dataset changes unless explicitly ingested;
 - no public tool trace leaks.
+
+Current 2026-06-06 selected 8-server smoke:
+
+- `static_page_xinbai_template_reference` passed, returned one artifact link with focus `取高机会`.
+- `static_page_xinbai_temp_contract_area` passed, returned one artifact link with focus `经营总览`.
+- `static_page_xinbai_traffic_stats` passed, returned one artifact link with focus `经营总览`.
+- Ordinary guards `长期卧床老人多长时间翻身一次？`, `取高是什么意思？`, and `风险识别系统有哪些项目经历？` completed with zero artifact links.
+- No third-party public URL, auth method, required request field, or existing response field changed.
 
 **Step 4: Commit**
 

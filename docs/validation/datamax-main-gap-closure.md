@@ -1616,3 +1616,51 @@ Data-ingestion external fixed-task smoke:
 - Safety:
   - no third-party public URL, auth, required request field, or existing response field changed;
   - no source database query, raw customer row, credential, database URL, bearer token, full document, or provider payload was recorded.
+
+### 2026-06-06 Current-Head Platform Capability Routing Rollout
+
+- Purpose:
+  - advance Task 9 by making model-visible platform capabilities explicit enough for report/static-page, document processing, data ingestion, collection/integration setup, and proactive-message requests;
+  - ensure temporary report materials such as templates, contracts, store-area evidence, and traffic-stat files route to the report/static-page workflow rather than being mistaken for permanent document-processing tasks;
+  - keep normal answers working and avoid false report triggers for metric-definition or resume/project-experience questions.
+- Commits:
+  - `2cd1d7d` routed temporary report materials to static pages and added fixture coverage;
+  - `9766931` recovered accepted template-baseline links during publish/refresh;
+  - `bee7e08` exposed template links for report-material updates while preserving explicit existing-page repair behavior.
+- Local verification:
+  - `cargo test -p platform-api external_channel_capability_routing_fixture --lib` passed;
+  - `cargo test -p platform-api static_page_public_url_with_prompt_focus_adds_module_query --lib` passed;
+  - `cargo test -p platform-api external_channel_static_page_artifact_detects_xinbai_business_report_modules --lib` passed;
+  - `cargo test -p platform-api external_channel_model_tool_request --lib` passed;
+  - `cargo test -p platform-api external_channel_static_page_reply_restores_visual_contract_template_link --lib` passed;
+  - `cargo test -p platform-api external_channel_static_page_reply_prefers_accepted_template_link_over_fixed_task_queue --lib` passed;
+  - `cargo test -p platform-api external_channel_static_page_dataset_template_overlap_skips_image2_and_queues_codex --lib` passed;
+  - `cargo test -p platform-api static_page_stable_artifact_key_uses_canonical_dataset_not_temporary_dataset --lib` passed;
+  - `cargo fmt --check -p platform-api` passed;
+  - `cargo check -p platform-api` passed;
+  - `git diff --check` passed with only Windows LF/CRLF warnings.
+- 8-server rollout:
+  - `/srv/aiv3/repo` was fast-forwarded to `bee7e0828699`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api` passed;
+  - `aiv3-platform-api.service` was restarted and reported `active`;
+  - the pre-existing untracked `mode` file remained untouched;
+  - a transient untracked `inbound_bearer_token` file caused by a bad shell redirection during diagnosis was removed immediately without reading its content.
+- 8-server selected capability-routing smoke:
+  - run against `https://v3.elepcloud.com` with the active third-party bearer loaded from 8 server configuration and not printed;
+  - selected cases file contained three new report-material cases plus three ordinary-Q&A guards;
+  - result: `External capability routing smoke passed for 6 case(s)`.
+- Case results:
+  - `static_page_xinbai_template_reference`: one artifact link, focus `取高机会`;
+  - `static_page_xinbai_temp_contract_area`: one artifact link, focus `经营总览`;
+  - `static_page_xinbai_traffic_stats`: one artifact link, focus `经营总览`;
+  - `plain_qa_bedridden_turning`: completed with zero artifact links;
+  - `plain_metric_meaning_question`: completed with zero artifact links;
+  - `plain_resume_risk_system_question`: completed with zero artifact links.
+- Safety:
+  - no third-party public URL, auth method, required request field, or existing response field changed;
+  - no raw token, database URL, raw customer row, full document, provider payload, or credential value was printed or recorded;
+  - the change is additive to internal routing guidance and fixture coverage.
+- Remaining action:
+  - keep the full capability-routing fixture in the release gate;
+  - add new customer wording as fixtures when missed;
+  - audit public third-party docs only when customer-visible report/artifact fields or additive behavior changes.
