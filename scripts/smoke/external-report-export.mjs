@@ -657,7 +657,7 @@ function parseSseBlock(block) {
 
 function isTerminalFrame(frame) {
   const event = String(frame.event || '');
-  if (/completed|static_page_published|failed|cancelled|error/i.test(event)) {
+  if (/completed|failed|cancelled|error/i.test(event)) {
     return true;
   }
   const candidates = collectValuesForKeys(frame.data, [
