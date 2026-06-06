@@ -1302,3 +1302,27 @@ Data-ingestion external fixed-task smoke:
   - no customer-facing answer was suppressed;
   - silent prewarm customer visibility stayed false;
   - no bearer token, database URL, raw customer document, or raw provider payload is intentionally recorded in this validation entry.
+
+### 2026-06-06 P1 Follow-Up Status
+
+- Model-gateway operator smoke:
+  - unauthenticated `GET http://127.0.0.1:3000/v1/model-gateway/status` returned HTTP `401`;
+  - body prefix: `{"code":"auth_session_required","message":"请先登录主系统后再管理模型池"}`;
+  - no legitimate operator session/cookie or local-key material was available in this thread, so authenticated status/profile/test smoke remains pending;
+  - no auth bypass, allow-any flag, or temporary operator privilege change was added.
+- Data-source identity mapping review:
+  - source reviewed: `hy-sql-traffic-area`;
+  - sync run reviewed: `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - total source rows 577, unique documents/chunks/evidence 384, collapsed duplicate rows 193;
+  - current materialized counts: `bi_contract_warning` 6, `bi_oa_zulinhetong` 100, `bi_oa_zulinhetonggudingzujin` 100, `bi_oa_zulinhetongtichengzujin` 100, `bi_rentsales_detail` 1, `nwstore` 77;
+  - collapse is concentrated in `bi_contract_warning` and `bi_rentsales_detail`;
+  - sanitized mapping review found current `id_column` values are `parentcode` for `bi_contract_warning` and `storecode` for `bi_rentsales_detail`, while composite `id_columns` are also present in configuration;
+  - interpretation: current behavior is entity/store-level materialization for those two tables, not source-row-level materialization;
+  - recommended next step if row-level completeness is required: run a staging-only mapping change that uses the composite `id_columns` for document identity, then rerun guarded sync and compare source rows, unique documents, chunks, evidence, and report behavior before production adoption.
+- Low-quality recovery safety:
+  - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED` is unset;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` is unset;
+  - `CODEX_HOST_TASK_ENABLED=true`;
+  - `CODEX_HOST_TASK_ALLOWLIST` is set but does not include `answer_quality_autofix`;
+  - `CODEX_HOST_CAPABILITY_ALLOWLIST` is unset;
+  - result: no hard answer gate and no live `answer_quality_autofix` task creation under current 8-server configuration.
