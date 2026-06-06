@@ -716,10 +716,10 @@ const lines = [
   '',
   ...(report.latest_sync_identity_audit.tables.length
     ? [
-        '| Table | Identity Columns | Source Rows | Unique Docs | Collapsed Rows | Current Docs | Status |',
-        '| --- | --- | ---: | ---: | ---: | ---: | --- |',
+        '| Table | Identity Columns | Source Rows | Unique Docs | Collapsed Rows | Current Docs | Status | Recommended Action |',
+        '| --- | --- | ---: | ---: | ---: | ---: | --- | --- |',
         ...report.latest_sync_identity_audit.tables.map((table) =>
-          `| \`${table.table}\` | ${table.id_columns.length ? table.id_columns.map((column) => `\`${column}\``).join(', ') : 'none'} | ${table.source_row_count} | ${table.unique_document_count} | ${table.collapsed_duplicate_row_count} | ${table.current_document_count} | ${table.identity_status} |`
+          `| \`${table.table}\` | ${table.id_columns.length ? table.id_columns.map((column) => `\`${column}\``).join(', ') : 'none'} | ${table.source_row_count} | ${table.unique_document_count} | ${table.collapsed_duplicate_row_count} | ${table.current_document_count} | ${table.identity_status} | ${table.recommended_action || 'none'} |`
         ),
       ]
     : ['- none']),
