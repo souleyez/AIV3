@@ -665,6 +665,56 @@ Data-ingestion external fixed-task smoke:
   - rerun the guarded operator sync with explicit `source_id=hy-sql-traffic-area` and `force=true`;
   - record whether the sync completes or fails for a new non-duplicate root cause.
 
+### 2026-06-06 8-Server Retrieval Evidence Idempotency Deployment
+
+- Commit:
+  - `8fd0a1d69df0`.
+- Deployment command shape:
+  - `git pull --ff-only`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p retrieval-worker`;
+  - restart `aiv3-platform-api.service` and `aiv3-retrieval-worker.service`.
+- Result:
+  - server fast-forwarded from `688643f780f3` to `8fd0a1d69df0`;
+  - release build succeeded;
+  - `aiv3-platform-api.service` active;
+  - `aiv3-retrieval-worker.service` active;
+  - existing untracked server file `mode` was observed and not touched.
+- Guarded operator sync retry:
+  - AssistantRun `de6755e0-b490-4665-901b-8847b7a0081b`;
+  - plan id `staging-plan-ca9e6b0e-7f16-4fc0-b979-e1ad63afba06`;
+  - source id `hy-sql-traffic-area`;
+  - confirm returned HTTP 200;
+  - created dataset false because dataset `ac7bb786-3ffb-40e2-bade-9f70d5fb4764` already existed from the previous confirmation;
+  - sync returned HTTP 202;
+  - sync run id `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2`;
+  - deduplicated false;
+  - production write allowed false.
+- AssistantRun event result:
+  - latest terminal event `assistant_run.data_ingestion_staging_sync_updated`;
+  - workflow stage `completed`;
+  - workflow status `succeeded`;
+  - previous duplicate-key failure did not recur.
+- DataMax dataset evidence state:
+  - dataset id `ac7bb786-3ffb-40e2-bade-9f70d5fb4764`;
+  - lifecycle `draft`;
+  - current documents 384;
+  - current chunks 384;
+  - current retrieval evidence rows 384;
+  - all current documents are indexed.
+- External sync run state:
+  - `external_sync_runs.status=succeeded`;
+  - `sync_kind=full`;
+  - `failure_kind` empty;
+  - counts recorded `row_count=577`, `documents_ingested=577`, `chunks_ingested=577`, `chunks_indexed=577`, `retrieval_evidences_indexed=577`;
+  - `failed_row_count=0`.
+- Follow-up audit:
+  - current dataset has 384 unique document/chunk/evidence rows while sync counts recorded 577 processed/indexed rows;
+  - current table distribution is `bi_contract_warning=6`, `bi_oa_zulinhetong=100`, `bi_oa_zulinhetonggudingzujin=100`, `bi_oa_zulinhetongtichengzujin=100`, `bi_rentsales_detail=1`, `nwstore=77`;
+  - this does not block the duplicate-key fix, but should be audited before claiming full source materialization count accuracy.
+- Safety:
+  - no third-party public URL/auth/request/response field was changed;
+  - no bearer token, session token, database URL, source credential, or raw source row was recorded.
+
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
 - Files changed:

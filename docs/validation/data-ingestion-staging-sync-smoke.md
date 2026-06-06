@@ -246,6 +246,62 @@ Interpretation:
   - rerun guarded sync with explicit `source_id=hy-sql-traffic-area` and `force=true`;
   - record document, chunk, retrieval evidence counts or a new sanitized non-duplicate failure.
 
+## 2026-06-06 8-Server Idempotency Retry Result
+
+- Environment: `8服务器`.
+- Deployed commit: `8fd0a1d69df0`.
+- Build/restart:
+  - `platform-api` release build succeeded;
+  - `retrieval-worker` release build succeeded;
+  - `aiv3-platform-api.service` active;
+  - `aiv3-retrieval-worker.service` active.
+- Reused reviewed staging flow:
+  - AssistantRun `de6755e0-b490-4665-901b-8847b7a0081b`;
+  - plan id `staging-plan-ca9e6b0e-7f16-4fc0-b979-e1ad63afba06`;
+  - source id `hy-sql-traffic-area`;
+  - dataset id `ac7bb786-3ffb-40e2-bade-9f70d5fb4764`.
+- Confirm result:
+  - HTTP 200;
+  - accepted true;
+  - created dataset false;
+  - production write allowed false.
+- Sync retry body:
+  - `source_id=hy-sql-traffic-area`;
+  - `sync_kind=full`;
+  - `force=true`;
+  - checkpoint `operator_smoke=2026-06-06-idempotent-retry`.
+- Sync result:
+  - HTTP 202;
+  - sync run id `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2`;
+  - deduplicated false;
+  - production write allowed false;
+  - AssistantRun events reached `workflow_stage=completed` and `workflow_status=succeeded`;
+  - duplicate key `retrieval_evidences_execution_id_document_chunk_id_key` did not recur.
+- Current confirmed staging dataset state:
+  - documents 384;
+  - chunks 384;
+  - retrieval evidence rows 384;
+  - document lifecycle distribution: `indexed=384`.
+- Sync run stored counts:
+  - status `succeeded`;
+  - failure kind empty;
+  - row count 577;
+  - documents ingested 577;
+  - chunks ingested 577;
+  - chunks indexed 577;
+  - retrieval evidences indexed 577;
+  - failed row count 0.
+- Count-audit note:
+  - the successful sync's processed/indexed counters report 577 while the current staging dataset has 384 unique documents/chunks/evidence rows;
+  - current unique table distribution is `bi_contract_warning=6`, `bi_oa_zulinhetong=100`, `bi_oa_zulinhetonggudingzujin=100`, `bi_oa_zulinhetongtichengzujin=100`, `bi_rentsales_detail=1`, `nwstore=77`;
+  - this should be audited as a counting/materialization semantics issue before claiming exact row-to-document parity.
+- Safety result:
+  - public third-party contract changed: false;
+  - production write allowed: false;
+  - schema mutation allowed: false;
+  - raw credentials printed: false;
+  - raw source rows printed: false.
+
 ## Safety Notes
 
 - Use only DataMax stored database-source configuration and server-side env references.

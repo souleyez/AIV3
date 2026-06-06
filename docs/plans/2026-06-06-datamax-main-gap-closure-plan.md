@@ -14,7 +14,7 @@
 
 - Before this plan update, local `main` was clean at commit `688643f`.
 - GitHub `main` includes the latest data-ingestion staging-plan persistence and operator-confirmation slices.
-- 8 server is deployed to commit `688643f780f3`; `aiv3-platform-api.service` and `aiv3-codex-host-agent.service` are active.
+- 8 server is deployed to commit `8fd0a1d69df0`; `aiv3-platform-api.service` and `aiv3-retrieval-worker.service` are active.
 - 8-server third-party streaming smoke has passed with 15/15 tasks OK, no duplicate final messages, 3 artifact links, and P95 latency about 6 seconds.
 - 8-server external data-ingestion analysis can produce a confirmable `v3_data_ingestion_staging_plan` without raw credential leakage.
 - 8-server authenticated operator confirmation for the reviewed staging plan has been proven:
@@ -22,8 +22,10 @@
   - `production_write_allowed=false`;
   - a private staging dataset was created;
   - sync refused ambiguous source selection until `source_id=hy-sql-traffic-area` was passed.
-- The latest guarded sync started successfully but failed during retrieval indexing with `index_external_retrieval` because `retrieval_evidences` hit duplicate key `retrieval_evidences_execution_id_document_chunk_id_key`.
-- This makes retrieval-evidence idempotent indexing the current P0 blocker before further production data-ingestion sync claims.
+- The earlier guarded sync failed during retrieval indexing with `index_external_retrieval` because `retrieval_evidences` hit duplicate key `retrieval_evidences_execution_id_document_chunk_id_key`.
+- Commit `8fd0a1d` made retrieval-evidence writes idempotent on `(execution_id, document_chunk_id)`.
+- The 8-server retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` reached `workflow_stage=completed` and `workflow_status=succeeded`; the confirmed staging dataset currently has 384 indexed documents, 384 chunks, and 384 retrieval evidence rows.
+- Sync run counts recorded 577 processed/indexed rows while the current dataset has 384 unique document/evidence rows; this is a follow-up counting/unique-materialization audit item, not the duplicate-key blocker.
 - The model-visible capability loop is closed for product-level capabilities:
   - `static_page_artifact`;
   - `data_ingestion_analysis`;
@@ -77,7 +79,7 @@ Treat this section as the current executable plan. The longer task bodies below 
 
 | Priority | Gap | Current state | Next executable action | Done when |
 | --- | --- | --- | --- | --- |
-| P0 | G6 data-ingestion sync idempotency | Confirm and sync routes are live on 8 server. The guarded sync starts but fails at retrieval indexing because duplicate `(execution_id, document_chunk_id)` evidence rows violate `retrieval_evidences_execution_id_document_chunk_id_key`. | Make external-source retrieval-evidence indexing idempotent, add regression coverage, deploy the worker/API slice, and rerun the same operator confirm/sync with `force=true`. | 8-server sync reaches completed or a new truthful non-duplicate failure; the target staging dataset contains source-derived documents, chunks, and retrieval evidence. |
+| P0 | G6 data-ingestion sync idempotency | Fixed and deployed. Confirm/sync routes are live on 8 server, and retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed after retrieval-evidence upsert. The target staging dataset has source-derived documents, chunks, and evidence. | Record the success receipt, keep the 577 processed rows vs 384 unique evidence rows as a counting/materialization audit item, then move to P0 production smoke. | Duplicate-key failure no longer blocks data-ingestion sync; docs record the deployed commit, sync id, counts, and remaining count-audit note. |
 | P0 | G1/G2 production smoke and concurrency | Runtime config shows 20 chat lanes, 5 static-page/Image2 lanes, and 2 Cloudflare fallback lanes. Third-party streaming smoke passed, but full 20-way ordinary chat, main-site 20-way, static-page 5-way, fallback 2-way, report export, and document-quality smoke are not closed. | After G6 is fixed, run the full private smoke set against `https://v3.elepcloud.com` with credentials loaded outside the repo. | Validation ledger records pass/fail, latency, report links, export links, service status, and no secret leakage. |
 | P0 | G3 Xinbai monthly report template operations | Accepted template and focused export links work. Low-load prewarm is still off. Product expectation is that most report requests reuse the modular monthly template and reorder modules by focus. | Keep the Xinbai modular monthly report as the only default template, verify focus routing and export files on 8 server, then decide whether to enable low-load prewarm. | Report requests return one clickable report link, correct focus, accessible `table-data.csv`, `report.ppt`, `report.md`, and no duplicate link chatter. |
 | P0 | G7 controlled streaming | Third-party stream path has a production receipt. Main-site new/continue true streaming still needs browser/SSE smoke. | Run browser smoke with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` for new AssistantRun and continued AssistantRun. | Main-site UI shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
@@ -88,16 +90,16 @@ Treat this section as the current executable plan. The longer task bodies below 
 
 ### Immediate Execution Order
 
-1. Locate the retrieval-evidence insertion path that can write duplicate `(execution_id, document_chunk_id)` rows.
-2. Add a failing regression for duplicate external-source indexing in the same execution.
-3. Implement idempotent insert/upsert behavior without changing public third-party fields.
-4. Run local targeted tests and data-ingestion staging sync smoke.
-5. Commit, push, deploy the changed binaries to 8 server, and restart only affected services.
-6. Re-run the 8-server operator sync with explicit `source_id=hy-sql-traffic-area` and `force=true`.
-7. Record whether sync completed or failed for a new root cause in `docs/validation/datamax-main-gap-closure.md` and `docs/validation/data-ingestion-staging-sync-smoke.md`.
-8. Continue with main-site streaming smoke, full 20-way production smoke, and Xinbai report/export smoke.
+1. Record the 8-server G6 idempotency success receipt and count-audit note in validation docs.
+2. Run P0 production smoke: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality.
+3. Run main-site streaming browser/SSE smoke for new and continued AssistantRun.
+4. Verify Xinbai monthly report template reuse, focus ordering, one-link reply, and export files on 8 server.
+5. Decide whether the 577 processed vs 384 unique evidence row count requires a code fix before broader data-ingestion rollout.
+6. Continue to controlled background enterprise-memory batch only after P0 smoke remains stable.
 
 ### P0 Task A: Fix Retrieval-Evidence Idempotency
+
+**Status:** completed locally and deployed to 8 server on commit `8fd0a1d`.
 
 **Files:**
 
@@ -167,6 +169,8 @@ git push
 ```
 
 ### P0 Task B: Deploy And Re-Run 8-Server Data-Ingestion Sync
+
+**Status:** completed for the duplicate-key blocker on 2026-06-06. Retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` succeeded. Follow-up count audit remains open because sync counters report 577 processed/indexed rows while the staging dataset currently has 384 unique documents/chunks/evidence rows.
 
 **Files:**
 
