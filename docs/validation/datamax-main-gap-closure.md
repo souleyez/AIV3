@@ -63,7 +63,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | Gate | Status | Receipt |
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
-| P0 Gate B: report/static-page operations | passed for explicit report/static-page requests | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. Local prewarm safety coverage now proves silent prewarm sources are allowed through the later auto-publish path and do not dispatch customer outbound replies, but a real prewarm consumer/low-load execution smoke remains required before production enablement. |
+| P0 Gate B: report/static-page operations | passed for explicit requests and private prewarm smoke | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Low-load static-page template prewarm is implemented and deployed at `5c267abff53d`; private smoke proved normal answer unaffected, no customer artifact stream event, no outbound reply, real `static_page/generate_static_page_image` consumption, Image2 preview, local render/publish, accepted template storage, and duplicate skip. Production `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is still unset by default pending operator rollout decision. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | passed for post-ingest rollout | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. A tiny live upload/new-parse smoke then proved all five configured deterministic kinds enqueue and succeed for a newly indexed document. Full existing-document backfill remains disabled. |
 | P1 Gate D: low-quality answer recovery | passed for safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue now requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Dedicated opt-in guard is deployed to 8 server on `3394b0a5f60a`; runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`, so live enqueue remains intentionally disabled until an explicit operator decision. |
@@ -1264,3 +1264,41 @@ Data-ingestion external fixed-task smoke:
   - commit, push, deploy changed services to 8 server;
   - run private scoped prewarm smoke with `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` only for the reviewed test window;
   - verify normal answer unaffected, no unsolicited customer reply, static-page worker consumption/requeue, accepted template storage, and duplicate skip/reuse.
+
+### 2026-06-06 8-Server Static-Page Template Prewarm Rollout
+
+- Commits:
+  - `a2b31b9` wired silent prewarm to a real customer-invisible draft plus delayed `static_page/generate_static_page_image` task and worker low-load recheck.
+  - `5c267ab` changed silent prewarm finalization to local render/publish after Image2 preview, avoiding Codex/Couldflare dependency for background template warming.
+- Deployment:
+  - `/srv/aiv3/repo` fast-forwarded to `5c267abff53d`.
+  - Release build passed for `platform-api` and `static-page-worker`.
+  - `aiv3-platform-api.service`, `aiv3-static-page-worker.service`, `aiv3-codex-host-agent.service`, `aiv3-web.service`, and `aiv3-document-enrichment-worker.service` were active after rollout.
+  - Existing untracked 8-server file `mode` was observed and not touched.
+  - Temporary `STATIC_PAGE_TEMPLATE_PREWARM_*` manager environment was set only for private smoke windows and then cleared; production default is unset/off.
+- First private prewarm smoke, old Codex publish path:
+  - request receipt: `/srv/aiv3/repo/target/static-page-template-prewarm-smoke/20260606071751-request.json`.
+  - ordinary SSE answer returned HTTP 200, completed once, and emitted no static-page/artifact customer event.
+  - internal task was real `static_page/generate_static_page_image` with logical queue `static_page_template_prewarm`.
+  - Image2 preview succeeded and then the old auto-publish path entered `codex_host/run_codex_host_task`.
+  - The Codex task eventually succeeded, but the long runtime justified the follow-up local-publish fix.
+- Second private prewarm smoke, local publish path:
+  - request receipt: `/srv/aiv3/repo/target/static-page-template-prewarm-smoke/20260606074117-local-request.json`.
+  - AssistantRun: `22cae514-c32c-43c9-aaa1-e71730499fb5`.
+  - ordinary SSE answer returned HTTP 200, completed once, and emitted no static-page/artifact customer event.
+  - internal events included `assistant_run.static_page_template_prewarm_queued`, `static_page_image_job.preview_ready`, `static_page_render.created`, `assistant_run.external_channel_static_page_publish_completed`, and `assistant_run.static_page_template_prewarm_published`.
+  - workflow task: `static_page/generate_static_page_image`, status `succeeded`, logical queue `static_page_template_prewarm`, logical task key `prepare_template_when_low_load`.
+  - new prewarm path created zero `codex_host` workflow tasks and zero outbound-reply dispatch events.
+  - published artifact URL was generated under `/generated-artifacts/database-static-pages/external-channel/.../index.html`; the draft was marked rendered and accepted by artifact stability metadata.
+  - repeated same dataset scope plus same `default_prompt` returned a normal answer and produced no new prewarm/static-page/Codex events.
+- Post-deploy smoke:
+  - third-party ordinary Q&A: `target/external-channel-20way-smoke/20260606072725.json`, 5/5 OK, P95 3452 ms.
+  - main-site AssistantRun streaming: `target/main-assistant-streaming-smoke/20260606072838.json`, create and continue OK.
+  - Xinbai report/export: `target/external-report-export-smoke/20260606072749.json`, JSON and SSE 2/2 OK, expected title/focus and exports confirmed.
+  - static-page explicit request reuse: `target/static-page-5way-smoke/20260606072931.json`, 5/5 artifact links.
+  - document-quality regression: `target/document-quality-smoke/document-quality-smoke-20260606T072948Z-6504.json`, passed.
+- Safety:
+  - no third-party public URL, auth, required request field, or existing response field changed;
+  - no customer-facing answer was suppressed;
+  - silent prewarm customer visibility stayed false;
+  - no bearer token, database URL, raw customer document, or raw provider payload is intentionally recorded in this validation entry.
