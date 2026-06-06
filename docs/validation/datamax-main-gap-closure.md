@@ -1785,6 +1785,42 @@ Data-ingestion external fixed-task smoke:
   - existing `v3_*` and `X-V3-*` protocol names were intentionally preserved and documented as compatibility fields;
   - no credential, bearer token, database URL, raw customer row, provider payload, or full customer document was recorded.
 
+### 2026-06-06 Current-Head Third-Party Contract Documentation Re-Audit
+
+- Purpose:
+  - refresh Task 10 evidence after later P1/P2 validation commits;
+  - prove the currently deployed online documentation still matches the additive third-party contract and DataMax naming.
+- Repository state:
+  - local repository head: `9a3a79daf115`;
+  - local `git status --short --branch`: `## main...origin/main` before this documentation-only receipt update.
+- Source/public copy comparison:
+  - `docs/integrations/third-party-integration-api.zh-CN.md` and `apps/web/public/external-integrations/third-party-integration-api.zh-CN.md` had matching SHA-256 hash `DCA7E765B35F46909B0317A07A42D08216048633C609FA623E350448462BF11F`;
+  - `docs/integrations/third-party-integration-api.zh-CN.html` and `apps/web/public/external-integrations/third-party-integration-api.zh-CN.html` had matching SHA-256 hash `C0673787C42C6040C3B431EF9BF332628FE94756A5C6B0B6D87963A43CAC8B89`;
+  - no standalone `scripts/generate-third-party-docs.*` was present; the existing renderer is `tools/render-pure-third-party-guide-html.mjs`.
+- Local verification:
+  - `npm run check:pure-third-party-guide-html` passed and reported both pure and full third-party guides up to date;
+  - `npm run test:pure-third-party-guide-html` passed, 5 tests;
+  - explicit search found no customer-facing `AI Data Platform`, `AI数据平台`, `V3 生成`, `V3生成`, `V3 第三方`, `V3第三方`, `V3 文档`, `V3文档`, `V3 主`, `V3主`, `V3 能力`, `V3能力`, `V3 平台`, or `V3平台` phrase in the full third-party source/public MD/HTML copies.
+- Contract coverage confirmed in source/public docs:
+  - `dataset_external_id` and `dataset_external_ids`;
+  - `available_document_external_ids` and `documentExternalId`;
+  - same-`conversation_external_id` authorization persistence and changed-conversation boundary;
+  - template/reference files as structure/style/field references rather than automatic permanent source data;
+  - `reply.artifact_links[0]`, `reply.card.public_url`, and `reply.card.generated_artifact_url`;
+  - `reply.card.table_data_url`, `reply.card.ppt_download_url`, `reply.card.markdown_download_url` / `reply.card.text_download_url`, `reply.card.download_exports[]`;
+  - export filenames `table-data.csv`, `report.ppt`, and `report.md`;
+  - SSE progress, polling fallback, and final static-page/report artifact delivery;
+  - additive fields are ignorable by older clients.
+- Online verification:
+  - `https://v3.elepcloud.com/external-integrations/third-party-integration-api.zh-CN.md` returned `200`, length `77793`, and included DataMax naming, dataset scopes, conversation scope, report export filenames, artifact fields, and additive compatibility text;
+  - `https://v3.elepcloud.com/external-integrations/third-party-integration-api.zh-CN.html` returned `200`, length `141362`, and included the same key contract text;
+  - `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.md` returned `200`, length `48906`, included DataMax/third-party text, and did not include the checked legacy product-name phrases;
+  - `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html` returned `200`, length `85711`, included DataMax/third-party text, and did not include the checked legacy product-name phrases.
+- Safety:
+  - no public third-party URL, auth method, required request field, existing response field, status value, or header name was changed;
+  - existing `v3_*`, `X-V3-*`, and `https://v3.elepcloud.com` compatibility names remain documented as stable protocol names;
+  - no credential, bearer token, database URL, raw customer row, provider payload, or full customer document was recorded.
+
 ### 2026-06-06 Data-Source Row Identity Decision Memo
 
 - Purpose:
