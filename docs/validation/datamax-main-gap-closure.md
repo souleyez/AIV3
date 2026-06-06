@@ -66,7 +66,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate B: report/static-page operations | passed for explicit requests and private prewarm smoke | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Low-load static-page template prewarm is implemented and deployed at `5c267abff53d`; private smoke proved normal answer unaffected, no customer artifact stream event, no outbound reply, real `static_page/generate_static_page_image` consumption, Image2 preview, local render/publish, accepted template storage, and duplicate skip. Production `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is still unset by default pending operator rollout decision. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | passed for post-ingest rollout | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. A tiny live upload/new-parse smoke then proved all five configured deterministic kinds enqueue and succeed for a newly indexed document. Full existing-document backfill remains disabled. |
-| P1 Gate D: low-quality answer recovery | passed for safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue now requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Dedicated opt-in guard is deployed to 8 server on `3394b0a5f60a`; runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`, so live enqueue remains intentionally disabled until an explicit operator decision. |
+| P1 Gate D: low-quality answer recovery | passed for current safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Current-head `1e99281ff695` runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`; local `answer_quality`, `answer_quality_autofix`, `assistant_run_answer_quality_gate`, codex-host-agent, and legacy quality-gate smoke all passed, so live enqueue remains intentionally disabled until an explicit operator decision. |
 | P1 Gate E: confirmed data ingestion | passed for current contract | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. |
 | P1 Gate F: operator observability | passed for deployed page and queue summary | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. 8-server deploy to `2193e0cd5248` succeeded; local/public `/external-integrations` returned `200` with DataMax/运营总览 SSR text; the web queue-stats proxy returned `200` with the configured observability cookie. Model-gateway status remains protected and returned `401 auth_session_required` without a main-system operator session, so an authenticated model-gateway operator smoke remains pending. |
 
@@ -1805,3 +1805,43 @@ Data-ingestion external fixed-task smoke:
   - no production mapping, code, public API, auth, URL, request field, or response field was changed;
   - no raw rows, database URL, credential, bearer token, provider payload, or full customer document was recorded;
   - rollback for future staging tests is to stop using the staging dataset/source mapping, not to delete customer documents.
+
+### 2026-06-06 Current-Head Passive Low-Quality Recovery Audit
+
+- Purpose:
+  - confirm Task 7 remains safe after the latest documentation/plan commits and 8-server sync;
+  - prove that the previously rolled-back customer-facing quality gate is not active and cannot suppress normal answers;
+  - prove that `answer_quality_autofix` cannot create live Codex Host tasks without an explicit operator rollout.
+- 8-server runtime audit:
+  - commit: `1e99281ff695`;
+  - `aiv3-platform-api.service`: active;
+  - `aiv3-codex-host-agent.service`: active;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED=true`: no;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED` present: no;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`: no;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` present: no;
+  - `CODEX_HOST_TASK_ENABLED=true`: yes;
+  - `CODEX_HOST_TASK_ALLOWLIST` present: yes;
+  - `CODEX_HOST_TASK_ALLOWLIST` contains `answer_quality_autofix`: no;
+  - `CODEX_HOST_CAPABILITY_ALLOWLIST` present: no;
+  - `CODEX_HOST_CAPABILITY_ALLOWLIST` contains `answer_quality_autofix`: no;
+  - `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES` present: yes;
+  - `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES` contains `answer_quality_autofix`: no.
+- Safety result:
+  - no hard answer gate is enabled;
+  - normal customer answers cannot be blocked by this path;
+  - passive cases may be recorded only by code paths that do not suppress the answer;
+  - live `answer_quality_autofix` task creation is impossible under current flags and allowlists.
+- Local verification:
+  - `cargo test -p platform-api answer_quality_autofix --lib` passed, 14 tests;
+  - `cargo test -p platform-api answer_quality --lib` passed, 35 tests;
+  - `cargo test -p platform-api assistant_run_answer_quality_gate --lib` passed, 14 tests;
+  - `cargo test -p codex-host-agent answer_quality --lib` passed, 3 tests;
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local` passed.
+- Smoke receipts:
+  - Quality-gate JSON: `target/document-quality-smoke/document-quality-smoke-20260606T111618Z-11416.json`;
+  - Quality-gate Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T111618Z-11416.md`.
+- Safety:
+  - no code, public API, auth, URL, request field, existing response field, operator env, or allowlist was changed;
+  - no credential, bearer token, database URL, provider payload, raw customer row, or full customer document was recorded;
+  - 120 server was not touched.

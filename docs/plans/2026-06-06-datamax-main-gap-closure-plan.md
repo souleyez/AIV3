@@ -62,7 +62,7 @@
 | P1 | Historical enrichment/backfill | New documents enrich; full historical backfill disabled. 8-server `--summary-only --dry-run` passed after `8f835d0`. | Plan a one-dataset/one-kind dry-run before any real batch; keep production backfill disabled until reviewed. | No document titles/content printed; no duplicate counts; no production backfill until reviewed. |
 | P1 | Authenticated model-gateway operator smoke | Current-head `15756668bcad` unauthenticated guard passes with `401 auth_session_required`; checked env still has no operator smoke cookie/email/local-key. | Run `smoke:model-gateway-operator` with a legitimate operator session or local-key login. | Operator status/profile health is proven without bypasses or leaked secrets. |
 | P1 | Data-source row identity | Current-head 8-server live audit passed and confirms question/report readiness, but `bi_contract_warning` and `bi_rentsales_detail` collapse 193 latest-sync rows under current identity. Decision memo `docs/operations/data-source-row-identity-decision.md` now fixes the safe boundary: production stays unchanged, row-level semantics require staging-only discriminator validation first. | Get the business decision: entity/latest-snapshot semantics vs row-level detail. If row-level is required, test staging-only discriminator mapping before production. | Report completeness semantics are documented and validated before production mapping changes. |
-| P1 | Passive low-quality recovery | Hard gate and live autofix are disabled. | Keep disabled; optionally enable passive collection/manual review only. | Weak answers are visible for review without suppressing normal customer answers. |
+| P1 | Passive low-quality recovery | Current-head `1e99281ff695` audit confirms the customer-facing hard gate is unset, the dedicated live-autofix flag is unset, and `answer_quality_autofix` is absent from both task/capability allowlists. Local answer-quality regressions pass, so the safe-disabled state is proven rather than assumed. | Keep disabled; only enable passive collection/manual review after an explicit operator decision. Do not create live autofix Codex tasks until the dedicated flag and both allowlists are intentionally set. | Weak answers are visible for review without suppressing normal customer answers, and no live autofix task can be created accidentally. |
 | P2 | Template library hygiene | Accepted Xinbai modular report should dominate matching; old artifacts exist historically. | Exclude old/non-default templates from normal matching; clean local generated artifacts only after explicit approval. | Same project/scope/default prompt reuses the accepted modular template; old dark/legacy templates do not pollute links. |
 | P2 | Model-visible capability routing | Current head has an internal capability catalog for report/static-page, document processing, data ingestion, collection/integration setup, and proactive message routing. Temporary template/contract/traffic-stat report materials are now routed to the report/static-page workflow instead of being treated as permanent document-processing tasks; selected 8-server smoke passed. | Keep the full fixture in the release gate, add new customer phrasing as fixtures, and audit docs after any additive artifact/report behavior change. | The model can choose supported platform workflows while the platform keeps auth/scope/tool execution authoritative, normal answers continue, and no public tool traces leak. |
 | P2 | Third-party contract docs | Current-head docs and public copies were audited on 2026-06-06: DataMax naming is explicit, legacy `v3_*`/`X-V3-*` protocol names are documented as compatibility fields, dataset/document union scope and same-conversation authorization are covered, and report exports name `table-data.csv`, `report.ppt`, and `report.md`. | Re-audit and regenerate public copies after any customer-visible report/artifact additive behavior change. | Third parties can understand dataset/document union scope, persisted conversation authorization, template reference uploads, report link fields, and export files without re-integration. |
@@ -503,6 +503,18 @@ Expected:
 - no normal customer answer is blocked;
 - no live autofix Codex task can be created.
 
+Current-head audit, 2026-06-06:
+
+- deployed repo: `1e99281ff695`;
+- `aiv3-platform-api.service`: active;
+- `aiv3-codex-host-agent.service`: active;
+- `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED=true`: no;
+- `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`: no;
+- `CODEX_HOST_TASK_ENABLED=true`: yes;
+- `CODEX_HOST_TASK_ALLOWLIST` is set but does not include `answer_quality_autofix`;
+- `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES` is set but does not include `answer_quality_autofix`;
+- result: live `answer_quality_autofix` execution remains impossible under current 8-server configuration, and normal answers cannot be blocked by the rolled-back gate.
+
 **Step 2: If enabling later, enable passive collection first**
 
 Allowed first rollout:
@@ -521,6 +533,14 @@ cargo test -p platform-api assistant_run_answer_quality_gate --lib
 cargo test -p codex-host-agent answer_quality --lib
 powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local
 ```
+
+Latest verification, 2026-06-06:
+
+- `cargo test -p platform-api answer_quality_autofix --lib` passed, 14 tests;
+- `cargo test -p platform-api answer_quality --lib` passed, 35 tests;
+- `cargo test -p platform-api assistant_run_answer_quality_gate --lib` passed, 14 tests;
+- `cargo test -p codex-host-agent answer_quality --lib` passed, 3 tests;
+- `powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local` passed with receipt `target/document-quality-smoke/document-quality-smoke-20260606T111618Z-11416.json`.
 
 ---
 
