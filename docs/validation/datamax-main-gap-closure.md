@@ -1229,3 +1229,38 @@ Data-ingestion external fixed-task smoke:
   - 8-server migration rollout and live upload/parse smoke;
   - existing-document fingerprint backfill dry-run/execution on 8 server;
   - canonical read-through in retrieval/facts.
+
+### 2026-06-06 Local Static-Page Template Prewarm Implementation
+
+- Scope:
+  - Task X1 from `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`.
+  - No third-party public URL, auth, required request field, or existing response field changed.
+- Files changed:
+  - `crates/platform-api/src/lib.rs`;
+  - `crates/static-page-worker/src/main.rs`;
+  - `crates/storage/src/lib.rs`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`.
+- Platform behavior:
+  - silent prewarm no longer creates an orphan `static_page_template_prewarm/prewarm_static_page_template` task;
+  - it creates a customer-invisible static-page draft, injects a stable `source_refs.prewarm.key`, and queues the existing `static_page/generate_static_page_image` workflow task;
+  - the task payload is patched with logical queue metadata, selected scope, dataset artifact key, low-load policy, and `customer_visible=false`;
+  - `available_at` is delayed by `STATIC_PAGE_TEMPLATE_PREWARM_DELAY_MINUTES`, default 30 minutes;
+  - accepted template overlap and pending prewarm key checks still skip duplicates.
+- Worker behavior:
+  - before expensive image/static-page work, the worker detects silent prewarm drafts;
+  - it counts active explicit static-page and Codex-host heavy tasks for the same tenant;
+  - if pressure exceeds `STATIC_PAGE_TEMPLATE_PREWARM_MAX_ACTIVE_TASKS` (default 0), it requeues with a non-consuming delay from `STATIC_PAGE_TEMPLATE_PREWARM_RECHECK_DELAY_SECONDS` (default 300) and appends an internal skip event;
+  - otherwise it continues through the normal image preview and auto-publish path.
+- Local verification:
+  - `cargo fmt --check -p platform-api -p static-page-worker -p storage` passed.
+  - `cargo test -p platform-api static_page_template_prewarm --lib` passed, 3 tests.
+  - `cargo test -p platform-api external_channel_static_page_publish --lib` passed, 2 tests.
+  - `cargo test -p static-page-worker --bin static-page-worker prewarm` passed, 2 tests.
+  - `cargo test -p static-page-worker --lib` passed, 14 tests.
+  - `cargo test -p static-page-worker --bin static-page-worker parse_static_page_worker_concurrency_defaults_and_clamps` passed, 1 test.
+  - `cargo check -p platform-api -p static-page-worker` passed.
+  - `git diff --check` passed.
+- Pending:
+  - commit, push, deploy changed services to 8 server;
+  - run private scoped prewarm smoke with `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` only for the reviewed test window;
+  - verify normal answer unaffected, no unsolicited customer reply, static-page worker consumption/requeue, accepted template storage, and duplicate skip/reuse.

@@ -12,52 +12,22 @@
 
 ## Current Baseline - 2026-06-06
 
-- Before this plan update, local `main` was clean at commit `688643f`.
-- GitHub `main` includes the latest data-ingestion staging-plan persistence and operator-confirmation slices.
-- 8 server repo and `aiv3-platform-api.service` are deployed to commit `83e49529b9fd`; the main DataMax services checked after smoke are active.
-- 8-server third-party streaming smoke has passed with 15/15 tasks OK, no duplicate final messages, 3 artifact links, and P95 latency about 6 seconds.
-- 8-server external data-ingestion analysis can produce a confirmable `v3_data_ingestion_staging_plan` without raw credential leakage.
-- 8-server authenticated operator confirmation for the reviewed staging plan has been proven:
-  - confirm returned HTTP 200;
-  - `production_write_allowed=false`;
-  - a private staging dataset was created;
-  - sync refused ambiguous source selection until `source_id=hy-sql-traffic-area` was passed.
-- The earlier guarded sync failed during retrieval indexing with `index_external_retrieval` because `retrieval_evidences` hit duplicate key `retrieval_evidences_execution_id_document_chunk_id_key`.
-- Commit `8fd0a1d` made retrieval-evidence writes idempotent on `(execution_id, document_chunk_id)`.
-- The 8-server retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` reached `workflow_stage=completed` and `workflow_status=succeeded`; the confirmed staging dataset currently has 384 indexed documents, 384 chunks, and 384 retrieval evidence rows.
-- The 577 vs 384 count audit found a source-row vs unique-materialization mismatch: the sync processed 577 source rows, but current unique materialized documents/chunks/evidence are 384 because some configured MySQL identity columns collapse multiple source rows into one DataMax document. Commit `8c72144aa5f9` keeps `row_count` as source rows, records unique materialization/collapsed-row counts, and de-duplicates document ids before retrieval indexing. 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193.
-- The model-visible capability loop is closed for product-level capabilities:
-  - `static_page_artifact`;
-  - `data_ingestion_analysis`;
-  - `document_processing`;
-  - `collection_setup_analysis`;
-  - `integration_setup_analysis`;
-  - `message_channel_outreach`.
-- Third-party Xinbai report smoke previously passed for:
-  - `取高`;
-  - `经营状况`;
-  - `经营健康度`;
-  - `看看整体经营情况`;
-  - `风险识别`;
-  - `看看新街口店经营风险`;
-  - `销售缺口统计一下，哪些门店需要助推？`;
-  - ordinary-Q&A non-trigger guards such as `取高是什么意思？`.
-- Xinbai default report template is `xinbai-functional-modular-template-20260604`.
-- Report card enrichment restores:
-  - title `新世界百货经营管理月报表`;
-  - focused report URL;
-  - `table-data.csv`;
-  - `report.ppt`;
-  - `report.md`;
-  - `download_exports[]`.
-- Existing detailed plans remain reference material only; this document is the single active execution plan:
-  - `docs/plans/2026-05-31-v3-20-way-concurrency-upgrade-plan.md`;
-  - `docs/plans/2026-05-30-static-page-image-pipeline-optimization-plan.md`;
-  - `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`;
-  - `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`;
-  - `docs/plans/2026-06-01-v3-streaming-session-upgrade-plan.md`;
-  - `docs/plans/2026-05-21-database-source-integration-plan.md`;
-  - `docs/plans/2026-06-04-v3-model-visible-capability-loop-plan.md`.
+- Local `main` is clean at `b9787a774958`.
+- 8 server `/srv/aiv3/repo` is also at `b9787a774958`; `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-static-page-worker.service`, and `aiv3-document-enrichment-worker.service` are active.
+- 8 server still has the pre-existing untracked `mode` file; do not touch it during deploys.
+- Queue stats endpoint is reachable on 8 server; latest lightweight check returned `execution_count=198`, `task_count=395`, and `generated_at=2026-06-06T06:41:26Z`.
+- Production/demo gates already proven in validation:
+  - third-party ordinary chat 20-way;
+  - main-site chat 20-way;
+  - main-site AssistantRun true SSE streaming;
+  - third-party progress/artifact streaming;
+  - static-page 5-way;
+  - Cloudflare fallback concurrency guard;
+  - Xinbai explicit report trigger, one focused link, and export files;
+  - data-ingestion staging plan, operator-confirmed sync, idempotent retrieval indexing, and truthful source-row vs unique-materialization counters;
+  - newly parsed document enrichment for the five configured deterministic kinds.
+- Static-page generation should prefer the local/DataMax path. Cloudflare/Codex remains a bounded fallback path and must not be the only working path.
+- Existing detailed plans remain reference material only. This document is the single active execution plan; the top execution sheet below overrides older completed task lists later in the file.
 
 ## Non-Negotiable Rules
 
@@ -75,35 +45,262 @@
 
 ## Active Execution Sheet - 2026-06-06
 
-Treat this section as the current executable plan. The longer task bodies below are historical detail and implementation references.
+Treat this section as the current executable plan. The longer task bodies below are historical detail and implementation references only.
 
 | Priority | Gap | Current state | Next executable action | Done when |
 | --- | --- | --- | --- | --- |
-| P0 | G6 data-ingestion sync idempotency/count accuracy | Completed for current contract. Duplicate-key blocker is fixed; count fix is deployed to 8 server on `8c72144aa5f9`; re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with truthful source-row vs unique-materialization counts. | Move to G4/G5/G8. Separately review table identity mappings for `bi_contract_warning` and `bi_rentsales_detail` before claiming row-level completeness for those tables. | Sync counters truthfully separate source rows from unique materialized documents/chunks/evidence; duplicate indexing attempts do not recur; table identity compression is visible to operators. |
-| P0 | G1/G2 production smoke and concurrency | Completed for the current deploy. Runtime config shows 20 chat lanes, 5 static-page/Image2 lanes, and 2 Cloudflare fallback lanes. After the chat-session workflow-start fix, 8-server smoke passed for third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality local regressions. | Move to G7 controlled main-site streaming smoke; keep the P0 smoke commands as release gates for future deploys. | Validation ledger records pass/fail, latency, report links, export links, service status, and no secret leakage. |
-| P0 | G3 Xinbai monthly report template operations | Completed for explicit report/static-page requests. Accepted template and focused export links work on 8 server; report export smoke confirms title, focus, one report surface, and `table-data.csv`, `report.ppt`, `report.md`. Low-load prewarm remains off; the silent prewarm source is now allowed through the later auto-publish path and is protected from customer outbound replies, but the prewarm consumer/low-load execution smoke still needs closure before enabling the production flag. | Implement or configure a real low-load prewarm consumer, then run a no-customer-reply smoke before setting `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true`. | Report requests return one clickable report link, correct focus, accessible `table-data.csv`, `report.ppt`, `report.md`, and no duplicate link chatter. Prewarm must never create orphan tasks or send unsolicited customer replies. |
-| P0 | G7 controlled streaming | Completed for the current contract. Third-party stream path has a production receipt. Main-site new/continue true streaming now has a reusable SSE smoke script and a public 8-server receipt with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`: new run and continue run both emit many live deltas, then one completed event and one done event, without final-text duplication. | Keep `npm run smoke:main-assistant-streaming` as a release gate; next move to G4/G5/G8 rather than reworking the stream contract. | Main-site UI-compatible SSE shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
-| P1 | G4 background enterprise memory | Completed for the post-ingest rollout. Newly parsed document enrichment is enabled on 8 server at `3171fbb5e47d`; the low-priority `aiv3-document-enrichment-worker.service` is active; a tiny live upload/new-parse smoke proved the configured five deterministic kinds all enqueue and succeed. Existing-document full backfill remains disabled. | Keep full backfill disabled unless a reviewed low-volume batch is requested; continue watching real uploads for malformed-file edge cases and deterministic answer-supply quality. | Newly parsed documents with fingerprints enqueue only the configured deterministic enrichment kinds; the worker consumes them with bounded DB connections/backoff; resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval; duplicate documents do not double count. |
-| P1 | G5 passive low-quality recovery | Dedicated opt-in guard is deployed to 8 server on `3394b0a5f60a`. Hard customer-facing gate remains disabled. Runtime audit shows `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` unset and `answer_quality_autofix` absent from both task and agent allowlists, so production live enqueue is safely off. | Decide whether to explicitly enable live enqueue for passive collection plus manual review only; otherwise leave safe-disabled and use local/regression receipts as the release gate. | Weak answers are collected and classified; no normal answer is suppressed; live Codex task creation cannot happen unless the dedicated autofix flag and both allowlists are explicitly enabled; fixes stay within answer/retrieval optimization scope. |
-| P1 | G8 operator observability | Compact operator summary is implemented, pushed, and deployed to 8 server on `2193e0cd5248`. `/external-integrations` returns `200` locally and publicly with DataMax/运营总览 SSR text. The web queue-stats proxy returns `200` with the configured observability cookie. Model-gateway status remains protected and returns `401` without a main-system operator cookie. | Continue with G5 passive low-quality recovery, and later run an authenticated model-gateway operator smoke when an operator session/cookie is available. | A 20+ conversation incident can be triaged from DataMax without raw logs, credentials, or full customer data. |
-| P1 | G9 release hygiene | Commits through `0dc117d0fafa` are pushed and deployed to 8 server. `aiv3-platform-api.service` was rebuilt/restarted for the latest static-page prewarm safety slice; the main DataMax services checked after deploy are active. | Keep every future deploy tied to a commit, service status, smoke receipt, and rollback note. | 8 server is on latest `main`, all changed services are active, and validation docs match reality. |
+| P0 | G3 low-load static-page template prewarm | Local implementation now creates a customer-invisible draft plus delayed existing `static_page/generate_static_page_image` task. Worker low-load recheck/requeue is implemented and locally tested. Production flag remains unset pending 8-server private smoke. | Deploy changed binaries to 8 server and run private scoped prewarm smoke with the flag enabled only for the reviewed test window. | A private scoped chat can silently queue, consume, publish, and store a reusable template without any customer outbound reply. High-load conditions requeue instead of competing with explicit work. |
+| P0 | Release smoke after any P0 change | 8 server is stable at `b9787a774958`. | After G3 implementation, run local tests, deploy changed binaries only, and rerun 8-server smoke for ordinary chat, streaming, explicit report/export, static page, and prewarm no-reply behavior. | Validation doc records commit, service status, smoke receipts, and rollback note. Third-party public URLs/auth/request/response fields remain unchanged. |
+| P1 | G5 passive low-quality recovery | Safe-disabled deploy is live. Hard gate remains off. Live `answer_quality_autofix` enqueue is impossible under current flags/allowlists. | Keep disabled by default. If enabled later, enable passive collection plus manual review only, with strict fixed-task write scope and no answer suppression. | Weak-answer cases are classified and visible to operators; no normal answer is blocked; no Codex task can be created unless the dedicated flag and both allowlists are explicitly enabled. |
+| P1 | G8 authenticated model-gateway operator smoke | Operator summary page and queue summary work. Model-gateway status correctly returns `401` without a main-system operator session. | Obtain or use an existing legitimate operator session/cookie; run status/profile/test smoke without creating an auth bypass or printing secrets. | Operator page can show model lane health and profile state for a signed-in operator; unauthenticated access still returns `401`. |
+| P1 | G6 data-source row identity review | Sync counters are truthful. `bi_contract_warning` and `bi_rentsales_detail` currently collapse many source rows into fewer DataMax documents because of configured identity columns. | Review table identity mappings with business intent. If row-level materialization is required, change identity mapping in a staging-only slice and rerun guarded sync. | Operators can distinguish source rows, unique documents, chunks, evidence, and collapsed rows; Xinbai database-derived reports are not misleading about row-level completeness. |
+| P2 | Existing-document enrichment backfill | New documents enrich correctly. Full historical backfill remains disabled. | Keep disabled unless a reviewed low-volume batch is requested. Start with fingerprint dry-run, one dataset, one enrichment kind, and queue/backlog proof. | Historical docs can be enriched without duplicate counting, runaway cost, or upload/chat degradation. |
+| P2 | Template library hygiene | Xinbai modular monthly report is the default accepted template. Older report artifacts/templates exist historically. | Keep only accepted templates in normal matching; clean old generated artifacts only when explicitly requested and using the local backup/delete policy. | Same dataset/default_prompt/focus requests reuse the accepted template; old artifacts do not pollute matching or customer-visible links. |
 
 ### Immediate Execution Order
 
-1. Done: record the 8-server G6 idempotency success receipt and count-audit note in validation docs.
-2. Done: deploy the chat-session workflow-start fix exposed by main-site 20-way smoke.
-3. Done: run P0 production smoke: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality.
-4. Done: run main-site streaming browser/SSE smoke for new and continued AssistantRun.
-5. Done for current contract: verify Xinbai monthly report template reuse, focus ordering, one-link reply, and export files on 8 server.
-6. Done: deploy and validate the worker count fix for the 577 source rows vs 384 unique materialized rows audit.
-7. Done: run controlled background enterprise-memory batch on 8 server and record the single-document fingerprint/enrichment receipt.
-8. Done locally: add the compact G8 operator summary to the external integrations page and verify tests/build.
-9. Done: deploy the G8/G4 doc changes to 8 server, verify page/queue smoke, and record the model-gateway protected-status boundary.
-10. Done: deploy the G5 dedicated opt-in guard for passive low-quality recovery and verify 8-server safe-disabled runtime flags.
-11. Done: deploy G4 post-ingest enrichment kind allowlist, install low-priority document-enrichment worker, and enable newly parsed document enrichment on 8 server without full backfill.
-12. Done: ran a reviewed tiny upload/new-parse smoke on 8 server and proved end-to-end post-ingest enqueue/consume for the five configured deterministic enrichment kinds.
-13. In progress: close low-load static-page template prewarm. The silent prewarm source can now continue through auto-publish without customer outbound replies; next required step is a real prewarm consumer/low-load smoke before enabling `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true`.
-14. Next: decide whether to explicitly enable `answer_quality_autofix` live enqueue for passive collection plus manual review only; separately run an authenticated model-gateway operator smoke when a main-system operator session/cookie is available.
+1. Implement G3 real prewarm execution path and low-load requeue.
+2. Run local G3 tests and `cargo check` for changed crates.
+3. Deploy only changed services to 8 server; keep `mode` untouched.
+4. Run 8-server prewarm smoke with `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` only for the private test window, then decide whether to leave enabled.
+5. Rerun release gates: third-party ordinary Q&A, main-site streaming, explicit Xinbai report/export, static-page 5-way, and document-quality regression.
+6. Record results in `docs/validation/datamax-main-gap-closure.md`, commit, push, and deploy only after the validation receipt is complete.
+7. Move to P1: passive low-quality collection decision, authenticated model-gateway operator smoke, and data-source identity review.
+
+### Task X1: Implement Real Low-Load Static-Page Template Prewarm
+
+**Files:**
+
+- Modify: `crates/platform-api/src/lib.rs`
+- Modify: `crates/static-page-worker/src/main.rs`
+- Modify if needed: `crates/storage/src/lib.rs`
+- Add or modify smoke if needed: `scripts/smoke/static-page-template-prewarm.mjs`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Write failing tests for no-orphan prewarm**
+
+Add platform-api tests proving that `maybe_enqueue_external_channel_static_page_template_prewarm` creates work that an existing worker can consume.
+
+Expected before implementation:
+
+- test fails because prewarm currently targets `static_page_template_prewarm/prewarm_static_page_template`, which has no deployed consumer.
+
+**Step 2: Create a customer-invisible draft and delayed image job**
+
+Implement one of these equivalent approaches:
+
+- preferred: create a `StaticPageDraft` with `source_refs.prewarm.customer_visible=false`, `source_refs.prewarm.key=<prewarm_key>`, and then enqueue the existing `static_page/generate_static_page_image` workflow task with `available_at=now+STATIC_PAGE_TEMPLATE_PREWARM_DELAY_MINUTES`;
+- acceptable alternative: add a real service/consumer for `static_page_template_prewarm` that immediately hands off to the same existing static-page image/render pipeline.
+
+Required behavior:
+
+- no third-party public request/response fields change;
+- no customer-visible message or outbound reply is sent;
+- no duplicate prewarm is queued for overlapping dataset scope plus same `default_prompt`;
+- accepted template overlap still skips prewarm;
+- prewarm artifacts can become accepted/reusable templates only after successful publish.
+
+**Step 3: Add low-load recheck in `static-page-worker`**
+
+Before expensive Image2/static-page visual work for a prewarm job:
+
+- load the related draft/job;
+- detect `source_refs.prewarm.customer_visible=false`;
+- inspect workflow pressure for explicit `static_page` and `codex_host` work;
+- if pressure is above threshold, requeue the task with a non-consuming delay and append a compact internal event;
+- if low load, continue through the normal Image2 preview and auto-publish path.
+
+Use env flags with safe defaults:
+
+- `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=false`;
+- `STATIC_PAGE_TEMPLATE_PREWARM_DELAY_MINUTES=30`;
+- `STATIC_PAGE_TEMPLATE_PREWARM_RECHECK_DELAY_SECONDS=300`;
+- `STATIC_PAGE_TEMPLATE_PREWARM_MAX_ACTIVE_TASKS=0`.
+
+**Step 4: Verify locally**
+
+Run:
+
+```powershell
+cargo fmt --check -p platform-api -p static-page-worker
+cargo test -p platform-api static_page_template_prewarm --lib
+cargo test -p platform-api external_channel_static_page_publish --lib
+cargo test -p static-page-worker --bin static-page-worker prewarm
+cargo check -p platform-api -p static-page-worker
+git diff --check
+```
+
+Expected:
+
+- prewarm tests prove a consumable static-page task exists;
+- publish tests prove no customer dispatch for silent prewarm;
+- worker tests prove high-load requeue and low-load continue.
+
+**Step 5: 8-server private smoke**
+
+Deploy changed crates, then run a private prewarm test window:
+
+```powershell
+ssh 8服务器 "set -e; cd /srv/aiv3/repo; git pull --ff-only; CC=clang CXX=clang++ cargo build --release -p platform-api -p static-page-worker; sudo systemctl restart aiv3-platform-api.service aiv3-static-page-worker.service; sleep 5; systemctl is-active aiv3-platform-api.service; systemctl is-active aiv3-static-page-worker.service; git rev-parse --short=12 HEAD"
+```
+
+Smoke requirements:
+
+- set `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` only for the reviewed test window;
+- submit a normal scoped third-party conversation with dataset/document scope and `default_prompt`;
+- verify normal answer is unaffected;
+- verify `assistant_run.static_page_template_prewarm_queued` or equivalent event;
+- verify the task is consumed by the static-page worker;
+- verify published artifact/template exists;
+- verify no third-party outbound reply is dispatched for the prewarm artifact;
+- verify a repeated overlapping request reuses or skips instead of enqueuing another prewarm.
+
+### Task X2: Keep Explicit Report And Static-Page Request Path Stable
+
+**Files:**
+
+- Inspect/modify only if regression appears: `crates/platform-api/src/lib.rs`
+- Inspect/modify only if regression appears: `apps/web/app/HomePageClient.js`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Re-run explicit report smoke**
+
+Run:
+
+```powershell
+npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000
+npm run validate:xinbai-report-template -- --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html
+```
+
+Required cases:
+
+- `取高`, `经营状况`, `风险识别`, `销售缺口`, `助推`, and `看看整体经营情况` trigger the Xinbai report path;
+- `取高是什么意思？` and `风险识别系统有哪些项目经历？` do not trigger a report;
+- report reply exposes one primary link only;
+- card title is `新世界百货经营管理月报表`;
+- `table-data.csv`, `report.ppt`, and `report.md` are accessible;
+- normal answer text is not truncated by report creation.
+
+**Step 2: Fix only if smoke fails**
+
+Do not broaden report triggers globally. Xinbai-specific focus terms may be widened only inside the Xinbai/domain template routing policy.
+
+### Task X3: Decide Passive Low-Quality Recovery Rollout
+
+**Files:**
+
+- Inspect/modify if needed: `crates/platform-api/src/lib.rs`
+- Inspect/modify if needed: `crates/codex-host-agent/src/lib.rs`
+- Update: `docs/operations/answer-quality-autofix.md`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Keep the hard gate off**
+
+Confirm on 8 server:
+
+- `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED` is unset/false;
+- `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` is unset/false unless an explicit operator rollout is approved;
+- `answer_quality_autofix` is absent from both live allowlists unless approved.
+
+**Step 2: If enabling passive collection**
+
+Enable only after a recorded decision:
+
+- collect weak-answer signals and classifications;
+- do not suppress or replace customer answers;
+- route only confirmed system-defect cases to fixed-scope autofix;
+- require manual review before code/deploy changes.
+
+Verification:
+
+```powershell
+cargo test -p platform-api answer_quality_autofix --lib
+cargo test -p platform-api assistant_run_answer_quality_gate --lib
+cargo test -p codex-host-agent answer_quality --lib
+powershell -ExecutionPolicy Bypass -File .\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case answer_quality_autofix,human_exception,runtime_summary
+powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local
+```
+
+### Task X4: Run Authenticated Operator Smoke For Model Gateway
+
+**Files:**
+
+- Inspect/modify only if smoke reveals a bug: `apps/web/app/lib/model-gateway.js`
+- Inspect/modify only if smoke reveals a bug: `crates/platform-api/src/lib.rs`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Use a real operator session**
+
+Do not add a bypass. Use an existing signed-in operator cookie/session or a documented local-key operator path that already exists.
+
+**Step 2: Verify status and profile operations**
+
+Required checks:
+
+- unauthenticated `/v1/model-gateway/status` still returns `401`;
+- authenticated operator status returns active model lane state;
+- Right `gpt-5.5` profile remains enabled at concurrency 20;
+- MiniMax fallback remains bounded;
+- profile test endpoint returns a sanitized result and does not print secrets.
+
+### Task X5: Review Data-Source Identity Mappings
+
+**Files:**
+
+- Inspect: `crates/ingest-worker/src/main.rs`
+- Inspect: `crates/retrieval-worker/src/main.rs`
+- Inspect stored database-source/table mapping metadata through sanitized SQL only
+- Update: `docs/validation/data-ingestion-staging-sync-smoke.md`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Produce a sanitized mapping report**
+
+Report only:
+
+- source id;
+- table name;
+- configured identity columns;
+- source row count;
+- unique materialized document count;
+- collapsed duplicate row count.
+
+Do not print raw rows, credentials, URLs, or customer table contents.
+
+**Step 2: Decide business semantics**
+
+For `bi_contract_warning` and `bi_rentsales_detail`:
+
+- if entity-level aggregation is intended, keep current mapping and document the collapse;
+- if row-level report completeness is required, propose a composite identity mapping and test in staging only.
+
+**Step 3: Verify after any mapping change**
+
+Run:
+
+```powershell
+cargo test -p ingest-worker --bin ingest-worker external_source_ingest_table_counts -- --nocapture
+cargo test -p retrieval-worker --bin retrieval-worker external_index_document_ids -- --nocapture
+cargo check -p ingest-worker -p retrieval-worker
+bash scripts/run-data-ingestion-staging-live-smoke.sh
+```
+
+### Final Release Gate For This Plan
+
+Before declaring this plan closed, record all of the following in `docs/validation/datamax-main-gap-closure.md`:
+
+- deployed commit;
+- changed services and active status;
+- 8-server queue snapshot;
+- ordinary third-party Q&A smoke;
+- main-site streaming smoke;
+- explicit report/export smoke;
+- static-page 5-way smoke;
+- prewarm no-customer-reply smoke;
+- document-quality smoke;
+- answer-quality safe-disabled or explicitly-enabled state;
+- model-gateway authenticated operator smoke, or a recorded reason it remains pending;
+- data-source identity mapping decision;
+- rollback note.
 
 ### P0 Task A: Fix Retrieval-Evidence Idempotency
 
@@ -1801,29 +1998,27 @@ git push
 
 ## Execution Order
 
-Use `Active Execution Sheet - 2026-06-06` as the current execution sheet. The detailed task bodies above remain implementation reference only.
+Use `Active Execution Sheet - 2026-06-06` as the current execution sheet. Older Task A-H bodies remain implementation history and reference only.
 
-1. P0 Task A: fix retrieval-evidence idempotency and add regression coverage.
-2. P0 Task B: deploy the fix to 8 server and rerun guarded data-ingestion sync with explicit `source_id` and `force=true`.
-3. P0 Task C: run the remaining private production smoke set: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality.
-4. P0 Task D: close main-site live-streaming browser/SSE smoke for new and continued AssistantRun.
-5. P0 Task E: verify Xinbai monthly modular report template reuse, focus ordering, and export-file availability on 8 server.
-6. P1 Task F: run one controlled production fingerprint backfill/enrichment batch or explicitly defer it with reason and receipt.
-7. P1 Task G: enable passive low-quality collection only after P0 routes stay stable; keep the hard gate disabled.
-8. P1 Task H: expand operator observability with sanitized counters proven by smoke.
-9. Final release gate: record every command, commit, service status, smoke receipt, failure, and rollback path in validation docs.
+1. Task X1: implement real low-load static-page template prewarm and prove it does not create orphan tasks or unsolicited customer replies.
+2. Task X2: rerun explicit report/static-page request smoke and fix only regressions.
+3. Final P0 release gate: local tests, deploy changed services, 8-server smoke, validation receipt, commit, push.
+4. Task X3: decide passive low-quality recovery rollout. Keep hard answer gate disabled.
+5. Task X4: run authenticated model-gateway operator smoke without adding an auth bypass.
+6. Task X5: review data-source identity mappings for row-level report completeness.
+7. P2: consider limited historical enrichment backfill and template-library cleanup only after P0/P1 are stable.
 
 ## Definition Of Done
 
-- 8 server has recorded receipts for all P0 gates.
-- Main-site and third-party ordinary chat pass 20-way smoke.
-- Heavy jobs are bounded and do not starve chat.
-- Xinbai report reuse returns a focused link immediately and exposes export files.
-- Same-domain report requests prefer the accepted template unless redesign is explicit.
-- Documents continue to enrich after ingestion without blocking upload or chat.
-- Multi-document aggregate questions use deterministic fact snapshots before retrieval.
-- Low-quality answer recovery is passive, audited, fixed-scope, and regression-tested.
-- Data-ingestion analysis can proceed to confirmed staging sync without automatic production writes.
-- Streaming surfaces are consistent across JSON, SSE, and polling.
-- Operator view shows enough health data to diagnose queue, model, report, enrichment, and data-ingestion issues.
-- No public third-party contract break was introduced.
+- 8 server has recorded receipts for the current P0 release gate on the final deployed commit.
+- Low-load prewarm either remains disabled with a documented reason or is enabled only after an end-to-end no-customer-reply smoke.
+- Prewarm uses real consumed work and cannot leave permanent orphan queue items.
+- Third-party ordinary chat, main-site chat, and main-site streaming remain stable after the prewarm slice.
+- Explicit Xinbai report requests return one focused link and expose `table-data.csv`, `report.ppt`, and `report.md`.
+- Report triggers stay domain-scoped; ordinary questions such as `取高是什么意思？` do not accidentally generate reports.
+- Heavy jobs are bounded and do not starve 20-way chat.
+- Newly parsed documents continue to enrich without blocking upload or chat.
+- Low-quality recovery remains passive, audited, fixed-scope, and does not suppress normal answers.
+- Data-ingestion counters truthfully separate source rows, unique documents, chunks, evidence, and collapsed rows.
+- Operator observability can diagnose queue, model, report, enrichment, data-ingestion, and low-quality recovery health without raw logs or secrets.
+- No public third-party URL, auth method, required request field, or existing response field was changed.

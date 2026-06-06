@@ -6697,6 +6697,60 @@ impl PgWorkflowTaskRepository {
         map_workflow_task_row(&row)
     }
 
+    pub async fn update_payload_and_available_at(
+        &self,
+        task_id: WorkflowTaskId,
+        payload: &Value,
+        available_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<WorkflowTask> {
+        let row = sqlx::query(
+            r#"
+            update workflow_tasks
+            set payload = $2,
+                available_at = $3,
+                updated_at = $4
+            where id = $1
+            returning id, tenant_id, execution_id, queue, task_key, payload, status, attempt, max_attempts,
+                      available_at, claimed_at, finished_at, error, created_at, updated_at
+            "#,
+        )
+        .bind(task_id.0)
+        .bind(payload)
+        .bind(available_at)
+        .bind(updated_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_workflow_task_row(&row)
+    }
+
+    pub async fn count_active_static_page_heavy_tasks_excluding(
+        &self,
+        tenant_id: TenantId,
+        excluded_task_id: WorkflowTaskId,
+    ) -> Result<i64> {
+        let count = sqlx::query_scalar::<_, i64>(
+            r#"
+            select count(*)::bigint
+            from workflow_tasks
+            where tenant_id = $1
+              and id <> $2
+              and status in ('queued', 'claimed')
+              and (
+                (queue = 'static_page' and task_key in ('generate_static_page_image', 'render_static_page'))
+                or queue = 'codex_host'
+              )
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(excluded_task_id.0)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count)
+    }
+
     pub async fn mark_failed(
         &self,
         task_id: WorkflowTaskId,

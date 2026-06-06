@@ -109,9 +109,8 @@ use domain_model::{
     StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
     StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
     StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
-    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventId,
-    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
-    WorkflowTask,
+    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
+    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -34581,7 +34580,6 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
     Ok(outcome)
 }
 
-const STATIC_PAGE_TEMPLATE_PREWARM_QUEUE: &str = "static_page_template_prewarm";
 const STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY: &str = "prewarm_static_page_template";
 const STATIC_PAGE_TEMPLATE_PREWARM_SOURCE: &str =
     "external_channel_static_page_template_prewarm_candidate";
@@ -34631,7 +34629,7 @@ fn static_page_template_prewarm_candidate(
     selected_scope: &Value,
     message: &ExternalBotMessageView,
 ) -> Option<StaticPageTemplatePrewarmCandidate> {
-    let source_refs = static_page_template_prewarm_source_refs(connection_id, message);
+    let mut source_refs = static_page_template_prewarm_source_refs(connection_id, message);
     let tokens = static_page_template_match_tokens(selected_scope, &source_refs);
     if tokens.is_empty() {
         return None;
@@ -34647,6 +34645,8 @@ fn static_page_template_prewarm_candidate(
         b":",
         default_prompt_token.as_bytes(),
     ]);
+    let prewarm_key = format!("static-page-template-prewarm:{}", &prewarm_hash[..24]);
+    source_refs = static_page_template_prewarm_source_refs_with_key(source_refs, &prewarm_key);
     let template_stability_key = static_page_template_stability_key_with_default_prompt(
         "template:default",
         static_page_default_prompt_from_scope_or_refs(selected_scope, &source_refs),
@@ -34658,12 +34658,39 @@ fn static_page_template_prewarm_candidate(
         Some(connection_id),
     );
     Some(StaticPageTemplatePrewarmCandidate {
-        prewarm_key: format!("static-page-template-prewarm:{}", &prewarm_hash[..24]),
+        prewarm_key,
         scope_tokens,
         source_refs,
         template_stability_key,
         dataset_artifact_key,
     })
+}
+
+fn static_page_template_prewarm_source_refs_with_key(
+    mut source_refs: Value,
+    prewarm_key: &str,
+) -> Value {
+    ensure_json_object(&mut source_refs);
+    if let Some(object) = source_refs.as_object_mut() {
+        object.insert("prewarm_key".to_string(), json!(prewarm_key));
+        let prewarm = object
+            .entry("prewarm".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(prewarm_object) = prewarm.as_object_mut() {
+            prewarm_object.insert("key".to_string(), json!(prewarm_key));
+        }
+    }
+    source_refs
+}
+
+fn static_page_template_prewarm_key_from_source_refs(source_refs: &Value) -> Option<String> {
+    source_refs
+        .pointer("/prewarm/key")
+        .or_else(|| source_refs.get("prewarm_key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn static_page_template_prewarm_delay(now: DateTime<Utc>) -> DateTime<Utc> {
@@ -34691,6 +34718,22 @@ fn static_page_template_prewarm_low_load_policy() -> Value {
             "no_demo_freeze_window"
         ],
     })
+}
+
+fn static_page_template_prewarm_prompt(message: &ExternalBotMessageView) -> String {
+    let prompt_hint = message
+        .default_prompt
+        .as_deref()
+        .or(message.text.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(400).collect::<String>())
+        .unwrap_or_else(|| "按当前授权数据集组合生成通用经营可视化页面模板。".to_string());
+    format!(
+        "为当前授权数据集组合预热一套客户不可见、可复用的 DataMax 动态可视化页面模板。\
+默认使用现有数据源和文档范围，保留时间范围、区域/门店/分区等筛选能力；页面完成后仅作为同一数据集组合和相近 default_prompt 的默认模板，客户未明确要求时不要发送说明。\
+当前主题/默认提示：{prompt_hint}"
+    )
 }
 
 fn static_page_template_prewarm_task_payload(
@@ -34733,49 +34776,6 @@ fn static_page_template_prewarm_task_payload(
     })
 }
 
-fn static_page_template_prewarm_execution(
-    tenant_id: TenantId,
-    run: &AssistantRun,
-    candidate: &StaticPageTemplatePrewarmCandidate,
-    now: DateTime<Utc>,
-) -> (WorkflowExecution, WorkflowEventRecord) {
-    let execution = WorkflowExecution {
-        id: WorkflowExecutionId::new(),
-        tenant_id,
-        dataset_id: None,
-        report_plan_id: None,
-        kind: WorkflowKind::CodexHostTask,
-        version: "static_page_template_prewarm.v1".to_string(),
-        stage: "static_page_template_prewarm_queued".to_string(),
-        status: WorkflowStatus::Pending,
-        attempt: 0,
-        context: json!({
-            "assistant_run_id": run.id.to_string(),
-            "local_thread_id": run.local_thread_id,
-            "capability": "static_page_template_prewarm",
-            "prewarm_key": candidate.prewarm_key,
-            "template_id": "static_page_image2_data_publish",
-            "fixed_task_template_id": "static_page_image2_data_publish",
-            "low_load_only": true,
-        }),
-        created_at: now,
-        updated_at: now,
-    };
-    let initial_event = WorkflowEventRecord {
-        id: WorkflowEventId::new(),
-        execution_id: execution.id,
-        sequence_no: 1,
-        event_name: "workflow.queued".to_string(),
-        payload: json!({
-            "type": "static_page_template_prewarm_candidate",
-            "prewarm_key": candidate.prewarm_key,
-            "low_load_only": true,
-        }),
-        created_at: now,
-    };
-    (execution, initial_event)
-}
-
 async fn static_page_template_prewarm_pending_exists(
     state: &AppState,
     prewarm_key: &str,
@@ -34787,8 +34787,11 @@ async fn static_page_template_prewarm_pending_exists(
             from workflow_executions e
             join workflow_tasks t on t.execution_id = e.id
             where e.tenant_id = $1
-              and coalesce(e.context->>'prewarm_key', '') = $2
-              and coalesce(t.payload->>'prewarm_key', '') = $2
+              and (
+                coalesce(e.context->>'prewarm_key', '') = $2
+                or coalesce(t.payload->>'prewarm_key', '') = $2
+                or coalesce(t.payload #>> '{source_refs,prewarm,key}', '') = $2
+              )
               and e.status in ('pending', 'running')
               and t.status in ('queued', 'claimed')
         )
@@ -34862,16 +34865,29 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
     }
 
     let available_at = static_page_template_prewarm_delay(now);
-    let (execution, initial_event) =
-        static_page_template_prewarm_execution(state.tenant_id, run, &candidate, now);
-    state
-        .storage
-        .workflow_executions()
-        .create_with_initial_event(&execution, &initial_event)
-        .await
-        .map_err(ApiError::from_storage)?;
+    let prewarm_prompt = static_page_template_prewarm_prompt(message);
+    let draft_outcome = create_static_page_draft_for_assistant_run_id(
+        state,
+        run.id,
+        None,
+        CreateStaticPageDraftRequest {
+            title: Some("DataMax 静态页模板预热".to_string()),
+            prompt: Some(prewarm_prompt.clone()),
+            template_reference_id: None,
+            selected_scope: Some(selected_scope.clone()),
+            visibility_snapshot: None,
+            source_refs: candidate.source_refs.clone(),
+            draft_payload: Value::Null,
+        },
+    )
+    .await?;
+    if static_page_draft_is_accepted_template_baseline(&draft_outcome.draft)
+        && static_page_published_public_url_from_draft(&draft_outcome.draft).is_some()
+    {
+        return Ok(());
+    }
 
-    let task_payload = static_page_template_prewarm_task_payload(
+    let task_payload_patch = static_page_template_prewarm_task_payload(
         connection_id,
         run,
         message,
@@ -34879,19 +34895,23 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
         &candidate,
         now,
     );
-    let task = NewWorkflowTask {
-        queue: STATIC_PAGE_TEMPLATE_PREWARM_QUEUE.to_string(),
-        task_key: STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY.to_string(),
-        payload: task_payload,
-        available_at,
-        max_attempts: 1,
-    };
-    let persisted_task = state
-        .storage
-        .workflow_tasks()
-        .create(&execution, &task, now)
-        .await
-        .map_err(ApiError::from_storage)?;
+    let image_prompt_payload =
+        build_static_page_image_prompt_payload(&draft_outcome.draft, Some(&prewarm_prompt));
+    let (_status, Json(image_response)) = create_static_page_image_job_for_draft_with_options(
+        state,
+        draft_outcome.draft.clone(),
+        CreateStaticPageImageJobRequest {
+            prompt: Some(prewarm_prompt),
+            image_prompt_payload,
+        },
+        StaticPageImageJobCreateOptions {
+            task_available_at: Some(available_at),
+            task_payload_patch: Some(task_payload_patch),
+            queue_message: Some("低负载时自动预热模板，客户不可见。".to_string()),
+            operation_summary: Some("静态页模板预热任务已进入低优先级队列。".to_string()),
+        },
+    )
+    .await?;
     state
         .storage
         .assistant_runs()
@@ -34903,10 +34923,10 @@ async fn maybe_enqueue_external_channel_static_page_template_prewarm(
                 payload: json!({
                     "type": "static_page_template_prewarm_candidate",
                     "prewarm_key": candidate.prewarm_key,
-                    "workflow_execution_id": execution.id,
-                    "workflow_task_id": persisted_task.id,
-                    "queue": STATIC_PAGE_TEMPLATE_PREWARM_QUEUE,
-                    "task_key": STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY,
+                    "draft_id": draft_outcome.draft.id,
+                    "image_job_id": image_response.image_job.id,
+                    "queue": "static_page",
+                    "task_key": "generate_static_page_image",
                     "available_at": available_at,
                     "scope_token_count": candidate.scope_tokens.len(),
                     "dataset_artifact_key": candidate.dataset_artifact_key,
@@ -45643,10 +45663,33 @@ async fn create_static_page_image_job(
     create_static_page_image_job_for_draft(&state, draft, request).await
 }
 
+#[derive(Debug, Default)]
+struct StaticPageImageJobCreateOptions {
+    task_available_at: Option<DateTime<Utc>>,
+    task_payload_patch: Option<Value>,
+    queue_message: Option<String>,
+    operation_summary: Option<String>,
+}
+
 async fn create_static_page_image_job_for_draft(
+    state: &AppState,
+    draft: StaticPageDraft,
+    request: CreateStaticPageImageJobRequest,
+) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
+    create_static_page_image_job_for_draft_with_options(
+        state,
+        draft,
+        request,
+        StaticPageImageJobCreateOptions::default(),
+    )
+    .await
+}
+
+async fn create_static_page_image_job_for_draft_with_options(
     state: &AppState,
     mut draft: StaticPageDraft,
     request: CreateStaticPageImageJobRequest,
+    options: StaticPageImageJobCreateOptions,
 ) -> std::result::Result<(StatusCode, Json<CreateStaticPageImageJobResponse>), ApiError> {
     let mut request_image_prompt_payload = request.image_prompt_payload;
     let prompt_only_preview =
@@ -45740,18 +45783,25 @@ async fn create_static_page_image_job_for_draft(
         "type": "queue_image_job",
         "jobId": job.id,
         "queuePosition": job.queue_position,
-        "queueMessage": "资源正在排队，可以联系商务开通高级用户跳过等待。",
+        "queueMessage": options
+            .queue_message
+            .as_deref()
+            .unwrap_or("资源正在排队，可以联系商务开通高级用户跳过等待。"),
     })];
+    let operation_summary = options
+        .operation_summary
+        .as_deref()
+        .unwrap_or("效果图任务已进入资源队列。");
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
         &operations,
-        Some("效果图任务已进入资源队列。"),
+        Some(operation_summary),
     );
     append_static_page_operations_metadata(
         &mut draft.draft_payload,
         &operations,
         request.prompt.as_deref(),
-        "效果图任务已进入资源队列。",
+        operation_summary,
     );
     draft.status = StaticPageDraftStatus::Queued;
     let draft = state
@@ -45760,6 +45810,39 @@ async fn create_static_page_image_job_for_draft(
         .update(state.tenant_id, &draft)
         .await
         .map_err(ApiError::from_storage)?;
+    let mut workflow_task_id = started.enqueued_tasks.first().map(|task| task.id);
+    let mut workflow_task_available_at =
+        started.enqueued_tasks.first().map(|task| task.available_at);
+    for task in &started.enqueued_tasks {
+        let mut task_payload = task.payload.clone();
+        if let Some(patch) = options.task_payload_patch.as_ref() {
+            merge_json_value(&mut task_payload, patch);
+        }
+        if options.task_payload_patch.is_some() || options.task_available_at.is_some() {
+            let updated_task = if let Some(available_at) = options.task_available_at {
+                state
+                    .storage
+                    .workflow_tasks()
+                    .update_payload_and_available_at(
+                        task.id,
+                        &task_payload,
+                        available_at,
+                        Utc::now(),
+                    )
+                    .await
+                    .map_err(ApiError::from_storage)?
+            } else {
+                state
+                    .storage
+                    .workflow_tasks()
+                    .update_payload(task.id, &task_payload, Utc::now())
+                    .await
+                    .map_err(ApiError::from_storage)?
+            };
+            workflow_task_id = Some(updated_task.id);
+            workflow_task_available_at = Some(updated_task.available_at);
+        }
+    }
     append_static_page_draft_run_event(
         state,
         &draft,
@@ -45770,7 +45853,8 @@ async fn create_static_page_image_job_for_draft(
             "status": job.status.as_str(),
             "queue_position": job.queue_position,
             "workflow_execution_id": workflow_execution.id,
-            "workflow_task_id": started.enqueued_tasks.first().map(|task| task.id),
+            "workflow_task_id": workflow_task_id,
+            "workflow_task_available_at": workflow_task_available_at,
         }),
     )
     .await?;
@@ -75407,6 +75491,12 @@ fn build_initial_static_page_image_generation_execution(
     if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
         context.insert("prompt".to_string(), Value::String(prompt.to_string()));
     }
+    if let Some(prewarm_key) = static_page_template_prewarm_key_from_source_refs(&draft.source_refs)
+    {
+        context.insert("prewarm_key".to_string(), Value::String(prewarm_key));
+        context.insert("low_load_only".to_string(), Value::Bool(true));
+        context.insert("customer_visible".to_string(), Value::Bool(false));
+    }
 
     Ok(WorkflowExecution {
         id: execution_id,
@@ -95253,6 +95343,14 @@ mod tests {
             candidate.source_refs["prewarm"]["customer_visible"],
             json!(false)
         );
+        assert_eq!(
+            candidate.source_refs["prewarm"]["key"],
+            json!(candidate.prewarm_key.clone())
+        );
+        assert_eq!(
+            static_page_template_prewarm_key_from_source_refs(&candidate.source_refs).as_deref(),
+            Some(candidate.prewarm_key.as_str())
+        );
         assert!(candidate
             .scope_tokens
             .contains(&"dataset_external:dataset-a".to_string()));
@@ -95311,6 +95409,27 @@ mod tests {
         assert_eq!(
             payload["execution_contract"]["request_response_field_change_allowed"],
             json!(false)
+        );
+        assert_eq!(
+            payload["source_refs"]["prewarm"]["key"],
+            json!(candidate.prewarm_key.clone())
+        );
+        let mut workflow_payload = json!({
+            "execution_id": "static-page-image-execution",
+            "kind": "static_page_image_generation_workflow"
+        });
+        merge_json_value(&mut workflow_payload, &payload);
+        assert_eq!(
+            workflow_payload["kind"],
+            json!("static_page_image_generation_workflow")
+        );
+        assert_eq!(
+            workflow_payload["logical_queue"],
+            json!("static_page_template_prewarm")
+        );
+        assert_eq!(
+            workflow_payload["logical_task_key"],
+            json!("prepare_template_when_low_load")
         );
     }
 

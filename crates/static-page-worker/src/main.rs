@@ -34,6 +34,10 @@ const DEFAULT_IMAGE_HTTP_TIMEOUT_MS: u64 = 3 * 60 * 1_000;
 const DEFAULT_IMAGE_HTTP_CONNECT_TIMEOUT_MS: u64 = 30 * 1_000;
 const DEFAULT_STATIC_PAGE_WORKER_CONCURRENCY: usize = 1;
 const MAX_STATIC_PAGE_WORKER_CONCURRENCY: usize = 16;
+const STATIC_PAGE_TEMPLATE_PREWARM_SOURCE: &str =
+    "external_channel_static_page_template_prewarm_candidate";
+const DEFAULT_TEMPLATE_PREWARM_RECHECK_DELAY_SECONDS: u64 = 300;
+const DEFAULT_TEMPLATE_PREWARM_MAX_ACTIVE_TASKS: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StaticPageRenderTaskOutcome {
@@ -403,11 +407,6 @@ async fn process_task(
         .ok_or_else(|| anyhow!("workflow execution {} not found", task.execution_id))?;
     match &execution.kind {
         WorkflowKind::StaticPageImageGeneration => {
-            let image_provider_config = image_provider_config.ok_or_else(|| {
-                anyhow!(
-                    "STATIC_PAGE_IMAGE_PROVIDER direct config or CODEX_ORCHESTRATOR_ACCESS_KEY/CODEX_ORCHESTRATOR_KEY_FILE is required for static page image generation"
-                )
-            })?;
             process_static_page_image_task(
                 storage,
                 workflow_catalog,
@@ -437,7 +436,7 @@ async fn process_static_page_image_task(
     workflow_catalog: &WorkflowCatalog,
     event_bus: &EventBus,
     http_client: &Client,
-    image_provider_config: &StaticPageImageProviderConfig,
+    image_provider_config: Option<&StaticPageImageProviderConfig>,
     orchestrator_poll_interval_ms: u64,
     execution: &domain_model::WorkflowExecution,
     task: &domain_model::WorkflowTask,
@@ -452,6 +451,54 @@ async fn process_static_page_image_task(
             .get_by_id(task.tenant_id, job_id)
             .await?
             .ok_or_else(|| anyhow!("static page image job {job_id} not found"))?;
+        let draft = storage
+            .static_page_drafts()
+            .get_by_id(task.tenant_id, job.draft_id)
+            .await?
+            .ok_or_else(|| anyhow!("static page draft {} not found", job.draft_id))?;
+        if static_page_draft_is_silent_template_prewarm(&draft) {
+            let active_count =
+                static_page_template_prewarm_active_heavy_task_count(storage, task).await?;
+            let max_active = static_page_template_prewarm_max_active_tasks();
+            if static_page_template_prewarm_should_requeue_for_load(active_count, max_active) {
+                let now = Utc::now();
+                let recheck_at = static_page_template_prewarm_next_recheck_at(now);
+                storage
+                    .workflow_tasks()
+                    .requeue_after_non_consuming_transient_error(
+                        task.id,
+                        "static_page_template_prewarm_waiting_for_low_load",
+                        recheck_at,
+                        now,
+                    )
+                    .await?;
+                append_assistant_event(
+                    storage,
+                    job.tenant_id,
+                    job.assistant_run_id,
+                    "assistant_run.static_page_template_prewarm_skipped",
+                    json!({
+                        "draft_id": draft.id,
+                        "image_job_id": job.id,
+                        "workflow_execution_id": execution.id,
+                        "workflow_task_id": task.id,
+                        "prewarm_key": static_page_template_prewarm_key_from_source_refs(&draft.source_refs),
+                        "status": "waiting_for_low_load",
+                        "customer_visible": false,
+                        "active_heavy_task_count": active_count,
+                        "max_active_heavy_task_count": max_active,
+                        "recheck_at": recheck_at,
+                    }),
+                )
+                .await?;
+                return Ok(StaticPageImageTaskOutcome::Requeued);
+            }
+        }
+        let image_provider_config = image_provider_config.ok_or_else(|| {
+            anyhow!(
+                "STATIC_PAGE_IMAGE_PROVIDER direct config or CODEX_ORCHESTRATOR_ACCESS_KEY/CODEX_ORCHESTRATOR_KEY_FILE is required for static page image generation"
+            )
+        })?;
         if let StaticPageImageProviderConfig::Direct(direct_config) = image_provider_config {
             mark_job_running(storage, &mut job).await?;
             let direct_task_id = format!("direct-image2-{}", job.id);
@@ -1213,6 +1260,68 @@ fn static_page_image_orchestrator_task_id(image_prompt_payload: &Value) -> Optio
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn static_page_draft_is_silent_template_prewarm(draft: &StaticPageDraft) -> bool {
+    draft
+        .source_refs
+        .get("source")
+        .and_then(Value::as_str)
+        .is_some_and(|source| source == STATIC_PAGE_TEMPLATE_PREWARM_SOURCE)
+        || draft
+            .source_refs
+            .pointer("/prewarm/customer_visible")
+            .and_then(Value::as_bool)
+            .is_some_and(|visible| !visible)
+}
+
+fn static_page_template_prewarm_key_from_source_refs(source_refs: &Value) -> Option<String> {
+    source_refs
+        .pointer("/prewarm/key")
+        .or_else(|| source_refs.get("prewarm_key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn static_page_template_prewarm_recheck_delay_seconds() -> u64 {
+    env_u64(
+        "STATIC_PAGE_TEMPLATE_PREWARM_RECHECK_DELAY_SECONDS",
+        DEFAULT_TEMPLATE_PREWARM_RECHECK_DELAY_SECONDS,
+    )
+    .clamp(1, 24 * 60 * 60)
+}
+
+fn static_page_template_prewarm_max_active_tasks() -> i64 {
+    env_u64(
+        "STATIC_PAGE_TEMPLATE_PREWARM_MAX_ACTIVE_TASKS",
+        DEFAULT_TEMPLATE_PREWARM_MAX_ACTIVE_TASKS,
+    )
+    .min(i64::MAX as u64) as i64
+}
+
+fn static_page_template_prewarm_should_requeue_for_load(
+    active_heavy_task_count: i64,
+    max_active_heavy_task_count: i64,
+) -> bool {
+    active_heavy_task_count > max_active_heavy_task_count.max(0)
+}
+
+fn static_page_template_prewarm_next_recheck_at(
+    now: chrono::DateTime<Utc>,
+) -> chrono::DateTime<Utc> {
+    now + TimeDelta::seconds(static_page_template_prewarm_recheck_delay_seconds() as i64)
+}
+
+async fn static_page_template_prewarm_active_heavy_task_count(
+    storage: &PgStorage,
+    task: &domain_model::WorkflowTask,
+) -> Result<i64> {
+    storage
+        .workflow_tasks()
+        .count_active_static_page_heavy_tasks_excluding(task.tenant_id, task.id)
+        .await
 }
 
 fn static_page_next_poll_at(
@@ -2222,6 +2331,46 @@ mod tests {
         assert_eq!(parse_static_page_worker_concurrency(Some("0")), 1);
         assert_eq!(parse_static_page_worker_concurrency(Some("5")), 5);
         assert_eq!(parse_static_page_worker_concurrency(Some("99")), 16);
+    }
+
+    #[test]
+    fn static_page_template_prewarm_detects_silent_draft_source() {
+        let now = Utc::now();
+        let draft = StaticPageDraft {
+            id: domain_model::StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: None,
+            title: "DataMax 静态页模板预热".to_string(),
+            status: StaticPageDraftStatus::Queued,
+            selected_scope: json!({"dataset_external_ids": ["dataset-a"]}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "source": STATIC_PAGE_TEMPLATE_PREWARM_SOURCE,
+                "prewarm": {
+                    "key": "static-page-template-prewarm:test",
+                    "customer_visible": false
+                }
+            }),
+            draft_payload: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(static_page_draft_is_silent_template_prewarm(&draft));
+        assert_eq!(
+            static_page_template_prewarm_key_from_source_refs(&draft.source_refs).as_deref(),
+            Some("static-page-template-prewarm:test")
+        );
+    }
+
+    #[test]
+    fn static_page_template_prewarm_requeues_only_when_pressure_exceeds_threshold() {
+        assert!(!static_page_template_prewarm_should_requeue_for_load(0, 0));
+        assert!(static_page_template_prewarm_should_requeue_for_load(1, 0));
+        assert!(!static_page_template_prewarm_should_requeue_for_load(2, 2));
+        assert!(static_page_template_prewarm_should_requeue_for_load(3, 2));
+        assert!(static_page_template_prewarm_should_requeue_for_load(1, -1));
     }
 
     #[test]
