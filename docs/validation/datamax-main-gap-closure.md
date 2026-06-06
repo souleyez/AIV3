@@ -67,7 +67,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | passed for post-ingest rollout; historical full backfill still disabled | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. A tiny live upload/new-parse smoke then proved all five configured deterministic kinds enqueue and succeed for a newly indexed document. Current-head `112cc82e8457` summary-only dry-run returned `candidate_count=20`, `skipped_count=20`, `would_record_count=0`, `recorded_count=0`, so no historical records were written and full existing-document backfill remains disabled. |
 | P1 Gate D: low-quality answer recovery | passed for current safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Current-head `1e99281ff695` runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`; local `answer_quality`, `answer_quality_autofix`, `assistant_run_answer_quality_gate`, codex-host-agent, and legacy quality-gate smoke all passed, so live enqueue remains intentionally disabled until an explicit operator decision. |
-| P1 Gate E: confirmed data ingestion | passed for current contract; row-level semantics decision pending | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. Current-head `112cc82e8457` read-only smoke still shows question/report readiness, four ready datasets, and the same two collapsed latest-sync tables: `bi_contract_warning` collapsed 94 rows and `bi_rentsales_detail` collapsed 99 rows. Production mapping stays unchanged until a row-level-vs-entity-level business decision is made and staging discriminator validation passes. |
+| P1 Gate E: confirmed data ingestion | passed for current contract; row-level semantics decision pending | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. Current-head `7c2d92c5e8f7` read-only smoke still shows question/report readiness, four ready datasets, and the same two collapsed latest-sync tables: `bi_contract_warning` collapsed 94 rows and `bi_rentsales_detail` collapsed 99 rows. The Markdown summary now includes per-table recommended action, matching the JSON field. Production mapping stays unchanged until a row-level-vs-entity-level business decision is made and staging discriminator validation passes. |
 | P1 Gate F: operator observability | passed for deployed page and queue summary | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. 8-server deploy to `2193e0cd5248` succeeded; local/public `/external-integrations` returned `200` with DataMax/运营总览 SSR text; the web queue-stats proxy returned `200` with the configured observability cookie. Model-gateway status remains protected and returned `401 auth_session_required` without a main-system operator session, so an authenticated model-gateway operator smoke remains pending. |
 
 ## Rollout Receipts
@@ -1867,6 +1867,41 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, database mapping, production table, or schema was changed;
   - no source database query was performed by the data-source smoke;
   - 120 server was not touched.
+
+### 2026-06-06 Data-Source Recommended-Action Markdown Refresh
+
+- Purpose:
+  - advance Task 6 by making the row-identity recommended action visible in the Markdown smoke summary, not only in JSON;
+  - keep the decision aid sanitized and read-only before any production mapping decision.
+- Local verification before rollout:
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 env DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true DATA_INGESTION_LIVE_SMOKE_REPORT_DIR=target/data-ingestion-staging-live-smoke-self-test-recommended-action bash scripts/run-data-ingestion-staging-live-smoke.sh` passed;
+  - self-test Markdown included `Recommended Action` in the `Latest Sync Identity Audit` table;
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 bash -n scripts/run-data-ingestion-staging-live-smoke.sh` passed.
+- 8-server state:
+  - repository `/srv/aiv3/repo` was at `7c2d92c5e8f7`;
+  - `git status --short --branch` showed `## main...origin/main` plus the pre-existing untracked `mode` file;
+  - service status after the script sync remained active for platform API, document enrichment worker, ingest worker, retrieval worker, and static-page worker.
+- 8-server command shape:
+  - source `/etc/aiv3/aiv3.env`;
+  - pass `PLATFORM_DATABASE_URL` as `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` without printing it;
+  - run `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000 bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Receipts:
+  - JSON: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T124751Z.json`;
+  - Markdown: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T124751Z.md`.
+- Result:
+  - smoke passed;
+  - question/report ready: true;
+  - collapsed table count: `2`;
+  - collapsed duplicate rows: `193`;
+  - `bi_contract_warning`: source rows `100`, unique docs `6`, collapsed rows `94`, recommended action `verify composite identity is active in a staging sync before relying on row-level reports`;
+  - `bi_rentsales_detail`: source rows `100`, unique docs `1`, collapsed rows `99`, recommended action `verify composite identity is active in a staging sync before relying on row-level reports`.
+- Decision boundary:
+  - production mapping remains unchanged;
+  - recommended action is advisory only;
+  - row-level materialization still needs a business decision and staging-only discriminator validation before production.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, production table, database mapping, or schema was changed;
+  - no source database query, raw customer row, credential, database URL, bearer token, full document, or provider payload was recorded.
 
 ### 2026-06-06 Current-Head Passive Low-Quality Recovery Audit
 

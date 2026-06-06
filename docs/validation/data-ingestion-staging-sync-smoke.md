@@ -417,3 +417,34 @@ Interpretation:
   - reads DataMax PostgreSQL only;
   - does not query the customer/source database;
   - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, or public third-party contract change.
+
+## 2026-06-06 Recommended-Action Markdown Refresh
+
+- Environment: `8服务器`.
+- Repository state:
+  - `/srv/aiv3/repo` at `7c2d92c5e8f7`;
+  - `git status --short --branch` showed `## main...origin/main` and the pre-existing untracked `mode` file.
+- Change verified:
+  - `latest_sync_identity_audit.tables[].recommended_action` was already present in JSON;
+  - the Markdown `Latest Sync Identity Audit` table now also includes `Recommended Action`.
+- Command shape:
+  - source `/etc/aiv3/aiv3.env`;
+  - pass `PLATFORM_DATABASE_URL` to `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` without printing the value;
+  - run `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000 bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Receipts:
+  - JSON `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T124751Z.json`;
+  - Markdown `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T124751Z.md`.
+- Result:
+  - smoke status passed;
+  - question/report ready true;
+  - collapsed table count 2;
+  - collapsed duplicate rows 193;
+  - `bi_contract_warning`: source rows 100; unique docs 6; collapsed rows 94; recommended action `verify composite identity is active in a staging sync before relying on row-level reports`;
+  - `bi_rentsales_detail`: source rows 100; unique docs 1; collapsed rows 99; recommended action `verify composite identity is active in a staging sync before relying on row-level reports`.
+- Local verification before 8-server rollout:
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 env DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true DATA_INGESTION_LIVE_SMOKE_REPORT_DIR=target/data-ingestion-staging-live-smoke-self-test-recommended-action bash scripts/run-data-ingestion-staging-live-smoke.sh` passed;
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 bash -n scripts/run-data-ingestion-staging-live-smoke.sh` passed.
+- Safety:
+  - reads DataMax PostgreSQL only;
+  - does not query the customer/source database;
+  - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, or public third-party contract change.
