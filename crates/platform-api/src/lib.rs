@@ -10563,6 +10563,15 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
     } else {
         reply.artifact_links = dedupe_external_channel_public_artifact_links(reply.artifact_links);
     }
+    if reply.reply_type == ExternalBotReplyTypeView::ArtifactLink {
+        if let Some(public_url) = reply.artifact_links.first().cloned() {
+            let text = reply.text.take().unwrap_or_default();
+            reply.text = Some(external_channel_text_with_public_artifact_link(
+                text,
+                &public_url,
+            ));
+        }
+    }
     reply
 }
 
@@ -97192,6 +97201,9 @@ mod tests {
             Some("static_page_published")
         );
         assert_eq!(public_reply.artifact_links, vec![public_url.to_string()]);
+        let text = public_reply.text.as_deref().expect("public text");
+        assert!(text.contains("页面链接：[点击查看报表]"));
+        assert_eq!(text.matches(public_url).count(), 1);
         let card = public_reply.card.expect("public status card");
         assert_eq!(card["type"], json!("v3_static_page_pipeline"));
         assert_eq!(card["status"], json!("static_page_published"));
