@@ -100,6 +100,30 @@ Before switching to `active`, verify the profiles shown on the model pool page a
 
 ## Smoke
 
+First verify the operator-only model gateway surface itself. Use a real logged-in
+operator cookie, or the existing main-system local-key login path. Do not pass
+third-party bearer tokens to this smoke; they are a different contract.
+
+```bash
+npm run smoke:model-gateway-operator -- \
+  --base-url http://127.0.0.1:3000 \
+  --cookie "aidp_v3_session=..."
+```
+
+Alternative using the existing local-key login route:
+
+```bash
+MODEL_GATEWAY_OPERATOR_SMOKE_EMAIL=ops@example.com \
+MODEL_GATEWAY_OPERATOR_SMOKE_LOCAL_KEY="<operator local key>" \
+npm run smoke:model-gateway-operator -- \
+  --base-url http://127.0.0.1:3000
+```
+
+Add `--run-profile-test` only when the operator intends to consume a real short
+provider probe. Without credentials, `--allow-missing-credentials` records only
+the unauthenticated `401 auth_session_required` guard and leaves authenticated
+checks pending; it is not a production pass.
+
 After profile tests pass, run local contract smoke tests:
 
 ```bash

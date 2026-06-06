@@ -1359,3 +1359,36 @@ Data-ingestion external fixed-task smoke:
   - source/customer database is not queried by this smoke;
   - writes are disabled;
   - no raw credential, raw source row, full table dump, or third-party public contract change is recorded.
+
+### 2026-06-06 Model-Gateway Operator Smoke Harness
+
+- Commit:
+  - `ec4c54d` added `scripts/smoke/model-gateway-operator.mjs` and `npm run smoke:model-gateway-operator`.
+- What it verifies:
+  - unauthenticated `GET /v1/model-gateway/status` returns HTTP `401` with `auth_session_required`;
+  - authenticated mode can use either a real `aidp_v3_session` cookie or the existing `/v1/auth/key/login` email plus local-key path;
+  - authenticated status/profile checks confirm the expected primary profile, fallback profile, runtime worker pools, and sanitized responses;
+  - optional `--run-profile-test` calls the real profile test endpoint only when the operator intentionally requests a provider probe;
+  - the JSON/Markdown report does not include the session cookie, local key, provider API key, or raw auth env name.
+- Local verification:
+  - command: `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-no-credentials`;
+  - result: pending as expected because no operator credential was supplied;
+  - receipt JSON: `target/model-gateway-operator-smoke-no-credentials/20260606081635.json`;
+  - unauthenticated guard passed with HTTP `401 auth_session_required`;
+  - command without `--allow-missing-credentials` exited non-zero as expected, proving missing credentials are not counted as a pass;
+  - `node -c scripts/smoke/model-gateway-operator.mjs` passed.
+- 8-server verification:
+  - `/srv/aiv3/repo` fast-forwarded to `ec4c54d04a49`;
+  - command: `npm run smoke:model-gateway-operator -- --base-url http://127.0.0.1:3000 --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-no-credentials`;
+  - result: pending as expected;
+  - receipt JSON: `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials/20260606081736.json`;
+  - receipt Markdown: `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials/20260606081736.md`;
+  - unauthenticated guard passed and authenticated checks remain pending.
+- 8-server credential availability:
+  - `/etc/aiv3/aiv3.env` exposes `MODEL_GATEWAY_OPERATOR_ROLES`;
+  - no smoke cookie, operator local key, or operator email/local-key pair is configured in the checked server env files;
+  - no auth bypass, temporary allow-any setting, temporary role mutation, or fabricated session was added.
+- Remaining G8 action:
+  - run the same smoke with a legitimate operator cookie or email+local-key login;
+  - add `--run-profile-test` only after approving a real provider probe;
+  - record the sanitized passed receipt before marking the authenticated model-gateway operator smoke complete.
