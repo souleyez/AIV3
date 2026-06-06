@@ -72,6 +72,87 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 
 ## Rollout Receipts
 
+### 2026-06-06 Current-Head Task 1 Release Gate
+
+- Purpose:
+  - execute Task 1 from `docs/plans/2026-06-06-datamax-major-gap-executable-plan.md`;
+  - prove current-head DataMax ordinary chat, main-site chat, live streaming, static-page/report delivery, scoped third-party documents, data-ingestion readiness, and document-quality fixtures before continuing the larger gap-closure plan.
+- Local state:
+  - local repository: `e5dd871`;
+  - branch/status before validation: `## main...origin/main`;
+  - new executable plan document was present locally and is being committed with this validation update.
+- 8-server state:
+  - host: `8服务器`;
+  - repository path: `/srv/aiv3/repo`;
+  - deployed head: `e5dd8713c`;
+  - git status: `## main...origin/main` plus known untracked `?? mode`, left untouched;
+  - active services after smoke: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-static-page-worker.service`;
+  - workflow queue snapshot after smoke: `queued=0`, `running=0`, `retrying=0`, `task_count=380`, `execution_count=200`.
+- Local non-secret checks:
+  - `cargo fmt --check` passed;
+  - `node --check scripts\smoke\external-report-export.mjs` passed;
+  - `node --check scripts\smoke\external-scoped-document-chat.mjs` passed;
+  - `cargo check -p platform-api` passed;
+  - `cargo check -p retrieval-worker --bin document-enrichment-backfill` passed;
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local` passed;
+  - document-quality receipt: `target/document-quality-smoke/document-quality-smoke-20260606T135241Z-8124.json`;
+  - document-quality Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T135241Z-8124.md`;
+  - covered fixtures include one-character PDF, `邓工是谁`, elderly-care procedure/threshold facts, resume company statistics, multidimensional resume ranking, table structure, attendance absence/work-hour formatting, scanned PDF fallback, smart-home answer quality, and smart-elevator point lists.
+- 8-server third-party ordinary 20-way smoke:
+  - command shape: active `local-dev` `generic-chat-main` bearer loaded from 8-server configuration without printing it;
+  - command: `npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20 --timeout-ms 120000 --output-dir target/external-channel-20way-smoke-task1-e5dd871-clean`;
+  - receipt: `/srv/aiv3/repo/target/external-channel-20way-smoke-task1-e5dd871-clean/20260606140251.json`;
+  - result: `okCount=20`, `failedCount=0`, `completedCount=20`, `p50=4469 ms`, `p95=7140 ms`, `max=7319 ms`;
+  - note: an earlier identical pass wrote to a path containing a carriage-return character because the first remote PowerShell heredoc was not normalized; the clean rerun above is the authoritative receipt.
+- 8-server main-site 20-way smoke:
+  - first attempt without `--dataset-id` failed before mutation with `--dataset-id or MAIN_CHAT_SMOKE_DATASET_ID is required`;
+  - second attempt with dataset `cd024465-358e-458c-961d-a8894f2358c5` returned `dataset_not_found` for the main-site access scope, confirming the dataset was not suitable for this smoke;
+  - passing command: `npm run smoke:main-chat-20way -- --base-url https://v3.elepcloud.com --dataset-id 31588c60-0885-47c4-81fe-4ff5c27de8e7 --concurrency 20 --timeout-ms 90000 --poll-timeout-ms 120000 --output-dir target/main-chat-20way-smoke-task1-e5dd871-validscope`;
+  - receipt: `/srv/aiv3/repo/target/main-chat-20way-smoke-task1-e5dd871-validscope/20260606135734.json`;
+  - result: `okCount=20`, `failedCount=0`, `acceptedCount=20`, `assistantMessageCount=20`, `p50=18575 ms`, `p95=24941 ms`, `max=60972 ms`;
+  - conclusion: the real gate passes with a main-site-visible dataset; the plan command was corrected to require an explicit dataset id.
+- 8-server main-site live streaming smoke:
+  - command: `npm run smoke:main-assistant-streaming -- --base-url https://v3.elepcloud.com --timeout-ms 120000 --require-live-delta --require-multiple-deltas --output-dir target/main-assistant-streaming-smoke-task1-e5dd871`;
+  - receipt: `/srv/aiv3/repo/target/main-assistant-streaming-smoke-task1-e5dd871/20260606135849.json`;
+  - result: `ok=true`, `createOk=true`, `continueOk=true`, `createDeltaCount=81`, `continueDeltaCount=70`, `createFirstDeltaAtMs=3923`, `continueFirstDeltaAtMs=3497`.
+- 8-server static-page 5-way smoke:
+  - command shape: active `local-dev` `generic-chat-main` bearer loaded from 8-server configuration without printing it, Xinbai dataset scope `64fff6c8-10e2-4ee8-8243-23166cce3abc`;
+  - command: `npm run smoke:static-page-5way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 5 --poll-timeout-ms 300000 --require-artifact --dataset-external-ids 64fff6c8-10e2-4ee8-8243-23166cce3abc --output-dir target/static-page-5way-smoke-task1-e5dd871`;
+  - receipt: `/srv/aiv3/repo/target/static-page-5way-smoke-task1-e5dd871/20260606140004.json`;
+  - result: `okCount=5`, `failedCount=0`, `acceptedCount=5`, `artifactCount=5`, `p50=7680 ms`, `p95=8831 ms`, `max=8831 ms`.
+- 8-server report/export smoke:
+  - command shape: active `local-dev` `generic-chat-main` bearer loaded from 8-server configuration without printing it, Xinbai dataset scope `64fff6c8-10e2-4ee8-8243-23166cce3abc`, text-link requirement enabled;
+  - command: `npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000 --expected-title 新世界百货经营管理月报表 --expected-focus 取高机会 --output-dir target/external-report-export-smoke-task1-e5dd871`;
+  - receipt: `/srv/aiv3/repo/target/external-report-export-smoke-task1-e5dd871/20260606140039.json`;
+  - result: `modeCount=2`, `okCount=2`, `failedCount=0`, `datasetExternalIdCount=1`, `expectedTitle=新世界百货经营管理月报表`, `expectedFocus=取高机会`, `p50=9557 ms`, `p95=11373 ms`, `max=11373 ms`;
+  - export checks for `table-data.csv`, `report.ppt`, and `report.md` passed inside the smoke.
+- 8-server scoped third-party document smoke:
+  - command shape: active `local-dev` `generic-chat-main` bearer loaded from 8-server configuration without printing it;
+  - command: `npm run smoke:external-scoped-document-chat -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --source-id third-party-source-main --timeout-ms 180000 --parse-timeout-ms 240000 --output-dir target/external-scoped-document-chat-smoke-task1-e5dd871`;
+  - receipt: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-task1-e5dd871/20260606140117.json`;
+  - Markdown: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-task1-e5dd871/20260606140117.md`;
+  - result: `ok=true`, `caseCount=4`;
+  - scope coverage: dataset group, explicit document scope, same-conversation reuse, changed-conversation isolation, and temporary attachment-title supply.
+- 8-server data-ingestion live smoke:
+  - command shape: `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` set from server env without printing it, `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area`, `DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000`;
+  - command: `bash scripts/run-data-ingestion-staging-live-smoke.sh`;
+  - receipt: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T140202Z.json`;
+  - Markdown: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T140202Z.md`;
+  - result: `ready=true`, `question_report_ready=true`, `source_database_read=false`, `writes_allowed=false`;
+  - environment note: `psql` printed repeated `libpq.so.5: no version information available` warnings after the smoke completed; these are environment warnings and did not change the pass result.
+- Model-gateway operator guard:
+  - command: `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-task1-no-credentials-e5dd871`;
+  - receipt: `/srv/aiv3/repo/target/model-gateway-operator-smoke-task1-no-credentials-e5dd871/20260606140318.json`;
+  - Markdown: `/srv/aiv3/repo/target/model-gateway-operator-smoke-task1-no-credentials-e5dd871/20260606140318.md`;
+  - result: `pending=true`, `ready=false`, `failed=false`, `authMethod=none`, `credentialsProvided=false`, `profileId=rightcode-gpt-5-5-default`;
+  - conclusion: authenticated operator validation still requires a legitimate main-system operator credential; no bypass was used.
+- Safety:
+  - no third-party public URL, auth method, required request field, existing response field, production mapping, production table, or schema was changed;
+  - no real historical backfill or enrichment enqueue was run;
+  - no old generated artifact was deleted;
+  - no bearer token, cookie, local key, database URL, provider payload, raw customer row, full customer document, or local object path was printed;
+  - 120 server was not touched.
+
 ### 2026-06-06 Completion Audit And Dataset-Scoped Backfill Dry-Run
 
 - Purpose:
