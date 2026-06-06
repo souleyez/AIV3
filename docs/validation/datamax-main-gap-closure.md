@@ -225,6 +225,14 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - Create path: `createDeltaCount=74`, `createFirstDeltaAtMs=4792`, `createLatencyMs=6508`.
   - Continue path: `continueDeltaCount=71`, `continueFirstDeltaAtMs=2951`, `continueLatencyMs=4733`.
   - AssistantRun id: `d12e4106-e111-4ad4-889c-9a67c6820179`.
+- 8-server local rerun after pulling the smoke script:
+  - Commit on server: `95a23989b085`.
+  - Command: `npm run smoke:main-assistant-streaming -- --base-url https://v3.elepcloud.com --timeout-ms 120000 --require-live-delta --require-multiple-deltas`.
+  - Receipt: `/srv/aiv3/repo/target/main-assistant-streaming-smoke/20260606043550.json`.
+  - Result: `ok=true`, `createOk=true`, `continueOk=true`.
+  - Create path: `createDeltaCount=83`, `createFirstDeltaAtMs=1918`, `createLatencyMs=3506`.
+  - Continue path: `continueDeltaCount=70`, `continueFirstDeltaAtMs=1697`, `continueLatencyMs=4167`.
+  - AssistantRun id: `5996bc97-2860-443b-86c0-d2c1333ebb8d`.
 - Useful pre-run note:
   - A previous strict run failed because the default prompt was too short and produced a single delta on one path. The script was adjusted to use longer default create/continue prompts so strict multi-delta mode is stable enough for release gating.
 
