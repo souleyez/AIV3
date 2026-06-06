@@ -83,10 +83,10 @@ Treat this section as the current executable plan. The longer task bodies below 
 | P0 | G1/G2 production smoke and concurrency | Completed for the current deploy. Runtime config shows 20 chat lanes, 5 static-page/Image2 lanes, and 2 Cloudflare fallback lanes. After the chat-session workflow-start fix, 8-server smoke passed for third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality local regressions. | Move to G7 controlled main-site streaming smoke; keep the P0 smoke commands as release gates for future deploys. | Validation ledger records pass/fail, latency, report links, export links, service status, and no secret leakage. |
 | P0 | G3 Xinbai monthly report template operations | Completed for current contract. Accepted template and focused export links work on 8 server; report export smoke confirms title, focus, one report surface, and `table-data.csv`, `report.ppt`, `report.md`. Low-load prewarm is still off. | Decide whether to enable low-load prewarm after controlled streaming remains stable. | Report requests return one clickable report link, correct focus, accessible `table-data.csv`, `report.ppt`, `report.md`, and no duplicate link chatter. |
 | P0 | G7 controlled streaming | Completed for the current contract. Third-party stream path has a production receipt. Main-site new/continue true streaming now has a reusable SSE smoke script and a public 8-server receipt with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`: new run and continue run both emit many live deltas, then one completed event and one done event, without final-text duplication. | Keep `npm run smoke:main-assistant-streaming` as a release gate; next move to G4/G5/G8 rather than reworking the stream contract. | Main-site UI-compatible SSE shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
-| P1 | G4 background enterprise memory | Fingerprint/dedup, enrichment-run storage, deterministic enrichment kinds, and aggregate-first local tests are implemented. Production existing-document backfill/enrichment remains disabled. | Run a limited non-dry-run fingerprint backfill on reviewed scope, enqueue one reviewed document enrichment, then run duplicate read-through and aggregate Q&A smoke. | Resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval; duplicate documents do not double count. |
+| P1 | G4 background enterprise memory | Controlled production batch passed on 8 server: one reviewed local document was fingerprinted as canonical, one `fact_index_v2` enrichment run succeeded, 56 document facts were written, and the dataset entity snapshot now reports 210 source facts across 6 scanned documents. Local duplicate-read-through, enrichment, aggregate, and document-quality smoke passed. Long-running production enrichment and full existing-document backfill remain disabled. | Decide the next staged rollout scope: either enable post-ingest enrichment for newly parsed documents only, or run another reviewed low-volume existing-document backfill batch. Keep all runs idempotent and operator-audited. | Resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval; duplicate documents do not double count. |
 | P1 | G5 passive low-quality recovery | Local passive collection and fixed-scope packaging passed. Hard customer-facing gate remains disabled. Production enqueue is gated. | Enable passive collection only after P0 smokes remain stable; allow `answer_quality_autofix` only for fixed-scope system defects with tests. | Weak answers are collected and classified; no normal answer is suppressed; fixes stay within answer/retrieval optimization scope. |
-| P1 | G8 operator observability | Ledgers exist but operators still lack one compact status page for queues, model lanes, report jobs, enrichment backlog, low-quality cases, and staging/sync state. | Expand the existing external integrations/operator page with sanitized, lazy-loaded counters and status panels. | A 20+ conversation incident can be triaged from DataMax without raw logs, credentials, or full customer data. |
-| P1 | G9 release hygiene | Commits through `83e49529b9fd` are pushed. 8 server is on latest `main`; changed service `aiv3-platform-api.service` was rebuilt/restarted and core services are active. | Keep every future deploy tied to a commit, service status, smoke receipt, and rollback note. | 8 server is on latest `main`, all changed services are active, and validation docs match reality. |
+| P1 | G8 operator observability | Local implementation completed for the first compact operator summary: the external integrations page now shows sanitized operations cards for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. Queue/model summaries are light reads; task/runtime details remain lazy-loaded. Local helper tests and web build passed. | Deploy to 8 server and run an authenticated operator smoke on `/external-integrations`, `/api/v3/external/codex-executor-tasks/queue-stats`, and `/api/v3/model-gateway/status`. | A 20+ conversation incident can be triaged from DataMax without raw logs, credentials, or full customer data. |
+| P1 | G9 release hygiene | Commits through `8faa1b797b58` are pushed. 8 server is on latest `main`; changed services from the latest slices were rebuilt/restarted as needed, and core services were active after deploy. | Keep every future deploy tied to a commit, service status, smoke receipt, and rollback note. | 8 server is on latest `main`, all changed services are active, and validation docs match reality. |
 
 ### Immediate Execution Order
 
@@ -96,7 +96,9 @@ Treat this section as the current executable plan. The longer task bodies below 
 4. Done: run main-site streaming browser/SSE smoke for new and continued AssistantRun.
 5. Done for current contract: verify Xinbai monthly report template reuse, focus ordering, one-link reply, and export files on 8 server.
 6. Done: deploy and validate the worker count fix for the 577 source rows vs 384 unique materialized rows audit.
-7. Next: run controlled background enterprise-memory batch, then passive low-quality recovery and operator observability.
+7. Done: run controlled background enterprise-memory batch on 8 server and record the single-document fingerprint/enrichment receipt.
+8. Done locally: add the compact G8 operator summary to the external integrations page and verify tests/build.
+9. Next: deploy the G8/G4 doc changes to 8 server with operator smoke, then continue passive low-quality recovery.
 
 ### P0 Task A: Fix Retrieval-Evidence Idempotency
 
@@ -465,6 +467,8 @@ Expected:
 - elderly-care procedure questions cite parsed/enriched procedure content;
 - attendance date/work-hour questions remain readable;
 - Xinbai aggregate questions use deterministic aggregate before retrieval.
+
+**2026-06-06 controlled production receipt:** completed for one reviewed document on 8 server. The default recent-20 dry run was unsuitable because all 20 were external objects without local files. A narrowed absolute-path document dry run reported `candidate_count=1`, `would_record_count=1`, `skipped_count=0`, `duplicate_count=0`; the matching non-dry-run recorded one canonical fingerprint. A single `fact_index_v2` enrichment run was then enqueued and processed with `DOCUMENT_ENRICHMENT_WORKER_KIND=fact_index_v2`; it succeeded on the first attempt, persisted 56 document facts, and refreshed the dataset entity snapshot to `source_fact_count=210`, `scanned_document_count=6`. No full backfill or long-running worker was enabled.
 
 ### P1 Task G: Enable Passive Low-Quality Recovery Safely
 
@@ -1607,7 +1611,7 @@ git commit -m "Roll out controlled DataMax streaming"
 
 ## Task 11: Expand Operator Observability
 
-**Status:** pending
+**Status:** completed locally on 2026-06-06; 8-server deployment smoke remains pending.
 
 **Files:**
 
@@ -1652,6 +1656,13 @@ Run:
 ```powershell
 npm --prefix apps/web run build
 ```
+
+Local verification completed:
+
+- `node --test app/lib/external-integrations.test.mjs` from `apps/web` passed, 27 tests.
+- `npm --prefix apps/web run build` passed.
+- `GET http://127.0.0.1:3100/external-integrations` returned HTTP `200` during local dev-server smoke.
+- The new summary uses existing protected/light endpoints and keeps conversation/runtime details lazy-loaded.
 
 **Step 5: Commit**
 

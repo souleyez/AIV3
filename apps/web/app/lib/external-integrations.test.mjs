@@ -6,6 +6,7 @@ import {
   actionSignalLabel,
   artifactSignalLabel,
   auditItemTypeLabel,
+  buildOperationsSummary,
   buildExternalActionPermalink,
   buildExternalAuditQuery,
   buildExternalActionTrace,
@@ -1106,6 +1107,121 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
   assert.equal(formatWorkflowDuration(null), '无完成样本');
   assert.equal(workflowQueueLabel('static_page_publish'), '页面发布');
   assert.equal(workflowTaskKeyLabel('poll_static_page_publish'), '轮询页面发布');
+});
+
+test('buildOperationsSummary groups sanitized operator counters', () => {
+  const integrations = [
+    normalizeIntegrationSummary({
+      integration_id: 'generic-chat-main',
+      integration_kind: 'channel',
+      provider: 'generic_chat',
+      health_status: 'healthy',
+      action_summary: {
+        waiting_result_count: 1,
+      },
+      artifact_summary: {
+        signal: 'artifact_confirmation_pending',
+      },
+      config_summary: {
+        inbound_auth_configured: true,
+        inbound_auth_mode: 'bearer',
+        inbound_bearer_token: 'v3in_should_not_escape',
+      },
+    }),
+    normalizeIntegrationSummary({
+      integration_id: 'hy-sql-traffic-area',
+      integration_kind: 'source',
+      provider: 'mysql',
+      drift_summary: {
+        failed_sync_count: 1,
+        database_dataset_readiness: {
+          signal: 'ready',
+          document_count: 384,
+          indexed_document_count: 384,
+        },
+      },
+      config_summary: {
+        database_source: {
+          kind: 'mysql',
+          database: 'ops',
+          connection_env: 'MYSQL_PASSWORD_SHOULD_NOT_ESCAPE',
+          table_count: 6,
+        },
+      },
+    }),
+  ];
+  const workflowQueueStats = normalizeWorkflowQueueStats({
+    generated_at: '2026-06-06T06:00:00Z',
+    execution_count: 8,
+    task_count: 12,
+    queues: [
+      {
+        logical_queue: 'static_page_publish',
+        task_count: 4,
+        queued: 1,
+        running: 1,
+        retrying: 0,
+        failed: 0,
+        succeeded_duration_p95_ms: 120_000,
+        task_keys: [{ logical_task_key: 'poll_static_page_publish', queued: 1 }],
+      },
+      {
+        logical_queue: 'document_enrichment',
+        task_count: 2,
+        queued: 2,
+        failed: 0,
+        task_keys: [{ logical_task_key: 'fact_index_v2', queued: 2 }],
+      },
+      {
+        logical_queue: 'codex_fixed_task',
+        task_count: 1,
+        queued: 1,
+        failed: 0,
+        task_keys: [{ logical_task_key: 'submit_codex_fixed_task', queued: 1 }],
+      },
+    ],
+  });
+  const summary = buildOperationsSummary({
+    integrations,
+    workflowQueueStats,
+    modelGatewayStatus: {
+      lanes: [{
+        lane: 'assistant_chat',
+        routing_mode: 'database_primary',
+        active_count: 2,
+        queued_count: 1,
+        max_concurrency: 20,
+        profile_count: 2,
+        active_profile_count: 2,
+      }],
+      providers: [{
+        lane: 'assistant_chat',
+        profile_id: 'rightcode-default',
+        runtime_failure_count: 0,
+      }],
+      runtime: {
+        externalChannel: {
+          activeConversations: 3,
+        },
+      },
+    },
+    codexExecutorTasks: [
+      { kind: 'answer_quality_autofix', stage: 'queued' },
+    ],
+  });
+
+  const cardsByKey = Object.fromEntries(summary.cards.map((card) => [card.key, card]));
+  assert.equal(cardsByKey.ordinary_chat.value, '1');
+  assert.equal(cardsByKey.model_lane.value, '2/20');
+  assert.equal(cardsByKey.workflow_backlog.value, '5');
+  assert.equal(cardsByKey.static_report.value, '2');
+  assert.equal(cardsByKey.data_ingestion.value, '1/1');
+  assert.equal(cardsByKey.document_enrichment.value, '2');
+  assert.equal(cardsByKey.low_quality.value, '1');
+  assert.equal(cardsByKey.low_quality.detail.includes('不拦截正常回复'), true);
+  const rendered = JSON.stringify(summary);
+  assert(!rendered.includes('v3in_should_not_escape'));
+  assert(!rendered.includes('MYSQL_PASSWORD_SHOULD_NOT_ESCAPE'));
 });
 
 test('external integrations page does not include direct home navigation links', () => {

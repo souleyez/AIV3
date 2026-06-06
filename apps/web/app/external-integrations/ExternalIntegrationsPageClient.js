@@ -5,6 +5,7 @@ import {
   actionSignalLabel,
   artifactSignalLabel,
   auditItemTypeLabel,
+  buildOperationsSummary,
   buildExternalActionPermalink,
   buildExternalAuditQuery,
   buildExternalActionTrace,
@@ -48,6 +49,7 @@ import {
   workflowTaskKeyLabel,
 } from '../lib/external-integrations';
 import { applyDatabaseSourceProfile } from '../lib/database-source';
+import { normalizeModelGatewayStatus } from '../lib/model-gateway';
 
 const REFRESH_INTERVAL_MS = 15000;
 const CODEX_EXECUTOR_TASK_LIMIT = 20;
@@ -291,6 +293,8 @@ export default function ExternalIntegrationsPageClient() {
   const [codexExecutorTasks, setCodexExecutorTasks] = useState([]);
   const [codexExecutorQueueStats, setCodexExecutorQueueStats] = useState(null);
   const [codexExecutorAccessRequired, setCodexExecutorAccessRequired] = useState(false);
+  const [modelGatewayStatus, setModelGatewayStatus] = useState(null);
+  const [modelGatewayAccessRequired, setModelGatewayAccessRequired] = useState(false);
   const [selectedCodexExecutorTaskId, setSelectedCodexExecutorTaskId] = useState('');
   const [codexExecutorTaskDetail, setCodexExecutorTaskDetail] = useState(null);
   const [selectedId, setSelectedId] = useState('');
@@ -303,6 +307,7 @@ export default function ExternalIntegrationsPageClient() {
   const [conversationTestsLoading, setConversationTestsLoading] = useState(false);
   const [codexExecutorTasksLoading, setCodexExecutorTasksLoading] = useState(false);
   const [codexExecutorQueueStatsLoading, setCodexExecutorQueueStatsLoading] = useState(false);
+  const [modelGatewayStatusLoading, setModelGatewayStatusLoading] = useState(false);
   const [codexExecutorDetailLoading, setCodexExecutorDetailLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [actionDetailLoading, setActionDetailLoading] = useState(false);
@@ -498,6 +503,36 @@ export default function ExternalIntegrationsPageClient() {
     } finally {
       setCodexExecutorQueueStatsLoading(false);
     }
+  }
+
+  async function loadModelGatewayStatus() {
+    setModelGatewayStatusLoading(true);
+    try {
+      const payload = await fetchJson('/api/v3/model-gateway/status');
+      setModelGatewayStatus(normalizeModelGatewayStatus(payload || {}));
+      setModelGatewayAccessRequired(false);
+    } catch (loadError) {
+      if (
+        loadError?.status === 401
+        || loadError?.status === 403
+        || loadError?.code === 'auth_session_required'
+        || loadError?.code === 'model_gateway_operator_required'
+      ) {
+        setModelGatewayAccessRequired(true);
+        setModelGatewayStatus(null);
+        return;
+      }
+      setModelGatewayStatus(null);
+    } finally {
+      setModelGatewayStatusLoading(false);
+    }
+  }
+
+  async function refreshOperationsStatus() {
+    await Promise.all([
+      loadCodexExecutorQueueStats(),
+      loadModelGatewayStatus(),
+    ]);
   }
 
   async function refreshCodexExecutorPanel() {
@@ -921,6 +956,7 @@ export default function ExternalIntegrationsPageClient() {
       setCodexExecutorOpen(true);
     }
     loadIntegrations();
+    refreshOperationsStatus();
     const timer = window.setInterval(() => {
       loadIntegrations({ silent: true });
     }, REFRESH_INTERVAL_MS);
@@ -977,6 +1013,12 @@ export default function ExternalIntegrationsPageClient() {
   const codexExecutorInspect = codexExecutorTaskDetail
     ? codexExecutorInspectSummary(codexExecutorTaskDetail)
     : null;
+  const operationsSummary = useMemo(() => buildOperationsSummary({
+    integrations,
+    workflowQueueStats: codexExecutorQueueStats,
+    modelGatewayStatus,
+    codexExecutorTasks,
+  }), [integrations, codexExecutorQueueStats, modelGatewayStatus, codexExecutorTasks]);
   const codexExecutorQueueSummaries = (codexExecutorQueueStats?.queues || [])
     .filter((queue) => queue.taskCount > 0)
     .sort((left, right) => (
@@ -1011,7 +1053,7 @@ export default function ExternalIntegrationsPageClient() {
         <div className="external-product-copy">
           <p className="external-kicker">DataMax Enterprise Data Assistant</p>
           <h1>
-            <span>V3企业级</span>
+            <span>DataMax企业级</span>
             <span>数据处理</span>
             <span>助手</span>
           </h1>
@@ -1038,7 +1080,7 @@ export default function ExternalIntegrationsPageClient() {
         <figure className="external-product-visual">
           <img
             src="/external-integrations/v3-enterprise-assistant-hero.png"
-            alt="V3企业级数据处理助手能力概览"
+            alt="DataMax企业级数据处理助手能力概览"
           />
         </figure>
       </section>
@@ -1106,6 +1148,48 @@ export default function ExternalIntegrationsPageClient() {
             <strong>{totals.searchEvidenceRequired}</strong>
             <span>网页待处理</span>
           </div>
+        </div>
+      </section>
+
+      <section className="external-panel external-operations-panel" aria-label="DataMax 运营总览">
+        <div className="external-panel-head">
+          <div>
+            <h2>运营总览</h2>
+            <p>
+              {codexExecutorQueueStatsLoading || modelGatewayStatusLoading
+                ? '刷新中'
+                : `汇总更新时间 ${formatObservationTime(operationsSummary.generatedAt)}`}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="external-refresh-button"
+            disabled={codexExecutorQueueStatsLoading || modelGatewayStatusLoading}
+            onClick={refreshOperationsStatus}
+          >
+            刷新运营状态
+          </button>
+        </div>
+        <div className="external-operations-grid">
+          {operationsSummary.cards.map((item) => (
+            <article className={`external-operations-card external-operations-${item.tone}`} key={item.key}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+              <small>{item.detail}</small>
+            </article>
+          ))}
+        </div>
+        <div className="external-operations-notes">
+          {!operationsSummary.queueStatsLoaded ? (
+            <span>队列统计待读取；只加载汇总队列，不加载任务详情。</span>
+          ) : null}
+          {codexExecutorAccessRequired ? (
+            <span>执行器队列需要观测访问密钥。</span>
+          ) : null}
+          {modelGatewayAccessRequired ? (
+            <span>模型通道需要主系统 operator 会话。</span>
+          ) : null}
+          <span>所有运营卡片仅显示计数和状态，详情仍按需展开。</span>
         </div>
       </section>
 

@@ -65,9 +65,10 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
 | P0 Gate B: report/static-page operations | passed for current contract | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
-| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
+| P1 Gate C: background enterprise memory | passed for controlled production batch | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, a reviewed one-document non-dry-run fingerprint backfill recorded a canonical fingerprint, a single `fact_index_v2` enrichment run succeeded, 56 document facts were persisted, and the dataset entity snapshot reported 210 source facts across 6 scanned documents. Local document-quality, duplicate read-through, enrichment-worker, and aggregate regressions passed. Long-running production enrichment and full existing-document backfill remain disabled. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
 | P1 Gate E: confirmed data ingestion | passed for current contract | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. |
+| P1 Gate F: operator observability | passed locally, 8-server smoke pending | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. Production deployment and authenticated operator smoke remain pending. |
 
 ## Rollout Receipts
 
@@ -625,6 +626,69 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - the deploy, migration, service restart, binary availability, dry-run backfill, and one-shot worker startup are verified on 8 server;
   - production document enrichment is still not enabled and existing documents are not yet backfilled;
   - the next safe step is either a limited non-dry-run fingerprint backfill plus one reviewed enrichment enqueue, or an explicit defer until private document-quality smoke credentials are available.
+
+### 2026-06-06 Controlled Background Enterprise Memory Batch
+
+- 8-server head before the batch:
+  - `8faa1b797b58`.
+  - `document-fingerprint-backfill` and `document-enrichment-worker` release binaries were present.
+- Reviewed dry-run:
+  - default recent-20 command shape: `./target/release/document-fingerprint-backfill --limit 20 --dry-run --pretty`;
+  - result: `candidate_count=20`, `would_record_count=0`, `skipped_count=20`;
+  - interpretation: recent candidates were external objects without local files, so they were not suitable for a production non-dry-run backfill.
+- Scope narrowing:
+  - database object-key type audit showed `absolute=196` missing fingerprints and `external=2407` missing fingerprints;
+  - a single absolute-path document was selected by `--document-id`;
+  - single-document dry run result: `candidate_count=1`, `would_record_count=1`, `recorded_count=0`, `duplicate_count=0`, `skipped_count=0`.
+- Limited non-dry-run:
+  - command shape: `./target/release/document-fingerprint-backfill --document-id <reviewed_document_uuid> --pretty`;
+  - result: `candidate_count=1`, `recorded_count=1`, `duplicate_count=0`, `skipped_count=0`;
+  - final fingerprint state: `dedup_state=canonical`;
+  - rollback boundary: do not delete records; disable enrichment flags and stop the worker if rollout needs to pause.
+- Single enrichment run:
+  - enqueued one idempotent `fact_index_v2` run for the same document fingerprint;
+  - processed with `DOCUMENT_ENRICHMENT_WORKER_ONCE=true`, `DOCUMENT_ENRICHMENT_WORKER_MAX_RUNS=1`, and `DOCUMENT_ENRICHMENT_WORKER_KIND=fact_index_v2`;
+  - result: `status=succeeded`, `attempt_count=1`, `fact_count=56`;
+  - post-run checks: `document_facts=56`, dataset snapshot row exists, `source_fact_count=210`, `scanned_document_count=6`.
+- Local regressions:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local` passed.
+  - `cargo test -p storage document_canonical_enrichment --lib` passed.
+  - `cargo test -p retrieval-worker --bin document-enrichment-worker` passed, 8 tests.
+  - `cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib` passed.
+  - `cargo test -p platform-api database_aggregate_heuristics --lib` passed, 6 tests.
+  - `cargo test -p platform-api assistant_run_deterministic_aggregate_intent_covers_customer_smoke_domains --lib` passed.
+  - `cargo test -p platform-api planning_catalog_prefers_aggregate_fact_supply_without_fact_rows --lib` passed.
+- Remaining boundary:
+  - long-running production enrichment is still not enabled;
+  - full existing-document fingerprint backfill is still not enabled;
+  - the next rollout should either enable post-ingest enrichment only for newly parsed documents or run another reviewed, low-volume existing-document batch.
+
+### 2026-06-06 Local Operator Observability Summary
+
+- Files changed:
+  - `apps/web/app/lib/external-integrations.js`;
+  - `apps/web/app/lib/external-integrations.test.mjs`;
+  - `apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`;
+  - `apps/web/app/layout.js`;
+  - `apps/web/app/components/Sidebar.js`;
+  - `apps/web/app/globals.css`.
+- Behavior:
+  - adds a compact `运营总览` panel to `/external-integrations`;
+  - summarizes ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery;
+  - uses `/api/v3/external/codex-executor-tasks/queue-stats` for sanitized queue summaries;
+  - uses `/api/v3/model-gateway/status` for model-lane status when the current session is allowed;
+  - keeps Codex task runtime inspect, conversation timeline/debug payloads, and database source detail panels lazy-loaded;
+  - does not introduce or expose credentials, raw prompts, raw replies, raw document text, raw source rows, or database URLs.
+  - updates visible app title copy from legacy V3 wording to DataMax where this slice touched the web shell.
+- Verification:
+  - `node --test app/lib/external-integrations.test.mjs` from `apps/web` passed, 27 tests;
+  - `npm --prefix apps/web run build` passed;
+  - `GET http://127.0.0.1:3100/external-integrations` returned HTTP `200` during local dev-server smoke;
+  - the build emitted the existing Next.js middleware/proxy deprecation warning and NFT trace warning from `next.config.js`/local upload route; no new build failure was introduced.
+- Remaining boundary:
+  - 8-server deployment is pending;
+  - production operator smoke should verify `/external-integrations`, queue stats, and model-gateway status with the configured operator access;
+  - low-quality recovery remains passive and must not suppress normal customer answers.
 
 ### 2026-06-06 8-Server Streaming And Data-Ingestion Routing Receipt
 

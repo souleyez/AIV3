@@ -1240,6 +1240,246 @@ export function normalizeWorkflowQueueStats(raw = {}) {
   };
 }
 
+function queueTotal(queue, keys = ['queued', 'running', 'retrying']) {
+  return keys.reduce((sum, key) => sum + numberOrZero(queue?.[key]), 0);
+}
+
+function queueMatches(queue = {}, matchers = []) {
+  const logicalQueue = String(queue.logicalQueue || '').toLowerCase();
+  const physicalQueues = Array.isArray(queue.physicalQueues)
+    ? queue.physicalQueues.map((item) => String(item || '').toLowerCase())
+    : [];
+  const taskKeys = Array.isArray(queue.taskKeys)
+    ? queue.taskKeys.flatMap((taskKey) => [
+      taskKey.logicalTaskKey,
+      ...(Array.isArray(taskKey.physicalTaskKeys) ? taskKey.physicalTaskKeys : []),
+    ]).map((item) => String(item || '').toLowerCase())
+    : [];
+  const haystack = [logicalQueue, ...physicalQueues, ...taskKeys].join(' ');
+  return matchers.some((matcher) => haystack.includes(String(matcher || '').toLowerCase()));
+}
+
+function summarizeQueueGroup(stats = {}, matchers = []) {
+  const queues = Array.isArray(stats?.queues) ? stats.queues : [];
+  const matched = queues.filter((queue) => queueMatches(queue, matchers));
+  const active = matched.reduce((sum, queue) => sum + queueTotal(queue), 0);
+  const failed = matched.reduce((sum, queue) => sum + queueTotal(queue, ['failed', 'deadLettered']), 0);
+  const taskCount = matched.reduce((sum, queue) => sum + numberOrZero(queue.taskCount), 0);
+  const p95Values = matched
+    .map((queue) => queue.succeededDurationP95Ms ?? queue.finishedDurationP95Ms)
+    .filter((value) => value !== null && value !== undefined);
+  return {
+    queueCount: matched.length,
+    taskCount,
+    queued: matched.reduce((sum, queue) => sum + numberOrZero(queue.queued), 0),
+    running: matched.reduce((sum, queue) => sum + numberOrZero(queue.running), 0),
+    retrying: matched.reduce((sum, queue) => sum + numberOrZero(queue.retrying), 0),
+    active,
+    failed,
+    p95Ms: p95Values.length ? Math.max(...p95Values) : null,
+  };
+}
+
+function operationsTone({ active = 0, failed = 0, warning = false, ready = true } = {}) {
+  if (!ready || failed > 0) return 'critical';
+  if (warning || active > 0) return 'warning';
+  return 'healthy';
+}
+
+function modelLaneSummary(modelGatewayStatus = null) {
+  const lanes = Array.isArray(modelGatewayStatus?.lanes) ? modelGatewayStatus.lanes : [];
+  const providers = Array.isArray(modelGatewayStatus?.providers) ? modelGatewayStatus.providers : [];
+  const lane = lanes.find((item) => item.lane === 'assistant_chat') || lanes[0] || null;
+  if (!lane) {
+    return {
+      loaded: false,
+      value: '待读取',
+      detail: '模型池状态需 operator 会话',
+      active: 0,
+      queued: 0,
+      maxConcurrency: null,
+      activeProfileCount: 0,
+      failureCount: 0,
+    };
+  }
+  const laneName = String(lane.lane || '').trim();
+  const routingMode = String(lane.routingMode || lane.routing_mode || 'routing');
+  const active = numberOrZero(lane.activeCount ?? lane.active_count ?? lane.active);
+  const queued = numberOrZero(lane.queuedCount ?? lane.queued_count ?? lane.queued);
+  const maxConcurrency = lane.maxConcurrency ?? lane.max_concurrency ?? null;
+  const activeProfileCount = numberOrZero(lane.activeProfileCount ?? lane.active_profile_count);
+  const profileCount = numberOrZero(lane.profileCount ?? lane.profile_count);
+  const laneProviders = providers.filter((provider) => String(provider.lane || '') === laneName);
+  const failureCount = laneProviders.reduce((sum, provider) => (
+    sum
+    + numberOrZero(provider.runtimeFailureCount ?? provider.runtime_failure_count)
+    + numberOrZero(provider.runtimeTimeoutCount ?? provider.runtime_timeout_count)
+    + numberOrZero(provider.runtimeRateLimitCount ?? provider.runtime_rate_limit_count)
+  ), 0);
+  return {
+    loaded: true,
+    value: `${active}/${maxConcurrency ?? '-'}`,
+    detail: `${routingMode} · active profiles ${activeProfileCount}/${profileCount}`,
+    active,
+    queued,
+    maxConcurrency,
+    activeProfileCount,
+    failureCount,
+  };
+}
+
+function card(key, label, value, detail, tone = 'neutral', meta = {}) {
+  return {
+    key,
+    label,
+    value,
+    detail,
+    tone,
+    ...meta,
+  };
+}
+
+export function buildOperationsSummary({
+  integrations = [],
+  workflowQueueStats = null,
+  modelGatewayStatus = null,
+  codexExecutorTasks = [],
+} = {}) {
+  const normalizedIntegrations = Array.isArray(integrations) ? integrations : [];
+  const stats = workflowQueueStats?.queues
+    ? workflowQueueStats
+    : normalizeWorkflowQueueStats(workflowQueueStats || {});
+  const queueStatsLoaded = Boolean(workflowQueueStats?.queues || workflowQueueStats?.generatedAt || workflowQueueStats?.generated_at);
+  const channels = normalizedIntegrations.filter((item) => item.kind === 'channel');
+  const sources = normalizedIntegrations.filter((item) => item.kind === 'source');
+  const databaseSources = normalizedIntegrations.filter((item) => databaseSourceSummary(item).configured);
+  const readyDatabaseSources = databaseSources.filter((item) => {
+    const readiness = databaseSourceReadiness(item);
+    return readiness.signal === 'ready' || readiness.signal === 'partial_ready';
+  });
+  const databaseFailures = normalizedIntegrations.reduce((sum, item) => (
+    sum + numberOrZero(item.driftSummary?.failed_sync_count)
+  ), 0);
+  const actionFailures = normalizedIntegrations.reduce((sum, item) => (
+    sum + numberOrZero(item.blockedActionCount) + numberOrZero(item.failedActionCount)
+  ), 0);
+  const artifactIssues = normalizedIntegrations.filter((item) => (
+    ['artifact_confirmation_pending', 'artifact_blocked', 'artifact_failed'].includes(item.artifactSignal)
+  )).length;
+  const waitingResults = normalizedIntegrations.reduce((sum, item) => (
+    sum + numberOrZero(item.actionSummary?.waiting_result_count)
+  ), 0);
+  const searchRequired = normalizedIntegrations.reduce((sum, item) => (
+    sum + numberOrZero(item.searchSummary?.required_count)
+  ), 0);
+  const staticReportQueue = summarizeQueueGroup(stats, [
+    'static_page',
+    'report',
+    'product_image_generation',
+  ]);
+  const enrichmentQueue = summarizeQueueGroup(stats, [
+    'document_enrichment',
+    'fact_index',
+    'enrichment',
+  ]);
+  const fixedTaskQueue = summarizeQueueGroup(stats, [
+    'codex_fixed_task',
+    'answer_quality',
+  ]);
+  const lowQualityTaskCount = (Array.isArray(codexExecutorTasks) ? codexExecutorTasks : [])
+    .filter((task) => {
+      const text = `${task.kind || ''} ${task.stage || ''}`.toLowerCase();
+      return text.includes('answer_quality') || text.includes('autofix');
+    }).length;
+  const model = modelLaneSummary(modelGatewayStatus);
+  const externalChannelRuntime = modelGatewayStatus?.runtime?.externalChannel
+    || modelGatewayStatus?.runtime?.external_channel
+    || {};
+  const externalActiveConversations = numberOrZero(
+    externalChannelRuntime.activeConversations
+    ?? externalChannelRuntime.active_conversations,
+  );
+  const activeWorkflowBacklog = stats.queues.reduce((sum, queue) => sum + queueTotal(queue), 0);
+  const workflowFailures = stats.queues.reduce((sum, queue) => sum + queueTotal(queue, ['failed', 'deadLettered']), 0);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    queueStatsLoaded,
+    modelStatusLoaded: model.loaded,
+    cards: [
+      card(
+        'ordinary_chat',
+        '普通对话',
+        `${channels.length}`,
+        `通道 ${channels.length} · 当前并发 ${externalActiveConversations || '待读取'} · 动作异常 ${actionFailures}`,
+        operationsTone({ failed: actionFailures }),
+      ),
+      card(
+        'model_lane',
+        '模型通道',
+        model.value,
+        model.detail,
+        operationsTone({
+          ready: model.loaded && model.activeProfileCount > 0,
+          active: model.queued,
+          failed: model.failureCount,
+          warning: model.maxConcurrency !== null && model.active >= model.maxConcurrency,
+        }),
+      ),
+      card(
+        'workflow_backlog',
+        '工作流积压',
+        queueStatsLoaded ? `${activeWorkflowBacklog}` : '待读取',
+        queueStatsLoaded
+          ? `队列 ${stats.queues.length} · 失败 ${workflowFailures}`
+          : '只读取汇总队列，不读取任务详情',
+        queueStatsLoaded ? operationsTone({ active: activeWorkflowBacklog, failed: workflowFailures }) : 'neutral',
+      ),
+      card(
+        'static_report',
+        '报表/静态页',
+        queueStatsLoaded ? `${staticReportQueue.active}` : '待读取',
+        queueStatsLoaded
+          ? `运行 ${staticReportQueue.running} · 排队 ${staticReportQueue.queued} · P95 ${formatWorkflowDuration(staticReportQueue.p95Ms)}`
+          : '打开或刷新运营状态后显示',
+        queueStatsLoaded ? operationsTone({ active: staticReportQueue.active, failed: staticReportQueue.failed }) : 'neutral',
+      ),
+      card(
+        'template_reuse',
+        '模板/产物',
+        `${artifactIssues}`,
+        `产物异常 ${artifactIssues} · 待结果 ${waitingResults} · 网页证据 ${searchRequired}`,
+        operationsTone({ active: waitingResults + searchRequired, failed: artifactIssues }),
+      ),
+      card(
+        'data_ingestion',
+        '数据接入',
+        `${readyDatabaseSources.length}/${databaseSources.length}`,
+        `数据库源 ${databaseSources.length} · 同步失败 ${databaseFailures} · 文档源 ${sources.length}`,
+        operationsTone({ failed: databaseFailures, warning: databaseSources.length > readyDatabaseSources.length }),
+      ),
+      card(
+        'document_enrichment',
+        '文档深化',
+        queueStatsLoaded ? `${enrichmentQueue.active}` : '待读取',
+        queueStatsLoaded
+          ? `队列 ${enrichmentQueue.queueCount} · 失败 ${enrichmentQueue.failed}`
+          : '后台 enrichment 仅显示汇总',
+        queueStatsLoaded ? operationsTone({ active: enrichmentQueue.active, failed: enrichmentQueue.failed }) : 'neutral',
+      ),
+      card(
+        'low_quality',
+        '低质量恢复',
+        queueStatsLoaded ? `${Math.max(fixedTaskQueue.active, lowQualityTaskCount)}` : '待读取',
+        queueStatsLoaded
+          ? `固定任务积压 ${fixedTaskQueue.active} · 已加载低质任务 ${lowQualityTaskCount} · 不拦截正常回复`
+          : '仅统计固定任务/低质量队列',
+        queueStatsLoaded ? operationsTone({ active: fixedTaskQueue.active + lowQualityTaskCount, failed: fixedTaskQueue.failed }) : 'neutral',
+      ),
+    ],
+  };
+}
+
 export function workflowQueueLabel(value) {
   const labels = {
     static_page_image_preview: '效果图',
@@ -1247,6 +1487,12 @@ export function workflowQueueLabel(value) {
     product_image_generation: '商品图',
     codex_fixed_task: '通用 Codex',
     static_page_render: '静态页渲染',
+    document_enrichment: '文档深化',
+    report: '报表',
+    report_plan: '报表规划',
+    report_render: '报表渲染',
+    external_source: '数据接入',
+    ingest: '文档入库',
   };
   return labels[value] || value || '未分组';
 }
