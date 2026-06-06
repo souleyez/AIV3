@@ -599,6 +599,72 @@ Data-ingestion external fixed-task smoke:
   - use an authenticated operator session to confirm one reviewed external-channel staging plan and start one guarded source sync;
   - record synced dataset documents, chunks, retrieval evidence, and safe reply statuses without printing credentials or raw table rows.
 
+### 2026-06-06 8-Server Operator Confirm/Sync Duplicate-Key Receipt
+
+- Deployed commit before this receipt:
+  - `688643f780f3`.
+- Services checked:
+  - `aiv3-platform-api.service` active;
+  - `aiv3-codex-host-agent.service` active.
+- External data-ingestion analysis smoke:
+  - AssistantRun `de6755e0-b490-4665-901b-8847b7a0081b`;
+  - local report `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T032231Z.json`;
+  - terminal result succeeded with a confirmable staging plan.
+- Operator confirmation:
+  - plan id `staging-plan-ca9e6b0e-7f16-4fc0-b979-e1ad63afba06`;
+  - source id `hy-sql-traffic-area`;
+  - confirm returned HTTP 200;
+  - accepted true;
+  - dataset id `ac7bb786-3ffb-40e2-bade-9f70d5fb4764`;
+  - created dataset true;
+  - production write allowed false.
+- Guarded sync:
+  - first sync without `source_id` returned HTTP 400 with `data_ingestion_staging_database_source_ambiguous`, as expected for multiple in-plan sources;
+  - retry with `source_id=hy-sql-traffic-area` returned HTTP 202;
+  - sync run id `c37d9419-bacf-420b-8add-1fcfac4f02f2`;
+  - initial sync status running;
+  - deduplicated false;
+  - production write allowed false.
+- Terminal failure observed from sanitized AssistantRun events:
+  - workflow stage `failed`;
+  - workflow status `failed`;
+  - failure kind `index_external_retrieval`;
+  - sanitized error: duplicate key value violates unique constraint `retrieval_evidences_execution_id_document_chunk_id_key`.
+- Interpretation:
+  - operator confirmation and guarded sync routing are live on 8 server;
+  - the remaining P0 blocker is retrieval evidence indexing idempotency, not the third-party public API contract;
+  - no bearer token, session token, database URL, source credential, or raw customer row was recorded.
+
+### 2026-06-06 Local Retrieval Evidence Idempotency Slice
+
+- Files changed:
+  - `crates/storage/src/lib.rs`;
+  - `crates/platform-api/src/lib.rs`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`.
+- Behavior:
+  - `PgRetrievalEvidenceRepository::create_many` now upserts on `(execution_id, document_chunk_id)`;
+  - retrying the same indexing execution and chunk reuses the existing `retrieval_evidences.id`;
+  - retry metadata such as dataset id, document id, chunk index, source locator, excerpt, summary, payload filter key, embedding model, recall score, evidence manifest, and created time is refreshed from the retry input;
+  - the upsert is constrained by `tenant_id` and does not change third-party public URLs, auth, request fields, or response fields.
+- Local verification:
+  - `cargo fmt --check -p storage -p retrieval-worker -p platform-api` passed;
+  - `cargo test -p storage retrieval_evidence --lib` passed, 2 tests;
+  - `cargo test -p retrieval-worker external --lib` had no matching tests, so `cargo test -p retrieval-worker --lib` was also run and passed, 6 tests;
+  - `cargo test -p platform-api retrieval_evidence_create_many_is_idempotent_for_same_execution_chunk --lib -- --nocapture` compiled and was skipped by the local DB guard because `PLATFORM_DATABASE_URL` points at shared `ai_data_platform_v3`; the guard was not bypassed;
+  - `cargo test -p platform-api data_ingestion --lib` passed, 15 tests;
+  - `cargo test -p platform-api external_source_sync --lib` passed, 6 tests;
+  - `cargo check -p platform-api -p retrieval-worker` passed;
+  - `bash scripts/run-data-ingestion-staging-sync-smoke.sh` passed.
+- Smoke receipt:
+  - JSON `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T034221Z.json`;
+  - Markdown `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T034221Z.md`;
+  - live readiness self-test `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T034429Z.json`.
+- Remaining:
+  - commit and push the idempotency slice;
+  - deploy to 8 server;
+  - rerun the guarded operator sync with explicit `source_id=hy-sql-traffic-area` and `force=true`;
+  - record whether the sync completes or fails for a new non-duplicate root cause.
+
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
 - Files changed:

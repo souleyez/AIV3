@@ -4110,6 +4110,43 @@ pub struct PgRetrievalEvidenceRepository {
     pool: PgPool,
 }
 
+const RETRIEVAL_EVIDENCE_UPSERT_SQL: &str = r#"
+insert into retrieval_evidences (
+    id,
+    tenant_id,
+    dataset_id,
+    execution_id,
+    document_id,
+    document_chunk_id,
+    chunk_index,
+    source_locator,
+    content_excerpt,
+    summary,
+    payload_filter_key,
+    embedding_model,
+    recall_score,
+    evidence_manifest,
+    created_at
+)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+on conflict (execution_id, document_chunk_id) do update
+set dataset_id = excluded.dataset_id,
+    document_id = excluded.document_id,
+    chunk_index = excluded.chunk_index,
+    source_locator = excluded.source_locator,
+    content_excerpt = excluded.content_excerpt,
+    summary = excluded.summary,
+    payload_filter_key = excluded.payload_filter_key,
+    embedding_model = excluded.embedding_model,
+    recall_score = excluded.recall_score,
+    evidence_manifest = excluded.evidence_manifest,
+    created_at = excluded.created_at
+where retrieval_evidences.tenant_id = excluded.tenant_id
+returning id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
+          chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
+          embedding_model, recall_score, evidence_manifest, created_at
+"#;
+
 impl PgRetrievalEvidenceRepository {
     pub async fn create_many(
         &self,
@@ -4120,48 +4157,24 @@ impl PgRetrievalEvidenceRepository {
         let mut persisted = Vec::with_capacity(evidences.len());
 
         for evidence in evidences {
-            let row = sqlx::query(
-                r#"
-                insert into retrieval_evidences (
-                    id,
-                    tenant_id,
-                    dataset_id,
-                    execution_id,
-                    document_id,
-                    document_chunk_id,
-                    chunk_index,
-                    source_locator,
-                    content_excerpt,
-                    summary,
-                    payload_filter_key,
-                    embedding_model,
-                    recall_score,
-                    evidence_manifest,
-                    created_at
-                )
-                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                returning id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
-                          chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
-                          embedding_model, recall_score, evidence_manifest, created_at
-                "#,
-            )
-            .bind(RetrievalEvidenceId::new().0)
-            .bind(tenant_id.0)
-            .bind(evidence.dataset_id.0)
-            .bind(evidence.execution_id.0)
-            .bind(evidence.document_id.0)
-            .bind(evidence.document_chunk_id.0)
-            .bind(evidence.chunk_index)
-            .bind(&evidence.source_locator)
-            .bind(&evidence.content_excerpt)
-            .bind(&evidence.summary)
-            .bind(&evidence.payload_filter_key)
-            .bind(&evidence.embedding_model)
-            .bind(evidence.recall_score)
-            .bind(&evidence.evidence_manifest)
-            .bind(evidence.created_at)
-            .fetch_one(&mut *tx)
-            .await?;
+            let row = sqlx::query(RETRIEVAL_EVIDENCE_UPSERT_SQL)
+                .bind(RetrievalEvidenceId::new().0)
+                .bind(tenant_id.0)
+                .bind(evidence.dataset_id.0)
+                .bind(evidence.execution_id.0)
+                .bind(evidence.document_id.0)
+                .bind(evidence.document_chunk_id.0)
+                .bind(evidence.chunk_index)
+                .bind(&evidence.source_locator)
+                .bind(&evidence.content_excerpt)
+                .bind(&evidence.summary)
+                .bind(&evidence.payload_filter_key)
+                .bind(&evidence.embedding_model)
+                .bind(evidence.recall_score)
+                .bind(&evidence.evidence_manifest)
+                .bind(evidence.created_at)
+                .fetch_one(&mut *tx)
+                .await?;
 
             persisted.push(map_retrieval_evidence_row(&row)?);
         }
@@ -8691,6 +8704,15 @@ mod tests {
         let values = retrieval_evidence_ids_to_uuid_array(&ids);
 
         assert_eq!(values, ids.iter().map(|id| id.0).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn retrieval_evidence_insert_is_idempotent_by_execution_and_chunk() {
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL
+            .contains("on conflict (execution_id, document_chunk_id) do update"));
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL
+            .contains("where retrieval_evidences.tenant_id = excluded.tenant_id"));
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("returning id, tenant_id"));
     }
 
     #[test]

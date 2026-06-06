@@ -137488,6 +137488,147 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn retrieval_evidence_create_many_is_idempotent_for_same_execution_chunk() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping retrieval evidence idempotency test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("retrieval-evidence-idempotent-{}", Uuid::new_v4()),
+                "Retrieval Evidence Idempotency Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("retrieval-evidence-idempotent-{}", Uuid::new_v4()),
+                    title: "Retrieval Evidence Idempotency".to_string(),
+                    description: Some(
+                        "Dataset used to verify retrieval indexing retries.".to_string(),
+                    ),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Retry Notes".to_string(),
+                    object_key: "documents/retry-notes.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let now = Utc::now();
+        let execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: 0,
+                    content: "Retrying retrieval indexing should reuse existing evidence."
+                        .to_string(),
+                    token_count: 8,
+                    metadata: json!({ "section": "retry" }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("document chunk should be created");
+
+        let first = storage
+            .retrieval_evidences()
+            .create_many(
+                tenant.id,
+                &[storage::NewRetrievalEvidence {
+                    execution_id: execution.id,
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    document_chunk_id: chunks[0].id,
+                    chunk_index: chunks[0].chunk_index,
+                    source_locator: "documents/retry-notes.md#chunk=0".to_string(),
+                    content_excerpt: "Initial retry evidence".to_string(),
+                    summary: "Initial retrieval evidence".to_string(),
+                    payload_filter_key: "dataset/retry-initial".to_string(),
+                    embedding_model: "placeholder-minilm".to_string(),
+                    recall_score: 0.25,
+                    evidence_manifest: json!({ "attempt": 1 }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("first evidence insert should succeed");
+
+        let retry_time = now + chrono::TimeDelta::seconds(1);
+        let second = storage
+            .retrieval_evidences()
+            .create_many(
+                tenant.id,
+                &[storage::NewRetrievalEvidence {
+                    execution_id: execution.id,
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    document_chunk_id: chunks[0].id,
+                    chunk_index: chunks[0].chunk_index,
+                    source_locator: "documents/retry-notes.md#chunk=0".to_string(),
+                    content_excerpt: "Updated retry evidence".to_string(),
+                    summary: "Updated retrieval evidence".to_string(),
+                    payload_filter_key: "dataset/retry-updated".to_string(),
+                    embedding_model: "placeholder-minilm".to_string(),
+                    recall_score: 0.91,
+                    evidence_manifest: json!({ "attempt": 2 }),
+                    created_at: retry_time,
+                }],
+            )
+            .await
+            .expect("retry evidence insert should be idempotent");
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].id, first[0].id);
+        assert_eq!(second[0].summary, "Updated retrieval evidence");
+        assert_eq!(second[0].payload_filter_key, "dataset/retry-updated");
+        assert_eq!(second[0].recall_score, 0.91);
+
+        let listed = storage
+            .retrieval_evidences()
+            .list_by_document(tenant.id, document.id)
+            .await
+            .expect("document evidence should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, first[0].id);
+        assert_eq!(listed[0].summary, "Updated retrieval evidence");
+    }
+
+    #[tokio::test]
     async fn compare_documents_returns_multiple_document_details() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {

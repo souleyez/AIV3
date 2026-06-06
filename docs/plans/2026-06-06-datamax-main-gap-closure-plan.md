@@ -12,8 +12,18 @@
 
 ## Current Baseline - 2026-06-06
 
-- Local `main` was clean before this plan document was added.
-- 8 server was on commit `03458d310`; `aiv3-platform-api.service` was `active`.
+- Before this plan update, local `main` was clean at commit `688643f`.
+- GitHub `main` includes the latest data-ingestion staging-plan persistence and operator-confirmation slices.
+- 8 server is deployed to commit `688643f780f3`; `aiv3-platform-api.service` and `aiv3-codex-host-agent.service` are active.
+- 8-server third-party streaming smoke has passed with 15/15 tasks OK, no duplicate final messages, 3 artifact links, and P95 latency about 6 seconds.
+- 8-server external data-ingestion analysis can produce a confirmable `v3_data_ingestion_staging_plan` without raw credential leakage.
+- 8-server authenticated operator confirmation for the reviewed staging plan has been proven:
+  - confirm returned HTTP 200;
+  - `production_write_allowed=false`;
+  - a private staging dataset was created;
+  - sync refused ambiguous source selection until `source_id=hy-sql-traffic-area` was passed.
+- The latest guarded sync started successfully but failed during retrieval indexing with `index_external_retrieval` because `retrieval_evidences` hit duplicate key `retrieval_evidences_execution_id_document_chunk_id_key`.
+- This makes retrieval-evidence idempotent indexing the current P0 blocker before further production data-ingestion sync claims.
 - The model-visible capability loop is closed for product-level capabilities:
   - `static_page_artifact`;
   - `data_ingestion_analysis`;
@@ -21,7 +31,7 @@
   - `collection_setup_analysis`;
   - `integration_setup_analysis`;
   - `message_channel_outreach`.
-- Third-party Xinbai report smoke passed for:
+- Third-party Xinbai report smoke previously passed for:
   - `取高`;
   - `经营状况`;
   - `经营健康度`;
@@ -38,7 +48,7 @@
   - `report.ppt`;
   - `report.md`;
   - `download_exports[]`.
-- Existing detailed plans remain the source for lower-level implementation detail:
+- Existing detailed plans remain reference material only; this document is the single active execution plan:
   - `docs/plans/2026-05-31-v3-20-way-concurrency-upgrade-plan.md`;
   - `docs/plans/2026-05-30-static-page-image-pipeline-optimization-plan.md`;
   - `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`;
@@ -61,34 +71,185 @@
 - Third-party temporary document scopes and dataset scopes are authoritative for the conversation.
 - DataMax does not depend on model-side memory. Every model call should remain stateless and receive only DataMax-scoped temporary evidence.
 
-## Executable Remaining-Gap Snapshot - 2026-06-06
+## Active Execution Sheet - 2026-06-06
 
-This section is the current single-page execution sheet. Treat the longer task sections below as implementation detail.
+Treat this section as the current executable plan. The longer task bodies below are historical detail and implementation references.
 
-| Gap | Current state | Next executable action | Done when |
-| --- | --- | --- | --- |
-| G1: 8-server private production smoke | Read-only 8-server baseline is recorded. Third-party streaming smoke against `https://v3.elepcloud.com` passed with 10 ordinary, 3 static-page, and 2 reconnect lanes. Full 20-way ordinary chat, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report export, and document-quality smoke remain open. | Load private smoke credentials without committing them, then run the remaining full production smoke set against `https://v3.elepcloud.com`. | `docs/validation/datamax-main-gap-closure.md` contains receipts with pass/fail, latency, service status, report links, export URLs, and no secret leakage. |
-| G2: Production concurrency lock | 8 server reports chat concurrency 20, static-page/Image2 concurrency 5, Cloudflare fallback 2, Right `gpt-5.5` assistant profile concurrency 20. Platform API pool cap and starvation behavior are not fully proven by private smoke. | If G1 exposes pool starvation or timeout, adjust only internal env/model-profile/worker concurrency and document rollback. | 20 chat lanes are not starved by 5 heavy page jobs; same-conversation idempotency stays ordered. |
-| G3: Static-page template operations | Xinbai accepted template, focused report links, and exports are locally/publicly validated. Production low-load prewarm is still disabled. | Enable/report prewarm only after confirming low-load guard, accepted-template reuse, and operator status visibility. Keep Xinbai monthly modular report as the default template. | Same dataset/default-prompt/focus requests reuse the accepted template first; expensive Image2/Codex work is background only unless redesign is explicit. |
-| G4: Background enterprise memory rollout | Fingerprint/dedup, enrichment-run storage, worker loop, deterministic enrichment kinds, and aggregate-first local tests are implemented. 8 server is deployed on `1db91f69c3fd`; schema migration, binary build, dry-run fingerprint backfill, and one-shot worker startup were recorded. Production backfill/enrichment remains disabled because no `DOCUMENT_ENRICHMENT*` runtime flag is configured and `document_enrichment_runs` is empty. | Decide the first controlled live batch: either run a limited non-dry-run fingerprint backfill and enqueue one reviewed document, or keep production enrichment disabled until private document-quality smoke credentials are available. Then run duplicate read-through and aggregate Q&A smoke. | New and existing documents can enrich asynchronously; duplicate documents read through canonical chunks/facts; resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval. |
-| G5: Low-quality answer recovery | Passive detection and fixed-scope task packaging pass locally. Hard answer gate remains disabled. Production enqueue is config-gated. | Keep hard gate disabled. Enable only passive collection first, then optionally allow `answer_quality_autofix` in the fixed allowlist after live observation. | Weak answers are collected and classified; system-defect fixes remain limited to answer/retrieval optimization files and require tests before deployment. |
-| G6: Confirmed data ingestion | Local confirmation/sync contract passed. 8-server live read-only source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis now routes deterministically and returns a `v3_data_ingestion_staging_plan` with no raw credential leakage. Local code now allows a configured model-gateway operator to confirm/sync an external-channel staging plan while anonymous and ordinary non-owner users remain unable to see the run. | Deploy the operator-confirmation slice to 8 server, then confirm one reviewed plan and start one guarded sync using an authenticated operator session. | 8-server receipt proves no write before confirmation, sync source is in-plan, confirmed rows become ordinary dataset evidence, and replies reach `dataset_ready`, `sync_started`, `sync_completed`, or truthful failure. |
-| G7: Controlled streaming | Main-site create and continue SSE paths support live answer deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`. Third-party streaming smoke passed on 8 server/public endpoint: 15/15 tasks OK, no duplicate final messages, 3 artifact links, P95 latency about 6s. Main-site browser/SSE smoke remains open. | Run main-site browser/local smoke for new and continued AssistantRun streaming. Keep third-party final-answer release policy separated from progress/artifact streaming. | Main site can show live answer deltas for new and continued runs behind flag; third-party sees progress and links but no rejected final-answer fragments. |
-| G8: Operator observability | Validation ledgers exist, but operators still need one compact page for queues, model lane, report tasks, enrichment backlog, low-quality cases, and data-ingestion staging/sync. | Expand the existing external integration/operator page with lazy-loaded health panels and sanitized counts only. | A 20+ conversation incident can be triaged from DataMax without reading raw logs or exposing secrets. |
-| G9: Final release hygiene | Local commits through `eea4f99` were pushed and 8 server is on `eea4f995968a`; `platform-api` was rebuilt and restarted active after the data-ingestion routing fixes. Validation docs still need the final private smoke receipts before this gate closes. | Run the remaining private smoke set and update the validation ledger with pass/fail, latency, and links. | 8 server is on latest `main`, service statuses are active, validation docs record every command and result. |
+| Priority | Gap | Current state | Next executable action | Done when |
+| --- | --- | --- | --- | --- |
+| P0 | G6 data-ingestion sync idempotency | Confirm and sync routes are live on 8 server. The guarded sync starts but fails at retrieval indexing because duplicate `(execution_id, document_chunk_id)` evidence rows violate `retrieval_evidences_execution_id_document_chunk_id_key`. | Make external-source retrieval-evidence indexing idempotent, add regression coverage, deploy the worker/API slice, and rerun the same operator confirm/sync with `force=true`. | 8-server sync reaches completed or a new truthful non-duplicate failure; the target staging dataset contains source-derived documents, chunks, and retrieval evidence. |
+| P0 | G1/G2 production smoke and concurrency | Runtime config shows 20 chat lanes, 5 static-page/Image2 lanes, and 2 Cloudflare fallback lanes. Third-party streaming smoke passed, but full 20-way ordinary chat, main-site 20-way, static-page 5-way, fallback 2-way, report export, and document-quality smoke are not closed. | After G6 is fixed, run the full private smoke set against `https://v3.elepcloud.com` with credentials loaded outside the repo. | Validation ledger records pass/fail, latency, report links, export links, service status, and no secret leakage. |
+| P0 | G3 Xinbai monthly report template operations | Accepted template and focused export links work. Low-load prewarm is still off. Product expectation is that most report requests reuse the modular monthly template and reorder modules by focus. | Keep the Xinbai modular monthly report as the only default template, verify focus routing and export files on 8 server, then decide whether to enable low-load prewarm. | Report requests return one clickable report link, correct focus, accessible `table-data.csv`, `report.ppt`, `report.md`, and no duplicate link chatter. |
+| P0 | G7 controlled streaming | Third-party stream path has a production receipt. Main-site new/continue true streaming still needs browser/SSE smoke. | Run browser smoke with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` for new AssistantRun and continued AssistantRun. | Main-site UI shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
+| P1 | G4 background enterprise memory | Fingerprint/dedup, enrichment-run storage, deterministic enrichment kinds, and aggregate-first local tests are implemented. Production existing-document backfill/enrichment remains disabled. | Run a limited non-dry-run fingerprint backfill on reviewed scope, enqueue one reviewed document enrichment, then run duplicate read-through and aggregate Q&A smoke. | Resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval; duplicate documents do not double count. |
+| P1 | G5 passive low-quality recovery | Local passive collection and fixed-scope packaging passed. Hard customer-facing gate remains disabled. Production enqueue is gated. | Enable passive collection only after P0 smokes remain stable; allow `answer_quality_autofix` only for fixed-scope system defects with tests. | Weak answers are collected and classified; no normal answer is suppressed; fixes stay within answer/retrieval optimization scope. |
+| P1 | G8 operator observability | Ledgers exist but operators still lack one compact status page for queues, model lanes, report jobs, enrichment backlog, low-quality cases, and staging/sync state. | Expand the existing external integrations/operator page with sanitized, lazy-loaded counters and status panels. | A 20+ conversation incident can be triaged from DataMax without raw logs, credentials, or full customer data. |
+| P1 | G9 release hygiene | Commits through `688643f` are pushed and deployed. Validation docs need the latest G6 duplicate-key receipt and later fix receipt. | Keep every deploy tied to a commit, service status, smoke receipt, and rollback note. | 8 server is on latest `main`, all changed services are active, and validation docs match reality. |
 
-### Current Execution Order
+### Immediate Execution Order
 
-1. Deploy G6 operator confirmation to 8 server, then run one authenticated operator confirm/sync smoke against the completed external-channel staging plan.
-2. Run G7 main-site browser/SSE smoke for new and continued AssistantRun streaming; third-party streaming already has an 8-server receipt.
-3. Decide the G4 first controlled production enrichment batch: limited non-dry-run fingerprint backfill plus one reviewed enqueue, or defer until private document-quality smoke credentials are available.
-4. Run G1/G2 full private production smoke after credential/config verification: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report export, and document-quality smoke.
-5. Enable or defer G3 production prewarm based on the smoke result and operator capacity.
-6. Enable G5 passive live collection only after ordinary Q&A and report routing remain stable.
-7. Add G8 observability once the queue/status surfaces have the exact counters proven by smoke.
-8. Close G9 by recording remaining receipts and freezing the next release baseline.
+1. Locate the retrieval-evidence insertion path that can write duplicate `(execution_id, document_chunk_id)` rows.
+2. Add a failing regression for duplicate external-source indexing in the same execution.
+3. Implement idempotent insert/upsert behavior without changing public third-party fields.
+4. Run local targeted tests and data-ingestion staging sync smoke.
+5. Commit, push, deploy the changed binaries to 8 server, and restart only affected services.
+6. Re-run the 8-server operator sync with explicit `source_id=hy-sql-traffic-area` and `force=true`.
+7. Record whether sync completed or failed for a new root cause in `docs/validation/datamax-main-gap-closure.md` and `docs/validation/data-ingestion-staging-sync-smoke.md`.
+8. Continue with main-site streaming smoke, full 20-way production smoke, and Xinbai report/export smoke.
 
-### Required Smoke Set For The Next Deployment
+### P0 Task A: Fix Retrieval-Evidence Idempotency
+
+**Files:**
+
+- Inspect: `crates/storage/src/lib.rs`
+- Inspect: `crates/retrieval-worker/src/main.rs`
+- Inspect: `crates/retrieval-worker/src/lib.rs`
+- Inspect: `crates/external-source-worker/src/lib.rs`
+- Modify likely: `crates/storage/src/lib.rs`
+- Modify tests likely: `crates/storage/src/lib.rs` or `crates/retrieval-worker/src/lib.rs`
+- Update docs: `docs/validation/datamax-main-gap-closure.md`
+- Update docs: `docs/validation/data-ingestion-staging-sync-smoke.md`
+
+**Step 1: Find the write path**
+
+Run:
+
+```powershell
+rg -n "retrieval_evidences|insert.*retrieval|document_chunk_id|execution_id" crates/storage crates/retrieval-worker crates/external-source-worker
+```
+
+Expected:
+
+- exact repository method or SQL block that inserts retrieval evidence is identified;
+- caller path from external-source sync indexing is identified.
+
+**Step 2: Write a failing regression**
+
+Add a test that runs the same evidence insert twice for the same `execution_id` and `document_chunk_id`.
+
+Expected before implementation:
+
+- test fails with the duplicate-key behavior or proves the current method is not idempotent.
+
+**Step 3: Implement minimal idempotency**
+
+Preferred implementation:
+
+- use `ON CONFLICT (execution_id, document_chunk_id) DO UPDATE` when the duplicate row represents the same indexing attempt and the new values are at least as fresh;
+- otherwise use `DO NOTHING` only if the existing row is semantically equivalent and downstream counters are not misreported;
+- keep document, chunk, dataset, source, and execution identity unchanged;
+- do not hide unrelated source-sync errors.
+
+**Step 4: Verify locally**
+
+Run:
+
+```powershell
+cargo fmt --check -p storage -p retrieval-worker -p platform-api
+cargo test -p storage retrieval_evidence --lib
+cargo test -p retrieval-worker external --lib
+cargo test -p platform-api data_ingestion --lib
+cargo test -p platform-api external_source_sync --lib
+cargo check -p platform-api -p retrieval-worker
+bash scripts/run-data-ingestion-staging-sync-smoke.sh
+git diff --check
+```
+
+If a test filter has no matching tests, record the actual matching filter used in the validation ledger.
+
+**Step 5: Commit**
+
+```powershell
+git status --short --branch
+git add crates docs/validation
+git commit -m "Make retrieval evidence indexing idempotent"
+git push
+```
+
+### P0 Task B: Deploy And Re-Run 8-Server Data-Ingestion Sync
+
+**Files:**
+
+- Update: `docs/validation/datamax-main-gap-closure.md`
+- Update: `docs/validation/data-ingestion-staging-sync-smoke.md`
+
+**Step 1: Deploy changed services**
+
+Build and restart only changed binaries. If only storage/retrieval indexing changed, include `retrieval-worker`; include `platform-api` only if API code changed.
+
+```powershell
+ssh 8服务器 "set -e; cd /srv/aiv3/repo; git pull --ff-only; CC=clang CXX=clang++ cargo build --release -p platform-api -p retrieval-worker; sudo systemctl restart aiv3-platform-api.service aiv3-retrieval-worker.service; sleep 5; systemctl is-active aiv3-platform-api.service; systemctl is-active aiv3-retrieval-worker.service; git rev-parse --short=12 HEAD"
+```
+
+Expected:
+
+- server fast-forwards to the pushed commit;
+- changed services are active;
+- untracked server file `mode` is not touched.
+
+**Step 2: Re-run guarded sync**
+
+Use an authenticated operator session and the latest reviewed data-ingestion staging plan. Do not print bearer tokens, session tokens, database URLs, or raw source rows.
+
+Body shape:
+
+```json
+{
+  "source_id": "hy-sql-traffic-area",
+  "sync_kind": "full",
+  "force": true,
+  "checkpoint": {
+    "operator_smoke": "2026-06-06-idempotent-retry"
+  }
+}
+```
+
+Expected:
+
+- confirm remains idempotent;
+- sync starts with selected source;
+- no duplicate-key failure occurs;
+- terminal status is `data_ingestion_staging_sync_completed` or a new truthful non-duplicate failure with sanitized `failure_kind`.
+
+**Step 3: Verify indexed evidence**
+
+Query only DataMax metadata/state:
+
+- source-derived dataset id;
+- document count;
+- chunk count;
+- retrieval evidence count;
+- latest sync status;
+- sanitized failure kind if failed.
+
+Expected:
+
+- no raw customer table rows are printed;
+- no raw credentials are printed;
+- evidence count is non-zero if sync completed.
+
+**Step 4: Record receipt**
+
+Update both validation docs with:
+
+- commit;
+- services restarted;
+- run id;
+- plan id;
+- source id;
+- terminal state;
+- counts;
+- root cause if not completed.
+
+### P0 Task C: Close Production Smoke
+
+**Files:**
+
+- Update: `docs/validation/datamax-main-gap-closure.md`
+- Update if needed: `scripts/smoke/external-channel-20way.mjs`
+- Update if needed: `scripts/smoke/main-chat-20way.mjs`
+- Update if needed: `scripts/smoke/static-page-5way.mjs`
+- Update if needed: `scripts/smoke/cloudflare-fallback-2way.mjs`
 
 Run locally first when possible, then on or against 8 server:
 
@@ -117,6 +278,270 @@ git diff --check
 ```
 
 If private credentials are unavailable, record that explicitly in `docs/validation/datamax-main-gap-closure.md` and run only read-only/no-token guard probes. Do not claim a production pass from no-token probes.
+
+Expected:
+
+- third-party ordinary Q&A still works under 20-way concurrency;
+- main-site ordinary Q&A still works under 20-way concurrency;
+- 5 heavy static-page jobs do not starve ordinary chat;
+- Cloudflare fallback is bounded at 2-way concurrency;
+- report/export smoke returns one primary report link and accessible export files;
+- document-quality smoke covers resume project experience, elderly-care procedure answers, attendance date/work-hour formatting, and aggregate-first supply.
+
+**Commit after receipt update:**
+
+```powershell
+git add docs/validation scripts
+git commit -m "Record DataMax production smoke receipts"
+git push
+```
+
+### P0 Task D: Close Main-Site Controlled Streaming
+
+**Files:**
+
+- Inspect/modify if needed: `crates/platform-api/src/lib.rs`
+- Inspect/modify if needed: `apps/web/app/HomePageClient.js`
+- Inspect/modify if needed: `apps/web/app/lib/assistant-run-progress.js`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+- Reference: `docs/plans/2026-06-01-v3-streaming-session-upgrade-plan.md`
+
+**Step 1: Run local stream regressions**
+
+```powershell
+cargo fmt --check -p platform-api
+cargo test -p platform-api assistant_run_sse --lib
+cargo test -p platform-api assistant_run_continue_sse --lib
+cargo test -p platform-api assistant_run_live --lib
+cargo test -p platform-api assistant_run_continue --lib
+cargo test -p platform-api external_channel_public_stream --lib
+npm --prefix apps/web run build
+```
+
+Expected:
+
+- new AssistantRun stream emits live deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`;
+- continued AssistantRun stream uses the same live-delta path;
+- final full-text delta is not duplicated after live deltas.
+
+**Step 2: Run browser/SSE smoke**
+
+Use a private operator/main-site session. Test both:
+
+- new chat run;
+- continue existing run.
+
+Expected:
+
+- UI text appears progressively;
+- terminal state is consistent across SSE, polling, and final run view;
+- third-party stream policy remains progress/artifact-safe.
+
+**Step 3: Record and commit**
+
+```powershell
+git add docs/validation
+git commit -m "Record DataMax main-site streaming smoke"
+git push
+```
+
+### P0 Task E: Verify Xinbai Monthly Report Template Operations
+
+**Files:**
+
+- Inspect/modify if needed: `crates/platform-api/src/lib.rs`
+- Inspect/modify if needed: `crates/static-page-worker/src`
+- Inspect/modify if needed: `apps/web/app`
+- Update: `docs/validation/external-report-export-smoke.md`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Validate accepted template**
+
+```powershell
+npm run validate:xinbai-report-template
+npm run validate:xinbai-report-template -- --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html
+```
+
+Expected:
+
+- the modular monthly report template is still valid;
+- mobile layout, focus module ordering, export links, and public assets pass validation.
+
+**Step 2: Run external report/export smoke**
+
+```powershell
+npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main
+powershell -ExecutionPolicy Bypass -File .\scripts\run-external-capability-routing-smoke.ps1 -BaseUrl https://v3.elepcloud.com
+```
+
+Required scenarios:
+
+- `取高`;
+- `经营状况`;
+- `经营健康度`;
+- `看看整体经营情况`;
+- `风险识别`;
+- `看看新街口店经营风险`;
+- `销售缺口统计一下，哪些门店需要助推？`;
+- non-trigger guard: `取高是什么意思？`;
+- non-trigger guard: `风险识别系统有哪些项目经历？`.
+
+Expected:
+
+- report card title is `新世界百货经营管理月报表`;
+- one customer-visible link is returned;
+- `focus` matches the user concern;
+- `table-data.csv`, `report.ppt`, and `report.md` are reachable;
+- answer text explains the detected focus, not internal template reuse mechanics.
+
+**Step 3: Decide low-load prewarm**
+
+Enable `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` only if:
+
+- P0 concurrency smoke is stable;
+- template reuse is proven;
+- operator status can show queued/running/prewarm tasks;
+- expensive Image2/Codex work remains low priority.
+
+### P1 Task F: Controlled Background Enterprise Memory Batch
+
+**Files:**
+
+- Inspect/modify if needed: `crates/storage/src/lib.rs`
+- Inspect/modify if needed: `crates/platform-api/src/bin/document-fingerprint-backfill.rs`
+- Inspect/modify if needed: `crates/retrieval-worker/src/bin/document-enrichment-worker.rs`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+- Reference: `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`
+
+**Step 1: Run a reviewed dry run**
+
+On 8 server, use a reviewed dataset or document scope:
+
+```powershell
+ssh 8服务器 "cd /srv/aiv3/repo && set -a && . /etc/aiv3/aiv3.env && set +a && ./target/release/document-fingerprint-backfill --limit 20 --dry-run --pretty"
+```
+
+Expected:
+
+- candidate, skipped, canonical, and duplicate counts are recorded;
+- no content, credentials, or raw document text is printed.
+
+**Step 2: Run limited non-dry-run only after review**
+
+Use the same scoped command without `--dry-run` only for the reviewed target.
+
+Expected:
+
+- fingerprints are recorded;
+- duplicate aliasing does not change external document IDs;
+- rollback note is documented as "disable enrichment flags and stop worker", not "delete data".
+
+**Step 3: Enqueue and process one enrichment run**
+
+```powershell
+ssh 8服务器 "cd /srv/aiv3/repo && set -a && . /etc/aiv3/aiv3.env && set +a && DOCUMENT_ENRICHMENT_WORKER_ONCE=true DOCUMENT_ENRICHMENT_WORKER_MAX_RUNS=1 ./target/release/document-enrichment-worker"
+```
+
+Expected:
+
+- one run is claimed or the empty queue is recorded truthfully;
+- successful run writes only compact summaries/facts;
+- failed run records sanitized error and retry state.
+
+**Step 4: Run aggregate-quality smoke**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local
+```
+
+Expected:
+
+- resume multi-document project experience questions use deterministic supply;
+- elderly-care procedure questions cite parsed/enriched procedure content;
+- attendance date/work-hour questions remain readable;
+- Xinbai aggregate questions use deterministic aggregate before retrieval.
+
+### P1 Task G: Enable Passive Low-Quality Recovery Safely
+
+**Files:**
+
+- Inspect/modify if needed: `crates/platform-api/src/lib.rs`
+- Inspect/modify if needed: `crates/codex-host-agent/src/main.rs`
+- Update: `docs/operations/answer-quality-autofix.md`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Keep the hard gate disabled**
+
+Verify config and behavior:
+
+- no customer-facing hard quality gate is enabled;
+- insufficient-evidence answers are not suppressed;
+- passive collection can still record weak-answer packages.
+
+**Step 2: Run local regressions**
+
+```powershell
+cargo fmt --check -p platform-api -p codex-host-agent
+cargo test -p platform-api answer_quality_autofix --lib
+cargo test -p platform-api assistant_run_answer_quality_gate --lib
+cargo test -p codex-host-agent answer_quality --lib
+powershell -ExecutionPolicy Bypass -File .\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case answer_quality_autofix,human_exception,runtime_summary
+powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local
+```
+
+Expected:
+
+- weak answers and dissatisfaction signals are packaged;
+- `blocking_gate_enabled=false`;
+- fixed-task allowlist is limited to answer/retrieval optimization;
+- no customer answer is blocked by this path.
+
+**Step 3: Production rollout rule**
+
+Enable live enqueue only after P0 chat/report routes are stable. If enabled, start with passive collection and manual review; do not auto-merge any code change without tests and deployment receipt.
+
+### P1 Task H: Expand Operator Observability
+
+**Files:**
+
+- Modify: `apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`
+- Modify if needed: `apps/web/app/lib/external-integrations.js`
+- Modify if needed: `apps/web/app/lib/external-integrations.test.mjs`
+- Modify if needed: `crates/platform-api/src/lib.rs`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Add compact sanitized panels**
+
+The operator page should show:
+
+- model lane health and active concurrency;
+- workflow queue backlog by kind;
+- static-page/report queued/running/completed/failed counts;
+- template reuse/prewarm status;
+- document enrichment backlog;
+- low-quality passive case count;
+- data-ingestion staging/sync state and latest sanitized failure kind.
+
+**Step 2: Keep details lazy-loaded**
+
+Do not load raw logs, raw prompts, raw documents, raw source rows, database URLs, or credentials. Detailed panels load only when selected and remain sanitized.
+
+**Step 3: Verify**
+
+```powershell
+npm --prefix apps/web run build
+git diff --check
+```
+
+If a focused web test exists, run it and record the exact command. If not, add one before changing behavior-heavy UI state.
+
+**Step 4: Commit**
+
+```powershell
+git add apps/web crates docs/validation
+git commit -m "Expand DataMax operator observability"
+git push
+```
 
 ### Implementation Boundaries For The Next Slices
 
@@ -1341,17 +1766,17 @@ git push
 
 ## Execution Order
 
-Use `Executable Remaining-Gap Snapshot - 2026-06-06` as the current execution sheet. The detailed task bodies above remain the implementation reference.
+Use `Active Execution Sheet - 2026-06-06` as the current execution sheet. The detailed task bodies above remain implementation reference only.
 
-1. Task 10: run 8-server private streaming smoke; code/runtime deployment is done.
-2. Task 9: run 8-server live source readiness and one confirmed staging-plan smoke.
-3. Task 5 and Task 6: choose and execute the first controlled live enrichment batch, or explicitly defer production backfill/enrichment.
-4. Task 7: rerun private aggregate-first smoke on 8 server after deployment.
-5. Task 2 and Task 3: run 20-way private production smoke and lock config only if smoke exposes gaps.
-6. Task 4: enable or defer static-page low-load prewarm based on smoke and operator readiness.
-7. Task 8: keep passive answer-quality recovery enabled only after core chat/report routes are stable; hard gate remains disabled.
-8. Task 11: expand operator observability using the counters proven in the earlier tasks.
-9. Task 12: final private smoke, validation commit, and release baseline freeze.
+1. P0 Task A: fix retrieval-evidence idempotency and add regression coverage.
+2. P0 Task B: deploy the fix to 8 server and rerun guarded data-ingestion sync with explicit `source_id` and `force=true`.
+3. P0 Task C: run the remaining private production smoke set: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality.
+4. P0 Task D: close main-site live-streaming browser/SSE smoke for new and continued AssistantRun.
+5. P0 Task E: verify Xinbai monthly modular report template reuse, focus ordering, and export-file availability on 8 server.
+6. P1 Task F: run one controlled production fingerprint backfill/enrichment batch or explicitly defer it with reason and receipt.
+7. P1 Task G: enable passive low-quality collection only after P0 routes stay stable; keep the hard gate disabled.
+8. P1 Task H: expand operator observability with sanitized counters proven by smoke.
+9. Final release gate: record every command, commit, service status, smoke receipt, failure, and rollback path in validation docs.
 
 ## Definition Of Done
 

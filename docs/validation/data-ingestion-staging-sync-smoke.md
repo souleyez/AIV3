@@ -179,6 +179,73 @@ Interpretation:
 - The current default dataset still needs a confirmed sync or rebinding before it can be treated as ready.
 - Latest failed sync should stay visible as an operator attention item and should not erase the fact that alternate ready datasets exist.
 
+## 2026-06-06 8-Server Operator Confirm/Sync Result Before Idempotency Fix
+
+- Environment: `8服务器`.
+- Deployed commit: `688643f780f3`.
+- Analysis AssistantRun: `de6755e0-b490-4665-901b-8847b7a0081b`.
+- Plan id: `staging-plan-ca9e6b0e-7f16-4fc0-b979-e1ad63afba06`.
+- Source id: `hy-sql-traffic-area`.
+- Confirm result:
+  - HTTP 200;
+  - accepted true;
+  - dataset id `ac7bb786-3ffb-40e2-bade-9f70d5fb4764`;
+  - created dataset true;
+  - production write allowed false.
+- Sync result:
+  - initial request without `source_id` returned HTTP 400 `data_ingestion_staging_database_source_ambiguous`;
+  - retry with `source_id=hy-sql-traffic-area` returned HTTP 202;
+  - sync run id `c37d9419-bacf-420b-8add-1fcfac4f02f2`;
+  - initial status running;
+  - deduplicated false;
+  - production write allowed false.
+- Terminal failure:
+  - workflow stage `failed`;
+  - workflow status `failed`;
+  - failure kind `index_external_retrieval`;
+  - sanitized error references duplicate key `retrieval_evidences_execution_id_document_chunk_id_key`.
+- Interpretation:
+  - human/operator confirmation and guarded sync startup are live;
+  - sync source validation works;
+  - the next fix must make retrieval evidence indexing idempotent before this flow can be called complete.
+
+## 2026-06-06 Local Retrieval Evidence Idempotency Coverage
+
+- Files changed:
+  - `crates/storage/src/lib.rs`;
+  - `crates/platform-api/src/lib.rs`.
+- Behavior:
+  - `retrieval_evidences` writes now upsert on `(execution_id, document_chunk_id)`;
+  - retrying the same execution/chunk refreshes the evidence row instead of creating a duplicate or failing the sync;
+  - public third-party request and response fields are unchanged.
+- Local commands:
+  - `cargo fmt --check -p storage -p retrieval-worker -p platform-api`;
+  - `cargo test -p storage retrieval_evidence --lib`;
+  - `cargo test -p retrieval-worker external --lib`;
+  - `cargo test -p retrieval-worker --lib`;
+  - `cargo test -p platform-api retrieval_evidence_create_many_is_idempotent_for_same_execution_chunk --lib -- --nocapture`;
+  - `cargo test -p platform-api data_ingestion --lib`;
+  - `cargo test -p platform-api external_source_sync --lib`;
+  - `cargo check -p platform-api -p retrieval-worker`;
+  - `bash scripts/run-data-ingestion-staging-sync-smoke.sh`.
+- Results:
+  - format check passed;
+  - storage retrieval evidence tests passed, 2 tests;
+  - `retrieval-worker external` matched 0 tests; full `retrieval-worker --lib` passed, 6 tests;
+  - platform DB idempotency test compiled but was skipped by the local DB guard because the configured database is shared `ai_data_platform_v3`; the guard was not bypassed;
+  - platform data-ingestion tests passed, 15 tests;
+  - platform external-source sync tests passed, 6 tests;
+  - platform/retrieval compile check passed;
+  - staging sync smoke passed.
+- Smoke receipts:
+  - JSON `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T034221Z.json`;
+  - Markdown `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T034221Z.md`;
+  - live readiness self-test JSON `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T034429Z.json`.
+- Remaining:
+  - deploy this slice to 8 server;
+  - rerun guarded sync with explicit `source_id=hy-sql-traffic-area` and `force=true`;
+  - record document, chunk, retrieval evidence counts or a new sanitized non-duplicate failure.
+
 ## Safety Notes
 
 - Use only DataMax stored database-source configuration and server-side env references.
