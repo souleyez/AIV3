@@ -21065,6 +21065,29 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
+    if let Some(reply) = maybe_enqueue_external_channel_data_ingestion_analysis(
+        state,
+        connection_id,
+        connection,
+        &run,
+        &assistant_request,
+        &message,
+        now,
+        None,
+    )
+    .await?
+    {
+        return Ok((
+            StatusCode::ACCEPTED,
+            ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(run.id),
+                idempotency_key: message.idempotency_key.clone(),
+                reply,
+            },
+        ));
+    }
+
     let external_action_plan = plan_and_record_external_action_run(
         state,
         connection_id,
@@ -100659,6 +100682,16 @@ mod tests {
         assert!(!external_channel_message_requests_data_ingestion_analysis(
             "邓工是谁？"
         ));
+    }
+
+    #[test]
+    fn external_channel_data_ingestion_requests_are_prioritized_before_action_planning() {
+        let prompt = "请实时接入这个数据库，分析字段映射并生成建表 staging plan";
+
+        assert!(external_channel_message_requests_data_ingestion_analysis(
+            prompt
+        ));
+        assert!(external_channel_prompt_may_need_planned_action(prompt));
     }
 
     #[test]

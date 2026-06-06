@@ -339,7 +339,14 @@ function Test-ConfigHasDataSourceScope {
     if ($null -eq $Config) {
         return $false
     }
-    foreach ($key in @("dataset_external_id", "dataset_external_ids", "available_document_external_ids")) {
+    foreach ($key in @(
+        "dataset_external_id",
+        "dataset_external_ids",
+        "available_document_external_ids",
+        "business_datasource_ids",
+        "business_database_source_ids",
+        "database_source_ids"
+    )) {
         $value = Get-ConfigValue -Config $Config -Name $key -Default $null
         if ($key -eq "dataset_external_id") {
             if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
@@ -360,6 +367,13 @@ function New-ExternalDataIngestionSmokeBody {
 
     $sourceId = [string](Get-ConfigValue -Config $Config -Name "available_document_source_id" -Default "")
     $datasetExternalId = [string](Get-ConfigValue -Config $Config -Name "dataset_external_id" -Default "")
+    $businessDatasourceIds = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "business_datasource_ids"))
+    if ($businessDatasourceIds.Count -eq 0) {
+        $businessDatasourceIds = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "business_database_source_ids"))
+    }
+    if ($businessDatasourceIds.Count -eq 0) {
+        $businessDatasourceIds = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "database_source_ids"))
+    }
     $body = [ordered]@{
         platform = [string](Get-ConfigValue -Config $Config -Name "platform" -Default "generic_chat")
         tenant_external_id = [string](Get-ConfigValue -Config $Config -Name "tenant_external_id" -Default "tenant-ext-001")
@@ -376,6 +390,7 @@ function New-ExternalDataIngestionSmokeBody {
         available_document_source_id = if ([string]::IsNullOrWhiteSpace($sourceId)) { $null } else { $sourceId }
         available_document_external_ids = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "available_document_external_ids"))
         dataset_external_ids = @(Convert-ToStringArray (Get-ConfigValue -Config $Config -Name "dataset_external_ids"))
+        business_datasource_ids = $businessDatasourceIds
         mention_external_user_ids = @()
         attachment_refs = @()
         idempotency_key = "cloudflare-codex-smoke:data-ingestion:$RunId"
@@ -570,6 +585,7 @@ function Invoke-ServerStaticPageMutationSmoke {
         idempotency_key = $body.idempotency_key
         dataset_external_ids_count = @($body.dataset_external_ids).Count
         available_document_external_ids_count = @($body.available_document_external_ids).Count
+        business_datasource_ids_count = @($body.business_datasource_ids).Count
     }
     if ($submit.status_code -lt 200 -or $submit.status_code -ge 300 -or $null -eq $submitParsed) {
         return New-SmokeResult -CaseId "static-page-no-confirm" -Status "failed" -Message "External static-page mutation request did not return a valid success response." -Details $details

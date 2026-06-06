@@ -47,7 +47,7 @@ $env:V3_EXTERNAL_CHANNEL_BEARER_TOKEN = "<private token>"
   -ServerCaseConfigPath .\private\data-ingestion-smoke.case.json
 ```
 
-The private config must include at least one external-channel source selector: `dataset_external_id`, `dataset_external_ids`, or `available_document_external_ids`. It may also include `connection_id`, `available_document_source_id`, `data_ingestion_text`, and `bearer_token_env`. Without a bearer or without a source selector, the script fails before mutation with `mutation_attempted=false`.
+The private config must include at least one external-channel source selector: `dataset_external_id`, `dataset_external_ids`, `available_document_external_ids`, `business_datasource_ids`, `business_database_source_ids`, or `database_source_ids`. It may also include `connection_id`, `available_document_source_id`, `data_ingestion_text`, and `bearer_token_env`. Without a bearer or without a source selector, the script fails before mutation with `mutation_attempted=false`.
 
 ## 2026-05-25 Local Evidence
 
