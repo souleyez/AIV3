@@ -7,7 +7,9 @@ use retrieval_worker::{
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use storage::{NewRetrievalEvidence, PgStorage, DEFAULT_LOCAL_DATABASE_URL};
+use storage::{
+    NewDocumentEnrichmentRun, NewRetrievalEvidence, PgStorage, DEFAULT_LOCAL_DATABASE_URL,
+};
 use tokio::time::Duration;
 use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 
@@ -372,7 +374,7 @@ async fn process_post_ingest_fact_index_task(
     storage: &PgStorage,
     task: WorkflowTask,
 ) -> Result<()> {
-    let process_result: Result<usize> = async {
+    let process_result: Result<(usize, Value)> = async {
         let dataset_id = task_payload_uuid(&task.payload, "dataset_id")
             .map(domain_model::DatasetId)
             .ok_or_else(|| anyhow!("fact index cleanup task missing dataset_id"))?;
@@ -412,6 +414,9 @@ async fn process_post_ingest_fact_index_task(
             indexed_at,
         )
         .await?;
+        let enrichment_summary =
+            maybe_enqueue_document_enrichment_runs(storage, task.tenant_id, &document, indexed_at)
+                .await?;
 
         storage
             .documents()
@@ -432,18 +437,23 @@ async fn process_post_ingest_fact_index_task(
                         "snapshot_key": snapshot.snapshot_key,
                         "snapshot_source_fact_count": snapshot.source_fact_count,
                         "snapshot_source_document_count": snapshot.source_document_count,
+                    },
+                    "document_enrichment": {
+                        "status": enrichment_summary["status"].clone(),
+                        "run_count": enrichment_summary["run_count"].clone(),
+                        "skipped_reason": enrichment_summary["skipped_reason"].clone(),
                     }
                 }),
                 indexed_at,
             )
             .await?;
 
-        Ok(persisted_facts.len())
+        Ok((persisted_facts.len(), enrichment_summary))
     }
     .await;
 
     match process_result {
-        Ok(fact_count) => {
+        Ok((fact_count, enrichment_summary)) => {
             storage
                 .workflow_tasks()
                 .mark_succeeded(task.id, Utc::now())
@@ -452,6 +462,8 @@ async fn process_post_ingest_fact_index_task(
                 task_id = %task.id,
                 execution_id = %task.execution_id,
                 fact_count,
+                enrichment_status = enrichment_summary["status"].as_str().unwrap_or("unknown"),
+                enrichment_run_count = enrichment_summary["run_count"].as_i64().unwrap_or(0),
                 "post-ingest fact index cleanup task completed"
             );
             Ok(())
@@ -465,6 +477,152 @@ async fn process_post_ingest_fact_index_task(
             Err(error)
         }
     }
+}
+
+async fn maybe_enqueue_document_enrichment_runs(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    document: &Document,
+    available_at: chrono::DateTime<Utc>,
+) -> Result<Value> {
+    if !document_enrichment_enabled() {
+        return Ok(json!({
+            "status": "skipped",
+            "skipped_reason": "disabled",
+            "run_count": 0,
+            "runs": [],
+        }));
+    }
+
+    let Some(input_fingerprint) =
+        load_document_content_sha256(storage, tenant_id, document.id).await?
+    else {
+        return Ok(json!({
+            "status": "skipped",
+            "skipped_reason": "missing_content_fingerprint",
+            "run_count": 0,
+            "runs": [],
+        }));
+    };
+
+    let parse_version = document_enrichment_parse_version(document);
+    let priority = document_enrichment_default_priority();
+    let max_attempts = document_enrichment_max_attempts();
+    let mut runs = Vec::new();
+    for enrichment_kind in document_enrichment_kinds() {
+        let run = storage
+            .document_enrichment_runs()
+            .create_or_get(
+                tenant_id,
+                &NewDocumentEnrichmentRun {
+                    document_id: document.id,
+                    enrichment_kind: enrichment_kind.to_string(),
+                    parse_version: parse_version.clone(),
+                    input_fingerprint: input_fingerprint.clone(),
+                    priority,
+                    max_attempts,
+                    available_at,
+                },
+                available_at,
+            )
+            .await?;
+        runs.push(json!({
+            "id": run.id,
+            "document_id": run.document_id,
+            "enrichment_kind": run.enrichment_kind,
+            "status": run.status,
+            "attempt_count": run.attempt_count,
+            "priority": run.priority,
+            "available_at": run.available_at,
+        }));
+    }
+
+    Ok(json!({
+        "status": "queued",
+        "skipped_reason": Value::Null,
+        "run_count": runs.len(),
+        "input_fingerprint": input_fingerprint,
+        "parse_version": parse_version,
+        "runs": runs,
+    }))
+}
+
+async fn load_document_content_sha256(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    document_id: domain_model::DocumentId,
+) -> Result<Option<String>> {
+    let value = sqlx::query_scalar::<_, Option<String>>(
+        r#"
+        select content_sha256
+        from documents
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(document_id.0)
+    .fetch_optional(storage.pool())
+    .await?;
+    Ok(value.flatten().filter(|value| !value.trim().is_empty()))
+}
+
+fn document_enrichment_enabled() -> bool {
+    env_flag("DOCUMENT_ENRICHMENT_ENABLED", false)
+}
+
+fn document_enrichment_default_priority() -> i32 {
+    env_i32("DOCUMENT_ENRICHMENT_DEFAULT_PRIORITY", 100).clamp(1, 10_000)
+}
+
+fn document_enrichment_max_attempts() -> i32 {
+    env_i32("DOCUMENT_ENRICHMENT_MAX_ATTEMPTS", 3).clamp(1, 10)
+}
+
+fn document_enrichment_kinds() -> Vec<&'static str> {
+    vec![
+        "structure_outline_v1",
+        "fact_index_v2",
+        "qa_seed_v1",
+        "entity_relation_v1",
+    ]
+}
+
+fn document_enrichment_parse_version(document: &Document) -> Option<String> {
+    document
+        .metadata
+        .get("ingest")
+        .and_then(|value| {
+            value
+                .get("parse_version")
+                .or_else(|| value.get("parseVersion"))
+                .or_else(|| value.get("parse_method"))
+                .or_else(|| value.get("parseMethod"))
+        })
+        .or_else(|| document.metadata.get("parse_version"))
+        .or_else(|| document.metadata.get("parseVersion"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn env_flag(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn env_i32(key: &str, default: i32) -> i32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(default)
 }
 
 #[derive(Clone, Debug)]

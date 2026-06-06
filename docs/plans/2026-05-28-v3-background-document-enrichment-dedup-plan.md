@@ -234,7 +234,7 @@ Remaining:
 
 ## Task 5: Background Enrichment Orchestrator
 
-Status: `repository-foundation-completed-locally-2026-06-06`
+Status: `enqueue-foundation-completed-locally-2026-06-06`
 
 Files:
 
@@ -274,17 +274,21 @@ Progress 2026-06-06:
 
 - Added storage structs and repository for `document_enrichment_runs`.
 - Repository supports idempotent create/get, claim next available run, success marking, transient-error requeue with backoff time, terminal failure, and list-by-document.
+- Retrieval worker post-ingest fact cleanup can enqueue `structure_outline_v1`, `fact_index_v2`, `qa_seed_v1`, and `entity_relation_v1` runs when `DOCUMENT_ENRICHMENT_ENABLED=true`.
+- Enqueue is skipped by default, and skipped when a document has no `content_sha256`.
+- Document metadata records a compact `document_enrichment` enqueue summary after fact cleanup.
 - Added regression `document_enrichment_run_repository_claims_requeues_and_succeeds`.
 - Verified locally with:
   - `cargo fmt --check -p platform-api -p storage`;
   - `cargo test -p platform-api document_enrichment_run_repository_claims_requeues_and_succeeds --lib`;
   - `cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib`;
+  - `cargo test -p retrieval-worker`;
   - `cargo test -p storage document_canonical_enrichment --lib`;
+  - `cargo check -p retrieval-worker`;
   - `cargo check -p platform-api`.
 
 Remaining:
 
-- Enqueue enrichment runs after parse/index completion.
 - Add a low-priority worker/idle execution loop.
 - Add diagnostics surface for pending/running/failed enrichment runs.
 - Wire feature flags before enabling on 8 server.
