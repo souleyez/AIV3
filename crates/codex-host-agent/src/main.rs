@@ -2005,6 +2005,7 @@ async fn maybe_record_external_data_ingestion_analysis_result_from_task_output(
         event_name,
         external_data_ingestion_analysis_payload_from_fixed_task_output(
             workflow_execution_id,
+            fixed_task,
             fixed_task_output,
         ),
     )
@@ -2028,10 +2029,12 @@ fn data_ingestion_analysis_assistant_event_name(output: &Value) -> &'static str 
 
 fn external_data_ingestion_analysis_payload_from_fixed_task_output(
     workflow_execution_id: WorkflowExecutionId,
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
     output: &Value,
 ) -> Value {
     let staging_spec = output.get("staging_spec").cloned().unwrap_or(Value::Null);
     let staging_plan_available = !staging_spec.is_null();
+    let source_scope = external_data_ingestion_source_scope_from_fixed_task(fixed_task);
     json!({
         "template_id": "data_ingestion_analysis",
         "status": output.get("status").cloned().unwrap_or(Value::String("failed".to_string())),
@@ -2043,6 +2046,16 @@ fn external_data_ingestion_analysis_payload_from_fixed_task_output(
                 "plan_id": format!("staging-plan-{}", workflow_execution_id),
                 "codex_host_workflow_execution_id": workflow_execution_id.to_string(),
                 "template_id": "data_ingestion_analysis",
+                "approval_status": "pending_human_review",
+                "execution_policy": {
+                    "dry_run_only": true,
+                    "requires_human_confirmation": true,
+                    "production_write_allowed": false,
+                    "schema_mutation_allowed": false,
+                    "credential_request_allowed": false,
+                    "raw_table_dump_allowed": false,
+                },
+                "source_scope": source_scope,
                 "staging_spec": bounded_public_value(&staging_spec, 8),
                 "production_write_allowed": false,
                 "requires_human_confirmation": true,
@@ -2060,6 +2073,18 @@ fn external_data_ingestion_analysis_payload_from_fixed_task_output(
             "status": output.get("status").cloned().unwrap_or(Value::String("failed".to_string())),
             "auto_apply_allowed": false,
         },
+    })
+}
+
+fn external_data_ingestion_source_scope_from_fixed_task(
+    fixed_task: &contracts::CodexHostFixedTaskTemplateContextView,
+) -> Value {
+    json!({
+        "tenant_id_present": fixed_task.dataset_scope.get("tenant_id").is_some(),
+        "dataset_ids": safe_public_string_array(fixed_task.dataset_scope.get("dataset_ids"), 24, 96),
+        "database_source_ids": safe_public_string_array(fixed_task.dataset_scope.get("database_source_ids"), 24, 96),
+        "selected_document_ids": safe_public_string_array(fixed_task.dataset_scope.get("selected_document_ids"), 48, 96),
+        "uploaded_file_ids": safe_public_string_array(fixed_task.dataset_scope.get("uploaded_file_ids"), 48, 96),
     })
 }
 
@@ -8956,6 +8981,55 @@ function renderInsight(k){
             codex_host_cancelled_error_reason("Cloudflare Codex task timed out after 1800000ms"),
             None
         );
+    }
+
+    #[test]
+    fn external_data_ingestion_terminal_payload_keeps_confirmable_source_scope() {
+        let mut fixed_task =
+            contracts::CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example();
+        fixed_task.dataset_scope = json!({
+            "tenant_id": "tenant-redacted",
+            "database_source_ids": ["hy-sql-traffic-area"],
+            "dataset_ids": ["dataset-a"],
+            "selected_document_ids": [],
+            "uploaded_file_ids": []
+        });
+        let output = json!({
+            "status": "staging_spec_ready",
+            "staging_spec": {
+                "target_dataset": "新百经营 staging",
+                "target_table": "member_flow",
+                "steps": ["normalize", "stage"]
+            }
+        });
+
+        let payload = external_data_ingestion_analysis_payload_from_fixed_task_output(
+            WorkflowExecutionId::new(),
+            &fixed_task,
+            &output,
+        );
+        let plan = &payload["staging_plan"];
+
+        assert_eq!(payload["staging_plan_available"], json!(true));
+        assert_eq!(plan["type"], json!("v3_data_ingestion_staging_plan"));
+        assert_eq!(
+            plan["source_scope"]["database_source_ids"],
+            json!(["hy-sql-traffic-area"])
+        );
+        assert_eq!(
+            plan["execution_policy"]["requires_human_confirmation"],
+            json!(true)
+        );
+        assert_eq!(
+            plan["execution_policy"]["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            plan["execution_policy"]["schema_mutation_allowed"],
+            json!(false)
+        );
+        assert_eq!(payload["raw_credentials_exposed"], json!(false));
+        assert_eq!(payload["raw_table_dump_exposed"], json!(false));
     }
 
     #[test]

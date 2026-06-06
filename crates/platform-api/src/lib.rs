@@ -54019,6 +54019,34 @@ fn data_ingestion_staging_plan_from_output_artifacts(
         .find(|plan| plan.get("plan_id").and_then(Value::as_str) == Some(plan_id))
 }
 
+fn data_ingestion_staging_plan_from_events(
+    events: &[AssistantRunEvent],
+    plan_id: &str,
+) -> Option<Value> {
+    events
+        .iter()
+        .rev()
+        .filter(|event| {
+            matches!(
+                event.event_name.as_str(),
+                "assistant_run.data_ingestion_analysis_completed"
+                    | "assistant_run.data_ingestion_analysis_needs_human"
+                    | "assistant_run.data_ingestion_analysis_failed"
+            )
+        })
+        .filter_map(|event| event.payload.get("staging_plan").cloned())
+        .find(|plan| plan.get("plan_id").and_then(Value::as_str) == Some(plan_id))
+}
+
+fn data_ingestion_staging_plan_from_run_material(
+    output_artifacts: &Value,
+    events: &[AssistantRunEvent],
+    plan_id: &str,
+) -> Option<Value> {
+    data_ingestion_staging_plan_from_output_artifacts(output_artifacts, plan_id)
+        .or_else(|| data_ingestion_staging_plan_from_events(events, plan_id))
+}
+
 fn data_ingestion_staging_plan_database_source_ids(plan: &Value) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut source_ids = Vec::new();
@@ -54191,13 +54219,19 @@ async fn confirm_data_ingestion_staging_plan_for_run(
             format!("assistant run {assistant_run_id} was not found"),
         ));
     };
-    let plan = data_ingestion_staging_plan_from_output_artifacts(&run.output_artifacts, plan_id)
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "data_ingestion_staging_plan_not_found",
-                format!("data-ingestion staging plan {plan_id} was not found on this run"),
-            )
-        })?;
+    let events = storage
+        .assistant_runs()
+        .list_events(tenant_id, assistant_run_id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let plan =
+        data_ingestion_staging_plan_from_run_material(&run.output_artifacts, &events, plan_id)
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "data_ingestion_staging_plan_not_found",
+                    format!("data-ingestion staging plan {plan_id} was not found on this run"),
+                )
+            })?;
     if !data_ingestion_staging_plan_is_confirmable(&plan) {
         return Err(ApiError::bad_request(
             "data_ingestion_staging_plan_not_confirmable",
@@ -54248,11 +54282,6 @@ async fn confirm_data_ingestion_staging_plan_for_run(
             .map_err(ApiError::from_storage)?;
         (dataset, true)
     };
-    let events = storage
-        .assistant_runs()
-        .list_events(tenant_id, assistant_run_id)
-        .await
-        .map_err(ApiError::from_storage)?;
     let already_recorded = events.iter().any(|event| {
         event.event_name == "assistant_run.data_ingestion_staging_plan_confirmed"
             && event.payload.get("plan_id").and_then(Value::as_str) == Some(plan_id)
@@ -54305,13 +54334,20 @@ async fn sync_data_ingestion_staging_plan_for_run(
     operator_access: bool,
 ) -> std::result::Result<Value, ApiError> {
     validate_required("plan_id", plan_id)?;
-    let plan = data_ingestion_staging_plan_from_output_artifacts(&run.output_artifacts, plan_id)
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "data_ingestion_staging_plan_not_found",
-                format!("data-ingestion staging plan {plan_id} was not found on this run"),
-            )
-        })?;
+    let events = state
+        .storage
+        .assistant_runs()
+        .list_events(state.tenant_id, run.id)
+        .await
+        .map_err(ApiError::from_storage)?;
+    let plan =
+        data_ingestion_staging_plan_from_run_material(&run.output_artifacts, &events, plan_id)
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "data_ingestion_staging_plan_not_found",
+                    format!("data-ingestion staging plan {plan_id} was not found on this run"),
+                )
+            })?;
     if !data_ingestion_staging_plan_is_confirmable(&plan) {
         return Err(ApiError::bad_request(
             "data_ingestion_staging_plan_not_confirmable",
@@ -54319,12 +54355,6 @@ async fn sync_data_ingestion_staging_plan_for_run(
         ));
     }
     let source_id = data_ingestion_staging_select_database_source_id(&plan, requested_source_id)?;
-    let events = state
-        .storage
-        .assistant_runs()
-        .list_events(state.tenant_id, run.id)
-        .await
-        .map_err(ApiError::from_storage)?;
     let confirmed_payload = data_ingestion_staging_plan_confirmed_payload_from_events(
         &events, plan_id,
     )
@@ -116665,6 +116695,40 @@ retrieve_evidence:
             .expect("external system user should exist");
         let plan_id = format!("staging-plan-{}", Uuid::new_v4().simple());
         let source_id = format!("source-route-db-{}", Uuid::new_v4().simple());
+        let staging_plan = json!({
+            "type": "v3_data_ingestion_staging_plan",
+            "plan_id": plan_id.clone(),
+            "plan_version": 1,
+            "assistant_run_id": Value::Null,
+            "approval_status": "pending_human_review",
+            "execution_policy": {
+                "dry_run_only": true,
+                "requires_human_confirmation": true,
+                "production_write_allowed": false,
+                "schema_mutation_allowed": false,
+                "credential_request_allowed": false,
+                "raw_table_dump_allowed": false
+            },
+            "source_scope": {
+                "database_source_ids": [source_id.clone()]
+            },
+            "target": {
+                "dataset": "外部会话 staging 数据集",
+                "table": "member_flow",
+                "operation_mode": "review_before_import"
+            },
+            "mapping_entries": [
+                {"source": "customer_name", "target": "customer_name"}
+            ],
+            "staging_steps": [
+                {"name": "sync", "action": "import_source_rows"}
+            ],
+            "safety": {
+                "raw_credentials_exposed": false,
+                "raw_table_dump_exposed": false,
+                "production_write_allowed": false
+            }
+        });
         let run = harness
             .storage
             .assistant_runs()
@@ -116685,50 +116749,38 @@ retrieve_evidence:
                     evidence_state: json!({"status": "supplied"}),
                     service_lane: "external_channel".to_string(),
                     execution_trail: json!([]),
-                    output_artifacts: json!([{
-                        "type": "external_channel_data_ingestion_analysis",
-                        "staging_plan_available": true,
-                        "staging_plan": {
-                            "type": "v3_data_ingestion_staging_plan",
-                            "plan_id": plan_id.clone(),
-                            "plan_version": 1,
-                            "assistant_run_id": Value::Null,
-                            "approval_status": "pending_human_review",
-                            "execution_policy": {
-                                "dry_run_only": true,
-                                "requires_human_confirmation": true,
-                                "production_write_allowed": false,
-                                "schema_mutation_allowed": false,
-                                "credential_request_allowed": false,
-                                "raw_table_dump_allowed": false
-                            },
-                            "source_scope": {
-                                "database_source_ids": [source_id.clone()]
-                            },
-                            "target": {
-                                "dataset": "外部会话 staging 数据集",
-                                "table": "member_flow",
-                                "operation_mode": "review_before_import"
-                            },
-                            "mapping_entries": [
-                                {"source": "customer_name", "target": "customer_name"}
-                            ],
-                            "staging_steps": [
-                                {"name": "sync", "action": "import_source_rows"}
-                            ],
-                            "safety": {
-                                "raw_credentials_exposed": false,
-                                "raw_table_dump_exposed": false,
-                                "production_write_allowed": false
-                            }
-                        }
-                    }]),
+                    output_artifacts: json!([]),
                     runtime_manifest: json!({}),
                     created_at: Utc::now(),
                 },
             )
             .await
             .expect("external assistant run should be created");
+        harness
+            .storage
+            .assistant_runs()
+            .append_event(
+                harness.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.data_ingestion_analysis_completed".to_string(),
+                    payload: json!({
+                        "template_id": "data_ingestion_analysis",
+                        "status": "staging_spec_ready",
+                        "codex_host_workflow_execution_id": WorkflowExecutionId::new().to_string(),
+                        "staging_plan": staging_plan,
+                        "staging_plan_available": true,
+                        "staging_spec_available": true,
+                        "human_review_required": true,
+                        "production_write_allowed": false,
+                        "raw_credentials_exposed": false,
+                        "raw_table_dump_exposed": false
+                    }),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("terminal data-ingestion event should be appended");
         sqlx::query(
             r#"
             insert into external_source_connections (
