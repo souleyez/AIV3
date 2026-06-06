@@ -84,6 +84,13 @@
   - The same probe showed the first fact-index pass was too directory-heavy: the 256 fact cap was mostly consumed by TOC dot-leader terms and generic service/organization ngrams before later nursing sections.
   - Tightened local fact extraction so post-ingest cleanup now collects candidates across the full document, filters TOC dot-leader noise, then ranks higher-value care-domain facts before applying the cap.
   - Added a nursing-handover retrieval ranking guard so `护理交接班时，必须交接的内容有哪些？` prefers the concrete `四、交接内容` chunk over generic `交接班制度` / `床旁交接班` references.
+- Continued on 2026-06-06 for aggregate-first answer supply:
+  - Added an internal deterministic aggregate intent detector for resume statistics/ranking, attendance row analysis, document dimension aggregates, and Xinbai-style store/brand/take-high/risk/low-active metrics.
+  - Kept business-metric aggregate detection separate from generic document entity scans so database-backed operating questions can use `database_aggregate` without forcing a full document scan unless the prompt is explicitly document/file/table scoped.
+  - Tightened model-facing guidance so `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `database_aggregate`, `dataset_entity_scan`, and `spreadsheet_row_analysis` are treated as authoritative for totals/rankings while retrieval top-k remains secondary evidence for examples and source wording.
+  - ReAct planning catalog now lists deterministic aggregate supply actions before retrieval top-k for aggregate/statistical questions.
+  - Local regressions passed for `dataset_fact_snapshot`, `scoped_fact`, `database_aggregate_heuristics`, aggregate intent, ReAct catalog guidance, and answer-quality retry/skip slices.
+  - Full local document-quality smoke passed with receipt `target/document-quality-smoke/document-quality-smoke-20260606T010841Z-27544.json`.
   - Focused local regressions passed for fact-index TOC noise, nursing handover, and the neighboring elderly-care retrieval ranking cases for 翻身、发药、跌倒.
 - Continued on 2026-05-29 by turning the Xinbai dynamic static-page lesson into an internal DataMax contract:
   - Static-page export packages now declare both `data-snapshot.json` and `data.json`; `data.json` is the client-refresh data entry for generated pages, while `data-snapshot.json` remains the renderer/source-of-truth handoff file.
@@ -200,10 +207,11 @@
    - Only after those, adjust ReAct or quality-gate retry behavior.
 
 2. **Queryable fact aggregation**
-   - Verify full dataset/group statistics prefer `dataset_fact_snapshot`.
-   - Verify selected-document, ACL-filtered, and temporary conversation scopes can use `document_facts_scoped_aggregate` for supported company/skill/project/keyword/year/section prompts. Selected-document and external temporary scope regressions are now covered locally; keep extending with real 8-server smoke cases as customer data appears.
-   - Keep attendance on `spreadsheet_row_analysis` and resume ranking on resume-profile deterministic rows until their facts are normalized.
-   - Add a visible debug reason for why `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `dataset_entity_scan`, or `spreadsheet_row_analysis` was selected.
+   - Local code now verifies full dataset/group statistics prefer `dataset_fact_snapshot` and selected-document / external temporary scopes use `document_facts_scoped_aggregate`.
+   - Attendance stays on `spreadsheet_row_analysis`; resume ranking stays on resume-profile deterministic rows until those facts are fully normalized.
+   - Database-backed operating questions use `database_aggregate` for store/brand/risk/opportunity metrics.
+   - Existing `supply_quality.notes` provide visible debug reasons for `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `dataset_entity_scan`, and `spreadsheet_row_analysis`; database aggregate rows expose metric/dimension/time/scan-limit guidance in model context.
+   - Remaining: repeat the aggregate smoke on 8 server after deployment with private bearer/cookie configuration.
 
 3. **Answer quality recovery**
    - Keep customer-facing output permissive and avoid false-positive blocking.

@@ -644,7 +644,7 @@ git commit -m "Add background fact enrichment coverage"
 
 ## Task 7: Put Deterministic Facts Before Retrieval For Aggregates
 
-**Status:** pending
+**Status:** completed locally on 2026-06-06; 8-server private aggregate smoke remains pending because private bearer/cookie config is not present in this local shell.
 
 **Files:**
 
@@ -694,6 +694,20 @@ Make the brief explicit:
 - cite scope and row count;
 - use retrieval evidence only for explanation/details.
 
+Local progress:
+
+- Added an internal deterministic aggregate intent detector covering:
+  - document/entity count, list, rank, and table questions;
+  - resume company/project/skill/position/location/education/certificate/experience ranking;
+  - attendance absence, work-hour, and date row questions;
+  - store/brand/category/risk/opportunity/take-high/low-active business metrics.
+- Kept business-metric aggregate detection separate from generic document entity scans so database-backed operating questions can use database aggregates without forcing a full document scan unless the user explicitly points at documents, files, attachments, tables, or parsed materials.
+- Tightened model-facing guidance for `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `database_aggregate`, `dataset_entity_scan`, and `spreadsheet_row_analysis`:
+  - cite deterministic scope and row counts;
+  - use `row_count_by_type`, `scanned_document_count`, `source_document_count`, `source_fact_count`, `scan_limit`, and `result_row_count` where applicable;
+  - treat retrieval chunks as examples/source wording only, not proof of full-dataset totals.
+- Updated the ReAct planning catalog so models see deterministic aggregate supply actions before retrieval top-k for aggregate/statistical questions.
+
 **Step 4: Verify with private smoke**
 
 Run local and 8-server cases:
@@ -703,6 +717,27 @@ Run local and 8-server cases:
 - 考勤缺勤/工时长短;
 - 新百风险/取高/低活跃统计;
 - 养老手册操作规范问答.
+
+Local verification on 2026-06-06:
+
+```powershell
+cargo fmt --check -p platform-api
+cargo test -p platform-api dataset_fact_snapshot --lib
+cargo test -p platform-api scoped_fact --lib
+cargo test -p platform-api database_aggregate_heuristics --lib
+cargo test -p platform-api assistant_run_general_entity_scan_prompts_request_dataset_scan --lib
+cargo test -p platform-api assistant_run_deterministic_aggregate_intent_covers_customer_smoke_domains --lib
+cargo test -p platform-api planning_catalog_prefers_aggregate_fact_supply_without_fact_rows --lib
+cargo test -p platform-api assistant_run_answer_quality_judge_runs_for_structured_short_answer --lib
+cargo test -p platform-api assistant_run_answer_quality_judge_skips_satisfied_spreadsheet_table --lib
+cargo test -p platform-api assistant_run_answer_quality_gate_retries_deferred_retrieval_language --lib
+cargo check -p platform-api
+powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local
+```
+
+Full local smoke receipt: `target/document-quality-smoke/document-quality-smoke-20260606T010841Z-27544.json` and `target/document-quality-smoke/document-quality-smoke-20260606T010841Z-27544.md`.
+
+8-server private smoke remains pending until the private bearer/cookie configuration is available.
 
 **Step 5: Commit**
 

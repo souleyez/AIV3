@@ -159,8 +159,8 @@ pub(crate) fn build_assistant_run_react_planning_catalog(
             },
             "aggregate_fact_supply": {
                 "available": true,
-                "actions": ["use_dataset_fact_snapshot", "scan_dataset_entities"],
-                "note": "for global, cross-document, count, list, and rank questions, prefer dataset_fact_snapshot or dataset_entity_scan already present in evidenceState before retrieving top-k chunks"
+                "actions": ["use_dataset_fact_snapshot", "use_document_facts_scoped_aggregate", "use_database_aggregate", "use_spreadsheet_row_analysis", "scan_dataset_entities"],
+                "note": "for global/cross-document or selected-scope count, list, rank, attendance, and business-metric questions, prefer deterministic aggregate items already present in evidenceState: dataset_fact_snapshot, document_facts_scoped_aggregate, database_aggregate, spreadsheet_row_analysis, then dataset_entity_scan. Use retrieval top-k only for examples, source wording, and validation; do not infer totals from retrieval chunks"
             },
             "conversation_memory": {
                 "available": true,
@@ -690,7 +690,13 @@ mod tests {
 
         assert_eq!(
             catalog["systemCapabilities"]["aggregate_fact_supply"]["actions"],
-            json!(["use_dataset_fact_snapshot", "scan_dataset_entities"])
+            json!([
+                "use_dataset_fact_snapshot",
+                "use_document_facts_scoped_aggregate",
+                "use_database_aggregate",
+                "use_spreadsheet_row_analysis",
+                "scan_dataset_entities"
+            ])
         );
         assert_eq!(
             catalog["evidenceState"]["supplyQuality"]["datasetFactSnapshotCount"],

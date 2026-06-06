@@ -47126,6 +47126,11 @@ fn assistant_run_model_database_aggregate_item(item: &Value) -> Value {
         "source_scope": item.get("source_scope").cloned().unwrap_or(Value::Null),
         "policy": item.get("policy").cloned().unwrap_or(Value::Null),
         "note": item.get("note").and_then(Value::as_str).map(|value| truncate_assistant_supply_text(value, ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT)).unwrap_or_default(),
+        "model_guidance": item.get("model_guidance").cloned().unwrap_or_else(|| json!([
+            "Treat database_aggregate.rows as the deterministic aggregate for the requested metric/dimension.",
+            "Cite dimensions, metric/value_label, row count, scan_limit, and any time_filter when summarizing totals or rankings.",
+            "Use retrieval evidence only for explanation or source wording; do not recompute or estimate aggregate totals from retrieval chunks."
+        ])),
     })
 }
 
@@ -47242,7 +47247,7 @@ fn assistant_run_model_dataset_entity_scan_item(item: &Value) -> Value {
         "entities": item.get("entities").cloned().unwrap_or(Value::Null),
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
         "limits": item.get("limits").cloned().unwrap_or(Value::Null),
-        "model_note": "Use *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows as authoritative structured scan tables when answering entity/document dimension questions. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows over top-k retrieval chunks. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
+        "model_note": "Use *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows as authoritative structured scan tables when answering entity/document dimension questions. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows over top-k retrieval chunks. Cite scanned_document_count and row counts when giving totals. Use scanned_document_count as the document total; do not sum row document_count as total documents. Do not extend company lists from candidate_terms or document_hits.",
     })
 }
 
@@ -47260,7 +47265,7 @@ fn assistant_run_model_dataset_fact_snapshot_item(item: &Value) -> Value {
         "source_fact_count": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
         "row_count_by_type": item.get("row_count_by_type").cloned().unwrap_or(Value::Null),
         "entity_rows_by_type": item.get("entity_rows_by_type").cloned().unwrap_or(Value::Null),
-        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation.")),
+        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks.")),
     })
 }
 
@@ -47280,7 +47285,7 @@ fn assistant_run_compact_provider_retry_input(
     let mut sections = vec![
         "你是 AI 数据智能助手里的模型回答运行时。完整供料请求刚才未完成；现在系统只给你紧凑结构化供料，请直接回答用户问题。".to_string(),
         "禁止回复“已收到/处理中/稍后分析/系统将结合知识库与数据源”；如果结构化供料已经给出统计值，就按统计值直接输出。".to_string(),
-        "统计规则：dataset_fact_snapshot 优先于 runtime scan；company_count 是公司/组织总数；scanned_document_count 是扫描文档总数；*_rows[].document_count 是该行覆盖的文档数，不能把这些覆盖数相加当作文档总数。关键词/年份/标题/段落/表格问题优先使用 keyword_rows/year_rows/section_rows/paragraph_rows/table_rows。".to_string(),
+        "统计规则：dataset_fact_snapshot 优先于 runtime scan；company_count 是公司/组织总数；scanned_document_count 是扫描文档总数；row_count_by_type 是各事实类型的去重行数；*_rows[].document_count 是该行覆盖的文档数，不能把这些覆盖数相加当作文档总数。关键词/年份/标题/段落/表格问题优先使用 keyword_rows/year_rows/section_rows/paragraph_rows/table_rows。普通检索片段只能用于例证和出处校验，不能据此估算总数。".to_string(),
         format!("用户问题：{}", request.prompt.trim()),
         format!(
             "紧凑结构化供料：{}",
@@ -47391,7 +47396,7 @@ fn assistant_run_compact_dataset_fact_snapshot_payload(item: &Value) -> Option<V
         "source_fact_count": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
         "row_count_by_type": item.get("row_count_by_type").cloned().unwrap_or(Value::Null),
         "entity_rows_by_type": entity_rows_by_type,
-        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation.")),
+        "model_note": item.get("model_note").cloned().unwrap_or_else(|| json!("Use this as the authoritative dataset-level aggregate for count/list/rank questions. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks.")),
     }))
 }
 
@@ -47447,8 +47452,8 @@ fn assistant_run_compact_dataset_fact_snapshot_as_scan_payload(item: &Value) -> 
         "table_rows": [],
         "entity_rows_by_type": rows_by_type,
         "resume_profile_rows": [],
-        "answer_guidance": "Authoritative rows converted from dataset_fact_snapshot. Use retrieval evidence only for examples, quotes, and validation.",
-        "model_note": "This compact scan is fact-snapshot backed. Use scanned_document_count as the document total; do not infer totals from retrieval chunks or summed row counts.",
+        "answer_guidance": "Authoritative rows converted from dataset_fact_snapshot. Cite scanned_document_count and row counts for totals. Use retrieval evidence only for examples, quotes, and validation.",
+        "model_note": "This compact scan is fact-snapshot backed. Use scanned_document_count as the document total; cite row_count_by_type/entity row counts for list totals; do not infer totals from retrieval chunks or summed row counts.",
     }))
 }
 
@@ -47612,7 +47617,7 @@ fn assistant_run_compact_dataset_entity_scan_payload(item: &Value) -> Option<Val
         "resume_profile_rows": resume_profile_rows,
         "resume_project_delivery_rows": resume_project_delivery_rows,
         "answer_guidance": item.get("answer_guidance").cloned().unwrap_or(Value::Null),
-        "model_note": "Answer entity/document dimension questions from *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows only. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows. Do not use omitted candidate_terms, entities, document_hits, or summed row counts.",
+        "model_note": "Answer entity/document dimension questions from *_rows, keyword_rows, year_rows, section_rows, paragraph_rows, table_rows, resume_profile_rows, and resume_project_delivery_rows only. Cite scanned_document_count and the number of returned rows when giving totals. For multi-resume project delivery/detail questions, prefer resume_project_delivery_rows. Do not use omitted candidate_terms, entities, document_hits, retrieval chunks, or summed row counts for totals.",
     }))
 }
 
@@ -57593,15 +57598,7 @@ fn assistant_run_prompt_is_high_risk_quality_task(prompt: &str) -> bool {
             "work hour",
         ],
     ) || prompt_requests_document_entity_scan(prompt)
-        || prompt_requests_company_entity_statistics(prompt)
-        || prompt_requests_table_statistics(prompt)
-        || prompt_requests_resume_skill_ranking(prompt)
-        || prompt_requests_resume_project_ranking(prompt)
-        || prompt_requests_resume_position_ranking(prompt)
-        || prompt_requests_resume_location_ranking(prompt)
-        || prompt_requests_resume_company_ranking(prompt)
-        || prompt_requests_resume_education_ranking(prompt)
-        || prompt_requests_resume_certificate_ranking(prompt)
+        || prompt_requests_deterministic_aggregate_supply(prompt)
 }
 
 fn assistant_run_supply_quality_needs_judge(evidence_state: &Value) -> bool {
@@ -62492,9 +62489,9 @@ fn assistant_run_dataset_fact_snapshot_item_from_manifest(
         )
     };
     let model_note = if scope_filter.is_some() {
-        "Use this as the authoritative aggregate for the selected or authorized document scope. Use retrieval evidence only for examples, quotes, and validation."
+        "Use this as the authoritative aggregate for the selected or authorized document scope. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks."
     } else {
-        "Use this as the authoritative dataset-level aggregate for count/list/rank questions. Use retrieval evidence only for examples, quotes, and validation."
+        "Use this as the authoritative dataset-level aggregate for count/list/rank questions. Cite scanned_document_count, source_document_count, source_fact_count, and row_count_by_type when giving totals. Use retrieval evidence only for examples, quotes, and validation; never infer totals from retrieval chunks."
     };
 
     json!({
@@ -63601,6 +63598,9 @@ fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
             "平均",
             "趋势",
             "维度",
+            "占比",
+            "比例",
+            "分布",
             "报表",
             "表格",
             "top",
@@ -63623,12 +63623,21 @@ fn assistant_run_database_aggregate_requested(prompt: &str) -> bool {
             "门店",
             "分店",
             "品牌",
+            "品类",
+            "业态",
             "取高",
             "高分成",
             "缺口",
             "机会",
+            "助推",
+            "低活跃",
+            "风险",
+            "预警",
             "销售额",
             "租金",
+            "客流",
+            "坪效",
+            "租售比",
             "经营",
             "健康度",
             "总览",
@@ -69150,7 +69159,9 @@ fn assistant_run_supply_quality_report(
             "when fallback_reason is weak_indexed_evidence_expansion, use those expanded chunks before saying the document did not directly mention the requested flow",
             "when evidence_state.recovery_followup is present, answer with current evidence first; if still unverifiable, ask that follow-up and keep the task continuable in the same conversation",
             "when low_text_document_evidence is present, treat the document extraction as too sparse or low quality, avoid inferring contents from the title, and recommend OCR/reparse/manual review if needed",
-            "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps"
+            "read detail_targets before asserting exact source wording, tables, OCR, or media timestamps",
+            "for aggregate/statistical questions, cite the deterministic supply scope and row counts: scanned_document_count/source_document_count/row_count_by_type for fact snapshots, rows.len/scan_limit for database aggregates, and result_row_count for spreadsheet_row_analysis",
+            "ordinary retrieval top-k chunks are secondary support for examples and wording; they are not enough to prove full-dataset totals, rankings, or coverage",
         ],
     })
 }
@@ -75925,6 +75936,11 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
     if prompt_requests_resume_company_entity_scan(prompt) {
         return true;
     }
+    if prompt_requests_document_dimension_aggregate(prompt)
+        || prompt_requests_document_scoped_business_aggregate(prompt)
+    {
+        return true;
+    }
 
     let lower_prompt = prompt.to_ascii_lowercase();
     let has_entity_signal = prompt_contains_any(
@@ -75987,6 +76003,25 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
             "术语",
             "标签",
             "分词",
+            "门店",
+            "分店",
+            "店铺",
+            "品牌",
+            "品类",
+            "业态",
+            "类别",
+            "经营",
+            "取高",
+            "高分成",
+            "缺口",
+            "低活跃",
+            "风险",
+            "机会",
+            "销售额",
+            "租金",
+            "客流",
+            "坪效",
+            "租售比",
         ],
     ) || ascii_prompt_contains_any(
         &lower_prompt,
@@ -76056,6 +76091,21 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
             "certificate",
             "certificates",
             "certification",
+            "store",
+            "stores",
+            "shop",
+            "shops",
+            "brand",
+            "brands",
+            "category",
+            "categories",
+            "risk",
+            "risks",
+            "opportunity",
+            "opportunities",
+            "sales",
+            "rent",
+            "traffic",
         ],
     ) || lower_prompt.contains("tech stack");
     let has_coverage_signal = prompt_contains_any(
@@ -76111,6 +76161,246 @@ fn prompt_requests_document_entity_scan(prompt: &str) -> bool {
         || lower_prompt.contains("what are");
 
     has_entity_signal && (has_coverage_signal || prompt.contains("公司名"))
+}
+
+fn prompt_requests_deterministic_aggregate_supply(prompt: &str) -> bool {
+    prompt_requests_spreadsheet_row_level_analysis(prompt)
+        || prompt_requests_resume_company_entity_scan(prompt)
+        || prompt_requests_resume_skill_ranking(prompt)
+        || prompt_requests_resume_project_ranking(prompt)
+        || prompt_requests_resume_position_ranking(prompt)
+        || prompt_requests_resume_location_ranking(prompt)
+        || prompt_requests_resume_company_ranking(prompt)
+        || prompt_requests_resume_education_ranking(prompt)
+        || prompt_requests_resume_certificate_ranking(prompt)
+        || prompt_requests_resume_experience_statistics(prompt)
+        || prompt_requests_document_dimension_aggregate(prompt)
+        || prompt_requests_business_metric_aggregate(prompt)
+}
+
+fn prompt_requests_document_dimension_aggregate(prompt: &str) -> bool {
+    if assistant_run_entity_scan_answer_dimension(prompt).is_some() {
+        return true;
+    }
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_dimension = prompt_contains_any(
+        prompt,
+        &[
+            "公司",
+            "企业",
+            "组织",
+            "机构",
+            "人员",
+            "候选人",
+            "岗位",
+            "职位",
+            "技能",
+            "项目",
+            "产品",
+            "系统",
+            "平台",
+            "地点",
+            "位置",
+            "区域",
+            "学校",
+            "学历",
+            "证书",
+            "关键词",
+            "名词",
+            "年份",
+            "章节",
+            "段落",
+            "表格",
+            "品类",
+            "类别",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "company",
+            "organization",
+            "person",
+            "candidate",
+            "role",
+            "skill",
+            "project",
+            "product",
+            "system",
+            "location",
+            "region",
+            "school",
+            "degree",
+            "certificate",
+            "keyword",
+            "term",
+            "year",
+            "section",
+            "paragraph",
+            "table",
+            "category",
+        ],
+    );
+    has_dimension && prompt_requests_aggregate_operation(prompt)
+}
+
+fn prompt_requests_business_metric_aggregate(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    let has_business_dimension = prompt_contains_any(
+        prompt,
+        &[
+            "门店",
+            "分店",
+            "店铺",
+            "品牌",
+            "品牌店",
+            "品类",
+            "业态",
+            "区域",
+            "分区",
+            "经营",
+            "健康度",
+            "取高",
+            "高分成",
+            "缺口",
+            "助推",
+            "低活跃",
+            "风险",
+            "机会",
+            "销售",
+            "销售额",
+            "租金",
+            "客流",
+            "坪效",
+            "租售比",
+            "预警",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "store",
+            "stores",
+            "shop",
+            "shops",
+            "brand",
+            "brands",
+            "category",
+            "categories",
+            "risk",
+            "risks",
+            "opportunity",
+            "opportunities",
+            "sales",
+            "rent",
+            "traffic",
+            "warning",
+        ],
+    );
+    has_business_dimension && prompt_requests_aggregate_operation(prompt)
+}
+
+fn prompt_requests_document_scoped_business_aggregate(prompt: &str) -> bool {
+    if !prompt_requests_business_metric_aggregate(prompt) {
+        return false;
+    }
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_contains_any(
+        prompt,
+        &[
+            "文档",
+            "资料",
+            "知识库",
+            "文件",
+            "附件",
+            "表格",
+            "合同",
+            "手册",
+            "解析",
+            "抽取",
+            "入库",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "document",
+            "documents",
+            "file",
+            "files",
+            "attachment",
+            "spreadsheet",
+            "contract",
+            "extract",
+            "parse",
+        ],
+    )
+}
+
+fn prompt_requests_aggregate_operation(prompt: &str) -> bool {
+    let lower_prompt = prompt.to_ascii_lowercase();
+    prompt_contains_any(
+        prompt,
+        &[
+            "多少",
+            "几个",
+            "数量",
+            "总数",
+            "统计",
+            "汇总",
+            "合计",
+            "占比",
+            "比例",
+            "分布",
+            "排行",
+            "排名",
+            "排序",
+            "前",
+            "最高",
+            "最低",
+            "最大",
+            "最小",
+            "平均",
+            "趋势",
+            "哪些",
+            "哪个",
+            "列出",
+            "清单",
+            "明细",
+            "出表",
+            "表格",
+            "识别",
+            "预警",
+            "看一下",
+            "看看",
+            "分析",
+            "总览",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower_prompt,
+        &[
+            "count",
+            "total",
+            "statistic",
+            "statistics",
+            "summary",
+            "aggregate",
+            "sum",
+            "ratio",
+            "share",
+            "distribution",
+            "rank",
+            "sort",
+            "top",
+            "max",
+            "min",
+            "avg",
+            "trend",
+            "which",
+            "list",
+            "table",
+            "identify",
+            "analyze",
+            "overview",
+        ],
+    ) || lower_prompt.contains("how many")
 }
 
 fn prompt_requests_resume_company_entity_scan(prompt: &str) -> bool {
@@ -91885,6 +92175,15 @@ mod tests {
     fn database_aggregate_heuristics_treat_operating_health_as_data_question() {
         assert!(assistant_run_database_schema_context_requested(
             "经营健康度总览"
+        ));
+        assert!(assistant_run_database_aggregate_requested(
+            "低活跃风险品牌占比，按品类统计"
+        ));
+        assert!(assistant_run_database_aggregate_requested(
+            "租售比危险门店预警排行"
+        ));
+        assert!(assistant_run_database_aggregate_requested(
+            "客流下降风险门店有哪些"
         ));
         assert!(assistant_run_database_schema_context_requested(
             "我这里有哪些数据可以用么"
@@ -119385,6 +119684,32 @@ retrieve_evidence:
     }
 
     #[test]
+    fn assistant_run_deterministic_aggregate_intent_covers_customer_smoke_domains() {
+        assert!(prompt_requests_deterministic_aggregate_supply(
+            "简历公司名统计一下，列出覆盖文档数"
+        ));
+        assert!(prompt_requests_deterministic_aggregate_supply(
+            "14份简历按项目经验排序出表"
+        ));
+        assert!(prompt_requests_deterministic_aggregate_supply(
+            "这份考勤表查一下缺勤，工时最长和最短分别是谁"
+        ));
+        assert!(prompt_requests_deterministic_aggregate_supply(
+            "新百风险/取高/低活跃统计，哪些品牌门店需要助推"
+        ));
+        assert!(prompt_requests_deterministic_aggregate_supply(
+            "经营健康度看一下，按门店列出销售缺口和风险占比"
+        ));
+        assert!(prompt_requests_document_entity_scan(
+            "这份资料里的品牌店铺客户明细按门店汇总"
+        ));
+        assert!(!prompt_requests_document_entity_scan("经营健康度总览"));
+        assert!(!prompt_requests_deterministic_aggregate_supply(
+            "帮我写一段岗位技能介绍文案"
+        ));
+    }
+
+    #[test]
     fn assistant_run_fact_snapshot_replaces_only_supported_global_scan_prompts() {
         assert!(assistant_run_fact_snapshot_can_replace_dataset_entity_scan(
             "简历库里一共提到了多少个公司名？"
@@ -119862,6 +120187,14 @@ retrieve_evidence:
         assert_eq!(model_item["type"], json!("dataset_fact_snapshot"));
         assert_eq!(model_item["source_fact_count"], json!(7));
         assert!(model_item.get("snapshot_manifest").is_none());
+        assert!(model_item["model_note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("row_count_by_type"));
+        assert!(model_item["model_note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("never infer totals from retrieval chunks"));
         assert_eq!(
             model_item["entity_rows_by_type"]["organization"][0]["name"],
             json!("广州冠晚网络有限公司")
@@ -119881,6 +120214,8 @@ retrieve_evidence:
             .expect("fact snapshot should produce compact retry input");
         assert!(input.contains("\"dataset_fact_snapshots\""));
         assert!(input.contains("\"source_fact_count\":7"));
+        assert!(input.contains("row_count_by_type 是各事实类型的去重行数"));
+        assert!(input.contains("普通检索片段只能用于例证和出处校验"));
         assert!(input.contains("\"name\":\"广州冠晚网络有限公司\""));
         assert!(!input.contains("large_internal_debug"));
 
@@ -120073,6 +120408,22 @@ retrieve_evidence:
                 .as_str()
                 .unwrap_or_default()
                 .contains("dataset_fact_snapshot is present")));
+        assert!(report["modelGuidance"]
+            .as_array()
+            .expect("guidance should be present")
+            .iter()
+            .any(|note| note
+                .as_str()
+                .unwrap_or_default()
+                .contains("row_count_by_type")));
+        assert!(report["modelGuidance"]
+            .as_array()
+            .expect("guidance should be present")
+            .iter()
+            .any(|note| note
+                .as_str()
+                .unwrap_or_default()
+                .contains("ordinary retrieval top-k chunks")));
     }
 
     #[test]

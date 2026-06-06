@@ -64,7 +64,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
-| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, and Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets are implemented locally. Full local document-quality smoke passed. 8-server migration/backfill rollout, one-shot enrichment worker smoke, and live duplicate/enrichment smoke remain pending. |
+| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented locally. Full local document-quality smoke and aggregate-first regressions passed. 8-server migration/backfill rollout, one-shot enrichment worker smoke, live duplicate/enrichment smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | pending | Hard gate remains disabled; passive fixed-scope autofix loop needs implementation and validation. |
 | P1 Gate E: confirmed data ingestion | pending | `data_ingestion_analysis` terminal smoke exists; confirmed staging-to-dataset sync still needs closure and validation. |
 
@@ -321,6 +321,39 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 - Remaining:
   - run 8-server one-shot enrichment worker smoke after migration and deployment;
   - broaden spreadsheet extraction if the live workbook row shape differs from normalized text rows.
+
+### 2026-06-06 Aggregate-First Answer Supply Local Coverage
+
+- Files changed:
+  - `crates/platform-api/src/lib.rs`;
+  - `crates/platform-api/src/react_agent_catalog.rs`;
+  - `docs/plans/2026-05-25-v3-mainline-quality-executor-plan.md`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`;
+  - `docs/validation/document-understanding-smoke.md`;
+  - `docs/validation/datamax-main-gap-closure.md`.
+- Behavior:
+  - added internal deterministic aggregate intent detection for document/entity aggregates, resume statistics/ranking, attendance row analysis, and Xinbai-style store/brand/take-high/risk/low-active metric prompts;
+  - kept business metric aggregate detection separate from generic document entity scans, so database-backed operating questions can use `database_aggregate` without forcing a full document scan unless the prompt is explicitly document/file/table scoped;
+  - tightened model-facing guidance for `dataset_fact_snapshot`, `document_facts_scoped_aggregate`, `database_aggregate`, `dataset_entity_scan`, and `spreadsheet_row_analysis` so totals and rankings cite deterministic scope/row counts and retrieval top-k remains secondary support;
+  - updated ReAct planning catalog to advertise deterministic aggregate supply actions before retrieval top-k.
+- Local verification:
+  - `cargo fmt --check -p platform-api` passed.
+  - `cargo test -p platform-api dataset_fact_snapshot --lib` passed, 2 tests.
+  - `cargo test -p platform-api scoped_fact --lib` passed, 3 tests.
+  - `cargo test -p platform-api database_aggregate_heuristics --lib` passed, 6 tests.
+  - `cargo test -p platform-api assistant_run_general_entity_scan_prompts_request_dataset_scan --lib` passed, 1 test.
+  - `cargo test -p platform-api assistant_run_deterministic_aggregate_intent_covers_customer_smoke_domains --lib` passed, 1 test.
+  - `cargo test -p platform-api planning_catalog_prefers_aggregate_fact_supply_without_fact_rows --lib` passed, 1 test.
+  - `cargo test -p platform-api assistant_run_answer_quality_judge_runs_for_structured_short_answer --lib` passed, 1 test.
+  - `cargo test -p platform-api assistant_run_answer_quality_judge_skips_satisfied_spreadsheet_table --lib` passed, 1 test.
+  - `cargo test -p platform-api assistant_run_answer_quality_gate_retries_deferred_retrieval_language --lib` passed, 1 test.
+  - `cargo check -p platform-api` passed.
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local` passed.
+- Smoke receipt:
+  - JSON: `target/document-quality-smoke/document-quality-smoke-20260606T010841Z-27544.json`.
+  - Markdown summary: `target/document-quality-smoke/document-quality-smoke-20260606T010841Z-27544.md`.
+- Remaining:
+  - run private 8-server aggregate smoke after deployment and private bearer/cookie configuration are available.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
