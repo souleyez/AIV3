@@ -29324,9 +29324,6 @@ async fn external_channel_response_with_event_static_page_artifact_links(
     let Some(run_id) = response.assistant_run_id else {
         return Ok(response);
     };
-    if !response.reply.artifact_links.is_empty() && response.reply.card.is_some() {
-        return Ok(response);
-    }
     let events = state
         .storage
         .assistant_runs()
@@ -29345,6 +29342,36 @@ async fn external_channel_response_with_event_static_page_artifact_links(
         );
     }
     Ok(response)
+}
+
+fn static_page_public_url_without_focus(public_url: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(public_url.trim()).ok()?;
+    if !codex_host_fixed_task_public_artifact_url_allowed(url.as_str()) {
+        return None;
+    }
+    let existing_pairs = url
+        .query_pairs()
+        .filter(|(key, _)| key != "focus")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    url.set_query(None);
+    if !existing_pairs.is_empty() {
+        let mut pairs = url.query_pairs_mut();
+        for (key, value) in existing_pairs {
+            pairs.append_pair(&key, &value);
+        }
+    }
+    Some(url.to_string())
+}
+
+fn static_page_public_url_matches_ignoring_focus(left: &str, right: &str) -> bool {
+    let Some(left) = static_page_public_url_without_focus(left) else {
+        return false;
+    };
+    let Some(right) = static_page_public_url_without_focus(right) else {
+        return false;
+    };
+    left == right
 }
 
 fn external_channel_static_page_event_artifact_link_reply_from_events(
@@ -29485,11 +29512,23 @@ fn external_channel_reply_with_static_page_artifact_links(
         if first_public_link.is_none() {
             first_public_link = Some(link.to_string());
         }
-        if !reply.artifact_links.iter().any(|existing| existing == link) {
-            reply.artifact_links.push(link.to_string());
-        }
     }
     if let Some(public_url) = first_public_link.as_deref() {
+        reply.artifact_links.retain(|existing| {
+            !static_page_public_url_matches_ignoring_focus(existing, public_url)
+        });
+        reply.artifact_links.insert(0, public_url.to_string());
+        if let Some(Value::Object(card)) = reply.card.as_mut() {
+            for key in [
+                "public_url",
+                "generated_artifact_url",
+                "download_url",
+                "html_download_url",
+            ] {
+                card.insert(key.to_string(), Value::String(public_url.to_string()));
+            }
+            card.insert("artifact_links".to_string(), json!([public_url]));
+        }
         if let Some(text) = reply.text.take() {
             reply.text = Some(external_channel_text_with_public_artifact_link(
                 text, public_url,
@@ -101469,6 +101508,51 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_merge_replaces_raw_link_with_focused_link() {
+        let raw_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
+        let focused_url = static_page_public_url_with_focus_label(raw_url, "取高机会");
+        let base_reply = ExternalBotReplyView {
+            target_conversation_external_id: "room-1".to_string(),
+            reply_type: ExternalBotReplyTypeView::ArtifactLink,
+            text: Some("已生成报表。".to_string()),
+            card: Some(json!({
+                "type": "v3_static_page_image2_publish_completed",
+                "status": "static_page_published",
+                "public_url": raw_url,
+                "generated_artifact_url": raw_url,
+                "artifact_links": [raw_url]
+            })),
+            artifact_links: vec![raw_url.to_string()],
+            task_status: Some("static_page_published".to_string()),
+            requires_confirmation: false,
+            action_id: None,
+            confirmation_id: None,
+        };
+        let focused_reply = external_channel_static_page_published_reply(
+            "room-1",
+            raw_url,
+            &json!({
+                "public_url": raw_url,
+                "template_adaptation": {
+                    "userIntent": "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。"
+                }
+            }),
+        );
+
+        let merged = external_channel_reply_with_static_page_artifact_links(
+            base_reply,
+            Some(&focused_reply),
+        );
+        let card = merged.card.as_ref().expect("merged card");
+
+        assert_eq!(merged.artifact_links, vec![focused_url.clone()]);
+        assert_eq!(card["public_url"], json!(focused_url));
+        assert_eq!(card["generated_artifact_url"], json!(focused_url));
+        assert_eq!(card["artifact_links"], json!([focused_url]));
+    }
+
+    #[test]
     fn external_channel_public_reply_keeps_template_link_over_publish_queue_card() {
         let public_url =
             "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html?focus=%E5%8F%96%E9%AB%98%E6%9C%BA%E4%BC%9A";
@@ -116675,6 +116759,10 @@ retrieve_evidence:
             }
         });
 
+        let focused_url = static_page_public_url_with_focus_label(
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html",
+            "取高机会",
+        );
         let reply =
             external_channel_static_page_publish_completed_reply_from_event_payload(&payload)
                 .expect("reply");
@@ -116685,35 +116773,21 @@ retrieve_evidence:
             "chat-static-page".to_string()
         );
         assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(
-            reply.artifact_links,
-            vec![
-                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
-                    .to_string()
-            ]
-        );
+        assert_eq!(reply.artifact_links, vec![focused_url.clone()]);
         let text = reply.text.as_deref().unwrap_or_default();
-        assert!(text.contains(
-            "页面链接：[点击查看报表](https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html)"
-        ));
+        assert!(text.contains(&format!("页面链接：[点击查看报表]({focused_url})")));
         assert!(!text.contains("页面地址:"));
-        assert_eq!(
-            text.matches(
-                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/final/index.html"
-            )
-            .count(),
-            1
-        );
+        assert_eq!(text.matches(&focused_url).count(), 1);
         assert!(text.contains("系统识别到本轮关注焦点：取高机会"));
         assert!(text.contains("报表会优先呈现：销售/租金/取高口径、门店/区域维度"));
         let card = reply.card.as_ref().expect("completed reply has card");
         assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
         assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
-        assert_eq!(card["public_url"], json!(payload["public_url"]));
-        assert_eq!(card["generated_artifact_url"], json!(payload["public_url"]));
-        assert_eq!(card["download_url"], json!(payload["public_url"]));
-        assert_eq!(card["html_download_url"], json!(payload["public_url"]));
-        assert_eq!(card["artifact_links"], json!([payload["public_url"]]));
+        assert_eq!(card["public_url"], json!(focused_url));
+        assert_eq!(card["generated_artifact_url"], json!(focused_url));
+        assert_eq!(card["download_url"], json!(focused_url));
+        assert_eq!(card["html_download_url"], json!(focused_url));
+        assert_eq!(card["artifact_links"], json!([focused_url]));
         assert_eq!(card["data_url"], json!(payload["data_url"]));
         assert_eq!(
             card["table_data_url"],
