@@ -1542,14 +1542,14 @@ Data-ingestion external fixed-task smoke:
   - prove the operator-only model gateway surface still rejects unauthenticated access;
   - record why the authenticated operator smoke remains pending rather than silently counting it as passed.
 - 8-server state:
-  - repository `/srv/aiv3/repo` was at `7be4111eb85a`;
+  - repository `/srv/aiv3/repo` was at `8f84176dc731`;
   - `git status --short --branch` showed `## main...origin/main` plus the pre-existing untracked `mode` file;
   - no service restart was needed for this guard-only smoke.
 - Command:
-  - `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-no-credentials-current-head`.
+  - `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-no-credentials-8f84176`.
 - Receipt:
-  - `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials-current-head/20260606095741.json`;
-  - `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials-current-head/20260606095741.md`.
+  - `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials-8f84176/20260606124152.json`;
+  - `/srv/aiv3/repo/target/model-gateway-operator-smoke-no-credentials-8f84176/20260606124152.md`.
 - Result:
   - status `pending`, as expected without operator credentials;
   - unauthenticated check passed with HTTP `401` and code `auth_session_required`;
@@ -1561,7 +1561,7 @@ Data-ingestion external fixed-task smoke:
   - `MODEL_GATEWAY_OPERATOR_SMOKE_EMAIL=false`;
   - `MODEL_GATEWAY_OPERATOR_SMOKE_LOCAL_KEY=false`;
   - `MAIN_ASSISTANT_STREAMING_SMOKE_COOKIE=false`;
-  - `AIV3_LOCAL_KEY=false`.
+  - no local-key login credential was available in the checked smoke env.
 - Safety:
   - no auth bypass, temporary allow-any, fabricated session, or role mutation was added;
   - no cookie, local key, provider key, raw auth env value, provider payload, bearer token, or public third-party contract change was recorded.
