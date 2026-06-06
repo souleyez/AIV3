@@ -1179,6 +1179,29 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - existing Next.js middleware/proxy deprecation warning;
   - existing Turbopack NFT trace warning from `next.config.js` and the local document upload route.
 
+### 2026-06-06 Task 9 Follow-Up Operator Observability Audit
+
+- Scope:
+  - follow-up read-only regression at `fcd2401`;
+  - no third-party public URL, auth, required request field, or existing response field changed;
+  - no service restart was needed because the current pass did not change web/API code.
+- Local verification:
+  - `npm --prefix apps/web run build` passed;
+  - build warnings remained the existing Next.js middleware/proxy deprecation warning and Turbopack NFT trace warning from `next.config.js`/local document upload route;
+  - `node --test app/lib/external-integrations.test.mjs` from `apps/web` passed, 27 tests;
+  - the same test run from the repository root is not valid for the path-sensitive page-source check because that test intentionally reads `app/external-integrations/ExternalIntegrationsPageClient.js` relative to the web workspace.
+- 8-server verification:
+  - `/srv/aiv3/repo` was at `fcd2401fc`, with the known untracked `mode` left untouched;
+  - `GET https://v3.elepcloud.com/external-integrations` returned `200`;
+  - public page HTML contained `DataMax` and `运营总览`;
+  - `GET http://127.0.0.1:3000/v1/workflow-tasks/queue-stats` returned `200`;
+  - `GET http://127.0.0.1:3000/v1/model-gateway/status` returned `401` with `auth_session_required`;
+  - `node --test app/lib/external-integrations.test.mjs` from `/srv/aiv3/repo/apps/web` passed, 27 tests.
+- Decision:
+  - Task 9 operator page and sanitized queue observability are still healthy;
+  - authenticated model-gateway status/profile smoke remains pending until a legitimate operator cookie or approved local-key login is available;
+  - no auth bypass, temporary allow-any role, fabricated session, raw provider payload, raw prompt, raw reply, credential, or full document content was used or recorded.
+
 ### 2026-06-06 8-Server Streaming And Data-Ingestion Routing Receipt
 
 - Follow-up pushed/deployed commits:

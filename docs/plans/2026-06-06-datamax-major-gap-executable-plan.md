@@ -745,6 +745,8 @@ git push
 - Inspect/modify: `apps/web/app/lib/model-gateway.js`
 - Update: `docs/validation/datamax-main-gap-closure.md`
 
+**Current status 2026-06-06:** Implemented and deployed. `/external-integrations` SSR-renders the DataMax operations summary, sanitized queue stats are reachable, and unauthenticated model-gateway status still returns `401 auth_session_required`. Local and 8-server helper tests pass. The only remaining Task 9 boundary is the authenticated model-gateway operator smoke, which still requires a legitimate operator cookie or approved local-key login; do not add an auth bypass to complete it.
+
 **Step 1: Check protected operations surfaces**
 
 Run:
@@ -759,6 +761,8 @@ Expected:
 - external integrations page returns `200`;
 - queue stats returns `200` only on the protected/internal path;
 - model-gateway status remains protected without operator session.
+
+2026-06-06 check at `fcd2401`: public `/external-integrations` returned `200` and included `DataMax` plus `运营总览`; internal `/v1/workflow-tasks/queue-stats` returned `200`; unauthenticated `/v1/model-gateway/status` returned `401 auth_session_required`.
 
 **Step 2: Ensure observability covers active gaps**
 
@@ -790,6 +794,8 @@ Expected:
 
 - build passes;
 - `/external-integrations` still SSR-renders DataMax operations summary.
+
+2026-06-06 check: `npm --prefix apps/web run build` passed. Existing warnings remain the Next middleware/proxy deprecation and Turbopack NFT trace warning; neither blocks the operator page.
 
 **Step 4: Commit**
 
