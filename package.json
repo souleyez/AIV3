@@ -8,6 +8,7 @@
     "smoke:external-report-export": "node scripts/smoke/external-report-export.mjs",
     "smoke:main-assistant-streaming": "node scripts/smoke/main-assistant-streaming.mjs",
     "smoke:main-chat-20way": "node scripts/smoke/main-chat-20way.mjs",
+    "smoke:model-gateway-operator": "node scripts/smoke/model-gateway-operator.mjs",
     "smoke:static-page-5way": "node scripts/smoke/static-page-5way.mjs",
     "smoke:heavy-static-page-5way": "node scripts/smoke/heavy-static-page-5way.mjs",
     "smoke:cloudflare-fallback-2way": "node scripts/smoke/cloudflare-fallback-2way.mjs",
