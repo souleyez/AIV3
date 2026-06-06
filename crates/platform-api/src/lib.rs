@@ -29367,14 +29367,84 @@ fn external_channel_static_page_event_artifact_link_reply_from_events(
         if !template_baseline_link && !terminal_or_stable_link {
             continue;
         }
-        let Some(public_url) = external_channel_public_artifact_url_from_value(payload) else {
+        let payload = external_channel_static_page_payload_with_event_intent(payload, events);
+        let Some(public_url) = external_channel_public_artifact_url_from_value(&payload) else {
             continue;
         };
         return Some(external_channel_static_page_published_reply(
             conversation_external_id,
             &public_url,
-            payload,
+            &payload,
         ));
+    }
+    None
+}
+
+fn external_channel_static_page_payload_with_event_intent(
+    payload: &Value,
+    events: &[AssistantRunEvent],
+) -> Value {
+    if external_channel_static_page_user_intent_from_payload(payload).is_some()
+        || !external_channel_static_page_focus_module_labels(Some(payload)).is_empty()
+    {
+        return payload.clone();
+    }
+    let Some(intent) = external_channel_static_page_user_intent_from_events(events) else {
+        return payload.clone();
+    };
+    let mut enriched = payload.clone();
+    let Value::Object(object) = &mut enriched else {
+        return enriched;
+    };
+    match object.get_mut("template_adaptation") {
+        Some(Value::Object(adaptation)) => {
+            adaptation
+                .entry("userIntent".to_string())
+                .or_insert_with(|| Value::String(intent));
+        }
+        _ => {
+            object.insert(
+                "template_adaptation".to_string(),
+                json!({ "userIntent": intent }),
+            );
+        }
+    }
+    enriched
+}
+
+fn external_channel_static_page_user_intent_from_events(
+    events: &[AssistantRunEvent],
+) -> Option<String> {
+    for event in events.iter().rev() {
+        let payload = &event.payload;
+        if let Some(intent) = external_channel_static_page_user_intent_from_payload(payload) {
+            return Some(intent.to_string());
+        }
+        if !matches!(
+            event.event_name.as_str(),
+            "static_page_draft.created" | "assistant_run.external_channel_message_received"
+        ) {
+            continue;
+        }
+        for pointer in [
+            "/prompt",
+            "/user_prompt",
+            "/text",
+            "/message/text",
+            "/external_message/text",
+            "/request/text",
+        ] {
+            let Some(value) = payload
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .map(str::trim)
+            else {
+                continue;
+            };
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
     }
     None
 }
@@ -31312,6 +31382,7 @@ fn external_channel_static_page_existing_artifact_reply_from_events(
         set_payload_value(&mut payload, "generated_artifact_url", json!(public_url));
         set_payload_value(&mut payload, "artifact_links", json!([public_url]));
     }
+    let payload = external_channel_static_page_payload_with_event_intent(&payload, events);
     Some(external_channel_static_page_stable_artifact_reused_reply(
         conversation_external_id,
         &payload,
@@ -96504,20 +96575,33 @@ mod tests {
         let public_url =
             "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
         let focused_url = static_page_public_url_with_focus_label(public_url, "取高机会");
-        let events = vec![AssistantRunEvent {
-            id: AssistantRunEventId::new(),
-            tenant_id: TenantId::new(),
-            run_id: AssistantRunId::new(),
-            sequence_no: 1,
-            event_name: "assistant_run.external_channel_static_page_publish_completed".to_string(),
-            payload: json!({
-                "public_url": public_url,
-                "template_adaptation": {
-                    "userIntent": "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。"
-                }
-            }),
-            created_at: Utc::now(),
-        }];
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let events = vec![
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 1,
+                event_name: "static_page_draft.created".to_string(),
+                payload: json!({
+                    "prompt": "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。"
+                }),
+                created_at: Utc::now(),
+            },
+            AssistantRunEvent {
+                id: AssistantRunEventId::new(),
+                tenant_id,
+                run_id,
+                sequence_no: 2,
+                event_name: "assistant_run.external_channel_static_page_publish_completed"
+                    .to_string(),
+                payload: json!({
+                    "public_url": public_url
+                }),
+                created_at: Utc::now(),
+            },
+        ];
 
         let reply = external_channel_static_page_event_artifact_link_reply_from_events(
             &events,
