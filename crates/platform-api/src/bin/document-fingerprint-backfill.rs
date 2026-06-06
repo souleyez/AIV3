@@ -20,6 +20,7 @@ struct BackfillArgs {
     limit: usize,
     dry_run: bool,
     include_existing: bool,
+    summary_only: bool,
     pretty: bool,
 }
 
@@ -42,7 +43,7 @@ struct LocalFingerprint {
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage: {program} [--dataset-id <uuid>] [--document-id <uuid>] [--limit <n>] [--dry-run] [--include-existing] [--pretty]"
+        "Usage: {program} [--dataset-id <uuid>] [--document-id <uuid>] [--limit <n>] [--dry-run] [--include-existing] [--summary-only] [--pretty]"
     )
 }
 
@@ -79,6 +80,7 @@ fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
     let pretty = remove_flag(&mut args, "--pretty");
     let dry_run = remove_flag(&mut args, "--dry-run");
     let include_existing = remove_flag(&mut args, "--include-existing");
+    let summary_only = remove_flag(&mut args, "--summary-only");
     let dataset_id = take_option(&mut args, "--dataset-id")
         .map(|raw| parse_uuid_arg("dataset_id", &raw).map(DatasetId))
         .transpose()?;
@@ -101,6 +103,7 @@ fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
         limit,
         dry_run,
         include_existing,
+        summary_only,
         pretty,
     })
 }
@@ -204,19 +207,27 @@ async fn run_document_fingerprint_backfill(
         ));
     }
 
-    Ok(json!({
+    let document_report_count = documents.len();
+    let mut summary = json!({
         "dry_run": args.dry_run,
         "dataset_id": args.dataset_id,
         "document_id": args.document_id,
         "limit": args.limit,
         "include_existing": args.include_existing,
+        "summary_only": args.summary_only,
         "candidate_count": documents.len(),
+        "document_report_count": document_report_count,
         "would_record_count": would_record_count,
         "recorded_count": recorded_count,
         "duplicate_count": duplicate_count,
         "skipped_count": skipped_count,
-        "documents": documents,
-    }))
+    });
+    if !args.summary_only {
+        if let Some(object) = summary.as_object_mut() {
+            object.insert("documents".to_string(), Value::Array(documents));
+        }
+    }
+    Ok(summary)
 }
 
 async fn load_document_candidates(
@@ -430,6 +441,7 @@ mod tests {
         assert_eq!(args.limit, 100);
         assert!(args.dry_run);
         assert!(!args.include_existing);
+        assert!(!args.summary_only);
         assert!(args.pretty);
     }
 
@@ -444,6 +456,7 @@ mod tests {
                 "--limit".to_string(),
                 "25".to_string(),
                 "--include-existing".to_string(),
+                "--summary-only".to_string(),
             ],
         )
         .expect("args should parse");
@@ -452,6 +465,7 @@ mod tests {
         assert_eq!(args.document_id, Some(DocumentId(document_id)));
         assert_eq!(args.limit, 25);
         assert!(args.include_existing);
+        assert!(args.summary_only);
     }
 
     #[test]
