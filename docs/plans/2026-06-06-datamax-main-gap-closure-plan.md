@@ -539,12 +539,13 @@ git commit -m "Add background document enrichment fingerprints"
 
 ## Task 6: Implement Background Fact Enrichment Phase 2
 
-**Status:** pending
+**Status:** completed locally on 2026-06-06; 8-server live enrichment/backfill smoke remains pending. Background enrichment worker now supports `table_structure_v1`, `entity_terms_v1`, `procedure_steps_v1`, `resume_profile_v1`, and `spreadsheet_metrics_v1` in addition to the Phase 1 kinds. Post-ingest enrichment enqueue includes the new kinds when `DOCUMENT_ENRICHMENT_ENABLED=true`. `fact_index` now emits `procedure_step` and `time_threshold` facts for care-operation text and includes those fact types in dataset entity snapshots. Fixture coverage has been added for elderly-care procedure facts and enrichment-specific resume/table/attendance checks. Full local document-quality smoke passed on 2026-06-06.
 
 **Files:**
 
 - Modify: `crates/platform-api/src/fact_index.rs`
-- Modify: `crates/retrieval-worker/src/lib.rs`
+- Modify: `crates/retrieval-worker/src/main.rs`
+- Modify: `crates/retrieval-worker/src/bin/document-enrichment-worker.rs`
 - Modify: `crates/ingest-worker/src/lib.rs`
 - Modify: `crates/storage/src/lib.rs`
 - Create or modify fixtures under: `fixtures/document-quality/`
@@ -588,6 +589,12 @@ Each enrichment run must store:
 - short output summary;
 - safe error message.
 
+Local progress:
+
+- Implemented aliases for the plan names and versioned worker kinds.
+- Added deterministic summaries for table structures, entity terms, procedure steps, resume profiles, and spreadsheet/attendance metrics.
+- Kept the worker standalone and low-priority; no model calls or VLM reparse are introduced here.
+
 **Step 3: Improve fact ranking before the cap**
 
 Extend `crates/platform-api/src/fact_index.rs` so it:
@@ -599,9 +606,20 @@ Extend `crates/platform-api/src/fact_index.rs` so it:
 - extracts date/hour/attendance facts from spreadsheets;
 - keeps source locators.
 
+Local progress:
+
+- Added `procedure_step` and `time_threshold` fact types to the dataset entity snapshot type list.
+- Added conservative procedure sentence and time-threshold extraction for care manuals.
+- Boosted procedure/time-threshold fact rank and confidence so late operational manual sections survive the fact cap.
+
 **Step 4: Rebuild dataset fact snapshots after enrichment**
 
 Ensure retrieval-worker or ingest-worker schedules snapshot refresh after enrichment completes.
+
+Local progress:
+
+- Existing `fact_index_v2` enrichment rebuilds document facts and refreshes the dataset entity rows snapshot.
+- Duplicate alias enrichment runs skip fact writes and report canonical read-through instead of double-counting.
 
 **Step 5: Verify**
 

@@ -139,9 +139,26 @@ async fn process_claimed_run(
         .await?;
     let generated_at = Utc::now();
     let summary = match run.enrichment_kind.as_str() {
-        "structure_outline_v1" => build_structure_outline_summary(&document, &chunks, generated_at),
+        "structure_outline_v1" | "section_outline_v1" | "section_outline" => {
+            build_structure_outline_summary(&document, &chunks, generated_at)
+        }
         "qa_seed_v1" => build_qa_seed_summary(&document, &chunks, generated_at),
         "entity_relation_v1" => build_entity_relation_summary(&document, &chunks, generated_at),
+        "entity_terms_v1" | "entity_terms" => {
+            build_entity_terms_summary(&document, &chunks, generated_at)
+        }
+        "table_structure_v1" | "table_structure" => {
+            build_table_structure_summary(&document, &chunks, generated_at)
+        }
+        "procedure_steps_v1" | "procedure_steps" => {
+            build_procedure_steps_summary(&document, &chunks, generated_at)
+        }
+        "resume_profile_v1" | "resume_profile" => {
+            build_resume_profile_summary(&document, &chunks, generated_at)
+        }
+        "spreadsheet_metrics_v1" | "spreadsheet_metrics" => {
+            build_spreadsheet_metrics_summary(&document, &chunks, generated_at)
+        }
         "fact_index_v2" => {
             run_fact_index_enrichment(storage, tenant_id, &document, &chunks, generated_at).await?
         }
@@ -334,6 +351,205 @@ fn build_entity_relation_summary(
     })
 }
 
+fn build_entity_terms_summary(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    generated_at: chrono::DateTime<Utc>,
+) -> Value {
+    let facts =
+        platform_api::fact_index::build_document_fact_candidates(document, chunks, generated_at);
+    let mut terms_by_type = BTreeMap::<String, BTreeSet<String>>::new();
+    for fact in &facts {
+        terms_by_type
+            .entry(fact.fact_type.clone())
+            .or_default()
+            .insert(fact.name.clone());
+    }
+    let term_rows = terms_by_type
+        .into_iter()
+        .map(|(fact_type, terms)| {
+            json!({
+                "fact_type": fact_type,
+                "term_count": terms.len(),
+                "terms": terms.into_iter().take(32).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "schema_version": "0.1.0",
+        "enrichment_kind": "entity_terms_v1",
+        "status": if term_rows.is_empty() { "empty" } else { "extracted" },
+        "document_id": document.id,
+        "dataset_id": document.dataset_id,
+        "document_title": document.title,
+        "chunk_count": chunks.len(),
+        "fact_count": facts.len(),
+        "term_type_count": term_rows.len(),
+        "term_rows": term_rows,
+        "generated_at": generated_at.to_rfc3339(),
+    })
+}
+
+fn build_table_structure_summary(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    generated_at: chrono::DateTime<Utc>,
+) -> Value {
+    let tables = extract_table_candidates(chunks, 24);
+    json!({
+        "schema_version": "0.1.0",
+        "enrichment_kind": "table_structure_v1",
+        "status": if tables.is_empty() { "empty" } else { "extracted" },
+        "document_id": document.id,
+        "dataset_id": document.dataset_id,
+        "document_title": document.title,
+        "chunk_count": chunks.len(),
+        "table_count": tables.len(),
+        "tables": tables,
+        "generated_at": generated_at.to_rfc3339(),
+    })
+}
+
+fn build_procedure_steps_summary(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    generated_at: chrono::DateTime<Utc>,
+) -> Value {
+    let steps = extract_procedure_steps(chunks, 80);
+    let threshold_terms = steps
+        .iter()
+        .filter_map(|step| step.get("threshold").cloned())
+        .collect::<Vec<_>>();
+    json!({
+        "schema_version": "0.1.0",
+        "enrichment_kind": "procedure_steps_v1",
+        "status": if steps.is_empty() { "empty" } else { "extracted" },
+        "document_id": document.id,
+        "dataset_id": document.dataset_id,
+        "document_title": document.title,
+        "chunk_count": chunks.len(),
+        "step_count": steps.len(),
+        "threshold_count": threshold_terms.len(),
+        "threshold_terms": threshold_terms,
+        "steps": steps,
+        "generated_at": generated_at.to_rfc3339(),
+    })
+}
+
+fn build_resume_profile_summary(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    generated_at: chrono::DateTime<Utc>,
+) -> Value {
+    let text = joined_chunk_text(chunks, 80_000);
+    let facts =
+        platform_api::fact_index::build_document_fact_candidates(document, chunks, generated_at);
+    let organizations = facts
+        .iter()
+        .filter(|fact| fact.fact_type == "organization")
+        .map(|fact| fact.name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(24)
+        .collect::<Vec<_>>();
+    let projects = facts
+        .iter()
+        .filter(|fact| fact.fact_type == "project_product_system")
+        .map(|fact| fact.name.clone())
+        .chain(extract_resume_project_lines(&text, 16))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(24)
+        .collect::<Vec<_>>();
+    let skills = extract_known_skill_terms(&text, 40);
+    let years = extract_year_terms_from_text(&text, 16);
+    let candidate_name = resume_candidate_name(document);
+    let cities = extract_known_terms(
+        &text,
+        &[
+            "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "武汉", "西安", "苏州",
+        ],
+        12,
+    );
+    let certificates = extract_lines_containing(&text, &["证书", "认证", "资格"], 12);
+
+    json!({
+        "schema_version": "0.1.0",
+        "enrichment_kind": "resume_profile_v1",
+        "status": if organizations.is_empty() && projects.is_empty() && skills.is_empty() { "sparse" } else { "extracted" },
+        "document_id": document.id,
+        "dataset_id": document.dataset_id,
+        "document_title": document.title,
+        "candidate_name": candidate_name,
+        "chunk_count": chunks.len(),
+        "organization_count": organizations.len(),
+        "organizations": organizations,
+        "project_count": projects.len(),
+        "projects": projects,
+        "skill_count": skills.len(),
+        "skills": skills,
+        "timeline_years": years,
+        "cities": cities,
+        "certificates": certificates,
+        "generated_at": generated_at.to_rfc3339(),
+    })
+}
+
+fn build_spreadsheet_metrics_summary(
+    document: &Document,
+    chunks: &[DocumentChunk],
+    generated_at: chrono::DateTime<Utc>,
+) -> Value {
+    let rows = extract_spreadsheet_metric_rows(chunks, 120);
+    let absence_rows = rows
+        .iter()
+        .filter(|row| row.get("counts_as_absence").and_then(Value::as_bool) == Some(true))
+        .cloned()
+        .collect::<Vec<_>>();
+    let work_hour_rows = rows
+        .iter()
+        .filter(|row| row.get("work_hours").and_then(Value::as_f64).is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    let longest_work_hour = work_hour_rows
+        .iter()
+        .max_by(|left, right| {
+            left.get("work_hours")
+                .and_then(Value::as_f64)
+                .partial_cmp(&right.get("work_hours").and_then(Value::as_f64))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned();
+    let shortest_work_hour = work_hour_rows
+        .iter()
+        .min_by(|left, right| {
+            left.get("work_hours")
+                .and_then(Value::as_f64)
+                .partial_cmp(&right.get("work_hours").and_then(Value::as_f64))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned();
+
+    json!({
+        "schema_version": "0.1.0",
+        "enrichment_kind": "spreadsheet_metrics_v1",
+        "status": if rows.is_empty() { "empty" } else { "extracted" },
+        "document_id": document.id,
+        "dataset_id": document.dataset_id,
+        "document_title": document.title,
+        "chunk_count": chunks.len(),
+        "row_count": rows.len(),
+        "absence_count": absence_rows.len(),
+        "work_hour_row_count": work_hour_rows.len(),
+        "longest_work_hour": longest_work_hour,
+        "shortest_work_hour": shortest_work_hour,
+        "absence_rows": absence_rows.into_iter().take(24).collect::<Vec<_>>(),
+        "sample_rows": rows.into_iter().take(40).collect::<Vec<_>>(),
+        "generated_at": generated_at.to_rfc3339(),
+    })
+}
+
 fn extract_structure_sections(chunks: &[DocumentChunk], limit: usize) -> Vec<SectionCandidate> {
     let mut sections = Vec::new();
     let mut seen = BTreeSet::new();
@@ -503,6 +719,520 @@ fn fact_count_by_type(facts: &[storage::NewDocumentFact]) -> BTreeMap<String, us
     counts
 }
 
+fn extract_table_candidates(chunks: &[DocumentChunk], limit: usize) -> Vec<Value> {
+    let mut tables = Vec::new();
+    for chunk in chunks {
+        for table in metadata_table_candidates(chunk, limit.saturating_sub(tables.len())) {
+            tables.push(table);
+            if tables.len() >= limit {
+                return tables;
+            }
+        }
+        for table in markdown_table_candidates(chunk, limit.saturating_sub(tables.len())) {
+            tables.push(table);
+            if tables.len() >= limit {
+                return tables;
+            }
+        }
+    }
+    tables
+}
+
+fn metadata_table_candidates(chunk: &DocumentChunk, limit: usize) -> Vec<Value> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut tables = Vec::new();
+    for key in ["tables", "table_rows", "tableRows", "structured_tables"] {
+        let Some(value) = chunk.metadata.get(key) else {
+            continue;
+        };
+        match value {
+            Value::Array(rows) => {
+                if rows.is_empty() {
+                    continue;
+                }
+                tables.push(json!({
+                    "chunk_index": chunk.chunk_index,
+                    "source": format!("metadata.{key}"),
+                    "row_count": rows.len(),
+                    "column_count": estimate_json_table_column_count(rows),
+                    "headers": estimate_json_table_headers(rows),
+                    "sample_rows": rows.iter().take(5).cloned().collect::<Vec<_>>(),
+                }));
+            }
+            Value::Object(object) => {
+                let rows = object
+                    .get("rows")
+                    .or_else(|| object.get("data"))
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let headers = object
+                    .get("headers")
+                    .or_else(|| object.get("columns"))
+                    .cloned()
+                    .unwrap_or_else(|| Value::Array(estimate_json_table_headers(&rows)));
+                tables.push(json!({
+                    "chunk_index": chunk.chunk_index,
+                    "source": format!("metadata.{key}"),
+                    "row_count": rows.len(),
+                    "column_count": estimate_json_table_column_count(&rows),
+                    "headers": headers,
+                    "sample_rows": rows.into_iter().take(5).collect::<Vec<_>>(),
+                }));
+            }
+            _ => {}
+        }
+        if tables.len() >= limit {
+            break;
+        }
+    }
+    tables
+}
+
+fn estimate_json_table_column_count(rows: &[Value]) -> usize {
+    rows.iter()
+        .map(|row| match row {
+            Value::Array(values) => values.len(),
+            Value::Object(object) => object.len(),
+            _ => 1,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn estimate_json_table_headers(rows: &[Value]) -> Vec<Value> {
+    rows.iter()
+        .find_map(|row| match row {
+            Value::Object(object) => Some(
+                object
+                    .keys()
+                    .take(24)
+                    .map(|key| Value::String(key.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            Value::Array(values) => Some(
+                (0..values.len().min(24))
+                    .map(|index| Value::String(format!("column_{}", index + 1)))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn markdown_table_candidates(chunk: &DocumentChunk, limit: usize) -> Vec<Value> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut tables = Vec::new();
+    let mut current = Vec::<String>::new();
+    for line in chunk.content.lines() {
+        let trimmed = line.trim();
+        if trimmed.matches('|').count() >= 2 {
+            current.push(trimmed.to_string());
+            continue;
+        }
+        flush_markdown_table(chunk.chunk_index, &mut current, &mut tables, limit);
+        if tables.len() >= limit {
+            return tables;
+        }
+    }
+    flush_markdown_table(chunk.chunk_index, &mut current, &mut tables, limit);
+    tables
+}
+
+fn flush_markdown_table(
+    chunk_index: i32,
+    current: &mut Vec<String>,
+    tables: &mut Vec<Value>,
+    limit: usize,
+) {
+    if current.len() < 2 || tables.len() >= limit {
+        current.clear();
+        return;
+    }
+    let rows = current
+        .iter()
+        .filter(|line| !is_markdown_separator_row(line))
+        .map(|line| split_markdown_table_row(line))
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        current.clear();
+        return;
+    }
+    let headers = rows.first().cloned().unwrap_or_default();
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    tables.push(json!({
+        "chunk_index": chunk_index,
+        "source": "content.markdown_table",
+        "row_count": rows.len().saturating_sub(1),
+        "column_count": column_count,
+        "headers": headers,
+        "sample_rows": rows.into_iter().take(6).collect::<Vec<_>>(),
+    }));
+    current.clear();
+}
+
+fn is_markdown_separator_row(line: &str) -> bool {
+    line.chars()
+        .all(|value| matches!(value, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+fn split_markdown_table_row(line: &str) -> Vec<String> {
+    line.trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(80).collect())
+        .collect()
+}
+
+fn extract_procedure_steps(chunks: &[DocumentChunk], limit: usize) -> Vec<Value> {
+    let mut steps = Vec::new();
+    let mut seen = BTreeSet::new();
+    for chunk in chunks {
+        for sentence in procedure_sentence_candidates(&chunk.content) {
+            if steps.len() >= limit {
+                return steps;
+            }
+            let Some(step) = clean_procedure_step(&sentence) else {
+                continue;
+            };
+            let normalized = normalize_for_seen(&step);
+            if !seen.insert(normalized) {
+                continue;
+            }
+            steps.push(json!({
+                "chunk_index": chunk.chunk_index,
+                "domain": procedure_domain(&step),
+                "step": step,
+                "threshold": extract_threshold_term(&sentence),
+                "source": if looks_like_ordered_step(&sentence) { "ordered_line" } else { "procedure_sentence" },
+            }));
+        }
+    }
+    steps
+}
+
+fn procedure_sentence_candidates(content: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for line in content.lines() {
+        for sentence in line.split(['。', '；', ';']) {
+            let trimmed = sentence.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if looks_like_ordered_step(trimmed) || contains_any(trimmed, PROCEDURE_SIGNALS) {
+                candidates.push(trimmed.to_string());
+            }
+        }
+    }
+    candidates
+}
+
+fn clean_procedure_step(value: &str) -> Option<String> {
+    let cleaned = value
+        .trim()
+        .trim_matches(|item: char| matches!(item, '-' | '*' | ' ' | '\t'))
+        .trim()
+        .to_string();
+    let char_count = cleaned.chars().count();
+    if !(4..=180).contains(&char_count) {
+        return None;
+    }
+    Some(cleaned)
+}
+
+fn procedure_domain(value: &str) -> &'static str {
+    if contains_any(value, &["发药", "服药", "药品", "医嘱", "剂量"]) {
+        "medication"
+    } else if contains_any(value, &["交接班", "巡查", "护理记录"]) {
+        "handover"
+    } else if contains_any(value, &["翻身", "压疮", "皮肤", "卧床"]) {
+        "bedridden_care"
+    } else if contains_any(value, &["跌倒", "噎食", "突发", "应急", "处置"]) {
+        "emergency"
+    } else {
+        "general"
+    }
+}
+
+fn looks_like_ordered_step(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with(|item: char| item.is_ascii_digit())
+        || trimmed.starts_with("第")
+        || trimmed.starts_with("（")
+        || trimmed.starts_with('(')
+        || trimmed.starts_with("一、")
+        || trimmed.starts_with("二、")
+        || trimmed.starts_with("三、")
+        || trimmed.starts_with("四、")
+}
+
+fn extract_threshold_term(value: &str) -> Option<String> {
+    if !(value.contains("小时") || value.contains("分钟") || value.contains("天")) {
+        return None;
+    }
+    let mut terms = Vec::new();
+    for token in value.split(|item: char| item.is_whitespace() || matches!(item, '，' | ',' | '、'))
+    {
+        if token.contains("小时") || token.contains("分钟") || token.contains("天") {
+            terms.push(token.trim_matches(|item: char| matches!(item, '。' | '；' | ';')));
+        }
+    }
+    (!terms.is_empty()).then(|| terms.join(" "))
+}
+
+fn joined_chunk_text(chunks: &[DocumentChunk], limit: usize) -> String {
+    let mut output = String::new();
+    for chunk in chunks {
+        if output.len() >= limit {
+            break;
+        }
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&chunk.content);
+    }
+    output.chars().take(limit).collect()
+}
+
+fn resume_candidate_name(document: &Document) -> Option<String> {
+    let raw = document
+        .title
+        .trim_end_matches(".pdf")
+        .trim_end_matches(".docx")
+        .trim_end_matches(".doc")
+        .trim_end_matches(".PDF")
+        .trim_end_matches(".DOCX")
+        .trim_end_matches(".DOC");
+    for part in raw.split(['_', '-', '—', ' ']) {
+        let cleaned = part
+            .replace("简历", "")
+            .replace("个人", "")
+            .replace("resume", "")
+            .trim()
+            .to_string();
+        let cjk_count = cleaned.chars().filter(|value| is_cjk_char(*value)).count();
+        if (2..=4).contains(&cjk_count) && cleaned.chars().count() <= 6 {
+            return Some(cleaned);
+        }
+    }
+    None
+}
+
+fn extract_resume_project_lines(text: &str, limit: usize) -> Vec<String> {
+    extract_lines_containing(text, &["项目", "系统", "平台", "产品", "中台"], limit)
+}
+
+fn extract_known_skill_terms(text: &str, limit: usize) -> Vec<String> {
+    extract_known_terms(
+        text,
+        &[
+            "Rust",
+            "Java",
+            "Python",
+            "JavaScript",
+            "TypeScript",
+            "React",
+            "Vue",
+            "Node",
+            "SQL",
+            "PostgreSQL",
+            "MySQL",
+            "Redis",
+            "Docker",
+            "Kubernetes",
+            "AI",
+            "大模型",
+            "物联网",
+            "数据分析",
+            "项目管理",
+            "产品设计",
+        ],
+        limit,
+    )
+}
+
+fn extract_known_terms(text: &str, terms: &[&str], limit: usize) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    terms
+        .iter()
+        .filter(|term| {
+            if term.is_ascii() {
+                lower.contains(&term.to_ascii_lowercase())
+            } else {
+                text.contains(*term)
+            }
+        })
+        .take(limit)
+        .map(|term| (*term).to_string())
+        .collect()
+}
+
+fn extract_lines_containing(text: &str, needles: &[&str], limit: usize) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let cleaned = line.trim();
+        if cleaned.is_empty() || !contains_any(cleaned, needles) {
+            continue;
+        }
+        let short = cleaned.chars().take(140).collect::<String>();
+        if seen.insert(normalize_for_seen(&short)) {
+            lines.push(short);
+        }
+        if lines.len() >= limit {
+            break;
+        }
+    }
+    lines
+}
+
+fn extract_year_terms_from_text(text: &str, limit: usize) -> Vec<String> {
+    let mut years = BTreeSet::new();
+    let chars = text.chars().collect::<Vec<_>>();
+    for window in chars.windows(4) {
+        if window.iter().all(|value| value.is_ascii_digit()) {
+            let year = window.iter().collect::<String>();
+            if year
+                .parse::<i32>()
+                .is_ok_and(|value| (1990..=2035).contains(&value))
+            {
+                years.insert(year);
+            }
+        }
+        if years.len() >= limit {
+            break;
+        }
+    }
+    years.into_iter().collect()
+}
+
+fn extract_spreadsheet_metric_rows(chunks: &[DocumentChunk], limit: usize) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for chunk in chunks {
+        for line in chunk.content.lines() {
+            if rows.len() >= limit {
+                return rows;
+            }
+            if !looks_like_spreadsheet_metric_line(line) {
+                continue;
+            }
+            rows.push(json!({
+                "chunk_index": chunk.chunk_index,
+                "date": extract_date_token(line),
+                "employee": extract_employee_token(line),
+                "work_hours": extract_work_hours(line),
+                "work_hours_label": extract_work_hours(line).map(|hours| format!("{hours:.2}小时")),
+                "counts_as_absence": line.contains("缺勤") || line.contains("未打卡") || line.contains("不考勤"),
+                "status": spreadsheet_status(line),
+                "source_text": line.trim().chars().take(180).collect::<String>(),
+            }));
+        }
+    }
+    rows
+}
+
+fn looks_like_spreadsheet_metric_line(line: &str) -> bool {
+    contains_any(line, &["缺勤", "未打卡", "不考勤", "工时", "小时", "考勤"])
+        || extract_date_token(line).is_some()
+}
+
+fn extract_date_token(line: &str) -> Option<String> {
+    for token in line.split(|item: char| item.is_whitespace() || matches!(item, ',' | '，' | '|'))
+    {
+        let normalized = token.replace('/', "-");
+        let parts = normalized.split('-').collect::<Vec<_>>();
+        if parts.len() == 3
+            && parts[0].len() == 4
+            && parts[1].len() <= 2
+            && parts[2].len() <= 2
+            && parts
+                .iter()
+                .all(|part| part.chars().all(|item| item.is_ascii_digit()))
+        {
+            let month = parts[1].parse::<u32>().ok()?;
+            let day = parts[2].parse::<u32>().ok()?;
+            if (1..=12).contains(&month) && (1..=31).contains(&day) {
+                return Some(format!("{}-{month:02}-{day:02}", parts[0]));
+            }
+        }
+    }
+    None
+}
+
+fn extract_employee_token(line: &str) -> Option<String> {
+    line.split_whitespace()
+        .find(|token| {
+            let mut chars = token.chars();
+            matches!(chars.next(), Some('A' | 'B' | 'C' | 'D' | 'E'))
+                && chars.all(|item| item.is_ascii_digit())
+        })
+        .map(|value| value.to_string())
+}
+
+fn extract_work_hours(line: &str) -> Option<f64> {
+    let marker = line.find("小时")?;
+    let before = &line[..marker];
+    let mut number = String::new();
+    for value in before.chars().rev() {
+        if value.is_ascii_digit() || value == '.' {
+            number.insert(0, value);
+        } else if !number.is_empty() {
+            break;
+        }
+    }
+    number.parse::<f64>().ok()
+}
+
+fn spreadsheet_status(line: &str) -> &'static str {
+    if line.contains("缺勤") || line.contains("未打卡") || line.contains("不考勤") {
+        "absence_or_missing_punch"
+    } else if line.contains("正常") {
+        "normal"
+    } else {
+        "unknown"
+    }
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn normalize_for_seen(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_cjk_char(value: char) -> bool {
+    matches!(
+        value as u32,
+        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+    )
+}
+
+const PROCEDURE_SIGNALS: &[&str] = &[
+    "应",
+    "必须",
+    "需要",
+    "核对",
+    "检查",
+    "登记",
+    "记录",
+    "观察",
+    "通知",
+    "上报",
+    "翻身",
+    "发药",
+    "服药",
+    "交接班",
+    "处置",
+    "巡查",
+    "评估",
+];
+
 impl WorkerConfig {
     fn from_env() -> Self {
         Self {
@@ -655,6 +1385,104 @@ mod tests {
                 .unwrap_or(0)
                 >= 1
         );
+    }
+
+    #[test]
+    fn table_structure_summary_extracts_markdown_tables() {
+        let document = test_document("经营表格.md");
+        let chunks = vec![test_chunk(
+            0,
+            BTreeMap::new(),
+            "| 门店 | 品牌 | 销售额 |\n| --- | --- | --- |\n| 新街口 | A品牌 | 1000 |",
+        )];
+
+        let summary = build_table_structure_summary(&document, &chunks, Utc::now());
+
+        assert_eq!(summary["table_count"], json!(1));
+        assert_eq!(summary["tables"][0]["column_count"], json!(3));
+        assert_eq!(summary["tables"][0]["headers"][0], json!("门店"));
+    }
+
+    #[test]
+    fn procedure_steps_summary_extracts_care_steps_and_thresholds() {
+        let document = test_document("养老机构实操手册.docx");
+        let chunks = vec![test_chunk(
+            0,
+            BTreeMap::new(),
+            "2.4 发药：发药前应核对老年人姓名、床号、药品名称、剂量、时间和方法。\n帮助无自主翻身能力的老年人翻身，应至少每2小时翻身1次。",
+        )];
+
+        let summary = build_procedure_steps_summary(&document, &chunks, Utc::now());
+        let steps = summary["steps"]
+            .as_array()
+            .expect("steps should be present");
+
+        assert!(steps
+            .iter()
+            .any(|step| step["domain"] == json!("medication")));
+        assert!(steps
+            .iter()
+            .any(|step| step["domain"] == json!("bedridden_care")));
+        assert!(summary["threshold_count"].as_u64().unwrap_or(0) >= 1);
+    }
+
+    #[test]
+    fn entity_terms_summary_groups_fact_terms() {
+        let document = test_document("候选人简历.pdf");
+        let chunks = vec![test_chunk(
+            0,
+            BTreeMap::from_iter([("section_title_hints".to_string(), json!(["项目经历"]))]),
+            "Acme Technology Ltd 负责智能梯控平台，2024年上线。",
+        )];
+
+        let summary = build_entity_terms_summary(&document, &chunks, Utc::now());
+
+        assert!(summary["term_type_count"].as_u64().unwrap_or(0) >= 1);
+        assert!(summary["term_rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["fact_type"] == json!("section")));
+    }
+
+    #[test]
+    fn resume_profile_summary_extracts_dimensions() {
+        let document = test_document("郑宇宁_AI全栈产品技术主管_优化简历.pdf");
+        let chunks = vec![test_chunk(
+            0,
+            BTreeMap::from_iter([(
+                "section_title_hints".to_string(),
+                json!(["项目经历"]),
+            )]),
+            "郑宇宁\n项目经历：智能家居平台、AI数据分析系统。\n技能：Python Rust React SQL 大模型 产品设计。\n2020-2024 在 Acme Technology Ltd 负责产品与技术管理。",
+        )];
+
+        let summary = build_resume_profile_summary(&document, &chunks, Utc::now());
+
+        assert_eq!(summary["candidate_name"], json!("郑宇宁"));
+        assert!(summary["skill_count"].as_u64().unwrap_or(0) >= 4);
+        assert!(summary["project_count"].as_u64().unwrap_or(0) >= 1);
+        assert!(summary["timeline_years"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("2024")));
+    }
+
+    #[test]
+    fn spreadsheet_metrics_summary_extracts_absence_and_work_hour_extremes() {
+        let document = test_document("考勤表.xlsx");
+        let chunks = vec![test_chunk(
+            0,
+            BTreeMap::new(),
+            "A5 2026/5/13 坐班0900 未打卡 不考勤\nA8 2026-02-07 坐班0900 12.55小时 正常考勤\nA8 2026-02-25 坐班0900 4.30小时 正常考勤",
+        )];
+
+        let summary = build_spreadsheet_metrics_summary(&document, &chunks, Utc::now());
+
+        assert_eq!(summary["absence_count"], json!(1));
+        assert_eq!(summary["longest_work_hour"]["work_hours"], json!(12.55));
+        assert_eq!(summary["shortest_work_hour"]["work_hours"], json!(4.3));
+        assert_eq!(summary["sample_rows"][0]["date"], json!("2026-05-13"));
     }
 
     fn test_document(title: &str) -> Document {

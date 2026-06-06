@@ -64,7 +64,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
-| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, and a standalone low-priority enrichment worker loop are implemented locally. 8-server migration/backfill rollout, one-shot enrichment worker smoke, and live duplicate/enrichment smoke remain pending. |
+| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, and Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets are implemented locally. Full local document-quality smoke passed. 8-server migration/backfill rollout, one-shot enrichment worker smoke, and live duplicate/enrichment smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | pending | Hard gate remains disabled; passive fixed-scope autofix loop needs implementation and validation. |
 | P1 Gate E: confirmed data ingestion | pending | `data_ingestion_analysis` terminal smoke exists; confirmed staging-to-dataset sync still needs closure and validation. |
 
@@ -285,6 +285,42 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - run migration before any enrichment backfill;
   - run one-shot smoke with `DOCUMENT_ENRICHMENT_WORKER_ONCE=true`;
   - enable continuous polling only after queue/backoff behavior is confirmed.
+
+### 2026-06-06 Background Fact Enrichment Phase 2 Local Coverage
+
+- Files changed:
+  - `crates/platform-api/src/fact_index.rs`;
+  - `crates/retrieval-worker/src/main.rs`;
+  - `crates/retrieval-worker/src/bin/document-enrichment-worker.rs`;
+  - `fixtures/document-quality/smoke-cases.json`;
+  - `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`;
+  - `docs/validation/datamax-main-gap-closure.md`.
+- Behavior:
+  - post-ingest enrichment enqueue now includes `table_structure_v1`, `entity_terms_v1`, `procedure_steps_v1`, `resume_profile_v1`, and `spreadsheet_metrics_v1` when `DOCUMENT_ENRICHMENT_ENABLED=true`;
+  - `document-enrichment-worker` supports versioned kinds and plan-name aliases for section outline, table structure, entity terms, procedure steps, resume profile, and spreadsheet metrics;
+  - table summaries extract metadata/Markdown table shapes;
+  - procedure summaries extract care-operation steps and time thresholds;
+  - resume summaries extract candidate name, organizations, projects, skills, years, cities, and certificates;
+  - spreadsheet summaries extract absence rows plus longest/shortest work-hour rows from normalized text rows;
+  - `fact_index` emits `procedure_step` and `time_threshold` facts so care-operation rules can be aggregated in dataset fact snapshots.
+- Fixture coverage:
+  - added `elderly-care-procedure-facts`;
+  - linked enrichment worker checks into resume ranking, table-heavy document, and frequent attendance cases.
+- Local verification:
+  - `cargo fmt --check -p platform-api -p retrieval-worker` passed.
+  - `cargo test -p platform-api fact_index --lib` passed, 6 tests.
+  - `cargo test -p retrieval-worker` passed.
+  - `cargo check -p retrieval-worker` passed.
+  - `cargo check -p platform-api` passed.
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local` passed.
+- Smoke receipts:
+  - Selected elderly-care smoke: `target/document-quality-smoke/document-quality-smoke-20260606T005136Z-21792.json`.
+  - Selected resume/table/attendance smoke: `target/document-quality-smoke/document-quality-smoke-20260606T005218Z-22360.json`.
+  - Full local document-quality smoke: `target/document-quality-smoke/document-quality-smoke-20260606T005235Z-6760.json`.
+- Remaining:
+  - run 8-server one-shot enrichment worker smoke after migration and deployment;
+  - broaden spreadsheet extraction if the live workbook row shape differs from normalized text rows.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 

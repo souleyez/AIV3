@@ -61,6 +61,49 @@
     ]
   },
   {
+    "id": "elderly-care-procedure-facts",
+    "label": "Elderly-care procedure and threshold facts",
+    "fixture_kind": "care_manual",
+    "prompt": "长期卧床老人多久翻身一次？给老人发药时需要核对什么？护理交接班必须交接哪些内容？",
+    "expected": [
+      "procedure_step and time_threshold facts are produced for care-operation text",
+      "retrieval ranking prefers care-operation chunks over generic facility/policy chunks",
+      "background enrichment extracts procedure steps and thresholds"
+    ],
+    "observability": {
+      "original_parse_status": "unit_contract",
+      "parse_quality_status": "unit_contract",
+      "quality_gate_triggered_reason": "care_procedure_fact_guard",
+      "retry_attempts": 0,
+      "react_actions_used": ["retrieve_evidence", "read_document_detail"],
+      "premium_action": "not_used",
+      "answer_supply_sources": ["dataset_fact_snapshot", "retrieval_evidence", "read_document_detail"],
+      "aggregate_answer_source": "dataset_fact_snapshot"
+    },
+    "expect_no_quality_gate": true,
+    "expected_answer_sources": ["dataset_fact_snapshot", "retrieval_evidence"],
+    "required_aggregate_sources": ["dataset_fact_snapshot", "retrieval_evidence"],
+    "local_tests": [
+      {
+        "package": "platform-api",
+        "filter": "document_fact_candidates_extract_procedure_steps_and_time_thresholds"
+      },
+      {
+        "package": "platform-api",
+        "filter": "retrieval_ranking_prefers_medication_check_chunk_over_invoice_noise"
+      },
+      {
+        "package": "platform-api",
+        "filter": "retrieval_ranking_prefers_nursing_handover_contents_over_general_rules"
+      },
+      {
+        "package": "retrieval-worker",
+        "filter": "procedure_steps_summary_extracts_care_steps_and_thresholds",
+        "target": "bin:document-enrichment-worker"
+      }
+    ]
+  },
+  {
     "id": "resume-company-statistics",
     "label": "Resume company name statistics",
     "fixture_kind": "resume_set",
@@ -122,6 +165,11 @@
       {
         "package": "platform-api",
         "filter": "assistant_run_compact_retry_input_keeps_only_authoritative_company_rows"
+      },
+      {
+        "package": "retrieval-worker",
+        "filter": "resume_profile_summary_extracts_dimensions",
+        "target": "bin:document-enrichment-worker"
       }
     ]
   },
@@ -152,6 +200,11 @@
       {
         "package": "platform-api",
         "filter": "assistant_run_compact_retry_input_keeps_only_authoritative_company_rows"
+      },
+      {
+        "package": "retrieval-worker",
+        "filter": "table_structure_summary_extracts_markdown_tables",
+        "target": "bin:document-enrichment-worker"
       }
     ]
   },
@@ -234,6 +287,11 @@
       {
         "package": "platform-api",
         "filter": "assistant_run_attendance_row_analysis_handles_frequent_absence_workhour_prompt"
+      },
+      {
+        "package": "retrieval-worker",
+        "filter": "spreadsheet_metrics_summary_extracts_absence_and_work_hour_extremes",
+        "target": "bin:document-enrichment-worker"
       }
     ]
   },

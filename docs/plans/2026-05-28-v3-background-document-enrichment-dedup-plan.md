@@ -317,7 +317,7 @@ Remaining:
 
 ## Task 6: Enrichment Outputs For Dense Manuals
 
-Status: `pending`
+Status: `phase-2-local-smoke-completed-2026-06-06`
 
 Target documents:
 
@@ -374,6 +374,45 @@ Acceptance:
   - 长期卧床老人多长时间翻身一次？
   - 给老人发药时，需要执行哪些核对步骤？
   - 护理交接班时，必须交接的内容有哪些？
+
+Progress 2026-06-06:
+
+- Added post-ingest enqueue coverage for:
+  - `table_structure_v1`;
+  - `entity_terms_v1`;
+  - `procedure_steps_v1`;
+  - `resume_profile_v1`;
+  - `spreadsheet_metrics_v1`.
+- Added worker support and aliases for plan-level names:
+  - `section_outline`;
+  - `table_structure`;
+  - `entity_terms`;
+  - `procedure_steps`;
+  - `resume_profile`;
+  - `spreadsheet_metrics`.
+- Added deterministic `output_summary` builders for:
+  - table structure extraction from metadata and Markdown tables;
+  - procedure step and threshold extraction for elderly-care manuals;
+  - entity term rows grouped by fact type;
+  - resume profile dimensions including candidate name, organizations, projects, skills, years, cities, and certificates;
+  - spreadsheet/attendance metrics including absence rows and longest/shortest work-hour rows.
+- Extended `fact_index` with `procedure_step` and `time_threshold` fact types so procedure/threshold facts can enter dataset entity snapshots.
+- Added fixture coverage in `fixtures/document-quality/smoke-cases.json` for elderly-care procedure facts and enrichment-specific resume/table/attendance checks.
+- Verified locally with:
+  - `cargo fmt --check -p platform-api -p retrieval-worker`;
+  - `cargo test -p platform-api fact_index --lib`;
+  - `cargo test -p retrieval-worker`;
+  - `cargo check -p retrieval-worker`;
+  - `cargo check -p platform-api`;
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local`.
+- Full local document-quality smoke passed and wrote:
+  - JSON: `target/document-quality-smoke/document-quality-smoke-20260606T005235Z-6760.json`;
+  - Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T005235Z-6760.md`.
+
+Remaining:
+
+- Add broader spreadsheet table metric extraction once real workbook row shapes are confirmed.
+- Run 8-server enrichment one-shot/backfill smoke after deployment.
 
 ## Task 7: Existing 8 Server Backfill And Dedup
 

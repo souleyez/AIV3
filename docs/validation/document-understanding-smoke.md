@@ -25,6 +25,7 @@ target/document-understanding-smoke/
 - Selected external DOC/DOCX evidence supply for short-name questions such as “邓工是谁”.
 - Parse status supply for failed, reparsing, degraded, and selected-range documents.
 - Resume/company and general typed entity scan behavior.
+- Background enrichment coverage for table structures, elderly-care procedure steps and time thresholds, entity terms, resume profiles, and attendance/spreadsheet metrics.
 
 ## Answer-Quality Autofix Escalation
 
@@ -35,6 +36,18 @@ Low-quality answer collection and fixed Codex patch proposal are covered by the 
 ```
 
 This smoke validates only the bounded task package, output validation, human-exception audit, and runtime summary. It does not re-enable a blocking answer gate, deploy changes, or broaden document/data permissions.
+
+## 2026-06-06 Local Background Enrichment Evidence
+
+- Command: `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local`
+- Result: passed
+- JSON report: `target/document-quality-smoke/document-quality-smoke-20260606T005235Z-6760.json`
+- Markdown summary: `target/document-quality-smoke/document-quality-smoke-20260606T005235Z-6760.md`
+- Added coverage includes:
+  - elderly-care procedure and threshold facts;
+  - table-structure enrichment;
+  - resume-profile enrichment;
+  - attendance/spreadsheet metric enrichment.
 
 ## 2026-05-20 Deployment Target Evidence
 

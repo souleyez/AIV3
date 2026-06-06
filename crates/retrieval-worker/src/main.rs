@@ -584,6 +584,11 @@ fn document_enrichment_kinds() -> Vec<&'static str> {
         "fact_index_v2",
         "qa_seed_v1",
         "entity_relation_v1",
+        "table_structure_v1",
+        "entity_terms_v1",
+        "procedure_steps_v1",
+        "resume_profile_v1",
+        "spreadsheet_metrics_v1",
     ]
 }
 

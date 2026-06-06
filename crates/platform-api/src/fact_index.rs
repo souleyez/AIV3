@@ -20,6 +20,8 @@ const DATASET_ENTITY_FACT_TYPES: &[&str] = &[
     "education_certificate",
     "date_period",
     "section",
+    "procedure_step",
+    "time_threshold",
     "keyword",
 ];
 
@@ -88,6 +90,34 @@ pub fn build_document_fact_candidates(
                 "date_period",
                 &year,
                 "text_year",
+                parse_version.clone(),
+                created_at,
+            );
+        }
+
+        for procedure in extract_procedure_step_fact_terms(&chunk.content, 12) {
+            push_document_fact_candidate(
+                &mut facts,
+                &mut seen,
+                document,
+                chunk,
+                "procedure_step",
+                &procedure,
+                "procedure_step_text",
+                parse_version.clone(),
+                created_at,
+            );
+        }
+
+        for threshold in extract_time_threshold_fact_terms(&chunk.content, 8) {
+            push_document_fact_candidate(
+                &mut facts,
+                &mut seen,
+                document,
+                chunk,
+                "time_threshold",
+                &threshold,
+                "time_threshold_text",
                 parse_version.clone(),
                 created_at,
             );
@@ -325,6 +355,8 @@ fn document_fact_candidate_rank_score(fact: &NewDocumentFact) -> f64 {
     let mut score = match fact.source_kind.as_str() {
         "section_title_hint" => 8.0,
         "text_company_name" => 7.0,
+        "procedure_step_text" => 6.5,
+        "time_threshold_text" => 6.0,
         "text_year" => 5.0,
         _ => 4.0,
     };
@@ -334,7 +366,12 @@ fn document_fact_candidate_rank_score(fact: &NewDocumentFact) -> f64 {
     }
     if matches!(
         fact.fact_type.as_str(),
-        "organization" | "role_position" | "project_product_system" | "section"
+        "organization"
+            | "role_position"
+            | "project_product_system"
+            | "section"
+            | "procedure_step"
+            | "time_threshold"
     ) {
         score += 1.0;
     }
@@ -430,6 +467,87 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
 }
 
+fn extract_procedure_step_fact_terms(content: &str, limit: usize) -> Vec<String> {
+    let mut steps = Vec::new();
+    let mut seen = BTreeSet::new();
+    for line in content.lines() {
+        for sentence in line.split(['。', '；', ';']) {
+            let trimmed = sentence.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !looks_like_procedure_sentence(trimmed) {
+                continue;
+            }
+            let cleaned = trimmed
+                .trim_matches(|value: char| matches!(value, '-' | '*' | ' ' | '\t'))
+                .trim();
+            let char_count = cleaned.chars().count();
+            if !(6..=160).contains(&char_count) {
+                continue;
+            }
+            let normalized = normalize_fact_name(cleaned);
+            if seen.insert(normalized) {
+                steps.push(cleaned.chars().take(120).collect::<String>());
+            }
+            if steps.len() >= limit {
+                return steps;
+            }
+        }
+    }
+    steps
+}
+
+fn looks_like_procedure_sentence(value: &str) -> bool {
+    value.starts_with(|item: char| item.is_ascii_digit())
+        || value.starts_with("第")
+        || contains_any(
+            value,
+            &[
+                "应",
+                "必须",
+                "需要",
+                "核对",
+                "检查",
+                "登记",
+                "记录",
+                "观察",
+                "通知",
+                "上报",
+                "翻身",
+                "发药",
+                "服药",
+                "交接班",
+                "处置",
+                "巡查",
+                "评估",
+            ],
+        )
+}
+
+fn extract_time_threshold_fact_terms(content: &str, limit: usize) -> Vec<String> {
+    let mut thresholds = Vec::new();
+    let mut seen = BTreeSet::new();
+    for line in content.lines() {
+        for sentence in line.split(['。', '；', ';', '，', ',']) {
+            let trimmed = sentence.trim();
+            if !(trimmed.contains("小时") || trimmed.contains("分钟") || trimmed.contains("天"))
+            {
+                continue;
+            }
+            let cleaned = trimmed.chars().take(80).collect::<String>();
+            let normalized = normalize_fact_name(&cleaned);
+            if seen.insert(normalized) {
+                thresholds.push(cleaned);
+            }
+            if thresholds.len() >= limit {
+                return thresholds;
+            }
+        }
+    }
+    thresholds
+}
+
 fn fact_term_is_useful(term: &str) -> bool {
     let trimmed = term.trim();
     let char_count = trimmed.chars().count();
@@ -505,6 +623,8 @@ fn fact_confidence(source_kind: &str) -> f64 {
     match source_kind {
         "section_title_hint" => 0.92,
         "text_year" => 0.9,
+        "procedure_step_text" => 0.88,
+        "time_threshold_text" => 0.88,
         _ => 0.82,
     }
 }
@@ -834,6 +954,35 @@ mod tests {
         assert!(facts
             .iter()
             .all(|fact| !fact.name.contains("................................")));
+    }
+
+    #[test]
+    fn document_fact_candidates_extract_procedure_steps_and_time_thresholds() {
+        let document = document_with_metadata(json!({}));
+        let mut chunk = document_chunk(
+            &document,
+            json!({
+                "section_title_hints": ["老年人发药及翻身护理"]
+            }),
+        );
+        chunk.content =
+            "发药前应核对老年人姓名、床号、药品名称、剂量、时间和方法。帮助无自主翻身能力的老年人翻身，应至少每2小时翻身1次。"
+                .to_string();
+
+        let facts = build_document_fact_candidates(&document, &[chunk], Utc::now());
+
+        assert!(facts.iter().any(|fact| fact.fact_type == "procedure_step"
+            && fact.source_kind == "procedure_step_text"
+            && fact.name.contains("发药前应核对")));
+        assert!(
+            facts
+                .iter()
+                .any(|fact| fact.fact_type == "procedure_step"
+                    && fact.name.contains("每2小时翻身1次"))
+        );
+        assert!(facts.iter().any(|fact| fact.fact_type == "time_threshold"
+            && fact.source_kind == "time_threshold_text"
+            && fact.name.contains("每2小时")));
     }
 
     #[test]
