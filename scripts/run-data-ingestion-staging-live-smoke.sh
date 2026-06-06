@@ -61,6 +61,7 @@ if [[ "${self_test}" == "true" ]]; then
   sync_runs_json='[{"sync_run_id":"sync-smoke","sync_kind":"content","status":"succeeded","failure_kind":null,"workflow_stage":"completed","workflow_status":"succeeded","documents_ingested":50,"chunks_ingested":50,"chunks_indexed":50,"retrieval_evidences_indexed":50,"enqueued_task_count":0,"created_at":"2026-05-30T08:55:00Z","updated_at":"2026-05-30T09:00:00Z"}]'
   datasets_json='[{"dataset_id":"dataset-smoke","key":"external-source-hy-sql-auto-dataset-hy-sql-main","title":"HY SQL Ready Dataset","lifecycle":"active","is_default":true,"dataset_external_id":"hy-sql-main","document_count":50,"indexed_document_count":50,"failed_document_count":0,"processing_document_count":0,"chunk_count":50,"indexed_chunk_count":50,"retrieval_evidence_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z","updated_at":"2026-05-30T09:05:00Z"}]'
   tables_json='[{"table":"bi_traffic_area","document_count":50,"indexed_document_count":50,"chunk_count":50,"indexed_chunk_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z"}]'
+  identity_audit_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","latest_sync":{"sync_run_id":"sync-smoke","status":"succeeded","updated_at":"2026-05-30T09:00:00Z"},"tables":[{"table":"bi_traffic_area","id_column":"id","id_columns":["id"],"source_row_count":50,"unique_document_count":50,"unique_chunk_count":50,"collapsed_duplicate_row_count":0,"current_document_count":50}]}'
   api_status_json='{"source_id":"source-smoke","status":{"config_valid":true,"dataset_readiness":{"signal":"ready"},"sync_readiness":{"signal":"ready"},"health_findings":{"signal":"healthy","items":[]}}}'
   api_fetch_status="self_test"
 else
@@ -268,6 +269,117 @@ left join chunk_summaries c on c.source_table = s.source_table;
 SQL
 )"
 
+identity_audit_json="$(
+  run_psql_json <<'SQL'
+with source as (
+  select id, tenant_id, config_redacted
+  from external_source_connections
+  where source_key = :'source_key'
+  order by updated_at desc
+  limit 1
+),
+mapped_tables as (
+  select coalesce(
+           nullif(item ->> 'table', ''),
+           nullif(item ->> 'name', ''),
+           nullif(item ->> 'table_name', '')
+         ) as table_name,
+         nullif(item ->> 'id_column', '') as id_column,
+         case
+           when jsonb_typeof(item -> 'id_columns') = 'array'
+                and jsonb_array_length(item -> 'id_columns') > 0
+             then item -> 'id_columns'
+           when nullif(item ->> 'id_column', '') is not null
+             then jsonb_build_array(item ->> 'id_column')
+           else '[]'::jsonb
+         end as id_columns
+  from source s
+  cross join lateral jsonb_array_elements(
+    coalesce(s.config_redacted #> '{database_source,tables}', '[]'::jsonb)
+  ) as mapped(item)
+),
+latest_sync as (
+  select r.id as sync_run_id,
+         r.status,
+         r.updated_at,
+         r.counts
+  from external_sync_runs r
+  join source s on s.id = r.source_id and s.tenant_id = r.tenant_id
+  where jsonb_typeof(coalesce(r.counts -> 'ingest_table_counts', 'null'::jsonb)) = 'array'
+  order by r.updated_at desc
+  limit 1
+),
+sync_counts as (
+  select nullif(item ->> 'table', '') as table_name,
+         coalesce(nullif(item ->> 'row_count', '')::bigint, nullif(item ->> 'source_rows_ingested', '')::bigint, 0) as source_row_count,
+         coalesce(nullif(item ->> 'unique_documents_materialized', '')::bigint, nullif(item ->> 'documents_ingested', '')::bigint, 0) as unique_document_count,
+         coalesce(nullif(item ->> 'unique_chunks_materialized', '')::bigint, nullif(item ->> 'chunks_ingested', '')::bigint, 0) as unique_chunk_count,
+         coalesce(nullif(item ->> 'collapsed_duplicate_row_count', '')::bigint, 0) as collapsed_duplicate_row_count
+  from latest_sync
+  cross join lateral jsonb_array_elements(latest_sync.counts -> 'ingest_table_counts') as counts(item)
+),
+doc_counts as (
+  select coalesce(nullif(doc.metadata #>> '{external_metadata,source_table}', ''), '[unmapped]') as table_name,
+         count(distinct doc.id)::bigint as current_document_count
+  from source s
+  join documents doc on doc.tenant_id = s.tenant_id
+  where doc.lifecycle <> 'archived'
+    and doc.metadata #>> '{external_source,source_id}' = s.id
+  group by coalesce(nullif(doc.metadata #>> '{external_metadata,source_table}', ''), '[unmapped]')
+),
+table_names as (
+  select table_name from mapped_tables where table_name is not null
+  union
+  select table_name from sync_counts where table_name is not null
+  union
+  select table_name from doc_counts where table_name is not null
+),
+table_rows as (
+  select jsonb_build_object(
+           'table', n.table_name,
+           'id_column', m.id_column,
+           'id_columns', coalesce(m.id_columns, '[]'::jsonb),
+           'source_row_count', coalesce(sc.source_row_count, 0),
+           'unique_document_count', coalesce(sc.unique_document_count, 0),
+           'unique_chunk_count', coalesce(sc.unique_chunk_count, 0),
+           'collapsed_duplicate_row_count',
+             case
+               when sc.table_name is null then 0
+               when sc.collapsed_duplicate_row_count > 0 then sc.collapsed_duplicate_row_count
+               else greatest(sc.source_row_count - sc.unique_document_count, 0)
+             end,
+           'current_document_count', coalesce(dc.current_document_count, 0)
+         ) as item
+  from table_names n
+  left join mapped_tables m on m.table_name = n.table_name
+  left join sync_counts sc on sc.table_name = n.table_name
+  left join doc_counts dc on dc.table_name = n.table_name
+)
+select jsonb_build_object(
+  'source_id', (select id from source),
+  'source_key', :'source_key',
+  'latest_sync', coalesce(
+    (
+      select jsonb_build_object(
+        'sync_run_id', sync_run_id,
+        'status', status,
+        'updated_at', updated_at
+      )
+      from latest_sync
+    ),
+    'null'::jsonb
+  ),
+  'tables', coalesce(
+    (
+      select jsonb_agg(item order by item ->> 'table')
+      from table_rows
+    ),
+    '[]'::jsonb
+  )
+)::text;
+SQL
+)"
+
 api_status_json="null"
 api_fetch_status="skipped"
 if command -v curl >/dev/null 2>&1; then
@@ -292,6 +404,7 @@ SMOKE_SOURCE_JSON="${source_json}" \
 SMOKE_SYNC_RUNS_JSON="${sync_runs_json}" \
 SMOKE_DATASETS_JSON="${datasets_json}" \
 SMOKE_TABLES_JSON="${tables_json}" \
+SMOKE_IDENTITY_AUDIT_JSON="${identity_audit_json}" \
 SMOKE_API_STATUS_JSON="${api_status_json}" \
 node >"${report_json}" <<'NODE'
 const parseJson = (value, fallback) => {
@@ -307,6 +420,7 @@ const source = parseJson(process.env.SMOKE_SOURCE_JSON, null);
 const syncRuns = parseJson(process.env.SMOKE_SYNC_RUNS_JSON, []);
 const datasets = parseJson(process.env.SMOKE_DATASETS_JSON, []);
 const tables = parseJson(process.env.SMOKE_TABLES_JSON, []);
+const identityAuditRaw = parseJson(process.env.SMOKE_IDENTITY_AUDIT_JSON, null);
 const apiStatus = parseJson(process.env.SMOKE_API_STATUS_JSON, null);
 const requireDefaultReady = process.env.SMOKE_REQUIRE_DEFAULT_READY === 'true';
 const sourceExists = Boolean(source && source.source_id);
@@ -345,6 +459,67 @@ const apiSummary = apiStatus && typeof apiStatus === 'object'
         : [],
     }
   : null;
+const normalizeIdentityAudit = (audit) => {
+  const empty = {
+    source_id: null,
+    source_key: process.env.SMOKE_SOURCE_KEY,
+    latest_sync: null,
+    tables: [],
+    collapsed_table_count: 0,
+    total_collapsed_duplicate_row_count: 0,
+  };
+  if (!audit || typeof audit !== 'object') return empty;
+  const tables = Array.isArray(audit.tables)
+    ? audit.tables.map((table) => {
+        const idColumns = Array.isArray(table.id_columns)
+          ? table.id_columns.filter((column) => typeof column === 'string' && column.trim()).map((column) => column.trim())
+          : [];
+        const sourceRowCount = Number(table.source_row_count || 0);
+        const uniqueDocumentCount = Number(table.unique_document_count || 0);
+        const collapsedDuplicateRowCount = Number(
+          table.collapsed_duplicate_row_count ?? Math.max(sourceRowCount - uniqueDocumentCount, 0)
+        );
+        const identityStatus =
+          sourceRowCount <= 0
+            ? 'no_latest_sync_rows'
+            : uniqueDocumentCount <= 0
+              ? 'not_materialized'
+              : collapsedDuplicateRowCount > 0
+                ? 'collapsed_identity'
+                : 'row_level_or_no_duplicates';
+        const recommendedAction =
+          identityStatus !== 'collapsed_identity'
+            ? 'none'
+            : idColumns.length > 1
+              ? 'verify composite identity is active in a staging sync before relying on row-level reports'
+              : 'consider a composite identity mapping in staging if source-row-level completeness is required';
+        return {
+          table: table.table || '[unmapped]',
+          id_column: table.id_column || null,
+          id_columns: idColumns,
+          source_row_count: sourceRowCount,
+          unique_document_count: uniqueDocumentCount,
+          unique_chunk_count: Number(table.unique_chunk_count || 0),
+          collapsed_duplicate_row_count: collapsedDuplicateRowCount,
+          current_document_count: Number(table.current_document_count || 0),
+          identity_status: identityStatus,
+          recommended_action: recommendedAction,
+        };
+      })
+    : [];
+  return {
+    source_id: audit.source_id || null,
+    source_key: audit.source_key || process.env.SMOKE_SOURCE_KEY,
+    latest_sync: audit.latest_sync || null,
+    tables,
+    collapsed_table_count: tables.filter((table) => table.identity_status === 'collapsed_identity').length,
+    total_collapsed_duplicate_row_count: tables.reduce(
+      (sum, table) => sum + Number(table.collapsed_duplicate_row_count || 0),
+      0
+    ),
+  };
+};
+const identityAudit = normalizeIdentityAudit(identityAuditRaw);
 const warnings = [];
 if (sourceExists && !source.connection_env_present) {
   warnings.push('database source has no configured connection env reference');
@@ -365,6 +540,11 @@ if (!hasSucceededSync) {
 }
 if (!readyDatasets.length) {
   warnings.push('no source-derived dataset has indexed documents and chunks');
+}
+if (identityAudit.collapsed_table_count > 0) {
+  warnings.push(
+    `identity audit found collapsed source rows in ${identityAudit.collapsed_table_count} table(s)`
+  );
 }
 const ready = sourceExists && hasSucceededSync && readyDatasets.length > 0 && (!requireDefaultReady || defaultDatasetReady);
 const questionReportReady = Boolean(
@@ -430,6 +610,7 @@ const report = {
     retrieval_evidence_count: Number(dataset.retrieval_evidence_count || 0),
   })),
   table_readiness: tables,
+  latest_sync_identity_audit: identityAudit,
   question_report_readiness: {
     ready: questionReportReady,
     basis: primaryReadyDataset
@@ -469,6 +650,7 @@ const report = {
     'It does not connect to or query the customer/source database.',
     'A latest failed sync can coexist with an older ready dataset; the report separates those signals.',
     'Question/report readiness means V3 has a source-derived dataset with indexed documents, chunks, retrieval evidence, and at least one ready source table.',
+    'The identity audit is read-only and compares the latest DataMax sync counts with configured identity columns; collapsed rows are an attention signal, not an automatic smoke failure.',
   ],
 };
 
@@ -525,6 +707,22 @@ const lines = [
   `- Sync signal: ${report.api_status.summary?.sync_signal || 'n/a'}`,
   `- Health signal: ${report.api_status.summary?.health_signal || 'n/a'}`,
   `- Health codes: ${(report.api_status.summary?.health_item_codes || []).join(', ') || 'none'}`,
+  '',
+  '## Latest Sync Identity Audit',
+  '',
+  `- Latest sync: ${report.latest_sync_identity_audit.latest_sync?.sync_run_id || 'none'}`,
+  `- Collapsed table count: ${report.latest_sync_identity_audit.collapsed_table_count}`,
+  `- Collapsed duplicate rows: ${report.latest_sync_identity_audit.total_collapsed_duplicate_row_count}`,
+  '',
+  ...(report.latest_sync_identity_audit.tables.length
+    ? [
+        '| Table | Identity Columns | Source Rows | Unique Docs | Collapsed Rows | Current Docs | Status |',
+        '| --- | --- | ---: | ---: | ---: | ---: | --- |',
+        ...report.latest_sync_identity_audit.tables.map((table) =>
+          `| \`${table.table}\` | ${table.id_columns.length ? table.id_columns.map((column) => `\`${column}\``).join(', ') : 'none'} | ${table.source_row_count} | ${table.unique_document_count} | ${table.collapsed_duplicate_row_count} | ${table.current_document_count} | ${table.identity_status} |`
+        ),
+      ]
+    : ['- none']),
   '',
   '## Question And Report Readiness',
   '',
