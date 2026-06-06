@@ -65,9 +65,9 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
 | P0 Gate B: report/static-page operations | passed for deployed `0f72ca37fc1e` | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. The deployed hygiene/focus-link patches make `xinbai-functional-modular-template-20260604` the primary default for Xinbai dataset-overlap matching, skip smoke/prewarm/fallback noise baselines, preserve public report card links after sanitization, and carry the current prompt focus into static-page SSE/report artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Focused capability routing smoke passed for template-reference, temporary-contract/area, and traffic-stat report materials. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
-| P1 Gate C: background enterprise memory | passed for post-ingest rollout | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. A tiny live upload/new-parse smoke then proved all five configured deterministic kinds enqueue and succeed for a newly indexed document. Full existing-document backfill remains disabled. |
+| P1 Gate C: background enterprise memory | passed for post-ingest rollout; historical full backfill still disabled | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. A tiny live upload/new-parse smoke then proved all five configured deterministic kinds enqueue and succeed for a newly indexed document. Current-head `112cc82e8457` summary-only dry-run returned `candidate_count=20`, `skipped_count=20`, `would_record_count=0`, `recorded_count=0`, so no historical records were written and full existing-document backfill remains disabled. |
 | P1 Gate D: low-quality answer recovery | passed for current safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Current-head `1e99281ff695` runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`; local `answer_quality`, `answer_quality_autofix`, `assistant_run_answer_quality_gate`, codex-host-agent, and legacy quality-gate smoke all passed, so live enqueue remains intentionally disabled until an explicit operator decision. |
-| P1 Gate E: confirmed data ingestion | passed for current contract | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. |
+| P1 Gate E: confirmed data ingestion | passed for current contract; row-level semantics decision pending | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. Current-head `112cc82e8457` read-only smoke still shows question/report readiness, four ready datasets, and the same two collapsed latest-sync tables: `bi_contract_warning` collapsed 94 rows and `bi_rentsales_detail` collapsed 99 rows. Production mapping stays unchanged until a row-level-vs-entity-level business decision is made and staging discriminator validation passes. |
 | P1 Gate F: operator observability | passed for deployed page and queue summary | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. 8-server deploy to `2193e0cd5248` succeeded; local/public `/external-integrations` returned `200` with DataMax/运营总览 SSR text; the web queue-stats proxy returned `200` with the configured observability cookie. Model-gateway status remains protected and returned `401 auth_session_required` without a main-system operator session, so an authenticated model-gateway operator smoke remains pending. |
 
 ## Rollout Receipts
@@ -1805,6 +1805,68 @@ Data-ingestion external fixed-task smoke:
   - no production mapping, code, public API, auth, URL, request field, or response field was changed;
   - no raw rows, database URL, credential, bearer token, provider payload, or full customer document was recorded;
   - rollback for future staging tests is to stop using the staging dataset/source mapping, not to delete customer documents.
+
+### 2026-06-06 Current-Head Data-Source Identity Audit And Historical Backfill Dry-Run
+
+- Purpose:
+  - advance P1 data-source identity and historical enrichment without production mapping changes or broad backfill writes;
+  - refresh the evidence on deployed/current head after the report/static-page focus-link closure.
+- Environment:
+  - local and 8-server repository head: `112cc82e8457`;
+  - 8-server status: `## main...origin/main` plus known untracked `?? mode`, left untouched;
+  - active services checked: `aiv3-platform-api.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-static-page-worker.service`.
+- Data-source identity audit command shape:
+  - `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` set from 8-server platform env without printing it;
+  - `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area`;
+  - `DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000`;
+  - `bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Data-source receipts:
+  - JSON: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T123346Z.json`;
+  - Markdown: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T123346Z.md`.
+- Data-source result:
+  - smoke status passed;
+  - source exists and is enabled;
+  - mapped table count: `6`;
+  - latest sync failed: no;
+  - dataset count: `5`;
+  - ready dataset count: `4`;
+  - default dataset ready: no;
+  - question/report ready: yes;
+  - ready basis dataset: `external-source-hy-sql-traffic-area-dataset-hy-sql-traffic-area-count-fix-smoke`;
+  - ready basis counts: documents `384`, chunks `384`, evidence `384`.
+- Latest-sync identity audit:
+  - latest sync: `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - collapsed table count: `2`;
+  - collapsed duplicate rows: `193`;
+  - `bi_contract_warning`: identity columns `parentcode`, `storecode`, `txdate`; source rows `100`; unique docs `6`; collapsed rows `94`; current docs `24`;
+  - `bi_rentsales_detail`: identity columns `storecode`, `contract_no`, `contract_startdate`; source rows `100`; unique docs `1`; collapsed rows `99`; current docs `6`;
+  - `bi_oa_zulinhetong`, `bi_oa_zulinhetonggudingzujin`, `bi_oa_zulinhetongtichengzujin`, and `nwstore` did not show latest-sync row collapse;
+  - `bi_traffic_area` had no latest-sync rows in this audit, while historical current docs remain visible in the ready dataset.
+- Data-source decision boundary:
+  - production mapping remains unchanged;
+  - current report/readiness is enough for entity/latest-snapshot reporting;
+  - row-level completeness for the two collapsed tables requires a staging-only discriminator mapping test before production.
+- Historical fingerprint backfill dry-run command:
+  - 8-server platform env loaded without printing the database URL;
+  - `./target/release/document-fingerprint-backfill --limit 20 --dry-run --summary-only --pretty`.
+- Historical fingerprint dry-run result:
+  - `candidate_count=20`;
+  - `document_report_count=20`;
+  - `dry_run=true`;
+  - `summary_only=true`;
+  - `include_existing=false`;
+  - `would_record_count=0`;
+  - `recorded_count=0`;
+  - `duplicate_count=0`;
+  - `skipped_count=20`.
+- Historical enrichment boundary:
+  - no real historical backfill batch was run;
+  - no production enrichment expansion was enabled;
+  - schema notice logs appeared because migrations are idempotent, but no document titles, document bodies, external URLs, raw rows, database URLs, credentials, bearer tokens, or provider payloads were printed.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, database mapping, production table, or schema was changed;
+  - no source database query was performed by the data-source smoke;
+  - 120 server was not touched.
 
 ### 2026-06-06 Current-Head Passive Low-Quality Recovery Audit
 

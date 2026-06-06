@@ -381,3 +381,39 @@ Interpretation:
 - Do not paste or store raw database URLs or passwords in smoke notes.
 - Do not enable production table writes or schema mutation for this smoke.
 - If sync fails, capture only `sync_run_id`, `workflow_stage`, `workflow_status`, `failure_kind`, and sanitized `last_error`.
+
+## 2026-06-06 Current-Head Row Identity Audit Refresh
+
+- Environment: `8服务器`.
+- Repository state:
+  - `/srv/aiv3/repo` at `112cc82e8457`;
+  - `git status --short --branch` showed `## main...origin/main` and the pre-existing untracked `mode` file.
+- Command shape:
+  - source `/etc/aiv3/aiv3.env`;
+  - pass `PLATFORM_DATABASE_URL` to `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` without printing the value;
+  - run `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000 bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Receipts:
+  - JSON `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T123346Z.json`;
+  - Markdown `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T123346Z.md`.
+- Result:
+  - smoke status passed;
+  - source exists and is enabled;
+  - mapped table count 6;
+  - latest sync failed false;
+  - dataset count 5;
+  - ready dataset count 4;
+  - default dataset ready false;
+  - question/report ready true.
+- Latest sync identity audit:
+  - latest sync `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - collapsed table count 2;
+  - collapsed duplicate rows 193;
+  - `bi_contract_warning`: identity columns `parentcode`, `storecode`, `txdate`; source rows 100; unique docs 6; collapsed rows 94; current docs 24;
+  - `bi_rentsales_detail`: identity columns `storecode`, `contract_no`, `contract_startdate`; source rows 100; unique docs 1; collapsed rows 99; current docs 6.
+- Decision point:
+  - keep production mapping unchanged for entity/latest-snapshot reporting;
+  - if row-level report completeness is required, run a staging-only discriminator mapping test before production adoption.
+- Safety:
+  - reads DataMax PostgreSQL only;
+  - does not query the customer/source database;
+  - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, or public third-party contract change.
