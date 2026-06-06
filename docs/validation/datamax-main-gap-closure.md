@@ -67,7 +67,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
-| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Local worker fix separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server deploy and re-sync receipt remain pending. |
+| P1 Gate E: confirmed data ingestion | passed for current contract | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. |
 
 ## Rollout Receipts
 
@@ -879,10 +879,63 @@ Data-ingestion external fixed-task smoke:
   - `cargo test -p retrieval-worker --bin retrieval-worker external_index_document_ids -- --nocapture` passed, 2 tests;
   - `cargo check -p ingest-worker -p retrieval-worker` passed.
 - Pending:
-  - deploy `ingest-worker` and `retrieval-worker` changes to 8 server;
-  - re-run one guarded staging sync receipt;
-  - verify new counts show source rows and unique materialization separately;
   - review identity mappings for `bi_contract_warning` and `bi_rentsales_detail` if the business wants row-level rather than entity-level materialization.
+- Safety:
+  - no raw source rows, credentials, database URL, bearer token, or session token were recorded;
+  - no third-party public URL, auth, required request field, or existing response field was changed.
+
+### 2026-06-06 8-Server Data-Ingestion Count Fix Deployment
+
+- Commit:
+  - `8c72144aa5f9` (`Fix external source materialization counts`).
+- Deployment:
+  - `/srv/aiv3/repo` fast-forwarded from `74ea7c7ac` to `8c72144aa5f9`;
+  - release build passed for `ingest-worker` and `retrieval-worker`;
+  - `aiv3-ingest-worker.service` active;
+  - `aiv3-retrieval-worker.service` active;
+  - existing untracked server file `mode` was observed and not touched.
+- Re-sync receipt:
+  - trigger path: source-level ExternalSourceSync into source-owned smoke dataset, not the private operator-confirmed staging dataset;
+  - source `hy-sql-traffic-area`;
+  - sync run `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - workflow execution `5ca412ad-04e9-47f0-a0a0-28ad03fe85e8`;
+  - target dataset `cd024465-358e-458c-961d-a8894f2358c5`;
+  - terminal status `succeeded`;
+  - workflow stage `completed`;
+  - failure kind empty.
+- Corrected sync counts:
+  - `row_count=577`;
+  - `source_rows_ingested=577`;
+  - `documents_ingested=384`;
+  - `chunks_ingested=384`;
+  - `chunks_indexed=384`;
+  - `retrieval_evidences_indexed=384`;
+  - `unique_documents_materialized=384`;
+  - `unique_chunks_materialized=384`;
+  - `unique_chunks_indexed=384`;
+  - `retrieval_evidences_materialized=384`;
+  - `documents_ingested_attempted=577`;
+  - `chunks_ingested_attempted=577`;
+  - `collapsed_duplicate_row_count=193`.
+- Per-table collapsed-row signal:
+  - `bi_contract_warning`: 100 source rows, 6 unique materialized documents, collapsed duplicate rows 94;
+  - `bi_rentsales_detail`: 100 source rows, 1 unique materialized document, collapsed duplicate rows 99;
+  - `bi_oa_zulinhetong`, `bi_oa_zulinhetonggudingzujin`, `bi_oa_zulinhetongtichengzujin`, and `nwstore`: no collapse under the current smoke batch.
+- DataMax table cross-check:
+  - `bi_contract_warning`: documents 6, chunks 6, evidence 6;
+  - `bi_oa_zulinhetong`: documents 100, chunks 100, evidence 100;
+  - `bi_oa_zulinhetonggudingzujin`: documents 100, chunks 100, evidence 100;
+  - `bi_oa_zulinhetongtichengzujin`: documents 100, chunks 100, evidence 100;
+  - `bi_rentsales_detail`: documents 1, chunks 1, evidence 1;
+  - `nwstore`: documents 77, chunks 77, evidence 77.
+- Live source smoke:
+  - command: `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL="$PLATFORM_DATABASE_URL" DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000 bash scripts/run-data-ingestion-staging-live-smoke.sh`;
+  - JSON receipt `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T045752Z.json`;
+  - Markdown receipt `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T045752Z.md`;
+  - result passed;
+  - question/report ready yes;
+  - basis dataset `external-source-hy-sql-traffic-area-dataset-hy-sql-traffic-area-count-fix-smoke`;
+  - warning retained: default dataset has no indexed database-source documents yet.
 - Safety:
   - no raw source rows, credentials, database URL, bearer token, or session token were recorded;
   - no third-party public URL, auth, required request field, or existing response field was changed.
