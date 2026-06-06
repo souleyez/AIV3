@@ -213,6 +213,44 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - no public API, third-party URL, auth method, required request field, existing response field, production mapping, production table, or schema was changed;
   - no credential, bearer token, database URL, raw row, provider payload, full customer document, or local object path was recorded.
 
+### 2026-06-06 Current-Head Task 4 Row Identity Staging Guidance
+
+- Purpose:
+  - make the data-source row identity audit more actionable without changing production source mappings;
+  - distinguish "composite identity not configured" from "composite identity configured but still collapsing rows."
+- Commit:
+  - `0caf8df52` (`Clarify data source identity smoke guidance`).
+- Code change:
+  - `scripts/run-data-ingestion-staging-live-smoke.sh` now adds `staging_discriminator_hints` for known collapsed Xinbai tables;
+  - collapsed tables with multiple configured identity columns now recommend validating an additional stable row discriminator in staging;
+  - tables with existing documents but no latest-sync row counts now warn to verify freshness before current-report use;
+  - synthetic self-test fixture now includes collapsed `bi_contract_warning`, collapsed `bi_rentsales_detail`, and a history-only table case.
+- Local verification:
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 bash -n scripts/run-data-ingestion-staging-live-smoke.sh` passed;
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 env DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true DATA_INGESTION_LIVE_SMOKE_REPORT_DIR=target/data-ingestion-staging-live-smoke-self-test-task4-expanded bash scripts/run-data-ingestion-staging-live-smoke.sh` passed;
+  - self-test JSON and Markdown contained the new configured-composite-collapse recommendation and staging hints.
+- 8-server rollout:
+  - `/srv/aiv3/repo` fast-forwarded to `0caf8df52`;
+  - no service restart was required because only the read-only smoke script changed;
+  - known untracked `?? mode` remained untouched.
+- 8-server live smoke:
+  - command shape: `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` set from server env without printing it, `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area`, `DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000`;
+  - JSON receipt: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T141410Z.json`;
+  - Markdown receipt: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T141410Z.md`;
+  - result: `ready=true`, question/report ready true.
+- Current row-identity findings:
+  - `bi_contract_warning`: source rows `100`, unique docs `6`, collapsed rows `94`, staging hints `contract_or_brand_identifier`, `shop_or_storefront_identifier`, `business_mode_or_metric_type`, `stable_detail_sequence_if_available`;
+  - `bi_rentsales_detail`: source rows `100`, unique docs `1`, collapsed rows `99`, staging hints `period_or_statement_date`, `brand_or_shop_identifier`, `rent_or_sales_detail_type`, `stable_detail_sequence_if_available`;
+  - `bi_traffic_area`: latest-sync source rows `0`, current docs `50`, freshness verification recommended before current-report use.
+- Decision status:
+  - production mapping remains unchanged;
+  - business still needs to decide entity/latest-snapshot vs row-level detail before any production mapping change;
+  - if row-level is required, the next technical step is a staging-only discriminator sync using stable columns from the hinted families.
+- Safety:
+  - reads DataMax PostgreSQL only;
+  - does not query the customer/source database;
+  - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, public API change, or third-party contract change.
+
 ### 2026-06-06 Completion Audit And Dataset-Scoped Backfill Dry-Run
 
 - Purpose:

@@ -12,6 +12,7 @@ Latest 8-server read-only smoke receipts:
 
 - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T100024Z.json`
 - `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T110226Z.json`
+- `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T141410Z.json`
 
 The current source-derived dataset is question/report ready, but two latest-sync tables collapse multiple source rows into fewer DataMax documents:
 
@@ -19,6 +20,12 @@ The current source-derived dataset is question/report ready, but two latest-sync
 | --- | --- | ---: | ---: | ---: | --- |
 | `bi_contract_warning` | `parentcode`, `storecode`, `txdate` | 100 | 6 | 94 | Row-level report completeness is not proven. |
 | `bi_rentsales_detail` | `storecode`, `contract_no`, `contract_startdate` | 100 | 1 | 99 | Row-level report completeness is not proven. |
+
+Current-head smoke now distinguishes "composite configured but still insufficient" from "single-column identity missing a composite mapping":
+
+- `bi_contract_warning`: current composite identity still collapses rows. Staging discriminator direction is contract/brand identifier, shop/storefront identifier, business-mode or metric type, and stable detail sequence if available.
+- `bi_rentsales_detail`: current composite identity still collapses rows. Staging discriminator direction is period/statement date, brand or shop identifier, rent/sales detail type, and stable detail sequence if available.
+- `bi_traffic_area`: latest sync has no source-row counts but existing documents are present, so freshness should be verified before using those documents for current reports.
 
 Other latest-sync tables in the same audit were row-level or had no duplicate materialization signal:
 

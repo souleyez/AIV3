@@ -448,3 +448,36 @@ Interpretation:
   - reads DataMax PostgreSQL only;
   - does not query the customer/source database;
   - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, or public third-party contract change.
+
+## 2026-06-06 Staging Discriminator Guidance Refresh
+
+- Environment: `8服务器`.
+- Repository state:
+  - `/srv/aiv3/repo` at `0caf8df52`;
+  - `git status --short --branch` showed `## main...origin/main` and the pre-existing untracked `mode` file.
+- Change verified:
+  - the read-only identity audit now distinguishes a missing composite mapping from a configured composite identity that still collapses rows;
+  - known collapsed Xinbai tables expose sanitized `staging_discriminator_hints` in JSON and append the same hint families to the Markdown recommended action;
+  - a mapped/current-doc table with no latest-sync row counts now gets a freshness warning.
+- Local verification before rollout:
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 bash -n scripts/run-data-ingestion-staging-live-smoke.sh` passed;
+  - `wsl.exe --cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 env DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true DATA_INGESTION_LIVE_SMOKE_REPORT_DIR=target/data-ingestion-staging-live-smoke-self-test-task4-expanded bash scripts/run-data-ingestion-staging-live-smoke.sh` passed;
+  - self-test JSON confirmed `bi_contract_warning` and `bi_rentsales_detail` get `configured composite identity still collapses rows` plus `staging_discriminator_hints`;
+  - self-test Markdown included the same staging hints.
+- 8-server command shape:
+  - source `/etc/aiv3/aiv3.env`;
+  - pass `PLATFORM_DATABASE_URL` to `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` without printing the value;
+  - run `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000 bash scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Receipts:
+  - JSON `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T141410Z.json`;
+  - Markdown `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T141410Z.md`.
+- Result:
+  - smoke status passed;
+  - question/report ready true;
+  - `bi_contract_warning`: source rows `100`; unique docs `6`; collapsed rows `94`; recommended action `configured composite identity still collapses rows; validate an added stable row discriminator in staging before relying on row-level reports`; staging hints `contract_or_brand_identifier`, `shop_or_storefront_identifier`, `business_mode_or_metric_type`, `stable_detail_sequence_if_available`;
+  - `bi_rentsales_detail`: source rows `100`; unique docs `1`; collapsed rows `99`; recommended action `configured composite identity still collapses rows; validate an added stable row discriminator in staging before relying on row-level reports`; staging hints `period_or_statement_date`, `brand_or_shop_identifier`, `rent_or_sales_detail_type`, `stable_detail_sequence_if_available`;
+  - `bi_traffic_area`: latest-sync source rows `0`; current docs `50`; recommended action `latest sync has no source-row counts for this table; verify freshness before using existing documents for current reports`.
+- Safety:
+  - reads DataMax PostgreSQL only;
+  - does not query the customer/source database;
+  - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, or public third-party contract change.
