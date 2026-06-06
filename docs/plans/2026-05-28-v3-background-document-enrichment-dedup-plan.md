@@ -234,12 +234,13 @@ Remaining:
 
 ## Task 5: Background Enrichment Orchestrator
 
-Status: `enqueue-foundation-completed-locally-2026-06-06`
+Status: `worker-execution-loop-completed-locally-2026-06-06`
 
 Files:
 
 - `crates/ingest-worker/src/main.rs`
 - `crates/retrieval-worker/src/main.rs`
+- `crates/retrieval-worker/src/bin/document-enrichment-worker.rs`
 - `crates/platform-api/src/fact_index.rs`
 - optional new module `document_enrichment.rs`
 
@@ -278,22 +279,41 @@ Progress 2026-06-06:
 - Enqueue is skipped by default, and skipped when a document has no `content_sha256`.
 - Document metadata records a compact `document_enrichment` enqueue summary after fact cleanup.
 - Added read-only diagnostics endpoint `GET /v1/documents/{document_id}/enrichment-runs`, guarded by the existing document visibility check.
+- Added a low-priority standalone `document-enrichment-worker` binary under `retrieval-worker`.
+- The worker explicitly claims `document_enrichment_runs` and is not started by the normal retrieval worker process unless operations configures it.
+- The worker supports:
+  - `structure_outline_v1`: deterministic section/heading outline from chunk metadata and content headings;
+  - `fact_index_v2`: deterministic fact rebuild and dataset entity snapshot refresh, with duplicate alias runs skipped through canonical read-through;
+  - `qa_seed_v1`: compact likely-question seeds derived from document title and sections;
+  - `entity_relation_v1`: deterministic entity/fact samples and relation hints from local fact candidates.
+- Operational knobs:
+  - `DOCUMENT_ENRICHMENT_WORKER_KIND`;
+  - `DOCUMENT_ENRICHMENT_WORKER_POLL_INTERVAL_MS`;
+  - `DOCUMENT_ENRICHMENT_WORKER_ERROR_BACKOFF_SECONDS`;
+  - `DOCUMENT_ENRICHMENT_WORKER_ONCE`;
+  - `DOCUMENT_ENRICHMENT_WORKER_MAX_RUNS`;
+  - `DOCUMENT_ENRICHMENT_WORKER_DATABASE_MAX_CONNECTIONS`.
 - Added regression `document_enrichment_run_repository_claims_requeues_and_succeeds`.
 - Added regression `list_document_enrichment_runs_returns_visible_document_runs`.
+- Added deterministic worker regressions for structure outline extraction, QA seed generation, and entity/fact summary generation.
 - Verified locally with:
   - `cargo fmt --check -p platform-api -p storage`;
+  - `cargo fmt --check -p retrieval-worker`;
   - `cargo test -p platform-api list_document_enrichment_runs_returns_visible_document_runs --lib`;
   - `cargo test -p platform-api document_enrichment_run_repository_claims_requeues_and_succeeds --lib`;
   - `cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib`;
+  - `cargo test -p retrieval-worker --bin document-enrichment-worker`;
   - `cargo test -p retrieval-worker`;
   - `cargo test -p storage document_canonical_enrichment --lib`;
+  - `cargo check -p retrieval-worker --bin document-enrichment-worker`;
   - `cargo check -p retrieval-worker`;
   - `cargo check -p platform-api`.
 
 Remaining:
 
-- Add a low-priority worker/idle execution loop.
 - Wire feature flags before enabling on 8 server.
+- Build and install the new worker binary on 8 server only after migration/backfill smoke.
+- Run one-shot 8-server smoke with `DOCUMENT_ENRICHMENT_WORKER_ONCE=true` before enabling continuous polling.
 
 ## Task 6: Enrichment Outputs For Dense Manuals
 

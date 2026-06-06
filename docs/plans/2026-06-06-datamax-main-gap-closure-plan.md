@@ -463,7 +463,7 @@ git commit -m "Close static page template reuse and prewarm operations"
 
 ## Task 5: Implement Background Document Enrichment Phase 1
 
-**Status:** in progress as of 2026-06-06. Storage schema, third-party parse fingerprint capture, main-site local register fingerprint capture, zip child-document fingerprint capture, a dry-run capable existing-document fingerprint backfill tool, canonical read-through for chunks/evidence/facts, the `document_enrichment_runs` repository foundation, feature-flagged post-ingest enrichment enqueue, and document-level enrichment diagnostics are implemented locally. Enrichment worker execution, 8-server migration/backfill rollout, and live smoke remain pending.
+**Status:** in progress as of 2026-06-06. Storage schema, third-party parse fingerprint capture, main-site local register fingerprint capture, zip child-document fingerprint capture, a dry-run capable existing-document fingerprint backfill tool, canonical read-through for chunks/evidence/facts, the `document_enrichment_runs` repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, and the low-priority enrichment worker execution loop are implemented locally. 8-server migration/backfill rollout and live smoke remain pending.
 
 **Files:**
 
@@ -472,6 +472,7 @@ git commit -m "Close static page template reuse and prewarm operations"
 - Modify: `crates/storage/src/lib.rs`
 - Modify: `crates/platform-api/src/lib.rs`
 - Modify: `crates/ingest-worker/src/lib.rs`
+- Create: `crates/retrieval-worker/src/bin/document-enrichment-worker.rs`
 - Modify: `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`
 - Modify: `docs/validation/document-understanding-smoke.md`
 
