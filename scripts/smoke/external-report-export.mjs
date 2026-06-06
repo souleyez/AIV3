@@ -453,6 +453,14 @@ async function analyzeReportSurface(args, values, metadata) {
   const exportUrls = inferExportUrls(args.baseUrl, publicUrl, allValues);
   const downloadExports = collectDownloadExports(allValues, args.baseUrl);
   const answerText = firstString([
+    ...values.flatMap((item) => [
+      item?.text,
+      item?.answer,
+      item?.content,
+      item?.output_text,
+      item?.outputText,
+      ...collectValuesForKeys(item, ['answer_text', 'answerText']),
+    ]),
     ...responses.flatMap((item) => {
       const itemReply = item.reply || {};
       return [
@@ -495,8 +503,14 @@ async function analyzeReportSurface(args, values, metadata) {
 
   return {
     ok: errors.length === 0,
-    replyType: reply.reply_type || reply.replyType || null,
-    taskStatus: reply.task_status || reply.taskStatus || null,
+    replyType: reply.reply_type
+      || reply.replyType
+      || firstString(collectValuesForKeys(allValues, ['reply_type', 'replyType']))
+      || null,
+    taskStatus: reply.task_status
+      || reply.taskStatus
+      || firstString(collectValuesForKeys(allValues, ['task_status', 'taskStatus']))
+      || null,
     title,
     publicUrl,
     publicUrlFocus,
