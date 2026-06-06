@@ -1784,3 +1784,24 @@ Data-ingestion external fixed-task smoke:
   - no third-party public URL, auth method, required request field, existing response field, status value, or header name was changed;
   - existing `v3_*` and `X-V3-*` protocol names were intentionally preserved and documented as compatibility fields;
   - no credential, bearer token, database URL, raw customer row, provider payload, or full customer document was recorded.
+
+### 2026-06-06 Data-Source Row Identity Decision Memo
+
+- Purpose:
+  - advance Task 6 without changing production mappings;
+  - document the current safe boundary for `bi_contract_warning` and `bi_rentsales_detail` after repeated 8-server read-only audits showed 193 collapsed latest-sync rows.
+- New document:
+  - `docs/operations/data-source-row-identity-decision.md`.
+- Decision boundary recorded:
+  - keep current production mapping unchanged;
+  - treat the two collapsed tables as entity/store/period-level evidence until the business explicitly requires row-level detail;
+  - do not claim row-level completeness for reports depending on all individual rows from those two tables;
+  - if row-level detail is required, test finer discriminator columns only in a staging/smoke dataset first.
+- Current evidence recorded in the memo:
+  - latest 8-server read-only receipts from `20260606T100024Z` and `20260606T110226Z`;
+  - `bi_contract_warning`: identity columns `parentcode`, `storecode`, `txdate`; 100 latest-sync source rows, 6 unique documents, 94 collapsed rows;
+  - `bi_rentsales_detail`: identity columns `storecode`, `contract_no`, `contract_startdate`; 100 latest-sync source rows, 1 unique document, 99 collapsed rows.
+- Safety:
+  - no production mapping, code, public API, auth, URL, request field, or response field was changed;
+  - no raw rows, database URL, credential, bearer token, provider payload, or full customer document was recorded;
+  - rollback for future staging tests is to stop using the staging dataset/source mapping, not to delete customer documents.
