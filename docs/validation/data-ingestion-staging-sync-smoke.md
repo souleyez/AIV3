@@ -179,6 +179,41 @@ Interpretation:
 - The current default dataset still needs a confirmed sync or rebinding before it can be treated as ready.
 - Latest failed sync should stay visible as an operator attention item and should not erase the fact that alternate ready datasets exist.
 
+## 2026-06-06 Identity Audit Extension
+
+- Commit: `25fb0ee`.
+- Changed script: `scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Purpose:
+  - add a reusable read-only `latest_sync_identity_audit` section;
+  - report configured identity columns, latest-sync source rows, unique materialized documents, collapsed duplicate rows, and current document counts by table;
+  - make source-row vs entity/store-level materialization gaps visible before database-derived reporting.
+- Local verification:
+  - command: `DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_GUIDE_CHECK=true bash scripts/run-data-ingestion-staging-sync-smoke.sh`;
+  - result: passed;
+  - receipt JSON: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T080441Z.json`;
+  - live self-test receipt JSON: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T080659Z.json`.
+- 8-server read-only verification:
+  - `/srv/aiv3/repo` commit: `25fb0ee9d0cb`;
+  - source key: `hy-sql-traffic-area`;
+  - receipt JSON: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T080856Z.json`;
+  - receipt Markdown: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T080856Z.md`;
+  - result: passed.
+- 8-server sanitized audit result:
+  - latest sync: `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - collapsed table count: 2;
+  - collapsed duplicate rows: 193;
+  - `bi_contract_warning`: source rows 100, unique documents 6, collapsed rows 94;
+  - `bi_rentsales_detail`: source rows 100, unique documents 1, collapsed rows 99;
+  - other latest-sync tables showed no source-row collapse.
+- Safety result:
+  - DataMax PostgreSQL read only;
+  - customer/source database read: false;
+  - writes allowed: false;
+  - raw credentials printed: false;
+  - raw table dump allowed: false.
+- Next staging decision:
+  - if source-row-level completeness is required for Xinbai reports, test a staging-only mapping with finer row discriminator columns for the two collapsed fact/detail tables before changing production mappings.
+
 ## 2026-06-06 8-Server Operator Confirm/Sync Result Before Idempotency Fix
 
 - Environment: `8服务器`.

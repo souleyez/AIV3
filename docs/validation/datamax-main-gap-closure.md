@@ -1318,7 +1318,7 @@ Data-ingestion external fixed-task smoke:
   - collapse is concentrated in `bi_contract_warning` and `bi_rentsales_detail`;
   - sanitized mapping review found current `id_column` values are `parentcode` for `bi_contract_warning` and `storecode` for `bi_rentsales_detail`, while composite `id_columns` are also present in configuration;
   - interpretation: current behavior is entity/store-level materialization for those two tables, not source-row-level materialization;
-  - recommended next step if row-level completeness is required: run a staging-only mapping change that uses the composite `id_columns` for document identity, then rerun guarded sync and compare source rows, unique documents, chunks, evidence, and report behavior before production adoption.
+  - recommended next step if row-level completeness is required: run a staging-only mapping change that adds or chooses finer row discriminator columns for the collapsed fact/detail tables, then rerun guarded sync and compare source rows, unique documents, chunks, evidence, and report behavior before production adoption.
 - Low-quality recovery safety:
   - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED` is unset;
   - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` is unset;
@@ -1326,3 +1326,36 @@ Data-ingestion external fixed-task smoke:
   - `CODEX_HOST_TASK_ALLOWLIST` is set but does not include `answer_quality_autofix`;
   - `CODEX_HOST_CAPABILITY_ALLOWLIST` is unset;
   - result: no hard answer gate and no live `answer_quality_autofix` task creation under current 8-server configuration.
+
+### 2026-06-06 Data-Source Identity Audit Smoke
+
+- Commit:
+  - `25fb0ee` added a reusable read-only identity audit section to `scripts/run-data-ingestion-staging-live-smoke.sh`.
+- Local verification:
+  - command: `DATA_INGESTION_STAGING_SYNC_SMOKE_SKIP_GUIDE_CHECK=true bash scripts/run-data-ingestion-staging-sync-smoke.sh`;
+  - result: passed;
+  - receipt JSON: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T080441Z.json`;
+  - live self-test receipt JSON: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T080659Z.json`;
+  - the self-test report includes `latest_sync_identity_audit` with configured identity columns, source rows, unique documents, collapsed duplicate rows, current documents, status, and recommended action.
+- 8-server read-only verification:
+  - `/srv/aiv3/repo` fast-forwarded to `25fb0ee9d0cb`;
+  - command shape: source `/etc/aiv3/aiv3.env`, pass `PLATFORM_DATABASE_URL` as `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL`, source key `hy-sql-traffic-area`, API base `http://127.0.0.1:3000`;
+  - result: passed;
+  - receipt JSON: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T080856Z.json`;
+  - receipt Markdown: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T080856Z.md`.
+- Sanitized identity audit result:
+  - latest sync: `e9da6483-5705-416e-bdc2-a1cc219f6566`;
+  - collapsed table count: 2;
+  - collapsed duplicate rows: 193;
+  - `bi_contract_warning`: identity columns `parentcode`, `storecode`, `txdate`; source rows 100, unique documents 6, collapsed rows 94;
+  - `bi_rentsales_detail`: identity columns `storecode`, `contract_no`, `contract_startdate`; source rows 100, unique documents 1, collapsed rows 99;
+  - other latest-sync tables in the report showed no source-row collapse;
+  - `bi_traffic_area` has historical current documents but no rows in the latest reviewed sync.
+- Interpretation:
+  - the repeatable audit now proves the row/materialization gap without printing raw customer rows or credentials;
+  - the next staging-only change, if business requires row-level report completeness, should add or choose finer row discriminator columns for the two collapsed fact/detail tables rather than assuming the current composite `id_columns` are sufficient.
+- Safety:
+  - reads DataMax PostgreSQL only;
+  - source/customer database is not queried by this smoke;
+  - writes are disabled;
+  - no raw credential, raw source row, full table dump, or third-party public contract change is recorded.
