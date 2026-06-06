@@ -26602,6 +26602,22 @@ fn external_channel_attachment_title_match_score(hint: &str, document_title: &st
 
     let hint_tokens = external_channel_attachment_title_match_tokens(hint);
     let title_tokens = external_channel_attachment_title_match_tokens(document_title);
+    let strict_ascii_hint_tokens = hint_tokens
+        .iter()
+        .filter(|token| {
+            token.chars().count() >= 4
+                && token.chars().all(|ch| ch.is_ascii_alphanumeric())
+                && token.chars().any(|ch| ch.is_ascii_alphabetic())
+                && !external_channel_attachment_title_generic_token(token)
+        })
+        .collect::<Vec<_>>();
+    if strict_ascii_hint_tokens.len() >= 2
+        && strict_ascii_hint_tokens
+            .iter()
+            .any(|token| !title_tokens.contains(*token))
+    {
+        return None;
+    }
     let mut score = 0i64;
     let mut has_specific_overlap = false;
     for token in &title_tokens {
@@ -69136,6 +69152,37 @@ async fn build_assistant_run_chunk_fallback_supply(
             selected_document_ids.is_empty() || selected_document_ids.contains(&document.id)
         })
         .collect::<Vec<_>>();
+    let mut documents = documents;
+    if !selected_document_ids.is_empty() {
+        let mut seen_document_ids = documents
+            .iter()
+            .map(|document| document.id)
+            .collect::<HashSet<_>>();
+        for document_id in selected_document_ids {
+            if seen_document_ids.contains(document_id) {
+                continue;
+            }
+            let Some(document) = state
+                .storage
+                .documents()
+                .get_by_id(state.tenant_id, *document_id)
+                .await
+                .map_err(ApiError::from_storage)?
+            else {
+                continue;
+            };
+            if !document_is_visible_for_assistant_evidence_owner_scope(
+                &document,
+                current_user_id,
+                selected_document_ids,
+                allow_selected_documents_without_acl_snapshot,
+            ) {
+                continue;
+            }
+            seen_document_ids.insert(document.id);
+            documents.push(document);
+        }
+    }
     let mut sources = Vec::new();
     for document in documents {
         if !document_is_visible_for_external_acl(
@@ -100139,6 +100186,17 @@ mod tests {
         assert!(external_channel_attachment_title_match_score(
             &hints[0],
             "李越-8年+技术-产品(即做技术又做产品）.pdf"
+        )
+        .is_none());
+        let smoke_hint = "DataMax Scope Smoke Attachment 20260606094114.md";
+        assert!(external_channel_attachment_title_match_score(
+            smoke_hint,
+            "DataMax Scope Smoke Attachment 20260606094114.md"
+        )
+        .is_some());
+        assert!(external_channel_attachment_title_match_score(
+            smoke_hint,
+            "DataMax Scope Smoke Extra 20260606094114.md"
         )
         .is_none());
     }
