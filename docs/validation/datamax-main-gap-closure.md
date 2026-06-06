@@ -62,11 +62,11 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 
 | Gate | Status | Receipt |
 | --- | --- | --- |
-| P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke also passed on 2026-06-06 with 20/20 OK and P95 5721 ms. Main-site 20-way smoke exposed a chat-session workflow-start bug: 20/20 requests were accepted but no assistant messages were produced because executions remained queued without `chat_session` tasks. A local fix now starts the workflow after session/message persistence; deployment and rerun remain pending. Static-page 5-way, Cloudflare fallback 2-way, and report/document-quality private smoke remain pending. |
-| P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
+| P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
+| P0 Gate B: report/static-page operations | passed for current contract | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
-| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Local operator-confirmation routing is now implemented and tested: configured model-gateway operators can confirm/sync external-channel staging plans, while anonymous and ordinary non-owner users still receive `assistant_run_not_found`. 8-server deploy plus authenticated operator confirm/sync smoke remain pending. |
+| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. Remaining item: audit 577 processed/indexed rows vs 384 unique current documents/chunks/evidence rows before broader rollout. |
 
 ## Rollout Receipts
 
@@ -139,7 +139,58 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - `cargo test -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib -- --nocapture` completed; the local shared-database guard skipped the DB route assertions as designed.
   - `cargo check -p platform-api` passed.
 - Remaining:
-  - Commit, deploy to 8 server, restart `aiv3-platform-api.service`, and rerun the main-site 20-way smoke with a private temporary main-site session.
+  - Completed by the 8-server rollout receipt below.
+
+### 2026-06-06 Chat-Session Workflow-Start Rollout And P0 Smoke
+
+- Commit:
+  - `83e49529b9fd` (`Start chat session workflows automatically`).
+- Changed behavior:
+  - `create_chat_session` and `append_chat_session_turn` now apply `WorkflowSignal::Start` after session/message/context persistence.
+  - Public response shape is unchanged.
+  - Returned workflow execution now has `status=running`, `stage=orchestrate_chat_session`, and a queued `chat_session/orchestrate_chat_session` task.
+- Local verification before deploy:
+  - `cargo fmt --check -p platform-api` passed.
+  - `cargo test -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib -- --nocapture` completed; the local shared-database guard skipped the DB route assertions as designed.
+  - `cargo check -p platform-api` passed.
+- 8-server deploy:
+  - `git pull --ff-only` moved `/srv/aiv3/repo` to `83e49529b9fd`.
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api` passed.
+  - `aiv3-platform-api.service` restarted and reported `active`.
+  - After smoke, these services reported `active`: `aiv3-platform-api.service`, `aiv3-chat-session-worker.service`, `aiv3-assistant-run-worker.service`, `aiv3-static-page-worker.service`, `aiv3-codex-host-agent.service`, and `aiv3-retrieval-worker.service`.
+  - Existing untracked 8-server file `mode` was observed and not touched.
+- Main-site 20-way rerun:
+  - Command: `npm run smoke:main-chat-20way -- --base-url https://v3.elepcloud.com --concurrency 20 --timeout-ms 90000 --poll-timeout-ms 120000`.
+  - Receipt: `/srv/aiv3/repo/target/main-chat-20way-smoke/20260606041553.json`.
+  - Result: `okCount=20`, `failedCount=0`, `acceptedCount=20`, `assistantMessageCount=20`.
+  - Latency: `p50=12487 ms`, `p95=15906 ms`, `max=15963 ms`.
+- External-channel 20-way rerun:
+  - Command: `npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20 --timeout-ms 120000`.
+  - Receipt: `/srv/aiv3/repo/target/external-channel-20way-smoke/20260606042403.json`.
+  - Result: `okCount=20`, `failedCount=0`, `completedCount=20`.
+  - Latency: `p50=2776 ms`, `p95=4036 ms`, `max=6923 ms`.
+  - The script's `answeredCount=0` reflects current script/report semantics and was not treated as a failure because all tasks emitted completion events.
+- Static-page 5-way:
+  - Command: `npm run smoke:static-page-5way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 5 --timeout-ms 120000 --poll-timeout-ms 300000`.
+  - Receipt: `/srv/aiv3/repo/target/static-page-5way-smoke/20260606042000.json`.
+  - Result: `okCount=5`, `failedCount=0`, `acceptedCount=5`, `artifactCount=5`, `requireArtifact=true`.
+  - Latency: `p50=7068 ms`, `p95=7794 ms`, `max=7794 ms`.
+  - Note: the first run used the wrong tenant's duplicate `generic-chat-main` bearer and returned expected HTTP 401. The passing run used the active `local-dev` channel connection token loaded from 8-server configuration and not printed.
+- Cloudflare fallback 2-way guard:
+  - Command: `npm run smoke:cloudflare-fallback-2way -- --base-url https://v3.elepcloud.com --max-allowed 2 --min-expected 2`.
+  - Receipt: `/srv/aiv3/repo/target/cloudflare-fallback-2way-smoke/20260606042140.json`.
+  - Result: `ok=true`, `codexConcurrency=2`, `maxRunning=0`, model-gateway status loaded, workflow queue stats loaded.
+  - Note: a preliminary run used `auth_method=smoke` for a temporary operator session and correctly failed with `unknown auth session method`; the passing run used `local_key`.
+- External report export:
+  - Command: `npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000`.
+  - Receipt: `/srv/aiv3/repo/target/external-report-export-smoke/20260606042158.json`.
+  - Result: `okCount=2`, `failedCount=0`, JSON and SSE passed.
+  - Confirmed: title `新世界百货经营管理月报表`, focus `取高机会`, `table-data.csv`, `report.ppt`, and `report.md`.
+- Document-quality regression:
+  - Command: `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local`.
+  - Receipt: `target/document-quality-smoke/document-quality-smoke-20260606T042304Z-10920.json`.
+  - Markdown summary: `target/document-quality-smoke/document-quality-smoke-20260606T042304Z-10920.md`.
+  - Result: passed all cases, including one-character PDF, `邓工是谁`, elderly-care procedure facts, resume company statistics, multi-dimensional resume ranking, table-heavy documents, attendance date/work-hour analysis, scanned PDF fallback, smart-home customer-feedback answer quality, and smart-elevator point-list answer quality.
 
 ### 2026-06-06 No-Cookie Cloudflare Fallback Guard Probe
 
