@@ -65,6 +65,25 @@ Safety result:
 - sync source must be in plan: true;
 - repeat sync clicks deduplicated: true.
 
+## 2026-06-06 Local Operator Confirmation Route Upgrade
+
+- Command: `bash scripts/run-data-ingestion-staging-sync-smoke.sh`
+- Result: passed.
+- Receipt JSON: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T025141Z.json`
+- Receipt Markdown: `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T025141Z.md`
+- Live readiness self-test JSON: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T025402Z.json`
+- Live readiness self-test Markdown: `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T025402Z.md`
+
+Additional route coverage:
+
+- external-channel staging plan owned by a third-party system user can be confirmed by a configured model-gateway operator;
+- the same operator can start sync for the confirmed private staging dataset;
+- anonymous callers still receive `assistant_run_not_found`;
+- ordinary signed-in non-owner users still receive `assistant_run_not_found`;
+- production write allowed: false;
+- raw credential exposure: false;
+- third-party public URL/auth/request/response contract changed: false.
+
 ## 8-Server Manual Smoke
 
 After deployment:

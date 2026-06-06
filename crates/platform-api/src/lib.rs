@@ -5580,18 +5580,19 @@ async fn require_model_gateway_operator_session(
 }
 
 fn ensure_model_gateway_operator(user: &User) -> std::result::Result<(), ApiError> {
-    if env_flag("MODEL_GATEWAY_OPERATOR_ALLOW_ANY_SIGNED_IN", false) {
-        return Ok(());
-    }
-    if model_gateway_operator_email_allowed(&user.email)
-        || model_gateway_operator_role_allowed(user)
-    {
+    if model_gateway_operator_allowed(user) {
         return Ok(());
     }
     Err(ApiError::forbidden(
         "model_gateway_operator_required",
         "当前账号没有模型池运维权限".to_string(),
     ))
+}
+
+fn model_gateway_operator_allowed(user: &User) -> bool {
+    env_flag("MODEL_GATEWAY_OPERATOR_ALLOW_ANY_SIGNED_IN", false)
+        || model_gateway_operator_email_allowed(&user.email)
+        || model_gateway_operator_role_allowed(user)
 }
 
 fn model_gateway_operator_email_allowed(email: &str) -> bool {
@@ -7976,6 +7977,32 @@ async fn load_visible_assistant_run_for_user(
         return Err(assistant_run_not_found_error(run_id));
     }
     Ok(run)
+}
+
+async fn load_external_channel_assistant_run_for_owner_or_operator(
+    state: &AppState,
+    headers: &HeaderMap,
+    run_id: AssistantRunId,
+) -> std::result::Result<(AssistantRun, Option<UserId>, bool), ApiError> {
+    let current_session = current_auth_session(state, headers).await?;
+    let current_user_id = current_session.as_ref().map(|(user, _session)| user.id);
+    let run = state
+        .storage
+        .assistant_runs()
+        .get_by_id(state.tenant_id, run_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .ok_or_else(|| assistant_run_not_found_error(run_id))?;
+    if owner_user_id_is_visible(run.user_id, current_user_id) {
+        return Ok((run, current_user_id, false));
+    }
+    let Some((user, _session)) = current_session else {
+        return Err(assistant_run_not_found_error(run_id));
+    };
+    if run.service_lane != "external_channel" || !model_gateway_operator_allowed(&user) {
+        return Err(assistant_run_not_found_error(run_id));
+    }
+    Ok((run, Some(user.id), true))
 }
 
 fn workflow_execution_not_found_error(execution_id: WorkflowExecutionId) -> ApiError {
@@ -43817,8 +43844,8 @@ async fn confirm_data_ingestion_staging_plan(
 ) -> std::result::Result<(StatusCode, Json<ConfirmDataIngestionStagingPlanResponse>), ApiError> {
     let run_id = parse_assistant_run_id(&run_id)?;
     validate_required("plan_id", &plan_id)?;
-    let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
+    let (_run, current_user_id, _operator_access) =
+        load_external_channel_assistant_run_for_owner_or_operator(&state, &headers, run_id).await?;
     let confirmed_by = request
         .confirmed_by
         .as_deref()
@@ -43856,8 +43883,8 @@ async fn sync_data_ingestion_staging_plan(
     let run_id = parse_assistant_run_id(&run_id)?;
     validate_required("plan_id", &plan_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
-    let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let run = load_visible_assistant_run_for_user(&state, run_id, current_user_id).await?;
+    let (run, current_user_id, operator_access) =
+        load_external_channel_assistant_run_for_owner_or_operator(&state, &headers, run_id).await?;
     let sync = sync_data_ingestion_staging_plan_for_run(
         &state,
         &run,
@@ -43869,6 +43896,7 @@ async fn sync_data_ingestion_staging_plan(
         request.force,
         &active_secret_binding_ids,
         current_user_id,
+        operator_access,
     )
     .await?;
     Ok((
@@ -54274,6 +54302,7 @@ async fn sync_data_ingestion_staging_plan_for_run(
     force: bool,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+    operator_access: bool,
 ) -> std::result::Result<Value, ApiError> {
     validate_required("plan_id", plan_id)?;
     let plan = data_ingestion_staging_plan_from_output_artifacts(&run.output_artifacts, plan_id)
@@ -54327,13 +54356,23 @@ async fn sync_data_ingestion_staging_plan_for_run(
             )
         })
         .and_then(parse_dataset_id)?;
-    let dataset = load_visible_dataset_for_user(
-        state,
-        dataset_id,
-        active_secret_binding_ids,
-        current_user_id,
-    )
-    .await?;
+    let dataset = if operator_access && run.service_lane == "external_channel" {
+        state
+            .storage
+            .datasets()
+            .get_by_id(state.tenant_id, dataset_id)
+            .await
+            .map_err(ApiError::from_storage)?
+            .ok_or_else(|| dataset_not_found_error(dataset_id))?
+    } else {
+        load_visible_dataset_for_user(
+            state,
+            dataset_id,
+            active_secret_binding_ids,
+            current_user_id,
+        )
+        .await?
+    };
     let source = load_enabled_database_source_connection(state, &source_id).await?;
     let connector_context = data_ingestion_staging_sync_connector_context(
         connector_context,
@@ -116363,6 +116402,7 @@ retrieve_evidence:
             false,
             &[],
             None,
+            false,
         )
         .await
         .expect_err("staging sync should require confirmation first");
@@ -116464,6 +116504,7 @@ retrieve_evidence:
             false,
             &[],
             None,
+            false,
         )
         .await
         .expect("confirmed staging plan should start database sync");
@@ -116507,6 +116548,7 @@ retrieve_evidence:
             false,
             &[],
             None,
+            false,
         )
         .await
         .expect("staging sync should be idempotent by default");
@@ -116599,6 +116641,204 @@ retrieve_evidence:
             completed_sync_reply.card.as_ref().unwrap()["workflow_status"],
             json!("succeeded")
         );
+    }
+
+    #[tokio::test]
+    async fn data_ingestion_staging_routes_allow_operator_to_confirm_external_channel_run() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let _operators = TestEnvVarRestore::set(
+            "MODEL_GATEWAY_OPERATOR_EMAILS",
+            "staging-operator@example.com",
+        );
+        let external_user = harness
+            .storage
+            .users()
+            .ensure_by_email(
+                harness.tenant_id,
+                &external_system_user_email("channel", "generic-chat-main"),
+                Some("第三方系统账户 - generic-chat-main"),
+            )
+            .await
+            .expect("external system user should exist");
+        let plan_id = format!("staging-plan-{}", Uuid::new_v4().simple());
+        let source_id = format!("source-route-db-{}", Uuid::new_v4().simple());
+        let run = harness
+            .storage
+            .assistant_runs()
+            .create(
+                harness.tenant_id,
+                &NewAssistantRun {
+                    user_id: Some(external_user.id),
+                    local_thread_id: Some("external:generic:conv-staging-route".to_string()),
+                    user_prompt: "分析授权数据库并生成 staging plan".to_string(),
+                    startup_briefing: json!({}),
+                    selected_scope: json!({
+                        "channel_connection_id": "generic-chat-main",
+                        "conversation_external_id": "conv-staging-route",
+                        "database_sources": [source_id.clone()]
+                    }),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([{
+                        "type": "external_channel_data_ingestion_analysis",
+                        "staging_plan_available": true,
+                        "staging_plan": {
+                            "type": "v3_data_ingestion_staging_plan",
+                            "plan_id": plan_id.clone(),
+                            "plan_version": 1,
+                            "assistant_run_id": Value::Null,
+                            "approval_status": "pending_human_review",
+                            "execution_policy": {
+                                "dry_run_only": true,
+                                "requires_human_confirmation": true,
+                                "production_write_allowed": false,
+                                "schema_mutation_allowed": false,
+                                "credential_request_allowed": false,
+                                "raw_table_dump_allowed": false
+                            },
+                            "source_scope": {
+                                "database_source_ids": [source_id.clone()]
+                            },
+                            "target": {
+                                "dataset": "外部会话 staging 数据集",
+                                "table": "member_flow",
+                                "operation_mode": "review_before_import"
+                            },
+                            "mapping_entries": [
+                                {"source": "customer_name", "target": "customer_name"}
+                            ],
+                            "staging_steps": [
+                                {"name": "sync", "action": "import_source_rows"}
+                            ],
+                            "safety": {
+                                "raw_credentials_exposed": false,
+                                "raw_table_dump_exposed": false,
+                                "production_write_allowed": false
+                            }
+                        }
+                    }]),
+                    runtime_manifest: json!({}),
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("external assistant run should be created");
+        sqlx::query(
+            r#"
+            insert into external_source_connections (
+                id,
+                tenant_id,
+                connector_kind,
+                source_key,
+                display_name,
+                base_url_redacted,
+                config_redacted,
+                sync_mode,
+                permission_mode,
+                health_status
+            )
+            values ($1, $2, 'mysql', $1, 'Route Operating DB', 'mysql://example/[redacted]', $3, 'pull', 'none', 'healthy')
+            "#,
+        )
+        .bind(&source_id)
+        .bind(harness.tenant_id.0)
+        .bind(json!({
+            "database_source": {
+                "connection_env": "DATA_INGESTION_ROUTE_TEST_MYSQL_URL",
+                "database": "hy_sql",
+                "tables": [
+                    {
+                        "table": "member_flow",
+                        "id_column": "id",
+                        "content_columns": ["customer_name"]
+                    }
+                ]
+            }
+        }))
+        .execute(harness.storage.pool())
+        .await
+        .expect("database source connection should be inserted");
+
+        let confirm_uri = format!(
+            "/v1/assistant-runs/{}/data-ingestion-staging-plans/{}/confirm",
+            run.id, plan_id
+        );
+        let anonymous =
+            post_json_request(harness.app.clone(), &confirm_uri, &json!({}), None).await;
+        assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
+        let anonymous_error: ApiErrorResponse = read_json_response(anonymous).await;
+        assert_eq!(anonymous_error.code, "assistant_run_not_found");
+
+        let ordinary_cookie =
+            issue_email_session_cookie(&harness, "staging-ordinary@example.com").await;
+        let ordinary = post_json_request(
+            harness.app.clone(),
+            &confirm_uri,
+            &json!({}),
+            Some(&ordinary_cookie),
+        )
+        .await;
+        assert_eq!(ordinary.status(), StatusCode::NOT_FOUND);
+
+        let operator_cookie =
+            issue_email_session_cookie(&harness, "staging-operator@example.com").await;
+        let confirmed_response = post_json_request(
+            harness.app.clone(),
+            &confirm_uri,
+            &json!({}),
+            Some(&operator_cookie),
+        )
+        .await;
+        assert_eq!(confirmed_response.status(), StatusCode::OK);
+        let confirmed: Value = read_json_response(confirmed_response).await;
+        assert_eq!(confirmed["accepted"], json!(true));
+        assert_eq!(confirmed["plan_id"], json!(plan_id.clone()));
+        assert_eq!(
+            confirmed["confirmation"]["production_write_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            confirmed["confirmation"]["dataset_title"],
+            json!("外部会话 staging 数据集")
+        );
+
+        let ordinary_sync = post_json_request(
+            harness.app.clone(),
+            &format!(
+                "/v1/assistant-runs/{}/data-ingestion-staging-plans/{}/sync",
+                run.id, plan_id
+            ),
+            &json!({"sync_kind": "full"}),
+            Some(&ordinary_cookie),
+        )
+        .await;
+        assert_eq!(ordinary_sync.status(), StatusCode::NOT_FOUND);
+
+        let sync_response = post_json_request(
+            harness.app.clone(),
+            &format!(
+                "/v1/assistant-runs/{}/data-ingestion-staging-plans/{}/sync",
+                run.id, plan_id
+            ),
+            &json!({
+                "sync_kind": "full",
+                "checkpoint": {"route": "operator"}
+            }),
+            Some(&operator_cookie),
+        )
+        .await;
+        assert_eq!(sync_response.status(), StatusCode::ACCEPTED);
+        let sync: Value = read_json_response(sync_response).await;
+        assert_eq!(sync["accepted"], json!(true));
+        assert_eq!(sync["sync"]["source_id"], json!(source_id.clone()));
+        assert_eq!(sync["sync"]["production_write_allowed"], json!(false));
+        assert_eq!(sync["sync"]["deduplicated"], json!(false));
     }
 
     #[tokio::test]

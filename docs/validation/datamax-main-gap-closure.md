@@ -66,7 +66,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
-| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Confirmation/sync remains pending because unauthenticated smoke cannot see the external-channel run through the current operator route and receives HTTP 404 `assistant_run_not_found`. |
+| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Local operator-confirmation routing is now implemented and tested: configured model-gateway operators can confirm/sync external-channel staging plans, while anonymous and ordinary non-owner users still receive `assistant_run_not_found`. 8-server deploy plus authenticated operator confirm/sync smoke remain pending. |
 
 ## Rollout Receipts
 
@@ -572,6 +572,32 @@ Data-ingestion external fixed-task smoke:
   - unauthenticated internal confirm attempt returned HTTP 404 with `assistant_run_not_found`;
   - root cause is operator visibility/session scope, not a third-party public-field contract issue;
   - next implementation slice should add or obtain a controlled operator-auth confirmation path for external-channel staging plans, then run one guarded sync receipt.
+
+### 2026-06-06 Local Operator Confirmation Route Upgrade
+
+- Files changed:
+  - `crates/platform-api/src/lib.rs`.
+- Behavior:
+  - data-ingestion staging plan confirm/sync routes now load the run through a narrow owner-or-operator path;
+  - owner-visible runs keep the previous owner-based behavior;
+  - external-channel runs owned by the third-party system account can be confirmed/synced by a configured model-gateway operator;
+  - anonymous callers and ordinary signed-in non-owner users still receive `assistant_run_not_found`;
+  - sync can read the plan-created private staging dataset for that operator-controlled external-channel flow;
+  - third-party public URLs, auth, request fields, and response fields were not changed.
+- Local verification:
+  - `cargo fmt --check -p platform-api` passed;
+  - `cargo test -p platform-api data_ingestion --lib` passed, 15 tests;
+  - `cargo test -p platform-api external_source_sync --lib` passed, 6 tests;
+  - `cargo check -p platform-api` passed;
+  - `bash scripts/run-data-ingestion-staging-sync-smoke.sh` passed.
+- Smoke receipt:
+  - `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T025141Z.json`;
+  - `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260606T025141Z.md`;
+  - live readiness self-test `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T025402Z.json`.
+- Remaining:
+  - deploy this code to 8 server;
+  - use an authenticated operator session to confirm one reviewed external-channel staging plan and start one guarded source sync;
+  - record synced dataset documents, chunks, retrieval evidence, and safe reply statuses without printing credentials or raw table rows.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
