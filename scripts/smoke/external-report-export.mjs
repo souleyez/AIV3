@@ -452,7 +452,7 @@ async function analyzeReportSurface(args, values, metadata) {
   const publicUrlFocus = focusFromUrl(publicUrl);
   const exportUrls = inferExportUrls(args.baseUrl, publicUrl, allValues);
   const downloadExports = collectDownloadExports(allValues, args.baseUrl);
-  const answerText = firstString([
+  const answerTextCandidates = [
     ...values.flatMap((item) => [
       item?.text,
       item?.answer,
@@ -472,7 +472,11 @@ async function analyzeReportSurface(args, values, metadata) {
         ...collectValuesForKeys(itemReply, ['answer_text', 'answerText']),
       ];
     }),
-  ]) || '';
+  ].map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+  const answerText = answerTextCandidates.find((item) => analyzeAnswerText(item).reportLinkPresent)
+    || answerTextCandidates.at(-1)
+    || '';
   const textMetrics = analyzeAnswerText(answerText);
   const fileChecks = args.skipFileChecks || !publicUrl
     ? []
