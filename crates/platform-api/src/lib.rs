@@ -10511,6 +10511,11 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
     if static_page_like {
         external_channel_static_page_enrich_reply_card(&mut reply);
     }
+    let static_page_public_artifact_url = if static_page_like {
+        external_channel_public_artifact_url_from_reply(&reply)
+    } else {
+        None
+    };
     let public_status = external_channel_reply_public_status(&reply);
     let provisional_existing_artifact =
         external_channel_static_page_provisional_existing_artifact(reply.card.as_ref());
@@ -10569,6 +10574,15 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
                 include_artifact_links,
                 include_preview_link,
             );
+            if include_artifact_links {
+                if let Some(public_url) = static_page_public_artifact_url.as_deref() {
+                    if let Some(object) = card.as_object_mut() {
+                        object.insert("public_url".to_string(), json!(public_url));
+                        object.insert("generated_artifact_url".to_string(), json!(public_url));
+                        object.insert("artifact_links".to_string(), json!([public_url]));
+                    }
+                }
+            }
         }
         card
     });
@@ -34294,6 +34308,105 @@ fn static_page_template_draft_profile_text(draft: &StaticPageDraft) -> String {
     text
 }
 
+fn static_page_template_profile_has_xinbai_primary_default_signal(
+    profile: &str,
+    profile_lower: &str,
+) -> bool {
+    static_page_template_text_contains_any(
+        profile,
+        profile_lower,
+        &[
+            "xinbai-functional-modular-template-20260604",
+            "xinbai_business_report",
+            "monthly_report_only_default_template",
+            "project_unique_default_template",
+            "xinbai_only_accepted_default_template",
+            XINBAI_PUBLISHED_REPORT_TITLE,
+        ],
+    )
+}
+
+fn static_page_template_draft_is_xinbai_primary_default_template(draft: &StaticPageDraft) -> bool {
+    if static_page_published_public_url_from_draft(draft).is_some_and(|url| {
+        url.to_ascii_lowercase()
+            .contains("xinbai-functional-modular-template-20260604")
+    }) {
+        return true;
+    }
+    let profile = static_page_template_draft_profile_text(draft);
+    let profile_lower = profile.to_ascii_lowercase();
+    static_page_template_profile_has_xinbai_primary_default_signal(&profile, &profile_lower)
+}
+
+fn static_page_template_draft_is_non_default_noise_baseline(draft: &StaticPageDraft) -> bool {
+    let profile = static_page_template_draft_profile_text(draft);
+    let profile_lower = profile.to_ascii_lowercase();
+    static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "并发编号",
+            "smoke",
+            "template_prewarm",
+            "prewarm",
+            "测试页",
+            "test page",
+            "static_page_template_prewarm_candidate",
+            "DataMax 静态页模板预热",
+        ],
+    )
+}
+
+fn static_page_template_context_prefers_xinbai_primary(
+    current_prompt: Option<&str>,
+    selected_scope: &Value,
+    source_refs: &Value,
+) -> bool {
+    let mut text = String::new();
+    if let Some(prompt) = current_prompt {
+        text.push_str(prompt);
+        text.push('\n');
+    }
+    text.push_str(&static_page_template_limited_value_text(selected_scope));
+    text.push('\n');
+    text.push_str(&static_page_template_limited_value_text(source_refs));
+    let lower = text.to_ascii_lowercase();
+    let has_xinbai_scope_or_prompt = static_page_template_text_contains_any(
+        &text,
+        &lower,
+        &[
+            "新百",
+            "新世界",
+            "新世界百货",
+            "xinbai",
+            "hy-sql-traffic-area",
+        ],
+    );
+    if !has_xinbai_scope_or_prompt {
+        return false;
+    }
+    static_page_template_intent_reuse_class(current_prompt.unwrap_or_default())
+        == Some("business_report")
+        || static_page_template_text_contains_any(
+            &text,
+            &lower,
+            &[
+                "取高",
+                "高分成",
+                "经营",
+                "报表",
+                "月报",
+                "风险",
+                "销售缺口",
+                "助推",
+                "坪效",
+                "客流",
+                "dashboard",
+                "report",
+            ],
+        )
+}
+
 fn static_page_template_current_scope_mentions_recipient_role(
     selected_scope: &Value,
     source_refs: &Value,
@@ -34348,13 +34461,19 @@ fn static_page_template_baseline_score(
         score.add(20, "default_prompt_compatible");
     }
 
+    let profile = static_page_template_draft_profile_text(draft);
+    let profile_lower = profile.to_ascii_lowercase();
+    let has_xinbai_primary_default_signal =
+        static_page_template_profile_has_xinbai_primary_default_signal(&profile, &profile_lower);
+    if has_xinbai_primary_default_signal {
+        score.add(90, "baseline_xinbai_primary_default_template");
+    }
+
     if !static_page_template_request_needs_store_sales_binding(current_prompt) {
         return score;
     }
 
     score.add(25, "request_store_sales_filter_binding");
-    let profile = static_page_template_draft_profile_text(draft);
-    let profile_lower = profile.to_ascii_lowercase();
     let has_store_or_region = static_page_template_text_contains_any(
         &profile,
         &profile_lower,
@@ -34408,17 +34527,6 @@ fn static_page_template_baseline_score(
             "xinbai_business_report",
             "primary_default_template",
             "project_unique_default_template",
-        ],
-    );
-    let has_xinbai_primary_default_signal = static_page_template_text_contains_any(
-        &profile,
-        &profile_lower,
-        &[
-            "xinbai-functional-modular-template-20260604",
-            "xinbai_business_report",
-            "monthly_report_only_default_template",
-            "project_unique_default_template",
-            "xinbai_only_accepted_default_template",
         ],
     );
     let has_generic_health_signal = static_page_template_text_contains_any(
@@ -34582,6 +34690,13 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
         .map_err(ApiError::from_storage)?;
 
     let mut best_match: Option<(StaticPageDraft, StaticPageTemplateBaselineScore)> = None;
+    let mut best_xinbai_primary_match: Option<(StaticPageDraft, StaticPageTemplateBaselineScore)> =
+        None;
+    let current_prefers_xinbai_primary = static_page_template_context_prefers_xinbai_primary(
+        current_prompt,
+        selected_scope,
+        source_refs,
+    );
     for draft in baselines {
         if !static_page_draft_is_accepted_template_baseline(&draft) {
             continue;
@@ -34606,6 +34721,9 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
             continue;
         }
         if static_page_draft_is_template_fallback_baseline(&draft) {
+            continue;
+        }
+        if static_page_template_draft_is_non_default_noise_baseline(&draft) {
             continue;
         }
         if static_page_published_public_url_from_draft(&draft).is_none() {
@@ -34638,6 +34756,20 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
                 &draft,
                 &baseline_tokens,
             );
+            let draft_is_xinbai_primary =
+                static_page_template_draft_is_xinbai_primary_default_template(&draft);
+            if current_prefers_xinbai_primary && !draft_is_xinbai_primary {
+                continue;
+            }
+            if draft_is_xinbai_primary {
+                let should_replace = best_xinbai_primary_match
+                    .as_ref()
+                    .is_none_or(|(_, best_score)| candidate_score.score > best_score.score);
+                if should_replace {
+                    best_xinbai_primary_match = Some((draft, candidate_score));
+                }
+                continue;
+            }
             let should_replace = best_match
                 .as_ref()
                 .is_none_or(|(_, best_score)| candidate_score.score > best_score.score);
@@ -34648,7 +34780,8 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
         }
         outcome.default_prompt_mismatch_count += 1;
     }
-    if let Some((draft, score)) = best_match {
+    let selected_match = best_xinbai_primary_match.or(best_match);
+    if let Some((draft, score)) = selected_match {
         outcome.selected_score = Some(score.score);
         outcome.selected_features = score.features;
         outcome.draft = Some(draft);
@@ -95585,6 +95718,72 @@ mod tests {
     }
 
     #[test]
+    fn static_page_template_identifies_xinbai_primary_and_noise_baselines() {
+        let now = Utc::now();
+        let primary = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: Some(UserId::new()),
+            title: "静态页：新百经营分析月报".to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "artifact_stability": {
+                    "baseline_status": "accepted",
+                    "default_template_scope": "xinbai_business_report"
+                }
+            }),
+            draft_payload: json!({
+                "finalPage": {
+                    "publicUrl": XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL
+                },
+                "features": [
+                    "primary_default_template",
+                    "monthly_report_only_default_template",
+                    "project_unique_default_template",
+                    "xinbai_only_accepted_default_template"
+                ]
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(static_page_template_draft_is_xinbai_primary_default_template(&primary));
+        assert!(!static_page_template_draft_is_non_default_noise_baseline(
+            &primary
+        ));
+
+        let smoke = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: Some(UserId::new()),
+            title: "静态页：请生成一页经营分析静态页报表，若后台仍在处理请返回可继续轮询的状态。 并发编号 3。"
+                .to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "artifact_stability": {
+                    "baseline_status": "accepted"
+                }
+            }),
+            draft_payload: json!({
+                "finalPage": {
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/codex-host/smoke/index.html"
+                }
+            }),
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(!static_page_template_draft_is_xinbai_primary_default_template(&smoke));
+        assert!(static_page_template_draft_is_non_default_noise_baseline(
+            &smoke
+        ));
+    }
+
+    #[test]
     fn static_page_template_score_prefers_sales_store_report_over_generic_health_page() {
         let selected_scope = json!({
             "type": "external_channel",
@@ -98664,8 +98863,7 @@ mod tests {
             "external_document_scope_status": "dataset_resolved"
         });
         assistant_request.selected_scope = Some(selected_scope.clone());
-        let public_url =
-            "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/index.html";
+        let public_url = XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL;
         let baseline_source_refs = apply_static_page_artifact_stability_to_source_refs(
             json!({
                 "source": "external_channel_static_page_artifact_request",
@@ -98677,7 +98875,7 @@ mod tests {
                 "dataset_external_ids": ["xinbai-project-dataset"],
                 "answer_policy": external_answer_policy_value(&message)
             }),
-            None,
+            Some("test-xinbai-primary-template"),
             "accepted",
             Some(public_url),
             Utc::now(),
@@ -98688,9 +98886,15 @@ mod tests {
                 "finalPage": {
                     "status": "rendered",
                     "publicUrl": public_url
-                }
+                },
+                "features": [
+                    "primary_default_template",
+                    "monthly_report_only_default_template",
+                    "project_unique_default_template",
+                    "xinbai_only_accepted_default_template"
+                ]
             }),
-            None,
+            Some("test-xinbai-primary-template"),
             "accepted",
             Some(public_url),
             Utc::now(),
@@ -98738,6 +98942,57 @@ mod tests {
             )
             .await
             .expect("baseline draft should be created");
+        let generic_public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/codex-host/generic-latest/index.html";
+        let generic_source_refs = apply_static_page_artifact_stability_to_source_refs(
+            json!({
+                "source": "external_channel_static_page_artifact_request",
+                "channel_connection_id": "generic-chat-main",
+                "platform": "generic_chat",
+                "conversation_external_id": "conv-static-template-overlap",
+                "message_external_id": "msg-static-template-baseline-generic",
+                "artifact_type": "static_page",
+                "dataset_external_ids": ["xinbai-project-dataset"],
+                "answer_policy": external_answer_policy_value(&message)
+            }),
+            Some("test-xinbai-generic-template"),
+            "accepted",
+            Some(generic_public_url),
+            now + Duration::seconds(1),
+        );
+        let generic_payload = apply_static_page_artifact_stability_to_payload(
+            json!({
+                "status": "rendered",
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": generic_public_url
+                },
+                "modules": ["经营分析静态页", "临时排行"]
+            }),
+            Some("test-xinbai-generic-template"),
+            "accepted",
+            Some(generic_public_url),
+            now + Duration::seconds(1),
+        );
+        state
+            .storage
+            .static_page_drafts()
+            .create(
+                state.tenant_id,
+                &NewStaticPageDraft {
+                    assistant_run_id: baseline_run.id,
+                    owner_user_id: Some(UserId::new()),
+                    title: "静态页：请生成一页经营分析静态页，效果图可在流式过程中展示".to_string(),
+                    status: StaticPageDraftStatus::Rendered,
+                    selected_scope: selected_scope.clone(),
+                    visibility_snapshot: json!({"policy": "test"}),
+                    source_refs: generic_source_refs,
+                    draft_payload: generic_payload,
+                    created_at: now + Duration::seconds(1),
+                },
+            )
+            .await
+            .expect("generic baseline draft should be created");
         let run = state
             .storage
             .assistant_runs()
@@ -99493,8 +99748,7 @@ mod tests {
             "external_document_scope_status": "dataset_resolved"
         });
         assistant_request.selected_scope = Some(selected_scope.clone());
-        let public_url =
-            "https://v3.elepcloud.com/generated-artifacts/static-pages/xinbai-template/index.html";
+        let public_url = XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL;
         let baseline_source_refs = apply_static_page_artifact_stability_to_source_refs(
             json!({
                 "source": "external_channel_static_page_artifact_request",
@@ -99506,7 +99760,7 @@ mod tests {
                 "dataset_external_ids": ["xinbai-project-dataset"],
                 "answer_policy": external_answer_policy_value(&message)
             }),
-            None,
+            Some("test-xinbai-primary-delivery-template"),
             "accepted",
             Some(public_url),
             Utc::now(),
@@ -99517,9 +99771,15 @@ mod tests {
                 "finalPage": {
                     "status": "rendered",
                     "publicUrl": public_url
-                }
+                },
+                "features": [
+                    "primary_default_template",
+                    "monthly_report_only_default_template",
+                    "project_unique_default_template",
+                    "xinbai_only_accepted_default_template"
+                ]
             }),
-            None,
+            Some("test-xinbai-primary-delivery-template"),
             "accepted",
             Some(public_url),
             Utc::now(),

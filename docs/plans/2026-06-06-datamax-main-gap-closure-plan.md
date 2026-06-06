@@ -63,7 +63,7 @@
 | P1 | Authenticated model-gateway operator smoke | Current-head `15756668bcad` unauthenticated guard passes with `401 auth_session_required`; checked env still has no operator smoke cookie/email/local-key. | Run `smoke:model-gateway-operator` with a legitimate operator session or local-key login. | Operator status/profile health is proven without bypasses or leaked secrets. |
 | P1 | Data-source row identity | Current-head 8-server live audit passed and confirms question/report readiness, but `bi_contract_warning` and `bi_rentsales_detail` collapse 193 latest-sync rows under current identity. Decision memo `docs/operations/data-source-row-identity-decision.md` now fixes the safe boundary: production stays unchanged, row-level semantics require staging-only discriminator validation first. | Get the business decision: entity/latest-snapshot semantics vs row-level detail. If row-level is required, test staging-only discriminator mapping before production. | Report completeness semantics are documented and validated before production mapping changes. |
 | P1 | Passive low-quality recovery | Current-head `1e99281ff695` audit confirms the customer-facing hard gate is unset, the dedicated live-autofix flag is unset, and `answer_quality_autofix` is absent from both task/capability allowlists. Local answer-quality regressions pass, so the safe-disabled state is proven rather than assumed. | Keep disabled; only enable passive collection/manual review after an explicit operator decision. Do not create live autofix Codex tasks until the dedicated flag and both allowlists are intentionally set. | Weak answers are visible for review without suppressing normal customer answers, and no live autofix task can be created accidentally. |
-| P2 | Template library hygiene | Accepted Xinbai modular report should dominate matching; old artifacts exist historically. | Exclude old/non-default templates from normal matching; clean local generated artifacts only after explicit approval. | Same project/scope/default prompt reuses the accepted modular template; old dark/legacy templates do not pollute links. |
+| P2 | Template library hygiene | Local implementation now makes `xinbai-functional-modular-template-20260604` the primary default candidate for Xinbai dataset-overlap matching, skips smoke/prewarm/fallback noise baselines, and preserves public report links after card sanitization. 8-server read-only audit confirmed many accepted historical templates still exist, so runtime selection must rely on these guards rather than filesystem cleanup. | Build/deploy to 8 server and run the report/export plus focused routing smoke on the deployed commit. Do not delete old generated artifacts without explicit cleanup approval. | Same project/scope/default prompt reuses the accepted modular template; old dark/legacy/smoke/prewarm/fallback templates do not pollute customer-visible links. |
 | P2 | Model-visible capability routing | Current head has an internal capability catalog for report/static-page, document processing, data ingestion, collection/integration setup, and proactive message routing. Temporary template/contract/traffic-stat report materials are now routed to the report/static-page workflow instead of being treated as permanent document-processing tasks; selected 8-server smoke passed. | Keep the full fixture in the release gate, add new customer phrasing as fixtures, and audit docs after any additive artifact/report behavior change. | The model can choose supported platform workflows while the platform keeps auth/scope/tool execution authoritative, normal answers continue, and no public tool traces leak. |
 | P2 | Third-party contract docs | Current-head docs and public copies were audited on 2026-06-06: DataMax naming is explicit, legacy `v3_*`/`X-V3-*` protocol names are documented as compatibility fields, dataset/document union scope and same-conversation authorization are covered, and report exports name `table-data.csv`, `report.ppt`, and `report.md`. | Re-audit and regenerate public copies after any customer-visible report/artifact additive behavior change. | Third parties can understand dataset/document union scope, persisted conversation authorization, template reference uploads, report link fields, and export files without re-integration. |
 | P2 | Observability and runbooks | Operator page and validation docs exist. | Keep runbooks aligned with the current release gate and failures. | Operators can diagnose queue/model/report/enrichment/data-ingestion health without raw logs. |
@@ -566,6 +566,13 @@ Produce a sanitized report with:
 
 Do not print customer raw data or local source paths.
 
+Current audit, 2026-06-06:
+
+- local generated template directory contains the retained primary template `xinbai-functional-modular-template-20260604`;
+- 8-server read-only accepted-template audit returned 60 recent accepted baselines, including primary modular Xinbai templates plus historical one-off Codex pages, prewarm/fallback entries, and smoke/concurrency artifacts;
+- the audit recorded only draft ids, titles, scope hashes, default-prompt hashes, accepted/rendered status, owner presence, public artifact URLs, and coarse tags;
+- no raw rows, source file paths, credentials, database URLs, bearer tokens, or customer document bodies were printed.
+
 **Step 2: Enforce Xinbai default matching**
 
 Required behavior:
@@ -574,6 +581,26 @@ Required behavior:
 - old dark, fallback, and experimental reports are excluded unless explicitly selected;
 - dataset overlap plus same `default_prompt` can reuse an accepted template;
 - focus changes reorder modules rather than creating a new visual template by default.
+
+Current implementation, 2026-06-06:
+
+- dataset-overlap selection separates Xinbai primary-template candidates from generic accepted baselines and chooses a primary candidate first when present;
+- Xinbai business-report context skips non-primary accepted baselines, preventing old one-off report pages from becoming the default link;
+- smoke, prewarm, test, and fallback-like accepted baselines are skipped from normal overlap matching;
+- public static-page response card sanitization now restores verified public `public_url`, `generated_artifact_url`, and `artifact_links` fields after internal-field pruning.
+
+Latest local verification:
+
+- `cargo test -p platform-api static_page_template --lib` passed, 18 tests;
+- `cargo test -p platform-api external_channel_static_page_dataset_template_overlap --lib` passed, 2 tests;
+- `cargo test -p platform-api external_channel_static_page_reply --lib` passed, 14 tests;
+- `cargo test -p platform-api external_channel_static_page_artifact --lib` passed, 13 tests;
+- `cargo test -p platform-api external_channel_public_response --lib` passed, 2 tests;
+- `cargo test -p platform-api static_page_revision_intent_accepts_natural_report_edit_wording --lib` passed;
+- `cargo test -p platform-api external_channel_public_response_enriches_xinbai_report_card_exports --lib` passed;
+- `npm run validate:xinbai-report-template` passed;
+- `npm run validate:xinbai-report-template -- --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html` passed and checked 7 public files;
+- `cargo check -p platform-api` passed.
 
 **Step 3: Cleanup only with explicit approval**
 

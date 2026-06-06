@@ -58,6 +58,35 @@ $env:V3_EXTERNAL_CHANNEL_BEARER_TOKEN = "<private token>"
 
 The optional private config can supply `connection_id`, `tenant_external_id`, `bot_external_id`, `available_document_source_id`, `available_document_external_ids`, `dataset_external_ids`, `requested_skills`, `template`, and `bearer_token_env`. If no bearer is configured, the script fails before mutation with `mutation_attempted=false`. Reports record only redacted counts/statuses and must not include the bearer value.
 
+## 2026-06-06 Xinbai Template Library Hygiene
+
+- Purpose:
+  - keep `xinbai-functional-modular-template-20260604` as the only normal default template for Xinbai business-report matching;
+  - prevent historical one-off, smoke, prewarm, and fallback static pages from being returned as customer-visible default report links;
+  - keep public report card links available after internal field sanitization.
+- Implementation:
+  - dataset-overlap template matching now identifies Xinbai primary default candidates and chooses them ahead of generic accepted baselines;
+  - Xinbai business-report context skips non-primary accepted baselines during normal overlap matching;
+  - smoke/prewarm/test/fallback-like baselines are excluded from normal overlap matching;
+  - public static-page reply card sanitization restores verified public `public_url`, `generated_artifact_url`, and `artifact_links` fields after internal fields are pruned.
+- Sanitized accepted-template audit:
+  - local retained generated template directory: `target/database-static-pages/xinbai-functional-modular-template-20260604`;
+  - 8-server read-only accepted-template audit returned 60 recent accepted baselines, including primary modular Xinbai templates and historical one-off/prewarm/fallback/smoke artifacts;
+  - audit output contained only draft ids, titles, scope hashes, default-prompt hashes, status, owner presence, public artifact URLs, and coarse tags.
+- Local verification:
+  - `cargo test -p platform-api static_page_template --lib` passed, 18 tests;
+  - `cargo test -p platform-api external_channel_static_page_dataset_template_overlap --lib` passed, 2 tests;
+  - `cargo test -p platform-api external_channel_static_page_reply --lib` passed, 14 tests;
+  - `cargo test -p platform-api external_channel_static_page_artifact --lib` passed, 13 tests;
+  - `cargo test -p platform-api external_channel_public_response --lib` passed, 2 tests;
+  - `npm run validate:xinbai-report-template` passed;
+  - `npm run validate:xinbai-report-template -- --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html` passed and checked 7 public files;
+  - `cargo check -p platform-api` passed.
+- Safety:
+  - no old generated artifacts were deleted;
+  - no third-party public URL, auth method, request field, or existing response field was changed;
+  - no raw customer row, full customer document, source path, credential, bearer token, database URL, or provider payload was recorded.
+
 ## 2026-05-25 No-Confirm Static-Page Smoke Evidence
 
 - Environment: local Windows workspace, plan-only, no server writes
