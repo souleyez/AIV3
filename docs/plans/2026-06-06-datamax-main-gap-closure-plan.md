@@ -750,7 +750,7 @@ git commit -m "Prefer deterministic facts for aggregate answers"
 
 ## Task 8: Add Low-Quality Answer Monitoring And Fixed-Scope Autofix
 
-**Status:** pending
+**Status:** completed locally on 2026-06-06; production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`.
 
 **Files:**
 
@@ -786,6 +786,15 @@ Collect internal signals from completed runs:
 
 Store only safe summaries and references. Do not store full customer documents.
 
+Local progress:
+
+- Passive case collection remains post-answer and records `blocking_gate_enabled=false`.
+- Added passive signals for:
+  - deterministic aggregate supply ignored by an insufficient-evidence answer;
+  - report/static-page request completed without a usable generated-artifact link;
+  - repeated fallback/timeout/provider-failure events in the same run.
+- Existing signals remain covered for user complaints, strong complaints, internal marker/tool-call leaks, weak insufficient answers, retry exhaustion, controlled fallback, and parse-quality degradation without VLM upgrade.
+
 **Step 3: Route only system-defect cases to fixed-task autofix**
 
 Use existing `answer_quality_autofix` with strict write scope:
@@ -802,6 +811,12 @@ Reject:
 - ambiguous user request;
 - unsupported public contract change;
 - required credential access.
+
+Local progress:
+
+- Fixed-task allowlist remains restricted to answer-quality files, document-quality fixtures, smoke scripts, and validation docs.
+- `answer_quality_autofix` output validation still rejects out-of-scope files, missing tests, missing rollback notes, invalid failure types, and high-risk patches without human review.
+- Operation docs now match the actual legacy smoke script path `scripts/run-v3-quality-gate-smoke.ps1`.
 
 **Step 4: Require regression before patch is accepted**
 
@@ -822,6 +837,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-cloudflare-codex-fixed-ta
 powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1
 cargo test -p codex-host-agent answer_quality --lib
 ```
+
+Local verification on 2026-06-06:
+
+```powershell
+cargo fmt --check -p platform-api -p codex-host-agent
+cargo test -p platform-api answer_quality_autofix --lib
+cargo test -p codex-host-agent answer_quality --lib
+cargo test -p platform-api assistant_run_answer_quality_gate --lib
+powershell -ExecutionPolicy Bypass -File .\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case answer_quality_autofix,human_exception,runtime_summary
+powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local
+cargo check -p platform-api -p codex-host-agent
+```
+
+Smoke receipts:
+
+- Fixed-task smoke JSON: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T011735Z.json`.
+- Fixed-task smoke Markdown: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T011735Z.md`.
+- Quality-gate smoke JSON: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.json`.
+- Quality-gate smoke Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.md`.
 
 **Step 6: Commit**
 

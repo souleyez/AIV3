@@ -165,7 +165,7 @@ Fixed input package:
       "crates/platform-api/src/lib.rs",
       "fixtures/document-quality/**",
       "scripts/run-document-quality-smoke.ps1",
-      "scripts/run-DataMax-quality-gate-smoke.ps1",
+      "scripts/run-v3-quality-gate-smoke.ps1",
       "docs/validation/**"
     ],
     "symbols": [

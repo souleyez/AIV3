@@ -37,6 +37,13 @@ Low-quality answer collection and fixed Codex patch proposal are covered by the 
 
 This smoke validates only the bounded task package, output validation, human-exception audit, and runtime summary. It does not re-enable a blocking answer gate, deploy changes, or broaden document/data permissions.
 
+Latest local receipt on 2026-06-06:
+
+- Fixed-task JSON: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T011735Z.json`
+- Fixed-task Markdown: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T011735Z.md`
+- Quality-gate JSON: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.json`
+- Quality-gate Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.md`
+
 ## 2026-06-06 Local Background Enrichment Evidence
 
 - Command: `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local`

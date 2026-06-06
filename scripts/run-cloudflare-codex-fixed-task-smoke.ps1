@@ -41,12 +41,19 @@ function Resolve-SmokeCases {
     }
     $resolved = New-Object System.Collections.Generic.List[string]
     foreach ($item in $Requested) {
-        $caseId = if ($CaseAliases.ContainsKey($item)) { $CaseAliases[$item] } else { $item }
-        if ($AllCases -notcontains $caseId) {
-            throw "Unknown fixed-task smoke case '$item'. Known cases: $($AllCases -join ', ')"
-        }
-        if (-not $resolved.Contains($caseId)) {
-            $resolved.Add($caseId) | Out-Null
+        $items = ([string]$item).Split(",", [System.StringSplitOptions]::RemoveEmptyEntries)
+        foreach ($rawCaseId in $items) {
+            $caseName = $rawCaseId.Trim()
+            if ([string]::IsNullOrWhiteSpace($caseName)) {
+                continue
+            }
+            $caseId = if ($CaseAliases.ContainsKey($caseName)) { $CaseAliases[$caseName] } else { $caseName }
+            if ($AllCases -notcontains $caseId) {
+                throw "Unknown fixed-task smoke case '$caseName'. Known cases: $($AllCases -join ', ')"
+            }
+            if (-not $resolved.Contains($caseId)) {
+                $resolved.Add($caseId) | Out-Null
+            }
         }
     }
     return $resolved.ToArray()

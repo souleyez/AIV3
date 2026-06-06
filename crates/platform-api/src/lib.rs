@@ -51346,6 +51346,16 @@ fn assistant_run_answer_quality_low_quality_case_package(
             other => format!("answer_quality_{other}"),
         });
     }
+    if assistant_run_answer_contains_insufficient_evidence_marker(&answer)
+        && assistant_run_answer_quality_has_deterministic_supply(evidence_state)
+    {
+        signals.push("deterministic_supply_ignored".to_string());
+    }
+    if assistant_run_answer_quality_report_link_expected(request)
+        && !assistant_run_output_artifacts_include_report_link(output_artifacts)
+    {
+        signals.push("missing_report_artifact_link".to_string());
+    }
     if event_names
         .iter()
         .any(|event| event.contains("answer_quality_gate.retry_exhausted"))
@@ -51365,6 +51375,9 @@ fn assistant_run_answer_quality_low_quality_case_package(
         && !upgrade_parse_attempted
     {
         signals.push("parse_quality_degraded_without_upgrade".to_string());
+    }
+    if assistant_run_answer_quality_repeated_fallback_or_timeout(event_names) {
+        signals.push("repeated_fallback_or_timeout".to_string());
     }
     signals.sort();
     signals.dedup();
@@ -51399,6 +51412,112 @@ fn assistant_run_answer_quality_low_quality_case_package(
         },
         "blocking_gate_enabled": false,
     }))
+}
+
+fn assistant_run_answer_quality_has_deterministic_supply(evidence_state: &Value) -> bool {
+    let supply_quality_has_deterministic_rows = evidence_state
+        .get("supply_quality")
+        .map(|supply_quality| {
+            [
+                "datasetFactSnapshotCount",
+                "dataset_fact_snapshot_count",
+                "spreadsheetRowAnalysisCount",
+                "spreadsheet_row_analysis_count",
+                "databaseAggregateCount",
+                "database_aggregate_count",
+            ]
+            .iter()
+            .any(|key| {
+                supply_quality
+                    .get(*key)
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+            })
+        })
+        .unwrap_or(false);
+    supply_quality_has_deterministic_rows
+        || evidence_state
+            .get("supplied_items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|item| {
+                matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some(
+                        "dataset_fact_snapshot" | "database_aggregate" | "spreadsheet_row_analysis"
+                    )
+                )
+            })
+}
+
+fn assistant_run_answer_quality_report_link_expected(request: &CreateAssistantRunRequest) -> bool {
+    assistant_run_xinbai_published_report_link_answer(&request.prompt).is_some()
+        || external_channel_prompt_requests_static_page_report_workflow(&request.prompt)
+}
+
+fn assistant_run_output_artifacts_include_report_link(output_artifacts: &[Value]) -> bool {
+    output_artifacts.iter().any(|artifact| {
+        let artifact_kind = artifact
+            .get("artifact_kind")
+            .or_else(|| artifact.get("artifactKind"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let artifact_type = artifact
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let has_static_page_type = matches!(
+            artifact_type,
+            "generated_artifact" | "external_channel_static_page_artifact" | "static_page_artifact"
+        ) || artifact_kind == "static_page";
+        let has_url = [
+            "public_url",
+            "publicUrl",
+            "generated_artifact_url",
+            "generatedArtifactUrl",
+            "download_url",
+            "downloadUrl",
+            "html_download_url",
+            "htmlDownloadUrl",
+        ]
+        .iter()
+        .any(|key| {
+            artifact
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(codex_host_fixed_task_public_artifact_url_allowed)
+                .unwrap_or(false)
+        }) || artifact
+            .get("artifact_links")
+            .or_else(|| artifact.get("artifactLinks"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|value| {
+                value
+                    .as_str()
+                    .map(codex_host_fixed_task_public_artifact_url_allowed)
+                    .unwrap_or(false)
+            });
+        has_static_page_type && has_url
+    })
+}
+
+fn assistant_run_answer_quality_repeated_fallback_or_timeout(event_names: &[String]) -> bool {
+    event_names
+        .iter()
+        .filter(|event| {
+            let lower = event.to_ascii_lowercase();
+            lower.contains("fallback")
+                || lower.contains("timeout")
+                || lower.contains("timed_out")
+                || lower.contains("provider_failed")
+                || lower.contains("retry_exhausted")
+        })
+        .count()
+        >= 2
 }
 
 fn assistant_run_answer_quality_autofix_fixed_task_from_case(
@@ -108251,6 +108370,143 @@ mod tests {
             .expect("sources")
             .iter()
             .any(|source| source == "spreadsheet_row_analysis"));
+        assert!(package["low_quality_signals"]
+            .as_array()
+            .expect("signals")
+            .iter()
+            .any(|signal| signal == "deterministic_supply_ignored"));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_autofix_collects_missing_report_link_case() {
+        let request = CreateAssistantRunRequest {
+            prompt: "看看最新的门店取高报表".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["xinbai-dataset"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 2,
+                "databaseAggregateCount": 1,
+                "indexedEvidenceCount": 0
+            }
+        });
+        let output_artifacts = vec![json!({
+            "type": "assistant_message",
+            "content": "已根据当前需求整理门店取高报表。"
+        })];
+
+        let package = assistant_run_answer_quality_low_quality_case_package(
+            AssistantRunId::new(),
+            &request,
+            &json!({"mode": "external_document_scope", "datasets": ["xinbai-dataset"]}),
+            &evidence_state,
+            &output_artifacts,
+            &[],
+        )
+        .expect("missing report link should collect case");
+
+        assert!(package["low_quality_signals"]
+            .as_array()
+            .expect("signals")
+            .iter()
+            .any(|signal| signal == "missing_report_artifact_link"));
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_autofix_does_not_collect_report_case_with_link() {
+        let request = CreateAssistantRunRequest {
+            prompt: "看看最新的门店取高报表".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["xinbai-dataset"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 2,
+                "databaseAggregateCount": 1,
+                "indexedEvidenceCount": 0
+            }
+        });
+        let output_artifacts = vec![
+            json!({
+                "type": "assistant_message",
+                "content": "已根据当前需求整理门店取高报表。"
+            }),
+            json!({
+                "type": "generated_artifact",
+                "artifact_kind": "static_page",
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/report/index.html"
+            }),
+        ];
+
+        assert!(assistant_run_answer_quality_low_quality_case_package(
+            AssistantRunId::new(),
+            &request,
+            &json!({"mode": "external_document_scope", "datasets": ["xinbai-dataset"]}),
+            &evidence_state,
+            &output_artifacts,
+            &[],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn assistant_run_answer_quality_autofix_collects_repeated_fallback_or_timeout_case() {
+        let request = CreateAssistantRunRequest {
+            prompt: "经营健康度看一下".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["dataset-1"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let evidence_state = json!({
+            "status": "supplied",
+            "supply_quality": {
+                "selectedDatasetCount": 1,
+                "suppliedItemCount": 1,
+                "indexedEvidenceCount": 1
+            }
+        });
+        let output_artifacts = vec![json!({
+            "type": "assistant_message",
+            "content": "已根据当前资料整理经营健康度。"
+        })];
+
+        let package = assistant_run_answer_quality_low_quality_case_package(
+            AssistantRunId::new(),
+            &request,
+            &json!({"mode": "user_selected", "datasets": ["dataset-1"]}),
+            &evidence_state,
+            &output_artifacts,
+            &[
+                "assistant_run.provider_timeout".to_string(),
+                "assistant_run.model_fallback_used".to_string(),
+            ],
+        )
+        .expect("repeated fallback/timeout should collect case");
+
+        assert!(package["low_quality_signals"]
+            .as_array()
+            .expect("signals")
+            .iter()
+            .any(|signal| signal == "repeated_fallback_or_timeout"));
     }
 
     #[test]

@@ -65,7 +65,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented locally. Full local document-quality smoke and aggregate-first regressions passed. 8-server migration/backfill rollout, one-shot enrichment worker smoke, live duplicate/enrichment smoke, and private aggregate smoke remain pending. |
-| P1 Gate D: low-quality answer recovery | pending | Hard gate remains disabled; passive fixed-scope autofix loop needs implementation and validation. |
+| P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
 | P1 Gate E: confirmed data ingestion | pending | `data_ingestion_analysis` terminal smoke exists; confirmed staging-to-dataset sync still needs closure and validation. |
 
 ## Rollout Receipts
@@ -354,6 +354,36 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - Markdown summary: `target/document-quality-smoke/document-quality-smoke-20260606T010841Z-27544.md`.
 - Remaining:
   - run private 8-server aggregate smoke after deployment and private bearer/cookie configuration are available.
+
+### 2026-06-06 Passive Answer Quality Autofix Local Coverage
+
+- Files changed:
+  - `crates/platform-api/src/lib.rs`;
+  - `scripts/run-cloudflare-codex-fixed-task-smoke.ps1`;
+  - `docs/operations/answer-quality-autofix.md`;
+  - `docs/operations/cloudflare-codex-fixed-task-templates.md`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`;
+  - `docs/validation/datamax-main-gap-closure.md`.
+- Behavior:
+  - hard customer-facing answer gate remains disabled; collected packages record `blocking_gate_enabled=false`;
+  - passive low-quality collection now records deterministic supply ignored by an insufficient-evidence answer, missing report/static-page artifact links, and repeated fallback/timeout/provider-failure events;
+  - fixed-task smoke script accepts both separate `-Case` values and comma-separated case lists, matching the plan command;
+  - operation docs now match the actual legacy smoke script path `scripts/run-v3-quality-gate-smoke.ps1`.
+- Local verification:
+  - `cargo fmt --check -p platform-api -p codex-host-agent` passed.
+  - `cargo test -p platform-api answer_quality_autofix --lib` passed, 12 tests.
+  - `cargo test -p codex-host-agent answer_quality --lib` passed, 3 tests.
+  - `cargo test -p platform-api assistant_run_answer_quality_gate --lib` passed, 14 tests.
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case answer_quality_autofix,human_exception,runtime_summary` passed.
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local` passed.
+  - `cargo check -p platform-api -p codex-host-agent` passed.
+- Smoke receipts:
+  - Fixed-task JSON: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T011735Z.json`.
+  - Fixed-task Markdown: `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260606T011735Z.md`.
+  - Quality-gate JSON: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.json`.
+  - Quality-gate Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T011549Z-23164.md`.
+- Remaining:
+  - after deployment, run 8-server live passive collection/enqueue smoke with production-safe allowlist settings.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 

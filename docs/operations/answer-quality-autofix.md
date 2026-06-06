@@ -10,6 +10,9 @@ DataMax may collect a low-quality case when one or more signals appear:
 
 - direct user dissatisfaction or strong complaint;
 - weak "资料不足/无法回答/需要继续检索" answer while evidence, facts, or spreadsheet row analysis exists;
+- deterministic aggregate supply exists but the answer still says evidence is insufficient;
+- a report/static-page request completes without a usable generated-artifact link;
+- repeated provider fallback or timeout events occur in the same run;
 - answer-quality retry exhausted;
 - controlled fallback used;
 - parse-quality recovery is suggested but no VLM upgrade was attempted;
@@ -41,7 +44,7 @@ Allowed write scope:
 - `crates/platform-api/src/lib.rs`
 - `fixtures/document-quality/**`
 - `scripts/run-document-quality-smoke.ps1`
-- `scripts/run-DataMax-quality-gate-smoke.ps1`
+- `scripts/run-v3-quality-gate-smoke.ps1` (legacy filename; validates the DataMax answer-quality contract)
 - `docs/validation/**`
 
 The task may diagnose and propose low-risk answer-quality patches without per-task human confirmation. It must include regression tests or smoke updates before behavior changes.
