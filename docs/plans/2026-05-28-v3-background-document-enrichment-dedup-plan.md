@@ -234,7 +234,7 @@ Remaining:
 
 ## Task 5: Background Enrichment Orchestrator
 
-Status: `pending`
+Status: `repository-foundation-completed-locally-2026-06-06`
 
 Files:
 
@@ -269,6 +269,25 @@ Acceptance:
 - Upload returns before enrichment finishes.
 - Failed enrichment retries with backoff and is visible in diagnostics.
 - Disabling the feature flags returns the system to current behavior.
+
+Progress 2026-06-06:
+
+- Added storage structs and repository for `document_enrichment_runs`.
+- Repository supports idempotent create/get, claim next available run, success marking, transient-error requeue with backoff time, terminal failure, and list-by-document.
+- Added regression `document_enrichment_run_repository_claims_requeues_and_succeeds`.
+- Verified locally with:
+  - `cargo fmt --check -p platform-api -p storage`;
+  - `cargo test -p platform-api document_enrichment_run_repository_claims_requeues_and_succeeds --lib`;
+  - `cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib`;
+  - `cargo test -p storage document_canonical_enrichment --lib`;
+  - `cargo check -p platform-api`.
+
+Remaining:
+
+- Enqueue enrichment runs after parse/index completion.
+- Add a low-priority worker/idle execution loop.
+- Add diagnostics surface for pending/running/failed enrichment runs.
+- Wire feature flags before enabling on 8 server.
 
 ## Task 6: Enrichment Outputs For Dense Manuals
 

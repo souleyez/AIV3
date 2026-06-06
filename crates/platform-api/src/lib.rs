@@ -134474,6 +134474,146 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn document_enrichment_run_repository_claims_requeues_and_succeeds() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("enrichment-run-dataset-{}", Uuid::new_v4()),
+                    title: "Enrichment Run Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": "public",
+                    "default_secret_binding_ids": []
+                }),
+            )
+            .await
+            .expect("dataset should be created");
+        let document = harness
+            .storage
+            .documents()
+            .create(
+                harness.tenant_id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Enrichment doc".to_string(),
+                    object_key: "/tmp/enrichment-doc.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let now = Utc::now();
+        let repository = harness.storage.document_enrichment_runs();
+        let created = repository
+            .create_or_get(
+                harness.tenant_id,
+                &storage::NewDocumentEnrichmentRun {
+                    document_id: document.id,
+                    enrichment_kind: "fact_index_v2".to_string(),
+                    parse_version: Some("parse-v1".to_string()),
+                    input_fingerprint: "sha256-fixture".to_string(),
+                    priority: 100,
+                    max_attempts: 2,
+                    available_at: now,
+                },
+                now,
+            )
+            .await
+            .expect("enrichment run should create");
+        assert_eq!(created.status, "pending");
+
+        let idempotent = repository
+            .create_or_get(
+                harness.tenant_id,
+                &storage::NewDocumentEnrichmentRun {
+                    document_id: document.id,
+                    enrichment_kind: "fact_index_v2".to_string(),
+                    parse_version: Some("parse-v1".to_string()),
+                    input_fingerprint: "sha256-fixture".to_string(),
+                    priority: 25,
+                    max_attempts: 3,
+                    available_at: now,
+                },
+                now,
+            )
+            .await
+            .expect("enrichment run should be idempotent");
+        assert_eq!(idempotent.id, created.id);
+        assert_eq!(idempotent.priority, 25);
+        assert_eq!(idempotent.max_attempts, 3);
+
+        let claimed = repository
+            .claim_next_available(harness.tenant_id, Some("fact_index_v2"), now)
+            .await
+            .expect("claim should load")
+            .expect("run should be claimed");
+        assert_eq!(claimed.id, created.id);
+        assert_eq!(claimed.status, "running");
+        assert_eq!(claimed.attempt_count, 1);
+
+        let requeued = repository
+            .requeue_after_error(
+                harness.tenant_id,
+                created.id,
+                "transient error",
+                now + Duration::minutes(1),
+                now + Duration::seconds(10),
+            )
+            .await
+            .expect("run should requeue");
+        assert_eq!(requeued.status, "pending");
+        assert_eq!(requeued.error_message.as_deref(), Some("transient error"));
+
+        let unavailable = repository
+            .claim_next_available(harness.tenant_id, Some("fact_index_v2"), now)
+            .await
+            .expect("early claim should load");
+        assert!(unavailable.is_none());
+
+        let claimed_again = repository
+            .claim_next_available(
+                harness.tenant_id,
+                Some("fact_index_v2"),
+                now + Duration::minutes(2),
+            )
+            .await
+            .expect("second claim should load")
+            .expect("run should be claimed again");
+        assert_eq!(claimed_again.attempt_count, 2);
+
+        let succeeded = repository
+            .mark_succeeded(
+                harness.tenant_id,
+                created.id,
+                &json!({ "fact_count": 3 }),
+                now + Duration::minutes(3),
+            )
+            .await
+            .expect("run should succeed");
+        assert_eq!(succeeded.status, "succeeded");
+        assert_eq!(succeeded.output_summary["fact_count"], json!(3));
+
+        let runs = repository
+            .list_by_document(harness.tenant_id, document.id, 10)
+            .await
+            .expect("runs should list");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, created.id);
+    }
+
+    #[tokio::test]
     async fn auth_logout_revokes_session() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let Some(harness) = build_auth_api_test_harness().await else {

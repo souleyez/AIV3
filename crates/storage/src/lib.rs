@@ -207,6 +207,38 @@ pub struct NewDocument {
 }
 
 #[derive(Clone, Debug)]
+pub struct NewDocumentEnrichmentRun {
+    pub document_id: DocumentId,
+    pub enrichment_kind: String,
+    pub parse_version: Option<String>,
+    pub input_fingerprint: String,
+    pub priority: i32,
+    pub max_attempts: i32,
+    pub available_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DocumentEnrichmentRun {
+    pub id: Uuid,
+    pub tenant_id: TenantId,
+    pub document_id: DocumentId,
+    pub enrichment_kind: String,
+    pub parse_version: Option<String>,
+    pub input_fingerprint: String,
+    pub status: String,
+    pub priority: i32,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub available_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub output_summary: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
 pub struct NewDatasetDocumentMembership {
     pub dataset_id: DatasetId,
     pub document_id: DocumentId,
@@ -832,6 +864,12 @@ impl PgStorage {
 
     pub fn documents(&self) -> PgDocumentRepository {
         PgDocumentRepository {
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub fn document_enrichment_runs(&self) -> PgDocumentEnrichmentRunRepository {
+        PgDocumentEnrichmentRunRepository {
             pool: self.pool.clone(),
         }
     }
@@ -2023,6 +2061,230 @@ async fn resolve_canonical_document_id(
     .await?;
 
     Ok(DocumentId(resolved.unwrap_or(document_id.0)))
+}
+
+#[derive(Clone)]
+pub struct PgDocumentEnrichmentRunRepository {
+    pool: PgPool,
+}
+
+impl PgDocumentEnrichmentRunRepository {
+    pub async fn create_or_get(
+        &self,
+        tenant_id: TenantId,
+        new_run: &NewDocumentEnrichmentRun,
+        created_at: DateTime<Utc>,
+    ) -> Result<DocumentEnrichmentRun> {
+        let row = sqlx::query(
+            r#"
+            insert into document_enrichment_runs (
+                tenant_id,
+                document_id,
+                enrichment_kind,
+                parse_version,
+                input_fingerprint,
+                priority,
+                max_attempts,
+                available_at,
+                created_at,
+                updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            on conflict (tenant_id, document_id, enrichment_kind, input_fingerprint)
+            do update set
+                priority = least(document_enrichment_runs.priority, excluded.priority),
+                max_attempts = greatest(document_enrichment_runs.max_attempts, excluded.max_attempts),
+                available_at = least(document_enrichment_runs.available_at, excluded.available_at),
+                parse_version = coalesce(excluded.parse_version, document_enrichment_runs.parse_version),
+                updated_at = excluded.updated_at
+            returning id, tenant_id, document_id, enrichment_kind, parse_version, input_fingerprint,
+                      status, priority, attempt_count, max_attempts, available_at, started_at,
+                      finished_at, error_message, output_summary, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(new_run.document_id.0)
+        .bind(&new_run.enrichment_kind)
+        .bind(&new_run.parse_version)
+        .bind(&new_run.input_fingerprint)
+        .bind(new_run.priority)
+        .bind(new_run.max_attempts)
+        .bind(new_run.available_at)
+        .bind(created_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_document_enrichment_run_row(&row)
+    }
+
+    pub async fn claim_next_available(
+        &self,
+        tenant_id: TenantId,
+        enrichment_kind: Option<&str>,
+        claimed_at: DateTime<Utc>,
+    ) -> Result<Option<DocumentEnrichmentRun>> {
+        let row = sqlx::query(
+            r#"
+            with next_run as (
+                select id
+                from document_enrichment_runs
+                where tenant_id = $1
+                  and status = 'pending'
+                  and available_at <= $2
+                  and attempt_count < max_attempts
+                  and ($3::text is null or enrichment_kind = $3)
+                order by priority asc, available_at asc, created_at asc, id asc
+                for update skip locked
+                limit 1
+            )
+            update document_enrichment_runs
+            set status = 'running',
+                attempt_count = attempt_count + 1,
+                started_at = $2,
+                error_message = null,
+                updated_at = $2
+            where id in (select id from next_run)
+            returning id, tenant_id, document_id, enrichment_kind, parse_version, input_fingerprint,
+                      status, priority, attempt_count, max_attempts, available_at, started_at,
+                      finished_at, error_message, output_summary, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(claimed_at)
+        .bind(enrichment_kind)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref()
+            .map(map_document_enrichment_run_row)
+            .transpose()
+    }
+
+    pub async fn mark_succeeded(
+        &self,
+        tenant_id: TenantId,
+        run_id: Uuid,
+        output_summary: &Value,
+        finished_at: DateTime<Utc>,
+    ) -> Result<DocumentEnrichmentRun> {
+        let row = sqlx::query(
+            r#"
+            update document_enrichment_runs
+            set status = 'succeeded',
+                finished_at = $3,
+                error_message = null,
+                output_summary = $4,
+                updated_at = $3
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, document_id, enrichment_kind, parse_version, input_fingerprint,
+                      status, priority, attempt_count, max_attempts, available_at, started_at,
+                      finished_at, error_message, output_summary, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(run_id)
+        .bind(finished_at)
+        .bind(output_summary)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_document_enrichment_run_row(&row)
+    }
+
+    pub async fn requeue_after_error(
+        &self,
+        tenant_id: TenantId,
+        run_id: Uuid,
+        error_message: &str,
+        available_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<DocumentEnrichmentRun> {
+        let row = sqlx::query(
+            r#"
+            update document_enrichment_runs
+            set status = case
+                    when attempt_count >= max_attempts then 'failed'
+                    else 'pending'
+                end,
+                available_at = $3,
+                finished_at = case
+                    when attempt_count >= max_attempts then $4
+                    else null
+                end,
+                error_message = $5,
+                updated_at = $4
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, document_id, enrichment_kind, parse_version, input_fingerprint,
+                      status, priority, attempt_count, max_attempts, available_at, started_at,
+                      finished_at, error_message, output_summary, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(run_id)
+        .bind(available_at)
+        .bind(updated_at)
+        .bind(error_message)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_document_enrichment_run_row(&row)
+    }
+
+    pub async fn mark_failed(
+        &self,
+        tenant_id: TenantId,
+        run_id: Uuid,
+        error_message: &str,
+        finished_at: DateTime<Utc>,
+    ) -> Result<DocumentEnrichmentRun> {
+        let row = sqlx::query(
+            r#"
+            update document_enrichment_runs
+            set status = 'failed',
+                finished_at = $3,
+                error_message = $4,
+                updated_at = $3
+            where tenant_id = $1 and id = $2
+            returning id, tenant_id, document_id, enrichment_kind, parse_version, input_fingerprint,
+                      status, priority, attempt_count, max_attempts, available_at, started_at,
+                      finished_at, error_message, output_summary, created_at, updated_at
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(run_id)
+        .bind(finished_at)
+        .bind(error_message)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_document_enrichment_run_row(&row)
+    }
+
+    pub async fn list_by_document(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+        limit: i64,
+    ) -> Result<Vec<DocumentEnrichmentRun>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, document_id, enrichment_kind, parse_version, input_fingerprint,
+                   status, priority, attempt_count, max_attempts, available_at, started_at,
+                   finished_at, error_message, output_summary, created_at, updated_at
+            from document_enrichment_runs
+            where tenant_id = $1 and document_id = $2
+            order by created_at desc, id asc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(document_id.0)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_document_enrichment_run_row).collect()
+    }
 }
 
 impl PgDatasetDocumentMembershipRepository {
@@ -6664,6 +6926,28 @@ fn map_document_row(row: &sqlx::postgres::PgRow) -> Result<Document> {
             .ok_or_else(|| anyhow!("unknown document lifecycle: {lifecycle}"))?,
         secret_binding_ids: secret_binding_ids_from_metadata(&metadata)?,
         metadata: json_object_to_btree_map(metadata)?,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn map_document_enrichment_run_row(row: &sqlx::postgres::PgRow) -> Result<DocumentEnrichmentRun> {
+    Ok(DocumentEnrichmentRun {
+        id: row.get("id"),
+        tenant_id: TenantId(row.get::<Uuid, _>("tenant_id")),
+        document_id: DocumentId(row.get::<Uuid, _>("document_id")),
+        enrichment_kind: row.get("enrichment_kind"),
+        parse_version: row.get("parse_version"),
+        input_fingerprint: row.get("input_fingerprint"),
+        status: row.get("status"),
+        priority: row.get("priority"),
+        attempt_count: row.get("attempt_count"),
+        max_attempts: row.get("max_attempts"),
+        available_at: row.get("available_at"),
+        started_at: row.get("started_at"),
+        finished_at: row.get("finished_at"),
+        error_message: row.get("error_message"),
+        output_summary: row.get("output_summary"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
