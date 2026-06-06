@@ -1392,3 +1392,38 @@ Data-ingestion external fixed-task smoke:
   - run the same smoke with a legitimate operator cookie or email+local-key login;
   - add `--run-profile-test` only after approving a real provider probe;
   - record the sanitized passed receipt before marking the authenticated model-gateway operator smoke complete.
+
+### 2026-06-06 Existing-Document Fingerprint Backfill Summary-Only Audit
+
+- Commit:
+  - `8f835d0` added `--summary-only` to `document-fingerprint-backfill`.
+- Purpose:
+  - verify the historical fingerprint/backfill tool can be audited on 8 server without printing per-document titles, paths, URLs, or content;
+  - keep full historical enrichment/backfill disabled until a reviewed tiny batch is explicitly approved.
+- 8-server deployment state:
+  - `/srv/aiv3/repo` was already fast-forwarded to `8f835d0d31ae`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api` had passed for the release binary;
+  - the pre-existing untracked `mode` file remained untouched.
+- 8-server dry-run command:
+  - source `/etc/aiv3/aiv3.env`;
+  - run `./target/release/document-fingerprint-backfill --limit 20 --dry-run --summary-only --pretty`.
+- Result:
+  - `candidate_count=20`;
+  - `document_report_count=20`;
+  - `dry_run=true`;
+  - `summary_only=true`;
+  - `include_existing=false`;
+  - `limit=20`;
+  - `duplicate_count=0`;
+  - `skipped_count=20`;
+  - `would_record_count=0`;
+  - `recorded_count=0`;
+  - `dataset_id=null`;
+  - `document_id=null`.
+- Safety:
+  - no `documents` array was emitted;
+  - no document title, document content, customer row, local file path, external URL, database URL, credential, bearer token, or provider payload was recorded;
+  - PostgreSQL migration notice logs printed only schema/relation names and did not include customer data;
+  - no real backfill or enrichment batch was run.
+- Remaining action:
+  - if historical enrichment is required, start with one reviewed dataset, one deterministic enrichment kind, and a low-volume dry-run/batch under queue monitoring before any broader rollout.
