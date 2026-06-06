@@ -287,6 +287,33 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - production `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` remains unset;
   - a real low-load prewarm consumer/execution smoke is still required before enabling the production flag, otherwise prewarm can become queued work without a proven end-to-end template artifact.
 
+### 2026-06-06 8-Server Static-Page Prewarm Safety Rollout
+
+- Commit deployed:
+  - `0dc117d0fafa`.
+- Deployment:
+  - 8 server fast-forwarded from `e6b6c5ba5` to `0dc117d0f`;
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api` passed;
+  - `aiv3-platform-api.service` was restarted and returned `active`;
+  - repo remains `main...origin/main`; existing untracked `mode` remains untouched.
+- 8-server verification:
+  - `CC=clang CXX=clang++ cargo test -p platform-api static_page_template_prewarm --lib` passed, 3 tests;
+  - `GET http://127.0.0.1:3000/v1/workflow-tasks/queue-stats` returned HTTP 200;
+  - `STATIC_PAGE_TEMPLATE_PREWARM_*` runtime env remains unset for `aiv3-platform-api.service`.
+- Services checked after deploy:
+  - `aiv3-platform-api.service`: active;
+  - `aiv3-web.service`: active;
+  - `aiv3-static-page-worker.service`: active;
+  - `aiv3-codex-host-agent.service`: active;
+  - `aiv3-chat-session-worker.service`: active;
+  - `aiv3-assistant-run-worker.service`: active;
+  - `aiv3-retrieval-worker.service`: active;
+  - `aiv3-document-enrichment-worker.service`: active.
+- Safety boundary:
+  - the deploy does not enable production low-load prewarm;
+  - no third-party public URL, auth, request field, or response field changed;
+  - the change only prevents future silent prewarm artifacts from being blocked by the auto-publish source gate or accidentally dispatched as customer-visible replies.
+
 ### 2026-06-06 Background Document Enrichment Schema Phase 1
 
 - Files changed:
