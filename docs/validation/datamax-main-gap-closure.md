@@ -183,6 +183,36 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - no old generated artifact was deleted;
   - no credentials, bearer token, database URL, raw row, provider payload, or full customer document was recorded.
 
+### 2026-06-06 Current-Head Task 3 Scoped Third-Party Document Regression
+
+- Purpose:
+  - execute the local regression portion of Task 3 from `docs/plans/2026-06-06-datamax-major-gap-executable-plan.md`;
+  - prove the Task 1 live scoped-document smoke is backed by focused platform regressions.
+- Local head:
+  - `9962e26` after recording the Task 2 Xinbai report contract regression.
+- Local verification:
+  - `node --check scripts\smoke\external-scoped-document-chat.mjs` passed;
+  - `cargo test -p platform-api external_document_parse --lib` passed, 2 tests;
+  - `cargo test -p platform-api external_channel_temporary_scope_restores --lib` passed, 1 test;
+  - `cargo test -p platform-api external_channel_dataset_external_id --lib` passed, 3 tests;
+  - `cargo test -p platform-api external_attachment_title --lib` passed, 1 test;
+  - `cargo test -p platform-api assistant_run_external_document_scope_supplies_selected_doc_without_acl_snapshot --lib` passed, 1 test.
+- Coverage:
+  - third-party external document parse can create/resolve source datasets;
+  - same `conversation_external_id` restores temporary document scope without repeating document IDs;
+  - `dataset_external_id` and `dataset_external_ids` authorize and restore dataset group scope;
+  - DataMax/V3-compatible dataset UUID scope remains accepted;
+  - attachment-title matching supplies selected documents before a durable ACL snapshot exists;
+  - selected external document scope can answer `邓工是谁`-style questions without waiting for ACL persistence.
+- Live receipt:
+  - Task 1 8-server scoped smoke already passed with `caseCount=4`;
+  - receipt: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-task1-e5dd871/20260606140117.json`.
+- Conclusion:
+  - no Task 3 code fix was required in this pass.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, production mapping, production table, or schema was changed;
+  - no credential, bearer token, database URL, raw row, provider payload, full customer document, or local object path was recorded.
+
 ### 2026-06-06 Completion Audit And Dataset-Scoped Backfill Dry-Run
 
 - Purpose:
