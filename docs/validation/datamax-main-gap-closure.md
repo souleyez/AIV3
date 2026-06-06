@@ -1664,3 +1664,74 @@ Data-ingestion external fixed-task smoke:
   - keep the full capability-routing fixture in the release gate;
   - add new customer wording as fixtures when missed;
   - audit public third-party docs only when customer-visible report/artifact fields or additive behavior changes.
+
+### 2026-06-06 Current-Head Release Gate Rerun After Plan Update
+
+- Purpose:
+  - rerun the current-head release gate after the main plan/validation and capability-routing rollout were synced to GitHub and 8 server;
+  - distinguish proved production/demo behavior from checks that still require a legitimate main-system or operator credential.
+- Deployed state:
+  - local and 8-server commit: `15756668bcad`;
+  - 8-server `git status --short --branch`: `## main...origin/main` plus the known pre-existing untracked `mode` file;
+  - active services after smoke: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-static-page-worker.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-codex-host-agent.service`.
+- Local precheck:
+  - `git status --short --branch` returned clean `main...origin/main`;
+  - `git rev-parse --short=12 HEAD` returned `15756668bcad`;
+  - `git diff --check` passed.
+- Third-party ordinary 20-way smoke:
+  - command shape: server-side local-dev `generic-chat-main` bearer loaded from DataMax configuration and not printed, then `npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20 --timeout-ms 120000 --output-dir target/external-channel-20way-smoke-release-gate-1575666`;
+  - receipt: `/srv/aiv3/repo/target/external-channel-20way-smoke-release-gate-1575666/20260606105443.json`;
+  - result: `okCount=20`, `failedCount=0`, `completedCount=20`, `p50=2534 ms`, `p95=3632 ms`, `max=5236 ms`.
+- Main-site chat-session 20-way:
+  - no `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, or `MAIN_CHAT_SMOKE_BEARER` was configured on 8 server;
+  - no-credential script run without dataset id failed before mutation, as expected: `--dataset-id or MAIN_CHAT_SMOKE_DATASET_ID is required`;
+  - a server-local dataset probe against both public `https://v3.elepcloud.com` and local `http://127.0.0.1:3000` returned 20/20 HTTP `404` with `dataset_not_found ... current access scope`;
+  - receipts:
+    - `/srv/aiv3/repo/target/main-chat-20way-smoke-release-gate-1575666/20260606105637.json`;
+    - `/srv/aiv3/repo/target/main-chat-20way-smoke-release-gate-local-1575666/20260606105722.json`;
+  - interpretation: main-site 20-way remains pending until a legitimate main-system session or bearer with dataset scope is available; this was not counted as a pass.
+- Main-site AssistantRun live streaming:
+  - command: `npm run smoke:main-assistant-streaming -- --base-url https://v3.elepcloud.com --timeout-ms 120000 --require-live-delta --require-multiple-deltas --output-dir target/main-assistant-streaming-smoke-release-gate-1575666`;
+  - receipt: `/srv/aiv3/repo/target/main-assistant-streaming-smoke-release-gate-1575666/20260606105820.json`;
+  - result: `ok=true`, create/continue both passed, `createDeltaCount=84`, `continueDeltaCount=69`, first delta at `1993 ms` and `1737 ms`, AssistantRun id `92a71cd8-4515-4368-9822-c8e8d10d5f1e`.
+- Static-page 5-way:
+  - command shape: server-side local-dev bearer loaded and not printed, Xinbai dataset external id `64fff6c8-10e2-4ee8-8243-23166cce3abc`, `npm run smoke:static-page-5way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 5 --timeout-ms 120000 --poll-timeout-ms 300000 --require-artifact --output-dir target/static-page-5way-smoke-release-gate-1575666`;
+  - receipt: `/srv/aiv3/repo/target/static-page-5way-smoke-release-gate-1575666/20260606105848.json`;
+  - result: `okCount=5`, `failedCount=0`, `acceptedCount=5`, `artifactCount=5`, `p50=6134 ms`, `p95=7883 ms`.
+- Cloudflare fallback guard without operator credential:
+  - command: `node scripts/smoke/cloudflare-fallback-2way.mjs --base-url https://v3.elepcloud.com --min-expected 0 --max-allowed 2 --output-dir target/cloudflare-fallback-2way-smoke-release-gate-no-credentials-1575666`;
+  - receipt: `/srv/aiv3/repo/target/cloudflare-fallback-2way-smoke-release-gate-no-credentials-1575666/20260606105911.json`;
+  - result: `workflowQueueStatsLoaded=true`, `statusHttpStatus=401`, `auth_session_required`, `codexWorkerPresent=false`;
+  - interpretation: queue status is reachable and model-gateway status remains protected; authenticated Cloudflare/Codex concurrency proof remains pending until an operator credential is available.
+- Xinbai report/export:
+  - command shape: server-side local-dev bearer loaded and not printed, `EXTERNAL_REPORT_EXPORT_SMOKE_DATASET_EXTERNAL_IDS=64fff6c8-10e2-4ee8-8243-23166cce3abc`, `EXTERNAL_REPORT_EXPORT_SMOKE_REQUIRE_TEXT_LINK=true`, then `npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000 --output-dir target/external-report-export-smoke-release-gate-1575666`;
+  - receipt: `/srv/aiv3/repo/target/external-report-export-smoke-release-gate-1575666/20260606105927.json`;
+  - result: `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, `datasetExternalIdCount=1`, text-link requirement passed, export file checks passed.
+- Third-party scoped-document chat:
+  - command shape: server-side local-dev bearer loaded and not printed, `npm run smoke:external-scoped-document-chat -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --source-id third-party-source-main --timeout-ms 180000 --parse-timeout-ms 240000 --output-dir target/external-scoped-document-chat-smoke-release-gate-1575666`;
+  - receipt: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-release-gate-1575666/20260606110036.json`;
+  - Markdown summary: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-release-gate-1575666/20260606110036.md`;
+  - result: `ok=true`, `caseCount=4`; all four temporary fixture documents parsed to `parsed`/`ready`, dataset group plus explicit document union passed, same-conversation follow-up restored scope, changed-conversation isolation passed, attachment-title supply passed.
+- Document-quality local regression:
+  - command: `powershell -ExecutionPolicy Bypass -File .\scripts\run-document-quality-smoke.ps1 -Local`;
+  - receipt: `target/document-quality-smoke/document-quality-smoke-20260606T110103Z-31172.json`;
+  - Markdown summary: `target/document-quality-smoke/document-quality-smoke-20260606T110103Z-31172.md`;
+  - result: passed all cases, including one-character PDF, `邓工是谁`, elderly-care procedures, resume company statistics, multi-dimensional resume ranking, table-heavy documents, attendance absence/work-hour analysis, scanned/visual PDF fallback, smart-home answer quality, and smart-elevator point-list answer quality.
+- Model-gateway operator guard:
+  - command: `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-release-gate-no-credentials-1575666`;
+  - receipt: `/srv/aiv3/repo/target/model-gateway-operator-smoke-release-gate-no-credentials-1575666/20260606110208.json`;
+  - Markdown summary: `/srv/aiv3/repo/target/model-gateway-operator-smoke-release-gate-no-credentials-1575666/20260606110208.md`;
+  - result: `pending=true`, unauthenticated guard passed with HTTP `401 auth_session_required`, no cookie/local-key/provider secret recorded; authenticated operator status remains pending.
+- Data-source identity audit:
+  - command shape: `DATA_INGESTION_LIVE_SMOKE_DATABASE_URL` set from server env without printing, `DATA_INGESTION_LIVE_SMOKE_SOURCE_KEY=hy-sql-traffic-area`, `DATA_INGESTION_LIVE_SMOKE_API_BASE=http://127.0.0.1:3000`, then `bash scripts/run-data-ingestion-staging-live-smoke.sh`;
+  - receipt: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T110226Z.json`;
+  - Markdown summary: `/srv/aiv3/repo/target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260606T110226Z.md`;
+  - result: `ready=true`, source enabled, mapped table count 6, succeeded sync exists, latest sync not failed, ready dataset count 4, question/report readiness true;
+  - identity audit still shows collapsed rows in two tables: `bi_contract_warning` collapsed 94/100 latest-sync rows, `bi_rentsales_detail` collapsed 99/100 latest-sync rows, total collapsed duplicate rows 193.
+- Safety:
+  - no third-party public URL, auth method, required request field, or existing response field changed;
+  - no bearer token, database URL, raw customer row, full customer document, provider payload, cookie, or local key was recorded;
+  - 120 server was not touched.
+- Remaining release-gate blockers:
+  - main-site chat-session 20-way needs a legitimate main-system session/bearer and dataset scope;
+  - authenticated model-gateway and Cloudflare fallback concurrency proof need a legitimate operator cookie or local-key login.
