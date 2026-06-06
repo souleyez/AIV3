@@ -61,7 +61,7 @@ if [[ "${self_test}" == "true" ]]; then
   sync_runs_json='[{"sync_run_id":"sync-smoke","sync_kind":"content","status":"succeeded","failure_kind":null,"workflow_stage":"completed","workflow_status":"succeeded","documents_ingested":50,"chunks_ingested":50,"chunks_indexed":50,"retrieval_evidences_indexed":50,"enqueued_task_count":0,"created_at":"2026-05-30T08:55:00Z","updated_at":"2026-05-30T09:00:00Z"}]'
   datasets_json='[{"dataset_id":"dataset-smoke","key":"external-source-hy-sql-auto-dataset-hy-sql-main","title":"HY SQL Ready Dataset","lifecycle":"active","is_default":true,"dataset_external_id":"hy-sql-main","document_count":50,"indexed_document_count":50,"failed_document_count":0,"processing_document_count":0,"chunk_count":50,"indexed_chunk_count":50,"retrieval_evidence_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z","updated_at":"2026-05-30T09:05:00Z"}]'
   tables_json='[{"table":"bi_traffic_area","document_count":50,"indexed_document_count":50,"chunk_count":50,"indexed_chunk_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z"}]'
-  identity_audit_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","latest_sync":{"sync_run_id":"sync-smoke","status":"succeeded","updated_at":"2026-05-30T09:00:00Z"},"tables":[{"table":"bi_traffic_area","id_column":"id","id_columns":["id"],"source_row_count":50,"unique_document_count":50,"unique_chunk_count":50,"collapsed_duplicate_row_count":0,"current_document_count":50}]}'
+  identity_audit_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","latest_sync":{"sync_run_id":"sync-smoke","status":"succeeded","updated_at":"2026-05-30T09:00:00Z"},"tables":[{"table":"bi_traffic_area","id_column":"id","id_columns":["id"],"source_row_count":50,"unique_document_count":50,"unique_chunk_count":50,"collapsed_duplicate_row_count":0,"current_document_count":50},{"table":"bi_contract_warning","id_column":"parentcode","id_columns":["parentcode","storecode","txdate"],"source_row_count":100,"unique_document_count":6,"unique_chunk_count":6,"collapsed_duplicate_row_count":94,"current_document_count":24},{"table":"bi_rentsales_detail","id_column":"storecode","id_columns":["storecode","contract_no","contract_startdate"],"source_row_count":100,"unique_document_count":1,"unique_chunk_count":1,"collapsed_duplicate_row_count":99,"current_document_count":6},{"table":"bi_traffic_area_history_only","id_column":null,"id_columns":[],"source_row_count":0,"unique_document_count":0,"unique_chunk_count":0,"collapsed_duplicate_row_count":0,"current_document_count":50}]}'
   api_status_json='{"source_id":"source-smoke","status":{"config_valid":true,"dataset_readiness":{"signal":"ready"},"sync_readiness":{"signal":"ready"},"health_findings":{"signal":"healthy","items":[]}}}'
   api_fetch_status="self_test"
 else
@@ -459,6 +459,26 @@ const apiSummary = apiStatus && typeof apiStatus === 'object'
         : [],
     }
   : null;
+const stagingDiscriminatorHints = (tableName) => {
+  const table = String(tableName || '').toLowerCase();
+  if (table === 'bi_contract_warning') {
+    return [
+      'contract_or_brand_identifier',
+      'shop_or_storefront_identifier',
+      'business_mode_or_metric_type',
+      'stable_detail_sequence_if_available',
+    ];
+  }
+  if (table === 'bi_rentsales_detail') {
+    return [
+      'period_or_statement_date',
+      'brand_or_shop_identifier',
+      'rent_or_sales_detail_type',
+      'stable_detail_sequence_if_available',
+    ];
+  }
+  return [];
+};
 const normalizeIdentityAudit = (audit) => {
   const empty = {
     source_id: null,
@@ -487,12 +507,15 @@ const normalizeIdentityAudit = (audit) => {
               : collapsedDuplicateRowCount > 0
                 ? 'collapsed_identity'
                 : 'row_level_or_no_duplicates';
+        const stagingHints = stagingDiscriminatorHints(table.table);
         const recommendedAction =
-          identityStatus !== 'collapsed_identity'
-            ? 'none'
-            : idColumns.length > 1
-              ? 'verify composite identity is active in a staging sync before relying on row-level reports'
-              : 'consider a composite identity mapping in staging if source-row-level completeness is required';
+          identityStatus === 'collapsed_identity'
+            ? idColumns.length > 1
+              ? 'configured composite identity still collapses rows; validate an added stable row discriminator in staging before relying on row-level reports'
+              : 'consider a composite identity mapping in staging if source-row-level completeness is required'
+            : identityStatus === 'no_latest_sync_rows' && Number(table.current_document_count || 0) > 0
+              ? 'latest sync has no source-row counts for this table; verify freshness before using existing documents for current reports'
+              : 'none';
         return {
           table: table.table || '[unmapped]',
           id_column: table.id_column || null,
@@ -504,6 +527,7 @@ const normalizeIdentityAudit = (audit) => {
           current_document_count: Number(table.current_document_count || 0),
           identity_status: identityStatus,
           recommended_action: recommendedAction,
+          staging_discriminator_hints: stagingHints,
         };
       })
     : [];
@@ -718,9 +742,12 @@ const lines = [
     ? [
         '| Table | Identity Columns | Source Rows | Unique Docs | Collapsed Rows | Current Docs | Status | Recommended Action |',
         '| --- | --- | ---: | ---: | ---: | ---: | --- | --- |',
-        ...report.latest_sync_identity_audit.tables.map((table) =>
-          `| \`${table.table}\` | ${table.id_columns.length ? table.id_columns.map((column) => `\`${column}\``).join(', ') : 'none'} | ${table.source_row_count} | ${table.unique_document_count} | ${table.collapsed_duplicate_row_count} | ${table.current_document_count} | ${table.identity_status} | ${table.recommended_action || 'none'} |`
-        ),
+        ...report.latest_sync_identity_audit.tables.map((table) => {
+          const hintText = Array.isArray(table.staging_discriminator_hints) && table.staging_discriminator_hints.length
+            ? `; staging hints: ${table.staging_discriminator_hints.join(', ')}`
+            : '';
+          return `| \`${table.table}\` | ${table.id_columns.length ? table.id_columns.map((column) => `\`${column}\``).join(', ') : 'none'} | ${table.source_row_count} | ${table.unique_document_count} | ${table.collapsed_duplicate_row_count} | ${table.current_document_count} | ${table.identity_status} | ${table.recommended_action || 'none'}${hintText} |`;
+        }),
       ]
     : ['- none']),
   '',
