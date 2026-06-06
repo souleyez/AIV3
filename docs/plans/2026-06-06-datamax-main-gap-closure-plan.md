@@ -73,7 +73,7 @@ This section is the current single-page execution sheet. Treat the longer task s
 | G4: Background enterprise memory rollout | Fingerprint/dedup, enrichment-run storage, worker loop, deterministic enrichment kinds, and aggregate-first local tests are implemented. 8-server migration/backfill/live smoke remain pending. | Deploy migration on 8 server, dry-run fingerprint backfill, run one-shot enrichment worker, then run duplicate read-through and aggregate Q&A smoke. | New and existing documents can enrich asynchronously; duplicate documents read through canonical chunks/facts; resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval. |
 | G5: Low-quality answer recovery | Passive detection and fixed-scope task packaging pass locally. Hard answer gate remains disabled. Production enqueue is config-gated. | Keep hard gate disabled. Enable only passive collection first, then optionally allow `answer_quality_autofix` in the fixed allowlist after live observation. | Weak answers are collected and classified; system-defect fixes remain limited to answer/retrieval optimization files and require tests before deployment. |
 | G6: Confirmed data ingestion | Local staging-plan confirmation, private staging dataset creation/reuse, guarded source sync, dedupe, same-conversation scope restore, and public-doc contract smoke passed on 2026-06-06. | Deploy to 8 server, run the live read-only source readiness smoke, then manually confirm one reviewed staging plan against a stored database source before customer-facing use. | 8-server receipt proves no write before confirmation, sync source is in-plan, confirmed rows become ordinary dataset evidence, and replies reach `dataset_ready`, `sync_started`, `sync_completed`, or truthful failure. |
-| G7: Controlled streaming | Third-party streaming expectations exist; main-site true streaming still needs controlled rollout. | Add/verify `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED` for main-site true stream. Keep third-party final-answer release gated while streaming progress/artifact status. | Main site can show live answer deltas behind flag; third-party sees progress and links but no rejected final-answer fragments. |
+| G7: Controlled streaming | Main-site create and continue SSE paths both support live answer deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`; third-party live answer stream remains separately controlled by `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED`. Local regressions passed on 2026-06-06. | Run main-site browser/local smoke and 8-server private streaming smoke after deployment. Keep third-party final-answer release gated while streaming progress/artifact status. | Main site can show live answer deltas for new and continued runs behind flag; third-party sees progress and links but no rejected final-answer fragments. |
 | G8: Operator observability | Validation ledgers exist, but operators still need one compact page for queues, model lane, report tasks, enrichment backlog, low-quality cases, and data-ingestion staging/sync. | Expand the existing external integration/operator page with lazy-loaded health panels and sanitized counts only. | A 20+ conversation incident can be triaged from DataMax without reading raw logs or exposing secrets. |
 | G9: Final release hygiene | Local branch is ahead of origin and several local-only improvements are committed. | Before deployment, run local gate, push, pull on 8 server, build changed binaries, restart only changed services, then rerun private smoke. | 8 server is on latest `main`, service statuses are active, validation docs record every command and result. |
 
@@ -1056,7 +1056,7 @@ git commit -m "Close confirmed data ingestion sync flow"
 
 ## Task 10: Roll Out Controlled Streaming Safely
 
-**Status:** pending
+**Status:** in progress as of 2026-06-06. Main-site `continue/stream` now uses the same live-delta worker/channel path as new AssistantRun creation when `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`. Third-party stream behavior was not changed; existing safety/replay regressions still pass. 8-server private streaming smoke remains pending.
 
 **Files:**
 
@@ -1086,6 +1086,14 @@ Use:
 - `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`;
 - existing external flag `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED` only after smoke passes.
 
+Local progress:
+
+- `/v1/assistant-runs/stream` already emitted `assistant_run.delta` behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`.
+- `/v1/assistant-runs/{run_id}/continue/stream` now also uses a live worker/channel when that flag is enabled.
+- Continue streaming reuses `AssistantRunLiveDeltaSink` and `complete_assistant_run_provider_live_streaming`.
+- Continue completion can skip the final full-text delta if live deltas already reached the browser, avoiding duplicate text in the main-site chat UI.
+- Non-streaming JSON continue and background model-completion recovery still pass `None` for the live sink.
+
 **Step 3: Add reconnect and final-shape regressions**
 
 Tests must prove:
@@ -1109,6 +1117,31 @@ npm --prefix apps/web run build
 npm run build:pure-third-party-guide-html
 npm run check:pure-third-party-guide-html
 ```
+
+Local verification on 2026-06-06:
+
+```powershell
+cargo fmt --check -p platform-api
+cargo test -p platform-api assistant_run_sse --lib
+cargo test -p platform-api assistant_run_continue_sse --lib
+cargo test -p platform-api assistant_run_live --lib
+cargo test -p platform-api assistant_run_continue --lib
+cargo test -p platform-api external_channel_stream_resume --lib
+cargo test -p platform-api external_channel_public_stream --lib
+cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib
+cargo check -p platform-api
+```
+
+Notes:
+
+- `cargo test -p platform-api assistant_run_streaming --lib` currently has no matching tests; the actual main-site filters above are the authoritative local coverage for this slice.
+- `cargo test -p platform-api external_channel_streaming --lib` currently has no matching tests; third-party stream coverage is under `external_channel_public_stream`, `external_channel_stream_resume`, and the named generic-chat live delta test.
+
+Remaining:
+
+- run browser/local smoke for main-site new and continued AssistantRun streaming with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`;
+- run 8-server private external streaming smoke with the active bearer;
+- record whether `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED=true` remains enabled or should be kept as progress-only until the 8-server smoke passes.
 
 **Step 5: Commit**
 

@@ -420,6 +420,36 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - manually confirm one reviewed staging plan and start sync through the internal operator routes;
   - record that source-derived documents, chunks, and retrieval evidence are available before customer-facing reporting from that staging dataset.
 
+### 2026-06-06 Controlled Streaming Local Coverage
+
+- Files changed:
+  - `crates/platform-api/src/lib.rs`;
+  - `docs/plans/2026-06-01-v3-streaming-session-upgrade-plan.md`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`;
+  - `docs/validation/datamax-main-gap-closure.md`.
+- Behavior:
+  - main-site `POST /v1/assistant-runs/{run_id}/continue/stream` now supports live answer deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`;
+  - main-site new-run and continue-run stream paths share the same `AssistantRunLiveDeltaSink` worker/channel pattern;
+  - continue stream completion skips the final full-text delta when live deltas were already emitted, preventing duplicate text in the browser;
+  - JSON continue and background model-completion recovery remain non-streaming;
+  - third-party streaming behavior and public fields were not changed in this slice.
+- Local verification:
+  - `cargo fmt --check -p platform-api` passed;
+  - `cargo test -p platform-api assistant_run_sse --lib` passed, 5 tests;
+  - `cargo test -p platform-api assistant_run_continue_sse --lib` passed, 1 test;
+  - `cargo test -p platform-api assistant_run_live --lib` passed, 1 test;
+  - `cargo test -p platform-api assistant_run_continue --lib` passed, 4 tests;
+  - `cargo test -p platform-api external_channel_stream_resume --lib` passed, 1 test;
+  - `cargo test -p platform-api external_channel_public_stream --lib` passed, 2 tests;
+  - `cargo test -p platform-api generic_chat_page_event_stream_can_emit_live_answer_delta_without_final_duplication --lib` passed, 1 test;
+  - `cargo check -p platform-api` passed.
+- Notes:
+  - `assistant_run_streaming` and `external_channel_streaming` are currently plan labels, not active test filters; the local regression filters above are the effective coverage.
+- Remaining:
+  - run a browser/local main-site streaming smoke with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`;
+  - run 8-server private `scripts/smoke/external-channel-streaming-10way.mjs` with active bearer;
+  - record whether 8-server should keep third-party answer deltas enabled or only stream progress/artifacts until the private smoke passes.
+
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
 - Files changed:

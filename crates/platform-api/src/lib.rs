@@ -9442,25 +9442,37 @@ fn create_assistant_run_sse_completion_with_delta(
 }
 
 fn continue_assistant_run_sse_completion(response: ContinueAssistantRunResponse) -> String {
+    continue_assistant_run_sse_completion_with_delta(response, true)
+}
+
+fn continue_assistant_run_sse_completion_with_delta(
+    response: ContinueAssistantRunResponse,
+    emit_answer_delta: bool,
+) -> String {
     let text = response.assistant_message.content.clone();
     let assistant_run_id = response.run.id;
     let completed_data = json!({
         "assistant_run_id": assistant_run_id,
         "response": response,
     });
-    sse_text_delta_events("assistant_run.delta", &text)
-        + &sse_json_event(
-            "assistant_run.completed",
-            assistant_run_sse_public_payload(
-                Some(assistant_run_id),
-                100,
-                "completed",
-                "completed",
-                "本轮继续处理已生成回复。",
-                completed_data,
-            ),
-        )
-        + &sse_json_event("done", json!({"ok": true}))
+    let mut encoded = if emit_answer_delta {
+        sse_text_delta_events("assistant_run.delta", &text)
+    } else {
+        String::new()
+    };
+    encoded.push_str(&sse_json_event(
+        "assistant_run.completed",
+        assistant_run_sse_public_payload(
+            Some(assistant_run_id),
+            100,
+            "completed",
+            "completed",
+            "本轮继续处理已生成回复。",
+            completed_data,
+        ),
+    ));
+    encoded.push_str(&sse_json_event("done", json!({"ok": true})));
+    encoded
 }
 
 #[cfg(test)]
@@ -12436,7 +12448,10 @@ async fn external_channel_static_page_sse_continue_polling_event_persisted(
 
 enum AssistantRunSseWorkerMessage {
     AnswerDelta(String),
-    Finished(std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError>),
+    CreateFinished(std::result::Result<(StatusCode, Json<CreateAssistantRunResponse>), ApiError>),
+    ContinueFinished(
+        std::result::Result<(StatusCode, Json<ContinueAssistantRunResponse>), ApiError>,
+    ),
 }
 
 #[derive(Clone)]
@@ -12474,7 +12489,7 @@ async fn create_assistant_run_stream(
         let sink = AssistantRunLiveDeltaSink::new(sender.clone());
         tokio::spawn(async move {
             let result = create_assistant_run_inner(state, headers, request, Some(sink)).await;
-            let _ = sender.send(AssistantRunSseWorkerMessage::Finished(result));
+            let _ = sender.send(AssistantRunSseWorkerMessage::CreateFinished(result));
         });
         let accepted = create_assistant_run_sse_accepted_event();
         let live_stream = stream::unfold(Some((receiver, false)), |state| async move {
@@ -12485,7 +12500,7 @@ async fn create_assistant_run_stream(
                 Some(AssistantRunSseWorkerMessage::AnswerDelta(body)) => {
                     Some((Ok(Bytes::from(body)), Some((receiver, true))))
                 }
-                Some(AssistantRunSseWorkerMessage::Finished(result)) => {
+                Some(AssistantRunSseWorkerMessage::CreateFinished(result)) => {
                     let body = match result {
                         Ok((_, Json(response))) => create_assistant_run_sse_completion_with_delta(
                             response,
@@ -12495,6 +12510,13 @@ async fn create_assistant_run_stream(
                     };
                     Some((Ok(Bytes::from(body)), None))
                 }
+                Some(AssistantRunSseWorkerMessage::ContinueFinished(_)) => Some((
+                    Ok(Bytes::from(sse_error_event(ApiError::internal(
+                        "assistant_run_live_stream_unexpected_message",
+                        "assistant run live stream received a continue completion".to_string(),
+                    )))),
+                    None,
+                )),
                 None => Some((
                     Ok(Bytes::from(sse_error_event(ApiError::internal(
                         "assistant_run_live_stream_closed",
@@ -43851,6 +43873,7 @@ async fn continue_assistant_run(
         request,
         &active_secret_binding_ids,
         current_user_id,
+        None,
     )
     .await?;
 
@@ -43865,6 +43888,66 @@ async fn continue_assistant_run_stream(
 ) -> std::result::Result<Response, ApiError> {
     let parsed_run_id = parse_assistant_run_id(&run_id)?;
     let accepted = continue_assistant_run_sse_accepted_event(parsed_run_id);
+    if assistant_run_live_answer_stream_enabled() {
+        let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
+        let current_user_id = current_auth_user_id(&state, &headers).await?;
+        let run =
+            load_visible_assistant_run_for_user(&state, parsed_run_id, current_user_id).await?;
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sink = AssistantRunLiveDeltaSink::new(sender.clone());
+        tokio::spawn(async move {
+            let result = continue_assistant_run_loaded(
+                &state,
+                parsed_run_id,
+                run,
+                request,
+                &active_secret_binding_ids,
+                current_user_id,
+                Some(sink),
+            )
+            .await
+            .map(|response| (StatusCode::CREATED, Json(response)));
+            let _ = sender.send(AssistantRunSseWorkerMessage::ContinueFinished(result));
+        });
+        let live_stream = stream::unfold(Some((receiver, false)), |state| async move {
+            let Some((mut receiver, answer_delta_emitted)) = state else {
+                return None;
+            };
+            match receiver.recv().await {
+                Some(AssistantRunSseWorkerMessage::AnswerDelta(body)) => {
+                    Some((Ok(Bytes::from(body)), Some((receiver, true))))
+                }
+                Some(AssistantRunSseWorkerMessage::ContinueFinished(result)) => {
+                    let body = match result {
+                        Ok((_, Json(response))) => continue_assistant_run_sse_completion_with_delta(
+                            response,
+                            !answer_delta_emitted,
+                        ),
+                        Err(error) => sse_error_event(error),
+                    };
+                    Some((Ok(Bytes::from(body)), None))
+                }
+                Some(AssistantRunSseWorkerMessage::CreateFinished(_)) => Some((
+                    Ok(Bytes::from(sse_error_event(ApiError::internal(
+                        "assistant_run_continue_live_stream_unexpected_message",
+                        "assistant run continue live stream received a create completion"
+                            .to_string(),
+                    )))),
+                    None,
+                )),
+                None => Some((
+                    Ok(Bytes::from(sse_error_event(ApiError::internal(
+                        "assistant_run_continue_live_stream_closed",
+                        "assistant run continue live stream worker closed before returning a result"
+                            .to_string(),
+                    )))),
+                    None,
+                )),
+            }
+        });
+        let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(live_stream);
+        return Ok(sse_stream_response(stream));
+    }
     let stream = stream::iter(vec![Ok(Bytes::from(accepted))]).chain(stream::once(async move {
         let body = match continue_assistant_run(State(state), headers, Path(run_id), Json(request))
             .await
@@ -43902,6 +43985,7 @@ async fn continue_assistant_run_loaded(
     request: ContinueAssistantRunRequest,
     active_secret_binding_ids: &[SecretBindingId],
     current_user_id: Option<UserId>,
+    live_delta_sink: Option<AssistantRunLiveDeltaSink>,
 ) -> std::result::Result<ContinueAssistantRunResponse, ApiError> {
     let continue_prompt = request
         .prompt
@@ -44006,12 +44090,13 @@ async fn continue_assistant_run_loaded(
                         max_steps,
                     )
                 };
-                let response = complete_assistant_run_provider(
+                let response = complete_assistant_run_provider_for_create(
                     MODEL_LANE_ASSISTANT_CHAT,
                     chat_runtime.mode.clone(),
                     chat_runtime.provider.clone(),
                     chat_runtime.model.clone(),
                     provider_input,
+                    live_delta_sink.clone(),
                 )
                 .await
                 .map_err(|error| {
@@ -44356,9 +44441,16 @@ pub async fn consume_assistant_run_model_completion_turn_dispatch(
         .await
         .map_err(ApiError::from_storage)?;
 
-    let response =
-        continue_assistant_run_loaded(state, run_id, run, continue_request, &[], current_user_id)
-            .await?;
+    let response = continue_assistant_run_loaded(
+        state,
+        run_id,
+        run,
+        continue_request,
+        &[],
+        current_user_id,
+        None,
+    )
+    .await?;
 
     let consumed_event = state
         .storage
@@ -123291,6 +123383,58 @@ retrieve_evidence:
     }
 
     #[test]
+    fn assistant_run_continue_sse_completion_can_skip_final_delta_after_live_stream() {
+        let run_id = AssistantRunId::new();
+        let now = Utc::now();
+        let response = ContinueAssistantRunResponse {
+            run: AssistantRunView {
+                id: run_id,
+                local_thread_id: Some("thread-live-continue".to_string()),
+                user_prompt: "继续分析".to_string(),
+                startup_briefing: json!({}),
+                selected_scope: json!({"mode": "ordinary_chat"}),
+                scope_candidates: Vec::new(),
+                context_policy: json!({}),
+                evidence_state: json!({}),
+                service_lane: "ordinary_chat".to_string(),
+                execution_trail: Vec::new(),
+                output_artifacts: Vec::new(),
+                runtime: json!({"provider": "scripted"}),
+                created_at: now,
+                updated_at: now,
+            },
+            assistant_message: AssistantRunMessageView {
+                role: ChatMessageRole::Assistant,
+                content: "继续 live 已经吐过这一段。".to_string(),
+            },
+            runtime: json!({"provider": "scripted"}),
+            event: AssistantRunEventView {
+                id: AssistantRunEventId::new(),
+                run_id,
+                sequence_no: 1,
+                event_name: "assistant_run.continued".to_string(),
+                payload: json!({}),
+                created_at: now,
+            },
+            selected_scope: json!({"mode": "ordinary_chat"}),
+            evidence_state: json!({}),
+            execution_trail: Vec::new(),
+            output_artifacts: Vec::new(),
+            required_confirmations: Vec::new(),
+            diagnostics: json!({}),
+        };
+
+        let encoded = continue_assistant_run_sse_completion_with_delta(response, false);
+
+        assert!(!encoded.contains("event: assistant_run.delta"));
+        assert!(encoded.contains("event: assistant_run.completed"));
+        assert!(encoded.contains(&format!("\"assistant_run_id\":\"{run_id}\"")));
+        assert!(encoded.contains("\"display_text\":\"本轮继续处理已生成回复。\""));
+        assert!(encoded.contains("event: done"));
+        assert!(encoded.contains("\"ok\":true"));
+    }
+
+    #[test]
     fn assistant_run_live_delta_sink_emits_assistant_delta_event() {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let sink = AssistantRunLiveDeltaSink::new(sender);
@@ -123302,7 +123446,8 @@ retrieve_evidence:
 
         let body = match receiver.try_recv().expect("live delta should be queued") {
             AssistantRunSseWorkerMessage::AnswerDelta(body) => body,
-            AssistantRunSseWorkerMessage::Finished(_) => panic!("expected answer delta"),
+            AssistantRunSseWorkerMessage::CreateFinished(_)
+            | AssistantRunSseWorkerMessage::ContinueFinished(_) => panic!("expected answer delta"),
         };
         assert!(body.contains("event: assistant_run.delta"));
         assert!(body.contains("\"index\":7"));
