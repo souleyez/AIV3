@@ -110028,6 +110028,7 @@ mod tests {
 
     #[test]
     fn answer_quality_autofix_live_enqueue_requires_dedicated_flag() {
+        let _lock = codex_model_gateway_env_lock().lock().expect("env lock");
         let _task_enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
         let _allowlist = TestEnvVarRestore::set(
             "CODEX_HOST_TASK_ALLOWLIST",
@@ -110044,6 +110045,7 @@ mod tests {
 
     #[test]
     fn answer_quality_autofix_live_enqueue_allows_explicit_opt_in() {
+        let _lock = codex_model_gateway_env_lock().lock().expect("env lock");
         let _task_enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
         let _allowlist = TestEnvVarRestore::set(
             "CODEX_HOST_TASK_ALLOWLIST",

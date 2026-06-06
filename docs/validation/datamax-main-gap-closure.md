@@ -281,6 +281,45 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - no historical fingerprint, fact, snapshot, or enrichment records were written;
   - no document title, document body, external URL, local object path, raw row, database URL, credential, bearer token, provider payload, cookie, local key, public API, third-party contract, production table, or schema was changed or recorded.
 
+### 2026-06-06 Current-Head Task 7 Passive Quality Recovery Audit
+
+- Purpose:
+  - execute Task 7 from `docs/plans/2026-06-06-datamax-major-gap-executable-plan.md`;
+  - verify answer-quality recovery remains passive/safe-disabled in production while local regressions remain stable.
+- 8-server safe-disabled audit:
+  - `aiv3-platform-api.service`: active;
+  - `aiv3-codex-host-agent.service`: active;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED` present: false;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED=true`: false;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` present: false;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`: false;
+  - `CODEX_HOST_TASK_ENABLED=true`: false;
+  - `CODEX_HOST_TASK_ALLOWLIST` contains `answer_quality_autofix`: false;
+  - `CODEX_HOST_CAPABILITY_ALLOWLIST` contains `answer_quality_autofix`: false;
+  - `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES` contains `answer_quality_autofix`: false.
+- Initial local verification finding:
+  - `cargo test -p platform-api answer_quality --lib` initially failed one test: `answer_quality_autofix_live_enqueue_requires_dedicated_flag`;
+  - narrower `cargo test -p platform-api answer_quality_autofix --lib` passed, indicating test-order/environment interaction rather than production logic failure.
+- Fix:
+  - added the existing test env mutex `codex_model_gateway_env_lock()` around `answer_quality_autofix_live_enqueue_requires_dedicated_flag` and `answer_quality_autofix_live_enqueue_allows_explicit_opt_in`;
+  - this serializes the two tests that set `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` to different values.
+- Final local verification after fix:
+  - `cargo fmt --check -p platform-api` passed;
+  - `cargo test -p platform-api answer_quality --lib` passed, 35 tests;
+  - `cargo test -p platform-api answer_quality_autofix --lib` passed, 14 tests;
+  - `cargo test -p platform-api assistant_run_answer_quality_gate --lib` passed, 14 tests;
+  - `cargo test -p codex-host-agent answer_quality --lib` passed, 3 tests;
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\run-v3-quality-gate-smoke.ps1 -Local` passed;
+  - quality smoke receipt: `target/document-quality-smoke/document-quality-smoke-20260606T142205Z-28480.json`;
+  - quality smoke Markdown: `target/document-quality-smoke/document-quality-smoke-20260606T142205Z-28480.md`.
+- Conclusion:
+  - production remains stricter than passive-autofix: no hard gate, no autofix flag, no Codex task execution, and no allowlist entry;
+  - local tests now prove the live enqueue preflight reliably rejects missing dedicated opt-in even under broad answer-quality test filters.
+- Safety:
+  - production customer answers are not blocked;
+  - no live `answer_quality_autofix` Codex task can enqueue under current 8-server configuration;
+  - no public API, third-party contract, production env value, credential, bearer token, provider payload, raw row, or customer document was changed or recorded.
+
 ### 2026-06-06 Completion Audit And Dataset-Scoped Backfill Dry-Run
 
 - Purpose:
