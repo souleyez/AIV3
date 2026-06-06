@@ -12,8 +12,8 @@
 
 ## Baseline - 2026-06-06
 
-- Local `main` is at `8f835d0d31ae` after adding summary-only fingerprint backfill output.
-- 8 server `/srv/aiv3/repo` has pulled `8f835d0d31ae` and the `platform-api` release build passed.
+- Local `main` is at `2c83ed2e1868` after the current-head report-link regression fix and smoke-harness corrections.
+- 8 server `/srv/aiv3/repo` has pulled `2c83ed2e1868`; `platform-api` release build/restart passed for the platform-code portion of this head and the final smoke-script-only update was pulled without service restart.
 - 8 server has a pre-existing untracked `mode` file. Leave it untouched.
 - P0 flows already have recent passing receipts in `docs/validation/datamax-main-gap-closure.md`:
   - third-party ordinary 20-way chat;
@@ -23,6 +23,7 @@
   - static-page 5-way;
   - Cloudflare fallback concurrency guard;
   - Xinbai report link/export smoke;
+  - current-head Xinbai report JSON/SSE smoke with a required clickable text link;
   - data-ingestion staging plan and confirmed sync;
   - post-ingest deterministic enrichment for newly parsed documents;
   - low-load static-page template prewarm private smoke.
@@ -51,8 +52,8 @@
 
 | Priority | Gap | Current State | Next Action | Done When |
 | --- | --- | --- | --- | --- |
-| P0 | Final 8-server release gate | Core smokes recently passed, but the current head moved to `8f835d0`. | Run the final current-head smoke set on 8 server and update validation. | All required smokes pass on the deployed commit; service status and rollback note are recorded. |
-| P0 | Xinbai report/template contract | Modular monthly report is the intended only default template. Link/export smoke has passed before; recent UX/template changes must stay covered. | Re-run explicit report/export and template validation. Fix only regressions. | One clickable report link, correct focus, normal answer not truncated, exports accessible, no false report trigger. |
+| P0 | Final 8-server release gate | Current-head third-party ordinary 20-way rerun, Xinbai report/export, and static-page 5-way have fresh 8-server receipts. Main-site auth-dependent smoke still needs a legitimate main-system session when closing the full gate. | Run or record the remaining main-site authenticated smokes, then update validation. | All required smokes pass on the deployed commit; service status and rollback note are recorded. |
+| P0 | Xinbai report/template contract | Current-head report/export regression is fixed: JSON and SSE both expose one clickable text report link plus export files. | Keep the smoke in the release gate and fix only new regressions. | One clickable report link, correct focus, normal answer not truncated, exports accessible, no false report trigger. |
 | P0 | Third-party scope and temporary attachments | Dataset/document/conversation scope reuse has been implemented; temporary uploaded documents must be kept in answer scope. | Add or rerun scoped third-party Q&A smoke with a temporary attachment, dataset scope, and follow-up turn. | Temporary documents and grouped datasets remain authorized across the same conversation; unrelated sessions cannot see them. |
 | P1 | Historical enrichment/backfill | New documents enrich; full historical backfill disabled. 8-server `--summary-only --dry-run` passed after `8f835d0`. | Plan a one-dataset/one-kind dry-run before any real batch; keep production backfill disabled until reviewed. | No document titles/content printed; no duplicate counts; no production backfill until reviewed. |
 | P1 | Authenticated model-gateway operator smoke | Unauthenticated guard passes with `401`; real operator credential unavailable in this thread. | Run `smoke:model-gateway-operator` with a legitimate operator session or local-key login. | Operator status/profile health is proven without bypasses or leaked secrets. |

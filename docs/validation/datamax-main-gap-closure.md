@@ -1427,3 +1427,51 @@ Data-ingestion external fixed-task smoke:
   - no real backfill or enrichment batch was run.
 - Remaining action:
   - if historical enrichment is required, start with one reviewed dataset, one deterministic enrichment kind, and a low-volume dry-run/batch under queue monitoring before any broader rollout.
+
+### 2026-06-06 Current-Head External Report Link Regression
+
+- Context:
+  - current repository head moved past the prior P0 smoke receipts because the plan/validation and smoke harness were updated;
+  - the current 8-server release gate was rerun against `https://v3.elepcloud.com` using the active `generic-chat-main` connection token loaded on 8 server without printing the token.
+- Initial current-head ordinary Q&A smoke:
+  - first 20-way run receipt: `/srv/aiv3/repo/target/external-channel-20way-smoke-current-head/20260606083717.json`;
+  - result: `okCount=19`, `failedCount=1`;
+  - failed item returned HTTP 200 but ended with `external_channel.answer_retrying`, `error`, and `done` rather than `external_channel.completed`;
+  - immediate rerun receipt: `/srv/aiv3/repo/target/external-channel-20way-smoke-current-head-rerun/20260606083826.json`;
+  - rerun result: `okCount=20`, `failedCount=0`, `completedCount=20`, `p50=3091 ms`, `p95=5047 ms`, `max=5525 ms`;
+  - interpretation: one transient model/direct-answer retry failure occurred and should remain observable, but the rerun passed the 20-way ordinary third-party gate.
+- Initial report/export smoke:
+  - receipt: `/srv/aiv3/repo/target/external-report-export-smoke-current-head/20260606083848.json`;
+  - result: JSON mode passed, SSE mode failed `text_link_present`;
+  - the SSE response exposed `publicUrl`, `artifact_links`, expected title `新世界百货经营管理月报表`, expected focus `取高机会`, and all export files, but the completed stream text did not provide a clickable report link for clients that read `text`.
+- Fixes:
+  - `2162f82` updated `external-report-export` smoke so `external_channel.static_page_published` is not treated as the final terminal frame before `external_channel.completed`;
+  - `6990632` updated the smoke to read top-level stream `text`, `reply_type`, and `task_status`;
+  - `cbf09d7` first added public artifact-link text recovery for streamed artifact replies;
+  - `a6c5984` recovered the report URL from the artifact card when `reply.artifact_links` was not yet populated;
+  - `8d0037f` aligned the public `external_channel.completed` envelope text with the completed data text so third-party stream clients see the clickable report link in `text`;
+  - `2c83ed2` updated the smoke to analyze the completed/report-link text rather than the first progress text.
+- Local verification:
+  - `node --check scripts/smoke/external-report-export.mjs` passed;
+  - `cargo fmt --check -p platform-api` passed;
+  - `cargo test -p platform-api external_channel_static_page_sse --lib` passed, 6 tests;
+  - `cargo test -p platform-api external_channel_static_page --lib` passed, 59 tests;
+  - `cargo check -p platform-api` passed;
+  - `git diff --check` passed with only Windows LF/CRLF warnings.
+- 8-server deployment:
+  - `/srv/aiv3/repo` fast-forwarded through the fixes to `2c83ed2e1868`;
+  - `platform-api` release build and `aiv3-platform-api.service` restart were performed after the platform code fixes, with service state `active`;
+  - the final smoke-script-only update was pulled without a service restart;
+  - the pre-existing untracked `mode` file remained untouched.
+- Final report/export smoke:
+  - command shape: `EXTERNAL_REPORT_EXPORT_SMOKE_DATASET_EXTERNAL_IDS=64fff6c8-10e2-4ee8-8243-23166cce3abc EXTERNAL_REPORT_EXPORT_SMOKE_REQUIRE_TEXT_LINK=true npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000 --output-dir target/external-report-export-smoke-current-head-passed`;
+  - receipt: `/srv/aiv3/repo/target/external-report-export-smoke-current-head-passed/20260606091204.json`;
+  - result: `okCount=2`, `failedCount=0`, JSON and SSE passed;
+  - confirmed expected title `新世界百货经营管理月报表`, expected focus `取高机会`, one text report link, report public URL, `table-data.csv`, `report.ppt`, and `report.md`.
+- Current-head static-page 5-way smoke:
+  - receipt: `/srv/aiv3/repo/target/static-page-5way-smoke-current-head/20260606091235.json`;
+  - result: `okCount=5`, `failedCount=0`, `acceptedCount=5`, `artifactCount=5`, `p50=6332 ms`, `p95=6740 ms`, `max=6740 ms`.
+- Safety:
+  - no third-party public URL, auth method, required request field, or existing response field was changed;
+  - no bearer token, database URL, raw customer row, full document, or provider payload was recorded;
+  - the report-link fix is additive to customer-facing text and existing artifact fields.
