@@ -10564,7 +10564,10 @@ fn external_channel_public_reply(mut reply: ExternalBotReplyView) -> ExternalBot
         reply.artifact_links = dedupe_external_channel_public_artifact_links(reply.artifact_links);
     }
     if reply.reply_type == ExternalBotReplyTypeView::ArtifactLink {
-        if let Some(public_url) = reply.artifact_links.first().cloned() {
+        if let Some(public_url) = external_channel_public_artifact_url_from_reply(&reply) {
+            if !reply.artifact_links.iter().any(|link| link == &public_url) {
+                reply.artifact_links.insert(0, public_url.clone());
+            }
             let text = reply.text.take().unwrap_or_default();
             reply.text = Some(external_channel_text_with_public_artifact_link(
                 text,
