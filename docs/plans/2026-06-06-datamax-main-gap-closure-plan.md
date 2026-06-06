@@ -12,8 +12,8 @@
 
 ## Baseline - 2026-06-06
 
-- Local `main` is at `2c83ed2e1868` after the current-head report-link regression fix and smoke-harness corrections.
-- 8 server `/srv/aiv3/repo` has pulled `2c83ed2e1868`; `platform-api` release build/restart passed for the platform-code portion of this head and the final smoke-script-only update was pulled without service restart.
+- Local `main` is at `08e6e9c3aa67` after the current-head report-link regression fix, smoke-harness corrections, and validation ledger update.
+- 8 server `/srv/aiv3/repo` has pulled `08e6e9c3aa67`; `platform-api` release build/restart passed for the platform-code portion of this head. Later smoke/doc-only commits were pulled without service restart because no deployed binary changed.
 - 8 server has a pre-existing untracked `mode` file. Leave it untouched.
 - P0 flows already have recent passing receipts in `docs/validation/datamax-main-gap-closure.md`:
   - third-party ordinary 20-way chat;
@@ -24,16 +24,20 @@
   - Cloudflare fallback concurrency guard;
   - Xinbai report link/export smoke;
   - current-head Xinbai report JSON/SSE smoke with a required clickable text link;
+  - current-head static-page 5-way smoke;
   - data-ingestion staging plan and confirmed sync;
   - post-ingest deterministic enrichment for newly parsed documents;
   - low-load static-page template prewarm private smoke.
 - Still open:
+  - third-party scoped-document/temporary-attachment smoke must be added or rerun against the current deployed contract;
   - historical backfill has only a summary-only dry-run receipt after commit `8f835d0`; no real backfill batch has been approved or run;
   - authenticated model-gateway operator smoke still needs a legitimate operator cookie or local-key login;
   - full existing-document enrichment backfill remains disabled by policy;
   - source-row completeness for `bi_contract_warning` and `bi_rentsales_detail` needs a business decision before row-level remapping;
   - low-quality answer recovery is intentionally passive/safe-disabled until an operator rollout decision;
-  - Xinbai modular report should remain the only default template for that project, with old templates excluded from normal matching.
+  - Xinbai modular report should remain the only default template for that project, with old templates excluded from normal matching;
+  - model-visible platform capabilities should be made explicit enough that report generation, document ingestion, deep parsing, data ingestion, and proactive messaging can be routed without leaking tool traces or blocking normal answers;
+  - public third-party integration docs must be checked after every additive field or report-card/export-field behavior change.
 
 ## Non-Negotiable Rules
 
@@ -60,6 +64,8 @@
 | P1 | Data-source row identity | Counts now distinguish source rows vs unique materialized docs. Two Xinbai tables collapse rows under current identity. | Decide entity-level vs row-level semantics; if row-level is required, test staging-only discriminator mapping. | Report completeness semantics are documented and validated before production mapping changes. |
 | P1 | Passive low-quality recovery | Hard gate and live autofix are disabled. | Keep disabled; optionally enable passive collection/manual review only. | Weak answers are visible for review without suppressing normal customer answers. |
 | P2 | Template library hygiene | Accepted Xinbai modular report should dominate matching; old artifacts exist historically. | Exclude old/non-default templates from normal matching; clean local generated artifacts only after explicit approval. | Same project/scope/default prompt reuses the accepted modular template; old dark/legacy templates do not pollute links. |
+| P2 | Model-visible capability routing | Some capabilities are already model-guided, but customer prompts still miss report/static-page triggers in edge cases. | Maintain a safe capability catalog and smoke prompts for report, document parse/deep parse, data ingestion, static page, collection, connector, and proactive message routing. | The model can choose supported platform workflows while the platform keeps auth/scope/tool execution authoritative. |
+| P2 | Third-party contract docs | Docs have been updated across the thread, but drift can recur after report-card/export changes. | Audit online Markdown/HTML integration docs and regenerate public copies when behavior changes. | Third parties can understand dataset/document union scope, persisted conversation authorization, template reference uploads, report link fields, and export files without re-integration. |
 | P2 | Observability and runbooks | Operator page and validation docs exist. | Keep runbooks aligned with the current release gate and failures. | Operators can diagnose queue/model/report/enrichment/data-ingestion health without raw logs. |
 
 ---
@@ -541,6 +547,130 @@ If deleting local generated artifacts is requested, use the local backup-first d
 
 ---
 
+## Task 9: Model-Visible Platform Capability Routing
+
+**Files:**
+
+- Inspect/modify: `crates/platform-api/src/lib.rs`
+- Inspect/modify: `crates/platform-api/src/assistant_capabilities.rs`
+- Inspect/modify if present: `crates/assistant-runtime/src/*.rs`
+- Inspect/modify: `scripts/run-external-capability-routing-smoke.ps1`
+- Inspect/modify: `scripts/smoke/external-report-export.mjs`
+- Update: `docs/validation/external-capability-routing-smoke.md`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Inventory model-visible capabilities**
+
+Produce a small internal capability table, not customer-visible copy, covering:
+
+- ordinary answer composition from scoped retrieval/facts;
+- document upload/parse/index status;
+- deterministic post-ingest enrichment and deep parsing;
+- VLM reparse as premium fallback only;
+- third-party dataset/document/conversation authorization;
+- report/static-page generation and accepted-template reuse;
+- data-source connection analysis and staging plan;
+- collection/connector tasks;
+- proactive outbound message/task notification;
+- operator escalation / human confirmation when required.
+
+Expected:
+
+- capabilities describe what the model may request, not what the model may execute directly;
+- platform-side scope/auth/queue policy remains authoritative;
+- no raw tool schema, secret, provider payload, or internal credential path is exposed to customers.
+
+**Step 2: Tighten routing prompts and guards**
+
+Add or update routing guidance so these customer expressions can choose a workflow without cutting off the normal answer:
+
+- Xinbai report domain: `取高`, `经营状况`, `经营健康度`, `整体经营情况`, `风险识别`, `销售缺口`, `助推`, `哪些门店需要关注`;
+- document domain: `分析附件`, `按这个模板`, `临时上传合同`, `客流统计`, `重新解析`, `看上传文件`;
+- data domain: `接入数据库`, `建表`, `字段映射`, `把数据入库`, `生成经营报表`;
+- proactive domain: `完成后通知`, `需要主动发消息`, `让系统继续处理`.
+
+Expected:
+
+- normal answer continues even when a report/static-page task is queued;
+- third-party clients receive artifact links through existing report/artifact fields;
+- broad routing stays domain-scoped and does not turn generic questions like `取高是什么意思？` or resume project-experience questions into report tasks.
+
+**Step 3: Add routing smoke cases**
+
+Run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-external-capability-routing-smoke.ps1 -BaseUrl https://v3.elepcloud.com -ConnectionId generic-chat-main
+```
+
+Required cases:
+
+- report triggers above produce the Xinbai modular report with correct `focus`;
+- non-report questions do not create artifacts;
+- report-triggering questions still contain a normal answer body;
+- temporary attachment/template references are acknowledged as answer/report material, not treated as permanent dataset changes unless explicitly ingested;
+- no public tool trace leaks.
+
+**Step 4: Commit**
+
+```powershell
+git add crates scripts docs/validation
+git commit -m "Stabilize platform capability routing"
+git push
+```
+
+---
+
+## Task 10: Third-Party Contract Documentation And Public Artifact Docs
+
+**Files:**
+
+- Update: `docs/integrations/third-party-integration-api.zh-CN.md`
+- Update generated/public copy if present: `public/docs/third-party-integration-api.zh-CN.md`
+- Update generated/public copy if present: `apps/web/public/docs/third-party-integration-api.zh-CN.md`
+- Update if generator exists: `scripts/generate-third-party-docs.*`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Step 1: Audit the current public contract**
+
+Verify the docs explain these additive/compatible behaviors:
+
+- `dataset_external_id` and `dataset_external_ids` are stable business group scopes;
+- `available_document_external_ids` and `documentExternalId` can be combined with dataset scopes;
+- if a document is already covered by a dataset group, document-level duplication is ignored;
+- authorization persists for the same `conversation_external_id` across later turns;
+- a changed `conversation_external_id` starts a new authorization boundary;
+- uploaded template/reference files can guide report/static-page/document output without automatically becoming permanent source data;
+- report card fields expose the primary page URL plus `table-data.csv`, `report.ppt`, and `report.md`;
+- SSE may show progress/effect images, while the final page link is available through the fixed report/artifact fields;
+- existing URLs/auth/request fields/response fields are unchanged.
+
+Expected:
+
+- no old V3 naming remains in current customer-facing docs; use `DataMax`;
+- docs do not require already integrated third parties to rework existing calls;
+- docs explain that new additive fields can be ignored by older clients.
+
+**Step 2: Regenerate and compare public copies**
+
+Run the existing docs generator if available. Otherwise update the Markdown source and any checked-in public copy manually.
+
+Expected:
+
+- source and online/public copies match for third-party scope and report-card behavior;
+- generated HTML or public Markdown includes DataMax naming and current report export fields;
+- no secret examples, real bearer tokens, or private customer URLs are present.
+
+**Step 3: Commit**
+
+```powershell
+git add docs public apps/web/public scripts
+git commit -m "Document current third-party DataMax contract"
+git push
+```
+
+---
+
 ## Final Definition Of Done
 
 This plan is complete only when all items are true:
@@ -555,6 +685,8 @@ This plan is complete only when all items are true:
 - Data-source row identity semantics are documented for collapsed tables before any production mapping change.
 - Low-quality recovery remains passive and cannot block normal answers.
 - Template matching excludes stale Xinbai templates from normal customer-visible reuse.
+- Model-visible platform capabilities route report/static-page/document/data/proactive tasks without exposing tool traces or changing public contracts.
+- Online third-party integration docs match the deployed additive contract and use DataMax naming.
 - No raw credentials, raw customer rows, full documents, provider payloads, or secret env names are recorded.
 
 ## Commit Cadence
@@ -566,5 +698,7 @@ This plan is complete only when all items are true:
   - `Stabilize Xinbai report template contract`
   - `Cover third-party scoped document chat`
   - `Record authenticated model gateway smoke`
+  - `Stabilize platform capability routing`
+  - `Document current third-party DataMax contract`
 - Push only after local checks pass.
 - Deploy to 8 server with `git pull --ff-only`; restart only services whose binaries or web build changed.
