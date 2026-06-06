@@ -38655,7 +38655,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
         tenant_id,
         event_bus.clone(),
     );
-    let image_job_view = to_static_page_image_job_view(job);
+    let image_job_view = to_static_page_image_job_view(job.clone());
     let template_reference = draft
         .draft_payload
         .get("templateReference")
@@ -38736,6 +38736,65 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
             &connection,
             &run,
         );
+        if source_kind == Some(STATIC_PAGE_TEMPLATE_PREWARM_SOURCE)
+            && !external_channel_static_page_publish_customer_visible(&draft.source_refs)
+        {
+            let now = Utc::now();
+            let (rendered_draft, render_output) =
+                create_static_page_render_output_inline(&state, draft.clone(), Some(job), false)
+                    .await?;
+            let published = publish_external_static_page_render_output_as_generated_artifact(
+                &run,
+                &render_output,
+                &rendered_draft.source_refs,
+                now,
+            )?;
+            let completed_payload = mark_external_static_page_local_generated_artifact_published(
+                storage,
+                tenant_id,
+                &run,
+                &rendered_draft,
+                &render_output,
+                Some(image_job_id.as_str()),
+                &rendered_draft.source_refs,
+                &published,
+                now,
+            )
+            .await?;
+            storage
+                .assistant_runs()
+                .append_event(
+                    tenant_id,
+                    run.id,
+                    &NewAssistantRunEvent {
+                        event_name: "assistant_run.static_page_template_prewarm_published"
+                            .to_string(),
+                        payload: json!({
+                            "source": source_kind,
+                            "channel_connection_id": connection_id,
+                            "draft_id": rendered_draft.id,
+                            "image_job_id": image_job_view.id,
+                            "render_output_id": render_output.id,
+                            "preview_asset_key": image_job_view.preview_asset_key,
+                            "public_url": completed_payload
+                                .get("public_url")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "dataset_artifact_key": completed_payload
+                                .get("dataset_artifact_key")
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                            "publish_mode": "local_generated_artifact_first",
+                            "customer_visible": false,
+                            "cloudflare_codex_used": false,
+                        }),
+                        created_at: now,
+                    },
+                )
+                .await
+                .map_err(ApiError::from_storage)?;
+            return Ok(());
+        }
         if !codex_visual_contract_publish_ready {
             storage
                 .assistant_runs()
@@ -55707,21 +55766,23 @@ async fn mark_external_static_page_local_generated_artifact_published(
         )
         .await
         .map_err(ApiError::from_storage)?;
-    if let Err(error) = maybe_dispatch_external_channel_outbound_reply(
-        storage,
-        tenant_id,
-        run.id,
-        "assistant_run.external_channel_static_page_publish_completed",
-        &completed_payload,
-        now,
-    )
-    .await
-    {
-        tracing::warn!(
-            error = ?error,
-            assistant_run_id = %run.id,
-            "external channel outbound reply dispatch failed after local static-page publish completion"
-        );
+    if external_channel_static_page_publish_customer_visible(source_refs) {
+        if let Err(error) = maybe_dispatch_external_channel_outbound_reply(
+            storage,
+            tenant_id,
+            run.id,
+            "assistant_run.external_channel_static_page_publish_completed",
+            &completed_payload,
+            now,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = ?error,
+                assistant_run_id = %run.id,
+                "external channel outbound reply dispatch failed after local static-page publish completion"
+            );
+        }
     }
     Ok(completed_payload)
 }
