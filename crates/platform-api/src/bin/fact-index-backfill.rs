@@ -11,7 +11,10 @@ struct BackfillArgs {
     dataset_id: DatasetId,
     document_id: Option<DocumentId>,
     limit: usize,
+    explicit_limit: bool,
     dry_run: bool,
+    confirm_real_run: bool,
+    summary_only: bool,
     pretty: bool,
 }
 
@@ -25,7 +28,7 @@ struct DocumentFactBackfillSummary {
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage: {program} --dataset-id <uuid> [--document-id <uuid>] [--limit <n>] [--dry-run] [--pretty]"
+        "Usage: {program} --dataset-id <uuid> [--document-id <uuid>] [--limit <n>] [--dry-run] [--summary-only] [--confirm-real-run] [--pretty]"
     )
 }
 
@@ -61,13 +64,17 @@ async fn main() -> Result<()> {
 fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
     let pretty = remove_flag(&mut args, "--pretty");
     let dry_run = remove_flag(&mut args, "--dry-run");
+    let confirm_real_run = remove_flag(&mut args, "--confirm-real-run");
+    let summary_only = remove_flag(&mut args, "--summary-only");
     let dataset_id = take_option(&mut args, "--dataset-id")
         .ok_or_else(|| anyhow!(usage(program)))
         .and_then(|raw| parse_uuid_arg("dataset_id", &raw).map(DatasetId))?;
     let document_id = take_option(&mut args, "--document-id")
         .map(|raw| parse_uuid_arg("document_id", &raw).map(DocumentId))
         .transpose()?;
-    let limit = take_option(&mut args, "--limit")
+    let raw_limit = take_option(&mut args, "--limit");
+    let explicit_limit = raw_limit.is_some();
+    let limit = raw_limit
         .map(|raw| raw.parse::<usize>())
         .transpose()?
         .unwrap_or(50)
@@ -76,12 +83,25 @@ fn parse_args(program: &str, mut args: Vec<String>) -> Result<BackfillArgs> {
     if !args.is_empty() {
         anyhow::bail!(usage(program));
     }
+    if !dry_run && !confirm_real_run {
+        anyhow::bail!(
+            "real fact-index backfill requires --confirm-real-run; rerun with --dry-run --summary-only first"
+        );
+    }
+    if !dry_run && document_id.is_none() && (!explicit_limit || limit > 5) {
+        anyhow::bail!(
+            "dataset-level real fact-index backfill requires an explicit --limit no greater than 5"
+        );
+    }
 
     Ok(BackfillArgs {
         dataset_id,
         document_id,
         limit,
+        explicit_limit,
         dry_run,
+        confirm_real_run,
+        summary_only,
         pretty,
     })
 }
@@ -186,23 +206,42 @@ async fn run_fact_index_backfill(
         });
     }
 
-    Ok(json!({
+    let document_report_count = summaries.len();
+    let mut output = json!({
         "dry_run": args.dry_run,
+        "confirm_real_run": args.confirm_real_run,
         "dataset_id": args.dataset_id,
         "document_id": args.document_id,
+        "limit": args.limit,
+        "summary_only": args.summary_only,
         "document_count": summaries.len(),
+        "document_report_count": document_report_count,
         "derived_fact_count": derived_fact_count,
         "inserted_fact_count": inserted_fact_count,
         "skipped_document_count": skipped_document_count,
         "snapshot_updated": !args.dry_run,
         "snapshot": snapshot_summary,
-        "parse_quality_warnings": parse_quality_warnings,
+        "parse_quality_warning_count": parse_quality_warnings.len(),
         "fact_type_counts": fact_type_counts_to_json(&fact_type_counts),
-        "documents": summaries
-            .iter()
-            .map(document_summary_to_json)
-            .collect::<Vec<_>>(),
-    }))
+    });
+    if !args.summary_only {
+        if let Some(object) = output.as_object_mut() {
+            object.insert(
+                "parse_quality_warnings".to_string(),
+                Value::Array(parse_quality_warnings),
+            );
+            object.insert(
+                "documents".to_string(),
+                Value::Array(
+                    summaries
+                        .iter()
+                        .map(document_summary_to_json)
+                        .collect::<Vec<_>>(),
+                ),
+            );
+        }
+    }
+    Ok(output)
 }
 
 async fn load_backfill_documents(
@@ -328,8 +367,94 @@ mod tests {
         assert_eq!(args.dataset_id, DatasetId(dataset_id));
         assert_eq!(args.document_id, Some(DocumentId(document_id)));
         assert_eq!(args.limit, 25);
+        assert!(args.explicit_limit);
         assert!(args.dry_run);
+        assert!(!args.confirm_real_run);
+        assert!(!args.summary_only);
         assert!(args.pretty);
+    }
+
+    #[test]
+    fn parse_args_supports_summary_only() {
+        let dataset_id = Uuid::new_v4();
+        let args = parse_args(
+            "fact-index-backfill",
+            vec![
+                "--dataset-id".to_string(),
+                dataset_id.to_string(),
+                "--dry-run".to_string(),
+                "--summary-only".to_string(),
+            ],
+        )
+        .expect("args should parse");
+
+        assert_eq!(args.dataset_id, DatasetId(dataset_id));
+        assert!(args.summary_only);
+        assert!(args.dry_run);
+    }
+
+    #[test]
+    fn parse_args_requires_confirmation_for_real_run() {
+        let dataset_id = Uuid::new_v4();
+        let err = parse_args(
+            "fact-index-backfill",
+            vec!["--dataset-id".to_string(), dataset_id.to_string()],
+        )
+        .expect_err("real run should require confirmation");
+
+        assert!(err.to_string().contains("--confirm-real-run"));
+    }
+
+    #[test]
+    fn parse_args_requires_small_explicit_limit_for_dataset_real_run() {
+        let dataset_id = Uuid::new_v4();
+        let err = parse_args(
+            "fact-index-backfill",
+            vec![
+                "--dataset-id".to_string(),
+                dataset_id.to_string(),
+                "--confirm-real-run".to_string(),
+            ],
+        )
+        .expect_err("dataset real run should require explicit tiny limit");
+
+        assert!(err.to_string().contains("--limit"));
+
+        let err = parse_args(
+            "fact-index-backfill",
+            vec![
+                "--dataset-id".to_string(),
+                dataset_id.to_string(),
+                "--limit".to_string(),
+                "6".to_string(),
+                "--confirm-real-run".to_string(),
+            ],
+        )
+        .expect_err("dataset real run should reject broad limits");
+
+        assert!(err.to_string().contains("no greater than 5"));
+    }
+
+    #[test]
+    fn parse_args_allows_confirmed_single_document_real_run() {
+        let dataset_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+        let args = parse_args(
+            "fact-index-backfill",
+            vec![
+                "--dataset-id".to_string(),
+                dataset_id.to_string(),
+                "--document-id".to_string(),
+                document_id.to_string(),
+                "--confirm-real-run".to_string(),
+            ],
+        )
+        .expect("confirmed single-document real run should parse");
+
+        assert_eq!(args.dataset_id, DatasetId(dataset_id));
+        assert_eq!(args.document_id, Some(DocumentId(document_id)));
+        assert!(!args.dry_run);
+        assert!(args.confirm_real_run);
     }
 
     #[test]

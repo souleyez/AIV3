@@ -120,7 +120,7 @@ Progress 2026-06-06:
 - Third-party external document parse now computes SHA-256 from downloaded bytes and records it with byte size after document creation.
 - Main-site document registration now records SHA-256 and byte size when `object_key` resolves to a local file; unreadable or remote object keys are skipped without blocking registration.
 - Zip archive expansion now records SHA-256 and byte size for extracted child documents before enqueueing child ingest workflows.
-- Added `document-fingerprint-backfill` as a dry-run capable maintenance binary for existing documents. It supports `--dataset-id`, `--document-id`, `--limit`, `--dry-run`, `--include-existing`, and `--pretty`, and only records fingerprints for local object keys that resolve on the current server.
+- Added `document-fingerprint-backfill` as a dry-run capable maintenance binary for existing documents. It supports `--dataset-id`, `--document-id`, `--limit`, `--dry-run`, `--include-existing`, `--summary-only`, and `--pretty`, and only records fingerprints for local object keys that resolve on the current server.
 - Storage records the first seen content fingerprint as the canonical document and marks later matching content as duplicate without changing external document IDs.
 - Added canonical read-through for duplicate document reads:
   - document chunks can be read through `list_by_document_or_canonical`;
@@ -434,6 +434,7 @@ Steps:
 - Link canonical documents for exact content duplicates.
 - Add dataset memberships for reused canonical content.
 - Run enrichment backfill for priority documents.
+- Run fact-index backfill only through `--dry-run --summary-only` first. Any real fact-index run must use `--confirm-real-run`; dataset-level real runs must use an explicit `--limit <= 5`.
 - Do not delete duplicate files in the first pass.
 
 Acceptance:
