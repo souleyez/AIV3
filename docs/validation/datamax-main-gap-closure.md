@@ -153,6 +153,36 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - no bearer token, cookie, local key, database URL, provider payload, raw customer row, full customer document, or local object path was printed;
   - 120 server was not touched.
 
+### 2026-06-06 Current-Head Task 2 Xinbai Report Contract Regression
+
+- Purpose:
+  - execute the local regression portion of Task 2 from `docs/plans/2026-06-06-datamax-major-gap-executable-plan.md`;
+  - confirm the Xinbai report/static-page contract remains stable after the Task 1 live 8-server smoke.
+- Local head:
+  - `6f3f674` after recording the executable plan and Task 1 release-gate receipts.
+- Local verification:
+  - `cargo test -p platform-api external_channel_static_page --lib` passed, 62 tests;
+  - `cargo test -p platform-api external_channel_public_response --lib` passed, 2 tests;
+  - `cargo test -p platform-api static_page_template --lib` passed, 18 tests;
+  - `cargo test -p platform-api external_channel_static_page_dataset_template_overlap --lib` passed, 2 tests;
+  - `cargo test -p platform-api external_channel_public_response_enriches_xinbai_report_card_exports --lib` passed, 1 test;
+  - `npm run validate:xinbai-report-template` passed;
+  - `npm run validate:xinbai-report-template -- --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html` passed and checked 7 public files.
+- Template validation details:
+  - template: `xinbai-functional-modular-template-20260604`;
+  - checked files: `index.html`, `data.json`, `data-snapshot.json`, `manifest.json`, `table-data.csv`, `report.ppt`, `report.md`;
+  - manifest features: `99`;
+  - data rows: `stores=77`, `opportunities=60`, `lowActivity=40`.
+- Link/export coverage:
+  - Task 1 live 8-server report/export smoke already confirmed one customer-facing primary link, title `新世界百货经营管理月报表`, focus `取高机会`, and accessible export files.
+- Conclusion:
+  - no Task 2 code fix was required in this pass;
+  - keep the same tests and `npm run smoke:external-report-export` in future release gates.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, production mapping, production table, schema, or generated artifact was changed;
+  - no old generated artifact was deleted;
+  - no credentials, bearer token, database URL, raw row, provider payload, or full customer document was recorded.
+
 ### 2026-06-06 Completion Audit And Dataset-Scoped Backfill Dry-Run
 
 - Purpose:
