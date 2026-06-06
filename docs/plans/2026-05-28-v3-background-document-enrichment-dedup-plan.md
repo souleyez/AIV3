@@ -418,7 +418,7 @@ Remaining:
 
 ## Task 7: Existing 8 Server Backfill And Dedup
 
-Status: `pending`
+Status: `guarded-dry-run-refreshed-2026-06-06`
 
 Steps:
 
@@ -443,6 +443,22 @@ Acceptance:
 - Existing third-party and local documents remain reachable.
 - Duplicate exact-content documents no longer require duplicate parsing/fact extraction.
 - Existing DataMax answers improve without requiring users to re-upload files.
+
+Progress 2026-06-06:
+
+- Re-ran the reviewed blocked dataset dry-runs on 8 server at current head:
+  - receipt directory: `/srv/aiv3/repo/target/historical-enrichment-task5-dryrun-20260606T141645Z`;
+  - fingerprint dry-run: `candidate_count=20`, `recorded_count=0`, `would_record_count=0`, `skipped_count=20`, `skipped_reason_counts.file_not_found=20`;
+  - fact-index dry-run: `document_count=5`, `derived_fact_count=139`, `inserted_fact_count=0`, `snapshot_updated=false`;
+  - enrichment precheck: `document_count=10`, `missing_fingerprint_count=10`, `would_enqueue_count=0`, `enqueued_count=0`.
+- Re-ran the reachable single-document enrichment precheck:
+  - receipt directory: `/srv/aiv3/repo/target/historical-enrichment-task5-ready-doc-precheck-20260606T141749Z`;
+  - dataset `1bcf2529-0bbb-46e6-884f-c2b33db352c2`;
+  - document `00fc651b-99f7-444b-9ee7-59695b2736cf`;
+  - `missing_fingerprint_count=0`, `would_enqueue_count=2`, `enqueued_count=0`;
+  - `procedure_steps_v1=1`, `table_structure_v1=1`.
+- No real historical fingerprint, fact-index, or enrichment records were written.
+- Next step still requires explicit operator approval before running a real single-document enqueue.
 
 ## Task 8: Observability
 

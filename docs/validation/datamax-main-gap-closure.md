@@ -251,6 +251,36 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - does not query the customer/source database;
   - no production writes, schema mutation, raw credentials, raw source rows, full table dump, bearer token, public API change, or third-party contract change.
 
+### 2026-06-06 Current-Head Task 5 Historical Enrichment Dry-Run Refresh
+
+- Purpose:
+  - execute the safe dry-run portion of Task 5 from `docs/plans/2026-06-06-datamax-major-gap-executable-plan.md`;
+  - refresh historical fingerprint/fact/enrichment evidence at the current deployed head without running real backfill.
+- 8-server state:
+  - `/srv/aiv3/repo` at `dafb7f53d`;
+  - known untracked `?? mode` remained untouched.
+- Reviewed blocked dataset dry-run:
+  - dataset: `cd024465-358e-458c-961d-a8894f2358c5`;
+  - receipt directory: `/srv/aiv3/repo/target/historical-enrichment-task5-dryrun-20260606T141645Z`;
+  - fingerprint command: `./target/release/document-fingerprint-backfill --dataset-id cd024465-358e-458c-961d-a8894f2358c5 --limit 20 --dry-run --summary-only --pretty`;
+  - fingerprint result: `candidate_count=20`, `recorded_count=0`, `would_record_count=0`, `skipped_count=20`, `skipped_reason_counts.file_not_found=20`;
+  - fact-index command: `./target/release/fact-index-backfill --dataset-id cd024465-358e-458c-961d-a8894f2358c5 --limit 5 --dry-run --summary-only --pretty`;
+  - fact-index result: `document_count=5`, `derived_fact_count=139`, `inserted_fact_count=0`, `snapshot_updated=false`, fact types `date_period=10`, `keyword=84`, `procedure_step=15`, `section=30`;
+  - enrichment precheck command: `./target/release/document-enrichment-backfill --dataset-id cd024465-358e-458c-961d-a8894f2358c5 --kind procedure_steps,table_structure --limit 10 --dry-run --summary-only --pretty`;
+  - enrichment precheck result: `document_count=10`, `missing_fingerprint_count=10`, `would_enqueue_count=0`, `enqueued_count=0`.
+- Reachable single-document precheck:
+  - receipt directory: `/srv/aiv3/repo/target/historical-enrichment-task5-ready-doc-precheck-20260606T141749Z`;
+  - command: `./target/release/document-enrichment-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --document-id 00fc651b-99f7-444b-9ee7-59695b2736cf --kind procedure_steps,table_structure --dry-run --summary-only --pretty`;
+  - result: `document_count=1`, `missing_fingerprint_count=0`, `would_enqueue_count=2`, `enqueued_count=0`, `enqueue_count_by_kind.procedure_steps_v1=1`, `enqueue_count_by_kind.table_structure_v1=1`.
+- Decision status:
+  - the reviewed blocked dataset is still blocked by missing local object files;
+  - the reachable single document remains a valid tiny candidate if an operator explicitly approves a real historical enrichment enqueue;
+  - no real enqueue was run in this pass.
+- Safety:
+  - all commands were `--dry-run --summary-only`;
+  - no historical fingerprint, fact, snapshot, or enrichment records were written;
+  - no document title, document body, external URL, local object path, raw row, database URL, credential, bearer token, provider payload, cookie, local key, public API, third-party contract, production table, or schema was changed or recorded.
+
 ### 2026-06-06 Completion Audit And Dataset-Scoped Backfill Dry-Run
 
 - Purpose:
