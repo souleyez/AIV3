@@ -85,3 +85,19 @@ ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=false
 ```
 
 Case collection may remain enabled because it is passive and does not change customer-facing answers.
+
+## Current 8-Server State
+
+Latest sanitized audit on 2026-06-06:
+
+- repository head checked: `fc7c37048c76`;
+- `aiv3-platform-api.service` active;
+- `aiv3-codex-host-agent.service` active;
+- customer-facing hard answer gate flag absent / not true;
+- dedicated live `answer_quality_autofix` flag absent / not true;
+- general Codex Host tasking enabled;
+- task allowlist present but does not contain `answer_quality_autofix`;
+- host capability allowlist absent or not containing `answer_quality_autofix`;
+- agent profile allowed capabilities present but do not contain `answer_quality_autofix`.
+
+Result: normal customer answers cannot be blocked by this path, and live `answer_quality_autofix` task execution remains impossible until the dedicated flag and both allowlist gates are intentionally enabled.
