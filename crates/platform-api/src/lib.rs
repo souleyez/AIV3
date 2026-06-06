@@ -35748,6 +35748,44 @@ fn static_page_prompt_requests_existing_artifact_revision(prompt: &str) -> bool 
     )
 }
 
+fn static_page_prompt_hides_template_baseline_link_for_revision(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    external_channel_text_has_any(
+        &compact,
+        prompt,
+        &[
+            "已有页面",
+            "已有报表",
+            "修复",
+            "修正",
+            "更正",
+            "修改",
+            "调整",
+            "改一下",
+            "改成",
+            "变更",
+            "小修",
+            "删除",
+            "去掉",
+            "替换",
+            "联动",
+            "不会变",
+            "不变",
+            "数据绑定",
+            "绑定错误",
+            "口径错",
+            "口径不对",
+            "单位错",
+            "小数点",
+            "bug",
+        ],
+    )
+}
+
 fn static_page_prompt_requests_existing_artifact_delivery(prompt: &str) -> bool {
     if static_page_prompt_requests_explicit_redesign(prompt)
         || static_page_prompt_requests_existing_artifact_revision(prompt)
@@ -40100,9 +40138,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         let codex_execution_id_value = codex_execution_id
             .map(|value| json!(value))
             .unwrap_or(Value::Null);
-        let revision_request =
-            static_page_prompt_requests_existing_artifact_revision(&assistant_request.prompt);
-        let expose_visual_contract_as_artifact = !revision_request;
+        let hide_visual_contract_for_revision =
+            static_page_prompt_hides_template_baseline_link_for_revision(&assistant_request.prompt);
+        let expose_visual_contract_as_artifact = !hide_visual_contract_for_revision;
         let provisional_public_url_value = if expose_visual_contract_as_artifact {
             json!(visual_contract_url)
         } else {
@@ -95021,6 +95059,19 @@ mod tests {
         assert!(static_page_prompt_requests_existing_artifact_revision(
             "修复近7日销售，切换区域和门店后需要跟着变化"
         ));
+        assert!(static_page_prompt_requests_existing_artifact_revision(
+            "我临时上传了合同，帮新百经营报表补充门店面积和坪效。"
+        ));
+        assert!(
+            !static_page_prompt_hides_template_baseline_link_for_revision(
+                "我临时上传了合同，帮新百经营报表补充门店面积和坪效。"
+            )
+        );
+        assert!(
+            static_page_prompt_hides_template_baseline_link_for_revision(
+                "修复近7日销售，切换区域和门店后需要跟着变化"
+            )
+        );
         assert!(!static_page_prompt_requests_existing_artifact_revision(
             "把之前生成过的报表链接再发我一下"
         ));
