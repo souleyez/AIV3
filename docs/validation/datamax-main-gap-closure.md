@@ -64,6 +64,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
 | P0 Gate B: report/static-page operations | passed for current contract | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. |
+| P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
 | P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. Remaining item: audit 577 processed/indexed rows vs 384 unique current documents/chunks/evidence rows before broader rollout. |
@@ -191,6 +192,41 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - Receipt: `target/document-quality-smoke/document-quality-smoke-20260606T042304Z-10920.json`.
   - Markdown summary: `target/document-quality-smoke/document-quality-smoke-20260606T042304Z-10920.md`.
   - Result: passed all cases, including one-character PDF, `邓工是谁`, elderly-care procedure facts, resume company statistics, multi-dimensional resume ranking, table-heavy documents, attendance date/work-hour analysis, scanned PDF fallback, smart-home customer-feedback answer quality, and smart-elevator point-list answer quality.
+
+### 2026-06-06 Main-Site AssistantRun Streaming Smoke
+
+- New smoke script:
+  - `scripts/smoke/main-assistant-streaming.mjs`.
+  - Package command: `npm run smoke:main-assistant-streaming`.
+- What it checks:
+  - `POST /v1/assistant-runs/stream` emits exactly one `assistant_run.accepted`, one or more `assistant_run.delta`, exactly one `assistant_run.completed`, and exactly one `done`.
+  - `POST /v1/assistant-runs/{run_id}/continue/stream` does the same for a continued run.
+  - Completed payload includes the assistant response.
+  - The concatenated deltas do not look like the final full answer repeated twice.
+  - Optional strict mode requires multiple deltas for both create and continue paths.
+- Local regressions run before this smoke:
+  - `cargo fmt --check -p platform-api` passed.
+  - `cargo test -p platform-api assistant_run_sse --lib` passed, 5 tests.
+  - `cargo test -p platform-api assistant_run_continue_sse --lib` passed, 1 test.
+  - `cargo test -p platform-api assistant_run_live --lib` passed, 1 test.
+  - `cargo test -p platform-api assistant_run_continue --lib` passed, 4 tests.
+  - `cargo test -p platform-api external_channel_public_stream --lib` passed, 2 tests.
+  - `npm --prefix apps/web run build` passed with the existing Next.js tracing warning.
+- 8-server runtime precondition:
+  - `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`.
+  - `ASSISTANT_RUN_RUNTIME_MODE=provider`.
+  - `ASSISTANT_RUN_RUNTIME_PROVIDER=rightcode`.
+  - `ASSISTANT_RUN_RUNTIME_MODEL=gpt-5.5`.
+  - `LLM_GATEWAY_LANE_ASSISTANT_CHAT_MODE=active`.
+- Public 8-server strict smoke:
+  - Command: `npm run smoke:main-assistant-streaming -- --base-url https://v3.elepcloud.com --timeout-ms 120000 --require-live-delta --require-multiple-deltas`.
+  - Receipt: `target/main-assistant-streaming-smoke/20260606043328.json`.
+  - Result: `ok=true`, `createOk=true`, `continueOk=true`.
+  - Create path: `createDeltaCount=74`, `createFirstDeltaAtMs=4792`, `createLatencyMs=6508`.
+  - Continue path: `continueDeltaCount=71`, `continueFirstDeltaAtMs=2951`, `continueLatencyMs=4733`.
+  - AssistantRun id: `d12e4106-e111-4ad4-889c-9a67c6820179`.
+- Useful pre-run note:
+  - A previous strict run failed because the default prompt was too short and produced a single delta on one path. The script was adjusted to use longer default create/continue prompts so strict multi-delta mode is stable enough for release gating.
 
 ### 2026-06-06 No-Cookie Cloudflare Fallback Guard Probe
 
