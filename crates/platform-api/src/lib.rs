@@ -57046,6 +57046,9 @@ fn external_channel_static_page_published_reply(
     public_url: &str,
     payload: &Value,
 ) -> ExternalBotReplyView {
+    let raw_public_url = public_url.trim();
+    let focused_public_url =
+        external_channel_static_page_public_url_with_payload_focus(raw_public_url, payload);
     let dynamic_page_contract =
         external_channel_static_page_artifact_payload_value(payload, "dynamic_page_contract");
     let dynamic_page_contract = normalize_static_page_dynamic_page_contract(dynamic_page_contract);
@@ -57058,18 +57061,18 @@ fn external_channel_static_page_published_reply(
             external_channel_static_page_customer_ready_text_for_payload(
                 "已依据客户需求生成可发送的报表页面；最终页面仍在后台继续优化发布。",
                 Some(payload),
-                public_url,
+                &focused_public_url,
             ),
-            public_url,
+            &focused_public_url,
         )
     } else {
         external_channel_text_with_public_artifact_link(
             external_channel_static_page_customer_ready_text_for_payload(
                 external_channel_static_page_customer_ready_text(),
                 Some(payload),
-                public_url,
+                &focused_public_url,
             ),
-            public_url,
+            &focused_public_url,
         )
     };
     let template_reference_id =
@@ -57084,23 +57087,23 @@ fn external_channel_static_page_published_reply(
         external_channel_static_page_data_refresh_policy_from_payload(payload);
     let default_template_scope =
         external_channel_static_page_default_template_scope_from_payload(payload);
-    let report_title = external_channel_static_page_report_title(payload, public_url);
-    let data_url = external_channel_static_page_data_url(payload, public_url);
+    let report_title = external_channel_static_page_report_title(payload, &focused_public_url);
+    let data_url = external_channel_static_page_data_url(payload, raw_public_url);
     let table_data_url = external_channel_static_page_export_url(
         payload,
-        public_url,
+        raw_public_url,
         &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
         "table-data.csv",
     );
     let ppt_download_url = external_channel_static_page_export_url(
         payload,
-        public_url,
+        raw_public_url,
         &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
         "report.ppt",
     );
     let markdown_download_url = external_channel_static_page_export_url(
         payload,
-        public_url,
+        raw_public_url,
         &[
             "markdown_download_url",
             "markdownDownloadUrl",
@@ -57113,7 +57116,7 @@ fn external_channel_static_page_published_reply(
     );
     let download_exports = external_channel_static_page_download_exports_from_payload(
         payload,
-        public_url,
+        raw_public_url,
         data_url.clone(),
         &report_title,
     );
@@ -57127,11 +57130,11 @@ fn external_channel_static_page_published_reply(
             "title": report_title,
             "report_title": report_title,
             "display_title": report_title,
-            "public_url": public_url,
-            "generated_artifact_url": public_url,
-            "download_url": public_url,
-            "html_download_url": public_url,
-            "artifact_links": [public_url],
+            "public_url": focused_public_url,
+            "generated_artifact_url": focused_public_url,
+            "download_url": focused_public_url,
+            "html_download_url": focused_public_url,
+            "artifact_links": [focused_public_url],
             "data_url": data_url,
             "table_data_url": table_data_url,
             "ppt_download_url": ppt_download_url,
@@ -57227,7 +57230,7 @@ fn external_channel_static_page_published_reply(
                 .or_else(|| payload.pointer("/source_refs/artifact_stability/baseline_status").cloned())
                 .unwrap_or(Value::Null),
         })),
-        artifact_links: vec![public_url.to_string()],
+        artifact_links: vec![focused_public_url],
         task_status: Some("static_page_published".to_string()),
         requires_confirmation: false,
         action_id: None,
@@ -57239,12 +57242,17 @@ fn external_channel_static_page_stable_artifact_reused_reply(
     conversation_external_id: &str,
     payload: &Value,
 ) -> ExternalBotReplyView {
-    let public_url = payload
+    let raw_public_url = payload
         .get("public_url")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| codex_host_fixed_task_public_artifact_url_allowed(value))
         .unwrap_or_default();
+    let public_url = if raw_public_url.is_empty() {
+        String::new()
+    } else {
+        external_channel_static_page_public_url_with_payload_focus(raw_public_url, payload)
+    };
     let template_reference_id =
         external_channel_static_page_template_reference_id_from_payload(payload);
     let template_reference = external_channel_static_page_template_reference_from_payload(payload);
@@ -57258,22 +57266,22 @@ fn external_channel_static_page_stable_artifact_reused_reply(
     let default_template_scope =
         external_channel_static_page_default_template_scope_from_payload(payload);
     let report_title = external_channel_static_page_report_title(payload, &public_url);
-    let data_url = external_channel_static_page_data_url(payload, &public_url);
+    let data_url = external_channel_static_page_data_url(payload, raw_public_url);
     let table_data_url = external_channel_static_page_export_url(
         payload,
-        &public_url,
+        raw_public_url,
         &["table_data_url", "tableDataUrl", "csv_url", "csvUrl"],
         "table-data.csv",
     );
     let ppt_download_url = external_channel_static_page_export_url(
         payload,
-        &public_url,
+        raw_public_url,
         &["ppt_download_url", "pptDownloadUrl", "ppt_url", "pptUrl"],
         "report.ppt",
     );
     let markdown_download_url = external_channel_static_page_export_url(
         payload,
-        &public_url,
+        raw_public_url,
         &[
             "markdown_download_url",
             "markdownDownloadUrl",
@@ -57286,7 +57294,7 @@ fn external_channel_static_page_stable_artifact_reused_reply(
     );
     let download_exports = external_channel_static_page_download_exports_from_payload(
         payload,
-        &public_url,
+        raw_public_url,
         data_url.clone(),
         &report_title,
     );
@@ -57297,9 +57305,9 @@ fn external_channel_static_page_stable_artifact_reused_reply(
             external_channel_static_page_customer_ready_text_for_payload(
                 external_channel_static_page_customer_ready_text(),
                 Some(payload),
-                public_url,
+                &public_url,
             ),
-            public_url,
+            &public_url,
         )),
         card: Some(json!({
             "type": "v3_static_page_stable_artifact",
@@ -96487,6 +96495,55 @@ mod tests {
         );
         assert_eq!(
             card["download_exports"][2]["url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/report.md")
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_event_reply_adds_prompt_focus_to_artifact_link() {
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html";
+        let focused_url = static_page_public_url_with_focus_label(public_url, "取高机会");
+        let events = vec![AssistantRunEvent {
+            id: AssistantRunEventId::new(),
+            tenant_id: TenantId::new(),
+            run_id: AssistantRunId::new(),
+            sequence_no: 1,
+            event_name: "assistant_run.external_channel_static_page_publish_completed".to_string(),
+            payload: json!({
+                "public_url": public_url,
+                "template_adaptation": {
+                    "userIntent": "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。"
+                }
+            }),
+            created_at: Utc::now(),
+        }];
+
+        let reply = external_channel_static_page_event_artifact_link_reply_from_events(
+            &events,
+            "conversation-1",
+        )
+        .expect("publish event should produce artifact reply");
+        let card = reply.card.as_ref().expect("artifact card");
+
+        assert_eq!(reply.artifact_links, vec![focused_url.clone()]);
+        assert_eq!(card["public_url"], json!(focused_url));
+        assert_eq!(card["generated_artifact_url"], json!(focused_url));
+        assert!(reply
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains(&focused_url));
+        assert_eq!(
+            card["table_data_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/table-data.csv")
+        );
+        assert_eq!(
+            card["ppt_download_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/report.ppt")
+        );
+        assert_eq!(
+            card["markdown_download_url"],
             json!("https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/report.md")
         );
     }
