@@ -65,7 +65,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
 | P0 Gate B: report/static-page operations | passed for current contract | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
-| P1 Gate C: background enterprise memory | passed for controlled production batch | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, a reviewed one-document non-dry-run fingerprint backfill recorded a canonical fingerprint, a single `fact_index_v2` enrichment run succeeded, 56 document facts were persisted, and the dataset entity snapshot reported 210 source facts across 6 scanned documents. Local document-quality, duplicate read-through, enrichment-worker, and aggregate regressions passed. Long-running production enrichment and full existing-document backfill remain disabled. |
+| P1 Gate C: background enterprise memory | passed for post-ingest rollout | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. Full existing-document backfill remains disabled. |
 | P1 Gate D: low-quality answer recovery | passed for safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue now requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Dedicated opt-in guard is deployed to 8 server on `3394b0a5f60a`; runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`, so live enqueue remains intentionally disabled until an explicit operator decision. |
 | P1 Gate E: confirmed data ingestion | passed for current contract | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. |
 | P1 Gate F: operator observability | passed for deployed page and queue summary | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. 8-server deploy to `2193e0cd5248` succeeded; local/public `/external-integrations` returned `200` with DataMax/运营总览 SSR text; the web queue-stats proxy returned `200` with the configured observability cookie. Model-gateway status remains protected and returned `401 auth_session_required` without a main-system operator session, so an authenticated model-gateway operator smoke remains pending. |
@@ -732,10 +732,40 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - `cargo test -p retrieval-worker --bin retrieval-worker document_enrichment_kinds` passed, 2 tests.
   - `cargo test -p retrieval-worker --bin document-enrichment-worker` passed, 8 tests.
 - Remaining:
-  - deploy to 8 server;
-  - install/start a low-priority `document-enrichment-worker` service;
-  - enable `DOCUMENT_ENRICHMENT_ENABLED=true` with a small `DOCUMENT_ENRICHMENT_KINDS` list for newly parsed documents only;
-  - do not run a full existing-document backfill in this rollout.
+  - run a reviewed tiny upload/new-parse smoke or watch the next real document ingestion to prove enqueue/consume from the live post-ingest path.
+
+### 2026-06-06 8-Server Post-Ingest Enrichment Rollout
+
+- Commit deployed:
+  - `3171fbb5e47d`.
+- Deployment:
+  - 8 server fast-forwarded from `be89395b3` to `3171fbb5e47d`;
+  - `CC=clang CXX=clang++ cargo build --release -p retrieval-worker` passed;
+  - `aiv3-retrieval-worker.service` was restarted and returned `active`;
+  - repo remains `main...origin/main`; existing untracked `mode` remains untouched.
+- Runtime configuration:
+  - retrieval-worker drop-in `/etc/systemd/system/aiv3-retrieval-worker.service.d/30-document-enrichment.conf`;
+  - `DOCUMENT_ENRICHMENT_ENABLED=true`;
+  - `DOCUMENT_ENRICHMENT_KINDS=fact_index_v2,table_structure_v1,procedure_steps_v1,resume_profile_v1,spreadsheet_metrics_v1`;
+  - `DOCUMENT_ENRICHMENT_DEFAULT_PRIORITY=500`;
+  - `DOCUMENT_ENRICHMENT_MAX_ATTEMPTS=2`.
+- Worker service:
+  - installed `/etc/systemd/system/aiv3-document-enrichment-worker.service`;
+  - enabled and started;
+  - `ActiveState=active`, `SubState=running`;
+  - process uses `Nice=10`, `CPUWeight=25`, `IOWeight=25`;
+  - `DOCUMENT_ENRICHMENT_WORKER_DATABASE_MAX_CONNECTIONS=2`;
+  - `DOCUMENT_ENRICHMENT_WORKER_POLL_INTERVAL_MS=15000`;
+  - `DOCUMENT_ENRICHMENT_WORKER_ERROR_BACKOFF_SECONDS=300`.
+- Smoke/audit:
+  - one-shot `document-enrichment-worker` startup succeeded before enabling the continuous service;
+  - journal confirms continuous polling started with 15-second interval;
+  - journal failure count for `document enrichment run failed` in the checked window was `0`;
+  - queue audit showed only the prior `succeeded|fact_index_v2|1` run and no pending/running backlog.
+- Safety boundary:
+  - no full existing-document fingerprint backfill was run;
+  - this rollout affects newly parsed documents that have fingerprints and pass through the normal post-ingest cleanup path;
+  - next proof should come from a reviewed tiny upload/new-parse smoke or the next real document ingestion event.
 
 ### 2026-06-06 Local Operator Observability Summary
 
