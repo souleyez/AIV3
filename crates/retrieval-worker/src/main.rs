@@ -6,7 +6,7 @@ use retrieval_worker::{
     LocalLexicalRetrievalIndexer, RetrievalChunkInput, RetrievalIndexJob, RetrievalIndexer,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use storage::{
     NewDocumentEnrichmentRun, NewRetrievalEvidence, PgStorage, DEFAULT_LOCAL_DATABASE_URL,
 };
@@ -673,6 +673,7 @@ async fn process_external_source_index_task(
             "source_id": context_string(&execution.context, "source_id")?,
             "external_sync_run_id": context_string(&execution.context, "external_sync_run_id")?,
             "document_count": summaries.len(),
+            "unique_document_count": summaries.len(),
             "indexed_chunk_count": indexed_chunk_count,
             "retrieval_evidence_count": retrieval_evidence_count,
             "document_ids": summaries
@@ -1195,19 +1196,28 @@ fn external_index_document_ids(
         ));
     }
 
-    values
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| anyhow!("external document id must be a string"))
-                .and_then(|raw| {
-                    raw.parse::<uuid::Uuid>()
-                        .map(domain_model::DocumentId)
-                        .map_err(|error| anyhow!("invalid external document id {raw}: {error}"))
-                })
-        })
-        .collect()
+    let mut seen_document_ids = BTreeSet::new();
+    let mut unique_document_ids = Vec::new();
+    for value in values {
+        let document_id = value
+            .as_str()
+            .ok_or_else(|| anyhow!("external document id must be a string"))
+            .and_then(|raw| {
+                raw.parse::<uuid::Uuid>()
+                    .map(domain_model::DocumentId)
+                    .map_err(|error| anyhow!("invalid external document id {raw}: {error}"))
+            })?;
+        if seen_document_ids.insert(document_id) {
+            unique_document_ids.push(document_id);
+        }
+    }
+    if unique_document_ids.is_empty() {
+        return Err(anyhow!(
+            "external retrieval index requires at least one unique document id"
+        ));
+    }
+
+    Ok(unique_document_ids)
 }
 
 async fn update_external_sync_run_index_counts(
@@ -1234,11 +1244,24 @@ async fn update_external_sync_run_index_counts(
     .bind(tenant_id.0)
     .bind(sync_run_id)
     .bind(json!({
+        "documents_indexed": signal_output
+            .get("unique_document_count")
+            .or_else(|| signal_output.get("document_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
         "chunks_indexed": signal_output
             .get("indexed_chunk_count")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        "unique_chunks_indexed": signal_output
+            .get("indexed_chunk_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
         "retrieval_evidences_indexed": signal_output
+            .get("retrieval_evidence_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        "retrieval_evidences_materialized": signal_output
             .get("retrieval_evidence_count")
             .and_then(Value::as_u64)
             .unwrap_or(0),
@@ -1599,6 +1622,23 @@ mod tests {
             &json!({
                 "last_output": {
                     "document_ids": [first.to_string(), second.to_string()]
+                }
+            }),
+            &json!({}),
+        )
+        .expect("external document ids should parse");
+
+        assert_eq!(ids, vec![first, second]);
+    }
+
+    #[test]
+    fn external_index_document_ids_deduplicate_in_order() {
+        let first = DocumentId::new();
+        let second = DocumentId::new();
+        let ids = external_index_document_ids(
+            &json!({
+                "last_output": {
+                    "document_ids": [first.to_string(), second.to_string(), first.to_string()]
                 }
             }),
             &json!({}),

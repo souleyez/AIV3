@@ -67,7 +67,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
-| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. Remaining item: audit 577 processed/indexed rows vs 384 unique current documents/chunks/evidence rows before broader rollout. |
+| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Local worker fix separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server deploy and re-sync receipt remain pending. |
 
 ## Rollout Receipts
 
@@ -850,6 +850,42 @@ Data-ingestion external fixed-task smoke:
 - Safety:
   - no third-party public URL/auth/request/response field was changed;
   - no bearer token, session token, database URL, source credential, or raw source row was recorded.
+
+### 2026-06-06 Data-Ingestion Count Audit And Local Worker Fix
+
+- Scope:
+  - 8-server read-only audit of sync run `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2`;
+  - dataset `ac7bb786-3ffb-40e2-bade-9f70d5fb4764`;
+  - source `hy-sql-traffic-area`.
+- Sanitized audit result:
+  - sync run `row_count=577`;
+  - current unique documents 384;
+  - current unique chunks 384;
+  - current retrieval evidence rows for workflow execution `e3f1dfda-504d-4b61-a2f8-71163c698581`: 384;
+  - per-table current materialization: `bi_contract_warning=6`, `bi_oa_zulinhetong=100`, `bi_oa_zulinhetonggudingzujin=100`, `bi_oa_zulinhetongtichengzujin=100`, `bi_rentsales_detail=1`, `nwstore=77`.
+- Root cause:
+  - the worker counted source rows and repeated processing attempts as `documents_ingested`, `chunks_ingested`, `chunks_indexed`, and `retrieval_evidences_indexed`;
+  - ingest passed duplicate `document_ids` to retrieval when multiple source rows mapped to the same `document_external_id`;
+  - retrieval-evidence idempotency prevented duplicate table rows, so the actual evidence table was correct but the sync-run count was misleading;
+  - current MySQL identity mappings collapse many rows for `bi_contract_warning` and `bi_rentsales_detail`; these mappings need a separate business review before row-level completeness is claimed.
+- Local code fix:
+  - `crates/ingest-worker/src/main.rs` now keeps `row_count` as source rows, records `source_rows_ingested`, attempted counts, unique materialized document/chunk counts, and `collapsed_duplicate_row_count`;
+  - `documents_ingested` and `chunks_ingested` now use unique materialized counts from the ingest stage;
+  - `document_ids` passed to the retrieval stage are unique;
+  - `crates/retrieval-worker/src/main.rs` also de-duplicates incoming document ids defensively and records `documents_indexed`, `unique_chunks_indexed`, and `retrieval_evidences_materialized`.
+- Local verification:
+  - `cargo fmt --check -p ingest-worker -p retrieval-worker` passed;
+  - `cargo test -p ingest-worker --bin ingest-worker external_source_ingest_table_counts -- --nocapture` passed, 1 test;
+  - `cargo test -p retrieval-worker --bin retrieval-worker external_index_document_ids -- --nocapture` passed, 2 tests;
+  - `cargo check -p ingest-worker -p retrieval-worker` passed.
+- Pending:
+  - deploy `ingest-worker` and `retrieval-worker` changes to 8 server;
+  - re-run one guarded staging sync receipt;
+  - verify new counts show source rows and unique materialization separately;
+  - review identity mappings for `bi_contract_warning` and `bi_rentsales_detail` if the business wants row-level rather than entity-level materialization.
+- Safety:
+  - no raw source rows, credentials, database URL, bearer token, or session token were recorded;
+  - no third-party public URL, auth, required request field, or existing response field was changed.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 

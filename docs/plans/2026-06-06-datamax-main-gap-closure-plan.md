@@ -25,7 +25,7 @@
 - The earlier guarded sync failed during retrieval indexing with `index_external_retrieval` because `retrieval_evidences` hit duplicate key `retrieval_evidences_execution_id_document_chunk_id_key`.
 - Commit `8fd0a1d` made retrieval-evidence writes idempotent on `(execution_id, document_chunk_id)`.
 - The 8-server retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` reached `workflow_stage=completed` and `workflow_status=succeeded`; the confirmed staging dataset currently has 384 indexed documents, 384 chunks, and 384 retrieval evidence rows.
-- Sync run counts recorded 577 processed/indexed rows while the current dataset has 384 unique document/evidence rows; this is a follow-up counting/unique-materialization audit item, not the duplicate-key blocker.
+- The 577 vs 384 count audit found a source-row vs unique-materialization mismatch: the sync processed 577 source rows, but current unique materialized documents/chunks/evidence are 384 because some configured MySQL identity columns collapse multiple source rows into one DataMax document. Local worker fixes now keep `row_count` as source rows, record unique materialization/collapsed-row counts, and de-duplicate document ids before retrieval indexing. Deployment and 8-server re-sync receipt are still pending.
 - The model-visible capability loop is closed for product-level capabilities:
   - `static_page_artifact`;
   - `data_ingestion_analysis`;
@@ -79,7 +79,7 @@ Treat this section as the current executable plan. The longer task bodies below 
 
 | Priority | Gap | Current state | Next executable action | Done when |
 | --- | --- | --- | --- | --- |
-| P0 | G6 data-ingestion sync idempotency | Fixed and deployed. Confirm/sync routes are live on 8 server, and retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed after retrieval-evidence upsert. The target staging dataset has source-derived documents, chunks, and evidence. | Record the success receipt, keep the 577 processed rows vs 384 unique evidence rows as a counting/materialization audit item, then move to P0 production smoke. | Duplicate-key failure no longer blocks data-ingestion sync; docs record the deployed commit, sync id, counts, and remaining count-audit note. |
+| P0 | G6 data-ingestion sync idempotency/count accuracy | Duplicate-key blocker is fixed and deployed. The 8-server sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. Count audit shows 577 source rows collapsed into 384 unique materialized documents/chunks/evidence under the current MySQL table identity mappings. Local worker fix records both source-row and unique-materialization counts, plus collapsed duplicate rows, and de-duplicates retrieval indexing input. | Deploy the worker count fix to 8 server, re-run one reviewed guarded sync, and record the new counts. Separately review table identity mappings for `bi_contract_warning` and `bi_rentsales_detail` before claiming row-level completeness for those tables. | Sync counters truthfully separate source rows from unique materialized documents/chunks/evidence; duplicate indexing attempts do not recur; any table identity compression is visible to operators. |
 | P0 | G1/G2 production smoke and concurrency | Completed for the current deploy. Runtime config shows 20 chat lanes, 5 static-page/Image2 lanes, and 2 Cloudflare fallback lanes. After the chat-session workflow-start fix, 8-server smoke passed for third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality local regressions. | Move to G7 controlled main-site streaming smoke; keep the P0 smoke commands as release gates for future deploys. | Validation ledger records pass/fail, latency, report links, export links, service status, and no secret leakage. |
 | P0 | G3 Xinbai monthly report template operations | Completed for current contract. Accepted template and focused export links work on 8 server; report export smoke confirms title, focus, one report surface, and `table-data.csv`, `report.ppt`, `report.md`. Low-load prewarm is still off. | Decide whether to enable low-load prewarm after controlled streaming remains stable. | Report requests return one clickable report link, correct focus, accessible `table-data.csv`, `report.ppt`, `report.md`, and no duplicate link chatter. |
 | P0 | G7 controlled streaming | Completed for the current contract. Third-party stream path has a production receipt. Main-site new/continue true streaming now has a reusable SSE smoke script and a public 8-server receipt with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`: new run and continue run both emit many live deltas, then one completed event and one done event, without final-text duplication. | Keep `npm run smoke:main-assistant-streaming` as a release gate; next move to G4/G5/G8 rather than reworking the stream contract. | Main-site UI-compatible SSE shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
@@ -95,8 +95,8 @@ Treat this section as the current executable plan. The longer task bodies below 
 3. Done: run P0 production smoke: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality.
 4. Done: run main-site streaming browser/SSE smoke for new and continued AssistantRun.
 5. Done for current contract: verify Xinbai monthly report template reuse, focus ordering, one-link reply, and export files on 8 server.
-6. Next: decide whether the 577 processed vs 384 unique evidence row count requires a code fix before broader data-ingestion rollout.
-7. Continue to controlled background enterprise-memory batch after the count audit or if the audit is explicitly deferred.
+6. In progress: deploy and validate the worker count fix for the 577 source rows vs 384 unique materialized rows audit.
+7. Next: run controlled background enterprise-memory batch after the count fix has an 8-server receipt or is explicitly deferred.
 
 ### P0 Task A: Fix Retrieval-Evidence Idempotency
 
@@ -171,7 +171,7 @@ git push
 
 ### P0 Task B: Deploy And Re-Run 8-Server Data-Ingestion Sync
 
-**Status:** completed for the duplicate-key blocker on 2026-06-06. Retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` succeeded. Follow-up count audit remains open because sync counters report 577 processed/indexed rows while the staging dataset currently has 384 unique documents/chunks/evidence rows.
+**Status:** completed for the duplicate-key blocker on 2026-06-06. Retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` succeeded. The follow-up count audit found that the sync processed 577 source rows but the current staging dataset has 384 unique materialized documents/chunks/evidence rows. Local worker code now separates source-row counts from unique materialized counts and de-duplicates retrieval indexing input; 8-server deploy and re-sync receipt remain pending.
 
 **Files:**
 

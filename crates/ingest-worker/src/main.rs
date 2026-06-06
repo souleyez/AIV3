@@ -660,6 +660,14 @@ struct ExternalSourceDocumentInput {
     acl_hash: Option<String>,
 }
 
+#[derive(Default)]
+struct ExternalSourceIngestTableAccumulator {
+    source_row_count: usize,
+    chunks_ingested_attempted: usize,
+    unique_document_ids: BTreeSet<domain_model::DocumentId>,
+    unique_chunk_counts: BTreeMap<domain_model::DocumentId, usize>,
+}
+
 async fn process_external_source_ingest_task(
     storage: &PgStorage,
     workflow_catalog: &WorkflowCatalog,
@@ -687,9 +695,12 @@ async fn process_external_source_ingest_task(
     let documents = external_source_documents_from_context(&execution.context, &task.payload)?;
 
     let process_result: Result<Value> = async {
+        let source_row_count = documents.len();
         let mut document_summaries = Vec::with_capacity(documents.len());
-        let mut total_chunks = 0usize;
-        let mut table_counts = BTreeMap::<String, (usize, usize)>::new();
+        let mut chunks_ingested_attempted = 0usize;
+        let mut unique_document_ids = BTreeSet::new();
+        let mut unique_chunk_counts = BTreeMap::new();
+        let mut table_counts = BTreeMap::<String, ExternalSourceIngestTableAccumulator>::new();
         for input in documents {
             let document = upsert_external_source_document(
                 storage,
@@ -714,11 +725,15 @@ async fn process_external_source_ingest_task(
 
             let chunks =
                 build_external_source_document_chunks(dataset_id, document.id, &source_id, &input);
-            total_chunks += chunks.len();
+            chunks_ingested_attempted += chunks.len();
             let source_table = external_source_input_table(&input);
             let table_count = table_counts.entry(source_table.clone()).or_default();
-            table_count.0 += 1;
-            table_count.1 += chunks.len();
+            table_count.source_row_count += 1;
+            table_count.chunks_ingested_attempted += chunks.len();
+            table_count.unique_document_ids.insert(document.id);
+            table_count.unique_chunk_counts.insert(document.id, chunks.len());
+            unique_document_ids.insert(document.id);
+            unique_chunk_counts.insert(document.id, chunks.len());
             storage
                 .document_chunks()
                 .replace_for_document(task.tenant_id, document.id, &chunks)
@@ -756,19 +771,28 @@ async fn process_external_source_ingest_task(
                 "lifecycle": updated_document.lifecycle.as_str(),
             }));
         }
+        let unique_chunks_materialized = unique_chunk_counts.values().sum::<usize>();
 
         let signal_output = json!({
             "source_id": source_id,
             "external_sync_run_id": sync_run_id,
             "document_count": document_summaries.len(),
-            "row_count": document_summaries.len(),
-            "chunk_count": total_chunks,
+            "row_count": source_row_count,
+            "source_rows_ingested": source_row_count,
+            "chunk_count": chunks_ingested_attempted,
+            "documents_ingested_attempted": document_summaries.len(),
+            "chunks_ingested_attempted": chunks_ingested_attempted,
+            "unique_document_count": unique_document_ids.len(),
+            "unique_chunk_count": unique_chunks_materialized,
+            "unique_documents_materialized": unique_document_ids.len(),
+            "unique_chunks_materialized": unique_chunks_materialized,
+            "collapsed_duplicate_row_count": source_row_count.saturating_sub(unique_document_ids.len()),
             "skipped_row_count": 0,
             "failed_row_count": 0,
             "ingest_table_counts": external_source_ingest_table_counts(table_counts),
-            "document_ids": document_summaries
+            "document_ids": unique_document_ids
                 .iter()
-                .filter_map(|summary| summary.get("document_id").cloned())
+                .map(|document_id| json!(document_id))
                 .collect::<Vec<_>>(),
             "external_documents": document_summaries,
         });
@@ -1143,6 +1167,34 @@ async fn update_external_sync_run_counts(
     else {
         return Ok(());
     };
+    let row_count = signal_output
+        .get("row_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let attempted_documents = signal_output
+        .get("documents_ingested_attempted")
+        .or_else(|| signal_output.get("document_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let attempted_chunks = signal_output
+        .get("chunks_ingested_attempted")
+        .or_else(|| signal_output.get("chunk_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unique_documents = signal_output
+        .get("unique_documents_materialized")
+        .or_else(|| signal_output.get("unique_document_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(attempted_documents);
+    let unique_chunks = signal_output
+        .get("unique_chunks_materialized")
+        .or_else(|| signal_output.get("unique_chunk_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(attempted_chunks);
+    let collapsed_duplicate_rows = signal_output
+        .get("collapsed_duplicate_row_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| row_count.saturating_sub(unique_documents));
 
     sqlx::query(
         r#"
@@ -1155,18 +1207,15 @@ async fn update_external_sync_run_counts(
     .bind(tenant_id.0)
     .bind(sync_run_id)
     .bind(json!({
-        "documents_ingested": signal_output
-            .get("document_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        "row_count": signal_output
-            .get("row_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        "chunks_ingested": signal_output
-            .get("chunk_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
+        "row_count": row_count,
+        "source_rows_ingested": row_count,
+        "documents_ingested": unique_documents,
+        "chunks_ingested": unique_chunks,
+        "unique_documents_materialized": unique_documents,
+        "unique_chunks_materialized": unique_chunks,
+        "documents_ingested_attempted": attempted_documents,
+        "chunks_ingested_attempted": attempted_chunks,
+        "collapsed_duplicate_row_count": collapsed_duplicate_rows,
         "skipped_row_count": signal_output
             .get("skipped_row_count")
             .and_then(Value::as_u64)
@@ -1239,16 +1288,28 @@ fn external_source_input_table(input: &ExternalSourceDocumentInput) -> String {
     .unwrap_or_else(|| "[unmapped]".to_string())
 }
 
-fn external_source_ingest_table_counts(table_counts: BTreeMap<String, (usize, usize)>) -> Value {
+fn external_source_ingest_table_counts(
+    table_counts: BTreeMap<String, ExternalSourceIngestTableAccumulator>,
+) -> Value {
     Value::Array(
         table_counts
             .into_iter()
-            .map(|(table, (documents_ingested, chunks_ingested))| {
+            .map(|(table, counts)| {
+                let unique_documents = counts.unique_document_ids.len();
+                let unique_chunks = counts.unique_chunk_counts.values().sum::<usize>();
                 json!({
                     "table": table,
-                    "documents_ingested": documents_ingested,
-                    "row_count": documents_ingested,
-                    "chunks_ingested": chunks_ingested,
+                    "row_count": counts.source_row_count,
+                    "source_rows_ingested": counts.source_row_count,
+                    "documents_ingested": unique_documents,
+                    "chunks_ingested": unique_chunks,
+                    "unique_documents_materialized": unique_documents,
+                    "unique_chunks_materialized": unique_chunks,
+                    "documents_ingested_attempted": counts.source_row_count,
+                    "chunks_ingested_attempted": counts.chunks_ingested_attempted,
+                    "collapsed_duplicate_row_count": counts
+                        .source_row_count
+                        .saturating_sub(unique_documents),
                     "skipped_row_count": 0,
                     "failed_row_count": 0,
                 })
@@ -2307,14 +2368,29 @@ mod tests {
         };
         assert_eq!(external_source_input_table(&input), "bi_traffic_area");
 
+        let first_document_id = DocumentId::new();
+        let second_document_id = DocumentId::new();
         let mut table_counts = BTreeMap::new();
-        table_counts.insert("bi_traffic_area".to_string(), (2, 5));
+        let mut counts = ExternalSourceIngestTableAccumulator::default();
+        counts.source_row_count = 3;
+        counts.chunks_ingested_attempted = 7;
+        counts.unique_document_ids.insert(first_document_id);
+        counts.unique_document_ids.insert(second_document_id);
+        counts.unique_chunk_counts.insert(first_document_id, 2);
+        counts.unique_chunk_counts.insert(second_document_id, 3);
+        table_counts.insert("bi_traffic_area".to_string(), counts);
         assert_eq!(
             external_source_ingest_table_counts(table_counts),
             json!([{
                 "table": "bi_traffic_area",
+                "source_rows_ingested": 3,
+                "documents_ingested_attempted": 3,
+                "chunks_ingested_attempted": 7,
+                "unique_documents_materialized": 2,
+                "unique_chunks_materialized": 5,
+                "collapsed_duplicate_row_count": 1,
                 "documents_ingested": 2,
-                "row_count": 2,
+                "row_count": 3,
                 "chunks_ingested": 5,
                 "skipped_row_count": 0,
                 "failed_row_count": 0
