@@ -94,7 +94,7 @@ Progress 2026-06-06:
 
 ## Task 2: Capture Content Fingerprints During Ingest
 
-Status: `new-upload-capture-completed-backfill-pending-2026-06-06`
+Status: `new-upload-capture-completed-backfill-tool-added-2026-06-06`
 
 Files:
 
@@ -120,6 +120,7 @@ Progress 2026-06-06:
 - Third-party external document parse now computes SHA-256 from downloaded bytes and records it with byte size after document creation.
 - Main-site document registration now records SHA-256 and byte size when `object_key` resolves to a local file; unreadable or remote object keys are skipped without blocking registration.
 - Zip archive expansion now records SHA-256 and byte size for extracted child documents before enqueueing child ingest workflows.
+- Added `document-fingerprint-backfill` as a dry-run capable maintenance binary for existing documents. It supports `--dataset-id`, `--document-id`, `--limit`, `--dry-run`, `--include-existing`, and `--pretty`, and only records fingerprints for local object keys that resolve on the current server.
 - Storage records the first seen content fingerprint as the canonical document and marks later matching content as duplicate without changing external document IDs.
 - Added regression coverage in `external_document_parse_endpoint_downloads_and_enqueues_ingest` for:
   - `documents.content_sha256`;
@@ -132,6 +133,7 @@ Progress 2026-06-06:
   - canonical document alias creation in `document_content_fingerprints`.
 - Verified locally with:
   - `cargo fmt --check -p platform-api -p storage`;
+  - `cargo test -p platform-api --bin document-fingerprint-backfill`;
   - `cargo test -p platform-api register_document_records_local_content_fingerprint --lib`;
   - `cargo test -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`;
   - `cargo test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib`;
@@ -140,7 +142,7 @@ Progress 2026-06-06:
   - `cargo check -p platform-api`.
 - Not done yet:
   - 8-server migration rollout;
-  - existing-document fingerprint backfill;
+  - existing-document fingerprint backfill dry-run/execution on 8 server;
   - duplicate-read canonical routing in retrieval/facts.
 
 ## Task 3: Canonical Dedup Without Breaking Document IDs
