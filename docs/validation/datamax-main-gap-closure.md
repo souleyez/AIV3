@@ -2153,6 +2153,34 @@ Data-ingestion external fixed-task smoke:
   - existing `v3_*`, `X-V3-*`, and `https://v3.elepcloud.com` compatibility names remain documented as stable protocol names;
   - no credential, bearer token, database URL, raw customer row, provider payload, or full customer document was recorded.
 
+### 2026-06-06 Task 10 Follow-Up Third-Party Docs Audit
+
+- Scope:
+  - follow-up at current local/GitHub/8-server head `f5ae5b8`;
+  - no third-party public URL, auth method, required request field, existing response field, status value, or header name was changed.
+- Source/public copy comparison:
+  - full Markdown source and public copy hash matched: `DCA7E765B35F46909B0317A07A42D08216048633C609FA623E350448462BF11F`;
+  - full HTML source and public copy hash matched: `C0673787C42C6040C3B431EF9BF332628FE94756A5C6B0B6D87963A43CAC8B89`;
+  - pure Markdown source and public copy hash matched: `EA07F0E78645A8606148A35A94337B6E819736A27A177577D7798A3A23377B18`;
+  - pure HTML source and public copy hash matched: `8EAD1EE23805B906BC81DA851584457437422369788509850F704B49A8866B05`.
+- Local verification:
+  - `npm run build:pure-third-party-guide-html` passed and regenerated the source/public HTML/Markdown copies without leaving a git diff;
+  - `npm run check:pure-third-party-guide-html` passed;
+  - `npm run test:pure-third-party-guide-html` passed, 5 tests;
+  - required contract terms are present in the source/public Markdown copies, including dataset scopes, document scopes, `conversation_external_id`, report artifact fields, and export filenames;
+  - narrow sensitive scan found no OpenAI-style key, long literal Bearer token, `DATABASE_URL=.*://`, password assignment, or api-key assignment in `docs/integrations` or `apps/web/public/external-integrations`;
+  - stale-brand scan found no checked customer-facing legacy phrases such as `AI Data Platform`, `AI数据平台`, `V3 生成`, `V3 第三方`, `V3 文档`, `V3 主`, `V3 能力`, or `V3 平台` in `docs/integrations` or `apps/web/public/external-integrations`.
+- Online verification:
+  - `https://v3.elepcloud.com/external-integrations/third-party-integration-api.zh-CN.md` returned `200`, included DataMax, dataset scope, conversation scope, report export filenames, and artifact fields;
+  - `https://v3.elepcloud.com/external-integrations/third-party-integration-api.zh-CN.html` returned `200` and included the same checked contract content;
+  - `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.md` returned `200`, included DataMax, dataset scope, conversation scope, report export filenames, and artifact fields;
+  - `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html` returned `200` and included the same checked contract content;
+  - 8-server `npm run check:pure-third-party-guide-html` passed after pull to `f5ae5b8`.
+- Decision:
+  - Task 10 is current for the additive DataMax third-party contract;
+  - existing compatibility names such as `v3_*`, `X-V3-*`, and `https://v3.elepcloud.com` remain documented and intentionally stable;
+  - no credential, bearer token, database URL, raw customer row, provider payload, full customer document, cookie, local key, or source path was recorded.
+
 ### 2026-06-06 Data-Source Row Identity Decision Memo
 
 - Purpose:

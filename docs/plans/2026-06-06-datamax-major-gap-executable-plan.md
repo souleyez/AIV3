@@ -817,6 +817,8 @@ git push
 - Update generator if present: `tools/render-pure-third-party-guide-html.mjs`
 - Update: `docs/validation/datamax-main-gap-closure.md`
 
+**Current status 2026-06-06:** Current head docs pass generation/check/test. Source Markdown/HTML and `apps/web/public/external-integrations` copies are hash-matched for both the full and pure third-party guides. Online full and pure MD/HTML return `200` and include DataMax naming, dataset/document scope, same-conversation authorization, report artifact links, and `table-data.csv` / `report.ppt` / `report.md` export fields. Existing compatibility names such as `v3_*`, `X-V3-*`, and `https://v3.elepcloud.com` are intentionally preserved as stable protocol names.
+
 **Step 1: Audit public contract wording**
 
 Docs must explain:
@@ -837,6 +839,8 @@ Expected:
 - legacy compatibility protocol names remain documented when clients still use them;
 - no new mandatory field is introduced.
 
+2026-06-06 check at `f5ae5b8`: required Task 10 terms are present in source and public Markdown copies; no request/response/auth/URL change is required.
+
 **Step 2: Build and compare docs**
 
 Run:
@@ -853,6 +857,8 @@ Expected:
 - docs generator/checks pass;
 - no real secret examples;
 - no stale user-facing `V3` branding except documented compatibility field names.
+
+2026-06-06 check: build/check/test passed. Narrow scans found no OpenAI-style key, long literal Bearer token, database URL assignment, password/api-key assignment, or checked stale customer-facing V3 brand phrases in `docs/integrations` and `apps/web/public/external-integrations`.
 
 **Step 3: Verify online docs after deployment**
 
