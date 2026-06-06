@@ -17,6 +17,17 @@ const DEFAULT_QUEUE: &str = "retrieval";
 const EXTERNAL_SOURCE_INDEX_TASK_KEY: &str = "index_external_retrieval";
 const POST_INGEST_FACT_INDEX_TASK_KEY: &str = "cleanup_document_facts";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
+const DEFAULT_DOCUMENT_ENRICHMENT_KINDS: &[&str] = &[
+    "structure_outline_v1",
+    "fact_index_v2",
+    "qa_seed_v1",
+    "entity_relation_v1",
+    "table_structure_v1",
+    "entity_terms_v1",
+    "procedure_steps_v1",
+    "resume_profile_v1",
+    "spreadsheet_metrics_v1",
+];
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -508,8 +519,17 @@ async fn maybe_enqueue_document_enrichment_runs(
     let parse_version = document_enrichment_parse_version(document);
     let priority = document_enrichment_default_priority();
     let max_attempts = document_enrichment_max_attempts();
+    let enrichment_kinds = document_enrichment_kinds();
+    if enrichment_kinds.is_empty() {
+        return Ok(json!({
+            "status": "skipped",
+            "skipped_reason": "no_enabled_enrichment_kinds",
+            "run_count": 0,
+            "runs": [],
+        }));
+    }
     let mut runs = Vec::new();
-    for enrichment_kind in document_enrichment_kinds() {
+    for enrichment_kind in enrichment_kinds {
         let run = storage
             .document_enrichment_runs()
             .create_or_get(
@@ -579,17 +599,39 @@ fn document_enrichment_max_attempts() -> i32 {
 }
 
 fn document_enrichment_kinds() -> Vec<&'static str> {
-    vec![
-        "structure_outline_v1",
-        "fact_index_v2",
-        "qa_seed_v1",
-        "entity_relation_v1",
-        "table_structure_v1",
-        "entity_terms_v1",
-        "procedure_steps_v1",
-        "resume_profile_v1",
-        "spreadsheet_metrics_v1",
-    ]
+    optional_env("DOCUMENT_ENRICHMENT_KINDS")
+        .map(|value| document_enrichment_kinds_from_csv(&value))
+        .unwrap_or_else(|| DEFAULT_DOCUMENT_ENRICHMENT_KINDS.to_vec())
+}
+
+fn document_enrichment_kinds_from_csv(value: &str) -> Vec<&'static str> {
+    let mut kinds = Vec::new();
+    for raw in value.split(',') {
+        let Some(kind) = normalize_document_enrichment_kind(raw) else {
+            continue;
+        };
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    kinds
+}
+
+fn normalize_document_enrichment_kind(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "structure_outline_v1" | "section_outline_v1" | "section_outline" => {
+            Some("structure_outline_v1")
+        }
+        "fact_index_v2" => Some("fact_index_v2"),
+        "qa_seed_v1" => Some("qa_seed_v1"),
+        "entity_relation_v1" => Some("entity_relation_v1"),
+        "table_structure_v1" | "table_structure" => Some("table_structure_v1"),
+        "entity_terms_v1" | "entity_terms" => Some("entity_terms_v1"),
+        "procedure_steps_v1" | "procedure_steps" => Some("procedure_steps_v1"),
+        "resume_profile_v1" | "resume_profile" => Some("resume_profile_v1"),
+        "spreadsheet_metrics_v1" | "spreadsheet_metrics" => Some("spreadsheet_metrics_v1"),
+        _ => None,
+    }
 }
 
 fn document_enrichment_parse_version(document: &Document) -> Option<String> {
@@ -1583,6 +1625,34 @@ mod tests {
         assert!(facts
             .iter()
             .all(|fact| fact.parse_version.as_deref() == Some("pdf-paddleocr")));
+    }
+
+    #[test]
+    fn document_enrichment_kinds_csv_supports_staged_rollout_aliases_and_dedupes() {
+        let kinds = document_enrichment_kinds_from_csv(
+            " fact_index_v2, table_structure, procedure_steps_v1, table_structure_v1, resume_profile, spreadsheet_metrics ",
+        );
+
+        assert_eq!(
+            kinds,
+            vec![
+                "fact_index_v2",
+                "table_structure_v1",
+                "procedure_steps_v1",
+                "resume_profile_v1",
+                "spreadsheet_metrics_v1"
+            ]
+        );
+    }
+
+    #[test]
+    fn document_enrichment_kinds_csv_ignores_unknown_entries() {
+        let kinds = document_enrichment_kinds_from_csv(
+            "unknown_kind, entity_terms, , another_unknown, section_outline",
+        );
+
+        assert_eq!(kinds, vec!["entity_terms_v1", "structure_outline_v1"]);
+        assert!(document_enrichment_kinds_from_csv("unknown_kind").is_empty());
     }
 
     #[test]

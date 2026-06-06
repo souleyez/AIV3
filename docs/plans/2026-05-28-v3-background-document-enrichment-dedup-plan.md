@@ -259,6 +259,7 @@ Changes:
   - `parse_version`
 - Add feature flags:
   - `DOCUMENT_ENRICHMENT_ENABLED`
+  - `DOCUMENT_ENRICHMENT_KINDS`
   - `DOCUMENT_ENRICHMENT_IDLE_ONLY`
   - `DOCUMENT_ENRICHMENT_MAX_CONCURRENCY`
   - `DOCUMENT_ENRICHMENT_PREMIUM_VLM_ENABLED`
@@ -277,6 +278,7 @@ Progress 2026-06-06:
 - Repository supports idempotent create/get, claim next available run, success marking, transient-error requeue with backoff time, terminal failure, and list-by-document.
 - Retrieval worker post-ingest fact cleanup can enqueue `structure_outline_v1`, `fact_index_v2`, `qa_seed_v1`, and `entity_relation_v1` runs when `DOCUMENT_ENRICHMENT_ENABLED=true`.
 - Enqueue is skipped by default, and skipped when a document has no `content_sha256`.
+- Enqueue can now be narrowed with `DOCUMENT_ENRICHMENT_KINDS`, a comma-separated list that accepts versioned names and plan aliases such as `fact_index_v2`, `table_structure`, `procedure_steps`, `resume_profile`, and `spreadsheet_metrics`. Unknown entries are ignored; if a provided list has no valid kinds, post-ingest enqueue records `no_enabled_enrichment_kinds`.
 - Document metadata records a compact `document_enrichment` enqueue summary after fact cleanup.
 - Added read-only diagnostics endpoint `GET /v1/documents/{document_id}/enrichment-runs`, guarded by the existing document visibility check.
 - Added a low-priority standalone `document-enrichment-worker` binary under `retrieval-worker`.

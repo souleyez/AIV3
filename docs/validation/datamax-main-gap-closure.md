@@ -714,6 +714,29 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - full existing-document fingerprint backfill is still not enabled;
   - the next rollout should either enable post-ingest enrichment only for newly parsed documents or run another reviewed, low-volume existing-document batch.
 
+### 2026-06-06 Post-Ingest Enrichment Kind Allowlist
+
+- Files changed:
+  - `crates/retrieval-worker/src/main.rs`;
+  - `docs/plans/2026-05-28-v3-background-document-enrichment-dedup-plan.md`;
+  - `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`;
+  - `docs/validation/datamax-main-gap-closure.md`.
+- Behavior:
+  - post-ingest enrichment enqueue now supports `DOCUMENT_ENRICHMENT_KINDS`, a comma-separated rollout list;
+  - accepted entries include versioned names and plan aliases, for example `fact_index_v2`, `table_structure`, `procedure_steps`, `resume_profile`, and `spreadsheet_metrics`;
+  - duplicate entries are de-duplicated in input order;
+  - unknown entries are ignored, and a configured list with no valid kinds records `no_enabled_enrichment_kinds` instead of enqueueing unexpected work;
+  - the default remains the existing full deterministic kind set when `DOCUMENT_ENRICHMENT_KINDS` is absent.
+- Local verification:
+  - `cargo fmt --check -p retrieval-worker` passed.
+  - `cargo test -p retrieval-worker --bin retrieval-worker document_enrichment_kinds` passed, 2 tests.
+  - `cargo test -p retrieval-worker --bin document-enrichment-worker` passed, 8 tests.
+- Remaining:
+  - deploy to 8 server;
+  - install/start a low-priority `document-enrichment-worker` service;
+  - enable `DOCUMENT_ENRICHMENT_ENABLED=true` with a small `DOCUMENT_ENRICHMENT_KINDS` list for newly parsed documents only;
+  - do not run a full existing-document backfill in this rollout.
+
 ### 2026-06-06 Local Operator Observability Summary
 
 - Files changed:
