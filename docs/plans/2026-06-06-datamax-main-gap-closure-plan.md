@@ -70,23 +70,23 @@ This section is the current single-page execution sheet. Treat the longer task s
 | G1: 8-server private production smoke | Read-only 8-server baseline is recorded. Local shell has no private bearer/cookie for mutating 20-way smoke. | Load private smoke credentials without committing them, then run third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report export, and document-quality smoke against `https://v3.elepcloud.com`. | `docs/validation/datamax-main-gap-closure.md` contains receipts with pass/fail, latency, service status, report links, export URLs, and no secret leakage. |
 | G2: Production concurrency lock | 8 server reports chat concurrency 20, static-page/Image2 concurrency 5, Cloudflare fallback 2, Right `gpt-5.5` assistant profile concurrency 20. Platform API pool cap and starvation behavior are not fully proven by private smoke. | If G1 exposes pool starvation or timeout, adjust only internal env/model-profile/worker concurrency and document rollback. | 20 chat lanes are not starved by 5 heavy page jobs; same-conversation idempotency stays ordered. |
 | G3: Static-page template operations | Xinbai accepted template, focused report links, and exports are locally/publicly validated. Production low-load prewarm is still disabled. | Enable/report prewarm only after confirming low-load guard, accepted-template reuse, and operator status visibility. Keep Xinbai monthly modular report as the default template. | Same dataset/default-prompt/focus requests reuse the accepted template first; expensive Image2/Codex work is background only unless redesign is explicit. |
-| G4: Background enterprise memory rollout | Fingerprint/dedup, enrichment-run storage, worker loop, deterministic enrichment kinds, and aggregate-first local tests are implemented. 8-server migration/backfill/live smoke remain pending. | Deploy migration on 8 server, dry-run fingerprint backfill, run one-shot enrichment worker, then run duplicate read-through and aggregate Q&A smoke. | New and existing documents can enrich asynchronously; duplicate documents read through canonical chunks/facts; resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval. |
+| G4: Background enterprise memory rollout | Fingerprint/dedup, enrichment-run storage, worker loop, deterministic enrichment kinds, and aggregate-first local tests are implemented. 8 server is deployed on `1db91f69c3fd`; schema migration, binary build, dry-run fingerprint backfill, and one-shot worker startup were recorded. Production backfill/enrichment remains disabled because no `DOCUMENT_ENRICHMENT*` runtime flag is configured and `document_enrichment_runs` is empty. | Decide the first controlled live batch: either run a limited non-dry-run fingerprint backfill and enqueue one reviewed document, or keep production enrichment disabled until private document-quality smoke credentials are available. Then run duplicate read-through and aggregate Q&A smoke. | New and existing documents can enrich asynchronously; duplicate documents read through canonical chunks/facts; resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval. |
 | G5: Low-quality answer recovery | Passive detection and fixed-scope task packaging pass locally. Hard answer gate remains disabled. Production enqueue is config-gated. | Keep hard gate disabled. Enable only passive collection first, then optionally allow `answer_quality_autofix` in the fixed allowlist after live observation. | Weak answers are collected and classified; system-defect fixes remain limited to answer/retrieval optimization files and require tests before deployment. |
-| G6: Confirmed data ingestion | Local staging-plan confirmation, private staging dataset creation/reuse, guarded source sync, dedupe, same-conversation scope restore, and public-doc contract smoke passed on 2026-06-06. | Deploy to 8 server, run the live read-only source readiness smoke, then manually confirm one reviewed staging plan against a stored database source before customer-facing use. | 8-server receipt proves no write before confirmation, sync source is in-plan, confirmed rows become ordinary dataset evidence, and replies reach `dataset_ready`, `sync_started`, `sync_completed`, or truthful failure. |
-| G7: Controlled streaming | Main-site create and continue SSE paths both support live answer deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`; third-party live answer stream remains separately controlled by `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED`. Local regressions passed on 2026-06-06. | Run main-site browser/local smoke and 8-server private streaming smoke after deployment. Keep third-party final-answer release gated while streaming progress/artifact status. | Main site can show live answer deltas for new and continued runs behind flag; third-party sees progress and links but no rejected final-answer fragments. |
+| G6: Confirmed data ingestion | Local staging-plan confirmation, private staging dataset creation/reuse, guarded source sync, dedupe, same-conversation scope restore, and public-doc contract smoke passed on 2026-06-06. Code is deployed to 8 server on `1db91f69c3fd`. | Run the live read-only source readiness smoke on 8 server, then manually confirm one reviewed staging plan against a stored database source before customer-facing use. | 8-server receipt proves no write before confirmation, sync source is in-plan, confirmed rows become ordinary dataset evidence, and replies reach `dataset_ready`, `sync_started`, `sync_completed`, or truthful failure. |
+| G7: Controlled streaming | Main-site create and continue SSE paths both support live answer deltas behind `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED`; third-party live answer stream remains separately controlled by `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED`. Local regressions passed on 2026-06-06 and the code is deployed to 8 server. Runtime flags are present on 8 server, but private browser/SSE smoke is still pending. | Run main-site browser/local smoke and 8-server private streaming smoke after deployment. Keep third-party final-answer release gated while streaming progress/artifact status. | Main site can show live answer deltas for new and continued runs behind flag; third-party sees progress and links but no rejected final-answer fragments. |
 | G8: Operator observability | Validation ledgers exist, but operators still need one compact page for queues, model lane, report tasks, enrichment backlog, low-quality cases, and data-ingestion staging/sync. | Expand the existing external integration/operator page with lazy-loaded health panels and sanitized counts only. | A 20+ conversation incident can be triaged from DataMax without reading raw logs or exposing secrets. |
-| G9: Final release hygiene | Local branch is ahead of origin and several local-only improvements are committed. | Before deployment, run local gate, push, pull on 8 server, build changed binaries, restart only changed services, then rerun private smoke. | 8 server is on latest `main`, service statuses are active, validation docs record every command and result. |
+| G9: Final release hygiene | Local commits through `1db91f6` were pushed and 8 server is on `1db91f69c3fd`; `platform-api` and `retrieval-worker` rebuilt and restarted active. Validation docs still need the final private smoke receipts before this gate closes. | Run the remaining private smoke set and update the validation ledger with pass/fail, latency, and links. | 8 server is on latest `main`, service statuses are active, validation docs record every command and result. |
 
 ### Current Execution Order
 
-1. Finish G7 next because streaming is customer-visible and must not leak low-quality deltas.
-2. Roll out G4 migration/backfill/enrichment on 8 server with dry-run receipts before enabling background processing broadly.
-3. Run G6 live source readiness and one confirmed staging-plan smoke after deployment.
-4. Run G1/G2 private production smoke after deployment and config verification.
+1. Run G7 private main-site and third-party streaming smoke on 8 server; code and runtime flags are present, but customer-visible behavior still needs a live receipt.
+2. Run G6 live source readiness and one confirmed staging-plan smoke on 8 server; code is deployed, but no production confirmation receipt exists yet.
+3. Decide the G4 first controlled production enrichment batch: limited non-dry-run fingerprint backfill plus one reviewed enqueue, or defer until private document-quality smoke credentials are available.
+4. Run G1/G2 private production smoke after credential/config verification.
 5. Enable or defer G3 production prewarm based on the smoke result and operator capacity.
 6. Enable G5 passive live collection only after ordinary Q&A and report routing remain stable.
 7. Add G8 observability once the queue/status surfaces have the exact counters proven by smoke.
-8. Close G9 by pushing, deploying, recording receipts, and freezing the next release baseline.
+8. Close G9 by recording remaining receipts and freezing the next release baseline.
 
 ### Required Smoke Set For The Next Deployment
 
@@ -528,7 +528,7 @@ git commit -m "Close static page template reuse and prewarm operations"
 
 ## Task 5: Implement Background Document Enrichment Phase 1
 
-**Status:** in progress as of 2026-06-06. Storage schema, third-party parse fingerprint capture, main-site local register fingerprint capture, zip child-document fingerprint capture, a dry-run capable existing-document fingerprint backfill tool, canonical read-through for chunks/evidence/facts, the `document_enrichment_runs` repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, and the low-priority enrichment worker execution loop are implemented locally. 8-server migration/backfill rollout and live smoke remain pending.
+**Status:** in progress as of 2026-06-06. Storage schema, third-party parse fingerprint capture, main-site local register fingerprint capture, zip child-document fingerprint capture, a dry-run capable existing-document fingerprint backfill tool, canonical read-through for chunks/evidence/facts, the `document_enrichment_runs` repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, and the low-priority enrichment worker execution loop are implemented. 8-server deployment reached commit `1db91f69c3fd`; schema migration, dry-run backfill, and one-shot worker startup passed. Production non-dry-run backfill, long-running enrichment enablement, live duplicate read-through smoke, and private aggregate smoke remain pending.
 
 **Files:**
 
@@ -604,7 +604,7 @@ git commit -m "Add background document enrichment fingerprints"
 
 ## Task 6: Implement Background Fact Enrichment Phase 2
 
-**Status:** completed locally on 2026-06-06; 8-server live enrichment/backfill smoke remains pending. Background enrichment worker now supports `table_structure_v1`, `entity_terms_v1`, `procedure_steps_v1`, `resume_profile_v1`, and `spreadsheet_metrics_v1` in addition to the Phase 1 kinds. Post-ingest enrichment enqueue includes the new kinds when `DOCUMENT_ENRICHMENT_ENABLED=true`. `fact_index` now emits `procedure_step` and `time_threshold` facts for care-operation text and includes those fact types in dataset entity snapshots. Fixture coverage has been added for elderly-care procedure facts and enrichment-specific resume/table/attendance checks. Full local document-quality smoke passed on 2026-06-06.
+**Status:** completed locally and deployed to 8 server on 2026-06-06; 8-server production enrichment/backfill smoke remains pending. Background enrichment worker now supports `table_structure_v1`, `entity_terms_v1`, `procedure_steps_v1`, `resume_profile_v1`, and `spreadsheet_metrics_v1` in addition to the Phase 1 kinds. Post-ingest enrichment enqueue includes the new kinds when `DOCUMENT_ENRICHMENT_ENABLED=true`. `fact_index` now emits `procedure_step` and `time_threshold` facts for care-operation text and includes those fact types in dataset entity snapshots. Fixture coverage has been added for elderly-care procedure facts and enrichment-specific resume/table/attendance checks. Full local document-quality smoke passed on 2026-06-06. On 8 server, one-shot worker startup passed, but there were no queued runs to process.
 
 **Files:**
 
@@ -1056,7 +1056,7 @@ git commit -m "Close confirmed data ingestion sync flow"
 
 ## Task 10: Roll Out Controlled Streaming Safely
 
-**Status:** in progress as of 2026-06-06. Main-site `continue/stream` now uses the same live-delta worker/channel path as new AssistantRun creation when `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`. Third-party stream behavior was not changed; existing safety/replay regressions still pass. 8-server private streaming smoke remains pending.
+**Status:** in progress as of 2026-06-06. Main-site `continue/stream` now uses the same live-delta worker/channel path as new AssistantRun creation when `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`. Third-party stream behavior was not changed; existing safety/replay regressions still pass. Code is deployed to 8 server and streaming runtime flags are present; 8-server private streaming smoke remains pending.
 
 **Files:**
 
@@ -1320,15 +1320,15 @@ git push
 
 Use `Executable Remaining-Gap Snapshot - 2026-06-06` as the current execution sheet. The detailed task bodies above remain the implementation reference.
 
-1. Task 10: roll out controlled streaming safely.
-2. Task 5 and Task 6: deploy migration/backfill/enrichment on 8 server and validate live read-through.
-3. Task 9: run 8-server live source readiness and one confirmed staging-plan smoke after deployment.
+1. Task 10: run 8-server private streaming smoke; code/runtime deployment is done.
+2. Task 9: run 8-server live source readiness and one confirmed staging-plan smoke.
+3. Task 5 and Task 6: choose and execute the first controlled live enrichment batch, or explicitly defer production backfill/enrichment.
 4. Task 7: rerun private aggregate-first smoke on 8 server after deployment.
 5. Task 2 and Task 3: run 20-way private production smoke and lock config only if smoke exposes gaps.
 6. Task 4: enable or defer static-page low-load prewarm based on smoke and operator readiness.
 7. Task 8: keep passive answer-quality recovery enabled only after core chat/report routes are stable; hard gate remains disabled.
 8. Task 11: expand operator observability using the counters proven in the earlier tasks.
-9. Task 12: final local gate, push, deploy to 8 server, private smoke, and validation commit.
+9. Task 12: final private smoke, validation commit, and release baseline freeze.
 
 ## Definition Of Done
 

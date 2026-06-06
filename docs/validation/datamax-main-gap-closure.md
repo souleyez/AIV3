@@ -64,9 +64,9 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. Requires private bearer/cookie 8-server smoke. Local environment currently has no `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `V3_EXTERNAL_CHANNEL_BEARER_TOKEN`, `DATAMAX_EXTERNAL_CHANNEL_BEARER_TOKEN`, `MAIN_CHAT_SMOKE_DATASET_ID`, `MAIN_CHAT_SMOKE_COOKIE`, `MAIN_CHAT_SMOKE_BEARER`, `STATIC_PAGE_5WAY_BEARER`, or `STATIC_PAGE_5WAY_DATASET_EXTERNAL_IDS`. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
-| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented locally for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented locally. Full local document-quality smoke and aggregate-first regressions passed. 8-server migration/backfill rollout, one-shot enrichment worker smoke, live duplicate/enrichment smoke, and private aggregate smoke remain pending. |
+| P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
-| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. Internal confirm/sync routes, private staging dataset creation/reuse, source-in-plan validation, sync dedupe, progress events, same-conversation staging dataset restore, and public-doc contract are covered locally. 8-server live source readiness and one reviewed staging-plan confirmation/sync smoke remain pending after deployment. |
+| P1 Gate E: confirmed data ingestion | in progress | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. Internal confirm/sync routes, private staging dataset creation/reuse, source-in-plan validation, sync dedupe, progress events, same-conversation staging dataset restore, and public-doc contract are covered locally. Code is deployed to 8 server on `1db91f69c3fd`; 8-server live source readiness and one reviewed staging-plan confirmation/sync smoke remain pending. |
 
 ## Rollout Receipts
 
@@ -449,6 +449,46 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - run a browser/local main-site streaming smoke with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`;
   - run 8-server private `scripts/smoke/external-channel-streaming-10way.mjs` with active bearer;
   - record whether 8-server should keep third-party answer deltas enabled or only stream progress/artifacts until the private smoke passes.
+
+### 2026-06-06 8-Server Deployment Receipt For Main Gap Slice
+
+- Local pushed commit:
+  - `1db91f6 Add main-site continue live streaming`.
+- 8-server deployment command:
+  - `ssh 8服务器 "set -e; cd /srv/aiv3/repo; git pull --ff-only; CC=clang CXX=clang++ cargo build --release -p platform-api -p retrieval-worker; sudo systemctl restart aiv3-platform-api.service aiv3-retrieval-worker.service; sleep 5; systemctl is-active aiv3-platform-api.service; systemctl is-active aiv3-retrieval-worker.service; git rev-parse --short HEAD"`.
+- Result:
+  - server fast-forwarded from `03458d310` to `1db91f69c`;
+  - `platform-api` and `retrieval-worker` release builds succeeded;
+  - `aiv3-platform-api.service` active;
+  - `aiv3-retrieval-worker.service` active;
+  - confirmed remote head: `1db91f69c3fd`.
+- 8-server test commands:
+  - `CC=clang CXX=clang++ cargo test -p storage document_canonical_enrichment --lib`;
+  - `CC=clang CXX=clang++ cargo test -p retrieval-worker --bin document-enrichment-worker`;
+  - both passed on 8 server.
+- Migration evidence:
+  - platform startup and one-shot worker logs confirmed the new document fingerprint columns, `document_content_fingerprints`, `document_enrichment_runs`, and their indexes already exist.
+- Fingerprint backfill dry-run:
+  - command shape: `./target/release/document-fingerprint-backfill --limit 20 --dry-run --pretty` with 8-server platform env loaded;
+  - `candidate_count=20`;
+  - `would_record_count=14`;
+  - `skipped_count=6`;
+  - `recorded_count=0`;
+  - `duplicate_count=0`.
+- Enrichment worker one-shot:
+  - command shape: `DOCUMENT_ENRICHMENT_WORKER_ONCE=true DOCUMENT_ENRICHMENT_WORKER_MAX_RUNS=1 ./target/release/document-enrichment-worker` with 8-server platform env loaded;
+  - worker startup succeeded and confirmed schema availability;
+  - current `document_enrichment_runs` status query returned no rows, so no enrichment task was claimed;
+  - current fingerprint coverage query returned `0/1835` documents with `content_sha256`, because only a dry-run backfill has been executed.
+- Runtime flag audit:
+  - `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED` is present;
+  - `EXTERNAL_CHANNEL_LIVE_ANSWER_STREAM_ENABLED` is present;
+  - no `DOCUMENT_ENRICHMENT*` runtime flag was visible in the audited env files;
+  - no `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` runtime flag was visible in the audited env files.
+- Interpretation:
+  - the deploy, migration, service restart, binary availability, dry-run backfill, and one-shot worker startup are verified on 8 server;
+  - production document enrichment is still not enabled and existing documents are not yet backfilled;
+  - the next safe step is either a limited non-dry-run fingerprint backfill plus one reviewed enrichment enqueue, or an explicit defer until private document-quality smoke credentials are available.
 
 ### 2026-06-06 Main-Site And Zip Local Fingerprint Capture
 
