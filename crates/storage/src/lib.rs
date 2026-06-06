@@ -2005,6 +2005,26 @@ impl PgDocumentRepository {
     }
 }
 
+async fn resolve_canonical_document_id(
+    pool: &PgPool,
+    tenant_id: TenantId,
+    document_id: DocumentId,
+) -> Result<DocumentId> {
+    let resolved = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        select coalesce(canonical_document_id, id) as document_id
+        from documents
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(tenant_id.0)
+    .bind(document_id.0)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(DocumentId(resolved.unwrap_or(document_id.0)))
+}
+
 impl PgDatasetDocumentMembershipRepository {
     pub async fn create_or_update(
         &self,
@@ -2552,6 +2572,17 @@ impl PgDocumentChunkRepository {
         rows.iter().map(map_document_chunk_row).collect()
     }
 
+    pub async fn list_by_document_or_canonical(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+    ) -> Result<Vec<DocumentChunk>> {
+        let effective_document_id =
+            resolve_canonical_document_id(&self.pool, tenant_id, document_id).await?;
+        self.list_by_document(tenant_id, effective_document_id)
+            .await
+    }
+
     pub async fn mark_indexed(
         &self,
         tenant_id: TenantId,
@@ -2713,7 +2744,13 @@ impl PgDocumentFactRepository {
             r#"
             select id, tenant_id, dataset_id, document_id, fact_type, name, normalized_name, value_text, value_number, value_date, attributes, confidence, source_kind, source_locator, source_chunk_id, parse_version, created_at
             from document_facts
-            where tenant_id = $1 and dataset_id = $2 and fact_type = $3
+            where tenant_id = $1
+              and document_id in (
+                select coalesce(canonical_document_id, id)
+                from documents
+                where tenant_id = $1 and dataset_id = $2
+              )
+              and fact_type = $3
             order by normalized_name asc, document_id asc, created_at asc
             limit $4
             "#,
@@ -2749,7 +2786,13 @@ impl PgDocumentFactRepository {
                     '{}'::text[]
                 ) as source_locators
             from document_facts
-            where tenant_id = $1 and dataset_id = $2 and fact_type = $3
+            where tenant_id = $1
+              and document_id in (
+                select coalesce(canonical_document_id, id)
+                from documents
+                where tenant_id = $1 and dataset_id = $2
+              )
+              and fact_type = $3
             group by fact_type, normalized_name
             order by document_count desc, fact_count desc, normalized_name asc
             limit $4
@@ -2797,6 +2840,11 @@ impl PgDocumentFactRepository {
             .collect::<Vec<_>>();
         let rows = sqlx::query(
             r#"
+            with effective_documents as (
+                select distinct coalesce(canonical_document_id, id) as document_id
+                from documents
+                where tenant_id = $1 and id = any($2::uuid[])
+            )
             select
                 fact_type,
                 normalized_name,
@@ -2810,7 +2858,7 @@ impl PgDocumentFactRepository {
                 ) as source_locators
             from document_facts
             where tenant_id = $1
-              and document_id = any($2::uuid[])
+              and document_id in (select document_id from effective_documents)
               and fact_type = $3
             group by fact_type, normalized_name
             order by document_count desc, fact_count desc, normalized_name asc
@@ -3883,6 +3931,17 @@ impl PgRetrievalEvidenceRepository {
         rows.iter().map(map_retrieval_evidence_row).collect()
     }
 
+    pub async fn list_by_document_or_canonical(
+        &self,
+        tenant_id: TenantId,
+        document_id: DocumentId,
+    ) -> Result<Vec<RetrievalEvidence>> {
+        let effective_document_id =
+            resolve_canonical_document_id(&self.pool, tenant_id, document_id).await?;
+        self.list_by_document(tenant_id, effective_document_id)
+            .await
+    }
+
     pub async fn list_latest_by_dataset(
         &self,
         tenant_id: TenantId,
@@ -3900,7 +3959,12 @@ impl PgRetrievalEvidenceRepository {
                     chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
                     embedding_model, recall_score, evidence_manifest, created_at
                 from retrieval_evidences
-                where tenant_id = $1 and dataset_id = $2
+                where tenant_id = $1
+                  and document_id in (
+                    select coalesce(canonical_document_id, id)
+                    from documents
+                    where tenant_id = $1 and dataset_id = $2
+                  )
                 order by document_chunk_id, created_at desc
             ) latest
             order by created_at desc, document_id asc, chunk_index asc
@@ -3934,15 +3998,20 @@ impl PgRetrievalEvidenceRepository {
                     embedding_model, recall_score, evidence_manifest, created_at
                 from retrieval_evidences
                 where tenant_id = $1
-                  and (
-                    dataset_id = $2
-                    or document_id in (
-                        select document_id
-                        from dataset_document_memberships
-                        where tenant_id = $1
-                          and dataset_id = $2
-                          and (expires_at is null or expires_at > now())
-                    )
+                  and document_id in (
+                    select coalesce(d.canonical_document_id, d.id)
+                    from documents d
+                    where d.tenant_id = $1
+                      and (
+                        d.dataset_id = $2
+                        or d.id in (
+                            select document_id
+                            from dataset_document_memberships
+                            where tenant_id = $1
+                              and dataset_id = $2
+                              and (expires_at is null or expires_at > now())
+                        )
+                      )
                   )
                 order by document_chunk_id, created_at desc
             ) latest

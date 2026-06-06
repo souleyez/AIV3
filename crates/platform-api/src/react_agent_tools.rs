@@ -2105,7 +2105,7 @@ async fn video_ppt_extraction_result(
         let chunks = state
             .storage
             .document_chunks()
-            .list_by_document(state.tenant_id, document_id)
+            .list_by_document_or_canonical(state.tenant_id, document_id)
             .await
             .map_err(ApiError::from_storage)?;
         let detail = to_document_media_detail_view(document, chunks);
@@ -3830,7 +3830,7 @@ async fn read_document_detail_result(
         let chunks = state
             .storage
             .document_chunks()
-            .list_by_document(state.tenant_id, document_id)
+            .list_by_document_or_canonical(state.tenant_id, document_id)
             .await
             .map_err(ApiError::from_storage)?;
         items.push(document_detail_item(

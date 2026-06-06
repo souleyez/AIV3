@@ -69946,7 +69946,7 @@ async fn assistant_run_media_context_for_document(
     let chunks = state
         .storage
         .document_chunks()
-        .list_by_document(state.tenant_id, document_id)
+        .list_by_document_or_canonical(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
     let context = extract_media_metadata_from_chunks(&chunks)
@@ -72017,7 +72017,7 @@ async fn get_document_media_detail(
     let chunks = state
         .storage
         .document_chunks()
-        .list_by_document(state.tenant_id, document_id)
+        .list_by_document_or_canonical(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
 
@@ -72088,7 +72088,7 @@ async fn list_document_retrieval_evidences(
     let mut evidences = state
         .storage
         .retrieval_evidences()
-        .list_by_document(state.tenant_id, document_id)
+        .list_by_document_or_canonical(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
     sort_retrieval_evidences_by_relevance(&mut evidences);
@@ -72135,13 +72135,13 @@ async fn load_document_detail_with_state_and_local_scope(
     let chunks = state
         .storage
         .document_chunks()
-        .list_by_document(state.tenant_id, document_id)
+        .list_by_document_or_canonical(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
     let mut retrieval_evidences = state
         .storage
         .retrieval_evidences()
-        .list_by_document(state.tenant_id, document_id)
+        .list_by_document_or_canonical(state.tenant_id, document_id)
         .await
         .map_err(ApiError::from_storage)?;
     sort_retrieval_evidences_by_relevance(&mut retrieval_evidences);
@@ -134246,6 +134246,231 @@ retrieve_evidence:
         .await
         .expect("child content fingerprint should be recorded");
         assert_eq!(canonical_document_id, child.id.0);
+    }
+
+    #[tokio::test]
+    async fn canonical_duplicate_read_through_reuses_chunks_evidence_and_facts() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let canonical_dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("canonical-dataset-{}", Uuid::new_v4()),
+                    title: "Canonical Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": "public",
+                    "default_secret_binding_ids": []
+                }),
+            )
+            .await
+            .expect("canonical dataset should be created");
+        let duplicate_dataset = harness
+            .storage
+            .datasets()
+            .create_with_metadata(
+                harness.tenant_id,
+                NewDataset {
+                    key: format!("duplicate-dataset-{}", Uuid::new_v4()),
+                    title: "Duplicate Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+                json!({
+                    "visibility": "public",
+                    "default_secret_binding_ids": []
+                }),
+            )
+            .await
+            .expect("duplicate dataset should be created");
+        let canonical = harness
+            .storage
+            .documents()
+            .create(
+                harness.tenant_id,
+                NewDocument {
+                    dataset_id: canonical_dataset.id,
+                    title: "Canonical doc".to_string(),
+                    object_key: "/tmp/canonical-doc.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("canonical document should be created");
+        let duplicate = harness
+            .storage
+            .documents()
+            .create(
+                harness.tenant_id,
+                NewDocument {
+                    dataset_id: duplicate_dataset.id,
+                    title: "Duplicate doc".to_string(),
+                    object_key: "/tmp/duplicate-doc.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("duplicate document should be created");
+        let now = Utc::now();
+        let fingerprint = "canonical-read-through-fixture";
+        harness
+            .storage
+            .documents()
+            .record_content_fingerprint(harness.tenant_id, canonical.id, fingerprint, 128, now)
+            .await
+            .expect("canonical fingerprint should record");
+        harness
+            .storage
+            .documents()
+            .record_content_fingerprint(harness.tenant_id, duplicate.id, fingerprint, 128, now)
+            .await
+            .expect("duplicate fingerprint should record");
+
+        let chunks = harness
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                harness.tenant_id,
+                canonical.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: canonical_dataset.id,
+                    document_id: canonical.id,
+                    chunk_index: 0,
+                    content: "canonical chunk body".to_string(),
+                    token_count: 3,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("canonical chunks should persist");
+        let execution = create_test_workflow_execution(
+            &harness.storage,
+            harness.tenant_id,
+            canonical_dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        harness
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                harness.tenant_id,
+                &[storage::NewRetrievalEvidence {
+                    execution_id: execution.id,
+                    dataset_id: canonical_dataset.id,
+                    document_id: canonical.id,
+                    document_chunk_id: chunks[0].id,
+                    chunk_index: 0,
+                    source_locator: "chunk:0".to_string(),
+                    content_excerpt: "canonical chunk body".to_string(),
+                    summary: "canonical evidence".to_string(),
+                    payload_filter_key: "canonical".to_string(),
+                    embedding_model: "test".to_string(),
+                    recall_score: 0.99,
+                    evidence_manifest: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("canonical evidence should persist");
+        harness
+            .storage
+            .document_facts()
+            .replace_document_facts(
+                harness.tenant_id,
+                canonical.id,
+                &[storage::NewDocumentFact {
+                    dataset_id: canonical_dataset.id,
+                    document_id: canonical.id,
+                    fact_type: "person".to_string(),
+                    name: "Deng Gong".to_string(),
+                    normalized_name: "deng gong".to_string(),
+                    value_text: Some("project owner".to_string()),
+                    value_number: None,
+                    value_date: None,
+                    attributes: json!({}),
+                    confidence: 0.9,
+                    source_kind: "chunk".to_string(),
+                    source_locator: Some("chunk:0".to_string()),
+                    source_chunk_id: Some(chunks[0].id),
+                    parse_version: Some("test".to_string()),
+                    created_at: now,
+                    sources: Vec::new(),
+                }],
+            )
+            .await
+            .expect("canonical facts should persist");
+
+        let duplicate_chunks = harness
+            .storage
+            .document_chunks()
+            .list_by_document_or_canonical(harness.tenant_id, duplicate.id)
+            .await
+            .expect("duplicate chunks should read through");
+        assert_eq!(duplicate_chunks.len(), 1);
+        assert_eq!(duplicate_chunks[0].document_id, canonical.id);
+        assert_eq!(duplicate_chunks[0].content, "canonical chunk body");
+
+        let duplicate_evidence = harness
+            .storage
+            .retrieval_evidences()
+            .list_by_document_or_canonical(harness.tenant_id, duplicate.id)
+            .await
+            .expect("duplicate evidence should read through");
+        assert_eq!(duplicate_evidence.len(), 1);
+        assert_eq!(duplicate_evidence[0].document_id, canonical.id);
+
+        let duplicate_dataset_evidence = harness
+            .storage
+            .retrieval_evidences()
+            .list_latest_by_dataset(harness.tenant_id, duplicate_dataset.id, 10)
+            .await
+            .expect("duplicate dataset evidence should read through");
+        assert_eq!(duplicate_dataset_evidence.len(), 1);
+        assert_eq!(duplicate_dataset_evidence[0].document_id, canonical.id);
+
+        let duplicate_dataset_facts = harness
+            .storage
+            .document_facts()
+            .aggregate_document_facts_by_dataset(
+                harness.tenant_id,
+                duplicate_dataset.id,
+                "person",
+                10,
+            )
+            .await
+            .expect("duplicate dataset facts should read through");
+        assert_eq!(duplicate_dataset_facts.len(), 1);
+        assert_eq!(
+            duplicate_dataset_facts[0].source_document_ids,
+            vec![canonical.id]
+        );
+
+        let duplicate_document_facts = harness
+            .storage
+            .document_facts()
+            .aggregate_document_facts_by_documents(harness.tenant_id, &[duplicate.id], "person", 10)
+            .await
+            .expect("duplicate document facts should read through");
+        assert_eq!(duplicate_document_facts.len(), 1);
+        assert_eq!(
+            duplicate_document_facts[0].source_document_ids,
+            vec![canonical.id]
+        );
     }
 
     #[tokio::test]

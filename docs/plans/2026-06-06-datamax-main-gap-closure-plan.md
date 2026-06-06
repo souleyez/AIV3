@@ -463,7 +463,7 @@ git commit -m "Close static page template reuse and prewarm operations"
 
 ## Task 5: Implement Background Document Enrichment Phase 1
 
-**Status:** in progress as of 2026-06-06. Storage schema, third-party parse fingerprint capture, main-site local register fingerprint capture, zip child-document fingerprint capture, and a dry-run capable existing-document fingerprint backfill tool are implemented locally. 8-server migration/backfill rollout and canonical read-through in retrieval/facts remain pending.
+**Status:** in progress as of 2026-06-06. Storage schema, third-party parse fingerprint capture, main-site local register fingerprint capture, zip child-document fingerprint capture, a dry-run capable existing-document fingerprint backfill tool, and canonical read-through for chunks/evidence/facts are implemented locally. 8-server migration/backfill rollout and live smoke remain pending.
 
 **Files:**
 

@@ -122,6 +122,11 @@ Progress 2026-06-06:
 - Zip archive expansion now records SHA-256 and byte size for extracted child documents before enqueueing child ingest workflows.
 - Added `document-fingerprint-backfill` as a dry-run capable maintenance binary for existing documents. It supports `--dataset-id`, `--document-id`, `--limit`, `--dry-run`, `--include-existing`, and `--pretty`, and only records fingerprints for local object keys that resolve on the current server.
 - Storage records the first seen content fingerprint as the canonical document and marks later matching content as duplicate without changing external document IDs.
+- Added canonical read-through for duplicate document reads:
+  - document chunks can be read through `list_by_document_or_canonical`;
+  - retrieval evidence can be read through `list_by_document_or_canonical`;
+  - dataset-level and document-scoped fact aggregates resolve duplicate documents to canonical document facts;
+  - dataset retrieval evidence includes canonical evidence for documents assigned to the dataset.
 - Added regression coverage in `external_document_parse_endpoint_downloads_and_enqueues_ingest` for:
   - `documents.content_sha256`;
   - `documents.content_size_bytes`;
@@ -131,9 +136,15 @@ Progress 2026-06-06:
 - Added regression coverage in `register_document_records_local_content_fingerprint` for:
   - local object-key fingerprint capture through `/v1/documents`;
   - canonical document alias creation in `document_content_fingerprints`.
+- Added regression coverage in `canonical_duplicate_read_through_reuses_chunks_evidence_and_facts` for:
+  - duplicate-document chunk read-through;
+  - duplicate-document retrieval evidence read-through;
+  - duplicate-dataset retrieval evidence read-through;
+  - duplicate-dataset and duplicate-document fact aggregate read-through.
 - Verified locally with:
   - `cargo fmt --check -p platform-api -p storage`;
   - `cargo test -p platform-api --bin document-fingerprint-backfill`;
+  - `cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib`;
   - `cargo test -p platform-api register_document_records_local_content_fingerprint --lib`;
   - `cargo test -p platform-api create_zip_document_ingest_records_child_content_fingerprint --lib`;
   - `cargo test -p platform-api external_document_parse_endpoint_downloads_and_enqueues_ingest --lib`;
@@ -143,7 +154,7 @@ Progress 2026-06-06:
 - Not done yet:
   - 8-server migration rollout;
   - existing-document fingerprint backfill dry-run/execution on 8 server;
-  - duplicate-read canonical routing in retrieval/facts.
+  - 8-server live duplicate read-through smoke.
 
 ## Task 3: Canonical Dedup Without Breaking Document IDs
 
