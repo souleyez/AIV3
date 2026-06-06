@@ -2244,3 +2244,32 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, production table, schema, or dataset-source mapping was changed;
   - PostgreSQL notice logs included only existing schema/relation names;
   - 120 server was not touched.
+
+### 2026-06-06 Reachable Single-Document Enrichment Candidate
+
+- Purpose:
+  - avoid blocking historical enrichment solely on the previously reviewed dataset whose stored object files are missing;
+  - find a tiny reviewed scope that already has content fingerprints and missing deterministic enrichment kinds;
+  - keep this as a dry-run candidate only, with no real enqueue without explicit approval.
+- 8-server read-only candidate search:
+  - query shape: aggregate by dataset over fingerprinted documents and missing `procedure_steps_v1` / `table_structure_v1` runs;
+  - output contained only dataset UUIDs and counts, no document titles, object keys, paths, URLs, or content;
+  - found one dataset with one fingerprinted document missing both checked kinds.
+- Dataset-level precheck:
+  - dataset: `1bcf2529-0bbb-46e6-884f-c2b33db352c2`;
+  - receipt directory: `/srv/aiv3/repo/target/document-enrichment-ready-candidate-precheck-20260606T134123Z`;
+  - command: `./target/release/document-enrichment-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --kind procedure_steps,table_structure --limit 5 --dry-run --summary-only --pretty`;
+  - result: `document_count=5`, `missing_fingerprint_count=4`, `already_exists_count=0`, `would_enqueue_count=2`, `enqueued_count=0`, `enqueue_count_by_kind.procedure_steps_v1=1`, `enqueue_count_by_kind.table_structure_v1=1`;
+  - conclusion: the dataset contains one usable document but is not suitable for dataset-level real enqueue until the scope is narrowed.
+- Single-document precheck:
+  - document: `00fc651b-99f7-444b-9ee7-59695b2736cf`;
+  - receipt directory: `/srv/aiv3/repo/target/document-enrichment-ready-document-precheck-20260606T134212Z`;
+  - command: `./target/release/document-enrichment-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --document-id 00fc651b-99f7-444b-9ee7-59695b2736cf --kind procedure_steps,table_structure --dry-run --summary-only --pretty`;
+  - result: `document_count=1`, `missing_fingerprint_count=0`, `already_exists_count=0`, `would_enqueue_count=2`, `enqueued_count=0`, `enqueue_count_by_kind.procedure_steps_v1=1`, `enqueue_count_by_kind.table_structure_v1=1`;
+  - conclusion: this is a valid tiny candidate if an operator explicitly approves the first real historical enrichment enqueue.
+- Safety:
+  - no historical enrichment runs were enqueued;
+  - no historical fingerprint or fact records were written;
+  - no document title, document body, external URL, local path, raw row, database URL, credential, bearer token, provider payload, cookie, local key, or secret env value was recorded;
+  - no public API, third-party URL, auth method, required request field, existing response field, production table, schema, or dataset-source mapping was changed;
+  - 120 server was not touched.
