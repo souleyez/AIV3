@@ -1771,6 +1771,15 @@ Data-ingestion external fixed-task smoke:
   - explicit string audit passed for the four Markdown copies: `dataset_external_id`, `dataset_external_ids`, `available_document_external_ids`, `documentExternalId`, `conversation_external_id`, `table-data.csv`, `report.ppt`, `report.md`, `artifact_links`, `DataMax`, and `兼容命名`;
   - secret-pattern audit found no OpenAI-style key, long literal Bearer token, password assignment, or `DATABASE_URL=.*://` in `docs/integrations` or `apps/web/public/external-integrations`;
   - `git diff --check` passed with only Windows LF/CRLF warnings.
+- 8-server/public verification:
+  - documentation commit `b4956a3` was pushed to GitHub and `/srv/aiv3/repo` was fast-forwarded to `b4956a3157d3`;
+  - 8-server `npm run check:pure-third-party-guide-html` passed after pull;
+  - public URLs returned HTTP `200` and included `兼容命名`, `table-data.csv`, `report.ppt`, and `report.md`:
+    - `https://v3.elepcloud.com/external-integrations/third-party-integration-api.zh-CN.md`;
+    - `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.md`;
+    - `https://v3.elepcloud.com/external-integrations/third-party-integration-api.zh-CN.html`;
+    - `https://v3.elepcloud.com/external-integrations/pure-third-party-integration-guide.zh-CN.html`;
+  - `aiv3-platform-api.service` and `aiv3-web.service` remained active; the known 8-server untracked `mode` file was not touched.
 - Safety:
   - no third-party public URL, auth method, required request field, existing response field, status value, or header name was changed;
   - existing `v3_*` and `X-V3-*` protocol names were intentionally preserved and documented as compatibility fields;
