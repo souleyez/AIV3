@@ -10298,6 +10298,17 @@ fn external_channel_sse_completion_with_done(
         &idempotency_key,
         &text,
     );
+    let completed_text = completed_data
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if text.trim().is_empty() {
+                "本轮处理已返回当前结果。".to_string()
+            } else {
+                text.clone()
+            }
+        });
     encoded.push_str(&sse_json_event(
         "external_channel.completed",
         external_channel_public_stream_payload(external_channel_sse_public_payload(
@@ -10307,11 +10318,7 @@ fn external_channel_sse_completion_with_done(
             external_channel_static_page_sse_sequence("completed"),
             "completed",
             "completed",
-            if text.trim().is_empty() {
-                "本轮处理已返回当前结果。"
-            } else {
-                &text
-            },
+            &completed_text,
             None,
             None,
             completed_data,
@@ -10446,6 +10453,17 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
         &idempotency_key,
         &text,
     );
+    let completed_text = completed_data
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if text.trim().is_empty() {
+                "本轮处理已返回当前结果。".to_string()
+            } else {
+                text.clone()
+            }
+        });
     let completed_payload = external_channel_sse_public_payload(
         assistant_run_id,
         &idempotency_key,
@@ -10453,11 +10471,7 @@ async fn external_channel_sse_completion_with_done_persisted_and_delta(
         external_channel_static_page_sse_sequence("completed"),
         "completed",
         "completed",
-        if text.trim().is_empty() {
-            "本轮处理已返回当前结果。"
-        } else {
-            &text
-        },
+        &completed_text,
         None,
         None,
         completed_data.clone(),
