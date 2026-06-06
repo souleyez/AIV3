@@ -34583,6 +34583,8 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
 
 const STATIC_PAGE_TEMPLATE_PREWARM_QUEUE: &str = "static_page_template_prewarm";
 const STATIC_PAGE_TEMPLATE_PREWARM_TASK_KEY: &str = "prewarm_static_page_template";
+const STATIC_PAGE_TEMPLATE_PREWARM_SOURCE: &str =
+    "external_channel_static_page_template_prewarm_candidate";
 
 #[derive(Debug, Clone)]
 struct StaticPageTemplatePrewarmCandidate {
@@ -34598,7 +34600,7 @@ fn static_page_template_prewarm_source_refs(
     message: &ExternalBotMessageView,
 ) -> Value {
     json!({
-        "source": "external_channel_static_page_template_prewarm_candidate",
+        "source": STATIC_PAGE_TEMPLATE_PREWARM_SOURCE,
         "auto_publish_generated_artifact": true,
         "effect_image_confirmation_required": false,
         "continue_to_publish_after_effect_image": true,
@@ -37855,6 +37857,23 @@ fn external_channel_static_page_publish_completed_event_is_final(
     publish_mode != "demo_direct_generated_artifact" && !provisional_direct_html
 }
 
+fn external_channel_static_page_source_allows_auto_publish(source_kind: Option<&str>) -> bool {
+    matches!(
+        source_kind,
+        Some("external_channel_static_page_artifact_request")
+            | Some("local_chat_static_page_image2_pipeline")
+            | Some(STATIC_PAGE_TEMPLATE_PREWARM_SOURCE)
+    )
+}
+
+fn external_channel_static_page_publish_customer_visible(source_refs: &Value) -> bool {
+    source_refs
+        .get("prewarm")
+        .and_then(|value| value.get("customer_visible"))
+        .and_then(Value::as_bool)
+        != Some(false)
+}
+
 async fn external_channel_static_page_image2_enqueue_if_enabled(
     state: &AppState,
     connection_id: &str,
@@ -38575,11 +38594,7 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
     {
         return Ok(());
     }
-    if !matches!(
-        source_kind,
-        Some("external_channel_static_page_artifact_request")
-            | Some("local_chat_static_page_image2_pipeline")
-    ) {
+    if !external_channel_static_page_source_allows_auto_publish(source_kind) {
         return Ok(());
     }
     let Some(run) = storage
@@ -38666,7 +38681,11 @@ async fn maybe_enqueue_external_static_page_publish_after_image_ready(
     let publish_default_template_scope =
         external_channel_static_page_default_template_scope_from_payload(&publish_template_payload);
 
-    if source_kind == Some("external_channel_static_page_artifact_request") {
+    if matches!(
+        source_kind,
+        Some("external_channel_static_page_artifact_request")
+            | Some(STATIC_PAGE_TEMPLATE_PREWARM_SOURCE)
+    ) {
         let Some(connection_id) = external_channel_static_page_source_ref_string(
             &draft.source_refs,
             "channel_connection_id",
@@ -55033,21 +55052,23 @@ async fn maybe_record_external_static_page_publish_failed(
         )
         .await
         .map_err(ApiError::from_storage)?;
-    if let Err(error) = maybe_dispatch_external_channel_outbound_reply(
-        storage,
-        tenant_id,
-        assistant_run_id,
-        "assistant_run.external_channel_static_page_publish_failed",
-        &failed_payload,
-        Utc::now(),
-    )
-    .await
-    {
-        tracing::warn!(
-            error = ?error,
-            assistant_run_id = %assistant_run_id,
-            "external channel outbound reply dispatch failed after static-page publish failure"
-        );
+    if external_channel_static_page_publish_customer_visible(&source_refs) {
+        if let Err(error) = maybe_dispatch_external_channel_outbound_reply(
+            storage,
+            tenant_id,
+            assistant_run_id,
+            "assistant_run.external_channel_static_page_publish_failed",
+            &failed_payload,
+            Utc::now(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error = ?error,
+                assistant_run_id = %assistant_run_id,
+                "external channel outbound reply dispatch failed after static-page publish failure"
+            );
+        }
     }
     Ok(())
 }
@@ -55220,21 +55241,23 @@ async fn maybe_record_external_static_page_publish_completed(
         )
         .await
         .map_err(ApiError::from_storage)?;
-    if let Err(error) = maybe_dispatch_external_channel_outbound_reply(
-        storage,
-        tenant_id,
-        assistant_run_id,
-        "assistant_run.external_channel_static_page_publish_completed",
-        &completed_payload,
-        Utc::now(),
-    )
-    .await
-    {
-        tracing::warn!(
-            error = ?error,
-            assistant_run_id = %assistant_run_id,
-            "external channel outbound reply dispatch failed after static-page publish completion"
-        );
+    if external_channel_static_page_publish_customer_visible(&source_refs) {
+        if let Err(error) = maybe_dispatch_external_channel_outbound_reply(
+            storage,
+            tenant_id,
+            assistant_run_id,
+            "assistant_run.external_channel_static_page_publish_completed",
+            &completed_payload,
+            Utc::now(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error = ?error,
+                assistant_run_id = %assistant_run_id,
+                "external channel outbound reply dispatch failed after static-page publish completion"
+            );
+        }
     }
     Ok(())
 }
@@ -95289,6 +95312,34 @@ mod tests {
             payload["execution_contract"]["request_response_field_change_allowed"],
             json!(false)
         );
+    }
+
+    #[test]
+    fn static_page_template_prewarm_source_can_auto_publish_silently() {
+        assert!(external_channel_static_page_source_allows_auto_publish(
+            Some(STATIC_PAGE_TEMPLATE_PREWARM_SOURCE)
+        ));
+        assert!(external_channel_static_page_source_allows_auto_publish(
+            Some("external_channel_static_page_artifact_request")
+        ));
+        assert!(!external_channel_static_page_source_allows_auto_publish(
+            Some("external_channel_chat_answer")
+        ));
+
+        assert!(!external_channel_static_page_publish_customer_visible(
+            &json!({
+                "source": STATIC_PAGE_TEMPLATE_PREWARM_SOURCE,
+                "prewarm": {
+                    "mode": "silent_low_load_template_prewarm",
+                    "customer_visible": false
+                }
+            })
+        ));
+        assert!(external_channel_static_page_publish_customer_visible(
+            &json!({
+                "source": "external_channel_static_page_artifact_request"
+            })
+        ));
     }
 
     #[test]

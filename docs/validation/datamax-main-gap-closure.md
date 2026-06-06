@@ -63,7 +63,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | Gate | Status | Receipt |
 | --- | --- | --- |
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
-| P0 Gate B: report/static-page operations | passed for current contract | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. |
+| P0 Gate B: report/static-page operations | passed for explicit report/static-page requests | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. 8-server static-page 5-way smoke returned 5/5 artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. Local prewarm safety coverage now proves silent prewarm sources are allowed through the later auto-publish path and do not dispatch customer outbound replies, but a real prewarm consumer/low-load execution smoke remains required before production enablement. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
 | P1 Gate C: background enterprise memory | passed for post-ingest rollout | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, the controlled batch recorded one canonical fingerprint and one `fact_index_v2` success. Commit `3171fbb5e47d` is deployed with `DOCUMENT_ENRICHMENT_KINDS` narrowed to five deterministic kinds, `aiv3-document-enrichment-worker.service` active at low priority, and no pending enrichment backlog. A tiny live upload/new-parse smoke then proved all five configured deterministic kinds enqueue and succeed for a newly indexed document. Full existing-document backfill remains disabled. |
 | P1 Gate D: low-quality answer recovery | passed for safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue now requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Dedicated opt-in guard is deployed to 8 server on `3394b0a5f60a`; runtime audit shows the dedicated autofix flag unset and both allowlists excluding `answer_quality_autofix`, so live enqueue remains intentionally disabled until an explicit operator decision. |
@@ -269,6 +269,23 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - Accepted-template matching/reuse and prewarm task construction are implemented and tested.
   - The accepted Xinbai report template remains valid locally and publicly.
   - Silent low-load template prewarm is not active in production until `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` is configured and a low-load execution smoke is recorded.
+
+### 2026-06-06 Static-Page Prewarm Auto-Publish Safety Slice
+
+- Files changed:
+  - `crates/platform-api/src/lib.rs`.
+- Behavior:
+  - extracted the silent prewarm source constant `external_channel_static_page_template_prewarm_candidate`;
+  - allows that prewarm source through the later Image2-preview-to-static-page auto-publish source gate;
+  - keeps explicit static-page requests and local chat static-page pipelines on the same auto-publish allowlist;
+  - skips third-party outbound reply dispatch for static-page publish success/failure when the draft source refs carry `prewarm.customer_visible=false`.
+- Local verification:
+  - `cargo fmt --check -p platform-api` passed.
+  - `cargo test -p platform-api static_page_template_prewarm --lib` passed, 3 tests.
+  - `cargo check -p platform-api` passed.
+- Remaining:
+  - production `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` remains unset;
+  - a real low-load prewarm consumer/execution smoke is still required before enabling the production flag, otherwise prewarm can become queued work without a proven end-to-end template artifact.
 
 ### 2026-06-06 Background Document Enrichment Schema Phase 1
 
