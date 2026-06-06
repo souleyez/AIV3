@@ -9115,12 +9115,13 @@ async fn create_chat_session(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let started = apply_workflow_signal(&state, execution.id, WorkflowSignal::Start).await?;
 
     Ok((
         StatusCode::CREATED,
         Json(CreateChatSessionResponse {
             chat_session: hydrate_chat_session_view(&state, session).await?,
-            workflow_execution: to_workflow_execution_view(execution),
+            workflow_execution: started.execution,
         }),
     ))
 }
@@ -9280,13 +9281,14 @@ async fn append_chat_session_turn(
         )
         .await
         .map_err(ApiError::from_storage)?;
+    let started = apply_workflow_signal(&state, execution.id, WorkflowSignal::Start).await?;
 
     Ok((
         StatusCode::CREATED,
         Json(AppendChatSessionTurnResponse {
             chat_session: hydrate_chat_session_view(&state, session).await?,
             user_message: hydrate_chat_message_view(&state, user_message).await?,
-            workflow_execution: to_workflow_execution_view(execution),
+            workflow_execution: started.execution,
         }),
     ))
 }
@@ -136277,7 +136279,8 @@ retrieve_evidence:
         assert_eq!(payload.user_message.turn_index, 2);
         assert_eq!(payload.user_message.content, "Follow-up question");
         assert_eq!(payload.workflow_execution.kind, WorkflowKind::ChatSession);
-        assert_eq!(payload.workflow_execution.status, WorkflowStatus::Pending);
+        assert_eq!(payload.workflow_execution.status, WorkflowStatus::Running);
+        assert_eq!(payload.workflow_execution.stage, "orchestrate_chat_session");
 
         let persisted_execution = harness
             .storage
@@ -136295,6 +136298,16 @@ retrieve_evidence:
             persisted_execution.context["prompt"],
             json!("Follow-up question")
         );
+        let tasks = harness
+            .storage
+            .workflow_tasks()
+            .list_by_execution(payload.workflow_execution.id)
+            .await
+            .expect("workflow tasks should load");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].queue, "chat_session");
+        assert_eq!(tasks[0].task_key, "orchestrate_chat_session");
+        assert_eq!(tasks[0].status.as_str(), "queued");
 
         let messages = harness
             .storage

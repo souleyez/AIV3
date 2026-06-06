@@ -80,7 +80,7 @@ Treat this section as the current executable plan. The longer task bodies below 
 | Priority | Gap | Current state | Next executable action | Done when |
 | --- | --- | --- | --- | --- |
 | P0 | G6 data-ingestion sync idempotency | Fixed and deployed. Confirm/sync routes are live on 8 server, and retry sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed after retrieval-evidence upsert. The target staging dataset has source-derived documents, chunks, and evidence. | Record the success receipt, keep the 577 processed rows vs 384 unique evidence rows as a counting/materialization audit item, then move to P0 production smoke. | Duplicate-key failure no longer blocks data-ingestion sync; docs record the deployed commit, sync id, counts, and remaining count-audit note. |
-| P0 | G1/G2 production smoke and concurrency | Runtime config shows 20 chat lanes, 5 static-page/Image2 lanes, and 2 Cloudflare fallback lanes. Third-party streaming smoke passed, but full 20-way ordinary chat, main-site 20-way, static-page 5-way, fallback 2-way, report export, and document-quality smoke are not closed. | After G6 is fixed, run the full private smoke set against `https://v3.elepcloud.com` with credentials loaded outside the repo. | Validation ledger records pass/fail, latency, report links, export links, service status, and no secret leakage. |
+| P0 | G1/G2 production smoke and concurrency | Runtime config shows 20 chat lanes, 5 static-page/Image2 lanes, and 2 Cloudflare fallback lanes. Third-party 20-way external-channel smoke passed. Main-site 20-way smoke accepted all 20 requests but produced no assistant messages because `chat_session_workflow` executions stayed `pending/queued` with no task enqueued. Local fix now starts chat-session workflows immediately after session/message persistence. | Commit and deploy the chat-session workflow-start fix, then rerun main-site 20-way smoke before continuing static-page 5-way, fallback 2-way, report export, and document-quality smoke. | Validation ledger records pass/fail, latency, report links, export links, service status, and no secret leakage. |
 | P0 | G3 Xinbai monthly report template operations | Accepted template and focused export links work. Low-load prewarm is still off. Product expectation is that most report requests reuse the modular monthly template and reorder modules by focus. | Keep the Xinbai modular monthly report as the only default template, verify focus routing and export files on 8 server, then decide whether to enable low-load prewarm. | Report requests return one clickable report link, correct focus, accessible `table-data.csv`, `report.ppt`, `report.md`, and no duplicate link chatter. |
 | P0 | G7 controlled streaming | Third-party stream path has a production receipt. Main-site new/continue true streaming still needs browser/SSE smoke. | Run browser smoke with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` for new AssistantRun and continued AssistantRun. | Main-site UI shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
 | P1 | G4 background enterprise memory | Fingerprint/dedup, enrichment-run storage, deterministic enrichment kinds, and aggregate-first local tests are implemented. Production existing-document backfill/enrichment remains disabled. | Run a limited non-dry-run fingerprint backfill on reviewed scope, enqueue one reviewed document enrichment, then run duplicate read-through and aggregate Q&A smoke. | Resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval; duplicate documents do not double count. |
@@ -91,11 +91,12 @@ Treat this section as the current executable plan. The longer task bodies below 
 ### Immediate Execution Order
 
 1. Record the 8-server G6 idempotency success receipt and count-audit note in validation docs.
-2. Run P0 production smoke: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality.
-3. Run main-site streaming browser/SSE smoke for new and continued AssistantRun.
-4. Verify Xinbai monthly report template reuse, focus ordering, one-link reply, and export files on 8 server.
-5. Decide whether the 577 processed vs 384 unique evidence row count requires a code fix before broader data-ingestion rollout.
-6. Continue to controlled background enterprise-memory batch only after P0 smoke remains stable.
+2. Deploy the chat-session workflow-start fix exposed by main-site 20-way smoke.
+3. Run P0 production smoke: third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, report/export, and document-quality.
+4. Run main-site streaming browser/SSE smoke for new and continued AssistantRun.
+5. Verify Xinbai monthly report template reuse, focus ordering, one-link reply, and export files on 8 server.
+6. Decide whether the 577 processed vs 384 unique evidence row count requires a code fix before broader data-ingestion rollout.
+7. Continue to controlled background enterprise-memory batch only after P0 smoke remains stable.
 
 ### P0 Task A: Fix Retrieval-Evidence Idempotency
 

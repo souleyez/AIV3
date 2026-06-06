@@ -62,7 +62,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 
 | Gate | Status | Receipt |
 | --- | --- | --- |
-| P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. Full third-party 20-way, main-site 20-way, static-page 5-way, Cloudflare fallback 2-way, and report/document-quality private smoke remain pending. |
+| P0 Gate A: 20-way concurrency | in progress | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke also passed on 2026-06-06 with 20/20 OK and P95 5721 ms. Main-site 20-way smoke exposed a chat-session workflow-start bug: 20/20 requests were accepted but no assistant messages were produced because executions remained queued without `chat_session` tasks. A local fix now starts the workflow after session/message persistence; deployment and rerun remain pending. Static-page 5-way, Cloudflare fallback 2-way, and report/document-quality private smoke remain pending. |
 | P0 Gate B: report/static-page operations | in progress | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. Production low-load prewarm is not enabled because `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED` is unset on 8 server. See `external-capability-routing-smoke.md` and `external-report-export-smoke.md` for latest full bearer-backed report smoke. |
 | P1 Gate C: background enterprise memory | in progress | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. A dry-run capable existing-document fingerprint backfill tool exists. Canonical read-through for chunks/evidence/facts, the enrichment-run repository foundation, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, Phase 2 deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. Full local document-quality smoke and aggregate-first regressions passed. 8-server deploy to `1db91f69c3fd`, schema migration, build, service restart, dry-run fingerprint backfill, and one-shot worker startup are recorded. Production non-dry-run backfill/enrichment, live duplicate read-through smoke, and private aggregate smoke remain pending. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
@@ -99,6 +99,47 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 - Interpretation:
   - This is expected without a private bearer and confirms the external endpoint does not bypass third-party channel auth.
   - This probe is not a concurrency pass/fail result.
+
+### 2026-06-06 External-Channel 20-Way Smoke
+
+- Command:
+  - `npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20 --timeout-ms 120000`
+- Receipt:
+  - `target/external-channel-20way-smoke/20260606035800.json`
+- Result:
+  - `okCount=20`, `failedCount=0`.
+  - Latency: `p50=4739 ms`, `p95=5721 ms`, `max=6453 ms`.
+  - SSE included `external_channel.delta` and `external_channel.completed` events.
+- Interpretation:
+  - The third-party external-channel endpoint can accept and complete 20 concurrent ordinary requests with the private bearer loaded outside the repository.
+  - The script's `answeredCount=0` reflects current script/report semantics and was not treated as a failure because all tasks emitted completion events.
+
+### 2026-06-06 Main-Site 20-Way Smoke Failure And Local Fix
+
+- Command:
+  - `npm run smoke:main-chat-20way -- --base-url https://v3.elepcloud.com --concurrency 20 --timeout-ms 90000 --poll-timeout-ms 120000`
+- Receipt:
+  - `target/main-chat-20way-smoke/20260606035856.json`
+- Result before fix:
+  - `acceptedCount=20`.
+  - `assistantMessageCount=0`.
+  - `okCount=0`, `failedCount=20`.
+  - Poll latency around 124-126 seconds because sessions never received assistant messages.
+- 8-server diagnosis:
+  - `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-platform-api.service`, and `aiv3-retrieval-worker.service` were active.
+  - Recent `chat_session_workflow` executions stayed `status=pending`, `stage=queued`.
+  - No `chat_session/orchestrate_chat_session` workflow tasks were enqueued.
+- Root cause:
+  - `create_chat_session` and `append_chat_session_turn` created workflow executions and events but did not apply `WorkflowSignal::Start`.
+- Local fix:
+  - After session/message/context persistence, both routes now apply `WorkflowSignal::Start` and return the started execution.
+  - This keeps the existing public response shape unchanged while moving `workflow_execution.status` to `running`, `stage` to `orchestrate_chat_session`, and enqueueing the worker task.
+- Local verification:
+  - `cargo fmt --check -p platform-api` passed.
+  - `cargo test -p platform-api append_chat_session_turn_creates_user_message_and_new_execution --lib -- --nocapture` completed; the local shared-database guard skipped the DB route assertions as designed.
+  - `cargo check -p platform-api` passed.
+- Remaining:
+  - Commit, deploy to 8 server, restart `aiv3-platform-api.service`, and rerun the main-site 20-way smoke with a private temporary main-site session.
 
 ### 2026-06-06 No-Cookie Cloudflare Fallback Guard Probe
 
