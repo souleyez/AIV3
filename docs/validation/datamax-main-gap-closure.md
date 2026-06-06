@@ -1475,3 +1475,62 @@ Data-ingestion external fixed-task smoke:
   - no third-party public URL, auth method, required request field, or existing response field was changed;
   - no bearer token, database URL, raw customer row, full document, or provider payload was recorded;
   - the report-link fix is additive to customer-facing text and existing artifact fields.
+
+### 2026-06-06 Current-Head Third-Party Scoped Document Chat Smoke
+
+- Purpose:
+  - close the P0 gap for third-party document scope reuse, dataset/document union authorization, changed-conversation isolation, and temporary attachment-title document supply.
+- Script added:
+  - `scripts/smoke/external-scoped-document-chat.mjs`;
+  - package command: `npm run smoke:external-scoped-document-chat`.
+- Commits:
+  - `592fc38` added the executable scoped-document smoke and updated the main gap-closure plan;
+  - `e67d369` isolated external scoped document answers from cross-conversation external user memory;
+  - `4aa6073` tightened attachment title matching and supplied selected attachment document chunks.
+- Initial 8-server run:
+  - 8 server pulled `592fc38aa76c`;
+  - result: failed because a changed `conversation_external_id` still received the previous scoped answer token through `external_user_context`;
+  - diagnosis: the isolated run had `external_document_scope_status=document_ids_missing`, no scoped documents, and no document evidence, but `conversation_memory_items` supplied external user memory summarizing the previous document-scoped answer.
+- First fix:
+  - document/data conversation-bound external channel answers are no longer persisted into cross-conversation external user memory;
+  - existing external user memories are filtered at supply time by checking source `assistant_run.selected_scope`; older memories derived from conversation-bound document/data scopes are not supplied to a different `conversation_external_id`.
+- Second 8-server run:
+  - 8 server pulled `e67d3694247a`, built `platform-api` release, restarted `aiv3-platform-api.service`, and service state was `active`;
+  - result: failed at attachment-title scope because DataMax matched the attachment filename but did not supply selected attachment content to the model.
+- Second fix:
+  - attachment title matching now rejects sibling filenames that do not contain the strict ASCII title tokens from the uploaded filename;
+  - chunk fallback supply now directly loads selected document ids when dataset-scope listing is insufficient, so conversation-scoped attachment documents can be supplied from their parsed chunks.
+- Final 8-server run:
+  - deployed commit: `4aa607319693`;
+  - 8 server pulled the commit, built `platform-api` release, restarted `aiv3-platform-api.service`, and service state was `active`;
+  - the pre-existing untracked `mode` file remained untouched.
+- Final command shape:
+  - `EXTERNAL_SCOPED_DOCUMENT_SMOKE_BEARER=<server-loaded token> npm run smoke:external-scoped-document-chat -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --source-id third-party-source-main --timeout-ms 180000 --parse-timeout-ms 240000 --output-dir target/external-scoped-document-chat-smoke-current-head-passed`.
+- Final receipt:
+  - `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-current-head-passed/20260606095323.json`;
+  - `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-current-head-passed/20260606095323.md`.
+- Final result:
+  - `ok=true`;
+  - `caseCount=4`;
+  - parsed fixtures `alpha`, `beta`, `extra`, and `attachment` each reached `parseStatus=parsed`, `modelStatus=ready`, `chunkCount=1`, and `evidenceCount=1`;
+  - dataset group + explicit extra document union returned all expected scoped fixture tokens;
+  - same-conversation follow-up returned the explicit extra document token without repeating scope fields;
+  - changed-conversation no-scope case did not return the prior scoped token;
+  - attachment-title scope returned the attachment fixture token.
+- Local verification:
+  - `node --check scripts\smoke\external-scoped-document-chat.mjs` passed;
+  - `cargo test -p platform-api external_channel_dataset_external_id_authorizes_and_restores_conversation_group --lib` passed;
+  - `cargo test -p platform-api external_channel_temporary_scope_restores_for_same_conversation_without_repeated_document_ids --lib` passed;
+  - `cargo test -p platform-api external_channel_document_scope_builds_temporary_dataset_scope_from_available_documents --lib` passed;
+  - `cargo test -p platform-api external_channel_document_scope_missing_source_is_model_visible --lib` passed;
+  - `cargo test -p platform-api external_channel_attachment_title_hints_match_resume_document_titles --lib` passed;
+  - `cargo test -p platform-api external_user_memory_is_intent_gated_and_supplied --lib` passed;
+  - `cargo test -p platform-api assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents --lib` passed;
+  - `cargo test -p platform-api external_channel_dataset_scope_merges_explicit_attachment_title_document --lib` passed;
+  - `cargo fmt --check -p platform-api` passed;
+  - `cargo check -p platform-api` passed;
+  - `git diff --check` passed with only Windows LF/CRLF warnings.
+- Safety:
+  - third-party public URL, auth, required request fields, and existing response fields were not changed;
+  - no 120 server action was performed;
+  - no bearer token, database URL, full customer document, raw customer row, or provider payload was recorded.

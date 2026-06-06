@@ -87,6 +87,55 @@ cargo check -p platform-api
 
 - Pending: 8-server private aggregate smoke for live resume, attendance, Xinbai, and elderly-care datasets after deployment and private bearer/cookie configuration are available.
 
+## 2026-06-06 8-Server Third-Party Scoped Document Chat Smoke
+
+- Commit deployed: `4aa607319693`.
+- Command shape:
+
+```bash
+EXTERNAL_SCOPED_DOCUMENT_SMOKE_BEARER=<server-loaded token> \
+npm run smoke:external-scoped-document-chat -- \
+  --base-url https://v3.elepcloud.com \
+  --connection-id generic-chat-main \
+  --source-id third-party-source-main \
+  --timeout-ms 180000 \
+  --parse-timeout-ms 240000 \
+  --output-dir target/external-scoped-document-chat-smoke-current-head-passed
+```
+
+- Receipt:
+  - JSON: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-current-head-passed/20260606095323.json`
+  - Markdown: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-current-head-passed/20260606095323.md`
+- Result: passed, 4/4 cases.
+- Fixture readiness:
+  - `alpha`, `beta`, `extra`, and `attachment` parse status `parsed`;
+  - each fixture had `chunk_count=1` and `retrieval_evidence_count=1`;
+  - model status was `ready`.
+- Cases covered:
+  - `dataset_external_ids` authorized a stable group and `available_document_external_ids` unioned an explicit document outside that group;
+  - same `conversation_external_id` follow-up restored the previous scoped document range without repeating scope fields;
+  - changed `conversation_external_id` did not expose the prior scoped answer token;
+  - `attachment_refs.filename` matched the parsed attachment document and supplied its content to the answer.
+- Regressions found and fixed before pass:
+  - cross-conversation external user memory could previously supply answer excerpts derived from conversation-scoped document authorization; fixed by not persisting conversation-bound scoped answers to external user memory and by filtering older memory via source run `selected_scope`;
+  - attachment title scope could match sibling smoke documents too broadly and fail to supply selected document chunks; fixed by tightening ASCII title token matching and by allowing selected document ids to be loaded directly for fallback chunk supply.
+- Local verification for the fixes:
+
+```powershell
+node --check scripts\smoke\external-scoped-document-chat.mjs
+cargo test -p platform-api external_channel_attachment_title_hints_match_resume_document_titles --lib
+cargo test -p platform-api external_user_memory_is_intent_gated_and_supplied --lib
+cargo test -p platform-api assistant_run_external_temporary_scope_retrieval_limits_to_selected_documents --lib
+cargo test -p platform-api external_channel_dataset_scope_merges_explicit_attachment_title_document --lib
+cargo fmt --check -p platform-api
+cargo check -p platform-api
+git diff --check
+```
+
+- Safety:
+  - no third-party public URL, auth method, required request field, or existing response field changed;
+  - no bearer token, database URL, customer document body, provider payload, or customer row was recorded in this validation note.
+
 ## 2026-05-20 Deployment Target Evidence
 
 - Host: `8服务器`
