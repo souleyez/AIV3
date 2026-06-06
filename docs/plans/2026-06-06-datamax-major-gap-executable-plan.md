@@ -659,6 +659,8 @@ git push
 - Update: `docs/validation/static-page-render-smoke.md`
 - Update: `docs/validation/datamax-main-gap-closure.md`
 
+**Current status 2026-06-06:** Implemented and safe-disabled. Platform code creates a customer-invisible draft and delayed `static_page/generate_static_page_image` task only when `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true`; the static-page worker rechecks active heavy static-page/Codex work before image generation and requeues non-consumingly when load is above threshold. 8-server private smoke has already proven the local publish path can create an accepted generated-artifact template without customer-visible SSE/artifact events, and duplicate same-scope/default-prompt requests do not enqueue another prewarm task. The production default remains off; only a reviewed temporary smoke window may set `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true`.
+
 **Step 1: Verify prewarm remains off by default**
 
 Run an 8-server env/status audit that records only:
@@ -687,6 +689,14 @@ Expected:
 - prewarm never blocks or delays customer-visible chat;
 - if any condition is uncertain, skip prewarm.
 
+Current implementation detail:
+
+- enqueue gate is controlled by `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED`;
+- task start is delayed by `STATIC_PAGE_TEMPLATE_PREWARM_DELAY_MINUTES`, default 30;
+- worker counts active heavy static-page and Codex-host tasks for the same tenant before running Image2;
+- if active heavy task count is greater than `STATIC_PAGE_TEMPLATE_PREWARM_MAX_ACTIVE_TASKS`, default 0, the task is requeued after `STATIC_PAGE_TEMPLATE_PREWARM_RECHECK_DELAY_SECONDS`, default 300;
+- customer-visible report/static-page requests, data-ingestion requests, existing accepted template matches, dataset-overlap matches, and pending same `prewarm_key` all skip prewarm creation.
+
 **Step 3: Add plan-only smoke**
 
 Add or run a smoke that does not create customer-visible output:
@@ -713,6 +723,8 @@ Expected:
 - artifact completes;
 - later explicit report request can reuse it;
 - disabling the env flag stops future prewarm.
+
+2026-06-06 controlled smoke result: passed in a private window, then cleared. Production should stay unset/off unless a new reviewed low-load window is requested.
 
 **Step 5: Commit docs and code**
 

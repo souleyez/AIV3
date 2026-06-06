@@ -1587,6 +1587,31 @@ Data-ingestion external fixed-task smoke:
   - silent prewarm customer visibility stayed false;
   - no bearer token, database URL, raw customer document, or raw provider payload is intentionally recorded in this validation entry.
 
+### 2026-06-06 Task 8 Follow-Up Prewarm Audit
+
+- Local and 8-server heads:
+  - local `main` and GitHub `origin/main`: `ca26bcd`;
+  - 8-server `/srv/aiv3/repo`: `ca26bcd06`;
+  - 8-server services active: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-static-page-worker.service`.
+- 8-server runtime audit:
+  - `systemctl cat` and `systemctl show` for platform/static-page worker showed no active `STATIC_PAGE_TEMPLATE_PREWARM_*` runtime configuration;
+  - `STATIC_PAGE_IMAGE2_HTML_CONCURRENCY` and `CODEX_HOST_CLOUDFLARE_CONCURRENCY` were not changed in this audit;
+  - `/v1/workflow-tasks/queue-stats` returned HTTP data with `static_page_image_preview queued=0 running=0 retrying=0` and `static_page_render queued=0 running=0 retrying=0`;
+  - historical `failed` counters remain visible (`static_page_image_preview=4`, `static_page_render=1`) and were not treated as current backlog.
+- Current implementation conclusion:
+  - production prewarm remains safe-disabled unless `STATIC_PAGE_TEMPLATE_PREWARM_ENABLED=true` is explicitly set;
+  - when enabled in a reviewed window, platform prewarm creates a customer-invisible draft plus delayed `static_page/generate_static_page_image` task, not a third-party-visible reply;
+  - worker-side low-load recheck counts active heavy static-page/Codex work and non-consumingly requeues before Image2 when pressure is above threshold;
+  - silent prewarm finalization uses local render/publish after Image2 preview and does not require Cloudflare Codex.
+- Verification:
+  - local `cargo test -p platform-api static_page_template_prewarm --lib` passed, 3 tests;
+  - local `cargo test -p static-page-worker --bin static-page-worker prewarm` passed, 2 tests;
+  - 8-server `cargo test -p platform-api static_page_template_prewarm --lib --quiet` passed, 3 tests;
+  - 8-server `cargo test -p static-page-worker --bin static-page-worker prewarm --quiet` passed, 2 tests.
+- Decision:
+  - no code or production config change is required for Task 8 in this pass;
+  - do not enable background template prewarm for normal production traffic without a fresh reviewed low-load smoke window and post-window flag cleanup.
+
 ### 2026-06-06 P1 Follow-Up Status
 
 - Model-gateway operator smoke:
