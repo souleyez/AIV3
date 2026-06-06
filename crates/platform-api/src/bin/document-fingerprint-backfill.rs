@@ -42,6 +42,33 @@ struct LocalFingerprint {
     content_size_bytes: i64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FingerprintSkipReason {
+    EmptyObjectKey,
+    RemoteObjectKeyUnsupported,
+    LocalObjectRootUnset,
+    FileNotFound,
+    NotRegularFile,
+    FileTooLarge,
+    FileOpenFailed,
+    FileReadFailed,
+}
+
+impl FingerprintSkipReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EmptyObjectKey => "empty_object_key",
+            Self::RemoteObjectKeyUnsupported => "remote_object_key_unsupported",
+            Self::LocalObjectRootUnset => "local_object_root_unset",
+            Self::FileNotFound => "file_not_found",
+            Self::NotRegularFile => "not_regular_file",
+            Self::FileTooLarge => "file_too_large",
+            Self::FileOpenFailed => "file_open_failed",
+            Self::FileReadFailed => "file_read_failed",
+        }
+    }
+}
+
 fn usage(program: &str) -> String {
     format!(
         "Usage: {program} [--dataset-id <uuid>] [--document-id <uuid>] [--limit <n>] [--dry-run] [--include-existing] [--summary-only] [--pretty]"
@@ -147,17 +174,16 @@ async fn run_document_fingerprint_backfill(
     let mut skipped_reason_counts = BTreeMap::<String, usize>::new();
 
     for document in candidates {
-        let Some(fingerprint) = local_fingerprint_for_object_key(&document.object_key) else {
-            skipped_count += 1;
-            increment_count(&mut action_counts, "skipped");
-            increment_count(&mut skipped_reason_counts, "local_file_not_found");
-            documents.push(document_report(
-                &document,
-                "skipped",
-                Some("local_file_not_found"),
-                None,
-            ));
-            continue;
+        let fingerprint = match local_fingerprint_for_object_key(&document.object_key) {
+            Ok(fingerprint) => fingerprint,
+            Err(reason) => {
+                let reason = reason.as_str();
+                skipped_count += 1;
+                increment_count(&mut action_counts, "skipped");
+                increment_count(&mut skipped_reason_counts, reason);
+                documents.push(document_report(&document, "skipped", Some(reason), None));
+                continue;
+            }
         };
         let existing_canonical =
             load_existing_canonical_document_id(storage, tenant_id, &fingerprint.content_sha256)
@@ -283,49 +309,63 @@ async fn load_document_candidates(
         .collect())
 }
 
-fn local_fingerprint_for_object_key(object_key: &str) -> Option<LocalFingerprint> {
+fn local_fingerprint_for_object_key(
+    object_key: &str,
+) -> std::result::Result<LocalFingerprint, FingerprintSkipReason> {
     let path = resolve_local_object_path(object_key)?;
-    let metadata = fs::metadata(&path).ok()?;
+    let metadata = fs::metadata(&path).map_err(|_| FingerprintSkipReason::FileNotFound)?;
     if !metadata.is_file() {
-        return None;
+        return Err(FingerprintSkipReason::NotRegularFile);
     }
     let max_bytes = configured_max_fingerprint_bytes();
     if metadata.len() > max_bytes || metadata.len() > i64::MAX as u64 {
-        return None;
+        return Err(FingerprintSkipReason::FileTooLarge);
     }
 
-    let mut file = File::open(&path).ok()?;
+    let mut file = File::open(&path).map_err(|_| FingerprintSkipReason::FileOpenFailed)?;
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        let read = file.read(&mut buffer).ok()?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| FingerprintSkipReason::FileReadFailed)?;
         if read == 0 {
             break;
         }
         total = total.saturating_add(read as u64);
         if total > max_bytes || total > i64::MAX as u64 {
-            return None;
+            return Err(FingerprintSkipReason::FileTooLarge);
         }
         hasher.update(&buffer[..read]);
     }
 
-    Some(LocalFingerprint {
+    Ok(LocalFingerprint {
         path,
         content_sha256: format!("{:x}", hasher.finalize()),
         content_size_bytes: total as i64,
     })
 }
 
-fn resolve_local_object_path(object_key: &str) -> Option<PathBuf> {
-    let raw = object_key.trim().trim_start_matches("file://");
+fn resolve_local_object_path(
+    object_key: &str,
+) -> std::result::Result<PathBuf, FingerprintSkipReason> {
+    let trimmed = object_key.trim();
+    if trimmed.is_empty() {
+        return Err(FingerprintSkipReason::EmptyObjectKey);
+    }
+    if looks_like_remote_object_key(trimmed) {
+        return Err(FingerprintSkipReason::RemoteObjectKeyUnsupported);
+    }
+
+    let raw = trimmed.trim_start_matches("file://");
     if raw.is_empty() {
-        return None;
+        return Err(FingerprintSkipReason::EmptyObjectKey);
     }
 
     let direct = PathBuf::from(raw);
-    if direct.is_file() {
-        return Some(direct);
+    if direct.exists() {
+        return Ok(direct);
     }
 
     if cfg!(windows) {
@@ -335,17 +375,36 @@ fn resolve_local_object_path(object_key: &str) -> Option<PathBuf> {
                 if drive.len() == 1 {
                     let windows_path = format!("{}:\\{}", drive, path.replace('/', "\\"));
                     let candidate = PathBuf::from(windows_path);
-                    if candidate.is_file() {
-                        return Some(candidate);
+                    if candidate.exists() {
+                        return Ok(candidate);
                     }
                 }
             }
         }
     }
 
-    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
+    if direct.is_absolute() {
+        return Err(FingerprintSkipReason::FileNotFound);
+    }
+
+    let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or(FingerprintSkipReason::LocalObjectRootUnset)?;
     let rooted = Path::new(&root).join(raw);
-    rooted.is_file().then_some(rooted)
+    if rooted.exists() {
+        Ok(rooted)
+    } else {
+        Err(FingerprintSkipReason::FileNotFound)
+    }
+}
+
+fn looks_like_remote_object_key(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    ["http://", "https://", "s3://", "cos://", "oss://", "gs://"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
 }
 
 fn configured_max_fingerprint_bytes() -> u64 {
@@ -504,5 +563,23 @@ mod tests {
 
         assert_eq!(fingerprint.content_sha256, expected_sha256);
         assert_eq!(fingerprint.content_size_bytes, body.len() as i64);
+    }
+
+    #[test]
+    fn local_fingerprint_classifies_remote_object_keys() {
+        let error = local_fingerprint_for_object_key("https://example.invalid/customer.docx")
+            .expect_err("remote object keys are not fingerprinted locally");
+
+        assert_eq!(error, FingerprintSkipReason::RemoteObjectKeyUnsupported);
+        assert_eq!(error.as_str(), "remote_object_key_unsupported");
+    }
+
+    #[test]
+    fn local_fingerprint_classifies_missing_absolute_file() {
+        let path = std::env::temp_dir().join(format!("missing-{}", Uuid::new_v4()));
+        let error = local_fingerprint_for_object_key(&path.to_string_lossy())
+            .expect_err("missing absolute files should be reported");
+
+        assert_eq!(error, FingerprintSkipReason::FileNotFound);
     }
 }
