@@ -68,7 +68,7 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
 | P1 Gate C: background enterprise memory | passed for controlled production batch | Storage schema phase 1 implemented for document fingerprints, canonical aliases, and enrichment runs. Third-party parse, main-site local register, and zip child-document creation now persist SHA-256/size and canonical fingerprint rows when bytes/files are available. Canonical read-through for chunks/evidence/facts, feature-flagged post-ingest enrichment enqueue, document-level enrichment diagnostics, a standalone low-priority enrichment worker loop, deterministic enrichment kinds for tables/procedures/entities/resumes/spreadsheets, and local aggregate-first answer supply are implemented. On 8 server, a reviewed one-document non-dry-run fingerprint backfill recorded a canonical fingerprint, a single `fact_index_v2` enrichment run succeeded, 56 document facts were persisted, and the dataset entity snapshot reported 210 source facts across 6 scanned documents. Local document-quality, duplicate read-through, enrichment-worker, and aggregate regressions passed. Long-running production enrichment and full existing-document backfill remain disabled. |
 | P1 Gate D: low-quality answer recovery | in progress | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue remains configuration-gated by `CODEX_HOST_TASK_ENABLED` and `CODEX_HOST_TASK_ALLOWLIST`; 8-server live passive collection/enqueue smoke remains pending. |
 | P1 Gate E: confirmed data ingestion | passed for current contract | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. |
-| P1 Gate F: operator observability | passed locally, 8-server smoke pending | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. Production deployment and authenticated operator smoke remain pending. |
+| P1 Gate F: operator observability | passed for deployed page and queue summary | The external integrations page now includes a compact sanitized operations summary for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. It reuses existing protected/light endpoints and keeps task/runtime/conversation details lazy-loaded. Local external-integrations helper tests passed, web build passed, and local HTTP smoke returned `200`. 8-server deploy to `2193e0cd5248` succeeded; local/public `/external-integrations` returned `200` with DataMax/运营总览 SSR text; the web queue-stats proxy returned `200` with the configured observability cookie. Model-gateway status remains protected and returned `401 auth_session_required` without a main-system operator session, so an authenticated model-gateway operator smoke remains pending. |
 
 ## Rollout Receipts
 
@@ -686,9 +686,34 @@ This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure
   - `GET http://127.0.0.1:3100/external-integrations` returned HTTP `200` during local dev-server smoke;
   - the build emitted the existing Next.js middleware/proxy deprecation warning and NFT trace warning from `next.config.js`/local upload route; no new build failure was introduced.
 - Remaining boundary:
-  - 8-server deployment is pending;
-  - production operator smoke should verify `/external-integrations`, queue stats, and model-gateway status with the configured operator access;
+  - 8-server page and queue-summary deployment smoke passed;
+  - production operator smoke should still verify model-gateway status with a main-system operator session/cookie;
   - low-quality recovery remains passive and must not suppress normal customer answers.
+
+### 2026-06-06 8-Server Operator Observability Deployment Receipt
+
+- Commit:
+  - `2193e0cd5248 Expand DataMax operator observability`.
+- Deployment command shape:
+  - `git pull --ff-only`;
+  - `npm --prefix apps/web run build`;
+  - `sudo systemctl restart aiv3-web.service`.
+- Result:
+  - 8 server fast-forwarded from `8faa1b797` to `2193e0cd5248`;
+  - web build succeeded;
+  - `aiv3-web.service` active;
+  - `aiv3-platform-api.service` active;
+  - repository status remained `## main...origin/main` with the pre-existing untracked `mode` left untouched.
+- Smoke:
+  - `GET http://127.0.0.1:3100/external-integrations` returned `200`;
+  - `GET https://v3.elepcloud.com/external-integrations` returned `200`;
+  - both local and public page HTML contained `DataMax` and `运营总览`;
+  - platform queue stats returned `200` with `execution_count=197`, `task_count=392`, `queue_count=6`;
+  - web queue-stats proxy returned `200` with the configured observability cookie and a limited response of `execution_count=5`, `task_count=5`, `queue_count=1`;
+  - unauthenticated model-gateway status returned `401 auth_session_required`, which confirms the protected boundary but leaves authenticated operator status smoke pending.
+- Build warnings:
+  - existing Next.js middleware/proxy deprecation warning;
+  - existing Turbopack NFT trace warning from `next.config.js` and the local document upload route.
 
 ### 2026-06-06 8-Server Streaming And Data-Ingestion Routing Receipt
 

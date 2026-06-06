@@ -85,8 +85,8 @@ Treat this section as the current executable plan. The longer task bodies below 
 | P0 | G7 controlled streaming | Completed for the current contract. Third-party stream path has a production receipt. Main-site new/continue true streaming now has a reusable SSE smoke script and a public 8-server receipt with `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true`: new run and continue run both emit many live deltas, then one completed event and one done event, without final-text duplication. | Keep `npm run smoke:main-assistant-streaming` as a release gate; next move to G4/G5/G8 rather than reworking the stream contract. | Main-site UI-compatible SSE shows live deltas without duplicate final text; third-party keeps progress/artifact streaming and safe final release. |
 | P1 | G4 background enterprise memory | Controlled production batch passed on 8 server: one reviewed local document was fingerprinted as canonical, one `fact_index_v2` enrichment run succeeded, 56 document facts were written, and the dataset entity snapshot now reports 210 source facts across 6 scanned documents. Local duplicate-read-through, enrichment, aggregate, and document-quality smoke passed. Long-running production enrichment and full existing-document backfill remain disabled. | Decide the next staged rollout scope: either enable post-ingest enrichment for newly parsed documents only, or run another reviewed low-volume existing-document backfill batch. Keep all runs idempotent and operator-audited. | Resume, attendance, elderly-care, and Xinbai aggregate questions use deterministic supply before retrieval; duplicate documents do not double count. |
 | P1 | G5 passive low-quality recovery | Local passive collection and fixed-scope packaging passed. Hard customer-facing gate remains disabled. Production enqueue is gated. | Enable passive collection only after P0 smokes remain stable; allow `answer_quality_autofix` only for fixed-scope system defects with tests. | Weak answers are collected and classified; no normal answer is suppressed; fixes stay within answer/retrieval optimization scope. |
-| P1 | G8 operator observability | Local implementation completed for the first compact operator summary: the external integrations page now shows sanitized operations cards for ordinary chat, model lane, workflow backlog, report/static-page jobs, template/artifact state, data ingestion, document enrichment, and low-quality recovery. Queue/model summaries are light reads; task/runtime details remain lazy-loaded. Local helper tests and web build passed. | Deploy to 8 server and run an authenticated operator smoke on `/external-integrations`, `/api/v3/external/codex-executor-tasks/queue-stats`, and `/api/v3/model-gateway/status`. | A 20+ conversation incident can be triaged from DataMax without raw logs, credentials, or full customer data. |
-| P1 | G9 release hygiene | Commits through `8faa1b797b58` are pushed. 8 server is on latest `main`; changed services from the latest slices were rebuilt/restarted as needed, and core services were active after deploy. | Keep every future deploy tied to a commit, service status, smoke receipt, and rollback note. | 8 server is on latest `main`, all changed services are active, and validation docs match reality. |
+| P1 | G8 operator observability | Compact operator summary is implemented, pushed, and deployed to 8 server on `2193e0cd5248`. `/external-integrations` returns `200` locally and publicly with DataMax/运营总览 SSR text. The web queue-stats proxy returns `200` with the configured observability cookie. Model-gateway status remains protected and returns `401` without a main-system operator cookie. | Continue with G5 passive low-quality recovery, and later run an authenticated model-gateway operator smoke when an operator session/cookie is available. | A 20+ conversation incident can be triaged from DataMax without raw logs, credentials, or full customer data. |
+| P1 | G9 release hygiene | Commits through `2193e0cd5248` are pushed. 8 server is on latest `main`; `aiv3-web.service` was rebuilt/restarted for the latest web slice and core services were active after deploy. | Keep every future deploy tied to a commit, service status, smoke receipt, and rollback note. | 8 server is on latest `main`, all changed services are active, and validation docs match reality. |
 
 ### Immediate Execution Order
 
@@ -98,7 +98,8 @@ Treat this section as the current executable plan. The longer task bodies below 
 6. Done: deploy and validate the worker count fix for the 577 source rows vs 384 unique materialized rows audit.
 7. Done: run controlled background enterprise-memory batch on 8 server and record the single-document fingerprint/enrichment receipt.
 8. Done locally: add the compact G8 operator summary to the external integrations page and verify tests/build.
-9. Next: deploy the G8/G4 doc changes to 8 server with operator smoke, then continue passive low-quality recovery.
+9. Done: deploy the G8/G4 doc changes to 8 server, verify page/queue smoke, and record the model-gateway protected-status boundary.
+10. Next: continue passive low-quality recovery with the hard gate still disabled.
 
 ### P0 Task A: Fix Retrieval-Evidence Idempotency
 
@@ -1611,7 +1612,7 @@ git commit -m "Roll out controlled DataMax streaming"
 
 ## Task 11: Expand Operator Observability
 
-**Status:** completed locally on 2026-06-06; 8-server deployment smoke remains pending.
+**Status:** deployed to 8 server on 2026-06-06; authenticated model-gateway operator smoke remains pending.
 
 **Files:**
 
@@ -1663,6 +1664,14 @@ Local verification completed:
 - `npm --prefix apps/web run build` passed.
 - `GET http://127.0.0.1:3100/external-integrations` returned HTTP `200` during local dev-server smoke.
 - The new summary uses existing protected/light endpoints and keeps conversation/runtime details lazy-loaded.
+
+8-server verification completed:
+
+- 8 server pulled `2193e0cd5248`, built `apps/web`, and restarted `aiv3-web.service`.
+- `GET http://127.0.0.1:3100/external-integrations` returned `200` and included DataMax/运营总览 SSR text.
+- `GET https://v3.elepcloud.com/external-integrations` returned `200` and included DataMax/运营总览 SSR text.
+- Web queue-stats proxy returned `200` with the configured observability cookie.
+- `GET http://127.0.0.1:3000/v1/model-gateway/status` returned `401 auth_session_required` without a main-system operator session, which confirms the protected boundary but does not replace an authenticated operator smoke.
 
 **Step 5: Commit**
 
