@@ -287,6 +287,8 @@
 
 ### P1-3：产物下载与发布可见性审计
 
+**状态：进行中；main-site direct URL release gate 已完成，主站上传视频和第三方视频登记 smoke 待补。**
+
 **目标：** 确认不同入口的最终产物都能被用户拿到。
 
 覆盖入口：
@@ -301,6 +303,17 @@
 - assistant-run-bound 的产物链接通过 `/api/v3/html-artifacts/{artifact_id}/files/{index}` 或等价公开 surface 暴露。
 - 没有 assistant_run_id 的后端 smoke 要标注“仅后端证据，不代表主站聊天可见”。
 - 下载链接权限正确：同一 run/thread 可访问，跨 scope 不泄露。
+
+已完成证据：
+
+- `npm run smoke:video-ppt-main-visible` 已纳入 package scripts 和 `scripts/README.md`，作为 main-site assistant-run-bound video/PPT release gate。
+- reuse-mode 已复核主站 `assistant_run_id=46f57e74-85f9-4088-bad0-99f1ae0a6fea`：`deliverableState=final_pptx_ready`，PPTX/Markdown/manifest 6 类关键产物可通过 HTML artifact file API 下载。
+- release gate 验证 PPTX OOXML 必需 entry、PPTX slide count 和 Markdown slide heading count 一致；当前样例均为 30。
+
+仍待补充：
+
+- 主站上传视频文件入口 smoke。
+- 第三方上传/登记视频文件后触发 PPT 抽取的端到端 smoke。
 
 ### P2-1：授权录屏兜底 MVP 设计
 
@@ -633,7 +646,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 场景 | 输入 | 预期 | 当前状态 | 下一步 |
 | --- | --- | --- | --- | --- |
 | 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 作为后端回归基线保留 |
-| 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过，assistant run `46f57e74-85f9-4088-bad0-99f1ae0a6fea`，PPTX/Markdown/manifest 可下载 | 纳入 release gate |
+| 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过并纳入 `smoke:video-ppt-main-visible` release gate，PPTX/Markdown/manifest 可下载 | 作为 P1-3 回归基线保留 |
 | 主站上传视频 | 用户上传 `.mp4/.mov/...` | 上传登记后明确触发 PPT 抽取 | 能力已说明，仍需上传入口 smoke | P1-3 |
 | 第三方视频登记 | 第三方 `content_url` 或 attachment | 特殊触发后进入 `VideoExtraction` | 文档已说明，需端到端 smoke | P1-3 |
 | 公开视频页 | HTML 暴露 video/OG/JSON-LD/Twitter video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 后续用主站/第三方 smoke 复核展示 |
@@ -657,7 +670,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 做 P1-3 artifact 可见性审计的回归测试，把新增 `smoke:video-ppt-main-visible` 纳入后续 release gate，并补主站上传视频、第三方视频登记 smoke。
+1. 继续 P1-3，补主站上传视频入口 smoke 和第三方视频登记端到端 smoke。
 2. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审。
 3. 最后在明确授权和部署窗口后，评审是否允许 8 服务器内部录屏开关。
 

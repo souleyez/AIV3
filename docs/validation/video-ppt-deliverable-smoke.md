@@ -521,6 +521,67 @@ Safety result:
 - no 8-server deployment, build, restart, service mutation, or 120-server action was run;
 - no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt.
 
+## 2026-06-07 Main-Site Video/PPT Release Gate
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P1-3.
+
+Scope:
+
+- turn the previously ad hoc main-site visible video/PPT smoke into a reusable release gate;
+- validate assistant-run-bound artifact visibility, not only backend workflow success;
+- download final user-facing deliverables through the HTML artifact file API;
+- avoid re-running heavy video extraction when an existing completed assistant run can be reused.
+
+Implemented behavior:
+
+- added package script `smoke:video-ppt-main-visible`;
+- added `scripts/smoke/video-ppt-main-visible.mjs`;
+- documented the smoke in `scripts/README.md`;
+- supported both create-run mode and `--assistant-run-id` reuse mode;
+- required `video_extraction_summary` with `deliverable_status.state=final_pptx_ready`;
+- downloaded `pptx`, `video_slides_markdown`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, and `extraction_artifacts_manifest` through `/api/v3/html-artifacts/{artifact_id}/files/{index}`;
+- validated PPTX ZIP central-directory entries `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`;
+- validated PPTX slide count and Markdown `### Slide` heading count agreement.
+
+Smoke command:
+
+```text
+npm run smoke:video-ppt-main-visible -- --base-url https://v3.elepcloud.com --assistant-run-id 46f57e74-85f9-4088-bad0-99f1ae0a6fea --local-thread-id video-ppt-main-visible-20260607-01 --timeout-ms 60000 --output-dir target/video-ppt-main-visible-release-gate-smoke
+```
+
+Result:
+
+- `ok=true`;
+- `createdRun=false`;
+- `artifactOk=true`;
+- `deliverableState=final_pptx_ready`;
+- artifact id: `html-artifact-video-extraction-46f57e74-85f9-4088-bad0-99f1ae0a6fea-0c41706c-3e39-4c75-8f35-32d26f98e8b3`;
+- downloaded required file kinds: `video_slides_markdown`, `pptx`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, `extraction_artifacts_manifest`;
+- `pptxSlideCount=30`;
+- `markdownSlideHeadingCount=30`;
+- report: `target/video-ppt-main-visible-release-gate-smoke/20260607135915/report.json`.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-main-visible.mjs
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+npm run test:video-deliverables
+git diff --check
+```
+
+Remaining P1-3 work:
+
+- main-site uploaded-video smoke;
+- third-party video registration and special-trigger smoke.
+
+Safety result:
+
+- no customer/private/login-gated video was fetched;
+- generated downloads stayed under `target/` and were not committed;
+- no 8-server deployment, build, restart, service mutation, or 120-server action was run;
+- no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt.
+
 ## 2026-06-07 Public Page Video Resolver Slice
 
 Task source: `docs/plans/datamax-active-execution-plan.md` P1-1.
