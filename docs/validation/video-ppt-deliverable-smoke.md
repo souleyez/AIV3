@@ -471,3 +471,52 @@ Safety result:
 - no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt;
 - generated smoke downloads were kept under `target/` and were not committed;
 - plan-only synchronization should not include script/package changes unless the implementation slice is explicitly in scope.
+
+## 2026-06-07 WeChat Video Login Handoff Slice
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P1-2.
+
+Scope:
+
+- do not auto-parse WeChat Video Channels or other login-gated sources;
+- do not ask users for QR login, cookies, account credentials, browser storage, or private playback payloads;
+- do not claim DataMax has watched the video or generated PPT when no video file/direct URL was obtained;
+- provide an actionable handoff: upload video file, provide an anonymous direct video URL, or request operator-approved capture handling.
+
+Implemented behavior:
+
+- main-site assistant runs can emit a `wechat_video_login_handoff` HTML artifact for video-channel PPT extraction requests;
+- the artifact owner scope is the assistant run and its payload uses `failure_reason=login_gated_video_source_not_supported`;
+- source URL is not copied into the artifact payload; only a short share code is retained when detectable;
+- ReAct `resolve_video_url` returns the same unsupported reason and `upload_video_provide_direct_url_or_request_authorized_capture` next action;
+- the web artifact renderer shows the three handoff options while suppressing QR-login handoff text, raw source links, and credential-oriented fields;
+- third-party integration docs describe the same three options.
+
+Validation:
+
+```text
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p platform-api wechat_video_login_handoff --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_url_resolution --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+CC=clang CXX=clang++ cargo test -p ingest-worker --bin ingest-worker video_parse_media_placeholder -- --nocapture
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+npm run check:pure-third-party-guide-html
+node --check apps/web/app/lib/html-artifact-manifest.js
+```
+
+Result:
+
+- platform-api handoff tests passed: 3 tests;
+- platform-api video URL resolution tests passed: 4 tests;
+- platform-api video PPT tests passed: 4 tests;
+- ingest-worker video placeholder tests passed: 2 tests; the DB-backed fixture branch was intentionally skipped because the current `PLATFORM_DATABASE_URL` points at the shared non-test database;
+- web artifact manifest tests passed: 12 tests;
+- third-party guide check passed;
+- JavaScript syntax check passed.
+
+Safety result:
+
+- no customer/private/login-gated video was fetched;
+- no 8-server deployment, build, restart, service mutation, or 120-server action was run;
+- no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt.

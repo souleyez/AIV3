@@ -696,8 +696,10 @@ test('renders legacy video login handoff as unsupported source guidance', () => 
 
   assert.equal(video.rejected, false);
   assert.match(video.html, /视频来源受限/);
-  assert.match(video.html, /不执行扫码登录、Cookie、登录态页面获取或录屏绕过/);
+  assert.match(video.html, /不会执行扫码、Cookie、私有登录态获取或绕过限制的录屏/);
   assert.match(video.html, /请上传视频文件/);
+  assert.match(video.html, /提供可以匿名下载的直接视频 URL/);
+  assert.match(video.html, /申请授权录屏处理/);
   assert.match(video.html, /视频 PPT 提取/);
   assert.doesNotMatch(video.html, /二维码/);
   assert.doesNotMatch(video.html, /扫码登录交接/);

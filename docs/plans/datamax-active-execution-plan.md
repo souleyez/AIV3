@@ -250,6 +250,8 @@
 
 ### P1-2：微信视频号/登录态来源的产品 handoff
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 对视频号链接给出可执行下一步，而不是泛泛失败。
 
 产品行为：
@@ -266,6 +268,13 @@
 - 主站/第三方返回文案统一，不再让用户误以为 DataMax 已经看过视频内容。
 - unsupported 状态带 `failure_reason=login_gated_video_source_not_supported`。
 - API 文档保留“视频号不属于自动解析范围”的说明。
+
+完成证据：
+
+- 后端 `wechat_video_login_handoff` artifact 会绑定 assistant run，带 `failure_reason=login_gated_video_source_not_supported`，并给出上传视频文件、提供匿名直连视频 URL、申请授权录屏处理三选项。
+- ReAct `resolve_video_url` 对视频号/登录态来源返回同一失败原因和三选项 next action。
+- 前端 HTML artifact 安全渲染“视频来源受限”卡片，不显示二维码、扫码交接、原始链接、cookie 或登录态获取要求。
+- 第三方 API 文档和纯第三方指南已同步三选项 handoff。
 
 ### P1-3：产物下载与发布可见性审计
 
@@ -619,7 +628,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 主站上传视频 | 用户上传 `.mp4/.mov/...` | 上传登记后明确触发 PPT 抽取 | 能力已说明，仍需上传入口 smoke | P1-3 |
 | 第三方视频登记 | 第三方 `content_url` 或 attachment | 特殊触发后进入 `VideoExtraction` | 文档已说明，需端到端 smoke | P1-3 |
 | 公开视频页 | HTML 暴露 video/OG/JSON-LD | 解析候选并抽取 PPT | 基础能力已说明，需增强 fixtures 和失败分流 | P1-1 |
-| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | 当前拒绝正确 | P1-2 |
+| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | P1-2 handoff 已实现，拒绝原因稳定为 `login_gated_video_source_not_supported` | 后续用主站/第三方 smoke 复核展示 |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | 仅研究方案 | P2-1 |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
@@ -639,11 +648,10 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 做 P1-2 视频号失败 handoff 文案/状态统一，避免用户误以为系统正在解析视频号内容。
-2. 做 P1-1 公开页面 resolver 增强，覆盖 video tag、source tag、OG video、JSON-LD、相对 URL 和登录态拒绝 fixtures。
-3. 做 P1-3 artifact 可见性审计的回归测试，把新增 `smoke:video-ppt-main-visible` 纳入后续 release gate。
-4. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审。
-5. 最后在明确授权和部署窗口后，评审是否允许 8 服务器内部录屏开关。
+1. 做 P1-1 公开页面 resolver 增强，覆盖 video tag、source tag、OG video、JSON-LD、相对 URL 和登录态拒绝 fixtures。
+2. 做 P1-3 artifact 可见性审计的回归测试，把新增 `smoke:video-ppt-main-visible` 纳入后续 release gate，并补主站上传视频、第三方视频登记 smoke。
+3. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审。
+4. 最后在明确授权和部署窗口后，评审是否允许 8 服务器内部录屏开关。
 
 本计划完成当前阶段的定义：
 

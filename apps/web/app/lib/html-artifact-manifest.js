@@ -1008,13 +1008,18 @@ function renderWechatVideoLoginHandoff(manifest) {
   const payload = manifest.payload || {};
   const acquisitionSteps = [
     {
-      title: '提供可解析视频素材',
-      detail: '当前只支持上传视频文件、直接视频 URL，或公开页面里可直接解析到的视频地址。',
+      title: '上传视频文件',
+      detail: '用户或第三方系统上传原始视频文件后，再明确触发提取视频里的 PPT。',
       meta: 'required',
     },
     {
-      title: '进入后台解析',
-      detail: '拿到视频素材后再执行抽音频、抽关键帧、字幕/OCR 和 PPT/原文产物生成。',
+      title: '提供匿名直连视频 URL',
+      detail: '第三方系统可先把视频保存到自己的对象存储，再把可下载的视频地址交给 DataMax。',
+      meta: 'supported',
+    },
+    {
+      title: '申请授权录屏处理',
+      detail: '确有授权但拿不到视频文件时，进入 operator 审批的短时录屏兜底流程。',
       meta: 'waiting_video',
     },
   ];
@@ -1044,7 +1049,7 @@ function renderWechatVideoLoginHandoff(manifest) {
     ])}
     <section>
       <h2>来源受限</h2>
-      <p>当前开发切片不执行扫码登录、Cookie、登录态页面获取或录屏绕过。请上传视频文件，或提供可以直接访问的视频 URL；拿到视频素材后再进入同一套 PPT/原文提取流程。</p>
+      <p>当前不能自动从微信视频号或登录态页面拿到视频文件，也不会执行扫码、Cookie、私有登录态获取或绕过限制的录屏。请上传视频文件、提供可以匿名下载的直接视频 URL，或申请授权录屏处理；拿到视频素材后再进入同一套 PPT/原文提取流程。</p>
     </section>
     <section>
       <h2>获取视频</h2>

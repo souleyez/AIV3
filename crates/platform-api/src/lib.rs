@@ -13596,7 +13596,8 @@ async fn create_assistant_run_inner(
                 &NewAssistantRunEvent {
                     event_name: "assistant_run.wechat_video_login_handoff_required".to_string(),
                     payload: json!({
-                        "reason": "wechat_video_requires_login",
+                        "reason": "login_gated_video_source_not_supported",
+                        "failure_reason": "login_gated_video_source_not_supported",
                         "html_artifacts": [artifact.clone()],
                     }),
                     created_at: now,
@@ -13609,6 +13610,7 @@ async fn create_assistant_run_inner(
             "id": artifact.id,
             "title": artifact.title,
             "template_id": "wechat_video_login_handoff",
+            "content": "当前不能自动从微信视频号链接拿到视频文件。请上传视频文件、提供可匿名下载的直接视频 URL，或申请授权录屏处理；拿到视频文件后再提取 PPT。",
         }));
     }
     let events = state
@@ -60100,7 +60102,7 @@ fn build_assistant_run_react_provider_input(
         "工具选择：retrieve_evidence 用于发现 DataMax 可见范围内的候选证据；web_search 用于请求 DataMax 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 DataMax search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
-        "视频 PPT 提取：支持上传视频文件、直接视频 URL 或公开页面可解析视频地址。上传/登记视频后按普通素材入库；抽取 PPT/幻灯片/课件是特殊触发，需在已有视频素材且用户明确要求提取视频里的 PPT/幻灯片/课件时调用 extract_video_ppt_transcript；原文/字幕可作为该任务的附带交付物，但不要因单纯转写/字幕请求触发 PPT 抽取。直连 URL 先用 resolve_video_url。不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
+        "视频 PPT 提取：支持上传视频文件、直接视频 URL 或公开页面可解析视频地址。上传/登记视频后按普通素材入库；抽取 PPT/幻灯片/课件是特殊触发，需在已有视频素材且用户明确要求提取视频里的 PPT/幻灯片/课件时调用 extract_video_ppt_transcript；原文/字幕可作为该任务的附带交付物，但不要因单纯转写/字幕请求触发 PPT 抽取。直连 URL 先用 resolve_video_url。遇到微信视频号或登录态来源时，不要声称已经看过视频或已经生成 PPT，应给出上传视频文件、提供可匿名下载直连视频 URL、申请授权录屏处理三选项。不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "静态页修订发布严格受控：只有当当前打开产物是已发布静态页或带 publicUrl/finalPage 的静态页，且用户本轮明确要求修改/调整/修复/优化报表页面、改成某种风格、增加/去掉/移动模块，或刷新当前报表数据并发布新链接时，才允许用 publish_static_page_revision；arguments.instruction 必须保留用户本轮原始修订意图。泛泛查看、解释概念、仅问数据、仅问链接状态不得触发该动作；Host 会复用 existing_artifact 并通过固定 static_page_image2_data_publish 发布新产物，不要自己拼 codex_host_task。".to_string(),
         "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
@@ -60189,7 +60191,7 @@ fn build_assistant_run_react_continue_provider_input(
         "工具选择：retrieve_evidence 用于发现 DataMax 可见范围内的候选证据；web_search 用于请求 DataMax 受控外部/网页搜索证据，arguments 至少包含 query 和 reason；未收到带来源和时间的 DataMax search evidence 前，不得声称已联网搜索或引用实时网页结果；read_document_detail 用于需要原文措辞、OCR、表格、音视频转写/场景或画像字段等细节时，document_id 必须来自选中范围或已返回 observation；upgrade_parse_vlm 是高成本内部解析修复动作，仅当 answerQualityGate/answer_quality_gate 显示 premium_action_budget > premium_action_used，且 PDF/图片/扫描件解析质量低、缺表格结构或 judge 明确要求升级解析时使用，arguments 必须包含可见 document_id，可选 page_hint/question_focus；它只返回 observation，不是最终答案；最终引用只能来自 observation。".to_string(),
         "如果弱规划目录或供料证据里出现 detailTargets，优先用其中的 document_id 调 read_document_detail；detailTargets 只是深读目标，不是可引用证据。".to_string(),
         "静态页或报表意图且存在数据集时，优先 retrieve_evidence；若需要模块数据、字段、表格/OCR 或原文措辞，继续 read_document_detail，再创建静态页/报表动作。".to_string(),
-        "视频 PPT 提取：支持上传视频文件、直接视频 URL 或公开页面可解析视频地址。上传/登记视频后按普通素材入库；抽取 PPT/幻灯片/课件是特殊触发，需在已有视频素材且用户明确要求提取视频里的 PPT/幻灯片/课件时调用 extract_video_ppt_transcript；原文/字幕可作为该任务的附带交付物，但不要因单纯转写/字幕请求触发 PPT 抽取。直连 URL 先用 resolve_video_url。不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
+        "视频 PPT 提取：支持上传视频文件、直接视频 URL 或公开页面可解析视频地址。上传/登记视频后按普通素材入库；抽取 PPT/幻灯片/课件是特殊触发，需在已有视频素材且用户明确要求提取视频里的 PPT/幻灯片/课件时调用 extract_video_ppt_transcript；原文/字幕可作为该任务的附带交付物，但不要因单纯转写/字幕请求触发 PPT 抽取。直连 URL 先用 resolve_video_url。遇到微信视频号或登录态来源时，不要声称已经看过视频或已经生成 PPT，应给出上传视频文件、提供可匿名下载直连视频 URL、申请授权录屏处理三选项。不要请求扫码、Cookie、登录态页面或录屏绕过。".to_string(),
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "静态页修订发布严格受控：只有当当前打开产物是已发布静态页或带 publicUrl/finalPage 的静态页，且用户本轮明确要求修改/调整/修复/优化报表页面、改成某种风格、增加/去掉/移动模块，或刷新当前报表数据并发布新链接时，才允许用 publish_static_page_revision；arguments.instruction 必须保留用户本轮原始修订意图。泛泛查看、解释概念、仅问数据、仅问链接状态不得触发该动作；Host 会复用 existing_artifact 并通过固定 static_page_image2_data_publish 发布新产物，不要自己拼 codex_host_task。".to_string(),
         "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
@@ -79333,9 +79335,9 @@ fn report_render_summary_warnings(
 }
 
 fn wechat_video_login_handoff_artifact_from_prompt(
-    _run_id: AssistantRunId,
+    run_id: AssistantRunId,
     prompt: &str,
-    _created_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
 ) -> Option<HtmlArtifactManifestView> {
     let lower = prompt.to_ascii_lowercase();
     let mentions_wechat_video = lower.contains("weixin.qq.com/sph/")
@@ -79349,7 +79351,81 @@ fn wechat_video_login_handoff_artifact_from_prompt(
     // Login-gated acquisition, QR login, cookies, and recording bypasses are out of scope.
     // The current slice only supports uploaded video files or directly/publicly resolvable video URLs.
     if mentions_wechat_video && wants_slide_output {
-        return None;
+        let run_id_text = run_id.to_string();
+        let short_code =
+            wechat_video_short_code_from_prompt(prompt).unwrap_or_else(|| "未识别".to_string());
+        return Some(HtmlArtifactManifestView {
+            kind: "html_artifact".to_string(),
+            version: 1,
+            id: format!("html-artifact-wechat-video-login-handoff-{run_id_text}"),
+            title: "视频来源受限 · 微信视频号".to_string(),
+            source_type: contracts::HtmlArtifactSourceTypeView::VideoExtraction,
+            template_id: contracts::HtmlArtifactTemplateIdView::WechatVideoLoginHandoff,
+            owner_scope: contracts::HtmlArtifactOwnerScopeView {
+                scope_type: "assistant_run".to_string(),
+                id: run_id_text.clone(),
+            },
+            data_refs: Vec::new(),
+            provenance: contracts::HtmlArtifactProvenanceView {
+                producer: "v3-platform-api".to_string(),
+                reason: "wechat_video_login_handoff_required".to_string(),
+                source_run_id: Some(run_id_text),
+            },
+            interaction_mode: HtmlArtifactInteractionModeView::ActionIntent,
+            created_at,
+            payload: json!({
+                "status": "unsupported_source",
+                "failure_reason": "login_gated_video_source_not_supported",
+                "sourcePlatform": "微信视频号",
+                "source_platform": "微信视频号",
+                "shortCode": short_code.clone(),
+                "short_code": short_code,
+                "targetArtifact": "视频 PPT 提取",
+                "target_artifact": "视频 PPT 提取",
+                "blockedReason": "当前没有拿到可处理的视频文件，不能声称已经看过视频或已经生成 PPT。",
+                "blocked_reason": "当前没有拿到可处理的视频文件，不能声称已经看过视频或已经生成 PPT。",
+                "supportedNextSteps": [
+                    {
+                        "title": "上传视频文件",
+                        "detail": "用户或第三方系统上传原始视频文件后，再明确触发提取视频里的 PPT。"
+                    },
+                    {
+                        "title": "提供匿名直连视频 URL",
+                        "detail": "第三方系统可先把视频保存到自己的对象存储，再把可下载的视频地址交给 DataMax。"
+                    },
+                    {
+                        "title": "申请授权录屏处理",
+                        "detail": "确有授权但拿不到视频文件时，进入 operator 审批的短时录屏兜底流程。"
+                    }
+                ],
+                "supported_next_steps": [
+                    "upload_video_file",
+                    "provide_direct_video_url",
+                    "request_authorized_capture"
+                ]
+            }),
+        });
+    }
+    None
+}
+
+fn wechat_video_short_code_from_prompt(prompt: &str) -> Option<String> {
+    let lower = prompt.to_ascii_lowercase();
+    for marker in ["weixin.qq.com/sph/", "channels.weixin.qq.com/sph/"] {
+        let Some(index) = lower.find(marker) else {
+            continue;
+        };
+        let start = index + marker.len();
+        let code = prompt
+            .get(start..)
+            .unwrap_or_default()
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+            .take(80)
+            .collect::<String>();
+        if !code.is_empty() {
+            return Some(code);
+        }
     }
     None
 }
@@ -119808,14 +119884,62 @@ retrieve_evidence:
     }
 
     #[test]
-    fn wechat_video_login_handoff_artifact_rejects_login_gated_sources() {
+    fn wechat_video_login_handoff_artifact_returns_actionable_handoff() {
+        let run_id = AssistantRunId::new();
         let artifact = wechat_video_login_handoff_artifact_from_prompt(
-            AssistantRunId::new(),
+            run_id,
             "https://weixin.qq.com/sph/ActLMg4yTD 试试用智能助手提取这个视频的PPT",
             Utc::now(),
-        );
+        )
+        .expect("login-gated video PPT request should produce a handoff artifact");
 
-        assert!(artifact.is_none());
+        assert_eq!(
+            artifact.id,
+            format!("html-artifact-wechat-video-login-handoff-{run_id}")
+        );
+        assert_eq!(
+            artifact.source_type,
+            contracts::HtmlArtifactSourceTypeView::VideoExtraction
+        );
+        assert_eq!(
+            artifact.template_id,
+            contracts::HtmlArtifactTemplateIdView::WechatVideoLoginHandoff
+        );
+        assert_eq!(
+            artifact.interaction_mode,
+            HtmlArtifactInteractionModeView::ActionIntent
+        );
+        assert_eq!(
+            artifact.payload["failure_reason"],
+            json!("login_gated_video_source_not_supported")
+        );
+        assert_eq!(artifact.payload["shortCode"], json!("ActLMg4yTD"));
+        assert_eq!(
+            artifact.payload["supported_next_steps"],
+            json!([
+                "upload_video_file",
+                "provide_direct_video_url",
+                "request_authorized_capture"
+            ])
+        );
+        let serialized = serde_json::to_string(&artifact).expect("artifact should serialize");
+        assert!(!serialized.contains("weixin.qq.com"));
+        assert!(!serialized.contains("channels.weixin.qq.com"));
+        assert!(!serialized.contains("扫码"));
+        assert!(!serialized.to_ascii_lowercase().contains("cookie"));
+    }
+
+    #[test]
+    fn wechat_video_login_handoff_artifact_supports_channels_domain() {
+        let artifact = wechat_video_login_handoff_artifact_from_prompt(
+            AssistantRunId::new(),
+            "帮我从 channels.weixin.qq.com/sph/AhfmOtV8P5 里面提取课件",
+            Utc::now(),
+        )
+        .expect("channels video source should produce handoff");
+
+        assert_eq!(artifact.payload["short_code"], json!("AhfmOtV8P5"));
+        assert_eq!(artifact.payload["source_platform"], json!("微信视频号"));
     }
 
     #[test]

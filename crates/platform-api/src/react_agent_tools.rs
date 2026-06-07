@@ -1352,7 +1352,7 @@ fn video_url_resolution_placeholder_result(
             "source_present": !source_text.is_empty(),
             "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
             "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
-            "next_step": "请上传视频文件，或提供可直接访问的视频 URL；后台解析器落地后再登记素材并排队提取 PPT/原文。",
+            "next_step": "请上传视频文件、提供可匿名下载的直接视频 URL，或申请授权录屏处理；DataMax 当前没有拿到视频内容，不能声称已经看过视频或已经生成 PPT。",
         }),
         trail_step: json!({
             "status": status,
@@ -1552,7 +1552,7 @@ fn video_resolution_failure_kind(reason: &str) -> &'static str {
 fn video_resolution_failure_next_action(failure_kind: &str) -> &'static str {
     match failure_kind {
         "missing_source" => "provide_direct_video_url_or_upload",
-        "unsupported_source" => "provide_supported_public_or_uploaded_video",
+        "unsupported_source" => "upload_video_provide_direct_url_or_request_authorized_capture",
         "resolver_blocked" => "provide_direct_video_url_or_upload",
         "unavailable_video" => "check_public_video_availability_or_upload",
         _ => "retry_video_url_resolution_or_upload",
@@ -4349,8 +4349,12 @@ mod tests {
         );
         assert_eq!(
             result.observation["failure_next_action"],
-            json!("provide_supported_public_or_uploaded_video")
+            json!("upload_video_provide_direct_url_or_request_authorized_capture")
         );
+        assert!(result.observation["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("申请授权录屏处理"));
         assert_eq!(
             result.observation["unsupported_sources"],
             json!([
