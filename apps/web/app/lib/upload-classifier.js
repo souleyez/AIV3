@@ -91,7 +91,7 @@ export function buildUploadDatasetPayload(classification) {
 
 export function inferUploadMediaKind(file = null) {
   const signal = `${file?.name || ''} ${file?.type || ''}`.toLowerCase();
-  if (/(^|\W)video\//.test(signal) || /\.(mp4|mov|mkv|webm|avi|mpeg|mpg)(\W|$)/i.test(signal)) {
+  if (/(^|\W)video\//.test(signal) || /\.(mp4|mov|m4v|webm|mkv|avi|mpeg|mpg)(\W|$)/i.test(signal)) {
     return 'video';
   }
   if (/(^|\W)audio\//.test(signal) || /\.(mp3|wav|m4a|aac|flac|ogg|opus)(\W|$)/i.test(signal)) {

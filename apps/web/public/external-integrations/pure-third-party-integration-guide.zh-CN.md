@@ -60,6 +60,8 @@ Content-Type: application/json
 
 `dataset_external_id` 是业务稳定分组，不是每次上传生成的任务 ID、文件 ID 或下载任务 ID。DataMax 会为每个第三方通道连接建立对应系统账户；该通道解析入库、文档分组移动和对话运行都归属同一个系统账户，普通资料库列表默认不展示系统解析源。多个第三方接入时，不同通道连接会落到不同系统账户，便于隔离和审计。
 
+视频文件也可以通过本接口登记为 DataMax 视频素材。建议 `content_type` 传 `video/*`，或让 `content_url` / `title` 保留 `.mp4`、`.mov`、`.m4v`、`.webm`、`.mkv`、`.avi` 等后缀。视频素材的常规解析用于登记、下载和基础入库状态；从视频中抽取 PPT/课件页不是普通文档解析的默认行为，应在聊天中明确提出“提取视频里的 PPT/幻灯片/课件”，由 DataMax 作为特殊视频抽取触发处理。原文、字幕或转写可以作为视频 PPT 抽取任务的附带交付物，但单纯“提取字幕/转写原文”不应触发 PPT 抽取。该能力只面向视频里已经播放 PPT/课件的内容，不负责把普通视频创作成 PPT。
+
 响应：
 
 ```jsonc
@@ -548,6 +550,7 @@ DataMax 回推会带 `Authorization: Bearer <reply_dispatch_bearer_token>`，并
 | 静态页/报表 | 普通消息提出生成/修改报表；推荐传 `artifact_type=static_page` | `reply.artifact_links[0]`、`reply.card.public_url`、`reply.card.generated_artifact_url`、`reply.card.status_url` | `processing`、`static_page_published`、`failed` |
 | 数据接入/建表分析 | 普通消息提出入库、建表、字段映射、清洗、schema、ETL 或数据库分析 | `reply.card.type`、`reply.card.result_summary`、`reply.card.staging_plan`、`reply.card.dataset_id`、`reply.card.sync_run_id` | `data_ingestion_analysis_queued`、`data_ingestion_analysis_retrying`、`data_ingestion_analysis_completed`、`data_ingestion_analysis_needs_human`、`data_ingestion_analysis_failed`、`data_ingestion_analysis_cancelled` |
 | 文档处理/深解析 | 普通消息提出解析状态、重解析、深解析、VLM 升级解析或事实抽取 | `reply.card.type`、`reply.card.documents`、`reply.card.status_counts` | `document_processing_status`、`document_processing_review_required`、`document_processing_reparse_queued` |
+| 视频 PPT 抽取 | 先通过文档解析接口上传/登记视频文件，或在普通消息中提供可直接访问的视频 URL；再用普通消息提出“提取视频里的 PPT/幻灯片/课件” | `reply.card.type`、`reply.card.status`、`reply.card.download_exports[]`、`reply.artifact_links[]` | `video_extraction_queued`、`processing`、`video_extraction_summary`、`failed` |
 | 采集/资料库规划 | 普通消息提出资料采集、爬虫规划或来源接入 | `reply.card.type=v3_collection_setup_analysis`、`reply.requires_confirmation` | `needs_confirmation`、`capability_analysis_recorded` |
 | 第三方系统对接规划 | 普通消息提出 OA、文档库、数据库、用户/权限、API 或连接器对接 | `reply.card.type=v3_integration_setup_analysis`、`reply.requires_confirmation` | `needs_confirmation`、`capability_analysis_recorded` |
 | 主动消息/主动发起对话 | 普通消息要求完成后通知某人、发给负责人或跨会话确认 | `reply.card.type=v3_message_channel_outreach`、`reply.card.target_summary`、`reply.requires_confirmation` | `message_outreach_confirmation_required`；后续如启用安全自动派发，可出现 `message_outreach_queued`、`message_outreach_sent`、`message_outreach_failed` |

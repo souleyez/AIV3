@@ -100,5 +100,6 @@ test('upload classification summary names target dataset', () => {
 test('upload classifier detects audio and video materials', () => {
   assert.equal(inferUploadMediaKind({ name: '客服通话录音.mp3', type: 'audio/mpeg' }), 'audio');
   assert.equal(inferUploadMediaKind({ name: '巡店视频.mov', type: 'video/quicktime' }), 'video');
+  assert.equal(inferUploadMediaKind({ name: '课程回放.m4v', type: '' }), 'video');
   assert.equal(inferUploadMediaKind({ name: 'orders.csv', type: 'text/csv' }), '');
 });

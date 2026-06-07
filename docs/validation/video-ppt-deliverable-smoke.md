@@ -355,3 +355,20 @@ Safety result:
 - no source URL, generated artifact path, local extraction path, database URL, token, cookie, provider payload, raw customer row, or document body was recorded in this receipt;
 - the temporary high-port HTTP attempt was stopped and was not used for the passing smoke;
 - the passing smoke used the existing HTTPS generated-artifacts route and a non-sensitive synthetic PPT-playback MP4 only.
+
+## 2026-06-07 Video Upload And Special Trigger Clarification
+
+Scope clarified:
+
+- uploaded `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, and `.avi` files can be registered as video materials on the main site or through third-party document parse flows;
+- a registered video material is not the same as a completed PPT extraction package;
+- normal parsing may record/download/index the video material and any available transcript/OCR evidence, but `extract_video_ppt_transcript` remains the special trigger for generating screenshot-based PPT, Markdown, and video extraction manifests;
+- the special trigger should be keyed primarily by explicit requests to extract PPT, slides, or courseware from the video; transcript/subtitle-only requests should not be promoted into PPT extraction unless the user also asks for PPT/slides/courseware;
+- the trigger remains scoped to videos that already show PPT, slides, or courseware during playback, not arbitrary-video-to-PPT authoring;
+- login-gated/private/video-platform bypass sources remain out of scope; upload the file or provide an anonymous direct video URL instead.
+
+Code/docs follow-up:
+
+- main-site upload classification now recognizes `.m4v` as video material;
+- scope planning now treats `.mkv` and `.avi` video names/URLs as video PPT extraction prompts, matching backend video-material recognition;
+- third-party integration docs now explain video material registration, normal parse status, and the special PPT extraction trigger boundary.

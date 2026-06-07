@@ -3,8 +3,8 @@ import { attachVisibleDocumentsToDatasets, datasetDocumentTitleHints } from './d
 const MEDIA_DATASET_PATTERN = /音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
 const RESUME_DATASET_PATTERN = /简历|履历|候选人|求职|招聘|人才|面试|任职|工作经历|教育经历|项目经历|雇主|公司名|就职公司|resume|cv|candidate|recruit/i;
 const RESUME_ENTITY_SCAN_PATTERN = /(?=.*(简历|履历|候选人|求职|招聘|人才|resume|cv|candidate))(?=.*(公司名|公司|企业|雇主|任职|就职|工作经历|经历|company|employer))(?=.*(多少|几个|哪些|列出|统计|汇总|分布|全部|所有|提到|公司名|count|list|all))/i;
-const VIDEO_PPT_EXTRACTION_PATTERN = /((视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传).*(ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取))|((ppt|PPT|幻灯片|课件|原文|字幕|转写|讲稿|提取).*(视频|mp4|mov|m4v|webm|公开视频|视频地址|视频链接|url|URL|上传))/i;
-const DIRECT_VIDEO_SOURCE_PATTERN = /https?:\/\/\S+|\.(mp4|mov|m4v|webm)(\b|$)|公开视频|视频地址|视频链接|url|URL/i;
+const VIDEO_PPT_EXTRACTION_PATTERN = /((视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传).*(ppt|PPT|幻灯片|课件))|((ppt|PPT|幻灯片|课件).*(视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传))/i;
+const DIRECT_VIDEO_SOURCE_PATTERN = /https?:\/\/\S+|\.(mp4|mov|m4v|webm|mkv|avi)(\b|$)|公开视频|视频地址|视频链接|url|URL/i;
 
 const DATASET_HINTS = [
   { pattern: /订单|销售|营收|收入|库存|发货|客单|转化|复购|经营/, label: '订单' },

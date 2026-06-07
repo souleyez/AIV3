@@ -194,6 +194,22 @@ test('scope planner recommends public video page resolution before PPT extractio
   assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
 });
 
+test('scope planner treats mkv and avi video names as PPT extraction triggers', () => {
+  const mkvPlan = planAssistantScope({
+    prompt: 'https://cdn.example.com/lesson.mkv 帮我提取这个视频里的PPT',
+    datasets,
+  });
+  const aviPlan = planAssistantScope({
+    prompt: '培训回放.avi 里面的幻灯片提取一下',
+    datasets,
+  });
+
+  assert.equal(mkvPlan.intent, 'data_question');
+  assert.equal(mkvPlan.supplyStrategy.retrievalPolicy, 'not_requested');
+  assert.deepEqual(mkvPlan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
+  assert.deepEqual(aviPlan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
+});
+
 test('scope planner recommends uploaded video extraction without public URL resolution', () => {
   const plan = planAssistantScope({
     prompt: '我刚上传了一个视频，帮我提取里面的PPT和原文',
@@ -206,6 +222,16 @@ test('scope planner recommends uploaded video extraction without public URL reso
   assert.equal(plan.supplyStrategy.retrievalPolicy, 'not_requested');
   assert.equal(plan.supplyStrategy.preferDetail, false);
   assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.extract_ppt_transcript']);
+});
+
+test('scope planner does not use PPT extraction for transcript-only video requests', () => {
+  const plan = planAssistantScope({
+    prompt: '我刚上传了一个视频，帮我提取字幕和转写原文',
+    datasets,
+  });
+
+  assert.equal(plan.intent, 'data_question');
+  assert.equal(plan.supplyStrategy.recommendedActions.includes('media.extract_ppt_transcript'), false);
 });
 
 test('scope planner auto-selects media dataset for audio and video prompts', () => {
