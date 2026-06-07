@@ -1525,6 +1525,95 @@ Safety result:
 - generated temp frames stayed under test temp directories and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Public Candidate Sparse Text Build Auto-Selection
+
+Task source: P2-2E-2B / P2-2C follow-up from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- improve automatic selection for course videos where slide content changes through sparse text/build states on a mostly static dark background;
+- keep short animation and low-information guards intact;
+- keep the public candidate classified as `needs_manual_review`, not force a clean deliverable conclusion;
+- avoid live upload, third-party events, browser recording, capture fallback, or deployment.
+
+Implemented behavior:
+
+- increased the visual signature grid from 16x16 to 32x32 so sparse slide text has a better chance of being sampled;
+- tightened the same-segment average luma diff threshold from 5.0 to 2.0;
+- added a changed-sample guard with `same_segment_changed_sample_min_diff=24` and `same_segment_max_changed_sample_ratio=0.012`;
+- added `auto_selects_sparse_text_build_states_in_public_course_style_slides`, a deterministic dark-background sparse-text build fixture that now selects `[2, 5, 8]`;
+- cluster policy in `auto_selection` now records the visual signature grid and changed-sample guard thresholds.
+
+Public candidate rerun result:
+
+- `deliverable_state=final_pptx_ready`;
+- `frame_count=96`;
+- `requested_selected_count=9`;
+- `selected_count=7`;
+- requested candidates: `[3, 14, 25, 31, 39, 55, 66, 85, 93]`;
+- final selected candidates: `[3, 14, 25, 31, 55, 85, 93]`;
+- `deduped_candidate_count=2`;
+- `visual_duplicate_count=2`;
+- `has_pptx=true`;
+- `has_video_slides_markdown=true`;
+- `has_slide_quality_report=true`;
+- `has_subtitle_page_map=false`;
+- `quality_score=60`;
+- public-course quality matrix conclusion remains `needs_manual_review`.
+
+Manual visual review note:
+
+- the rerun covers more build content than the earlier 5-page package, including `Know your Audience` and a later multi-line content state;
+- two weak fade/title states are still selected, so this is not a clean deliverable;
+- one selected page still uses `full_frame_fallback`;
+- the next quality slice should decide whether to keep this as a `needs_manual_review` public sample or add a targeted fade/crop/sharpness fix.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects_sparse_text_build_states_in_public_course_style_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slide --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+npm run test:video-deliverables
+cargo check -p media-worker --bin video_ppt_offline_smoke
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input target/video-ppt-public-course-probe/nix-teach-5min-slides.mp4 --output-root target/video-ppt-public-candidate-extraction-grid32-buildsplit --ffmpeg-bin /opt/homebrew/bin/ffmpeg --interval-seconds 15 --title "Public slides sample: How to teach Nix in 5 minutes" --json-output target/video-ppt-public-candidate-extraction-grid32-buildsplit/offline-smoke-summary.json
+node tools/validate-video-deliverables.mjs target/video-ppt-public-candidate-extraction-grid32-buildsplit/<session>/generated_artifacts
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/video-ppt-public-candidate-extraction-grid32-buildsplit/<session>/generated_artifacts --pretty --output-dir target/video-ppt-public-candidate-quality-matrix-grid32-buildsplit
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- sparse-text build fixture passed;
+- `auto_selects` passed, 7 tests;
+- selected-slide regression passed, 4 tests;
+- controlled video sample deliverable contract passed;
+- video deliverable validator test suite passed, 19 tests;
+- offline smoke helper compiled;
+- public candidate offline smoke completed locally with `final_pptx_ready`;
+- public candidate deliverables validator passed;
+- public-course quality matrix passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`;
+- whitespace check passed.
+
+Remaining P2-2E work:
+
+- page-level human review must decide whether the 7-page public candidate is an acceptable `needs_manual_review` sample;
+- targeted fade filtering, crop fallback reduction, or sharpness/readability tuning may still be needed before any clean public-course deliverable claim;
+- the full three-sample quality matrix remains incomplete until a customer/operator-authorized sample is supplied.
+
+Safety result:
+
+- no main-site upload or live assistant run was created;
+- no third-party event was sent;
+- no WeChat Video Channels extraction, login bypass, cookie capture, browser recording, or authorized capture was performed;
+- no service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
+
 ## 2026-06-08 Public Candidate Selected Indices Semantics
 
 Task source: P2-2E-2B from `docs/plans/datamax-active-execution-plan.md`.
