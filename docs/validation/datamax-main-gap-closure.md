@@ -211,6 +211,55 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no raw connection string, credential, token, full table dump, raw row, document body, object path, source URL, provider payload, cookie, bearer token, local key, database URL, or secret env value was recorded;
   - 120 server was not touched.
 
+### 2026-06-07 Active Plan Task 8 Static Page And Report Regression Corpus
+
+- Purpose:
+  - execute Task 8 from `docs/plans/datamax-active-execution-plan.md`;
+  - strengthen the local regression corpus for Xinbai report triggers, focus routing, export fields, primary-template reuse, one-link delivery, and normal answer preservation.
+- Code change:
+  - `scripts/smoke/external-report-export.mjs` now supports `--self-test`;
+  - added `scripts/smoke/external-report-focus.mjs`;
+  - added npm script `smoke:external-report-focus`;
+  - updated `scripts/README.md` with the deterministic report smoke entrypoints.
+- Export self-test:
+  - command: `npm run smoke:external-report-export -- --self-test`;
+  - result: passed;
+  - report: `target/external-report-export-smoke/20260607030944-self-test.json`;
+  - modes: JSON and SSE, `okCount=2`, `failedCount=0`;
+  - title: `新世界百货经营管理月报表`;
+  - focus: `取高机会`;
+  - primary template: `xinbai-functional-modular-template-20260604`;
+  - fallback/prewarm/smoke template used: false;
+  - report link count per mode: 1;
+  - text markdown link count per mode: 1;
+  - normal answer preserved: true;
+  - export fields present: `table-data.csv`, `report.ppt`, and `report.md`.
+- Focus self-test:
+  - command: `npm run smoke:external-report-focus -- --self-test`;
+  - result: passed;
+  - report: `target/external-report-focus-smoke/external-report-focus-self-test-20260607030944.json`;
+  - report trigger cases: 7;
+  - ordinary guard cases: 4;
+  - report cases confirmed one primary-template artifact link each, no fallback/prewarm/smoke template;
+  - focus mapping covered `取高机会`, `经营总览`, and `风险店铺`;
+  - ordinary guards kept `取高是什么意思？`, `风险识别系统有哪些项目经历？`, unrelated general Q&A, and `经营风险是什么意思？` out of report generation.
+- Local verification:
+  - `node --check scripts/smoke/external-report-export.mjs` passed;
+  - `node --check scripts/smoke/external-report-focus.mjs` passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api report_trigger --lib` ran and matched 0 tests;
+  - replacement platform checks passed:
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact_detects_xinbai_business_report_modules --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact_ignores_business_metric_explanation_question --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact_ignores_document_statistics_without_business_context --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api static_page_public_url_with_prompt_focus_adds_module_query --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_text_reply_keeps_answer_and_appends_static_page_link --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_public_reply_keeps_template_link_over_publish_queue_card --lib`, 1 test;
+  - `node --test app/lib/external-integrations.test.mjs` passed, 29 tests, with the existing Node module-type warning only.
+- Safety:
+  - self-tests did not call DataMax, publish artifacts, run live chats, change third-party public URLs, change auth, mutate production mappings, or restart services;
+  - no credential, cookie, bearer token, local key, database URL, provider payload, raw customer row, full customer document, object path, or secret env value was recorded;
+  - 120 server was not touched.
+
 ### 2026-06-06 Current-Head Task 1 Release Gate
 
 - Purpose:

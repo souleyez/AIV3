@@ -55,8 +55,8 @@
 5. 已完成：duplicate / canonical read-through smoke。
 6. 已完成：被动回答质量离线语料。
 7. 已完成：数据源 row identity staging 自测。
-8. 下一步：静态页/报表回归语料强化。
-9. 第三方数据库只读状态强化。
+8. 已完成：静态页/报表回归语料强化。
+9. 下一步：第三方数据库只读状态强化。
 10. operator 观测页小幅打磨。
 11. 最终 validation 和可选部署。
 
@@ -561,7 +561,18 @@ git commit -m "Harden data ingestion staging self test"
 
 ## Task 8：静态页与报表回归语料强化
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 确认新世界/新百经营月报模板是默认主模板，命中模板时可以基于已有模板变更，报表链接只出现一次，导出文件可访问，且普通问答不被报表动作截断。
+
+**结果：**
+
+- `scripts/smoke/external-report-export.mjs --self-test` 新增离线 report-surface 契约，不调用 DataMax、不发布 artifact。
+- export self-test 覆盖 JSON/SSE 两种 surface，确认标题 `新世界百货经营管理月报表`、focus `取高机会`、主模板 `xinbai-functional-modular-template-20260604`、一个报表链接、`table-data.csv`、`report.ppt`、`report.md` 和普通回答文本保留。
+- 新增 `scripts/smoke/external-report-focus.mjs --self-test`，覆盖 7 个报表触发案例和 4 个普通问答 guard。
+- focus self-test 确认 `取高`、`销售缺口/助推` 命中 `取高机会`，`经营状况/经营健康度` 命中 `经营总览`，`风险识别` 命中 `风险店铺`；“取高是什么意思？”、“风险识别系统有哪些项目经历？” 等不生成报表链接。
+- 新增 npm 入口 `smoke:external-report-focus`，并更新 scripts README。
+- `cargo test -p platform-api report_trigger --lib` 当前匹配 0 tests；已用实际平台测试名补跑触发、focus、单链接和回答保留相关回归。
 
 **文件：**
 

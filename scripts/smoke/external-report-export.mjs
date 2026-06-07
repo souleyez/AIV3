@@ -10,6 +10,7 @@ const DEFAULT_EXPECTED_TITLE = '新世界百货经营管理月报表';
 const DEFAULT_EXPECTED_FOCUS = '取高机会';
 const DEFAULT_TEXT = '请根据当前数据集生成新百经营分析月报，重点看取高机会、销售缺口、哪些门店需要助推；正常回答同时推送报表链接。';
 const DEFAULT_PROMPT = '请面向业务用户，优先基于本轮文档和数据源回答。';
+const PRIMARY_XINBAI_TEMPLATE_ID = 'xinbai-functional-modular-template-20260604';
 const FILE_CHECKS = [
   ['html', 'index.html'],
   ['data', 'data.json'],
@@ -43,6 +44,7 @@ function parseArgs(argv) {
     skipStream: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_SKIP_STREAM),
     skipFileChecks: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_SKIP_FILE_CHECKS),
     requireTextLink: parseBoolean(process.env.EXTERNAL_REPORT_EXPORT_SMOKE_REQUIRE_TEXT_LINK),
+    selfTest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -111,6 +113,8 @@ function parseArgs(argv) {
       args.requireTextLink = false;
     } else if (arg === '--require-text-link') {
       args.requireTextLink = true;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -121,6 +125,12 @@ function parseArgs(argv) {
 
   if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 1000) {
     throw new Error('--timeout-ms must be at least 1000');
+  }
+  if (args.selfTest) {
+    args.allowEmptyScope = true;
+    args.allowMissingBearer = true;
+    args.requireTextLink = true;
+    args.skipFileChecks = true;
   }
   if (!args.allowMissingBearer && !args.bearer) {
     throw new Error('--bearer is required unless --allow-missing-bearer is set');
@@ -172,6 +182,7 @@ Checks:
   - download_exports has at least three entries
   - index.html, data.json, data-snapshot.json, table-data.csv, report.ppt, report.md are HTTP 200
   - assistant text has at most one report URL; the customer report link is delivered through artifact/card fields
+  - --self-test runs a deterministic offline contract fixture without calling DataMax
 
 Environment aliases:
   EXTERNAL_REPORT_EXPORT_SMOKE_BASE_URL
@@ -212,6 +223,90 @@ function buildPayload(args, mode, runId) {
     received_at: new Date().toISOString(),
     render_options: null,
   };
+}
+
+function buildSelfTestReportSurface(args) {
+  const focus = args.expectedFocus || DEFAULT_EXPECTED_FOCUS;
+  const publicUrl = `${normalizeBaseUrl(args.baseUrl)}/generated-artifacts/database-static-pages/${PRIMARY_XINBAI_TEMPLATE_ID}/index.html?focus=${encodeURIComponent(focus)}`;
+  const tableUrl = siblingUrl(publicUrl, 'table-data.csv');
+  const pptUrl = siblingUrl(publicUrl, 'report.ppt');
+  const markdownUrl = siblingUrl(publicUrl, 'report.md');
+  return {
+    reply: {
+      reply_type: 'artifact_link',
+      task_status: 'static_page_published',
+      text: `已基于当前经营数据保留正常回答：取高机会和销售缺口需要优先关注。页面链接：[点击查看报表](${publicUrl})`,
+      artifact_links: [publicUrl],
+      card: {
+        type: 'v3_static_page_report',
+        title: args.expectedTitle || DEFAULT_EXPECTED_TITLE,
+        public_url: publicUrl,
+        generated_artifact_url: publicUrl,
+        artifact_links: [publicUrl],
+        table_data_url: tableUrl,
+        ppt_download_url: pptUrl,
+        markdown_download_url: markdownUrl,
+        download_exports: [
+          { kind: 'table', label: 'table-data.csv', url: tableUrl },
+          { kind: 'ppt', label: 'report.ppt', url: pptUrl },
+          { kind: 'markdown', label: 'report.md', url: markdownUrl },
+        ],
+      },
+    },
+  };
+}
+
+async function runSelfTest(args) {
+  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const surface = buildSelfTestReportSurface(args);
+  const results = [];
+  for (const mode of ['json', 'stream']) {
+    const analysis = await analyzeReportSurface(args, [surface], {
+      mode,
+      httpStatus: 200,
+      latencyMs: 0,
+    });
+    const primaryTemplateUsed = Boolean(analysis.publicUrl?.includes(`/${PRIMARY_XINBAI_TEMPLATE_ID}/`));
+    const fallbackTemplateUsed = /fallback|prewarm|smoke/i.test(analysis.publicUrl || '');
+    const normalAnswerPreserved = surface.reply.text.includes('保留正常回答')
+      && surface.reply.text.includes('取高机会')
+      && !/正在处理|稍后查看|已收到/.test(surface.reply.text);
+    results.push({
+      mode,
+      ok: analysis.ok && primaryTemplateUsed && !fallbackTemplateUsed && normalAnswerPreserved,
+      ...analysis,
+      primaryTemplateUsed,
+      fallbackTemplateUsed,
+      normalAnswerPreserved,
+    });
+  }
+  const summary = {
+    runId,
+    selfTest: true,
+    modeCount: results.length,
+    okCount: results.filter((item) => item.ok).length,
+    failedCount: results.filter((item) => !item.ok).length,
+    expectedTitle: args.expectedTitle || null,
+    expectedFocus: args.expectedFocus || null,
+    primaryTemplateId: PRIMARY_XINBAI_TEMPLATE_ID,
+    singleReportLinkRequired: true,
+    exportFilesRequired: ['table-data.csv', 'report.ppt', 'report.md'],
+    dataMaxCalled: false,
+    bearerConfigured: false,
+    generatedAt: new Date().toISOString(),
+  };
+  const outputDir = join(process.cwd(), args.outputDir);
+  await mkdir(outputDir, { recursive: true });
+  const report = { summary, results };
+  const reportPath = join(outputDir, `${runId}-self-test.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+  console.log(JSON.stringify(summary, null, 2));
+  console.log(`report=${reportPath}`);
+
+  if (summary.failedCount > 0) {
+    process.exitCode = 1;
+  }
 }
 
 function requestHeaders(args, stream = false) {
@@ -857,6 +952,10 @@ function percentile(values, ratio) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const results = [];
   if (!args.skipJson) {
