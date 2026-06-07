@@ -705,3 +705,64 @@ Safety result:
 - no live upload smoke, third-party smoke, private-video smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no customer/private/login-gated video was fetched;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, upload object key, server local upload path, or generated artifact local path was recorded.
+
+## 2026-06-07 Third-Party Video PPT Smoke Script Slice
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P1-3C.
+
+Scope:
+
+- add a reusable third-party video/PPT smoke entrypoint without running a production third-party event in this slice;
+- keep the main-site direct URL and uploaded-video smoke paths unchanged;
+- separate video material registration from the special “extract PPT/slides/courseware already shown in this video” trigger;
+- keep WeChat Video Channels, login-gated, QR-login, cookie/session, and private-player sources outside automatic extraction.
+
+Implemented behavior:
+
+- added package script `smoke:external-video-ppt`;
+- added `scripts/smoke/external-video-ppt.mjs`;
+- documented the entrypoint in `scripts/README.md`;
+- refreshed the active plan to record P1-3C script completion and the remaining live bearer smoke gate;
+- the script registers a public or loopback video fixture through `/v1/external/channels/{connection_id}/documents/parse`;
+- the script polls `/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail` only to verify the video material is registered or ready for special trigger;
+- the script sends a scoped `/v1/external/channels/{connection_id}/events` message with `dataset_external_ids`, `available_document_external_ids`, and an explicit Chinese prompt asking to extract PPT/slides/courseware from the video;
+- the script asks for `video_ppt_extraction` and records `extract_video_ppt_transcript` as the expected action;
+- the script polls `/v1/external/channels/{connection_id}/assistant-runs/{run_id}/reply`;
+- the script validates that the third-party reply exposes a video/PPT extraction surface and is not a login-gated or direct-video-required unsupported response;
+- when deliverable downloads are enabled, the script requires `pptx`, `video_slides_markdown`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, and `extraction_artifacts_manifest`, then validates PPTX OOXML entries and Markdown/PPTX slide-count agreement.
+
+Validation:
+
+```text
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:external-video-ppt -- --help
+npm run smoke:external-video-ppt -- --self-test
+node --check scripts/smoke/external-scoped-document-chat.mjs
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- third-party video/PPT smoke script syntax check passed;
+- package entrypoint help command returned the expected usage, checks, and live bearer requirements;
+- deterministic offline self-test passed and did not call the network;
+- existing third-party scoped document chat smoke syntax check passed;
+- existing uploaded-video smoke syntax check passed;
+- HTML artifact manifest tests passed, 12 tests, with the existing Node module-type warning only;
+- video deliverables validator tests passed, 15 tests.
+
+Remaining P1-3C work:
+
+- run a live/controlled third-party smoke after the user provides or approves the inbound bearer and target connection/source ids;
+- append the live report with `connection_id`, `source_id`, `dataset_external_id`, `document_external_id`, `conversation_external_id`, assistant run id, reply status, artifact/download surface, downloaded file kinds, PPTX slide count, Markdown slide count, and warning interpretation;
+- if the third-party reply completes extraction but lacks a customer-visible download surface, record it as a third-party artifact visibility gap rather than weakening acceptance.
+
+Safety result:
+
+- no live upload smoke, third-party live smoke, private-video smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no customer/private/login-gated video was fetched;
+- no WeChat Video Channels URL was bypassed or recorded as parsed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, upload object key, server local upload path, private object path, or generated artifact local path was recorded.

@@ -8,6 +8,7 @@
     "smoke:external-report-export": "node scripts/smoke/external-report-export.mjs",
     "smoke:external-report-focus": "node scripts/smoke/external-report-focus.mjs",
     "smoke:external-scoped-document-chat": "node scripts/smoke/external-scoped-document-chat.mjs",
+    "smoke:external-video-ppt": "node scripts/smoke/external-video-ppt.mjs",
     "smoke:main-assistant-streaming": "node scripts/smoke/main-assistant-streaming.mjs",
     "smoke:main-chat-20way": "node scripts/smoke/main-chat-20way.mjs",
     "smoke:model-gateway-operator": "node scripts/smoke/model-gateway-operator.mjs",
