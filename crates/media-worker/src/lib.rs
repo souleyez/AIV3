@@ -6,6 +6,7 @@ use std::{
     collections::BTreeSet,
     fs::{self, File},
     io::Write,
+    net::IpAddr,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -40,6 +41,9 @@ pub const DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME: &str = "video_slides_screenshot_b
 const LOW_CONFIDENCE_VIDEO_EVIDENCE_THRESHOLD: f64 = 0.65;
 const VIDEO_VISUAL_SIGNATURE_GRID_SIZE: u32 = 16;
 const VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF: f64 = 3.0;
+const VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF: f64 = 5.0;
+const VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES: usize = 2;
+const VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES: usize = 96;
 const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
     "pptx",
     "final_deliverables_manifest",
@@ -213,6 +217,46 @@ impl Default for FrameExtractionConfig {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum VideoFrameExtractionInput {
+    LocalPath(PathBuf),
+    RemoteUrl(String),
+}
+
+impl VideoFrameExtractionInput {
+    fn ffmpeg_arg(&self) -> String {
+        match self {
+            Self::LocalPath(path) => path.display().to_string(),
+            Self::RemoteUrl(url) => url.clone(),
+        }
+    }
+
+    fn manifest_input_kind(&self) -> &'static str {
+        match self {
+            Self::LocalPath(_) => "local_media_path",
+            Self::RemoteUrl(_) => "remote_video_url",
+        }
+    }
+
+    fn manifest_input_value(&self) -> String {
+        match self {
+            Self::LocalPath(path) => path.display().to_string(),
+            Self::RemoteUrl(_) => "[redacted]".to_string(),
+        }
+    }
+
+    fn input_url_redacted(&self) -> bool {
+        matches!(self, Self::RemoteUrl(_))
+    }
+
+    fn sanitize_process_output(&self, value: String) -> String {
+        match self {
+            Self::LocalPath(_) => value,
+            Self::RemoteUrl(url) => value.replace(url, "[redacted]"),
+        }
+    }
+}
+
 pub fn run_video_frame_extraction_if_enabled(
     document: &Document,
     config: &FrameExtractionConfig,
@@ -221,7 +265,7 @@ pub fn run_video_frame_extraction_if_enabled(
         return video_frame_extraction_plan(document);
     }
 
-    let Some(input_path) = resolve_local_media_input_path(document) else {
+    let Some(input) = resolve_media_frame_extraction_input(document) else {
         let mut plan = video_frame_extraction_plan(document);
         if let Some(object) = plan.as_object_mut() {
             object.insert("status".to_string(), Value::String("skipped".to_string()));
@@ -234,14 +278,16 @@ pub fn run_video_frame_extraction_if_enabled(
         return plan;
     };
 
-    match run_video_frame_extraction(document, &input_path, config) {
+    match run_video_frame_extraction_with_input(document, &input, config) {
         Ok(manifest) => manifest,
         Err(error) => json!({
             "status": "failed",
             "source": "ffmpeg_external_process",
             "enabled": true,
             "reason": error,
-            "input_path": input_path.display().to_string(),
+            "input_kind": input.manifest_input_kind(),
+            "input_path": input.manifest_input_value(),
+            "input_url_redacted": input.input_url_redacted(),
             "sop": "wechat-video-ppt-extract/raw_frames",
         }),
     }
@@ -255,6 +301,18 @@ pub fn run_video_frame_extraction(
     if !input_path.is_file() {
         return Err("local_media_path_not_found".to_string());
     }
+    run_video_frame_extraction_with_input(
+        document,
+        &VideoFrameExtractionInput::LocalPath(input_path.to_path_buf()),
+        config,
+    )
+}
+
+fn run_video_frame_extraction_with_input(
+    document: &Document,
+    input: &VideoFrameExtractionInput,
+    config: &FrameExtractionConfig,
+) -> Result<Value, String> {
     if config.interval_seconds <= 0.0 {
         return Err("invalid_frame_interval".to_string());
     }
@@ -272,7 +330,7 @@ pub fn run_video_frame_extraction(
         .arg("error")
         .arg("-y")
         .arg("-i")
-        .arg(input_path)
+        .arg(input.ffmpeg_arg())
         .arg("-vf")
         .arg(&fps_filter)
         .arg(output_pattern.as_os_str())
@@ -287,7 +345,7 @@ pub fn run_video_frame_extraction(
         return Err(if stderr.trim().is_empty() {
             format!("ffmpeg exited with {}", output.status)
         } else {
-            stderr
+            input.sanitize_process_output(stderr)
         });
     }
 
@@ -302,7 +360,9 @@ pub fn run_video_frame_extraction(
         "status": "completed",
         "source": "ffmpeg_external_process",
         "enabled": true,
-        "input_path": input_path.display().to_string(),
+        "input_kind": input.manifest_input_kind(),
+        "input_path": input.manifest_input_value(),
+        "input_url_redacted": input.input_url_redacted(),
         "session_dir": session_dir.display().to_string(),
         "raw_frames_dir": raw_frames_dir.display().to_string(),
         "manifest_path": manifest_path.display().to_string(),
@@ -561,16 +621,49 @@ fn write_video_slide_candidate_review_files(
         return Ok(None);
     }
 
+    let keep_list_template_path = artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME);
+    let manual_selected_candidate_indices =
+        read_selected_candidate_indices_from_keep_list(&keep_list_template_path, frames.len());
+    let auto_selection = if manual_selected_candidate_indices.is_empty() {
+        video_auto_slide_selection_from_frames(&frames, frame_extraction)
+    } else {
+        VideoAutoSlideSelection::manual_override_skipped()
+    };
+    let auto_selection_value = auto_selection.to_value();
+    let selected_candidate_indices = if manual_selected_candidate_indices.is_empty() {
+        auto_selection.selected_candidate_indices.clone()
+    } else {
+        manual_selected_candidate_indices
+    };
+    let selection_source =
+        if !selected_candidate_indices.is_empty() && auto_selection.status == "auto_selected" {
+            "auto_unique_slide_keyframes"
+        } else if !selected_candidate_indices.is_empty() {
+            "ppt_keep_list_template"
+        } else {
+            "none"
+        };
+    let selected_candidate_index_set = selected_candidate_indices
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
     let candidates = frames
         .iter()
         .enumerate()
         .map(|(index, path)| {
+            let candidate_index = index + 1;
             let timestamp_seconds = video_candidate_timestamp_seconds(index + 1, frame_extraction);
             let evidence_refs =
                 video_candidate_nearby_evidence_refs(timestamp_seconds, evidence, frame_extraction);
             let evidence_ref_count = video_evidence_ref_count(&evidence_refs);
+            let selection_status = if selected_candidate_index_set.contains(&candidate_index) {
+                selection_source
+            } else {
+                "review_required"
+            };
             json!({
-                "candidate_index": index + 1,
+                "candidate_index": candidate_index,
                 "source": "raw_frames",
                 "file_name": path.file_name().and_then(|value| value.to_str()).unwrap_or("frame"),
                 "frame_path": path.display().to_string(),
@@ -578,8 +671,12 @@ fn write_video_slide_candidate_review_files(
                 "timestamp_label": format_seconds(timestamp_seconds),
                 "evidence_reference_status": if evidence_ref_count == 0 { "raw_frame_only" } else { "matched_nearby_evidence" },
                 "nearby_evidence_refs": evidence_refs,
-                "selection_status": "review_required",
-                "notes": "Candidate frame retained conservatively; rectangle extraction/dedupe/manual keep-list are later stages.",
+                "selection_status": selection_status,
+                "notes": if selection_status == "auto_unique_slide_keyframes" {
+                    "Candidate frame selected automatically as the representative frame for a stable PPT page segment; review is still required before customer delivery."
+                } else {
+                    "Candidate frame retained conservatively; automatic slide-page extraction or manual keep-list review may select it later."
+                },
             })
         })
         .collect::<Vec<_>>();
@@ -594,7 +691,7 @@ fn write_video_slide_candidate_review_files(
         .sum::<usize>();
     let candidate_manifest_path = artifacts_dir.join(DEFAULT_SLIDE_CANDIDATES_FILE_NAME);
     let candidate_manifest = json!({
-        "status": "review_required",
+        "status": if selection_source == "auto_unique_slide_keyframes" { "auto_selected" } else { "review_required" },
         "source": "raw_frames",
         "document_id": document.id.to_string(),
         "dataset_id": document.dataset_id.to_string(),
@@ -608,7 +705,14 @@ fn write_video_slide_candidate_review_files(
             "redaction": "source/provider/locator fields are sanitized before writing candidate evidence refs",
         },
         "rectangle_extraction_status": "not_promoted",
-        "dedupe_policy": "conservative_keep_all_until_review",
+        "selection_source": selection_source,
+        "selected_candidate_indices": selected_candidate_indices.clone(),
+        "auto_selection": auto_selection_value.clone(),
+        "dedupe_policy": if selection_source == "auto_unique_slide_keyframes" {
+            "auto-selected stable PPT page segments first; selected representatives are then de-duplicated by exact frame bytes and conservative visual similarity before PPTX generation"
+        } else {
+            "conservative_keep_all_until_review"
+        },
         "candidates": candidates,
     });
     fs::write(
@@ -626,13 +730,17 @@ fn write_video_slide_candidate_review_files(
 
     let contact_sheet_plan_path = artifacts_dir.join(DEFAULT_CONTACT_SHEET_PLAN_FILE_NAME);
     let contact_sheet_plan = json!({
-        "status": "planned",
+        "status": if selection_source == "auto_unique_slide_keyframes" { "auto_selected" } else { "planned" },
         "source": "raw_frames",
         "raw_frames_dir": raw_frames_dir.display().to_string(),
         "candidate_manifest": candidate_manifest_path.display().to_string(),
         "preview_html": contact_sheet_html_path.display().to_string(),
         "recommended_output": contact_sheet_html_path.display().to_string(),
-        "review_rule": "build a numbered contact sheet before rectangle extraction; keep user/model selected slide numbers only",
+        "review_rule": if selection_source == "auto_unique_slide_keyframes" {
+            "auto-selected stable PPT page representatives are available; use the numbered contact sheet to verify or override selected_candidate_indices"
+        } else {
+            "build a numbered contact sheet before rectangle extraction; keep user/model selected slide numbers only"
+        },
         "skill_reference": "wechat-video-ppt-extract/contact-sheet --source raw_frames",
     });
     fs::write(
@@ -641,23 +749,23 @@ fn write_video_slide_candidate_review_files(
     )
     .map_err(|error| error.to_string())?;
 
-    let keep_list_template_path = artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME);
-    let selected_candidate_indices =
-        read_selected_candidate_indices_from_keep_list(&keep_list_template_path, candidates.len());
     let keep_list_template = json!({
-        "status": "waiting_for_selection",
+        "status": if selection_source == "auto_unique_slide_keyframes" { "auto_selected" } else { "waiting_for_selection" },
         "source": "slide_candidates_manifest",
         "document_id": document.id.to_string(),
         "dataset_id": document.dataset_id.to_string(),
         "title": document.title,
         "candidate_manifest": candidate_manifest_path.display().to_string(),
         "contact_sheet_plan": contact_sheet_plan_path.display().to_string(),
-        "selected_candidate_indices": [],
+        "selected_candidate_indices": selected_candidate_indices.clone(),
+        "selection_source": selection_source,
+        "auto_selection": auto_selection_value.clone(),
         "rejected_candidate_indices": [],
         "selection_notes": [],
         "review_policy": {
-            "requires_numbered_contact_sheet": true,
-            "dedupe_policy": "conservative_manual_or_model_review",
+            "requires_numbered_contact_sheet": selection_source != "auto_unique_slide_keyframes",
+            "manual_override_allowed": true,
+            "dedupe_policy": "exact frame bytes and conservative visual near-duplicates are removed before final PPTX generation",
             "do_not_auto_select_all_frames": true,
         },
     });
@@ -682,6 +790,8 @@ fn write_video_slide_candidate_review_files(
         &candidate_manifest_path,
         &contact_sheet_html_path,
         &keep_list_template_path,
+        selection_source,
+        &auto_selection_value,
     );
     fs::write(
         &selected_slides_manifest_path,
@@ -754,9 +864,14 @@ fn write_video_slide_candidate_review_files(
         "recommended_output": pptx_output_path.display().to_string(),
         "recommended_output_file_name": DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
         "selection": {
-            "mode": "manual_or_model_review_required",
+            "mode": if selection_source == "auto_unique_slide_keyframes" { "auto_unique_slide_keyframes" } else { "manual_or_model_review_required" },
             "selected_candidate_indices": selected_candidate_indices.clone(),
-            "rule": "Do not build a final PPTX until ppt_keep_list_template.json is filled and confirmed from the numbered contact sheet.",
+            "auto_selection": auto_selection_value.clone(),
+            "rule": if selection_source == "auto_unique_slide_keyframes" {
+                "Build a screenshot PPTX from stable PPT page representatives; review the contact sheet and selected_slides_manifest before customer delivery."
+            } else {
+                "Do not build a final PPTX until ppt_keep_list_template.json is filled and confirmed from the numbered contact sheet."
+            },
         },
         "speaker_notes": {
             "include_source_frame": true,
@@ -771,7 +886,7 @@ fn write_video_slide_candidate_review_files(
             "include_crop_mode": true,
             "redact_internal_paths": true,
         },
-        "build_policy": "one_raster_image_per_slide_after_keep_list",
+        "build_policy": if selection_source == "auto_unique_slide_keyframes" { "one_raster_image_per_auto_detected_ppt_page" } else { "one_raster_image_per_slide_after_keep_list" },
         "skill_reference": "wechat-video-ppt-extract/build-selected",
     });
     fs::write(
@@ -1128,6 +1243,61 @@ struct AcceptedVideoFrameVisualSignature {
     signature: VideoFrameVisualSignature,
 }
 
+#[derive(Clone, Debug)]
+struct VideoAutoSlideFrame {
+    candidate_index: usize,
+    file_name: String,
+    signature: VideoFrameVisualSignature,
+}
+
+#[derive(Clone, Debug)]
+struct VideoAutoSlideCluster {
+    frames: Vec<VideoAutoSlideFrame>,
+}
+
+#[derive(Clone, Debug)]
+struct VideoAutoSlideSelection {
+    status: &'static str,
+    selected_candidate_indices: Vec<usize>,
+    selected_clusters: Vec<Value>,
+    rejected_clusters: Vec<Value>,
+    decodable_frame_count: usize,
+    undecodable_frame_count: usize,
+}
+
+impl VideoAutoSlideSelection {
+    fn manual_override_skipped() -> Self {
+        Self {
+            status: "manual_keep_list_present",
+            selected_candidate_indices: Vec::new(),
+            selected_clusters: Vec::new(),
+            rejected_clusters: Vec::new(),
+            decodable_frame_count: 0,
+            undecodable_frame_count: 0,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "status": self.status,
+            "selected_candidate_indices": self.selected_candidate_indices,
+            "selected_page_count": self.selected_candidate_indices.len(),
+            "selected_clusters": self.selected_clusters,
+            "rejected_clusters": self.rejected_clusters,
+            "decodable_frame_count": self.decodable_frame_count,
+            "undecodable_frame_count": self.undecodable_frame_count,
+            "cluster_policy": {
+                "mode": "stable_ppt_page_segment_midpoint",
+                "visual_signature": format!("luma_{}x{}", VIDEO_VISUAL_SIGNATURE_GRID_SIZE, VIDEO_VISUAL_SIGNATURE_GRID_SIZE),
+                "same_segment_max_avg_luma_diff": VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF,
+                "min_stable_frames": VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES,
+                "max_selected_pages": VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES,
+                "ordinary_video_guard": "short unstable visual changes are rejected instead of auto-selecting every frame"
+            }
+        })
+    }
+}
+
 fn video_frame_visual_signature(path: &Path) -> Option<VideoFrameVisualSignature> {
     let image = ImageReader::open(path)
         .ok()?
@@ -1211,6 +1381,144 @@ fn video_visual_near_duplicate_match<'a>(
                 .partial_cmp(&right.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
+}
+
+fn video_auto_slide_selection_from_frames(
+    frames: &[PathBuf],
+    frame_extraction: &Value,
+) -> VideoAutoSlideSelection {
+    let mut selected_candidate_indices = Vec::<usize>::new();
+    let mut selected_clusters = Vec::<Value>::new();
+    let mut rejected_clusters = Vec::<Value>::new();
+    let mut decodable_frame_count = 0_usize;
+    let mut undecodable_frame_count = 0_usize;
+    let mut current_cluster: Option<VideoAutoSlideCluster> = None;
+    let interval_seconds = video_frame_interval_seconds(frame_extraction);
+
+    for (index, frame) in frames.iter().enumerate() {
+        let candidate_index = index + 1;
+        let file_name = frame
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("frame")
+            .to_string();
+        let Some(signature) = video_frame_visual_signature(frame) else {
+            undecodable_frame_count += 1;
+            continue;
+        };
+        decodable_frame_count += 1;
+        let next_frame = VideoAutoSlideFrame {
+            candidate_index,
+            file_name,
+            signature,
+        };
+
+        let belongs_to_current = current_cluster
+            .as_ref()
+            .and_then(|cluster| cluster.frames.first())
+            .and_then(|first| {
+                video_visual_signature_avg_diff(&next_frame.signature, &first.signature)
+            })
+            .map(|score| score <= VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF)
+            .unwrap_or(false);
+
+        if belongs_to_current {
+            if let Some(cluster) = current_cluster.as_mut() {
+                cluster.frames.push(next_frame);
+            }
+            continue;
+        }
+
+        if let Some(cluster) = current_cluster.take() {
+            video_finalize_auto_slide_cluster(
+                cluster,
+                interval_seconds,
+                &mut selected_candidate_indices,
+                &mut selected_clusters,
+                &mut rejected_clusters,
+            );
+        }
+        current_cluster = Some(VideoAutoSlideCluster {
+            frames: vec![next_frame],
+        });
+    }
+
+    if let Some(cluster) = current_cluster.take() {
+        video_finalize_auto_slide_cluster(
+            cluster,
+            interval_seconds,
+            &mut selected_candidate_indices,
+            &mut selected_clusters,
+            &mut rejected_clusters,
+        );
+    }
+
+    if selected_candidate_indices.len() > VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES {
+        let overflow = selected_candidate_indices.split_off(VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES);
+        rejected_clusters.push(json!({
+            "reason": "auto_selected_page_limit_exceeded",
+            "candidate_indices": overflow,
+            "max_selected_pages": VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES,
+        }));
+        selected_clusters.truncate(VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES);
+    }
+
+    let status = if !selected_candidate_indices.is_empty() {
+        "auto_selected"
+    } else if decodable_frame_count == 0 {
+        "not_applicable_no_decodable_frames"
+    } else {
+        "review_required_no_stable_ppt_page_segments"
+    };
+
+    VideoAutoSlideSelection {
+        status,
+        selected_candidate_indices,
+        selected_clusters,
+        rejected_clusters,
+        decodable_frame_count,
+        undecodable_frame_count,
+    }
+}
+
+fn video_finalize_auto_slide_cluster(
+    cluster: VideoAutoSlideCluster,
+    interval_seconds: f64,
+    selected_candidate_indices: &mut Vec<usize>,
+    selected_clusters: &mut Vec<Value>,
+    rejected_clusters: &mut Vec<Value>,
+) {
+    if cluster.frames.is_empty() {
+        return;
+    }
+    let first = cluster.frames.first().expect("cluster first frame");
+    let last = cluster.frames.last().expect("cluster last frame");
+    let frame_count = cluster.frames.len();
+    if frame_count < VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES {
+        rejected_clusters.push(json!({
+            "reason": "unstable_short_segment",
+            "candidate_count": frame_count,
+            "first_candidate_index": first.candidate_index,
+            "last_candidate_index": last.candidate_index,
+            "first_file_name": first.file_name,
+            "last_file_name": last.file_name,
+            "min_stable_frames": VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES,
+        }));
+        return;
+    }
+
+    let selected_frame = &cluster.frames[frame_count / 2];
+    selected_candidate_indices.push(selected_frame.candidate_index);
+    selected_clusters.push(json!({
+        "status": "stable_ppt_page_segment",
+        "candidate_count": frame_count,
+        "first_candidate_index": first.candidate_index,
+        "last_candidate_index": last.candidate_index,
+        "selected_candidate_index": selected_frame.candidate_index,
+        "selected_file_name": selected_frame.file_name,
+        "duration_seconds_estimate": video_round_similarity_score(frame_count as f64 * interval_seconds),
+        "selection_rule": "middle_frame_of_stable_visual_segment",
+    }));
 }
 
 fn video_round_similarity_score(value: f64) -> f64 {
@@ -1517,6 +1825,8 @@ fn selected_slides_manifest_from_keep_list(
     candidate_manifest_path: &Path,
     contact_sheet_html_path: &Path,
     keep_list_template_path: &Path,
+    selection_source: &str,
+    auto_selection: &Value,
 ) -> Value {
     let mut previous_timestamp_seconds = 0.0_f64;
     let mut selected_candidates = Vec::<Value>::new();
@@ -1671,13 +1981,15 @@ fn selected_slides_manifest_from_keep_list(
 
     json!({
         "status": if selected_candidates.is_empty() { "waiting_for_selection" } else { "ready_for_pptx_writer" },
-        "source": "ppt_keep_list_template",
+        "source": selection_source,
         "document_id": document.id.to_string(),
         "dataset_id": document.dataset_id.to_string(),
         "title": document.title,
         "candidate_manifest": candidate_manifest_path.display().to_string(),
         "contact_sheet_html": contact_sheet_html_path.display().to_string(),
         "keep_list_template": keep_list_template_path.display().to_string(),
+        "selection_source": selection_source,
+        "auto_selection": auto_selection,
         "selected_candidate_indices": selected_candidate_indices,
         "requested_selected_count": selected_candidate_indices.len(),
         "selected_count": selected_candidates.len(),
@@ -1693,6 +2005,8 @@ fn selected_slides_manifest_from_keep_list(
         "rejected_duplicate_candidates": rejected_duplicate_candidates,
         "next_step": if selected_candidates.is_empty() {
             "fill ppt_keep_list_template.json from the numbered contact sheet"
+        } else if selection_source == "auto_unique_slide_keyframes" {
+            "review auto-selected PPT page frames, slide_rectangles_manifest.json, and generated screenshot PPTX before customer delivery"
         } else {
             "review slide_rectangles_manifest.json and build screenshot-based PPTX from selected_candidates only"
         },
@@ -4834,6 +5148,81 @@ pub fn resolve_local_media_input_path(document: &Document) -> Option<PathBuf> {
     let root = std::env::var("PLATFORM_LOCAL_OBJECT_ROOT").ok()?;
     let rooted = Path::new(&root).join(raw);
     rooted.is_file().then_some(rooted)
+}
+
+fn resolve_media_frame_extraction_input(document: &Document) -> Option<VideoFrameExtractionInput> {
+    if let Some(path) = resolve_local_media_input_path(document) {
+        return Some(VideoFrameExtractionInput::LocalPath(path));
+    }
+
+    let remote_url = document
+        .metadata
+        .get("remote_media")
+        .and_then(|value| value.get("source_url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| document.object_key.trim());
+    if video_remote_media_url_allowed(remote_url) {
+        Some(VideoFrameExtractionInput::RemoteUrl(remote_url.to_string()))
+    } else {
+        None
+    }
+}
+
+fn video_remote_media_url_allowed(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw.trim()) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let host = url.host_str().unwrap_or_default();
+    if !video_remote_media_host_allowed(host) {
+        return false;
+    }
+    let lower = url.as_str().to_ascii_lowercase();
+    if lower.contains("weixin.qq.com/sph/") || lower.contains("channels.weixin.qq.com/sph/") {
+        return false;
+    }
+    video_remote_media_url_has_video_extension(url.as_str())
+}
+
+fn video_remote_media_host_allowed(host: &str) -> bool {
+    let lower = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    if lower.is_empty()
+        || lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower.ends_with(".local")
+    {
+        return false;
+    }
+    if let Ok(ip) = lower.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(ip) => {
+                !(ip.is_private()
+                    || ip.is_loopback()
+                    || ip.is_link_local()
+                    || ip.is_broadcast()
+                    || ip.is_documentation()
+                    || ip.octets()[0] == 0)
+            }
+            IpAddr::V6(ip) => !(ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local()),
+        };
+    }
+    true
+}
+
+fn video_remote_media_url_has_video_extension(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    let path = url.path().to_ascii_lowercase();
+    [
+        ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".mpeg", ".mpg",
+    ]
+    .into_iter()
+    .any(|extension| path.ends_with(extension))
 }
 
 fn env_flag(key: &str, default: bool) -> bool {
@@ -8902,6 +9291,133 @@ mod tests {
     }
 
     #[test]
+    fn auto_selects_stable_ppt_pages_from_decodable_raw_frames_without_keep_list() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-auto-selected-slides-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+
+        for frame_index in 1..=3 {
+            write_test_visual_slide_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [8, 8, 8],
+                [240, 240, 240],
+                20..80,
+                10..60,
+            );
+        }
+        for frame_index in 4..=6 {
+            write_test_visual_slide_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [24, 24, 24],
+                [230, 230, 230],
+                12..88,
+                16..68,
+            );
+        }
+        for frame_index in 7..=9 {
+            write_test_visual_slide_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [42, 42, 42],
+                [248, 248, 248],
+                28..74,
+                6..74,
+            );
+        }
+
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 9,
+            "interval_seconds": 0.15,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+        let files = manifest["files"].as_array().expect("files");
+
+        let candidate_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
+            .and_then(|file| file["path"].as_str())
+            .expect("candidate manifest path");
+        let candidate_manifest: Value = serde_json::from_str(
+            &fs::read_to_string(candidate_manifest_path).expect("candidate manifest"),
+        )
+        .expect("candidate manifest json");
+        assert_eq!(candidate_manifest["status"], json!("auto_selected"));
+        assert_eq!(
+            candidate_manifest["selection_source"],
+            json!("auto_unique_slide_keyframes")
+        );
+        assert_eq!(
+            candidate_manifest["selected_candidate_indices"],
+            json!([2, 5, 8])
+        );
+        assert_eq!(
+            candidate_manifest["auto_selection"]["selected_page_count"],
+            json!(3)
+        );
+        assert!(!candidate_manifest
+            .to_string()
+            .contains(&raw_frames_dir.display().to_string()));
+
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["status"], json!("ready_for_pptx_writer"));
+        assert_eq!(
+            selected_slides["source"],
+            json!("auto_unique_slide_keyframes")
+        );
+        assert_eq!(selected_slides["selected_count"], json!(3));
+        assert_eq!(
+            selected_slides["selected_candidate_indices"],
+            json!([2, 5, 8])
+        );
+
+        let pptx_plan_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx_build_plan"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx build plan path");
+        let pptx_plan = fs::read_to_string(pptx_plan_path).expect("pptx build plan");
+        assert!(pptx_plan.contains("one_raster_image_per_auto_detected_ppt_page"));
+        assert!(pptx_plan.contains("auto_unique_slide_keyframes"));
+
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        assert!(archive.by_name("[Content_Types].xml").is_ok());
+        assert!(archive.by_name("ppt/presentation.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide1.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide2.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide3.xml").is_ok());
+        assert!(archive.by_name("ppt/slides/slide4.xml").is_err());
+        assert!(archive.by_name("ppt/media/image1.png").is_ok());
+        assert!(archive.by_name("ppt/media/image2.png").is_ok());
+        assert!(archive.by_name("ppt/media/image3.png").is_ok());
+    }
+
+    #[test]
     fn detects_obvious_slide_rectangle_crop_from_png_frame() {
         let document = test_document();
         let output_root = std::env::temp_dir().join(format!(
@@ -9533,8 +10049,8 @@ mod tests {
     }
 
     #[test]
-    fn frame_extraction_is_planned_by_default_and_skips_remote_sources_when_enabled() {
-        let mut document = test_document();
+    fn frame_extraction_is_planned_by_default() {
+        let document = test_document();
         let disabled = run_video_frame_extraction_if_enabled(
             &document,
             &FrameExtractionConfig {
@@ -9545,19 +10061,57 @@ mod tests {
 
         assert_eq!(disabled["status"], json!("planned"));
         assert_eq!(disabled["enabled"], json!(false));
+    }
 
-        document.object_key = "https://cdn.example.com/video.mp4".to_string();
-        let skipped = run_video_frame_extraction_if_enabled(
-            &document,
-            &FrameExtractionConfig {
-                enabled: true,
-                ..FrameExtractionConfig::default()
-            },
+    #[test]
+    fn frame_extraction_accepts_public_remote_video_url_input() {
+        let mut document = test_document();
+        document.object_key =
+            "https://cdn.example.com/course/lesson-01.mp4?token=redacted".to_string();
+        document.metadata.insert(
+            "remote_media".to_string(),
+            json!({
+                "source_url": "https://cdn.example.com/course/lesson-01.mp4?token=redacted",
+                "source_type": "public_page_resolvable_video"
+            }),
         );
 
-        assert_eq!(skipped["status"], json!("skipped"));
-        assert_eq!(skipped["enabled"], json!(true));
-        assert_eq!(skipped["reason"], json!("local_media_path_not_available"));
+        let input = resolve_media_frame_extraction_input(&document)
+            .expect("public remote video should be accepted as ffmpeg input");
+
+        assert_eq!(
+            input,
+            VideoFrameExtractionInput::RemoteUrl(
+                "https://cdn.example.com/course/lesson-01.mp4?token=redacted".to_string()
+            )
+        );
+        assert_eq!(input.manifest_input_kind(), "remote_video_url");
+        assert_eq!(input.manifest_input_value(), "[redacted]");
+        assert!(input.input_url_redacted());
+        let sanitized = input.sanitize_process_output(
+            "https://cdn.example.com/course/lesson-01.mp4?token=redacted: HTTP 403".to_string(),
+        );
+        assert_eq!(sanitized, "[redacted]: HTTP 403");
+        assert!(video_remote_media_url_allowed(
+            "https://cdn.example.com/course/lesson-01.mp4?token=redacted"
+        ));
+    }
+
+    #[test]
+    fn frame_extraction_rejects_private_or_login_gated_remote_video_url_input() {
+        let mut private_document = test_document();
+        private_document.object_key = "https://127.0.0.1/private/course.mp4".to_string();
+        let mut wechat_document = test_document();
+        wechat_document.object_key = "https://weixin.qq.com/sph/ActLMg4yTD.mp4".to_string();
+
+        assert!(resolve_media_frame_extraction_input(&private_document).is_none());
+        assert!(resolve_media_frame_extraction_input(&wechat_document).is_none());
+        assert!(!video_remote_media_url_allowed(
+            "https://127.0.0.1/private/course.mp4"
+        ));
+        assert!(!video_remote_media_url_allowed(
+            "https://weixin.qq.com/sph/ActLMg4yTD.mp4"
+        ));
     }
 
     #[test]

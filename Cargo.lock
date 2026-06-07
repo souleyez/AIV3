@@ -1583,6 +1583,7 @@ dependencies = [
  "image",
  "observability",
  "platform-api",
+ "reqwest",
  "serde_json",
  "storage",
  "tokio",
