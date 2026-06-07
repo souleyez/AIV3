@@ -2763,3 +2763,65 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated temp frames stayed under test temp directories and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
+## 2026-06-08 Main-Site Upload Smoke Self-Test Gate
+
+Task source: EP2/P1-3B readiness from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- add an offline self-test gate for `smoke:video-ppt-upload-main`;
+- let the main-site uploaded-video smoke contract be checked before the user approves a live main-site write;
+- verify artifact/download contract shape, video PPT extraction scope, supported video extensions, and redaction gates without network access;
+- avoid live upload, dataset creation, assistant-run creation, third-party events, browser capture, service build/restart, 8-server deployment, or 120-server action.
+
+Implemented behavior:
+
+- `scripts/smoke/video-ppt-upload-main.mjs` now accepts `--self-test`;
+- `VIDEO_PPT_UPLOAD_MAIN_SMOKE_SELF_TEST=true` is supported as the environment fallback;
+- self-test builds a deterministic assistant-run-bound `video_extraction_summary` fixture with `deliverable_state=final_pptx_ready`;
+- self-test verifies required file kinds: `pptx`, `video_slides_markdown`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, and `extraction_artifacts_manifest`;
+- self-test verifies selected scope and scope candidate keep `intent=video_ppt_extraction`;
+- self-test verifies `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, and `.avi` are classified as video uploads;
+- self-test report records `networkCallsRun=false`, `productionWriteAllowed=false`, `fixtureDownloaded=false`, `uploadAttempted=false`, and `assistantRunCreated=false`;
+- `scripts/README.md` now documents the upload self-test and clarifies that live mode writes a controlled smoke upload/document/run record.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+npm run smoke:video-ppt-upload-main -- --help
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir target/video-ppt-upload-main-self-test-current
+npm run smoke:external-video-ppt -- --self-test --output-dir target/external-video-ppt-self-test-current
+git diff --check
+```
+
+Result:
+
+- upload smoke syntax check passed;
+- help output includes `--self-test` and states that self-test does not call the network, upload files, create datasets, or create assistant runs;
+- upload smoke self-test passed with `ok=true`;
+- self-test report summary showed `networkCallsRun=false`, `productionWriteAllowed=false`, `fixtureDownloaded=false`, `uploadAttempted=false`, and `assistantRunCreated=false`;
+- self-test contract showed `deliverableState=final_pptx_ready` and all six required deliverable kinds;
+- self-test contract showed supported extensions `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, and `.avi`;
+- redaction audit found no raw URL, token marker, bearer marker, or snake-case upload object key in the self-test report;
+- external video PPT self-test still passed as a control check;
+- whitespace check passed.
+
+Remaining work:
+
+- this improves P1-3B readiness but does not run the live main-site upload smoke;
+- P1-3B still needs explicit user approval because live mode writes a non-customer smoke upload/document/run record;
+- P1-3C still needs inbound bearer, `connection_id`, `source_id`, and authorized input;
+- P1-3D still needs an approved 8-server deployment window before live handoff pass;
+- P2-1C and P2-2E customer gates still need operator/customer authorization.
+
+Safety result:
+
+- no live main-site upload smoke was run;
+- no fixture video was downloaded;
+- no dataset, document, upload object, assistant run, or HTML artifact was created;
+- no third-party event was sent;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated self-test reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded in this shared receipt.

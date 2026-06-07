@@ -46,6 +46,7 @@ function parseArgs(argv) {
     datasetTitle: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_DATASET_TITLE || DEFAULT_DATASET_TITLE,
     cookie: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_COOKIE || '',
     bearer: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_BEARER || '',
+    selfTest: parseBoolean(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_SELF_TEST),
     timeoutMs: Number(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     pollIntervalMs: Number(
       process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_POLL_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS,
@@ -92,6 +93,8 @@ function parseArgs(argv) {
     } else if (arg === '--bearer') {
       args.bearer = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--timeout-ms') {
       args.timeoutMs = Number(requireValue(arg, next));
       index += 1;
@@ -130,6 +133,8 @@ function requireValue(name, value) {
 
 function printHelp() {
   console.log(`Usage:
+  npm run smoke:video-ppt-upload-main -- --self-test
+
   npm run smoke:video-ppt-upload-main -- \\
     --base-url https://v3.elepcloud.com \\
     --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \\
@@ -143,7 +148,14 @@ Checks:
   - waits for video_extraction_summary to reach final_pptx_ready
   - downloads PPTX/Markdown/manifests through /api/v3/html-artifacts/{id}/files/{index}
   - validates PPTX OOXML entries plus Markdown/PPTX slide-count agreement
+
+Notes:
+  - --self-test does not call the network, upload files, create datasets, or create assistant runs
 `);
+}
+
+function parseBoolean(value) {
+  return ['1', 'true', 'yes', 'y', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 function normalizeBaseUrl(value) {
@@ -849,8 +861,128 @@ function workflowIdFromIngest(ingest) {
     || null;
 }
 
+function buildSelfTestArtifact() {
+  return {
+    id: 'html-artifact-self-test-video-extraction',
+    title: 'Self-test video PPT extraction summary',
+    source_type: 'video_extraction',
+    template_id: 'video_extraction_summary',
+    created_at: new Date().toISOString(),
+    payload: {
+      deliverable_status: {
+        state: 'final_pptx_ready',
+        file_count: REQUIRED_FILE_KINDS.length,
+        has_pptx: true,
+        has_video_slides_markdown: true,
+        has_subtitle_page_map: false,
+        warning_count: 1,
+        warnings: [{ code: 'screenshot_based_pptx' }],
+      },
+      generated_artifacts: {
+        files: REQUIRED_FILE_KINDS.map((kind, index) => ({
+          artifact_kind: kind,
+          file_name: defaultDownloadName(kind, ''),
+          format: index === 0 ? 'pptx' : 'json_or_markdown',
+        })),
+      },
+    },
+  };
+}
+
+function assertSelfTestUploadContract() {
+  const dataset = {
+    id: 'dataset-self-test-video-ppt-upload',
+    key: DEFAULT_DATASET_KEY,
+    title: DEFAULT_DATASET_TITLE,
+  };
+  const scope = buildSelectedScope(dataset);
+  if (scope.intent !== 'video_ppt_extraction' || scope.supply_policy?.intent !== 'video_ppt_extraction') {
+    throw new Error('self-test selected scope did not preserve video PPT extraction intent');
+  }
+  if (!scope.datasets.includes(dataset.id)) {
+    throw new Error('self-test selected scope did not include the uploaded-video dataset');
+  }
+
+  const candidate = buildScopeCandidate(dataset);
+  if (candidate.source !== 'video_ppt_upload_main_smoke' || candidate.confidence !== 'high') {
+    throw new Error('self-test scope candidate did not identify the smoke source');
+  }
+
+  const artifact = videoArtifactFromList([buildSelfTestArtifact()]);
+  if (!artifact || deliverableState(artifact) !== 'final_pptx_ready') {
+    throw new Error('self-test video artifact was not detected as final_pptx_ready');
+  }
+  const summary = artifactSummary(artifact);
+  const missingKinds = REQUIRED_FILE_KINDS.filter((kind) =>
+    !summary.fileKinds.some((file) => file.kind === kind),
+  );
+  if (missingKinds.length > 0) {
+    throw new Error(`self-test artifact summary missing file kinds: ${missingKinds.join(', ')}`);
+  }
+
+  const supported = ['sample.mp4', 'sample.mov', 'sample.m4v', 'sample.webm', 'sample.mkv', 'sample.avi'];
+  const unsupported = supported.filter((fileName) =>
+    inferUploadMediaKind(fileName, inferContentType(fileName)) !== 'video',
+  );
+  if (unsupported.length > 0) {
+    throw new Error(`self-test upload classifier missed supported videos: ${unsupported.join(', ')}`);
+  }
+
+  const source = redactedUrlSummary('https://example.com/private/path/video.mp4?token=secret');
+  if (JSON.stringify(source).includes('token') || JSON.stringify(source).includes('/private/path')) {
+    throw new Error('self-test redacted URL summary leaked path or query data');
+  }
+
+  return {
+    selectedScopeIntent: scope.intent,
+    candidateSource: candidate.source,
+    deliverableState: deliverableState(artifact),
+    requiredFileKinds: REQUIRED_FILE_KINDS,
+    supportedVideoExtensions: supported.map((fileName) => extname(fileName)),
+    sourceSummaryRedacted: true,
+  };
+}
+
+async function runSelfTest(args) {
+  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const contract = assertSelfTestUploadContract();
+  const report = {
+    schema: 'v3.video_ppt_upload_main_smoke_self_test.v1',
+    summary: {
+      ok: true,
+      selfTest: true,
+      runId,
+      networkCallsRun: false,
+      productionWriteAllowed: false,
+      fixtureDownloaded: false,
+      uploadAttempted: false,
+      assistantRunCreated: false,
+    },
+    contract,
+    safety: {
+      sourceUrlsIncluded: false,
+      objectKeysIncluded: false,
+      cookiesIncluded: false,
+      bearerIncluded: false,
+      providerPayloadsIncluded: false,
+    },
+  };
+  const serialized = JSON.stringify(report);
+  if (/https?:\/\/|token=|object_key|Bearer\s/i.test(serialized)) {
+    throw new Error('self-test report contains unredacted URL, token, object key, or bearer marker');
+  }
+  await mkdir(args.outputDir, { recursive: true });
+  const reportPath = join(args.outputDir, `${runId}-self-test.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify({ ok: true, selfTest: true, runId, reportPath }, null, 2));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const outputDir = join(process.cwd(), args.outputDir, runId);
   const fixtureDir = join(outputDir, 'fixture');
