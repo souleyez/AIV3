@@ -372,3 +372,102 @@ Code/docs follow-up:
 - main-site upload classification now recognizes `.m4v` as video material;
 - scope planning now treats `.mkv` and `.avi` video names/URLs as video PPT extraction prompts, matching backend video-material recognition;
 - third-party integration docs now explain video material registration, normal parse status, and the special PPT extraction trigger boundary.
+
+## 2026-06-07 Main-Site Visible Video/PPT Smoke
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P0-1 and P0-2.
+
+Scope:
+
+- prove the main-site assistant-run-bound path, not only a backend workflow smoke;
+- use a public non-customer PPT-playback video URL;
+- validate that PPTX, Markdown, and manifests are visible through the main-site HTML artifact file API;
+- do not run login-gated/private/video-platform bypass sources.
+
+Input:
+
+- prompt: `请提取这个视频里的 PPT：https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4`
+- local thread: `video-ppt-main-visible-20260607-01`
+- assistant run id: `46f57e74-85f9-4088-bad0-99f1ae0a6fea`
+
+Observed main-site run:
+
+- create SSE returned one accepted event, 13 delta events, one completed event, and one done event;
+- create phase produced assistant run `46f57e74-85f9-4088-bad0-99f1ae0a6fea`;
+- the run event log contains `video_extraction.workflow_completed`;
+- model completion handoff was requested, enqueued, consumed, and appended a model-owned continue turn;
+- the workflow completion follow-up reported `status=final_pptx_ready`;
+- ready file kinds included `source_text`, `ppt_outline`, `slide_rectangles_manifest`, `slide_notes`, `video_slides_markdown`, `pptx`, `timestamp_map`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, and `extraction_artifacts_manifest`.
+
+Visible artifact:
+
+- artifact id: `html-artifact-video-extraction-46f57e74-85f9-4088-bad0-99f1ae0a6fea-0c41706c-3e39-4c75-8f35-32d26f98e8b3`;
+- source type: `video_extraction`;
+- template id: `video_extraction_summary`;
+- owner scope: assistant run `46f57e74-85f9-4088-bad0-99f1ae0a6fea`;
+- `GET /api/v3/html-artifacts?assistant_run_id=...&local_thread_id=...` returned the full video extraction artifact manifest;
+- `deliverable_status.state=final_pptx_ready`;
+- `generated_artifacts.status=completed`;
+- `frame_count=1281`;
+- `file_count=18`;
+- `has_pptx=true`;
+- `has_video_slides_markdown=true`;
+- `has_slide_notes=true`;
+- `has_slide_rectangles_manifest=true`;
+- `has_subtitle_page_map=false`.
+
+Download checks through `/api/v3/html-artifacts/{artifact_id}/files/{index}`:
+
+| Index | Kind | Result |
+| ---: | --- | --- |
+| 10 | `video_slides_markdown` | HTTP 200, `video_slides.md`, 10881 bytes |
+| 12 | `pptx` | HTTP 200, `video_slides_screenshot_based.pptx`, 268540 bytes |
+| 14 | `final_deliverables_manifest` | HTTP 200, `final_deliverables_manifest.json`, 11095 bytes |
+| 15 | `published_deliverable_manifest` | HTTP 200, `published_deliverable_manifest.json`, 16036 bytes |
+| 16 | `published_version_history` | HTTP 200, `published_version_history.json`, 5163 bytes |
+| 17 | `extraction_artifacts_manifest` | HTTP 200, `extraction_artifacts_manifest.json`, 9126 bytes |
+
+Quality review:
+
+- PPTX ZIP inspection found `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`;
+- PPTX contains 30 slide XML files and 30 picture elements;
+- 27 slides include DrawingML `a:srcRect` crop metadata;
+- `video_slides.md` contains `# Video Slides`, 30 `### Slide` sections, source frame names, timestamps, crop status, relative crop boxes, and per-slide narration availability notes;
+- selected slides manifest reports `selected_count=30`;
+- visual-similarity dedupe removed 7 near-duplicate selected candidates before PPTX generation;
+- `has_subtitle_page_map=false` is expected for this sample because no aligned transcript evidence is attached.
+
+Warnings interpreted:
+
+- `missing_transcript_alignment`: narration/page mapping is not available for this sample;
+- `full_frame_rectangle_fallback`: some slide regions may need review, although most slides had detector crop metadata;
+- `selected_slide_duplicates_removed`: duplicate suppression worked and is visible in the manifest;
+- `screenshot_based_pptx`: output is screenshot-based, not editable native slide reconstruction;
+- `speaker_notes_metadata_only`: notes preserve frame metadata without aligned narration;
+- `parse_partial` and `provider_failure`: provider transcript/native understanding is disabled, but screenshot PPTX and Markdown delivery still reached `final_pptx_ready`.
+
+Reusable smoke check drafted locally:
+
+The command below records the reproducible check shape used for this receipt. Treat the script/package wiring as implementation work that should be committed separately with its own validation scope; this receipt only records the main-site evidence and expected gate.
+
+```text
+node scripts/smoke/video-ppt-main-visible.mjs --base-url https://v3.elepcloud.com --assistant-run-id 46f57e74-85f9-4088-bad0-99f1ae0a6fea --local-thread-id video-ppt-main-visible-20260607-01 --timeout-ms 60000 --output-dir target/video-ppt-main-visible-script-smoke
+```
+
+Result:
+
+- `ok=true`;
+- `createdRun=false`;
+- `artifactOk=true`;
+- `deliverableState=final_pptx_ready`;
+- downloaded required file kinds: `video_slides_markdown`, `pptx`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, `extraction_artifacts_manifest`;
+- `pptxSlideCount=30`;
+- `markdownSlideHeadingCount=30`.
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no 8-server deployment, build, restart, service mutation, or 120-server action was run;
+- no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt;
+- generated smoke downloads were kept under `target/` and were not committed;
+- plan-only synchronization should not include script/package changes unless the implementation slice is explicitly in scope.

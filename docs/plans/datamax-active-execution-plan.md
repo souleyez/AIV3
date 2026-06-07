@@ -1,14 +1,14 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-07 21:05 CST
-**当前性质：** 计划收拢版，只改计划文档，不改代码，不发版到 8 服务器。
+**更新时间：** 2026-06-07 21:35 CST
+**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke 与质量复核已完成证据记录，后续按 P1/P2 切片继续开发。本计划编写本身不部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 1. 计划原则
 
 - DataMax 继续只有一份 active plan；历史计划、执行回执和测试记录压缩到本文件的事实基线和后续队列中。
-- 本轮只做计划整理；不改 `crates/**`、`apps/**`、`scripts/**` 代码，不重启服务，不部署 8 服务器。
-- GitHub 同步只允许同步文档提交；8 服务器只能在用户明确批准“发版/部署”后再 pull、build、restart。
+- 计划收拢阶段已结束；后续允许按本计划切片改代码、脚本和文档，但每个切片必须有对应验证证据。
+- GitHub 同步可以包含通过验证的代码/脚本/文档提交；8 服务器只能在用户明确批准“发版/部署”后再 pull、build、restart。
 - 120 服务器不在本计划范围内。
 - 不记录或传播密钥、cookie、扫码会话、数据库 URL、provider payload、原始客户文件、原始客户行、私有 object path、内部下载地址。
 - 视频 PPT 能力只面向“视频里已经播放 PPT/幻灯片/课件”的场景；不是把普通视频创作成 PPT。
@@ -17,10 +17,10 @@
 
 ### 2.1 代码与部署基线
 
-- 本地和 GitHub 当前 head：`b1abad9 Allow video parse placeholders to reach PPT extraction`。
+- 当前 head 以 `git rev-parse HEAD` / `git rev-parse origin/main` 为准；最近已同步的计划收拢基线是 `33b6d9b Consolidate DataMax execution plan`。
 - 已记录的 8 服务器最新部署基线：`b1abad9cc`，已启用 `INGEST_REMOTE_MEDIA_ENABLED=true` 和 `INGEST_REMOTE_MEDIA_CACHE_DIR=/srv/aiv3/remote-media-cache`。
 - 8 服务器已知未跟踪文件：`?? mode`，继续保持不触碰。
-- 本轮计划整理不重新验证、不重新部署 8 服务器；下一次部署必须单独获得批准。
+- P0 主站可见视频/PPT smoke 在主站 `https://v3.elepcloud.com` 通过；本轮未重新部署 8 服务器，下一次部署必须单独获得批准。
 
 ### 2.2 已完成的主线事项
 
@@ -65,7 +65,51 @@
 - 生成文件：18 类，包括 `pptx`、`video_slides_markdown`、`slide_notes`、`slide_rectangles_manifest`、`selected_slides_manifest`、`frame_manifest`、`timestamp_map`、`contact_sheet_html`、各类 manifest。
 - 关键缺口：`has_subtitle_page_map=false`，原因是样例没有可对齐字幕/转写；这是证据质量限制，不是抽帧/PPTX 失败。
 - warning 包括：`full_frame_rectangle_fallback`、`missing_transcript_alignment`、`parse_partial`、`provider_failure`、`screenshot_based_pptx`、`selected_slide_duplicates_removed`、`speaker_notes_metadata_only`。
-- 注意：这次是后端 workflow smoke，没有绑定旧聊天的 `assistant_run_id`，所以不会自动更新原先失败的主站对话；下一步需要补一次主站可见 smoke。
+- 注意：这次是后端 workflow smoke，没有绑定旧聊天的 `assistant_run_id`，所以不能单独代表主站聊天可见性；该缺口已通过 2.5 的主站可见 smoke 补齐。
+
+### 2.5 已完成的主站可见 smoke 与质量复核
+
+主站样例：
+
+- 主站：`https://v3.elepcloud.com`
+- 提示词：`请提取这个视频里的 PPT：https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4`
+- local thread：`video-ppt-main-visible-20260607-01`
+- assistant run id：`46f57e74-85f9-4088-bad0-99f1ae0a6fea`
+
+主站可见结果：
+
+- `video_extraction.workflow_completed` 已进入 assistant-run-bound 链路。
+- model completion follow-up 已 request、enqueue、consume，并追加模型后续轮。
+- HTML artifact：`html-artifact-video-extraction-46f57e74-85f9-4088-bad0-99f1ae0a6fea-0c41706c-3e39-4c75-8f35-32d26f98e8b3`
+- artifact `source_type=video_extraction`，`template_id=video_extraction_summary`，owner scope 绑定 assistant run。
+- `/api/v3/html-artifacts?assistant_run_id=...&local_thread_id=...` 返回完整 manifest。
+- `deliverable_status.state=final_pptx_ready`
+- `generated_artifacts.status=completed`
+- `frame_count=1281`
+- `file_count=18`
+- `has_pptx=true`
+- `has_video_slides_markdown=true`
+- `has_slide_notes=true`
+- `has_slide_rectangles_manifest=true`
+- `has_subtitle_page_map=false`
+
+下载与质量复核：
+
+- PPTX、`video_slides.md`、`final_deliverables_manifest.json`、`published_deliverable_manifest.json`、`published_version_history.json`、`extraction_artifacts_manifest.json` 均可通过 `/api/v3/html-artifacts/{artifact_id}/files/{index}` 下载。
+- PPTX 是有效 OOXML，包含 `[Content_Types].xml`、`ppt/presentation.xml`、`ppt/slides/slide1.xml`。
+- PPTX 含 30 个 slide XML 和 30 个 picture element。
+- `video_slides.md` 含 30 个 `### Slide` 小节，与 PPTX 页数一致。
+- selected slides manifest 报告 `selected_count=30`。
+- 27 页带 DrawingML `a:srcRect` crop metadata。
+- visual-similarity dedupe 移除了 7 个近重复候选。
+- `has_subtitle_page_map=false` 对该样例可接受，因为没有可对齐字幕/转写证据。
+
+质量结论：
+
+- 该样例达到“可交付截图型 PPTX + Markdown deck + manifest”标准。
+- warning 要按交付限制解释：`screenshot_based_pptx` 表示不是可编辑原生 PPT 重建，`missing_transcript_alignment` 表示没有字幕页映射，`full_frame_rectangle_fallback` 表示部分页面仍需人工复核 crop。
+- 这次没有使用客户视频、登录态页面、视频号绕行、cookie、token、数据库 URL、provider payload 或私有 object path。
+- 完整回执记录在 `docs/validation/video-ppt-deliverable-smoke.md`。
 
 ## 3. 当前能力边界
 
@@ -113,7 +157,7 @@
 
 ### P0-0：本次计划收拢与 GitHub 同步
 
-**状态：本轮执行。**
+**状态：已完成，2026-06-07，提交 `33b6d9b`。**
 **目标：** 把旧计划、视频测试、复核要求、视频号研究和录屏兜底设计合并成当前可执行方案。
 
 执行项：
@@ -130,7 +174,11 @@
 - GitHub 有 doc-only commit。
 - 最终回复明确“未改代码、未发 8 服务器”。
 
+后续说明：该 doc-only 阶段已经结束；当前计划进入功能开发执行期。
+
 ### P0-1：主站可见视频/PPT smoke
+
+**状态：已完成，2026-06-07。**
 
 **目标：** 用主站普通聊天链路跑一次 assistant-run-bound smoke，确认用户能在主站看到 PPT/Markdown 下载，而不是只看到后端 workflow 成功。
 
@@ -161,6 +209,8 @@
 - 不部署新代码，除非 smoke 证明当前部署缺必要修复且用户批准发版。
 
 ### P0-2：抽取效果复核标准化
+
+**状态：已完成，2026-06-07。**
 
 **目标：** 把“抽出来了”升级为“抽取质量可判断、可复核、可交付”。
 
@@ -338,6 +388,7 @@ CC=clang CXX=clang++ cargo test -p ingest-worker --bin ingest-worker auto_repars
 ### 5.2 P0-1 主站可见 smoke 执行步骤
 
 目的不是再次证明后端 workflow 能跑，而是证明主站用户能拿到可见产物。
+本节现在作为新版本回归或重新部署后的复现 runbook 使用；当前 P0-1 已完成，证据见 2.5。
 
 执行步骤：
 
@@ -369,6 +420,8 @@ git diff --check
 - `has_subtitle_page_map=false`：如果样例无字幕，不作为失败；如果样例有字幕，进入 P2-2。
 
 ### 5.3 P0-2 抽取效果复核执行步骤
+
+本节现在作为后续样例复核 runbook 使用；当前公开样例的 P0-2 已完成，证据见 2.5 和 `docs/validation/video-ppt-deliverable-smoke.md`。
 
 执行步骤：
 
@@ -561,11 +614,11 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 | 场景 | 输入 | 预期 | 当前状态 | 下一步 |
 | --- | --- | --- | --- | --- |
-| 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 追加质量复核回执 |
-| 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 待跑 | P0-1 |
-| 主站上传视频 | 用户上传 `.mp4/.mov/...` | 上传登记后明确触发 PPT 抽取 | 能力已说明，需 smoke | P0-1/P0-2 |
+| 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 作为后端回归基线保留 |
+| 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过，assistant run `46f57e74-85f9-4088-bad0-99f1ae0a6fea`，PPTX/Markdown/manifest 可下载 | 纳入 release gate |
+| 主站上传视频 | 用户上传 `.mp4/.mov/...` | 上传登记后明确触发 PPT 抽取 | 能力已说明，仍需上传入口 smoke | P1-3 |
 | 第三方视频登记 | 第三方 `content_url` 或 attachment | 特殊触发后进入 `VideoExtraction` | 文档已说明，需端到端 smoke | P1-3 |
-| 公开视频页 | HTML 暴露 video/OG/JSON-LD | 解析候选并抽取 PPT | 受支持，需增强 fixtures | P1-1 |
+| 公开视频页 | HTML 暴露 video/OG/JSON-LD | 解析候选并抽取 PPT | 基础能力已说明，需增强 fixtures 和失败分流 | P1-1 |
 | 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | 当前拒绝正确 | P1-2 |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | 仅研究方案 | P2-1 |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
@@ -586,15 +639,15 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 先跑 P0-1 主站可见公开视频 smoke，证明用户侧能拿到 PPT/Markdown 下载。
-2. 同步写 P0-2 质量复核回执，把 warning 解释清楚。
-3. 做 P1-2 视频号失败 handoff 文案/状态统一，避免用户误以为系统正在解析视频号内容。
-4. 再做 P1-1 公开页面 resolver 增强。
-5. 最后在明确授权和部署窗口后，评审 P2-1 录屏兜底 MVP。
+1. 做 P1-2 视频号失败 handoff 文案/状态统一，避免用户误以为系统正在解析视频号内容。
+2. 做 P1-1 公开页面 resolver 增强，覆盖 video tag、source tag、OG video、JSON-LD、相对 URL 和登录态拒绝 fixtures。
+3. 做 P1-3 artifact 可见性审计的回归测试，把新增 `smoke:video-ppt-main-visible` 纳入后续 release gate。
+4. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审。
+5. 最后在明确授权和部署窗口后，评审是否允许 8 服务器内部录屏开关。
 
 本计划完成当前阶段的定义：
 
 - active plan 已收敛为当前可执行方案。
-- 公开视频 smoke、主站复核、视频号限制、授权录屏兜底都纳入后续队列。
-- GitHub 只同步计划文档。
+- 后端公开视频 smoke、主站可见 smoke、抽取效果复核、视频号限制、授权录屏兜底都已纳入执行队列和验收矩阵。
+- GitHub 同步策略：计划/验证文档可按 doc-only 提交；功能或脚本提交必须绑定对应测试证据；任何 GitHub 同步都不等于 8 服务器发版。
 - 8 服务器未发版、未重启、未触碰 `mode`。
