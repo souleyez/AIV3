@@ -4,13 +4,24 @@ This audit maps the DataMax final definition of done to current evidence. The cu
 
 ## Current State
 
-- Date: 2026-06-06.
-- Local/GitHub head before this audit document update: `7084aaf1a`.
-- 8-server head before this audit document update: `7084aaf1a`.
+- Date: 2026-06-07.
+- Local/GitHub head before this audit document update: `88a03edc`.
+- 8-server head before this audit document update: `88a03edc`.
 - 8-server status: `## main...origin/main` plus the pre-existing untracked `mode` file, left untouched.
-- Active 8-server services checked: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-static-page-worker.service`.
-- Code drift note: after the current-head release-gate code receipts through `ca26bcd`, later commits `fcd2401`, `f5ae5b8`, and `7084aaf` changed only plan/validation documentation. No service restart was required for these documentation-only commits.
+- Active 8-server services checked: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-static-page-worker.service`, `aiv3-media-worker.service`, and `aiv3-assistant-run-worker.service`.
+- Code drift note: after the current-head release-gate code receipts through `ca26bcd`, later commits through `88a03ed` changed plan/validation/dependency-install policy only. No service restart was required for these documentation/configuration-only commits.
 - Current executable plan: `docs/plans/datamax-active-execution-plan.md`.
+
+## 2026-06-07 Current-Head Baseline Receipt
+
+- Local head: `88a03ed`.
+- GitHub `origin/main` head: `88a03edc`.
+- 8-server head: `88a03edc7`.
+- 8-server status: `## main...origin/main` plus the known untracked `mode`; the file was left untouched.
+- Active 8-server services checked: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-static-page-worker.service`, `aiv3-media-worker.service`, and `aiv3-assistant-run-worker.service`.
+- Queue stats: `GET http://127.0.0.1:3000/v1/workflow-tasks/queue-stats` returned valid JSON on 8 server; sanitized receipt size was `6006` bytes in `/tmp/datamax-active-plan-qstats.json`.
+- Docs check: `npm run check:pure-third-party-guide-html` passed locally; generated third-party guide HTML and public copies were up to date.
+- Safety: no secrets, raw queue payload, raw customer rows, full documents, cookies, local keys, provider payloads, or source credentials were recorded.
 
 ## Status Legend
 
@@ -22,7 +33,7 @@ This audit maps the DataMax final definition of done to current evidence. The cu
 
 | # | Requirement | Status | Evidence | Remaining Work |
 | ---: | --- | --- | --- | --- |
-| 1 | Validation records final deployed commit and 8-server smoke receipts for current head. | Proven for deployed code; current doc head synced | `docs/validation/datamax-main-gap-closure.md` records release-gate receipts for deployed code through `ca26bcd`; local/GitHub/8 server are synchronized at `7084aaf`, with the final three commits documentation-only. | Re-run full release gate after behavior code changes, or if operator wants a fresh current-head mutation gate despite docs-only changes. |
+| 1 | Validation records final deployed commit and 8-server smoke receipts for current head. | Proven for deployed code; current plan/config head synced | `docs/validation/datamax-main-gap-closure.md` records release-gate receipts for deployed code through `ca26bcd`; local/GitHub/8 server are synchronized at `88a03ed`, with later commits plan/dependency-install policy only. The 2026-06-07 baseline receipt confirms active services, valid queue-stats JSON, and no change to known `mode`. | Re-run full release gate after behavior code changes, or if operator wants a fresh current-head mutation gate despite docs/config-only changes. |
 | 2 | Third-party public URL/auth/request/response contract is unchanged. | Proven | Task 10 follow-up at `7084aaf` confirmed source/public copies match, online full/pure MD/HTML return `200`, compatibility `v3_*`/`X-V3-*` names remain stable, and no public URL/auth/required request/existing response field changed. | Continue re-auditing after any additive customer-visible artifact/report behavior. |
 | 3 | Third-party ordinary 20-way, main-site 20-way, streaming, static-page 5-way, report/export, data-ingestion, and document-quality smokes pass or have explicit root-cause notes. | Proven with pending auth-only checks | Release gate receipts cover third-party 20-way, main-site scoped 20-way with dataset `31588c60-0885-47c4-81fe-4ff5c27de8e7`, main-site streaming, static-page 5-way, report/export, data-ingestion readiness, scoped documents, and document-quality. Authenticated model-gateway/operator checks have explicit credential root-cause notes. | Provide a legitimate operator credential to turn the remaining auth-dependent model-gateway smoke into passed. |
 | 4 | Xinbai report returns one clickable primary link, exposes export files, preserves normal answer text, and uses modular monthly template by default. | Proven | Focus-link closure and report/export smoke at `0f72ca37fc1e` confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one text report link, and `table-data.csv`, `report.ppt`, `report.md`. Template hygiene keeps `xinbai-functional-modular-template-20260604` as the primary default. | Keep focused report/export smoke in future release gates. |
@@ -33,7 +44,7 @@ This audit maps the DataMax final definition of done to current evidence. The cu
 | 9 | Low-quality recovery remains passive and cannot block normal answers. | Proven | Current-head audit at `fc7c37048c76` shows hard gate absent, dedicated live-autofix flag absent, and `answer_quality_autofix` absent from task/capability allowlists. Local answer-quality regressions pass. | Keep disabled unless operator explicitly enables passive collection/manual review and the dedicated gates. |
 | 10 | Template matching excludes stale Xinbai templates from normal customer-visible reuse. | Proven | Template hygiene tests and focused 8-server smoke confirm primary Xinbai modular template selection, old smoke/prewarm/fallback candidates skipped, and focus-bearing artifact links returned. | Do not delete old artifacts without explicit cleanup approval; keep runtime guards. |
 | 11 | Model-visible platform capabilities route report/static-page/document/data/proactive tasks without tool traces or contract changes. | Proven | Capability routing rollout exposes internal capability catalog and selected 8-server smoke passed template-reference, temporary-contract/area, and traffic-stat report materials; ordinary guards emitted no artifact links. | Add customer phrasing fixtures when new misroutes are observed. |
-| 12 | Online third-party integration docs match deployed additive contract and use DataMax naming. | Proven | Task 10 follow-up at `7084aaf` confirmed source/public MD/HTML copies match by SHA-256; public full/pure MD/HTML URLs returned `200`; DataMax naming, dataset scopes, artifact fields, report exports, SSE progress, and additive compatibility text were confirmed. | Rebuild/recheck docs after public contract additions. |
+| 12 | Online third-party integration docs match deployed additive contract and use DataMax naming. | Proven | Task 10 follow-up at `7084aaf` confirmed source/public MD/HTML copies match by SHA-256; public full/pure MD/HTML URLs returned `200`; DataMax naming, dataset scopes, artifact fields, report exports, SSE progress, and additive compatibility text were confirmed. The 2026-06-07 local `npm run check:pure-third-party-guide-html` also passed at `88a03ed`. | Rebuild/recheck docs after public contract additions. |
 | 13 | No raw credentials, raw customer rows, full documents, provider payloads, or secret env names are recorded. | Proven for this audit trail | Each smoke/runbook receipt records sanitized command shapes and safety boundaries. Recent audits did not print bearer tokens, database URLs, raw rows, full documents, cookies, local keys, provider keys, or provider payloads. | Continue using sanitized reports; do not paste raw env or customer data into validation docs. |
 
 ## Remaining External Decisions
