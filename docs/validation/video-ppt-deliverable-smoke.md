@@ -1675,7 +1675,67 @@ Result:
 
 Remaining P2-2 work:
 
-- speaker-window obstruction, animation transition, and low-contrast text fixtures still need broader local coverage;
+- speaker-window obstruction and animation transition fixtures still need broader local coverage;
+- P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
+- P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated temp frames stayed under test temp directories and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
+## 2026-06-08 Low-Contrast Text Quality Report Fixture
+
+Task source: P2-2F/P2-2B local quality fixture follow-up from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- prove low-contrast slide text is surfaced as a quality-review risk in `slide_quality_report.json`;
+- keep the existing screenshot-based PPTX deliverable path intact;
+- keep the signal as a review warning, not a hard delivery failure;
+- avoid live extraction, network fetches, uploads, browser recording, or deployment.
+
+Implemented behavior:
+
+- added a deterministic low-contrast text PNG fixture;
+- added `flags_low_contrast_slide_text_in_quality_report`;
+- the fixture runs through `write_video_extraction_text_artifacts`, selected slides, slide rectangles, PPTX generation, and quality report generation;
+- `slide_quality_report.json` records `sharpness_status=measured`, `sharpness_risk=high`, and a score below the medium-risk threshold;
+- report summary records `sharpness_high_count=1` and `sharpness_unknown_count=0`;
+- risk flags include `frame_sharpness_review_required` with `high_count=1` and `unknown_count=0`;
+- the public quality report does not include the raw frame directory path.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker flags_low_contrast_slide_text_in_quality_report --lib
+CC=clang CXX=clang++ cargo test -p media-worker measures_slide_frame_sharpness_for_quality_report --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- low-contrast text end-to-end quality report fixture passed;
+- sharpness helper regression passed;
+- selected-slides regression passed;
+- controlled video sample deliverable contract passed;
+- slide rectangle regression passed, 5 tests;
+- video deliverable validator passed, 19 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- speaker-window obstruction and animation transition fixtures still need broader local coverage;
 - P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
 - P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
 

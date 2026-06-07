@@ -7920,6 +7920,26 @@ mod tests {
         image.save(path).expect("test sharp text slide png");
     }
 
+    fn write_test_low_contrast_text_slide_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(160, 90, image::Rgb([236, 236, 236]));
+        for x in 28..132 {
+            image.put_pixel(x, 22, image::Rgb([228, 228, 228]));
+            image.put_pixel(x, 23, image::Rgb([228, 228, 228]));
+            image.put_pixel(x, 52, image::Rgb([229, 229, 229]));
+        }
+        for y in 34..70 {
+            image.put_pixel(36, y, image::Rgb([230, 230, 230]));
+            image.put_pixel(76, y, image::Rgb([230, 230, 230]));
+            image.put_pixel(118, y, image::Rgb([230, 230, 230]));
+        }
+        for y in 38..66 {
+            for x in [48, 52, 56, 90, 94, 98, 102] {
+                image.put_pixel(x, y, image::Rgb([228, 228, 228]));
+            }
+        }
+        image.save(path).expect("test low contrast text slide png");
+    }
+
     fn assert_public_manifest_file_entry(files: &[Value], kind: &str, file_name: &str) {
         let file = files
             .iter()
@@ -7958,6 +7978,87 @@ mod tests {
         assert_eq!(missing.status, "unavailable");
         assert_eq!(missing.risk, "unknown");
         assert_eq!(missing.score, None);
+    }
+
+    #[test]
+    fn flags_low_contrast_slide_text_in_quality_report() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-low-contrast-quality-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        write_test_low_contrast_text_slide_png(&raw_frames_dir.join("frame_000001.png"));
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 1,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("quality report artifacts");
+        let files = manifest["files"].as_array().expect("files");
+        let slide_quality_report_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide quality report path");
+        let slide_quality_report =
+            fs::read_to_string(slide_quality_report_path).expect("slide quality report");
+        assert!(!slide_quality_report.contains(&raw_frames_dir.display().to_string()));
+        let slide_quality_report_json: Value =
+            serde_json::from_str(&slide_quality_report).expect("quality report json");
+
+        assert_eq!(slide_quality_report_json["slide_count"], json!(1));
+        assert_eq!(
+            slide_quality_report_json["summary"]["sharpness_high_count"],
+            json!(1)
+        );
+        assert_eq!(
+            slide_quality_report_json["summary"]["sharpness_unknown_count"],
+            json!(0)
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["sharpness_status"],
+            json!("measured")
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["sharpness_risk"],
+            json!("high")
+        );
+        assert!(
+            slide_quality_report_json["slides"][0]["sharpness_score"]
+                .as_i64()
+                .expect("sharpness score")
+                < VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE
+        );
+        let sharpness_risk = slide_quality_report_json["risk_flags"]
+            .as_array()
+            .expect("risk flags")
+            .iter()
+            .find(|risk| risk["code"] == json!("frame_sharpness_review_required"))
+            .expect("sharpness risk flag");
+        assert_eq!(sharpness_risk["high_count"], json!(1));
+        assert_eq!(sharpness_risk["unknown_count"], json!(0));
+        assert_eq!(
+            sharpness_risk["review_action"],
+            json!("review_blurry_or_unmeasured_slide_frames")
+        );
     }
 
     #[test]
