@@ -14,6 +14,7 @@ import {
   controlResultLabel,
   databaseSourceHealthSignalLabel,
   databaseSourceMetrics,
+  databaseSourceReadOnlyStatus,
   databaseSourceReadiness,
   databaseSourceSummary,
   databaseSourceSyncRuns,
@@ -992,6 +993,7 @@ export default function ExternalIntegrationsPageClient() {
   const selectedDatabaseSource = databaseSourceSummary(selected || {});
   const selectedDatabaseReadiness = databaseSourceReadiness(selected || {});
   const selectedDatabaseStatus = selected ? databaseStatusById[selected.id] || null : null;
+  const selectedDatabaseReadOnlyStatus = databaseSourceReadOnlyStatus(selected || {}, selectedDatabaseStatus);
   const selectedEffectiveDatabaseReadiness = selectedDatabaseStatus?.datasetReadiness?.configured
     ? selectedDatabaseStatus.datasetReadiness
     : selectedDatabaseReadiness;
@@ -2029,6 +2031,39 @@ export default function ExternalIntegrationsPageClient() {
                         <span>最近文档</span>
                         <strong>{formatObservationTime(selectedEffectiveDatabaseReadiness.latestDocumentUpdatedAt)}</strong>
                       </div>
+                    </div>
+                  ) : null}
+                  {selectedDatabaseReadOnlyStatus.configured ? (
+                    <div className="external-database-sync-readiness" aria-label="第三方数据库只读状态">
+                      <div>
+                        <span>只读状态</span>
+                        <strong className={`external-database-readiness-${selectedDatabaseReadOnlyStatus.signal}`}>
+                          {selectedDatabaseReadOnlyStatus.label}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>第三方范围</span>
+                        <strong>
+                          {[
+                            selectedDatabaseReadOnlyStatus.tenantExternalId,
+                            selectedDatabaseReadOnlyStatus.botExternalId,
+                          ].filter(Boolean).join(' / ') || '未配置'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>稳定分组</span>
+                        <strong>
+                          {selectedDatabaseReadOnlyStatus.datasetExternalIds.length
+                            ? selectedDatabaseReadOnlyStatus.datasetExternalIds.slice(0, 2).join(', ')
+                            : '未配置'}
+                        </strong>
+                      </div>
+                      <small>
+                        {selectedDatabaseReadOnlyStatus.recentError
+                          || selectedDatabaseReadOnlyStatus.latestAnalysisStatus
+                          || selectedDatabaseReadOnlyStatus.latestSyncStatus
+                          || (selectedDatabaseReadOnlyStatus.readOnlyAttached ? '只读挂接，不写生产' : '需要确认只读策略')}
+                      </small>
                     </div>
                   ) : null}
                   {selectedDatabaseStatus?.dataset?.datasetId ? (

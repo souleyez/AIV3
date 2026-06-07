@@ -260,6 +260,33 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no credential, cookie, bearer token, local key, database URL, provider payload, raw customer row, full customer document, object path, or secret env value was recorded;
   - 120 server was not touched.
 
+### 2026-06-07 Active Plan Task 9 Third-Party Database Read-Only Status
+
+- Purpose:
+  - execute Task 9 from `docs/plans/datamax-active-execution-plan.md`;
+  - make third-party/database-source read-only attachment state visible enough that operators can distinguish attached, unsynced, analyzing, ready, and operator-action states.
+- Code change:
+  - added frontend helper `databaseSourceReadOnlyStatus` and label helper `databaseSourceReadOnlyStatusLabel`;
+  - database-source summary now normalizes source/system user, tenant/bot external ids, dataset external ids, data-source/database existence flags, read-only attachment, latest sync/analysis status, and redacted recent error;
+  - database-source export now includes `read_only_status`;
+  - the external integrations page shows a compact "third-party database read-only status" row for selected database sources;
+  - CSS now maps `read_only_ready`, `attached`, `not_synced`, `analyzing`, `operator_required`, and `not_attached` to the existing database status tones.
+- Local verification:
+  - `node --test app/lib/external-integrations.test.mjs` passed, 31 tests, with the existing Node module-type warning only;
+  - `CC=clang CXX=clang++ cargo test -p platform-api third_party_database --lib` ran and matched 0 tests;
+  - replacement platform checks passed:
+    - `CC=clang CXX=clang++ cargo test -p platform-api database_source_status --lib`, 3 tests;
+    - `CC=clang CXX=clang++ cargo test -p platform-api database_dataset_readiness --lib`, 2 tests;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_database --lib`, 1 test;
+  - `cargo fmt --check` passed;
+  - `git diff --check` passed.
+- Safety:
+  - no public third-party request/response field, auth method, URL, production row mapping, database schema, or source sync behavior changed;
+  - no live source/customer database read, production write, service build, service restart, or deploy was run;
+  - helper redaction covers URL/path/token/connection-string-like recent errors before display/export;
+  - no credential, cookie, bearer token, local key, database URL, provider payload, raw customer row, full customer document, object path, or secret env value was recorded;
+  - 120 server was not touched.
+
 ### 2026-06-06 Current-Head Task 1 Release Gate
 
 - Purpose:

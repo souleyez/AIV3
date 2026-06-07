@@ -56,8 +56,8 @@
 6. 已完成：被动回答质量离线语料。
 7. 已完成：数据源 row identity staging 自测。
 8. 已完成：静态页/报表回归语料强化。
-9. 下一步：第三方数据库只读状态强化。
-10. operator 观测页小幅打磨。
+9. 已完成：第三方数据库只读状态强化。
+10. 下一步：operator 观测页小幅打磨。
 11. 最终 validation 和可选部署。
 
 每个任务通过测试后独立提交。
@@ -646,7 +646,19 @@ git commit -m "Harden report trigger regression corpus"
 
 ## Task 9：第三方数据库只读状态强化
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 让第三方“已挂接数据库/数据集”状态清楚可见，并减少误判为“接口不可用”或“没收到数据”。
+
+**结果：**
+
+- 前端 helper 新增 `databaseSourceReadOnlyStatus` / `databaseSourceReadOnlyStatusLabel`，只归一化现有 redacted summary/status，不新增或改变第三方公开 API 字段。
+- 数据库源 summary 现在可展示 source/system user、tenant/bot、dataset external ids、data-source/database 存在性、只读挂接、最近 sync/analysis 状态和 redacted 最近错误。
+- 数据库状态导出 JSON 增加 `read_only_status`，明确区分 `只读可用`、`已挂接`、`未同步`、`分析中`、`需要 operator 处理`、`未挂接`。
+- 观测页选中数据库源区域新增“第三方数据库只读状态”条，显示只读状态、第三方范围、稳定分组和 redacted 最近错误/阶段。
+- CSS 补齐新只读状态的视觉映射。
+- `cargo test -p platform-api third_party_database --lib` 当前匹配 0 tests；已用实际 database-source/status/readiness 测试补证。
+- `node --test app/lib/external-integrations.test.mjs` 通过 31 tests，仅保留既有 Node module-type warning。
 
 **文件：**
 

@@ -8310,18 +8310,27 @@ body {
   background: #eef8f4 !important;
 }
 
+.external-database-readiness-read_only_ready,
+.external-database-readiness-attached,
+.external-database-readiness-ready {
+  border-color: #bfd0cb !important;
+  background: #eef8f4 !important;
+}
+
 .external-database-readiness-partial_ready,
 .external-database-readiness-processing,
 .external-database-readiness-sync_running,
 .external-database-readiness-sync_queued,
-.external-database-readiness-indexing {
+.external-database-readiness-indexing,
+.external-database-readiness-analyzing {
   border-color: #e7cf92 !important;
   background: #fff8df !important;
 }
 
 .external-database-readiness-failed,
 .external-database-readiness-sync_failed,
-.external-database-readiness-index_failed {
+.external-database-readiness-index_failed,
+.external-database-readiness-operator_required {
   border-color: #d29a8d !important;
   background: #fff4f0 !important;
 }
@@ -8329,6 +8338,8 @@ body {
 .external-database-readiness-no_documents,
 .external-database-readiness-no_sync,
 .external-database-readiness-synced_no_documents,
+.external-database-readiness-not_synced,
+.external-database-readiness-not_attached,
 .external-database-readiness-unknown {
   border-color: #d7cdbc !important;
   background: #f8fafc !important;

@@ -15,6 +15,8 @@ import {
   controlResultLabel,
   databaseSourceHealthSignalLabel,
   databaseSourceMetrics,
+  databaseSourceReadOnlyStatus,
+  databaseSourceReadOnlyStatusLabel,
   databaseSourceReadiness,
   databaseSourceSummary,
   databaseSourceSyncRuns,
@@ -307,6 +309,7 @@ test('buildDatabaseSourceStatusExport produces redacted database status summary'
   assert.equal(report.report_type, 'database_source_status_summary');
   assert.equal(report.generated_at, '2026-05-23T10:00:00Z');
   assert.equal(report.database_source.connection_env, 'THIRD_PARTY_HY_SQL_DATABASE_URL');
+  assert.equal(report.read_only_status.label, '只读可用');
   assert.equal(report.dataset.datasetExternalId, 'hy-sql-main');
   assert.equal(report.sync_readiness.rowFailureGroups[0].reportedFailedRowCount, 1);
   assert.equal(report.recent_sync_runs[0].checkpointSummary.cursorPresent, true);
@@ -444,6 +447,13 @@ test('database source observability helpers normalize redacted source summary', 
         database: 'hy_sql',
         connection_env: 'THIRD_PARTY_HY_SQL_DATABASE_URL',
         default_dataset_id: '018f0000-0000-7000-9000-000000000001',
+        system_user_id: 'system-hy-sql',
+        tenant_external_id: 'tenant-hy',
+        bot_external_id: 'bot-v3',
+        dataset_external_ids: ['hy-sql-main', 'hy-sql-reporting'],
+        read_only: true,
+        latest_analysis_status: 'analysis_ready',
+        latest_sync_status: 'completed',
         table_count: 3,
         tables: ['bi_traffic_area', 'bi_order_day', 'bi_user_region'],
       },
@@ -471,12 +481,21 @@ test('database source observability helpers normalize redacted source summary', 
   assert.equal(source.kind, 'mysql');
   assert.equal(source.database, 'hy_sql');
   assert.equal(source.defaultDatasetId, '018f0000-0000-7000-9000-000000000001');
+  assert.equal(source.systemUserId, 'system-hy-sql');
+  assert.equal(source.tenantExternalId, 'tenant-hy');
+  assert.equal(source.botExternalId, 'bot-v3');
+  assert.deepEqual(source.datasetExternalIds, ['hy-sql-main', 'hy-sql-reporting']);
+  assert.equal(source.readOnly, true);
   assert.equal(source.tableCount, 3);
   assert.deepEqual(source.tables, ['bi_traffic_area', 'bi_order_day', 'bi_user_region']);
 
   const metrics = databaseSourceMetrics(integration);
   assert.deepEqual(metrics.map((metric) => metric.label), [
+    '只读状态',
     '问答就绪',
+    '系统用户',
+    '第三方范围',
+    '稳定分组',
     '数据库',
     '连接引用',
     '默认数据集',
@@ -484,6 +503,10 @@ test('database source observability helpers normalize redacted source summary', 
     '最近同步',
     '失败同步',
   ]);
+  assert.equal(metrics.find((metric) => metric.label === '只读状态').value, '只读可用');
+  assert.equal(metrics.find((metric) => metric.label === '系统用户').value, 'system-hy-sql');
+  assert.equal(metrics.find((metric) => metric.label === '第三方范围').value, 'tenant tenant-hy · bot bot-v3');
+  assert.equal(metrics.find((metric) => metric.label === '稳定分组').value, 'hy-sql-main, hy-sql-reporting');
   assert.equal(metrics.find((metric) => metric.label === '问答就绪').value, '部分可问');
   assert.equal(metrics.find((metric) => metric.label === '最近同步').value, 'completed');
   const readiness = databaseSourceReadiness(integration);
@@ -492,6 +515,11 @@ test('database source observability helpers normalize redacted source summary', 
   assert.equal(readiness.documentCount, 128);
   assert.equal(readiness.indexedChunkCount, 460);
   assert.equal(readiness.latestDocumentUpdatedAt, '2026-05-22T01:00:00Z');
+  const readOnly = databaseSourceReadOnlyStatus(integration);
+  assert.equal(readOnly.label, '只读可用');
+  assert.equal(readOnly.sourceId, 'hy-sql-source');
+  assert.equal(readOnly.systemUserId, 'system-hy-sql');
+  assert.deepEqual(readOnly.datasetExternalIds, ['hy-sql-main', 'hy-sql-reporting']);
 
   const tablePreview = databaseSourceTablePreview(integration, 2);
   assert.deepEqual(tablePreview.tables, ['bi_traffic_area', 'bi_order_day']);
@@ -570,6 +598,49 @@ test('database source observability helpers keep unconfigured sources quiet', ()
   assert.equal(source.configured, false);
   assert.deepEqual(databaseSourceMetrics(integration), []);
   assert.deepEqual(databaseSourceTablePreview(integration), { tables: [], hiddenCount: 0 });
+  assert.equal(databaseSourceReadOnlyStatus(integration).label, '未挂接');
+});
+
+test('database source read-only status separates unsynced, running, and operator states', () => {
+  const baseIntegration = normalizeIntegrationSummary({
+    integration_id: 'hy-sql-read-only',
+    integration_kind: 'source',
+    config_summary: {
+      database_source: {
+        kind: 'mysql',
+        database: 'hy_sql',
+        connection_env: 'THIRD_PARTY_HY_SQL_DATABASE_URL',
+        dataset_external_id: 'hy-sql-main',
+        read_only: true,
+      },
+    },
+  });
+
+  assert.equal(databaseSourceReadOnlyStatus(baseIntegration, {
+    status: {
+      sync_readiness: { signal: 'no_sync' },
+    },
+  }).label, '未同步');
+
+  assert.equal(databaseSourceReadOnlyStatus(baseIntegration, {
+    status: {
+      sync_readiness: { signal: 'sync_running', latest_status: 'running' },
+    },
+  }).label, '分析中');
+
+  const operatorRequired = databaseSourceReadOnlyStatus(baseIntegration, {
+    status: {
+      config_valid: true,
+      sync_readiness: {
+        signal: 'sync_failed',
+        last_error: 'failed with database_url=postgres://secret at /srv/private/source.sql',
+      },
+    },
+  });
+  assert.equal(operatorRequired.label, '需要 operator 处理');
+  assert.equal(operatorRequired.recentError.includes('database_url=[redacted]'), true);
+  assert.equal(operatorRequired.recentError.includes('[redacted:path]'), true);
+  assert(!operatorRequired.recentError.includes('postgres://secret'));
 });
 
 test('database source status helper normalizes selected-only detail payload', () => {
@@ -843,6 +914,15 @@ test('databaseSourceHealthSignalLabel covers selected-source health states', () 
   assert.equal(databaseSourceHealthSignalLabel('attention'), '需关注');
   assert.equal(databaseSourceHealthSignalLabel('blocking'), '阻断');
   assert.equal(databaseSourceHealthSignalLabel('in_progress'), '处理中');
+});
+
+test('databaseSourceReadOnlyStatusLabel covers read-only database states', () => {
+  assert.equal(databaseSourceReadOnlyStatusLabel('read_only_ready'), '只读可用');
+  assert.equal(databaseSourceReadOnlyStatusLabel('attached'), '已挂接');
+  assert.equal(databaseSourceReadOnlyStatusLabel('not_synced'), '未同步');
+  assert.equal(databaseSourceReadOnlyStatusLabel('analyzing'), '分析中');
+  assert.equal(databaseSourceReadOnlyStatusLabel('operator_required'), '需要 operator 处理');
+  assert.equal(databaseSourceReadOnlyStatusLabel('not_attached'), '未挂接');
 });
 
 test('artifactSignalLabel covers publish and revoke states', () => {

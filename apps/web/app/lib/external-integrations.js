@@ -229,6 +229,7 @@ export function buildDatabaseSourceStatusExport({
 } = {}) {
   const source = databaseSourceSummary(integration);
   const normalized = status?.loaded ? status : normalizeDatabaseSourceStatus(status);
+  const readOnlyStatus = databaseSourceReadOnlyStatus(integration, normalized);
   return {
     report_type: 'database_source_status_summary',
     generated_at: generatedAt,
@@ -250,6 +251,7 @@ export function buildDatabaseSourceStatusExport({
       table_count: source.tableCount,
       tables: source.tables,
     },
+    read_only_status: readOnlyStatus,
     dataset: normalized.dataset || {},
     dataset_readiness: normalized.datasetReadiness || {},
     sync_readiness: {
@@ -486,6 +488,16 @@ export function databaseSourceSummary(integration = {}) {
   const tables = Array.isArray(raw.tables)
     ? raw.tables.map((table) => String(table || '').trim()).filter(Boolean)
     : [];
+  const datasetExternalIds = uniqueStringArray([
+    ...arrayValue(raw.dataset_external_ids || raw.datasetExternalIds),
+    raw.dataset_external_id,
+    raw.datasetExternalId,
+    raw.default_dataset_external_id,
+    raw.defaultDatasetExternalId,
+    ...arrayValue(configSummary.dataset_external_ids || configSummary.datasetExternalIds),
+    configSummary.dataset_external_id,
+    configSummary.datasetExternalId,
+  ]);
   const configured = raw.configured !== false && Boolean(
     raw.kind
       || raw.database
@@ -504,9 +516,22 @@ export function databaseSourceSummary(integration = {}) {
       defaultDatasetId: '',
       tableCount: 0,
       tables: [],
+      sourceId: String(integration.id || integration.source_id || ''),
+      systemUserId: '',
+      tenantExternalId: '',
+      botExternalId: '',
+      datasetExternalIds: [],
+      dataSourceExists: false,
+      databaseExists: false,
+      readOnly: false,
+      latestAnalysisStatus: '',
+      latestSyncStatus: '',
+      recentError: '',
       error: '',
     };
   }
+  const productionWriteAllowed = raw.production_write_allowed ?? raw.productionWriteAllowed;
+  const readOnlyValue = raw.read_only ?? raw.readOnly ?? raw.read_only_attached ?? raw.readOnlyAttached;
   return {
     configured: true,
     valid: raw.valid !== false,
@@ -516,8 +541,41 @@ export function databaseSourceSummary(integration = {}) {
     defaultDatasetId: String(raw.default_dataset_id || raw.defaultDatasetId || ''),
     tableCount: numberOrZero(raw.table_count ?? raw.tableCount) || tables.length,
     tables,
-    error: String(raw.error || ''),
+    sourceId: String(raw.source_id || raw.sourceId || integration.id || integration.source_id || ''),
+    systemUserId: String(raw.system_user_id || raw.systemUserId || raw.owner_user_id || raw.ownerUserId || ''),
+    tenantExternalId: String(raw.tenant_external_id || raw.tenantExternalId || configSummary.tenant_external_id || configSummary.tenantExternalId || ''),
+    botExternalId: String(raw.bot_external_id || raw.botExternalId || configSummary.bot_external_id || configSummary.botExternalId || ''),
+    datasetExternalIds,
+    dataSourceExists: Boolean(raw.data_source_exists ?? raw.dataSourceExists ?? raw.source_exists ?? raw.sourceExists ?? true),
+    databaseExists: Boolean(raw.database_exists ?? raw.databaseExists ?? raw.database),
+    readOnly: readOnlyValue === undefined ? productionWriteAllowed !== true : Boolean(readOnlyValue),
+    latestAnalysisStatus: String(raw.latest_analysis_status || raw.latestAnalysisStatus || ''),
+    latestSyncStatus: String(raw.latest_sync_status || raw.latestSyncStatus || ''),
+    recentError: redactDatabaseStatusText(raw.recent_error || raw.recentError || raw.last_error || raw.lastError || raw.error || ''),
+    error: redactDatabaseStatusText(raw.error || ''),
   };
+}
+
+function arrayValue(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  return value ? [value] : [];
+}
+
+function redactDatabaseStatusText(value, maxLength = 180) {
+  let text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  text = text
+    .replace(/https?:\/\/[^\s<>"']+/gi, '[redacted:url]')
+    .replace(/\/(?:Users|Volumes|srv|tmp|var|private|home)\/[^\s<>"']+/g, '[redacted:path]')
+    .replace(/\b[A-Za-z]:\\[^\s<>"']+/g, '[redacted:path]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted:token]')
+    .replace(/\bv3in_[A-Za-z0-9._-]+/g, '[redacted:token]')
+    .replace(/\b(cookie|token|secret|password|api[_-]?key|connection[_-]?url|database[_-]?url)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
 export function outboundReplyDispatchSummary(integration = {}) {
@@ -593,13 +651,22 @@ export function databaseSourceMetrics(integration = {}) {
       ? integration.drift_summary
       : {};
   const readiness = databaseSourceReadiness(integration);
+  const readOnly = databaseSourceReadOnlyStatus(integration);
+  const thirdPartyScope = [
+    source.tenantExternalId ? `tenant ${source.tenantExternalId}` : '',
+    source.botExternalId ? `bot ${source.botExternalId}` : '',
+  ].filter(Boolean).join(' · ');
   return [
+    { label: '只读状态', value: readOnly.label },
     { label: '问答就绪', value: readiness.label },
+    { label: '系统用户', value: source.systemUserId || '未配置' },
+    { label: '第三方范围', value: thirdPartyScope || '未配置' },
+    { label: '稳定分组', value: source.datasetExternalIds.length ? source.datasetExternalIds.join(', ') : '未配置' },
     { label: '数据库', value: source.database || '未配置' },
     { label: '连接引用', value: source.connectionEnv || '未配置' },
     { label: '默认数据集', value: readiness.defaultDatasetId || source.defaultDatasetId || '未绑定' },
     { label: '表数量', value: source.tableCount },
-    { label: '最近同步', value: driftSummary.latest_sync_status || '无记录' },
+    { label: '最近同步', value: source.latestSyncStatus || driftSummary.latest_sync_status || '无记录' },
     { label: '失败同步', value: numberOrZero(driftSummary.failed_sync_count) },
   ];
 }
@@ -614,6 +681,102 @@ export function databaseSourceReadiness(integration = {}) {
     ? driftSummary.database_dataset_readiness
     : {};
   return normalizeDatabaseReadiness(raw);
+}
+
+export function databaseSourceReadOnlyStatus(integration = {}, status = null) {
+  const source = databaseSourceSummary(integration);
+  const normalized = status?.loaded
+    ? status
+    : status
+      ? normalizeDatabaseSourceStatus(status)
+      : null;
+  const driftSummary = integration?.driftSummary && typeof integration.driftSummary === 'object'
+    ? integration.driftSummary
+    : integration?.drift_summary && typeof integration.drift_summary === 'object'
+      ? integration.drift_summary
+      : {};
+  const datasetExternalIds = uniqueStringArray([
+    ...source.datasetExternalIds,
+    normalized?.dataset?.datasetExternalId,
+    ...(normalized?.datasets || []).map((dataset) => dataset.datasetExternalId),
+  ]);
+  const datasetReadiness = normalized?.datasetReadiness?.configured
+    ? normalized.datasetReadiness
+    : databaseSourceReadiness(integration);
+  const syncReadiness = normalized?.syncReadiness || {};
+  const healthFindings = normalized?.healthFindings || {};
+  const latestSyncStatus = syncReadiness.latestStatus || source.latestSyncStatus || driftSummary.latest_sync_status || '';
+  const latestAnalysisStatus = source.latestAnalysisStatus || driftSummary.latest_analysis_status || '';
+  const recentError = redactDatabaseStatusText(
+    source.recentError
+    || normalized?.configError
+    || syncReadiness.lastError
+    || syncReadiness.failureKind
+    || healthFindings.items?.find((item) => item.severity === 'error' || item.severity === 'warning')?.message
+    || '',
+  );
+  const syncFailure = ['sync_failed', 'index_failed'].includes(syncReadiness.signal)
+    || Boolean(syncReadiness.lastError || syncReadiness.failureKind || normalized?.configError);
+  let signal = 'attached';
+  if (!source.configured) {
+    signal = 'not_attached';
+  } else if (
+    !source.valid
+    || normalized?.configValid === false
+    || healthFindings.signal === 'blocking'
+    || syncFailure
+  ) {
+    signal = 'operator_required';
+  } else if (
+    ['sync_running', 'sync_queued', 'indexing'].includes(syncReadiness.signal)
+    || /queued|running|processing|in_progress/i.test(latestAnalysisStatus)
+  ) {
+    signal = 'analyzing';
+  } else if (['ready', 'partial_ready'].includes(datasetReadiness.signal) && source.readOnly) {
+    signal = 'read_only_ready';
+  } else if (
+    ['no_sync', 'synced_no_documents', 'no_documents'].includes(syncReadiness.signal)
+    || (!latestSyncStatus && source.configured)
+  ) {
+    signal = 'not_synced';
+  } else if (!source.readOnly) {
+    signal = 'operator_required';
+  }
+  return {
+    configured: source.configured,
+    signal,
+    label: databaseSourceReadOnlyStatusLabel(signal),
+    sourceId: source.sourceId,
+    systemUserId: source.systemUserId,
+    tenantExternalId: source.tenantExternalId,
+    botExternalId: source.botExternalId,
+    datasetExternalIds,
+    dataSourceExists: source.dataSourceExists,
+    databaseExists: source.databaseExists,
+    readOnlyAttached: source.configured && source.readOnly,
+    latestSyncStatus,
+    latestAnalysisStatus,
+    recentError,
+  };
+}
+
+export function databaseSourceReadOnlyStatusLabel(signal) {
+  switch (String(signal || '').toLowerCase()) {
+    case 'read_only_ready':
+      return '只读可用';
+    case 'attached':
+      return '已挂接';
+    case 'not_synced':
+      return '未同步';
+    case 'analyzing':
+      return '分析中';
+    case 'operator_required':
+      return '需要 operator 处理';
+    case 'not_attached':
+      return '未挂接';
+    default:
+      return '未知';
+  }
 }
 
 export function normalizeDatabaseSourceStatus(raw = {}) {
@@ -709,6 +872,7 @@ export function normalizeDatabaseSourceStatus(raw = {}) {
   const syncReadiness = normalizeDatabaseSyncReadiness(status?.sync_readiness || status?.syncReadiness || {});
   return {
     loaded: Boolean(raw?.status || raw?.dataset_readiness || raw?.table_readiness),
+    sourceId: String(raw?.source_id || raw?.sourceId || status?.source_id || status?.sourceId || ''),
     configValid: status?.config_valid !== false,
     configError: String(status?.config_error || ''),
     dataset: {
