@@ -1525,6 +1525,69 @@ Safety result:
 - generated temp frames stayed under test temp directories and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Public Slides Video Candidate Access Probe
+
+Task source: S1 / P2-2E-2 from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- find a public, non-customer, anonymously downloadable video candidate whose content is slide/presentation screen recording;
+- verify only source access and sampled visual suitability before attempting full DataMax extraction;
+- keep downloaded videos, byte-range probes, HTML pages, and frame images under `target/`;
+- avoid main-site writes, third-party events, browser recording, service builds, service restarts, and 8-server deployment.
+
+Probe method:
+
+- searched for public pages that expose direct MP4 slide/presentation videos;
+- used `curl -fsSI -L` and `curl -fsSL -H 'Range: bytes=0-1048575'` for HEAD/range checks;
+- used macOS AVFoundation through a one-off Swift command to export sampled JPEG frames from downloaded public candidates;
+- visually inspected sampled frames locally; no generated frames or raw videos are committed.
+
+Rejected or deferred candidates:
+
+- GCU edShare `ALC EEE2` candidates: page was publicly viewable and direct video URLs returned `video/mp4` with `Accept-Ranges: bytes`, but sampled frames at 0/60/120/180/240 seconds were lecturer-camera video rather than visible slide playback, so this is not a good P2-2E public slides sample.
+- media.ccc `Nix in Space` slides feed: direct slides MP4 returned `video/mp4`, supported byte ranges, and decoded as a slide feed, but sampled frames showed a mostly static single slide/website screen; keep only as a fallback accessibility probe, not a quality-matrix sample.
+- one MIT mirror candidate returned 404 and was excluded.
+
+Selected candidate for next extraction step:
+
+- Host category: public media.ccc CDN / mirror-hosted NixCon 2023 presentation.
+- Event title: `How to teach Nix in 5 minutes!`.
+- Public event page status: HTTP 200.
+- Page metadata: title present, `duration=PT1444S`, and page HTML includes a `source` entry labeled `slides eng 1080p` with `type=video/mp4`.
+- Download surface: page contains a `Slides` section with `Download mp4`.
+- Direct slides media probe: initial CDN URL redirects to a public mirror, final response is `video/mp4`, `content-length=48967286`, `accept-ranges=bytes`.
+- Range probe: `206 Partial Content`, `content-range=bytes 0-1048575/48967286`.
+- Full-file local probe: downloaded only under `target/`; SHA-256 prefix `b6ef1adf0290`.
+- Visual suitability probe: sampled frames at 30/60/180 seconds show the title slide; 300 and 420 seconds show `Knowing where you are and why you are there`; 360 seconds shows `Know your Audience`. This proves the candidate has visible slide content and at least multiple distinct slide states.
+
+Current status:
+
+- `candidate_accessible=true`
+- `candidate_visual_slide_content=true`
+- `candidate_has_multiple_slide_states=true`
+- `full_extraction_run=false`
+- `quality_matrix_run=false`
+- `matrix_complete=false`
+
+Next step:
+
+- Use this candidate as the first P2-2E public slide/presentation sample for an offline or controlled extraction run.
+- After `generated_artifacts/` exists, run:
+
+```text
+node tools/validate-video-deliverables.mjs <generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <generated_artifacts> --pretty --output-dir target/video-ppt-quality-matrix-smoke
+```
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no WeChat Video Channels page was fetched;
+- no main-site upload, third-party event, live smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media and sampled frames stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
 ## 2026-06-08 Video PPT Quality Matrix Local Deliverables Input
 
 Task source: P2-2E-1 from `docs/plans/datamax-active-execution-plan.md`.

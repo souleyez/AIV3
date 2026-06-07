@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 02:26 CST
-**当前性质：** 开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback，讲师小窗/外部前景遮挡端到端 crop fixture 已通过；P2-2C 暗色、亮色、纯色低信息稳定段过滤和短动画转场本地 fixture 已完成，降低黑屏、白屏、灰屏、亮色空白、短动画转场误选为 PPT 页的风险，且深色主题内容页防误伤 fixture 已通过；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，`slide_quality_report.json` 现在可输出 sharpness/readability risk，旧包兼容，且低对比字迹端到端质量报告 fixture 已通过；P2-2E 三样例质量矩阵 self-test scaffold 和 P2-2E-1 本地 `generated_artifacts/` 输入适配均已完成，quality matrix 现在可用 `--synthetic-deliverables <path>` 复用 deliverables validator 复核本地产物，但完整三样例验收仍需真实公开视频课程和客户授权样例。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E 真实 public/customer 质量矩阵仍待执行。本轮未部署 8 服务器。
+**更新时间：** 2026-06-08 02:43 CST
+**当前性质：** 开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback，讲师小窗/外部前景遮挡端到端 crop fixture 已通过；P2-2C 暗色、亮色、纯色低信息稳定段过滤和短动画转场本地 fixture 已完成，降低黑屏、白屏、灰屏、亮色空白、短动画转场误选为 PPT 页的风险，且深色主题内容页防误伤 fixture 已通过；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，`slide_quality_report.json` 现在可输出 sharpness/readability risk，旧包兼容，且低对比字迹端到端质量报告 fixture 已通过；P2-2E 三样例质量矩阵 self-test scaffold 和 P2-2E-1 本地 `generated_artifacts/` 输入适配均已完成，quality matrix 现在可用 `--synthetic-deliverables <path>` 复用 deliverables validator 复核本地产物；S1 公开视频 slides/presentation 候选访问和画面探测已完成，已找到一个匿名可下载且有多页 slide 状态的 public candidate，但还未执行完整抽取或 quality matrix。完整三样例验收仍需 public candidate 的真实抽取回执和客户授权样例。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E public/customer 质量矩阵仍待执行。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 0. 下一阶段执行总览
@@ -97,6 +97,13 @@ P2-2E-1 已完成。若暂时没有主站上传授权、第三方 bearer 或 8 �
 #### 0.6.3 公开视频课程样例执行计划
 
 目的：补齐 P2-2E 真实 public course 样例，验证真实课件视频中的黑边、讲师小窗、转场、弱字幕、低清晰度和重复页，而不是继续只依赖 synthetic fixture。
+
+当前候选状态：
+
+- S1 已完成一次候选探测，结果记录在 `docs/validation/video-ppt-deliverable-smoke.md` 的 `2026-06-08 Public Slides Video Candidate Access Probe`。
+- 已排除或降级的候选包括 GCU edShare lecturer-camera 视频、media.ccc 静态单页 slides feed 和一个 404 的 MIT 镜像候选。
+- 当前可用 public candidate 是 media.ccc / NixCon 2023 的 `How to teach Nix in 5 minutes!` slides MP4：匿名可下载、支持 Range、页面有 `Slides -> Download mp4`，抽样帧确认有多页 slide 状态。
+- 这只证明候选可访问且视觉内容适合进入下一步；还没有跑完整 `VideoExtraction`，也没有完成 P2-2E public quality matrix。
 
 候选标准：
 
