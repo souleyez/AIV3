@@ -1666,6 +1666,89 @@ Safety result:
 - public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full validator-offending value was recorded.
 
+## 2026-06-08 Public Candidate Manifest Redaction Fix And Quality Matrix Pass
+
+Task source: P2-2E-2A from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- fix public artifact manifest redaction without relaxing `tools/validate-video-deliverables.mjs`;
+- keep the offline smoke helper local-safe and non-production;
+- rerun the same public media.ccc / NixCon slides candidate;
+- classify the result through the existing quality matrix.
+
+Implemented behavior:
+
+- public artifact entries now pass through recursive public evidence redaction before being written into final/published/version/extraction manifests;
+- non-download public artifact `uri` fields such as internal `artifact://...` pointers are redacted and marked with `uri_redacted=true`, avoiding false public URL/path exposure and validator pattern matches;
+- artifact `path` remains `[redacted]` with `path_redacted=true`;
+- file names remain visible through `file_name`;
+- the offline smoke helper now reads `selected_count` from the generated `selected_slides_manifest` artifact entry instead of a missing summary path.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+cargo check -p media-worker --bin video_ppt_offline_smoke
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+npm run test:video-deliverables
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input <target-public-candidate-mp4> --output-root target/video-ppt-public-candidate-extraction --ffmpeg-bin /opt/homebrew/bin/ffmpeg --interval-seconds 15 --title "Public slides sample: How to teach Nix in 5 minutes" --json-output target/video-ppt-public-candidate-extraction/offline-smoke-summary.json
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <public-candidate-generated_artifacts> --pretty --output-dir target/video-ppt-public-candidate-quality-matrix
+```
+
+Result:
+
+- formatting and format check passed;
+- offline smoke helper compiled;
+- media-worker controlled deliverable contract test passed;
+- video deliverables validator test suite passed, 19 tests;
+- public candidate offline smoke completed with `deliverable_state=final_pptx_ready`;
+- `frame_count=96`;
+- `selected_count=5`;
+- PPTX generated: yes;
+- `video_slides.md` generated: yes;
+- `slide_notes.md` generated: yes;
+- `slide_quality_report.json` generated: yes;
+- `subtitle_page_map.json` generated: no, because there was no transcript/subtitle evidence for this candidate;
+- public candidate deliverables validator passed;
+- public manifests no longer contained `artifact://`, token-like query markers, or absolute local path patterns.
+
+Quality matrix result:
+
+- `matrix_complete=false`;
+- `deliverable_count=0`;
+- `needs_manual_review_count=1`;
+- `not_deliverable_count=0`;
+- `pending_accessible_sample_count=1`;
+- `pending_authorization_count=1`;
+- local candidate package state: `final_pptx_ready`;
+- validator status: passed;
+- PPTX slide count: 5;
+- Markdown slide count: 5;
+- review conclusion: `needs_manual_review`.
+
+Quality risks:
+
+- `quality_score=56`;
+- risk flags: `full_frame_rectangle_fallback`, `missing_transcript_alignment`, `selected_slide_duplicates_removed`, `frame_sharpness_review_required`, `manual_review_required`;
+- summary: 1 full-frame fallback, 4 detector crops, 5 missing transcript alignments, 5 missing OCR alignments, 2 visual duplicates removed, and 4 high sharpness/readability review risks.
+
+Current conclusion:
+
+- P2-2E-2A is complete: the public candidate now passes the deliverable contract.
+- The public candidate is not marked as cleanly deliverable; its accepted quality conclusion is `needs_manual_review`.
+- Full P2-2E remains incomplete because customer-authorized video is still pending, and the public sample still needs human quality review or a follow-up quality slice.
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no WeChat Video Channels page was fetched;
+- no main-site upload, third-party event, live smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
+
 ## 2026-06-08 Video PPT Quality Matrix Local Deliverables Input
 
 Task source: P2-2E-1 from `docs/plans/datamax-active-execution-plan.md`.

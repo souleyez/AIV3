@@ -7055,6 +7055,8 @@ fn video_public_evidence_field(key: &str, value: &Value) -> Value {
         || lower_key.contains("cookie")
         || lower_key.contains("authorization")
         || lower_key.contains("provider_key")
+        || lower_key == "uri"
+        || lower_key.ends_with("_uri")
         || lower_key.contains("token")
         || lower_key.contains("secret")
         || lower_key == "object_key";
@@ -7122,24 +7124,35 @@ fn video_public_artifact_files_by_kinds(files: &[Value], kinds: &[&str]) -> Vec<
 }
 
 fn video_public_artifact_file(file: &Value) -> Value {
-    let mut public_file = file.clone();
+    let mut public_file = video_public_evidence_value(file);
     let Some(object) = public_file.as_object_mut() else {
         return public_file;
     };
-    let Some(path) = object.get("path").and_then(Value::as_str) else {
-        return public_file;
-    };
-    if path.trim().is_empty() {
-        return public_file;
-    }
-
-    let file_name = Path::new(path)
-        .file_name()
-        .and_then(|value| value.to_str())
+    let file_name = file
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .and_then(|path| Path::new(path).file_name().and_then(|value| value.to_str()))
+        .or_else(|| file.get("file_name").and_then(Value::as_str))
         .unwrap_or("artifact");
     object.insert("file_name".to_string(), json!(file_name));
-    object.insert("path".to_string(), json!("[redacted]"));
-    object.insert("path_redacted".to_string(), json!(true));
+    if file
+        .get("path")
+        .and_then(Value::as_str)
+        .is_some_and(|path| !path.trim().is_empty())
+    {
+        object.insert("path".to_string(), json!("[redacted]"));
+        object.insert("path_redacted".to_string(), json!(true));
+    }
+    if file
+        .get("uri")
+        .and_then(Value::as_str)
+        .is_some_and(|uri| !uri.trim().is_empty())
+    {
+        object.insert("uri".to_string(), json!("[redacted]"));
+        object.insert("uri_redacted".to_string(), json!(true));
+    }
     public_file
 }
 
@@ -7949,6 +7962,10 @@ mod tests {
         assert_eq!(file["file_name"], json!(file_name));
         assert_eq!(file["path"], json!("[redacted]"));
         assert_eq!(file["path_redacted"], json!(true));
+        if file.get("uri").is_some() {
+            assert_eq!(file["uri"], json!("[redacted]"));
+            assert_eq!(file["uri_redacted"], json!(true));
+        }
     }
 
     #[test]
