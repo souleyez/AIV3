@@ -42,6 +42,7 @@ function parseArgs(argv) {
     ),
     outputDir: process.env.VIDEO_PPT_HANDOFF_SMOKE_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
     allowMissingBearer: parseBoolean(process.env.VIDEO_PPT_HANDOFF_SMOKE_ALLOW_MISSING_BEARER),
+    preflight: parseBoolean(process.env.VIDEO_PPT_HANDOFF_SMOKE_PREFLIGHT),
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -94,6 +95,11 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--allow-missing-bearer') {
       args.allowMissingBearer = true;
+    } else if (arg === '--preflight') {
+      args.preflight = true;
+      if (args.mode === 'self-test') {
+        args.mode = 'both';
+      }
     } else if (arg === '--self-test') {
       args.mode = 'self-test';
       args.allowMissingBearer = true;
@@ -108,7 +114,11 @@ function parseArgs(argv) {
   if (!VALID_MODES.has(args.mode)) {
     throw new Error(`--mode must be one of: ${[...VALID_MODES].join(', ')}`);
   }
+  if (args.preflight && args.mode === 'self-test') {
+    throw new Error('--preflight cannot be combined with --self-test');
+  }
   if ((args.mode === 'external' || args.mode === 'both')
+    && !args.preflight
     && !args.allowMissingBearer
     && !args.bearer) {
     throw new Error('--bearer is required for external live mode unless --allow-missing-bearer is set');
@@ -125,6 +135,8 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(`Usage:
   npm run smoke:video-ppt-handoff -- --self-test
+
+  npm run smoke:video-ppt-handoff -- --preflight --allow-missing-bearer
 
   npm run smoke:video-ppt-handoff -- \\
     --mode main \\
@@ -148,6 +160,7 @@ Checks:
 
 Notes:
   - default mode is self-test and does not call the network
+  - --preflight validates handoff live gate shape and write scope without network calls
   - main/external/both modes write only lightweight smoke chat/event records
   - external live mode requires an approved inbound bearer unless --allow-missing-bearer is used for local testing
 `);
@@ -166,6 +179,18 @@ function requireValue(name, value) {
 
 function normalizeBaseUrl(value) {
   return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+function redactedUrlSummary(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return {
+      scheme: url.protocol.replace(/:$/, ''),
+      host: url.host,
+    };
+  } catch {
+    return { scheme: '', host: '' };
+  }
 }
 
 function makeRunId() {
@@ -566,7 +591,139 @@ function redactedPromptSummary(prompt) {
       || lower.includes('powerpoint')
       || promptText.includes('课件')
       || promptText.includes('幻灯片'),
+    mentionsLoginGate: promptText.includes('登录态')
+      || promptText.includes('视频号')
+      || promptText.includes('二维码')
+      || lower.includes('login'),
   };
+}
+
+function targetModes(mode) {
+  return mode === 'both' ? ['main', 'external'] : [mode];
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function redactedPreflightCommand(args) {
+  const modeArg = `--mode ${shellQuote(args.mode)}`;
+  const bearerArg = args.mode === 'external' || args.mode === 'both'
+    ? ' --bearer <redacted-inbound-bearer>'
+    : '';
+  return [
+    'npm run smoke:video-ppt-handoff --',
+    modeArg,
+    `--base-url ${shellQuote('<target-v3-base-url>')}`,
+    "--prompt '<redacted-login-gated-video-ppt-request>'",
+    `--local-thread-id ${shellQuote(args.localThreadId)}`,
+    bearerArg.trim(),
+    `--output-dir ${shellQuote(args.outputDir)}`,
+  ].filter(Boolean).join(' ');
+}
+
+async function runPreflight(args, runId) {
+  const modes = targetModes(args.mode);
+  const includesMain = modes.includes('main');
+  const includesExternal = modes.includes('external');
+  const prompt = redactedPromptSummary(args.prompt);
+  const credentialGateSatisfied = !includesExternal || Boolean(args.bearer) || args.allowMissingBearer;
+  const liveCredentialReady = !includesExternal || Boolean(args.bearer);
+  const deploymentApprovalRequired = true;
+  const failures = [
+    prompt.mentionsWeChatVideo || prompt.mentionsLoginGate ? '' : 'prompt_not_login_gated_video_source',
+    prompt.wantsSlideOutput ? '' : 'prompt_does_not_request_video_ppt',
+    includesExternal && !args.connectionId ? 'missing_connection_id' : '',
+    includesExternal && !args.sourceId ? 'missing_source_id' : '',
+    includesExternal && !credentialGateSatisfied ? 'missing_bearer_for_external_handoff_smoke' : '',
+  ].filter(Boolean);
+  const report = {
+    schema: 'v3.video_ppt_handoff_smoke_preflight.v1',
+    summary: {
+      ok: failures.length === 0,
+      preflight: true,
+      runId,
+      mode: args.mode,
+      targetModes: modes,
+      networkCallsRun: false,
+      sourcePageFetched: false,
+      videoDownloaded: false,
+      framesExtracted: false,
+      ocrRun: false,
+      pptGenerated: false,
+      providerCalled: false,
+      lightweightSmokeWritesPlanned: true,
+      deploymentApprovalRequired,
+      liveCredentialReady,
+      credentialGateSatisfied,
+      allowMissingBearer: args.allowMissingBearer,
+      failures,
+    },
+    target: {
+      baseUrl: redactedUrlSummary(args.baseUrl),
+      main: includesMain
+        ? {
+            localThreadId: args.localThreadId,
+            assistantRunReuseRequested: Boolean(args.assistantRunId),
+            plannedSteps: args.assistantRunId
+              ? ['reuse_assistant_run_id', 'poll_html_artifacts']
+              : ['create_lightweight_assistant_run', 'poll_html_artifacts'],
+          }
+        : null,
+      external: includesExternal
+        ? {
+            connectionIdPresent: Boolean(args.connectionId),
+            sourceIdPresent: Boolean(args.sourceId),
+            platform: args.platform,
+            tenantExternalIdPresent: Boolean(args.tenantExternalId),
+            botExternalIdPresent: Boolean(args.botExternalId),
+            senderExternalIdPresent: Boolean(args.senderExternalId),
+            plannedSteps: ['post_lightweight_events_message', 'optional_reply_poll'],
+          }
+        : null,
+    },
+    expectedSurface: {
+      failureReason: 'login_gated_video_source_not_supported',
+      supportedNextSteps: REQUIRED_NEXT_STEPS,
+      successSignalsRejected: [
+        'final_pptx_ready',
+        'video_extraction_summary',
+        'download_exports',
+        'artifact_links',
+      ],
+    },
+    prompt,
+    redaction: {
+      rawSourceUrlIncluded: false,
+      cookieIncluded: false,
+      bearerIncluded: false,
+      providerPayloadsIncluded: false,
+      localPathsIncluded: false,
+    },
+    commandTemplate: redactedPreflightCommand(args),
+  };
+  const serialized = JSON.stringify(report)
+    .replace(/--bearer <redacted-inbound-bearer>/g, '--auth <redacted>');
+  if (/weixin\.qq\.com\/sph|channels\.weixin\.qq\.com\/sph|https?:\/\/|token=|object_key|Bearer\s|\/Users\//i.test(serialized)) {
+    throw new Error('preflight report contains unredacted source URL, token, object key, bearer marker, or local path');
+  }
+  await mkdir(args.outputDir, { recursive: true });
+  const reportPath = join(args.outputDir, `${runId}-preflight.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify({
+    ok: report.summary.ok,
+    preflight: true,
+    runId,
+    mode: args.mode,
+    targetModes: modes,
+    credentialGateSatisfied,
+    liveCredentialReady,
+    deploymentApprovalRequired,
+    reportPath,
+  }, null, 2));
+  if (!report.summary.ok) {
+    process.exitCode = 1;
+  }
 }
 
 function mainArtifactSurface(artifact) {
@@ -948,6 +1105,8 @@ async function main() {
   const runId = makeRunId();
   if (args.mode === 'self-test') {
     await runSelfTest(args, runId);
+  } else if (args.preflight) {
+    await runPreflight(args, runId);
   } else {
     await runLive(args, runId);
   }

@@ -3177,3 +3177,64 @@ Safety result:
 - no browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated preflight/self-test reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared receipt.
+
+## 2026-06-08 Video Channel Handoff Live Preflight Gate
+
+Task source: P1-3D live handoff pass still needs an approved 8-server deployment window and, for external mode, inbound bearer/context; add a no-network preflight before any live handoff smoke is attempted.
+
+Scope:
+
+- add `smoke:video-ppt-handoff -- --preflight`;
+- validate main/external target mode shape, login-gated video prompt summary, external bearer/context gate, deployment approval requirement, expected handoff surface, live write scope, and report redaction;
+- avoid source-page fetch, video download, frame extraction, OCR, PPT generation, provider calls, assistant-run creation, `/events`, reply polling, and artifact polling.
+
+Implemented behavior:
+
+- `--preflight` defaults to `mode=both` unless `--mode main|external|both` is supplied;
+- missing external bearer now produces a preflight report with `ok=false` and `missing_bearer_for_external_handoff_smoke` instead of hard-failing before evidence is written;
+- `--allow-missing-bearer` lets local no-auth preflight validate shape while still reporting `liveCredentialReady=false`;
+- preflight records `deploymentApprovalRequired=true`, because the live main/external handoff pass still requires current code deployed to 8 server;
+- preflight records no source fetch, no video download, no frames/OCR/PPT, and no provider call;
+- preflight expected surface is fixed to `login_gated_video_source_not_supported` plus the three next steps: upload video file, provide anonymous direct video URL, and request authorized capture;
+- preflight rejects success/download expectations by recording `final_pptx_ready`, `video_extraction_summary`, `download_exports`, and `artifact_links` as disallowed signals;
+- preflight emits a redacted command template without raw base URL, raw source URL, token, object key, bearer value, or local path.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-handoff.mjs
+npm run smoke:video-ppt-handoff -- --help
+npm run smoke:video-ppt-handoff -- --preflight --output-dir target/video-ppt-handoff-preflight-missing-bearer-final
+npm run smoke:video-ppt-handoff -- --preflight --allow-missing-bearer --output-dir target/video-ppt-handoff-preflight-final
+npm run smoke:video-ppt-handoff -- --self-test --output-dir target/video-ppt-handoff-self-test-preflight-final
+rg -n "weixin\.qq\.com/sph|channels\.weixin\.qq\.com/sph|https?://|token=|object_key|Bearer |/Users/|cookie=|password=" target/video-ppt-handoff-preflight-final target/video-ppt-handoff-preflight-missing-bearer-final || true
+```
+
+Result:
+
+- handoff smoke syntax check passed;
+- help output documents `--preflight --allow-missing-bearer`;
+- missing-bearer preflight failed as expected with `ok=false`, `credentialGateSatisfied=false`, and `failures=["missing_bearer_for_external_handoff_smoke"]`;
+- local shape preflight with `--allow-missing-bearer` passed with `ok=true`, `targetModes=["main","external"]`, `networkCallsRun=false`, `sourcePageFetched=false`, `videoDownloaded=false`, `framesExtracted=false`, `ocrRun=false`, `pptGenerated=false`, and `providerCalled=false`;
+- local shape preflight reported `liveCredentialReady=false` and `deploymentApprovalRequired=true`, making clear it is not live-ready without bearer/deployment approval;
+- expected handoff surface showed `failureReason=login_gated_video_source_not_supported` and required next steps `upload_video_file`, `provide_direct_video_url`, and `request_authorized_capture`;
+- handoff self-test still passed after the preflight change;
+- preflight redaction scan found no raw WeChat source URL, raw URL, token marker, object key marker, bearer marker, local absolute path, cookie value marker, or password value marker.
+
+Remaining work:
+
+- this improves P1-3D readiness but does not run live main/external handoff smoke;
+- P1-3D main live still needs an approved 8-server deployment window;
+- P1-3D external live still needs approved inbound bearer/context in addition to deployment;
+- after approval, run preflight with the exact approved mode/context first, then run the live handoff smoke.
+
+Safety result:
+
+- no live handoff smoke was run;
+- no WeChat/login-gated source page was fetched;
+- no video was downloaded, uploaded, captured, OCRed, frame-extracted, or converted to PPT;
+- no provider/ReAct/model branch was called;
+- no assistant run, third-party event, reply poll, artifact poll, or HTML artifact was created;
+- no browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated preflight/self-test reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared receipt.
