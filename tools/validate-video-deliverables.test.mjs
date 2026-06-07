@@ -36,6 +36,28 @@ test("accepts legacy deliverables without optional slide quality report", () => 
   assert.equal(result.files.find((file) => file.kind === "slide_quality_report").exists, false);
 });
 
+test("accepts deliverables without subtitle page map when transcript alignment is unavailable", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "subtitle_page_map.json"));
+  for (const manifestFileName of [
+    "final_deliverables_manifest.json",
+    "published_deliverable_manifest.json",
+    "published_version_history.json",
+    "extraction_artifacts_manifest.json",
+  ]) {
+    const manifestPath = path.join(sessionDir, "generated_artifacts", manifestFileName);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    removeArtifactKind(manifest, "subtitle_page_map");
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.files.find((file) => file.kind === "subtitle_page_map").exists, false);
+});
+
 test("accepts detector-cropped slide rectangles", () => {
   const sessionDir = createCompleteDeliverables();
   const slideRectanglesPath = path.join(sessionDir, "generated_artifacts", "slide_rectangles_manifest.json");
@@ -523,7 +545,7 @@ function removeArtifactKind(value, artifactKind) {
   if (Array.isArray(value)) {
     for (let index = value.length - 1; index >= 0; index -= 1) {
       const item = value[index];
-      if (item?.artifact_kind === artifactKind) {
+      if (item === artifactKind || item?.artifact_kind === artifactKind) {
         value.splice(index, 1);
       } else {
         removeArtifactKind(item, artifactKind);
@@ -535,7 +557,11 @@ function removeArtifactKind(value, artifactKind) {
     return;
   }
   if (value.deliverable_status && typeof value.deliverable_status === "object") {
-    delete value.deliverable_status.has_slide_quality_report;
+    if (artifactKind === "slide_quality_report") {
+      delete value.deliverable_status.has_slide_quality_report;
+    } else if (artifactKind === "subtitle_page_map") {
+      value.deliverable_status.has_subtitle_page_map = false;
+    }
   }
   for (const nested of Object.values(value)) {
     removeArtifactKind(nested, artifactKind);

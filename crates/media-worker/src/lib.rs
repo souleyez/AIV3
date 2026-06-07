@@ -58,7 +58,6 @@ const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
     "slide_rectangles_manifest",
     "slide_notes",
     "video_slides_markdown",
-    "subtitle_page_map",
 ];
 const VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS: &[&str] = &[
     "pptx",
@@ -69,8 +68,8 @@ const VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS: &[&str] = &[
     "slide_rectangles_manifest",
     "slide_notes",
     "video_slides_markdown",
-    "subtitle_page_map",
 ];
+const VIDEO_CONDITIONAL_DELIVERABLE_KINDS: &[&str] = &["subtitle_page_map"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaWorkflowTaskKind {
@@ -4699,6 +4698,61 @@ pub fn video_extraction_output_artifact_from_output(
     }))
 }
 
+fn video_required_deliverable_package_kinds(
+    files: &[Value],
+    deliverable_status: &Value,
+) -> Vec<&'static str> {
+    video_required_file_kinds_for(
+        VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS,
+        files,
+        deliverable_status,
+    )
+}
+
+fn video_required_published_deliverable_kinds(
+    files: &[Value],
+    deliverable_status: &Value,
+) -> Vec<&'static str> {
+    video_required_file_kinds_for(
+        VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS,
+        files,
+        deliverable_status,
+    )
+}
+
+fn video_required_file_kinds_for(
+    base_kinds: &'static [&'static str],
+    files: &[Value],
+    deliverable_status: &Value,
+) -> Vec<&'static str> {
+    let mut kinds = base_kinds.to_vec();
+    for &kind in VIDEO_CONDITIONAL_DELIVERABLE_KINDS {
+        if video_conditional_deliverable_kind_required(kind, files, deliverable_status) {
+            kinds.push(kind);
+        }
+    }
+    kinds
+}
+
+fn video_conditional_deliverable_kind_required(
+    kind: &str,
+    files: &[Value],
+    deliverable_status: &Value,
+) -> bool {
+    files
+        .iter()
+        .any(|file| file.get("artifact_kind").and_then(Value::as_str) == Some(kind))
+        || match kind {
+            "subtitle_page_map" => {
+                deliverable_status
+                    .get("has_subtitle_page_map")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            }
+            _ => false,
+        }
+}
+
 fn video_deliverable_package_summary(
     assistant_run_id: &str,
     document_id: &str,
@@ -4712,12 +4766,14 @@ fn video_deliverable_package_summary(
         .iter()
         .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let required_file_kinds = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
+    let required_file_kind_refs =
+        video_required_deliverable_package_kinds(files, deliverable_status);
+    let required_file_kinds = required_file_kind_refs
         .iter()
         .copied()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let missing_required_file_kinds = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
+    let missing_required_file_kinds = required_file_kind_refs
         .iter()
         .copied()
         .filter(|kind| !ready_file_kinds.contains(kind))
@@ -4740,7 +4796,7 @@ fn video_deliverable_package_summary(
         .cloned()
         .unwrap_or(Value::Null);
     let has_published_version_history = !published_version_history.is_null();
-    let required_files = VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS
+    let required_files = required_file_kind_refs
         .iter()
         .filter_map(|kind| {
             files
@@ -4793,10 +4849,10 @@ fn video_deliverable_package_summary(
         "document_id": document_id,
         "dataset_id": output.get("dataset_id").cloned().unwrap_or(Value::Null),
         "title": title,
-        "required_file_kinds": required_file_kinds,
+        "required_file_kinds": required_file_kinds.clone(),
         "missing_required_file_kinds": missing_required_file_kinds,
         "ready_required_file_count": required_files.len(),
-        "required_file_count": VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS.len(),
+        "required_file_count": required_file_kind_refs.len(),
         "required_files": required_files,
         "artifact_group_counts": video_artifact_group_counts(files),
         "html_artifact_ids": html_artifact_ids,
@@ -5403,7 +5459,9 @@ pub fn video_extraction_durable_published_version_manifest(
         .iter()
         .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let missing_required_file_kinds = VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS
+    let required_file_kinds =
+        video_required_published_deliverable_kinds(&files, &deliverable_status);
+    let missing_required_file_kinds = required_file_kinds
         .iter()
         .copied()
         .filter(|kind| !ready_file_kinds.contains(kind))
@@ -5417,8 +5475,7 @@ pub fn video_extraction_durable_published_version_manifest(
     }
 
     let package_key = format!("video-ppt-{assistant_run_id}-{document_id}");
-    let published_files =
-        video_public_artifact_files_by_kinds(&files, VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS);
+    let published_files = video_public_artifact_files_by_kinds(&files, &required_file_kinds);
     let version_fingerprint =
         video_durable_published_version_fingerprint(document_id, dataset_id, &published_files);
     Some(json!({
@@ -5437,7 +5494,7 @@ pub fn video_extraction_durable_published_version_manifest(
         "source_history_file_name": DEFAULT_PUBLISHED_VERSION_HISTORY_FILE_NAME,
         "published_manifest_file_name": DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME,
         "ready_file_kinds": video_ready_file_kinds(&files),
-        "required_file_kinds": VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS,
+        "required_file_kinds": required_file_kinds.clone(),
         "missing_required_file_kinds": missing_required_file_kinds,
         "deliverable_status": deliverable_status,
         "published_files": published_files,
@@ -6626,7 +6683,9 @@ fn video_published_deliverable_manifest(
         .iter()
         .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let missing_required_file_kinds = VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS
+    let required_file_kinds =
+        video_required_published_deliverable_kinds(files, &deliverable_status);
+    let missing_required_file_kinds = required_file_kinds
         .iter()
         .copied()
         .filter(|kind| !ready_file_kinds.contains(kind))
@@ -6655,19 +6714,9 @@ fn video_published_deliverable_manifest(
         "version_no": if source_ready { json!(1) } else { Value::Null },
         "version_label": if source_ready { "v1" } else { "draft" },
         "deliverable_status": deliverable_status,
-        "required_file_kinds": VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS,
+        "required_file_kinds": required_file_kinds.clone(),
         "missing_required_file_kinds": missing_required_file_kinds,
-        "published_files": video_public_artifact_files_by_kinds(files, &[
-            "pptx",
-            "final_deliverables_manifest",
-            "published_deliverable_manifest",
-            "published_version_history",
-            "extraction_artifacts_manifest",
-            "slide_rectangles_manifest",
-            "slide_notes",
-            "video_slides_markdown",
-            "subtitle_page_map",
-        ]),
+        "published_files": video_public_artifact_files_by_kinds(files, &required_file_kinds),
         "manifest_outputs": video_public_artifact_files_by_kinds(files, &[
             "final_deliverables_manifest",
             "published_deliverable_manifest",
@@ -6718,7 +6767,9 @@ fn video_published_version_history_manifest(
         .iter()
         .filter_map(|file| file.get("artifact_kind").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let missing_required_file_kinds = VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS
+    let required_file_kinds =
+        video_required_published_deliverable_kinds(files, &deliverable_status);
+    let missing_required_file_kinds = required_file_kinds
         .iter()
         .copied()
         .filter(|kind| !ready_file_kinds.contains(kind))
@@ -6736,12 +6787,9 @@ fn video_published_version_history_manifest(
             "immutable_version": true,
             "frame_count": frame_count,
             "published_manifest_file_name": DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME,
-            "file_count": VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS.len(),
-            "artifact_kinds": VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS,
-            "published_files": video_public_artifact_files_by_kinds(
-                files,
-                VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS,
-            ),
+            "file_count": required_file_kinds.len(),
+            "artifact_kinds": required_file_kinds.clone(),
+            "published_files": video_public_artifact_files_by_kinds(files, &required_file_kinds),
         })
     } else {
         Value::Null
@@ -6765,7 +6813,7 @@ fn video_published_version_history_manifest(
         "latest_version_no": if source_ready { json!(1) } else { Value::Null },
         "latest_version_label": if source_ready { json!("v1") } else { Value::Null },
         "version_count": versions.len(),
-        "required_file_kinds": VIDEO_PUBLISHED_DELIVERABLE_REQUIRED_KINDS,
+        "required_file_kinds": required_file_kinds,
         "missing_required_file_kinds": missing_required_file_kinds,
         "deliverable_status": deliverable_status,
         "manifest_outputs": video_public_artifact_files_by_kinds(files, &[
@@ -8471,6 +8519,124 @@ mod tests {
             .iter()
             .any(|file| file["artifact_kind"] == json!("subtitle_page_map")));
         assert_eq!(output_artifact["html_artifact_ids"][0], html_artifact["id"]);
+    }
+
+    #[test]
+    fn final_video_deliverables_do_not_require_subtitle_page_map_without_transcript_alignment() {
+        let document = test_document();
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let files = [
+            ("pptx", DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME),
+            (
+                "final_deliverables_manifest",
+                DEFAULT_FINAL_DELIVERABLES_MANIFEST_FILE_NAME,
+            ),
+            (
+                "published_deliverable_manifest",
+                DEFAULT_PUBLISHED_DELIVERABLE_MANIFEST_FILE_NAME,
+            ),
+            (
+                "published_version_history",
+                DEFAULT_PUBLISHED_VERSION_HISTORY_FILE_NAME,
+            ),
+            (
+                "extraction_artifacts_manifest",
+                DEFAULT_EXTRACTION_ARTIFACTS_MANIFEST_FILE_NAME,
+            ),
+            (
+                "slide_rectangles_manifest",
+                DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
+            ),
+            ("slide_notes", DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME),
+            (
+                "video_slides_markdown",
+                DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME,
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, file_name)| {
+            json!({
+                "artifact_kind": kind,
+                "artifact_id": format!("video-{}-{kind}", document.id),
+                "title": format!("artifact {kind}"),
+                "format": "application/json",
+                "path": format!("generated_artifacts/{file_name}"),
+                "uri": format!("artifact://video-{}-{kind}", document.id),
+            })
+        })
+        .collect::<Vec<_>>();
+        let generated_artifacts = json!({
+            "status": "completed",
+            "files": files.clone(),
+        });
+        let deliverable_status = video_deliverable_status(&generated_artifacts);
+        let output = json!({
+            "status": "completed",
+            "document_id": document.id.to_string(),
+            "dataset_id": document.dataset_id.to_string(),
+            "title": "No subtitle sample",
+            "generated_artifacts": generated_artifacts,
+            "deliverable_status": deliverable_status.clone(),
+        });
+
+        assert_eq!(deliverable_status["state"], json!("final_pptx_ready"));
+        assert_eq!(deliverable_status["has_subtitle_page_map"], json!(false));
+        let warning_codes = deliverable_warning_codes(&deliverable_status);
+        assert!(warning_codes.contains("missing_transcript_alignment"));
+        assert!(warning_codes.contains("speaker_notes_metadata_only"));
+
+        let package = video_deliverable_package_summary(
+            run_id,
+            &document.id.to_string(),
+            "No subtitle sample",
+            &output,
+            &files,
+            &deliverable_status,
+            &[],
+        );
+        assert_eq!(package["publishable"], json!(true));
+        assert_eq!(package["missing_required_file_kinds"], json!([]));
+        assert_eq!(package["required_file_count"], json!(6));
+        assert!(!package["required_file_kinds"]
+            .as_array()
+            .expect("required file kinds")
+            .contains(&json!("subtitle_page_map")));
+
+        let published_manifest = video_published_deliverable_manifest(&document, &files, 2);
+        assert_eq!(
+            published_manifest["lifecycle_state"],
+            json!("published_version_ready")
+        );
+        assert_eq!(published_manifest["missing_required_file_kinds"], json!([]));
+        assert!(!published_manifest["required_file_kinds"]
+            .as_array()
+            .expect("required file kinds")
+            .contains(&json!("subtitle_page_map")));
+        assert!(!published_manifest["published_files"]
+            .as_array()
+            .expect("published files")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("subtitle_page_map")));
+
+        let version_history = video_published_version_history_manifest(&document, &files, 2);
+        assert_eq!(version_history["status"], json!("history_ready"));
+        assert_eq!(version_history["versions"][0]["file_count"], json!(8));
+        assert!(!version_history["versions"][0]["artifact_kinds"]
+            .as_array()
+            .expect("artifact kinds")
+            .contains(&json!("subtitle_page_map")));
+
+        let durable_manifest =
+            video_extraction_durable_published_version_manifest(run_id, "workflow-1", &output)
+                .expect("durable published manifest without subtitle map");
+        assert_eq!(
+            durable_manifest["lifecycle_state"],
+            json!("published_version_ready")
+        );
+        assert!(!durable_manifest["required_file_kinds"]
+            .as_array()
+            .expect("required file kinds")
+            .contains(&json!("subtitle_page_map")));
     }
 
     #[test]

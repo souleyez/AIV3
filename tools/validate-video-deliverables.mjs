@@ -52,6 +52,9 @@ const REQUIRED_FILES = [
     statusFlag: "has_video_slides_markdown",
     group: "final_outputs",
   },
+];
+
+const CONDITIONAL_FILES = [
   {
     kind: "subtitle_page_map",
     fileName: "subtitle_page_map.json",
@@ -122,6 +125,7 @@ export function validateVideoDeliverables(inputPath) {
 
   const files = [
     ...REQUIRED_FILES.map((file) => ({ ...file, required: true })),
+    ...CONDITIONAL_FILES.map((file) => ({ ...file, required: false })),
     ...OPTIONAL_FILES.map((file) => ({ ...file, required: false })),
   ].map((file) => {
     const filePath = path.join(artifactsDir, file.fileName);
@@ -175,6 +179,17 @@ export function validateVideoDeliverables(inputPath) {
     "slide_quality_report",
     errors,
   );
+  const requiredFiles = [
+    ...REQUIRED_FILES,
+    ...CONDITIONAL_FILES.filter((file) =>
+      conditionalFileIsRequired(file, files, [
+        finalManifest,
+        extractionManifest,
+        publishedManifest,
+        publishedVersionHistory,
+      ]),
+    ),
+  ];
 
   const pptx = files.find((file) => file.kind === "pptx");
   if (pptx?.exists && !fileStartsWithZipMagic(pptx.path)) {
@@ -194,16 +209,16 @@ export function validateVideoDeliverables(inputPath) {
   }
 
   if (finalManifest) {
-    validateFinalManifest(finalManifest, errors, warnings);
+    validateFinalManifest(finalManifest, errors, warnings, requiredFiles, CONDITIONAL_FILES);
   }
   if (extractionManifest) {
-    validateExtractionManifest(extractionManifest, errors);
+    validateExtractionManifest(extractionManifest, errors, requiredFiles);
   }
   if (publishedManifest) {
-    validatePublishedManifest(publishedManifest, errors);
+    validatePublishedManifest(publishedManifest, errors, requiredFiles);
   }
   if (publishedVersionHistory) {
-    validatePublishedVersionHistory(publishedVersionHistory, errors);
+    validatePublishedVersionHistory(publishedVersionHistory, errors, requiredFiles);
   }
   if (subtitlePageMap) {
     validateSubtitlePageMap(subtitlePageMap, errors);
@@ -241,18 +256,59 @@ export function validateVideoDeliverables(inputPath) {
   };
 }
 
-function validateFinalManifest(manifest, errors, warnings) {
+function conditionalFileIsRequired(file, files, manifests) {
+  const generatedFile = files.find((candidate) => candidate.kind === file.kind);
+  if (generatedFile?.exists) {
+    return true;
+  }
+  return manifests.some((manifest) =>
+    manifestStatusFlagIsTrue(manifest, file)
+      || manifestReferencesArtifactKind(manifest, file.kind),
+  );
+}
+
+function manifestStatusFlagIsTrue(manifest, file) {
+  return manifest?.deliverable_status?.[file.statusFlag] === true;
+}
+
+function manifestReferencesArtifactKind(value, artifactKind) {
+  if (Array.isArray(value)) {
+    return value.some((item) => manifestReferencesArtifactKind(item, artifactKind));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (value.artifact_kind === artifactKind) {
+    return true;
+  }
+  if (Array.isArray(value.artifact_kinds) && value.artifact_kinds.includes(artifactKind)) {
+    return true;
+  }
+  if (Array.isArray(value.required_file_kinds) && value.required_file_kinds.includes(artifactKind)) {
+    return true;
+  }
+  return Object.values(value).some((item) => manifestReferencesArtifactKind(item, artifactKind));
+}
+
+function validateFinalManifest(manifest, errors, warnings, requiredFiles, conditionalFiles) {
   const status = manifest.deliverable_status || {};
-  for (const file of REQUIRED_FILES) {
+  for (const file of requiredFiles) {
     if (status[file.statusFlag] !== true) {
       errors.push(issue("deliverable_status_missing_flag", `final manifest ${file.statusFlag} is not true`, file.kind));
+    }
+  }
+  for (const file of conditionalFiles) {
+    if (!requiredFiles.some((requiredFile) => requiredFile.kind === file.kind)
+      && Object.hasOwn(status, file.statusFlag)
+      && status[file.statusFlag] !== false) {
+      errors.push(issue("conditional_status_flag_invalid", `final manifest ${file.statusFlag} must be false when ${file.kind} is absent`, file.kind));
     }
   }
   const state = status.state || manifest.status || "";
   if (state !== "final_pptx_ready") {
     warnings.push(issue("deliverable_state_not_final", `deliverable state is ${state || "missing"}`));
   }
-  for (const file of REQUIRED_FILES) {
+  for (const file of requiredFiles) {
     const entry = findFileEntry(manifest[file.group], file);
     if (!entry) {
       errors.push(issue("final_manifest_group_missing_file", `${file.group} does not include ${file.kind} ${file.fileName}`, file.kind));
@@ -263,9 +319,9 @@ function validateFinalManifest(manifest, errors, warnings) {
   validateRedactedJson(manifest, "final_deliverables_manifest", errors);
 }
 
-function validateExtractionManifest(manifest, errors) {
+function validateExtractionManifest(manifest, errors, requiredFiles) {
   const files = Array.isArray(manifest.files) ? manifest.files : [];
-  for (const file of REQUIRED_FILES) {
+  for (const file of requiredFiles) {
     const entry = findFileEntry(files, file);
     if (!entry) {
       errors.push(issue("extraction_manifest_missing_file", `extraction manifest does not include ${file.kind} ${file.fileName}`, file.kind));
@@ -276,7 +332,7 @@ function validateExtractionManifest(manifest, errors) {
   validateRedactedJson(manifest, "extraction_artifacts_manifest", errors);
 }
 
-function validatePublishedManifest(manifest, errors) {
+function validatePublishedManifest(manifest, errors, requiredFiles) {
   if (manifest.manifest_type !== "v3.video_ppt_published_deliverable.v1") {
     errors.push(issue("published_manifest_type_invalid", "published manifest type is invalid", "published_deliverable_manifest"));
   }
@@ -287,7 +343,7 @@ function validatePublishedManifest(manifest, errors) {
     errors.push(issue("published_manifest_version_invalid", "published manifest immutable version metadata is invalid", "published_deliverable_manifest"));
   }
   const publishedFiles = Array.isArray(manifest.published_files) ? manifest.published_files : [];
-  for (const file of REQUIRED_FILES) {
+  for (const file of requiredFiles) {
     const entry = findFileEntry(publishedFiles, file);
     if (!entry) {
       errors.push(issue("published_manifest_missing_file", `published manifest does not include ${file.kind} ${file.fileName}`, file.kind));
@@ -298,7 +354,7 @@ function validatePublishedManifest(manifest, errors) {
   validateRedactedJson(manifest, "published_deliverable_manifest", errors);
 }
 
-function validatePublishedVersionHistory(manifest, errors) {
+function validatePublishedVersionHistory(manifest, errors, requiredFiles) {
   if (manifest.manifest_type !== "v3.video_ppt_published_version_history.v1") {
     errors.push(issue("published_history_type_invalid", "published version history manifest type is invalid", "published_version_history"));
   }
@@ -320,7 +376,7 @@ function validatePublishedVersionHistory(manifest, errors) {
       errors.push(issue("published_history_manifest_pointer_invalid", "published version history does not point to the published manifest", "published_version_history"));
     }
     const publishedFiles = Array.isArray(latest.published_files) ? latest.published_files : [];
-    for (const file of REQUIRED_FILES) {
+    for (const file of requiredFiles) {
       const entry = findFileEntry(publishedFiles, file);
       if (!entry) {
         errors.push(issue("published_history_missing_file", `published version history does not include ${file.kind} ${file.fileName}`, file.kind));

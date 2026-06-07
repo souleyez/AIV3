@@ -1087,6 +1087,67 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
 
+## 2026-06-08 Subtitle Page Map Conditional Contract Local Slice
+
+Task source: P0-3 from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- resolve the contract mismatch where no-subtitle video/PPT packages were product-acceptable with `has_subtitle_page_map=false`, but the public validator still treated `subtitle_page_map.json` as always required;
+- keep `subtitle_page_map.json` strict when transcript/subtitle evidence exists, or when a manifest/file declares that artifact;
+- keep OCR snippets as review evidence only, not as a substitute for transcript/subtitle page mapping;
+- update only local contract, validator, tests, and documentation; do not run live smoke or deploy.
+
+Implemented behavior:
+
+- `tools/validate-video-deliverables.mjs` now treats `subtitle_page_map` as a conditional deliverable: required only when the file exists, a deliverable status flag is true, or a final/published/extraction/history manifest declares the artifact;
+- no-subtitle packages with complete PPTX, Markdown, slide notes, rectangle manifest, published manifest, version history, extraction manifest, and `has_subtitle_page_map=false` now pass validator;
+- malformed, unmapped, unredacted, or inconsistently declared subtitle maps still fail validator;
+- `crates/media-worker/src/lib.rs` now computes required file kinds dynamically for deliverable package summary, published manifest, published version history, and durable published-version manifest;
+- final/published package readiness no longer depends on `subtitle_page_map` when no transcript/subtitle map exists;
+- media-worker still writes and publishes `subtitle_page_map.json` when selected slide transcript mapping is actually available.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+node --test tools/validate-video-deliverables.test.mjs
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker final_video_deliverables_do_not_require_subtitle_page_map_without_transcript_alignment --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker durable_published_version --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+git diff --check
+```
+
+Result:
+
+- rustfmt check passed;
+- validator tests passed, 19 tests, including the new no-subtitle package acceptance case and the existing malformed subtitle map rejection case;
+- media-worker no-subtitle package contract test passed, proving package summary, published manifest, version history, and durable manifest no longer require `subtitle_page_map`;
+- controlled video sample deliverable contract still passed, proving mapped subtitle packages remain valid;
+- media-worker durable published version tests passed, 2 tests;
+- platform-api video extraction tests passed, 3 tests;
+- platform-api video PPT tests passed, 5 tests;
+- whitespace check passed.
+
+Remaining work:
+
+- P1-3B main-site uploaded video live/controlled smoke still requires explicit user authorization because it writes a main-site smoke record;
+- P1-3C third-party video registration live smoke still requires inbound bearer, connection id, source id, and authorization;
+- P1-3D live handoff pass still waits for an approved deployment window before running live main/external handoff smoke;
+- P2-1C authorized capture sample remains unexecuted until operator approval and source details are supplied;
+- P2-2E still needs the three-sample quality review matrix and human review conclusions.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
+
 ## 2026-06-08 Dark Stable Segment Auto-Selection Guard Local Slice
 
 Task source: P2-2C from `docs/plans/datamax-active-execution-plan.md`.
