@@ -54,8 +54,8 @@
 4. 已完成：后台 enrichment / 去重诊断。
 5. 已完成：duplicate / canonical read-through smoke。
 6. 已完成：被动回答质量离线语料。
-7. 下一步：数据源 row identity staging 自测。
-8. 静态页/报表回归语料强化。
+7. 已完成：数据源 row identity staging 自测。
+8. 下一步：静态页/报表回归语料强化。
 9. 第三方数据库只读状态强化。
 10. operator 观测页小幅打磨。
 11. 最终 validation 和可选部署。
@@ -499,7 +499,18 @@ git commit -m "Add passive answer quality corpus"
 
 ## Task 7：数据源 Row Identity Staging 自测
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 对数据库接入、数据源 staging、row identity、`staging_plan` 做自测，不直接改生产 row 语义。
+
+**结果：**
+
+- `scripts/run-data-ingestion-staging-live-smoke.sh` 现在支持计划里的 `--self-test` 参数，不再只依赖环境变量。
+- self-test 报告新增 `row_identity_staging_self_test`，显式覆盖无 row identity 的 staging plan 和候选 identity 变化只走 staging plan 两类场景。
+- 确定性 self-test 覆盖 4 个 row identity case：2 个 missing identity plan、2 个 candidate identity change plan。
+- 报告固定记录 `staging_plan_only=true`、`production_write_allowed=false`、`production_mapping_mutation_allowed=false`、`schema_change_allowed_without_confirmation=false`。
+- redaction flags 固定确认未包含 raw connection、credential、token、raw table dump。
+- `bash scripts/run-data-ingestion-staging-live-smoke.sh --self-test`、`CC=clang CXX=clang++ cargo test -p platform-api data_ingestion --lib` 已通过；`CC=clang CXX=clang++ cargo test -p storage data_source --lib` 当前匹配 0 tests，已用 storage 外部集成 schema 注册测试补证。
 
 **文件：**
 

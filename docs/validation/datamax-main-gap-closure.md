@@ -170,6 +170,47 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no raw prompt, raw answer, evidence body, customer payload, document body, object path, source URL, row dump, credential, cookie, bearer token, local key, database URL, provider payload, or secret env value was recorded;
   - 120 server was not touched.
 
+### 2026-06-07 Active Plan Task 7 Row Identity Staging Self-Test
+
+- Purpose:
+  - execute Task 7 from `docs/plans/datamax-active-execution-plan.md`;
+  - prove row identity concerns can be surfaced as staging-only analysis without changing production row semantics.
+- Code change:
+  - `scripts/run-data-ingestion-staging-live-smoke.sh` now accepts the planned `--self-test` CLI argument in addition to the existing environment-variable self-test mode;
+  - self-test reports now include `row_identity_staging_self_test`;
+  - the new self-test block records missing-identity staging plans, candidate identity-change staging plans, production write/mapping/schema guards, and redaction flags.
+- Self-test coverage:
+  - command: `bash scripts/run-data-ingestion-staging-live-smoke.sh --self-test`;
+  - result: passed;
+  - report: `target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260607T030335Z.json`;
+  - `row_identity_staging_self_test.type=v3_data_ingestion_row_identity_staging_self_test`;
+  - `case_count=4`;
+  - `missing_identity_case_count=2`;
+  - `candidate_identity_change_case_count=2`;
+  - `missing_identity_plan_available=true`;
+  - `candidate_identity_change_plan_available=true`;
+  - `staging_plan_only=true`;
+  - `production_write_allowed=false`;
+  - `production_mapping_mutation_allowed=false`;
+  - `schema_change_allowed_without_confirmation=false`;
+  - `raw_connection_included=false`;
+  - `credential_included=false`;
+  - `token_included=false`;
+  - `raw_table_dump_included=false`.
+- Local verification:
+  - `CC=clang CXX=clang++ cargo test -p platform-api data_ingestion --lib` passed, 15 tests;
+  - `CC=clang CXX=clang++ cargo test -p storage data_source --lib` ran and matched 0 tests;
+  - replacement storage check `CC=clang CXX=clang++ cargo test -p storage external_integrations_schema_mentions_observe_first_tables --lib` passed, 1 test.
+- Conclusion:
+  - no-row-identity and collapsed-identity conditions now produce explicit staging-only self-test evidence;
+  - candidate identity changes are recommendations for operator review, not production row mapping mutations;
+  - production row-level semantics for `bi_contract_warning` / `bi_rentsales_detail` remain unchanged until a business decision and staging discriminator validation.
+- Safety:
+  - no source/customer database was read;
+  - no live data-ingestion sync, production write, production mapping change, schema migration, service build, service restart, or deploy was run;
+  - no raw connection string, credential, token, full table dump, raw row, document body, object path, source URL, provider payload, cookie, bearer token, local key, database URL, or secret env value was recorded;
+  - 120 server was not touched.
+
 ### 2026-06-06 Current-Head Task 1 Release Gate
 
 - Purpose:

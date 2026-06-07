@@ -20,6 +20,38 @@ require_default_ready="${DATA_INGESTION_LIVE_SMOKE_REQUIRE_DEFAULT_READY:-false}
 self_test="${DATA_INGESTION_LIVE_SMOKE_SELF_TEST:-false}"
 psql_bin="${PSQL_BIN:-psql}"
 
+print_usage() {
+  cat <<'EOF'
+Usage:
+  bash scripts/run-data-ingestion-staging-live-smoke.sh [--self-test]
+
+Options:
+  --self-test   Use deterministic local V3 source/sync/dataset fixtures.
+  --help        Show this help text.
+
+The live mode reads V3 PostgreSQL state and the local API status endpoint only.
+It does not connect to the customer/source database and does not write data.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --self-test)
+      self_test="true"
+      ;;
+    --help|-h)
+      print_usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      print_usage >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
 if [[ "${self_test}" != "true" ]] && ! command -v "${psql_bin}" >/dev/null 2>&1; then
   echo "psql was not found. Install PostgreSQL client tools or set PSQL_BIN=/path/to/psql." >&2
   exit 1
@@ -57,11 +89,11 @@ echo "API status endpoint: ${api_base}/v1/external/sources/${source_key}/databas
 
 if [[ "${self_test}" == "true" ]]; then
   echo "Self-test mode: using synthetic V3 source/sync/dataset fixtures"
-  source_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","connector_kind":"mysql","status":"enabled","health_status":"healthy","display_name":"HY SQL Traffic Area","database":"hy_sql","connection_env_present":true,"default_dataset_id":"dataset-smoke","mapped_table_count":1,"last_sync_at":"2026-05-30T09:00:00Z","last_success_at":"2026-05-30T09:00:00Z","last_failure_at":null,"updated_at":"2026-05-30T09:05:00Z"}'
+  source_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","connector_kind":"mysql","status":"enabled","health_status":"healthy","display_name":"HY SQL Traffic Area","database":"hy_sql","connection_env_present":true,"default_dataset_id":"dataset-smoke","mapped_table_count":5,"last_sync_at":"2026-05-30T09:00:00Z","last_success_at":"2026-05-30T09:00:00Z","last_failure_at":null,"updated_at":"2026-05-30T09:05:00Z"}'
   sync_runs_json='[{"sync_run_id":"sync-smoke","sync_kind":"content","status":"succeeded","failure_kind":null,"workflow_stage":"completed","workflow_status":"succeeded","documents_ingested":50,"chunks_ingested":50,"chunks_indexed":50,"retrieval_evidences_indexed":50,"enqueued_task_count":0,"created_at":"2026-05-30T08:55:00Z","updated_at":"2026-05-30T09:00:00Z"}]'
   datasets_json='[{"dataset_id":"dataset-smoke","key":"external-source-hy-sql-auto-dataset-hy-sql-main","title":"HY SQL Ready Dataset","lifecycle":"active","is_default":true,"dataset_external_id":"hy-sql-main","document_count":50,"indexed_document_count":50,"failed_document_count":0,"processing_document_count":0,"chunk_count":50,"indexed_chunk_count":50,"retrieval_evidence_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z","updated_at":"2026-05-30T09:05:00Z"}]'
   tables_json='[{"table":"bi_traffic_area","document_count":50,"indexed_document_count":50,"chunk_count":50,"indexed_chunk_count":50,"latest_document_updated_at":"2026-05-30T09:00:00Z"}]'
-  identity_audit_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","latest_sync":{"sync_run_id":"sync-smoke","status":"succeeded","updated_at":"2026-05-30T09:00:00Z"},"tables":[{"table":"bi_traffic_area","id_column":"id","id_columns":["id"],"source_row_count":50,"unique_document_count":50,"unique_chunk_count":50,"collapsed_duplicate_row_count":0,"current_document_count":50},{"table":"bi_contract_warning","id_column":"parentcode","id_columns":["parentcode","storecode","txdate"],"source_row_count":100,"unique_document_count":6,"unique_chunk_count":6,"collapsed_duplicate_row_count":94,"current_document_count":24},{"table":"bi_rentsales_detail","id_column":"storecode","id_columns":["storecode","contract_no","contract_startdate"],"source_row_count":100,"unique_document_count":1,"unique_chunk_count":1,"collapsed_duplicate_row_count":99,"current_document_count":6},{"table":"bi_traffic_area_history_only","id_column":null,"id_columns":[],"source_row_count":0,"unique_document_count":0,"unique_chunk_count":0,"collapsed_duplicate_row_count":0,"current_document_count":50}]}'
+  identity_audit_json='{"source_id":"source-smoke","source_key":"hy-sql-traffic-area","latest_sync":{"sync_run_id":"sync-smoke","status":"succeeded","updated_at":"2026-05-30T09:00:00Z"},"tables":[{"table":"bi_traffic_area","id_column":"id","id_columns":["id"],"source_row_count":50,"unique_document_count":50,"unique_chunk_count":50,"collapsed_duplicate_row_count":0,"current_document_count":50},{"table":"bi_contract_warning","id_column":"parentcode","id_columns":["parentcode","storecode","txdate"],"source_row_count":100,"unique_document_count":6,"unique_chunk_count":6,"collapsed_duplicate_row_count":94,"current_document_count":24},{"table":"bi_rentsales_detail","id_column":"storecode","id_columns":["storecode","contract_no","contract_startdate"],"source_row_count":100,"unique_document_count":1,"unique_chunk_count":1,"collapsed_duplicate_row_count":99,"current_document_count":6},{"table":"bi_no_identity_staging_candidate","id_column":null,"id_columns":[],"source_row_count":12,"unique_document_count":12,"unique_chunk_count":12,"collapsed_duplicate_row_count":0,"current_document_count":12},{"table":"bi_traffic_area_history_only","id_column":null,"id_columns":[],"source_row_count":0,"unique_document_count":0,"unique_chunk_count":0,"collapsed_duplicate_row_count":0,"current_document_count":50}]}'
   api_status_json='{"source_id":"source-smoke","status":{"config_valid":true,"dataset_readiness":{"signal":"ready"},"sync_readiness":{"signal":"ready"},"health_findings":{"signal":"healthy","items":[]}}}'
   api_fetch_status="self_test"
 else
@@ -399,6 +431,7 @@ SMOKE_HEAD="${head_short}" \
 SMOKE_STARTED_AT="${started_at}" \
 SMOKE_FINISHED_AT="${finished_at}" \
 SMOKE_REQUIRE_DEFAULT_READY="${require_default_ready}" \
+SMOKE_SELF_TEST="${self_test}" \
 SMOKE_API_FETCH_STATUS="${api_fetch_status}" \
 SMOKE_SOURCE_JSON="${source_json}" \
 SMOKE_SYNC_RUNS_JSON="${sync_runs_json}" \
@@ -407,6 +440,8 @@ SMOKE_TABLES_JSON="${tables_json}" \
 SMOKE_IDENTITY_AUDIT_JSON="${identity_audit_json}" \
 SMOKE_API_STATUS_JSON="${api_status_json}" \
 node >"${report_json}" <<'NODE'
+const assert = require('assert');
+
 const parseJson = (value, fallback) => {
   try {
     if (!value || !String(value).trim()) return fallback;
@@ -544,6 +579,77 @@ const normalizeIdentityAudit = (audit) => {
   };
 };
 const identityAudit = normalizeIdentityAudit(identityAuditRaw);
+const buildRowIdentityStagingSelfTest = (audit) => {
+  const tables = Array.isArray(audit?.tables) ? audit.tables : [];
+  const missingIdentityCases = tables
+    .filter((table) => !Array.isArray(table.id_columns) || table.id_columns.length === 0)
+    .filter((table) => Number(table.source_row_count || 0) > 0 || Number(table.current_document_count || 0) > 0)
+    .map((table) => ({
+      table: table.table,
+      observed_source_rows: Number(table.source_row_count || 0),
+      observed_current_documents: Number(table.current_document_count || 0),
+      safe_summary_available: true,
+      staging_plan_available: true,
+      recommended_action:
+        'create a staging-only row identity proposal before any production mapping change',
+    }));
+  const candidateIdentityChanges = tables
+    .filter((table) => table.identity_status === 'collapsed_identity')
+    .map((table) => ({
+      table: table.table,
+      current_identity_columns: table.id_columns,
+      collapsed_duplicate_row_count: Number(table.collapsed_duplicate_row_count || 0),
+      candidate_discriminator_hints: Array.isArray(table.staging_discriminator_hints)
+        ? table.staging_discriminator_hints
+        : [],
+      staging_plan_available: true,
+      production_mapping_mutated: false,
+      recommended_action: table.recommended_action,
+    }));
+  return {
+    enabled: process.env.SMOKE_SELF_TEST === 'true',
+    type: 'v3_data_ingestion_row_identity_staging_self_test',
+    case_count: missingIdentityCases.length + candidateIdentityChanges.length,
+    missing_identity_case_count: missingIdentityCases.length,
+    candidate_identity_change_case_count: candidateIdentityChanges.length,
+    missing_identity_plan_available: missingIdentityCases.length > 0,
+    candidate_identity_change_plan_available: candidateIdentityChanges.length > 0,
+    staging_plan_only: true,
+    production_write_allowed: false,
+    production_mapping_mutation_allowed: false,
+    schema_change_allowed_without_confirmation: false,
+    raw_connection_included: false,
+    credential_included: false,
+    token_included: false,
+    raw_table_dump_included: false,
+    staging_plan: {
+      type: 'v3_data_ingestion_row_identity_staging_plan',
+      approval_status: 'operator_review_required',
+      production_write_allowed: false,
+      production_mapping_mutation_allowed: false,
+      schema_change_allowed_without_confirmation: false,
+      recommended_next_step:
+        'review staging discriminator candidates before changing production row identity semantics',
+    },
+    missing_identity_cases: missingIdentityCases,
+    candidate_identity_changes: candidateIdentityChanges,
+  };
+};
+const rowIdentityStagingSelfTest = buildRowIdentityStagingSelfTest(identityAudit);
+if (process.env.SMOKE_SELF_TEST === 'true') {
+  assert(rowIdentityStagingSelfTest.missing_identity_case_count > 0, 'missing row identity fixture was not covered');
+  assert(
+    rowIdentityStagingSelfTest.candidate_identity_change_case_count > 0,
+    'candidate identity change fixture was not covered'
+  );
+  assert.equal(rowIdentityStagingSelfTest.production_write_allowed, false);
+  assert.equal(rowIdentityStagingSelfTest.production_mapping_mutation_allowed, false);
+  assert.equal(rowIdentityStagingSelfTest.staging_plan_only, true);
+  assert.equal(rowIdentityStagingSelfTest.raw_connection_included, false);
+  assert.equal(rowIdentityStagingSelfTest.credential_included, false);
+  assert.equal(rowIdentityStagingSelfTest.token_included, false);
+  assert.equal(rowIdentityStagingSelfTest.raw_table_dump_included, false);
+}
 const warnings = [];
 if (sourceExists && !source.connection_env_present) {
   warnings.push('database source has no configured connection env reference');
@@ -594,6 +700,7 @@ const report = {
     raw_credentials_printed: false,
     raw_table_dump_allowed: false,
   },
+  row_identity_staging_self_test: rowIdentityStagingSelfTest,
   checks: {
     source_exists: sourceExists,
     source_enabled: source?.status === 'enabled',
@@ -751,6 +858,42 @@ const lines = [
       ]
     : ['- none']),
   '',
+  '## Row Identity Staging Self-Test',
+  '',
+  `- Enabled: ${bool(report.row_identity_staging_self_test.enabled)}`,
+  `- Type: \`${report.row_identity_staging_self_test.type}\``,
+  `- Case count: ${report.row_identity_staging_self_test.case_count}`,
+  `- Missing identity plans: ${report.row_identity_staging_self_test.missing_identity_case_count}`,
+  `- Candidate identity change plans: ${report.row_identity_staging_self_test.candidate_identity_change_case_count}`,
+  `- Staging plan only: ${bool(report.row_identity_staging_self_test.staging_plan_only)}`,
+  `- Production write allowed: ${bool(report.row_identity_staging_self_test.production_write_allowed)}`,
+  `- Production mapping mutation allowed: ${bool(report.row_identity_staging_self_test.production_mapping_mutation_allowed)}`,
+  `- Schema change without confirmation allowed: ${bool(report.row_identity_staging_self_test.schema_change_allowed_without_confirmation)}`,
+  `- Raw connection included: ${bool(report.row_identity_staging_self_test.raw_connection_included)}`,
+  `- Credential included: ${bool(report.row_identity_staging_self_test.credential_included)}`,
+  `- Token included: ${bool(report.row_identity_staging_self_test.token_included)}`,
+  `- Raw table dump included: ${bool(report.row_identity_staging_self_test.raw_table_dump_included)}`,
+  '',
+  ...(report.row_identity_staging_self_test.missing_identity_cases.length
+    ? [
+        '### Missing Identity Cases',
+        '',
+        ...report.row_identity_staging_self_test.missing_identity_cases.map((item) =>
+          `- \`${item.table}\`: current_docs=${item.observed_current_documents}, source_rows=${item.observed_source_rows}, staging_plan=${bool(item.staging_plan_available)}`
+        ),
+        '',
+      ]
+    : []),
+  ...(report.row_identity_staging_self_test.candidate_identity_changes.length
+    ? [
+        '### Candidate Identity Changes',
+        '',
+        ...report.row_identity_staging_self_test.candidate_identity_changes.map((item) =>
+          `- \`${item.table}\`: collapsed_rows=${item.collapsed_duplicate_row_count}, production_mapping_mutated=${bool(item.production_mapping_mutated)}, hints=${item.candidate_discriminator_hints.join(', ') || 'none'}`
+        ),
+        '',
+      ]
+    : []),
   '## Question And Report Readiness',
   '',
   `- Ready: ${bool(report.question_report_readiness.ready)}`,
