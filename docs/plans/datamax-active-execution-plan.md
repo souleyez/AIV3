@@ -1,142 +1,106 @@
-# DataMax Active Execution Plan
+# DataMax 当前唯一执行计划
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Keep one canonical executable plan for DataMax and finish the remaining work that can be handled without external credentials, production-risk approvals, or business decisions. The immediate priority is to finish the video-to-PPT extraction deliverable path before continuing the remaining diagnostics and reporting hardening work.
+**目标：** 保持 DataMax 只有一份可执行计划，并优先完成当前不依赖外部凭据、生产风险批准或业务决策的事项。当前优先级先收敛“视频/页面材料提取为 PPT 交付物”的通路，再继续处理后台深化解析、去重、问答质量、报表和第三方对接加固。
 
-**Architecture:** DataMax remains the system of record for permissions, document/data ingestion, enterprise memory, model routing, media/video extraction deliverables, static-page/report artifacts, and third-party contract behavior. This plan prioritizes local or read-only work that can be independently implemented and verified; items requiring operator credentials, business approval, provider quota, or production mutation are explicitly parked.
+**架构：** DataMax 继续作为权限、文档/数据入库、企业记忆、模型路由、媒体/视频提取交付物、静态页/报表产物和第三方契约的系统事实源。本计划优先安排可以本地完成、只读验证或低风险闭环的任务；需要 operator 凭据、业务拍板、外部 provider 额度或生产写入的事项统一挂起。
 
-**Tech Stack:** Rust workspace (`platform-api`, `storage`, `media-worker`, `assistant-run-worker`, other workers, `codex-host-agent`), PostgreSQL, workflow tasks, Next.js web app, generated third-party docs, local/8-server smoke scripts, Markdown validation ledgers.
+**技术栈：** Rust workspace（`platform-api`、`storage`、`media-worker`、`assistant-run-worker`、其他 worker、`codex-host-agent`）、PostgreSQL、workflow tasks、Next.js Web、第三方文档生成器、本地/8 服务器 smoke、Markdown validation ledger。
 
 ---
 
-## Single-Plan Policy
+## 单计划原则
 
-- `docs/plans/datamax-active-execution-plan.md` is the only active plan file.
-- Historical plan files were consolidated into this file and should stay archived outside the repo backup area.
-- New work should update this file instead of creating another dated plan.
-- Validation evidence remains in `docs/validation/**`; operational decisions remain in `docs/operations/**`.
-- Do not change third-party public URLs, auth, required request fields, or existing response fields without explicit approval.
-- Do not touch 120 server from this plan.
-- Do not run real historical backfill, production row-identity remapping, or production prewarm enablement without explicit operator approval.
+- `docs/plans/datamax-active-execution-plan.md` 是唯一 active plan。
+- 历史计划文件已经汇总到本文件，并归档在仓库外备份区。
+- 后续新任务只更新本文件，不再新建日期计划。
+- 验证证据继续写入 `docs/validation/**`。
+- 运维/业务决策继续写入 `docs/operations/**`。
+- 未经明确批准，不改第三方公开 URL、鉴权、必填请求字段、已有响应字段。
+- 本计划不触碰 120 服务器。
+- 未经 operator 明确批准，不运行真实历史 backfill、不改生产行级 identity 映射、不启用生产低负载模板预热。
 
-## Current Baseline
+## 当前基线
 
-- Local/GitHub/8-server head before this plan: `303ba10`.
-- 8-server services checked active: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-static-page-worker.service`.
-- Known 8-server repo drift: untracked `mode`; leave untouched.
-- Current completion audit: `docs/validation/datamax-main-gap-closure-completion-audit.md`.
-- Historical plan cleanup receipt: `C:\Users\soulzyn\Desktop\codex-backups\datamax-plan-consolidation-20260607-093057.zip`.
+- 历史计划归档提交：`f911862`。
+- 远端新增视频/PPT 优先通道提交：`88a03ed`，已整合进本中文版计划。
+- 8 服务器已知仓库漂移：未跟踪文件 `mode`，不要动。
+- 当前 completion audit：`docs/validation/datamax-main-gap-closure-completion-audit.md`。
+- 历史计划归档包：`C:\Users\soulzyn\Desktop\codex-backups\datamax-plan-consolidation-20260607-093057.zip`。
+- Task 2 需要按执行时的真实 HEAD 重新记录本地、GitHub、8 服务器和服务状态。
 
-## External Decisions Parked
+## 外部资源/外部决策挂起项
 
-These are not blockers for the independent work queue below.
+这些事项不是下面独立执行队列的阻塞项。
 
-| Parked item | Why parked | Resume condition |
+| 挂起项 | 挂起原因 | 恢复条件 |
 | --- | --- | --- |
-| Authenticated model-gateway smoke | Needs legitimate operator cookie or approved local-key login | Operator provides credential; then run `npm run smoke:model-gateway-operator` |
-| `bi_contract_warning` / `bi_rentsales_detail` row-level production mapping | Needs business choice: entity/latest snapshot vs row-level detail | Business says row-level detail is required; then run staging-only discriminator validation first |
-| Real historical enrichment/backfill | Writes historical records or enqueues real work | Operator approves one tiny reviewed single-document run and rollback/queue monitoring |
-| Production low-load template prewarm | Creates background Image2/static-page work | Operator approves a short low-load window and cleanup check |
-| Full third-party database registration/sync public API | New public API/auth contract | Product decision to expose it and explicit interface review |
-| Cloudflare Codex production fallback reliance | Depends on external account/quota/config | Provider/host readiness and paid/quota state confirmed |
-| Real login-gated video extraction | Needs cookies, QR login, private host access, or browser playback/recording | Operator provides an approved accessible video source or explicitly approves a reviewed jump-host/provider smoke |
+| 模型池认证 smoke | 需要合法 operator cookie 或批准的 local-key 登录 | operator 提供凭据后运行 `npm run smoke:model-gateway-operator` |
+| `bi_contract_warning` / `bi_rentsales_detail` 生产行级映射 | 需要业务决定：实体/最新快照语义，还是行级明细语义 | 业务确认需要行级明细后，先做 staging-only discriminator 验证 |
+| 真实历史 enrichment/backfill | 会写历史记录或入队真实任务 | operator 批准一个极小单文档真实批次，并确认回滚/队列监控 |
+| 生产低负载模板预热 | 会产生后台 Image2/静态页任务 | operator 批准短时低负载窗口和事后清理检查 |
+| 完整第三方数据库注册/同步公开 API | 这是新的公开 API/鉴权契约 | 产品确认开放，并完成接口评审 |
+| Cloudflare Codex 生产兜底依赖 | 依赖外部账号、额度、配置状态 | provider/host readiness 与付费/额度状态确认 |
+| 真实登录态视频提取 | 需要 cookie、扫码、私有 host、浏览器播放或录屏 | operator 提供已批准的可访问视频源，或明确批准 reviewed jump-host/provider smoke |
 
 ---
 
-## Execution Order
+## 当前执行顺序
 
-1. Plan hygiene and documentation cleanup.
-2. Current-head baseline receipt.
-3. Video extraction to PPT deliverable priority lane.
-4. Background enrichment/dedup diagnostics.
-5. Duplicate/canonical read-through smoke.
-6. Passive answer-quality offline recovery corpus.
-7. Data-source row-identity staging self-test.
-8. Static-page/report regression corpus tightening.
-9. Third-party database read-only status hardening.
-10. Operator observability polish.
-11. Final validation ledger and optional deploy request.
+1. 计划文档整理。
+2. 当前 head 基线回执。
+3. 视频/页面材料提取为 PPT 交付物优先通道。
+4. 后台 enrichment / 去重诊断。
+5. duplicate / canonical read-through smoke。
+6. 被动回答质量离线语料。
+7. 数据源 row identity staging 自测。
+8. 静态页/报表回归语料强化。
+9. 第三方数据库只读状态强化。
+10. operator 观测页小幅打磨。
+11. 最终 validation 和可选部署。
 
-Each task should commit independently after tests pass.
-
----
-
-## Task 1: Plan Hygiene And Historical Plan Cleanup
-
-**Files:**
-
-- Keep: `docs/plans/datamax-active-execution-plan.md`
-- Remove with backup: all other `docs/plans/*.md`
-- Update if needed: `docs/validation/datamax-main-gap-closure-completion-audit.md`
-
-**Current status 2026-06-07:** Completed. Thirty-one historical plan files were archived with `Safe-RemoveToBackup.ps1` into `C:\Users\soulzyn\Desktop\codex-backups\datamax-plan-consolidation-20260607-093057.zip`; only this active plan remains in `docs/plans`.
-
-**Step 1: Verify this plan is the only active plan candidate**
-
-Run:
-
-```powershell
-Get-ChildItem docs\plans -File -Filter *.md | Sort-Object Name | Select-Object Name
-```
-
-Expected before cleanup: this file plus historical plan files.
-
-**Step 2: Move old plan files to backup**
-
-Use the backup-first helper, never `Remove-Item`:
-
-```powershell
-$oldPlans = Get-ChildItem docs\plans -File -Filter *.md |
-  Where-Object { $_.Name -ne 'datamax-active-execution-plan.md' } |
-  Select-Object -ExpandProperty FullName
-& "$HOME\.codex\bin\Safe-RemoveToBackup.ps1" `
-  -Path $oldPlans `
-  -Label "datamax-plan-consolidation" `
-  -Reason "Consolidate historical DataMax plans into one active plan"
-```
-
-Expected: old plan files are archived under `C:\Users\soulzyn\Desktop\codex-backups` and removed from `docs/plans`.
-
-**Step 3: Verify only one plan remains**
-
-Run:
-
-```powershell
-Get-ChildItem docs\plans -File -Filter *.md | Select-Object Name
-```
-
-Expected: only `datamax-active-execution-plan.md`.
-
-**Step 4: Check git diff**
-
-Run:
-
-```powershell
-git status --short
-git diff --check
-```
-
-Expected: one added active plan plus deleted historical plan files; no whitespace errors.
-
-**Step 5: Commit**
-
-```powershell
-git add docs/plans
-git commit -m "Consolidate DataMax active plan"
-```
+每个任务通过测试后独立提交。
 
 ---
 
-## Task 2: Current-Head Baseline Receipt
+## Task 1：计划文档整理
 
-**Files:**
+**状态：已完成，2026-06-07。**
 
-- Modify: `docs/validation/datamax-main-gap-closure-completion-audit.md`
+**文件：**
 
-**Step 1: Record local and 8-server state**
+- 保留：`docs/plans/datamax-active-execution-plan.md`
+- 已用 backup-first 方式归档：其他所有 `docs/plans/*.md`
+- 已更新：`docs/validation/datamax-main-gap-closure.md`
+- 已更新：`docs/validation/datamax-main-gap-closure-completion-audit.md`
 
-Run:
+**结果：**
+
+- 31 份历史计划文件已用 `Safe-RemoveToBackup.ps1` 归档。
+- 归档包：`C:\Users\soulzyn\Desktop\codex-backups\datamax-plan-consolidation-20260607-093057.zip`。
+- `docs/plans` 目录只剩本文件。
+- 已提交并同步到 GitHub/8 服务器：`f911862`。
+
+**后续规则：**
+
+- 不再新增日期计划。
+- 如果需要新增任务，直接加到本文件对应任务区或追加新的 Task。
+- 历史 validation 里引用旧计划路径的内容保留为审计上下文，不批量改写。
+
+---
+
+## Task 2：当前 Head 基线回执
+
+**目标：** 记录当前本地、GitHub、8 服务器和只读运行状态，作为后续任务的起点。
+
+**文件：**
+
+- 修改：`docs/validation/datamax-main-gap-closure-completion-audit.md`
+
+**Step 1：记录本地和 8 服务器状态**
+
+运行：
 
 ```powershell
 git status --short --branch
@@ -144,32 +108,39 @@ git rev-parse --short HEAD
 ssh 8服务器 'cd /srv/aiv3/repo && git status --short --branch && git rev-parse --short HEAD && systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-codex-host-agent.service aiv3-document-enrichment-worker.service aiv3-ingest-worker.service aiv3-retrieval-worker.service aiv3-static-page-worker.service aiv3-media-worker.service aiv3-assistant-run-worker.service'
 ```
 
-Expected: local and 8-server match, except the known 8-server `?? mode`.
+期望：
 
-**Step 2: Run read-only queue and docs checks**
+- 本地和 8 服务器 head 一致。
+- 8 服务器只有已知 `?? mode`。
+- 核心服务都是 `active`；如 `media-worker` 或 `assistant-run-worker` 未部署，需要记录真实状态，不做话术遮盖。
 
-Run:
+**Step 2：运行只读队列和文档检查**
+
+运行：
 
 ```powershell
 ssh 8服务器 'curl -sS --max-time 8 http://127.0.0.1:3000/v1/workflow-tasks/queue-stats >/tmp/datamax-active-plan-qstats.json && python3 -m json.tool /tmp/datamax-active-plan-qstats.json >/dev/null'
 npm run check:pure-third-party-guide-html
 ```
 
-Expected: queue stats JSON is valid; docs are up to date.
+期望：
 
-**Step 3: Append a short receipt**
+- queue stats 是合法 JSON。
+- 第三方文档生成结果是最新的。
 
-Add a dated section to `docs/validation/datamax-main-gap-closure-completion-audit.md` with:
+**Step 3：追加回执**
 
-- local/GitHub head;
-- 8-server head;
-- active service list;
-- media and assistant-run worker state;
-- queue-stats reachable yes/no;
-- known `mode` untouched;
-- no secret or raw payload recorded.
+在 `docs/validation/datamax-main-gap-closure-completion-audit.md` 追加短节，记录：
 
-**Step 4: Commit**
+- 本地/GitHub head。
+- 8 服务器 head。
+- active 服务列表。
+- `media-worker` 与 `assistant-run-worker` 状态。
+- queue stats 是否可达。
+- 已知 `mode` 未触碰。
+- 没有记录密钥、token、原始任务 payload、原始客户内容。
+
+**Step 4：提交**
 
 ```powershell
 git add docs/validation/datamax-main-gap-closure-completion-audit.md
@@ -178,57 +149,57 @@ git commit -m "Record DataMax active baseline"
 
 ---
 
-## Task 3: Video Extraction To PPT Deliverable Priority Lane
+## Task 3：视频/页面材料提取为 PPT 交付物优先通道
 
-**Files:**
+**目标：** 先收敛支持范围内的视频/PPT 交付路径：上传的视频文件、直连视频 URL、公开页面中可解析出的直连视频资源，应该产出完整且 redacted 的交付包，包括 transcript/material notes、选中页证据、`video_slides_screenshot_based.pptx`、`video_slides.md`、必要 manifest、可持久追踪的 published-version 元数据、前端可见下载/打开动作，以及 AssistantRun 后续消息告知用户 PPT 包已准备好。
 
-- Inspect/modify: `crates/media-worker/src/lib.rs`
-- Inspect/modify: `crates/media-worker/src/main.rs`
-- Inspect/modify: `crates/platform-api/src/lib.rs`
-- Inspect/modify: `crates/platform-api/src/react_agent_tools.rs`
-- Inspect/modify: `crates/storage/src/lib.rs`
-- Inspect/modify: `crates/domain-model/src/lib.rs`
-- Inspect/modify: `apps/web/app/HomePageClient.js`
-- Inspect/modify: `tools/validate-video-deliverables.mjs`
-- Inspect/modify: `scripts/run-assistant-run-worker-smoke.sh`
-- Inspect/modify: `scripts/run-jump-host-video-deliverable-smoke.ps1`
-- Update: `docs/validation/video-ppt-deliverable-smoke.md`
-- Update: `docs/validation/datamax-main-gap-closure.md`
+**边界：**
 
-**Goal:** Finish the supported video-to-PPT path first: uploaded video files, direct video URLs, and public pages that expose a direct video asset should produce a complete redacted deliverable package with transcript/material notes, selected slide evidence, `video_slides_screenshot_based.pptx`, `video_slides.md`, required manifests, durable published-version metadata, visible download/open actions, and an AssistantRun follow-up that tells the user the PPT package is ready.
+- 不绕过登录态页面、扫码登录、cookie、私有 host、播放限制、平台反爬。
+- 不把浏览器录屏或屏幕抓取当成替代方案。
+- 不在公开 manifest、assistant follow-up、validation 文档或下载产物中持久化原始 source URL、本地路径、cookie、provider payload、token-like 字符串。
+- 不运行真实 jump-host/provider 视频 smoke，除非 operator 提供批准过的可访问源和明确范围。
 
-**Safety boundaries:**
+**文件：**
 
-- Do not bypass login-gated pages, QR login, cookies, private hosts, playback restrictions, or platform anti-bot controls.
-- Do not run browser recording or screen-capture extraction as a workaround.
-- Do not persist raw source URLs, local paths, cookies, provider payloads, or token-like strings in public manifests, assistant follow-ups, validation docs, or downloadable artifacts.
-- Do not run real jump-host/provider video smoke unless an operator supplies an approved accessible source and scope.
+- 检查/修改：`crates/media-worker/src/lib.rs`
+- 检查/修改：`crates/media-worker/src/main.rs`
+- 检查/修改：`crates/platform-api/src/lib.rs`
+- 检查/修改：`crates/platform-api/src/react_agent_tools.rs`
+- 检查/修改：`crates/storage/src/lib.rs`
+- 检查/修改：`crates/domain-model/src/lib.rs`
+- 检查/修改：`apps/web/app/HomePageClient.js`
+- 检查/修改：`tools/validate-video-deliverables.mjs`
+- 检查/修改：`scripts/run-assistant-run-worker-smoke.sh`
+- 检查/修改：`scripts/run-jump-host-video-deliverable-smoke.ps1`
+- 更新：`docs/validation/video-ppt-deliverable-smoke.md`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
 
-**Step 1: Audit the current video/PPT path**
+**Step 1：审计当前视频/PPT 通路**
 
-Run:
+运行：
 
 ```powershell
 rg -n "video_extraction|VideoExtraction|extract_video_ppt|video_slides|pptx|PublishedVideoPpt|wechat_video|media-worker|assistant_run_model_completion" crates apps scripts docs -g "*.rs" -g "*.js" -g "*.mjs" -g "*.md" -g "*.sh" -g "*.ps1"
 ```
 
-Expected: identify the current workflow registration, media-worker task steps, deliverable writer, public validator, durable published-version tables, AssistantRun follow-up dispatch, API download/open surfaces, and web UI state.
+期望：定位 workflow 注册、media-worker 任务步骤、交付物写入、公开 validator、durable published-version 表、AssistantRun follow-up、API 下载/打开 surface、Web UI 状态。
 
-**Step 2: Close the local deterministic deliverable contract**
+**Step 2：补齐本地确定性交付物契约**
 
-Ensure the controlled sample and code path cover:
+确认 controlled sample 和代码路径覆盖：
 
-- supported source kinds: uploaded video file, direct video URL, public page resolvable to a direct video asset;
-- login-gated sources produce a handoff/unsupported state, not a request for cookies, QR login, or recording;
-- final package includes `video_slides_screenshot_based.pptx`, `video_slides.md`, `slide_notes.md`, `subtitle_page_map.json`, `slide_rectangles_manifest.json`, `extraction_artifacts_manifest.json`, `final_deliverables_manifest.json`, `published_deliverable_manifest.json`, and `published_version_history.json`;
-- PPTX is a real OOXML ZIP with `[Content_Types].xml`, `ppt/presentation.xml`, and slide entries;
-- selected slide duplicate/crop status is visible and review-required where needed;
-- all manifests and assistant-visible payloads are redacted;
-- API/UI surfaces expose a stable summary page plus PPTX/Markdown download actions without leaking private file paths.
+- 支持 source kind：上传视频文件、直连视频 URL、公开页面解析到直连视频资源。
+- 登录态来源进入 handoff/unsupported 状态，不索要 cookie、扫码或录屏。
+- 最终包包含 `video_slides_screenshot_based.pptx`、`video_slides.md`、`slide_notes.md`、`subtitle_page_map.json`、`slide_rectangles_manifest.json`、`extraction_artifacts_manifest.json`、`final_deliverables_manifest.json`、`published_deliverable_manifest.json`、`published_version_history.json`。
+- PPTX 是真实 OOXML ZIP，包含 `[Content_Types].xml`、`ppt/presentation.xml` 和 slide entries。
+- 选中页 duplicate/crop 状态可见；需要人工复核时有 review-required 标记。
+- manifest 和 assistant 可见 payload 已 redacted。
+- API/UI 暴露稳定 summary page 与 PPTX/Markdown 下载动作，不泄露私有文件路径。
 
-**Step 3: Run targeted local tests**
+**Step 3：运行本地目标测试**
 
-Run:
+运行：
 
 ```powershell
 npm run test:video-deliverables
@@ -243,29 +214,29 @@ cargo test -p platform-api video_ppt --lib
 bash scripts/run-assistant-run-worker-smoke.sh
 ```
 
-Expected: deterministic contract tests pass without real provider credentials, raw customer media, or production writes. The DB-backed assistant-run-worker smoke remains skipped unless pointed at an explicitly disposable test database.
+期望：确定性 contract 测试通过，不需要真实 provider 凭据、不使用原始客户媒体、不写生产。DB-backed assistant-run-worker smoke 如果没有明确 disposable test database，记录 skip。
 
-**Step 4: Add a read-only or self-test smoke for non-local validation**
+**Step 4：运行 jump-host 脚本自测**
 
-Run the jump-host validator self-test when PowerShell and `windows-jump` are available:
+运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
 ```
 
-If running from macOS without PowerShell or jump-host access, record the skip reason and the local deterministic validator evidence instead. Do not substitute a real login-gated video.
+期望：脚本自检可运行。若本机缺 PowerShell/jump-host 访问，记录 skip 原因；不要替换为真实登录态视频。
 
-**Step 5: Update validation**
+**Step 5：更新验证记录**
 
-Record in `docs/validation/video-ppt-deliverable-smoke.md` and `docs/validation/datamax-main-gap-closure.md`:
+更新 `docs/validation/video-ppt-deliverable-smoke.md` 和 `docs/validation/datamax-main-gap-closure.md`，记录：
 
-- supported source boundary;
-- completed deliverable package shape;
-- tests run and whether jump-host self-test was run or skipped;
-- current state of `aiv3-media-worker.service` and `aiv3-assistant-run-worker.service` if checked on 8 server;
-- any remaining operator-only real-video smoke decision.
+- 支持来源边界。
+- 已完成交付包形状。
+- 已运行测试，以及 jump-host self-test 是运行还是跳过。
+- 如果检查 8 服务器，记录 `aiv3-media-worker.service` 与 `aiv3-assistant-run-worker.service` 当前状态。
+- 剩余 operator-only real-video smoke 决策。
 
-**Step 6: Commit**
+**Step 6：提交**
 
 ```powershell
 git add crates apps tools scripts docs/validation
@@ -274,409 +245,496 @@ git commit -m "Prioritize video PPT deliverable completion"
 
 ---
 
-## Task 4: Background Enrichment And Dedup Diagnostics
+## Task 4：后台 Enrichment 与去重诊断
 
-**Files:**
+**目标：** operator 能判断文档是否 canonical、duplicate、已解析、已索引、已 enrichment、等待中或被阻塞，同时不暴露原始文档内容。
 
-- Inspect/modify: `crates/platform-api/src/lib.rs`
-- Inspect/modify: `crates/storage/src/lib.rs`
-- Inspect/modify: `apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`
-- Inspect/modify: `apps/web/app/lib/external-integrations.js`
-- Test: `apps/web/app/lib/external-integrations.test.mjs`
-- Update: `docs/validation/datamax-main-gap-closure.md`
+**文件：**
 
-**Goal:** Operators should be able to tell whether a document is canonical, duplicate, parsed, indexed, enriched, waiting, or blocked, without exposing raw document content.
+- 检查/修改：`crates/platform-api/src/lib.rs`
+- 检查/修改：`crates/storage/src/lib.rs`
+- 检查/修改：`apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`
+- 检查/修改：`apps/web/app/lib/external-integrations.js`
+- 测试：`apps/web/app/lib/external-integrations.test.mjs`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
 
-**Step 1: Locate current diagnostics**
+**Step 1：定位当前诊断能力**
 
-Run:
+运行：
 
 ```powershell
 rg -n "dedup_state|canonical_document_id|document_enrichment|enrichment_runs|fingerprint|parse_status|index_status" crates apps docs -g "*.rs" -g "*.js" -g "*.mjs" -g "*.md"
 ```
 
-Expected: find existing storage fields, enrichment run helpers, and observability helpers.
+期望：找到当前 storage 字段、enrichment run helper 和观测页 helper。
 
-**Step 2: Add or extend a redacted summary helper**
+**Step 2：补齐 redacted summary helper**
 
-If missing, add a helper that returns only:
+如果当前 summary 不够完整，新增或扩展一个只返回以下字段的 helper：
 
-- document id;
-- canonical document id;
-- dedup state;
-- parse/index status;
-- enrichment run counts by kind/status;
-- last error code/message summary;
-- next eligible run time;
-- no title/body/path/URL/raw metadata.
+- document id / external id / dataset ids。
+- canonical id。
+- duplicate 状态。
+- parse/index/enrichment 状态。
+- 最新 task id、task kind、task status、updated_at。
+- failure reason 的 redacted 短摘要。
 
-**Step 3: Write focused tests**
+不返回完整 chunk、原始文档文本、COS/object path、provider payload。
 
-Add tests that prove:
+**Step 3：接到观测页**
 
-- duplicate aliases show canonical read-through status;
-- missing fingerprint appears as a blocked reason;
-- summary does not include raw local paths, URLs, content, or credentials.
+观测页需要能显示：
 
-Run targeted tests, for example:
+- canonical / duplicate badge。
+- enrichment 状态。
+- 最新 task 状态。
+- 可区分“已停用/重复归档”和“真正卡住”。
+
+**Step 4：测试**
+
+运行：
 
 ```powershell
-cargo test -p platform-api document_enrichment --lib
-cargo test -p platform-api canonical_duplicate --lib
-node --test app/lib/external-integrations.test.mjs
+cargo test -p storage enrichment --lib
+cargo test -p platform-api external_document --lib
+npm test -- apps/web/app/lib/external-integrations.test.mjs
 ```
 
-Run the JS test from `apps/web`.
+如某个 test target 不存在，记录实际可运行 target，并补最小单测。
 
-**Step 4: Update validation**
+**Step 5：记录验证**
 
-Record the sanitized summary shape in `docs/validation/datamax-main-gap-closure.md`.
+更新 `docs/validation/datamax-main-gap-closure.md`，说明 operator 现在如何看 duplicate/canonical/enrichment 状态。
 
-**Step 5: Commit**
+**Step 6：提交**
 
 ```powershell
 git add crates apps docs/validation
-git commit -m "Expose document enrichment diagnostics"
+git commit -m "Expose document enrichment dedup diagnostics"
 ```
 
 ---
 
-## Task 5: Duplicate And Canonical Read-Through Smoke
+## Task 5：Duplicate 与 Canonical Read-Through Smoke
 
-**Files:**
+**目标：** 确认 8 服务器本地重复文档不会破坏第三方 dataset/file 授权，也不会导致“数据集下有文件但问不到”的问题。
 
-- Create or modify: `scripts/smoke/document-dedup-readthrough.mjs`
-- Test: `crates/platform-api/src/lib.rs`
-- Update: `docs/validation/datamax-main-gap-closure.md`
+**文件：**
 
-**Goal:** Prove exact duplicate content can be authorized through different document/dataset scopes while retrieval/facts read through canonical content.
+- 新建/修改：`scripts/smoke/document-dedup-readthrough.mjs`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
 
-**Step 1: Add a local smoke script**
+**Step 1：梳理授权读取路径**
 
-The script should run in local/test mode by default and avoid real customer documents. It should:
-
-- create or reuse a disposable dataset/thread;
-- register two documents with identical content bytes;
-- assert two public document identities exist;
-- assert one canonical content fingerprint exists;
-- query evidence/facts through both identities;
-- assert duplicate aggregation does not double-count facts.
-
-**Step 2: Add dry-run mode for 8 server**
-
-8-server mode must be read-only unless explicitly approved:
+运行：
 
 ```powershell
-node scripts/smoke/document-dedup-readthrough.mjs --base-url http://127.0.0.1:3000 --plan-only
+rg -n "available_document_external_ids|dataset_external_ids|conversation_external_id|canonical_document_id|document_scope|authorized" crates scripts docs -g "*.rs" -g "*.mjs" -g "*.md"
 ```
 
-Expected: reports what it would check without uploading.
+期望：确认 dataset-level 授权、document-level 授权、conversation 持续授权和 canonical read-through 使用同一查询语义。
 
-**Step 3: Run local checks**
+**Step 2：写 smoke**
+
+smoke 场景：
+
+- 同一个 external document 上传两次，第二次成为 duplicate。
+- dataset 授权传入 canonical 或 duplicate 任一侧，都能读到 canonical chunks。
+- `dataset_external_ids` 可包含多个分组。
+- 文档授权和分组授权可同时传；如果文档已在分组内，去重后不重复供料。
+- 后续同 `conversation_external_id` 不重复传授权，仍继承会话可见范围。
+
+**Step 3：本地测试**
+
+运行：
 
 ```powershell
-node --check scripts/smoke/document-dedup-readthrough.mjs
-cargo test -p platform-api canonical_duplicate --lib
+node scripts/smoke/document-dedup-readthrough.mjs --self-test
+cargo test -p platform-api third_party_authorization --lib
+cargo test -p storage document_dedup --lib
 ```
 
-**Step 4: Commit**
+**Step 4：8 服务器只读验证**
+
+只读查询指定已知第三方 dataset/document，确认：
+
+- dataset 下文件数量符合预期。
+- duplicate/canonical 关系能解释“已停用”。
+- 不记录原始客户文本和完整 payload。
+
+**Step 5：提交**
 
 ```powershell
-git add scripts/smoke crates/platform-api/src/lib.rs docs/validation/datamax-main-gap-closure.md
-git commit -m "Add document dedup readthrough smoke"
+git add scripts/smoke docs/validation crates
+git commit -m "Add canonical document readthrough smoke"
 ```
 
 ---
 
-## Task 6: Passive Answer-Quality Offline Recovery Corpus
+## Task 6：被动回答质量离线语料
 
-**Files:**
+**目标：** 在不恢复 live hard gate、不拦截正常客户回答的前提下，找出低质量回答和漏触发动作，并形成可回放语料。
 
-- Inspect/modify: `crates/platform-api/src/lib.rs`
-- Inspect/modify: `crates/codex-host-agent/src/main.rs`
-- Create or modify: `scripts/smoke/answer-quality-offline-corpus.mjs`
-- Update: `docs/validation/datamax-main-gap-closure.md`
+**文件：**
 
-**Goal:** Improve the ability to find low-quality answers without blocking customer replies or enabling live auto-patch tasks.
+- 检查/修改：`crates/platform-api/src/lib.rs`
+- 检查/修改：`crates/assistant-run-worker/src/lib.rs`
+- 新建/修改：`scripts/smoke/answer-quality-offline-corpus.mjs`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
 
-**Step 1: Keep production hard gate off**
+**Step 1：确认生产硬门禁关闭**
 
-Run:
+运行：
 
 ```powershell
-rg -n "ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED|ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED|answer_quality_autofix" crates scripts docs
+rg -n "QUALITY_GATE|quality_gate|ANSWER_QUALITY|React|react_recovery|insufficient" crates apps docs scripts
 ```
 
-Expected: live autofix remains behind dedicated flags and allowlists.
+期望：线上默认不挡正常回答；如果有质量判断，只能是观测/离线回放或明确启用的实验开关。
 
-**Step 2: Build an offline corpus smoke**
+**Step 2：新增离线判定器**
 
-The smoke should classify stored or fixture answers into:
+判定器只输出 label，不修改代码、不入队 Codex、不影响客户响应：
 
-- likely evidence gap;
-- likely retrieval scope gap;
-- likely system wording gap;
-- acceptable cautious answer;
-- report/static-page action missed.
+- 资料不足类话术。
+- 检索供料明显不相关。
+- 应触发报表但没触发。
+- 报表链接缺失或重复。
+- 临时附件未纳入问答范围。
+- 第三方远程接口不可用 fallback。
 
-It must not enqueue Codex tasks or modify code.
+**Step 3：加入已知客户问题 fixture**
 
-**Step 3: Add fixtures from known customer patterns**
+至少覆盖：
 
-Include fixture prompts for:
+- “邓工是谁”。
+- 一字 PDF。
+- doc 问“邓工是谁”。
+- 简历公司名统计。
+- 多维简历排序出表。
+- 简历项目经历跨 14 份材料。
+- 考勤缺勤/工时长短/日期格式。
+- 养老护理翻身、发药核对、交接班。
+- 新百取高、风险、经营状况、销售缺口/助推。
+- 临时上传简历加入问答范围。
 
-- "资料不足/暂未找到" when the dataset has evidence;
-- report trigger wording around `取高`, `经营状况`, `风险识别`, `销售缺口`, `助推`;
-- ordinary non-report questions such as "取高是什么意思？";
-- temporary document resume analysis.
+**Step 4：测试**
 
-**Step 4: Run tests**
+运行：
 
 ```powershell
-node --check scripts/smoke/answer-quality-offline-corpus.mjs
+node scripts/smoke/answer-quality-offline-corpus.mjs --self-test
 cargo test -p platform-api answer_quality --lib
-cargo test -p platform-api assistant_run_answer_quality_gate --lib
-cargo test -p codex-host-agent answer_quality --lib
 ```
 
-**Step 5: Commit**
+**Step 5：记录验证**
+
+更新 `docs/validation/datamax-main-gap-closure.md`：
+
+- 离线语料覆盖了哪些问题。
+- 生产质量门禁仍未默认生效。
+- 后续如要自动优化，必须另走受控计划和审核。
+
+**Step 6：提交**
 
 ```powershell
-git add scripts/smoke crates docs/validation
-git commit -m "Add offline answer quality corpus"
-```
-
----
-
-## Task 7: Data-Source Row-Identity Staging Self-Test
-
-**Files:**
-
-- Modify: `scripts/run-data-ingestion-staging-live-smoke.sh`
-- Modify: `docs/operations/data-source-row-identity-decision.md`
-- Update: `docs/validation/data-ingestion-staging-sync-smoke.md`
-
-**Goal:** Prepare row-level validation without changing production mappings.
-
-**Step 1: Extend self-test fixtures**
-
-Add synthetic fixtures that model:
-
-- entity/latest snapshot identity;
-- row-level detail identity;
-- mixed identity with collapsed rows;
-- missing stable row discriminator.
-
-**Step 2: Emit recommended actions**
-
-The smoke should recommend one of:
-
-- keep entity/latest snapshot;
-- add stable row discriminator in staging;
-- split source into summary and detail datasets;
-- do not claim row-level completeness.
-
-**Step 3: Run local self-test**
-
-```powershell
-wsl.exe bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && bash -n scripts/run-data-ingestion-staging-live-smoke.sh"
-wsl.exe bash -lc "cd /mnt/c/Users/soulzyn/Desktop/codex/ai-data-platform-v3 && DATA_INGESTION_LIVE_SMOKE_SELF_TEST=true bash scripts/run-data-ingestion-staging-live-smoke.sh"
-```
-
-Expected: self-test emits no raw credentials and reports the correct recommendation for each fixture.
-
-**Step 4: Commit**
-
-```powershell
-git add scripts/run-data-ingestion-staging-live-smoke.sh docs/operations/data-source-row-identity-decision.md docs/validation/data-ingestion-staging-sync-smoke.md
-git commit -m "Strengthen data source identity self test"
+git add crates scripts/smoke docs/validation
+git commit -m "Add passive answer quality corpus"
 ```
 
 ---
 
-## Task 8: Static-Page And Report Regression Corpus
+## Task 7：数据源 Row Identity Staging 自测
 
-**Files:**
+**目标：** 对数据库接入、数据源 staging、row identity、`staging_plan` 做自测，不直接改生产 row 语义。
 
-- Modify: `scripts/smoke/external-report-export.mjs`
-- Modify: `scripts/smoke/static-page-5way.mjs`
-- Modify: `tools/validate-xinbai-report-template.mjs`
-- Update: `docs/validation/static-page-render-smoke.md`
+**文件：**
 
-**Goal:** Keep the report/static-page path from regressing without relying on Image2 or Cloudflare for every test.
+- 修改：`scripts/run-data-ingestion-staging-live-smoke.sh`
+- 检查/修改：`crates/platform-api/src/lib.rs`
+- 检查/修改：`crates/storage/src/lib.rs`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
 
-**Step 1: Add route fixtures**
+**Step 1：定位当前 staging plan 路径**
 
-Cover:
-
-- should trigger report: `取高`, `经营状况`, `经营健康度`, `整体经营情况`, `风险识别`, `销售缺口`, `助推`, `哪些门店需要关注`, `坪效`, `客流统计`;
-- should not trigger report: concept explanation, unrelated resume/system questions, plain nursing/manual questions;
-- prompt focus maps to expected `?focus=` values.
-
-**Step 2: Strengthen template validation**
-
-Validator should check:
-
-- one primary report link;
-- report title `新世界百货经营管理月报表`;
-- `table-data.csv`, `report.ppt`, `report.md`;
-- focus parameter preserved;
-- old fallback/prewarm/smoke templates not selected as normal default.
-
-**Step 3: Run local and public checks**
+运行：
 
 ```powershell
-node --check scripts/smoke/external-report-export.mjs
-node --check scripts/smoke/static-page-5way.mjs
-npm run validate:xinbai-report-template
-npm run validate:xinbai-report-template -- --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html
+rg -n "staging_plan|data_ingestion_analysis|row_identity|database_sync|data_source" crates scripts docs -g "*.rs" -g "*.sh" -g "*.md"
 ```
 
-**Step 4: Commit**
+**Step 2：补自测用例**
+
+至少覆盖：
+
+- 没有 row identity 时给出安全摘要和 staging plan。
+- 候选字段变化时不自动写 production。
+- 只在 staging/analysis 层输出建议。
+- 不泄露原始连接串、密码、token。
+
+**Step 3：测试**
+
+运行：
 
 ```powershell
-git add scripts/smoke tools docs/validation/static-page-render-smoke.md
-git commit -m "Strengthen report routing regression corpus"
-```
-
----
-
-## Task 9: Third-Party Database Read-Only Status Hardening
-
-**Files:**
-
-- Inspect/modify: `crates/platform-api/src/lib.rs`
-- Inspect/modify: `apps/web/app/lib/database-source.js`
-- Inspect/modify: `apps/web/app/lib/database-source.test.mjs`
-- Update: `docs/validation/data-ingestion-analysis-smoke.md`
-
-**Goal:** Improve the existing third-party-safe status view without opening new public registration/sync APIs.
-
-**Step 1: Audit current public database docs and routes**
-
-Run:
-
-```powershell
-rg -n "database-source|database_sources|data_ingestion|source readiness|third-party database|external.*database" crates apps docs -g "*.rs" -g "*.js" -g "*.mjs" -g "*.md"
-```
-
-**Step 2: Normalize redacted status**
-
-Ensure the status shape distinguishes:
-
-- source configured;
-- connection test state;
-- latest sync state;
-- ready dataset count;
-- default dataset empty vs older dataset ready;
-- report/question readiness;
-- row-identity warning present.
-
-No raw table dump, SQL, URL, password, or source credential.
-
-**Step 3: Tests**
-
-```powershell
-node --test app/lib/database-source.test.mjs
+bash scripts/run-data-ingestion-staging-live-smoke.sh --self-test
 cargo test -p platform-api data_ingestion --lib
+cargo test -p storage data_source --lib
 ```
 
-Run JS from `apps/web`.
+**Step 4：记录验证**
 
-**Step 4: Commit**
+更新 `docs/validation/datamax-main-gap-closure.md`，说明 row identity 仍处于 staging self-test，不自动改生产。
+
+**Step 5：提交**
+
+```powershell
+git add scripts crates docs/validation
+git commit -m "Harden data ingestion staging self test"
+```
+
+---
+
+## Task 8：静态页与报表回归语料强化
+
+**目标：** 确认新世界/新百经营月报模板是默认主模板，命中模板时可以基于已有模板变更，报表链接只出现一次，导出文件可访问，且普通问答不被报表动作截断。
+
+**文件：**
+
+- 修改：`scripts/smoke/external-report-export.mjs`
+- 修改：`scripts/smoke/external-report-focus.mjs`
+- 检查/修改：`crates/platform-api/src/lib.rs`
+- 检查/修改：`crates/codex-host-agent/src/lib.rs`
+- 检查/修改：`apps/web/app/HomePageClient.js`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
+
+**Step 1：确认触发词范围仅限报表上下文**
+
+应触发：
+
+- 取高。
+- 经营状况。
+- 经营健康度。
+- 风险识别。
+- 销售缺口。
+- 哪些门店需要助推。
+- 统计经营报表。
+
+不应误触发：
+
+- “取高是什么意思？”
+- “风险识别系统有哪些项目经历？”
+- 与新百经营数据无关的普通知识问答。
+
+**Step 2：确认产物契约**
+
+产物必须包含：
+
+- 一个主要报表链接。
+- 报表名称：`新世界百货经营管理月报表`。
+- `table-data.csv`。
+- `report.ppt`。
+- `report.md`。
+- URL 保留正确 focus。
+- 命中模板时使用主模板，不选旧 fallback/prewarm/smoke 模板。
+
+**Step 3：运行本地与公网检查**
+
+运行：
+
+```powershell
+node scripts/smoke/external-report-export.mjs --self-test
+node scripts/smoke/external-report-focus.mjs --self-test
+cargo test -p platform-api report_trigger --lib
+npm test -- apps/web/app/lib/external-integrations.test.mjs
+```
+
+如果需要公网 URL 只读检查，使用已发布报表 URL 验证可访问，不改第三方接口。
+
+**Step 4：更新验证**
+
+记录：
+
+- 命中模板后的回答仍能正常继续。
+- 报表地址只出现一次。
+- 三个导出文件可访问。
+- 触发/不触发案例。
+
+**Step 5：提交**
+
+```powershell
+git add scripts crates apps docs/validation
+git commit -m "Harden report trigger regression corpus"
+```
+
+---
+
+## Task 9：第三方数据库只读状态强化
+
+**目标：** 让第三方“已挂接数据库/数据集”状态清楚可见，并减少误判为“接口不可用”或“没收到数据”。
+
+**文件：**
+
+- 检查/修改：`crates/platform-api/src/lib.rs`
+- 检查/修改：`crates/storage/src/lib.rs`
+- 检查/修改：`apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
+
+**Step 1：定位第三方数据库状态**
+
+运行：
+
+```powershell
+rg -n "external database|third_party_database|database_only|data_source|dataset_external_id|source_id" crates apps docs -g "*.rs" -g "*.js" -g "*.md"
+```
+
+**Step 2：补只读状态摘要**
+
+摘要字段：
+
+- source/system user。
+- tenant/bot。
+- dataset_external_ids。
+- database/data-source 是否存在。
+- 最近 sync/analysis 状态。
+- 是否只读挂接。
+- 最近错误 redacted summary。
+
+不新增或改变第三方公开字段，除非用户另行批准。
+
+**Step 3：观测页展示**
+
+观测页显示：
+
+- 已挂接。
+- 未同步。
+- 分析中。
+- 只读可用。
+- 需要 operator 处理。
+
+**Step 4：测试**
+
+运行：
+
+```powershell
+cargo test -p platform-api third_party_database --lib
+npm test -- apps/web/app/lib/external-integrations.test.mjs
+```
+
+**Step 5：提交**
 
 ```powershell
 git add crates apps docs/validation
-git commit -m "Harden database source status summary"
+git commit -m "Expose third party database read only status"
 ```
 
 ---
 
-## Task 10: Operator Observability Polish
+## Task 10：Operator 观测页小幅打磨
 
-**Files:**
+**目标：** 在不大改 UI 的前提下，让 operator 更容易看任务状态、第三方会话、文档入库、报表产物和异常原因。
 
-- Modify: `apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`
-- Modify: `apps/web/app/lib/external-integrations.js`
-- Test: `apps/web/app/lib/external-integrations.test.mjs`
+**文件：**
 
-**Goal:** Make active gaps visible without opening protected internals.
+- 修改：`apps/web/app/external-integrations/ExternalIntegrationsPageClient.js`
+- 修改：`apps/web/app/lib/external-integrations.js`
+- 测试：`apps/web/app/lib/external-integrations.test.mjs`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
 
-**Step 1: Add summary cards if missing**
+**Step 1：确认现有页面能力**
 
-The external integrations operations panel should summarize:
-
-- answer-quality live autofix disabled/enabled;
-- model-gateway authenticated smoke pending;
-- historical enrichment real backfill disabled;
-- row-identity warning for collapsed tables;
-- static-page prewarm off by default;
-- queue backlog count.
-
-**Step 2: Tests**
+运行：
 
 ```powershell
-cd apps/web
-node --test app/lib/external-integrations.test.mjs
-npm run build
+rg -n "selected|lazy|workflow|queue|artifact|conversation|external" apps/web/app/external-integrations apps/web/app/lib -g "*.js" -g "*.mjs"
 ```
 
-Expected: 27+ tests pass and build succeeds.
+**Step 2：小幅补齐**
 
-**Step 3: Commit**
+优先做：
+
+- 只看选中项。
+- 懒加载任务明细。
+- 第三方对话测试保护。
+- 任务失败 redacted reason。
+- 报表产物链接和导出文件可见。
+
+不做大规模页面重构。
+
+**Step 3：测试**
+
+运行：
 
 ```powershell
-git add apps/web
-git commit -m "Polish DataMax operations summary"
+npm test -- apps/web/app/lib/external-integrations.test.mjs
+npm run lint -- --file apps/web/app/external-integrations/ExternalIntegrationsPageClient.js
+```
+
+如果 lint 命令格式与项目不匹配，运行项目现有等价命令并记录。
+
+**Step 4：提交**
+
+```powershell
+git add apps/web/app docs/validation
+git commit -m "Polish external integration observability"
 ```
 
 ---
 
-## Task 11: Final Validation And Optional Deploy
+## Task 11：最终验证与可选部署
 
-**Files:**
+**目标：** 汇总以上独立任务结果。只有用户明确要求部署时才部署；否则只提交、推 GitHub、做 8 服务器只读检查。
 
-- Modify: `docs/validation/datamax-main-gap-closure.md`
-- Modify: `docs/validation/datamax-main-gap-closure-completion-audit.md`
+**文件：**
 
-**Step 1: Run local release gate subset**
+- 修改：`docs/validation/datamax-main-gap-closure.md`
+- 修改：`docs/validation/datamax-main-gap-closure-completion-audit.md`
+
+**Step 1：本地总检查**
+
+运行：
 
 ```powershell
-cargo fmt --check
-cargo check -p platform-api
-npm --prefix apps/web run build
+git status --short --branch
+git diff --check
 npm run check:pure-third-party-guide-html
-npm run test:pure-third-party-guide-html
 ```
 
-Add targeted tests from tasks actually changed.
+按实际改动补充对应 targeted tests。
 
-**Step 2: Run 8-server read-only smoke**
+**Step 2：8 服务器只读 smoke**
+
+运行：
 
 ```powershell
 ssh 8服务器 'cd /srv/aiv3/repo && git status --short --branch && git rev-parse --short HEAD'
 ssh 8服务器 'curl -sS --max-time 8 http://127.0.0.1:3000/v1/workflow-tasks/queue-stats >/tmp/datamax-active-plan-final-qstats.json'
 ```
 
-If code changed and user asks to deploy:
+**Step 3：如用户明确要求部署**
+
+运行：
 
 ```powershell
 ssh 8服务器 'cd /srv/aiv3/repo && git pull --ff-only'
-# Build/restart only changed services.
+ssh 8服务器 'cd /srv/aiv3/repo && cargo build -p platform-api --release'
+ssh 8服务器 'sudo systemctl restart aiv3-platform-api.service'
+ssh 8服务器 'systemctl is-active aiv3-platform-api.service'
 ```
 
-Do not deploy automatically unless requested.
+如果没有代码改动，不重启服务。
 
-**Step 3: Update completion audit**
+**Step 4：最终记录**
 
-Record:
+记录：
 
-- completed independent tasks;
-- tests and receipts;
-- external decisions still parked;
-- no public API/auth/field changes unless explicitly approved.
+- 已完成的独立任务。
+- 已运行测试与 smoke。
+- 外部资源/外部决策仍挂起的事项。
+- 未改第三方公开 URL、鉴权、必填请求字段、已有响应字段。
+- 未触碰 120 服务器。
 
-**Step 4: Commit**
+**Step 5：提交**
 
 ```powershell
 git add docs/validation
@@ -685,13 +743,14 @@ git commit -m "Record DataMax active plan validation"
 
 ---
 
-## Definition Of Done
+## 当前完成定义
 
-This plan is current when:
+本计划达到当前完成态时，需要满足：
 
-- `docs/plans` contains only `datamax-active-execution-plan.md`;
-- independent tasks above are implemented or explicitly marked not needed;
-- local tests for changed code pass;
-- 8-server read-only checks pass, and deploy happens only when requested;
-- external-resource items stay parked with clear resume conditions;
-- no raw credentials, raw customer rows, full documents, provider payloads, object paths, or tokens are recorded.
+- `docs/plans` 只包含 `datamax-active-execution-plan.md`。
+- 上述可独立处理的任务已完成，或明确标注为当前不需要。
+- 变更涉及的本地测试通过。
+- 8 服务器只读检查通过。
+- 只有用户明确要求时才部署。
+- 外部资源/外部决策项继续有清晰恢复条件。
+- 不记录原始凭据、原始客户行、完整文档、provider payload、object path、token。
