@@ -104,6 +104,8 @@ const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
 const ZIP_COMPRESSION_STORED = 0;
 const ZIP_COMPRESSION_DEFLATED = 8;
 const PPTX_NOTES_XML_PATTERN = /^ppt\/notesSlides\/notesSlide\d+\.xml$/;
+const PPTX_SLIDE_XML_PATTERN = /^ppt\/slides\/slide\d+\.xml$/;
+const MARKDOWN_SLIDE_HEADING_PATTERN = /^#{2,3}\s+Slide\s+\d+\b/gm;
 
 export function resolveVideoDeliverablesPath(inputPath) {
   const absolutePath = path.resolve(inputPath || ".");
@@ -210,13 +212,27 @@ export function validateVideoDeliverables(inputPath) {
     ),
   ];
 
+  let pptxSlideCount = null;
   const pptx = files.find((file) => file.kind === "pptx");
   if (pptx?.exists && !fileStartsWithZipMagic(pptx.path)) {
     errors.push(issue("pptx_zip_magic_missing", "PPTX does not start with ZIP magic bytes", "pptx"));
   } else if (pptx?.exists) {
-    const { invalidZip, missingEntries, notesXmlEntries, unreadableNotesXmlEntries } = checkRequiredPptxEntries(pptx.path);
+    const {
+      invalidZip,
+      missingEntries,
+      notesXmlEntries,
+      unreadableNotesXmlEntries,
+      slideXmlCount,
+    } = checkRequiredPptxEntries(pptx.path);
     if (invalidZip) {
       errors.push(issue("pptx_central_directory_missing", "PPTX ZIP central directory could not be read", "pptx"));
+    } else {
+      pptxSlideCount = slideXmlCount;
+      if (!Number.isInteger(slideXmlCount) || slideXmlCount < 1) {
+        errors.push(issue("pptx_slide_count_invalid", "PPTX does not contain any slide XML entries", "pptx"));
+      } else if (notesXmlEntries.length !== slideXmlCount) {
+        errors.push(issue("pptx_notes_slide_count_mismatch", "PPTX notes XML count does not match slide XML count", "pptx_notes_xml"));
+      }
     }
     if (missingEntries.length) {
       errors.push(issue(
@@ -270,10 +286,19 @@ export function validateVideoDeliverables(inputPath) {
   if (slideNotes?.exists) {
     validateRedactedTextFile(slideNotes.path, "slide_notes", errors);
   }
+  let markdownSlideCount = null;
   const videoSlidesMarkdown = files.find((file) => file.kind === "video_slides_markdown");
   if (videoSlidesMarkdown?.exists) {
-    validateRedactedTextFile(videoSlidesMarkdown.path, "video_slides_markdown", errors);
+    const text = readTextFile(videoSlidesMarkdown.path, "video_slides_markdown", errors);
+    if (text !== null) {
+      markdownSlideCount = countMarkdownSlideHeadings(text);
+      if (markdownSlideCount < 1) {
+        errors.push(issue("video_slides_markdown_slide_count_invalid", "video_slides Markdown has no slide headings", "video_slides_markdown"));
+      }
+      validateRedactedText(text, "video_slides_markdown", errors);
+    }
   }
+  validateOutputSlideCounts({ pptxSlideCount, markdownSlideCount, selectedSlidesManifest }, errors);
 
   return {
     ok: errors.length === 0,
@@ -572,6 +597,19 @@ function validateSelectedSlideCounts(selectedSlidesManifest, slideRectanglesMani
   }
 }
 
+function validateOutputSlideCounts({ pptxSlideCount, markdownSlideCount, selectedSlidesManifest }, errors) {
+  const selectedCount = selectedSlidesManifest?.selected_count;
+  if (!Number.isInteger(selectedCount) || selectedCount < 1) {
+    return;
+  }
+  if (Number.isInteger(pptxSlideCount) && pptxSlideCount !== selectedCount) {
+    errors.push(issue("output_slide_count_mismatch", "PPTX slide count does not match selected_count", "pptx"));
+  }
+  if (Number.isInteger(markdownSlideCount) && markdownSlideCount !== selectedCount) {
+    errors.push(issue("output_slide_count_mismatch", "Markdown slide count does not match selected_count", "video_slides_markdown"));
+  }
+}
+
 function isPositiveIntegerArray(values) {
   return values.every((value) => Number.isInteger(value) && value >= 1);
 }
@@ -791,11 +829,23 @@ function validateRedactedJson(value, kind, errors) {
 }
 
 function validateRedactedTextFile(filePath, kind, errors) {
+  const text = readTextFile(filePath, kind, errors);
+  if (text !== null) {
+    validateRedactedText(text, kind, errors);
+  }
+}
+
+function readTextFile(filePath, kind, errors) {
   try {
-    validateRedactedText(fs.readFileSync(filePath, "utf8"), kind, errors);
+    return fs.readFileSync(filePath, "utf8");
   } catch (error) {
     errors.push(issue("text_file_read_failed", `${kind} text read failed: ${error.message}`, kind));
+    return null;
   }
+}
+
+function countMarkdownSlideHeadings(text) {
+  return (text.match(MARKDOWN_SLIDE_HEADING_PATTERN) || []).length;
 }
 
 function validateRedactedText(text, kind, errors) {
@@ -852,9 +902,11 @@ function checkRequiredPptxEntries(filePath) {
       missingEntries: REQUIRED_PPTX_ENTRIES,
       notesXmlEntries: [],
       unreadableNotesXmlEntries: [],
+      slideXmlCount: 0,
     };
   }
   const names = new Set(zip.entries.map((entry) => entry.name));
+  const slideXmlCount = zip.entries.filter((candidate) => PPTX_SLIDE_XML_PATTERN.test(candidate.name)).length;
   const notesXmlEntries = [];
   const unreadableNotesXmlEntries = [];
   for (const entry of zip.entries.filter((candidate) => PPTX_NOTES_XML_PATTERN.test(candidate.name))) {
@@ -870,6 +922,7 @@ function checkRequiredPptxEntries(filePath) {
     missingEntries: REQUIRED_PPTX_ENTRIES.filter((entry) => !names.has(entry)),
     notesXmlEntries,
     unreadableNotesXmlEntries,
+    slideXmlCount,
   };
 }
 

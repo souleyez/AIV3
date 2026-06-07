@@ -244,6 +244,39 @@ test("rejects unredacted token-like text inside pptx speaker notes XML", () => {
   assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "pptx_notes_xml"));
 });
 
+test("rejects output slide counts that do not match selected slides", () => {
+  const sessionDir = createCompleteDeliverables();
+  const artifactsDir = path.join(sessionDir, "generated_artifacts");
+  fs.writeFileSync(
+    path.join(artifactsDir, "video_slides_screenshot_based.pptx"),
+    minimalPptxFixtureBytes({ slideCount: 2 }),
+  );
+  fs.writeFileSync(
+    path.join(artifactsDir, "video_slides.md"),
+    "# Video Slides\n\n## Slide 1\n\n## Slide 2\n",
+  );
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "output_slide_count_mismatch" && error.kind === "pptx"));
+  assert.ok(result.errors.some((error) => error.code === "output_slide_count_mismatch" && error.kind === "video_slides_markdown"));
+});
+
+test("rejects video slides markdown without slide headings", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.writeFileSync(
+    path.join(sessionDir, "generated_artifacts", "video_slides.md"),
+    "# Video Slides\n\nNo slide headings are present.\n",
+  );
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "video_slides_markdown_slide_count_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "output_slide_count_mismatch" && error.kind === "video_slides_markdown"));
+});
+
 test("rejects unredacted local paths in public JSON", () => {
   const sessionDir = createCompleteDeliverables();
   const subtitleMapPath = path.join(sessionDir, "generated_artifacts", "subtitle_page_map.json");
@@ -726,16 +759,24 @@ function removeArtifactKind(value, artifactKind) {
   }
 }
 
-function minimalPptxFixtureBytes(notesXml = "") {
-  return minimalZipBytes([
+function minimalPptxFixtureBytes(options = {}) {
+  const normalizedOptions = typeof options === "string" ? { notesXml: options } : options;
+  const slideCount = normalizedOptions.slideCount ?? 1;
+  const notesXml = normalizedOptions.notesXml ?? "";
+  const entries = [
     "[Content_Types].xml",
     "_rels/.rels",
     "ppt/presentation.xml",
     "ppt/_rels/presentation.xml.rels",
-    "ppt/slides/slide1.xml",
-    "ppt/slides/_rels/slide1.xml.rels",
-    { name: "ppt/notesSlides/notesSlide1.xml", content: notesXml },
-  ]);
+  ];
+  for (let index = 1; index <= slideCount; index += 1) {
+    entries.push(
+      `ppt/slides/slide${index}.xml`,
+      `ppt/slides/_rels/slide${index}.xml.rels`,
+      { name: `ppt/notesSlides/notesSlide${index}.xml`, content: notesXml },
+    );
+  }
+  return minimalZipBytes(entries);
 }
 
 function minimalZipBytes(entries) {

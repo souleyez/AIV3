@@ -3552,3 +3552,56 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, selected manifest body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Output Slide Count Validator Gate
+
+Task source: continue local acceptance hardening for the video PPT review package. The active plan requires PPTX slide count, Markdown slide count, and `selected_count` to agree, but the public deliverables validator previously only checked that the PPTX contained the minimum OOXML entries.
+
+Scope:
+
+- count PPTX slide XML entries under `ppt/slides/slideN.xml`;
+- count `video_slides.md` slide headings using `##/### Slide N`;
+- require both counts to match `selected_slides_manifest.selected_count`;
+- fail Markdown deliverables that contain no slide headings;
+- keep this as local validator/test work only, with no live upload, third-party event, capture, or deployment.
+
+Implemented behavior:
+
+- PPTX/selected-count mismatches fail with `output_slide_count_mismatch` and `kind=pptx`;
+- Markdown/selected-count mismatches fail with `output_slide_count_mismatch` and `kind=video_slides_markdown`;
+- Markdown without slide headings fails with `video_slides_markdown_slide_count_invalid`;
+- PPTX notes XML count must match PPTX slide XML count, so speaker notes remain page-aligned.
+
+Validation:
+
+```text
+node --check tools/validate-video-deliverables.mjs
+npm run test:video-deliverables
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- video deliverables validator passed 24 Node test cases, including PPTX and Markdown slide-count mismatch coverage;
+- a real public candidate deliverables package passed `validate-video-deliverables`, with PPTX, Markdown, selected manifest, rectangles, and quality report counts aligned;
+- quality matrix self-test passed;
+- public-course quality matrix passed with the public candidate still classified as `needs_manual_review`, not `not_deliverable`;
+- no generated PPTX, frame, Markdown body, OCR text, raw video, source URL, token, cookie, bearer value, approval id, customer content, or local artifact path was copied into this ledger.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- customer-facing quality still depends on real authorized samples and manual review for crop, duplicate, subtitle, OCR, readability, and artifact visibility risks.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports and deliverables stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, Markdown body, or local artifact paths were recorded in this shared receipt.
