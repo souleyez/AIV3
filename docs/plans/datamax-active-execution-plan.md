@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 01:13 CST
-**当前性质：** 开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback；P2-2C 暗场/低信息稳定段过滤本地切片已完成，降低黑屏转场误选为 PPT 页的风险；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，`slide_quality_report.json` 现在可输出 sharpness/readability risk，旧包兼容；P2-2E 三样例质量矩阵 self-test scaffold 已完成，固定 synthetic/public/customer 三类 review gate，但完整三样例验收仍需真实公开视频课程和客户授权样例。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E 真实三样例质量矩阵仍待执行。本轮未部署 8 服务器。
+**更新时间：** 2026-06-08 01:22 CST
+**当前性质：** 开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback；P2-2C 暗场/低信息稳定段过滤本地切片已完成，降低黑屏转场误选为 PPT 页的风险；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，`slide_quality_report.json` 现在可输出 sharpness/readability risk，旧包兼容；P2-2E 三样例质量矩阵 self-test scaffold 已完成，固定 synthetic/public/customer 三类 review gate，下一步先把真实/合成抽取产物目录接入 quality matrix，再等待真实公开视频课程和客户授权样例完成完整三样例验收。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E 真实三样例质量矩阵仍待执行。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 0. 下一阶段执行总览
@@ -32,21 +32,24 @@
 
 | 优先级 | 切片 | 现在是否可做 | 需要输入/授权 | 交付物 | 验收口径 |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | P1-3B 主站上传视频 controlled smoke | 待授权后可做 | 用户批准在主站写入一条非客户公开视频 smoke 记录 | live smoke 回执，含 dataset/document/assistant run/artifact/download 证据 | `smoke:video-ppt-upload-main` 产出 `final_pptx_ready`，PPTX/Markdown/manifests 可下载 |
-| 2 | P1-3C 第三方视频登记 special-trigger smoke | 待凭据后可做 | inbound bearer、`connection_id`、`source_id`、公开视频或上传文件 | live 第三方回执，区分“素材登记”和“PPT 抽取触发” | `smoke:external-video-ppt` 证明第三方 surface 可见；缺下载出口则记录为发布可见性缺口 |
-| 3 | P1-3D 视频号/登录态 handoff live pass | 待部署窗口后可做 | 用户批准 8 服务器部署；第三方模式还需 bearer/context | main/external handoff live 回执 | 只返回 `login_gated_video_source_not_supported` 三选项 handoff，不抓视频、不抽帧、不走 provider |
-| 4 | P2-2F 清晰度/可读性质量信号 | 已完成本地切片 | 无 live 授权；只用本地 fixture | `slide_quality_report.json` 增加可选清晰度字段，validator 兼容旧包 | media-worker/validator/platform-api 本地测试通过；未下载公开视频、未部署 |
+| 1 | P2-2E-1 质量矩阵接入本地抽取产物 | 可立即做；不跑 live | 无 live 授权；只使用 `target/` 下真实或合成 `generated_artifacts` | `smoke:video-ppt-quality-matrix` 支持 `--synthetic-deliverables <path>`，报告继续脱敏并保留 public/customer pending gates | 复用 `validate-video-deliverables` 判定本地 PPTX/Markdown/manifests/质量报告；不把本地结果冒充真实三样例验收 |
+| 2 | P1-3B 主站上传视频 controlled smoke | 待授权后可做 | 用户批准在主站写入一条非客户公开视频 smoke 记录 | live smoke 回执，含 dataset/document/assistant run/artifact/download 证据 | `smoke:video-ppt-upload-main` 产出 `final_pptx_ready`，PPTX/Markdown/manifests 可下载 |
+| 3 | P1-3C 第三方视频登记 special-trigger smoke | 待凭据后可做 | inbound bearer、`connection_id`、`source_id`、公开视频或上传文件 | live 第三方回执，区分“素材登记”和“PPT 抽取触发” | `smoke:external-video-ppt` 证明第三方 surface 可见；缺下载出口则记录为发布可见性缺口 |
+| 4 | P1-3D 视频号/登录态 handoff live pass | 待部署窗口后可做 | 用户批准 8 服务器部署；第三方模式还需 bearer/context | main/external handoff live 回执 | 只返回 `login_gated_video_source_not_supported` 三选项 handoff，不抓视频、不抽帧、不走 provider |
 | 5 | P2-1C 授权录屏样例 | 待 operator 授权后可做 | approval id、可播放来源、最大时长、音频策略、保留期、handoff 目标 | 录制 MP4 的脱敏回执，随后复用上传或第三方视频 PPT 抽取 | 失败能分流为播放/录制/无 PPT/抽帧/质量问题；不绕过平台权限 |
-| 6 | P2-2E 三样例质量矩阵 | self-test scaffold 已完成；真实样例待授权/输入 | 合成视频、公开视频课程、客户授权视频 | 每个样例的 PPTX/Markdown/质量报告/人工复核结论 | `smoke:video-ppt-quality-matrix -- --self-test` 只证明矩阵 gate；完整验收仍需真实 public/customer 回执 |
+| 6 | P2-2E-2 真实公开视频课程样例 | 待样例后可做 | 匿名可下载公开视频课程或用户提供上传文件 | 公开视频课程的 PPTX/Markdown/质量报告/人工复核结论 | 记录黑边、讲师遮挡、转场、无字幕/弱字幕等真实质量风险，不用单一 synthetic 样例代替 |
+| 7 | P2-2E-3 客户授权视频样例 | 待授权后可做 | 客户/operator 授权、输入来源和保留策略 | 客户样例脱敏回执与质量结论；产物不进 Git | 区分可交付、需人工复核、不可交付，并记录 source access/video has no PPT/frame/crop/subtitle/artifact visibility 归因 |
 
 ### 0.4 可直接继续的本地开发切片
 
-P2-2F 已完成。若暂时没有主站上传授权、第三方 bearer 或 8 服务器部署窗口，仍可继续做更窄的本地质量切片，但不能用本地 fixture 代替 live 验收：
+P2-2F 已完成。若暂时没有主站上传授权、第三方 bearer 或 8 服务器部署窗口，下一步优先做 P2-2E-1 本地矩阵输入适配，但不能用本地 fixture 代替 live 验收：
 
-1. P2-2E 质量矩阵 self-test scaffold 已完成；后续可把真实合成 PPT 抽取报告接入该矩阵，但生成产物仍放 `target/` 且不提交。
-2. 继续补 P2-2B/P2-2C 的本地回归 fixture，覆盖讲师小窗遮挡、动画转场、深色主题 slide 与低对比字迹。
-3. 有真实公开视频课程或客户授权样例前，不声称三样例质量矩阵完成。
-4. 任何本地质量切片都不跑 live smoke、不下载私有视频、不上传文件、不部署；验证通过后追加 `docs/validation/video-ppt-deliverable-smoke.md` 回执并同步 GitHub。
+1. 将 `smoke:video-ppt-quality-matrix` 从纯 self-test 扩展为也能读取 `--synthetic-deliverables <path>`，路径指向一次真实或合成视频抽取输出的 `generated_artifacts/`。
+2. `--synthetic-deliverables` 模式必须复用 `validate-video-deliverables`，读取 `final_deliverables_manifest.json` 和 `slide_quality_report.json` 的脱敏摘要，只把 synthetic 类样例判定为本地 reviewed；public course 和 customer authorized 两类继续 pending。
+3. 临时样例、PPTX、帧图、matrix JSON 报告都放 `target/`，不提交；计划和验证回执只记录命令、状态、计数、风险码和脱敏文件种类。
+4. 继续补 P2-2B/P2-2C 的本地回归 fixture，覆盖讲师小窗遮挡、动画转场、深色主题 slide 与低对比字迹。
+5. 有真实公开视频课程或客户授权样例前，不声称三样例质量矩阵完成。
+6. 任何本地质量切片都不跑 live smoke、不下载私有视频、不上传文件、不部署；验证通过后追加 `docs/validation/video-ppt-deliverable-smoke.md` 回执并同步 GitHub。
 
 ### 0.5 必须等待授权的动作
 
@@ -508,7 +511,7 @@ git diff --check
 
 ### P2-2：视频/PPT 质量增强
 
-**状态：P2-2A 已完成本地验证；P2-2B bright-canvas detector 本地切片已完成；P2-2C 暗场稳定段过滤本地切片已完成；P2-2D OCR evidence 和质量报告 OCR coverage 本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成；P2-2E 三样例质量矩阵 self-test scaffold 已完成；P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 真实 public/customer 样例回执待后续执行。**
+**状态：P2-2A 已完成本地验证；P2-2B bright-canvas detector 本地切片已完成；P2-2C 暗场稳定段过滤本地切片已完成；P2-2D OCR evidence 和质量报告 OCR coverage 本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成；P2-2E 三样例质量矩阵 self-test scaffold 已完成，下一步先接入本地 `generated_artifacts/` 输入；P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 真实 public/customer 样例回执待后续执行。**
 
 **目标：** 提高截图型 PPT 的可读性，减少人工复核成本。
 
@@ -1224,6 +1227,25 @@ self-test 验收口径：
 - `source_urls_included=false`、`object_paths_included=false`、`credentials_included=false`、`provider_payloads_included=false`。
 - 报告写入 `target/video-ppt-quality-matrix-smoke/`，不提交生成报告。
 
+下一本地开发切片 P2-2E-1：
+
+1. 扩展 `scripts/smoke/video-ppt-quality-matrix.mjs`，新增 `--synthetic-deliverables <path>` 和环境变量兜底 `VIDEO_PPT_QUALITY_MATRIX_SYNTHETIC_DELIVERABLES`。
+2. 该路径必须指向一次视频/PPT 抽取输出的 `generated_artifacts/` 或等价目录；脚本不得读取、打印、提交原始视频路径、source URL、object path、cookie、token、provider payload。
+3. 调用 `validateVideoDeliverables(path)` 作为唯一交付契约入口；根据 validator errors/warnings、`final_deliverables_manifest.json` 和 `slide_quality_report.json` 生成 synthetic 类样例的 `deliverable_status`、`quality_report` 和 verdict。
+4. public course 和 customer authorized 两类仍然由同一份报告保留为 pending，不得因为 synthetic deliverables 成功就把 `matrix_complete` 置为 true。
+5. 新增或临时生成完整 deliverables fixture 时，只能写入 `target/`，并在提交前确认 `git status --short` 没有目标产物。
+6. 验证命令：
+
+```bash
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --help
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<fixture>/generated_artifacts --pretty
+git diff --check
+```
+
+7. 验证回执追加到 `docs/validation/video-ppt-deliverable-smoke.md`，只记录 schema、case counts、validator result、risk flags、脱敏 file kinds 和报告路径；不提交 target 报告。
+
 ### 5.9 部署门槛
 
 本计划本轮不部署。后续如用户明确要求发 8 服务器，按以下门槛走：
@@ -1253,7 +1275,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 early-return 和第三方 deterministic card 均已通过本地 endpoint/handler 测试，live pass 待部署后复跑 | P1-3D live |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |
 | 质量报告 | 已生成 PPTX/Markdown/manifest 的 video/PPT 包 | 输出可选 `slide_quality_report.json`，解释质量分和风险 | P2-2A 已完成本地验证；legacy 包兼容，新包质量报告可校验 | 作为后续样例复核辅助保留 |
-| 裁剪/稳定/字幕/清晰度增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射，并提示低清晰度/低可读性页 | P2-2B bright-canvas detector、P2-2C 暗场稳定段过滤、P2-2D OCR evidence/quality-report coverage、P2-2F 清晰度/可读性信号本地切片已完成；P2-2E quality-matrix self-test scaffold 已完成；真实样例矩阵和更广泛质量处理仍未完成 | P2-2B follow-up/P2-2C follow-up/P2-2D sample/P2-2E real samples |
+| 裁剪/稳定/字幕/清晰度增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射，并提示低清晰度/低可读性页 | P2-2B bright-canvas detector、P2-2C 暗场稳定段过滤、P2-2D OCR evidence/quality-report coverage、P2-2F 清晰度/可读性信号本地切片已完成；P2-2E quality-matrix self-test scaffold 已完成；真实/合成 deliverables 输入适配、真实样例矩阵和更广泛质量处理仍未完成 | 先做 P2-2E-1 local deliverables input，再做 P2-2B/P2-2C follow-up、P2-2D sample、P2-2E public/customer real samples |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
 ## 7. 决策门
@@ -1278,12 +1300,13 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
-2. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
-3. 在用户明确批准 8 服务器部署窗口后，复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；部署后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
-4. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
-5. 如果暂时没有 live 授权或部署窗口，继续准备 P2-2E 真实合成 PPT 抽取报告接入质量矩阵，或补 P2-2B/P2-2C 更广泛本地 fixture；不要把本地 fixture 结果替代真实公开视频课程或客户授权样例。
-6. 根据 P1-3/P2-1/P2-2A-D/F 证据继续 P2-2B/P2-2C/P2-2D/P2-2E：重点处理 crop fallback、重复页、转场帧、字幕页映射、逐页讲稿和三类样例人工复核。
+1. 先完成 P2-2E-1 本地 deliverables 输入适配：`smoke:video-ppt-quality-matrix` 增加 `--synthetic-deliverables <path>`，复用 validator，生成脱敏矩阵报告，并保持 public/customer 两类 pending。
+2. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
+3. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
+4. 在用户明确批准 8 服务器部署窗口后，复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；部署后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
+5. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
+6. 如果暂时没有 live 授权或部署窗口，继续补 P2-2B/P2-2C 更广泛本地 fixture，或准备可匿名下载的公开视频课程样例；不要把本地 fixture 结果替代真实公开视频课程或客户授权样例。
+7. 根据 P1-3/P2-1/P2-2A-D/F 证据继续 P2-2B/P2-2C/P2-2D/P2-2E：重点处理 crop fallback、重复页、转场帧、字幕页映射、逐页讲稿和三类样例人工复核。
 
 本计划完成当前阶段的定义：
 
@@ -1302,4 +1325,5 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M3 | P1-3D 视频号/登录态 handoff live pass | 用户批准 8 服务器部署窗口；第三方模式还需要 inbound bearer | 部署前本地测试、部署后 `npm run smoke:video-ppt-handoff -- --mode main`，第三方按授权补跑 | 主站/第三方返回 handoff 卡片，不抓视频、不生成 PPT、不走 provider | 仅在批准后 pull/build/restart 受影响服务 |
 | M4 | P2-1C 授权录屏样例 | operator 授权记录、可播放来源、最大时长、音频策略、保留期、handoff 目标 | `capture:authorized-video` dry-run，live capture 后复用 P1-3 上传或第三方抽取 smoke | 录制 `.mp4` 可进入现有 `VideoExtraction`，并有质量结论 | 默认不启用；8 内部录制需单独批准 |
 | M5 | P2-2F 清晰度/可读性质量信号 | 无 live 授权；本地 fixture 即可 | 已通过 media-worker selected_slides/slide_rectangle/controlled sample/sharpness helper、deliverable validator、platform-api video tests、`git diff --check` | 已完成：`slide_quality_report.json` 显示 sharpness/readability risk，旧包兼容 | 未部署 |
-| M6 | P2-2E 三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | `smoke:video-ppt-quality-matrix -- --self-test` 已通过；完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | self-test scaffold 已完成；完整完成仍需每个真实样例给出可交付/需人工复核/不可交付结论 | 不部署，除非质量切片已通过并获批 |
+| M6 | P2-2E-1 质量矩阵本地 deliverables 输入 | 一次真实或合成视频/PPT 抽取输出的 `generated_artifacts/`；可用临时 target fixture | `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`--help`、`--self-test --pretty`、`--synthetic-deliverables target/<fixture>/generated_artifacts --pretty`、`git diff --check` | matrix 可读取本地交付包并复用 validator，报告脱敏，public/customer gates 仍 pending | 未部署 |
+| M7 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |
