@@ -1466,3 +1466,56 @@ Safety result:
 - no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
+## 2026-06-08 Video PPT Quality Matrix Self-Test Scaffold
+
+Task source: P2-2E from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- add a deterministic self-test entrypoint for the P2-2E three-sample quality review matrix;
+- cover the required categories: synthetic PPT playback, public course video, and customer-authorized video;
+- keep public course and customer samples pending until real approved inputs exist;
+- do not run live extraction, download videos, upload files, record browser sessions, or deploy services.
+
+Implemented behavior:
+
+- added package script `smoke:video-ppt-quality-matrix`;
+- added `scripts/smoke/video-ppt-quality-matrix.mjs`;
+- documented the entrypoint in `scripts/README.md`;
+- self-test report schema is `v3.video_ppt_quality_matrix_smoke.v1`;
+- self-test sets `matrix_complete=false` and `status=partial_local_self_test_ready`;
+- synthetic PPT playback case is locally classified as `deliverable`;
+- public course video case is classified as `pending_accessible_sample`;
+- customer-authorized video case is classified as `pending_authorization`;
+- safety gates record `live_smoke_run=false`, `production_write_allowed=false`, and generated reports as non-committable.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --help
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty
+```
+
+Result:
+
+- syntax check passed;
+- help output returned expected usage and safety notes;
+- self-test passed with `case_count=3`, `deliverable_count=1`, `pending_count=2`;
+- generated report: `target/video-ppt-quality-matrix-smoke/20260607T171254-6254-self-test.json`;
+- report redaction flags showed no source URLs, object paths, credentials, or provider payloads included.
+
+Remaining P2-2E work:
+
+- attach a real synthetic PPT playback extraction report to the matrix;
+- run a public course video sample only after an anonymous direct video URL or uploaded fixture is approved;
+- run a customer-authorized sample only after explicit customer/operator authorization;
+- keep generated videos, PPTX files, reports, and matrix outputs under `target/` and out of Git.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
