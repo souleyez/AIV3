@@ -1,10 +1,10 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 05:39 CST
+**更新时间：** 2026-06-08 05:49 CST
 **当前性质：** 开发执行版；当前入口是第 0.7 节，尤其是第 0.7.13 节的全量验收闭环。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出复核风险已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；本轮仍不部署 8 服务器。
 **状态摘要：**
 
-- P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test，第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过。
+- P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 和第三方视频登记 special-trigger smoke 均已补离线 self-test 下载校验，视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；没有执行 live capture，没有接入 8 服务器生产服务。
 - P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown、清晰度/可读性风险提示均有本地验证。
@@ -338,7 +338,7 @@ npm run capture:authorized-video -- \
 | --- | --- | --- | --- |
 | 主站 direct URL | `smoke:video-ppt-main-visible` 已证明 assistant-run-bound 可见产物，PPTX/Markdown/manifests 可下载 | 作为发布前回归保留，不代表上传入口 | 仅在新部署后按需复跑 |
 | 主站上传视频 | `smoke:video-ppt-upload-main` 已实现，并已补离线 self-test 验证 artifact/download contract、最小 PPTX/Markdown 下载校验和视频扩展识别 | live controlled smoke 待用户批准，因为会写一条非客户 smoke 记录 | 执行包 EP2 |
-| 第三方登记视频 | `smoke:external-video-ppt` 已实现，self-test 通过 | live bearer、`connection_id`、`source_id` 和授权输入 | 执行包 EP3 |
+| 第三方登记视频 | `smoke:external-video-ppt` 已实现，self-test 已覆盖 reply surface 与最小 PPTX/Markdown 下载校验 | live bearer、`connection_id`、`source_id` 和授权输入 | 执行包 EP3 |
 | 公开视频课程样例 | media.ccc 三个匿名 slides 样例跑通过；主样例 7 页、quality score 61，第三样例修复后 3 页、quality score 68 | 均仍是 `needs_manual_review`，不能替代客户授权样例 | 执行包 EP1/EP5 |
 | 微信视频号和登录态 | 主站 early return、第三方 deterministic card 本地测试通过 | live handoff pass 需要先部署到 8 服务器 | 执行包 EP4 |
 | 授权录屏 | runbook 和 isolated helper 已实现，self-test/dry-run/授权门禁通过 | 没有 live capture；8 服务器内部录屏未启用 | 执行包 EP4 |
@@ -752,7 +752,7 @@ Safety:
 | 本地交付契约 | 已有 validator、media-worker、quality matrix 和 public probes 证据 | 不阻塞 | 后续代码变更都复跑最小相关验证 |
 | 公开视频质量样例 | 三个 media.ccc slides 样例可作为 public 证据，结论均偏 `needs_manual_review` | 不阻塞，但不能冒充客户样例 | 保留为真实 public 回执；继续窄修复只能降低风险，不能替代 live/customer gate |
 | 主站上传入口 | 脚本已实现，离线 self-test 已补并覆盖最小 PPTX/Markdown 校验；live smoke 未跑 | 阻塞“上传入口已验收”结论 | 需要用户批准写一条非客户 smoke 记录 |
-| 第三方登记入口 | 脚本和 self-test 已实现，live bearer/context 缺失 | 阻塞“第三方入口已验收”结论 | 需要 inbound bearer、`connection_id`、`source_id` 和安全输入 |
+| 第三方登记入口 | 脚本和 self-test 已实现，离线校验覆盖 reply surface 与最小 PPTX/Markdown；live bearer/context 缺失 | 阻塞“第三方入口已验收”结论 | 需要 inbound bearer、`connection_id`、`source_id` 和安全输入 |
 | 视频号/登录态 handoff | 本地 deterministic 逻辑已过；live pass 需要当前代码在 8 服务器 | 阻塞“现网 handoff 已验收”结论 | 需要用户单独批准 8 服务器部署窗口；验收只看 handoff，不抽视频 |
 | 授权录屏兜底 | runbook/helper/self-test/dry-run 门禁已具备 | 阻塞“兜底样例已验收”结论 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，不默认 8 服务器 |
 | 客户授权质量矩阵 | 脚本支持 customer input 和 approval id redaction；真实样例缺失 | 阻塞 P2-2E complete | 需要客户/operator 授权样例；产物不进 Git |
@@ -1212,7 +1212,7 @@ git diff --check
 - reuse-mode 已复核主站 `assistant_run_id=46f57e74-85f9-4088-bad0-99f1ae0a6fea`：`deliverableState=final_pptx_ready`，PPTX/Markdown/manifest 6 类关键产物可通过 HTML artifact file API 下载。
 - release gate 验证 PPTX OOXML 必需 entry、PPTX slide count 和 Markdown slide heading count 一致；当前样例均为 30。
 - `npm run smoke:video-ppt-upload-main` 已纳入 package scripts 和 `scripts/README.md`；脚本语法、help、离线 self-test、最小 PPTX/Markdown 下载校验、upload classifier、HTML artifact manifest 和 video deliverable validator 均已通过本地验证。
-- `npm run smoke:external-video-ppt` 已纳入 package scripts 和 `scripts/README.md`；脚本语法、help 和 `--self-test` 均已通过本地验证，self-test 不访问网络。
+- `npm run smoke:external-video-ppt` 已纳入 package scripts 和 `scripts/README.md`；脚本语法、help 和 `--self-test` 均已通过本地验证，self-test 不访问网络，并覆盖最小 PPTX/Markdown 下载校验。
 - `npm run smoke:video-ppt-handoff` 已纳入 package scripts 和 `scripts/README.md`；脚本语法、help、`--self-test`、`cargo test -p platform-api wechat_video_login_handoff --lib`、HTML artifact manifest 测试均已通过。
 - P1-3D 主站 live lightweight smoke 已试跑一次：没有抓视频、没有抽帧、没有下载产物，但 60 秒内未发现 `wechat_video_login_handoff` artifact；当前代码已修复为 early return，本地 handler 级测试覆盖 artifact list，可在下次部署后复跑 live pass。
 - P1-3D 第三方 handoff 本地 endpoint 测试已补齐：`generic_chat_wechat_video_ppt_handoff_short_circuits_provider` 在 provider 模式和不可达 gateway 下通过，证明第三方 `/events` 首次投递、幂等重复和 `/assistant-runs/{run_id}/reply` 查询都返回 card，且不产生 provider/ReAct/model reply 事件。
@@ -2148,7 +2148,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 无字幕 deliverable contract | 无 transcript/subtitle 的公开视频样例 | 没有 `subtitle_page_map.json` 时仍可交付截图型 PPTX，但必须标记 `missing_transcript_alignment` | P0-3 已完成本地切片；validator、media-worker package summary、published manifest、version history 和 durable manifest 已改为条件性契约 | 作为回归保留 |
 | 公开视频课程候选 | media.ccc/NixCon slides MP4 | 真实公开课件视频能通过 validator 并进入 quality matrix | S1 access probe 通过；S2A 离线抽取已生成 PPTX/Markdown/quality report，deliverables validator 通过，quality matrix 判为 `needs_manual_review`；selected manifest、稀疏文字/build 选页、best-sharpness 代表帧、visual-shape duplicate 保守去重均已完成本地修复；shape-dedupe 最终复跑仍为 7 页、质量分 61、`needs_manual_review`；`Nix in Space` 降级为 1 页弱对照；`Layered Nix Stores` 修复 bright-template build 误删后为 3 页、quality score 68、`needs_manual_review` | 若无授权，可继续 crop/sharpness/字幕公开样例窄修复；完整 P2-2E 仍等待客户授权样例 |
 | 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help/self-test/最小 PPTX-Markdown 校验；live/controlled 回执待授权 | P1-3B |
-| 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 self-test；live 回执待 bearer/授权 | P1-3C live |
+| 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 self-test/最小 PPTX-Markdown 校验；live 回执待 bearer/授权 | P1-3C live |
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
 | 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 early-return 和第三方 deterministic card 均已通过本地 endpoint/handler 测试，live pass 待部署后复跑 | P1-3D live |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |

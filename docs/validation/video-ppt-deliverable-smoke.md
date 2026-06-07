@@ -2829,3 +2829,59 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated self-test reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded in this shared receipt.
+
+## 2026-06-08 Third-Party Video PPT Smoke Self-Test Download Gate
+
+Task source: EP3/P1-3C readiness from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- strengthen `smoke:external-video-ppt -- --self-test` so it validates both the third-party reply surface and the minimal deliverable download contract;
+- keep live third-party execution gated on an approved inbound bearer, `connection_id`, `source_id`, and safe input;
+- avoid network calls, fixture registration, `/events` delivery, DataMax uploads, browser capture, service build/restart, 8-server deployment, and 120-server action.
+
+Implemented behavior:
+
+- `scripts/smoke/external-video-ppt.mjs` self-test now writes a minimal local PPTX ZIP fixture and Markdown deck under `target/`;
+- self-test runs the same `validateDownloads` path used by live third-party deliverable download checks;
+- self-test verifies required export kinds: `pptx`, `video_slides_markdown`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, and `extraction_artifacts_manifest`;
+- self-test verifies the minimal PPTX central directory contains `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`;
+- self-test verifies PPTX slide count and Markdown `### Slide` heading count are both `1`;
+- self-test report records `networkCallsRun=false`, `fixtureRegistered=false`, `eventSent=false`, and `deliverablesDownloadedFromNetwork=false`;
+- `scripts/README.md` now documents that external self-test covers reply surface plus minimal PPTX/Markdown validation.
+
+Validation:
+
+```text
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:external-video-ppt -- --self-test --output-dir target/external-video-ppt-self-test-download-validation
+git diff --check
+```
+
+Result:
+
+- external video PPT smoke syntax check passed;
+- external video PPT self-test passed with `ok=true`;
+- self-test reply surface showed `status=video_extraction_summary`, `cardType=video_extraction_summary`, `exportCount=6`, and no missing export kinds;
+- self-test summary showed `networkCallsRun=false`, `fixtureRegistered=false`, `eventSent=false`, and `deliverablesDownloadedFromNetwork=false`;
+- self-test download validation passed with `pptxSlideCount=1`, `markdownSlideHeadingCount=1`, and all three required PPTX entries present;
+- redaction audit found no raw URL, token marker, bearer marker, or snake-case upload object key in the self-test report;
+- whitespace check passed.
+
+Remaining work:
+
+- this improves P1-3C readiness but does not run the live third-party registration smoke;
+- P1-3C still needs approved inbound bearer, `connection_id`, `source_id`, and an authorized public/uploaded video input;
+- P1-3B still needs explicit user approval for a live main-site upload smoke record;
+- P1-3D still needs an approved 8-server deployment window before live handoff pass;
+- P2-1C and P2-2E customer gates still need operator/customer authorization.
+
+Safety result:
+
+- no live third-party smoke was run;
+- no fixture video was downloaded or registered;
+- no `/events` request was sent;
+- no DataMax upload, dataset, document, assistant run, or HTML artifact was created;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated self-test reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded in this shared receipt.
