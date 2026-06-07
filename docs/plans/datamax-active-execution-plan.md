@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 07:23 CST
-**当前性质：** 开发执行版；当前入口是第 0.7 节，尤其是第 0.7.13 节的全量验收闭环。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出复核风险已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。deliverables validator 已补 PPTX speaker notes XML 脱敏扫描，能读取 `ppt/notesSlides/*.xml` 并拒绝未脱敏本地路径、token/cookie/authorization/bearer/provider_key/secret/password 形态，同时用真实 public candidate 复核避免误伤正常公开课件链接；validator 也已把 `selected_slides_manifest.json` 纳入本地 review package 必检，校验 selected/requested indices、dedupe counts 和 selected/rectangle/quality 跨文件页数一致；PPTX slide XML 数、Markdown slide heading 数和 `selected_count` 也已纳入一致性 gate；quality matrix 现在优先使用 validator summary 的 frame/selected/PPTX/Markdown 计数，而不是用 quality report slide_count 代替所有计数。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 07:30 CST
+**当前性质：** 开发执行版；当前功能基线是 `2cd3ce4`，入口是第 0.7 节，尤其是第 0.7.13-0.7.14 节的全量验收闭环和当前 HEAD 审计。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出复核风险已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。deliverables validator 已补 PPTX speaker notes XML 脱敏扫描，能读取 `ppt/notesSlides/*.xml` 并拒绝未脱敏本地路径、token/cookie/authorization/bearer/provider_key/secret/password 形态，同时用真实 public candidate 复核避免误伤正常公开课件链接；validator 也已把 `selected_slides_manifest.json` 纳入本地 review package 必检，校验 selected/requested indices、dedupe counts 和 selected/rectangle/quality 跨文件页数一致；PPTX slide XML 数、Markdown slide heading 数和 `selected_count` 也已纳入一致性 gate；quality matrix 现在优先使用 validator summary 的 frame/selected/PPTX/Markdown 计数，而不是用 quality report slide_count 代替所有计数。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。下一步无授权可继续的本地硬化项是 validator/shared receipt JSON 输出脱敏：保证 `--json` 类共享输出默认不带本机 artifact path，同时不破坏内部 API 给质量矩阵读取本地文件的能力。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
@@ -17,6 +17,7 @@
 - deliverables validator 已补 selected slides manifest gate：本地交付包必须包含并校验 `selected_slides_manifest.json`，要求 `selected_count`、`selected_candidate_indices`、`requested_selected_candidate_indices`、dedupe counts、`slide_rectangles_manifest.promoted_rectangle_count` 和 `slide_quality_report.slide_count` 一致；但不强制 selected manifest 出现在 published download list，发布可见性仍由主站 live artifact smoke 证明。
 - deliverables validator 已补输出页数一致性 gate：读取 PPTX ZIP 中 `ppt/slides/slideN.xml` 数量，统计 `video_slides.md` 的 `Slide N` heading 数量，并与 `selected_slides_manifest.selected_count` 对齐，避免 PPTX/Markdown 与复核 manifest 页数错配。
 - deliverables validator 已输出结构化 `summary`：包含 `frame_count`、`selected_count`、`requested_selected_count`、`pptx_slide_count`、`markdown_slide_count`、rectangle/quality/subtitle page counts；quality matrix 的 public/customer/synthetic deliverables 输入优先使用该 summary 填写计数。
+- 待执行本地硬化项：`validate-video-deliverables --json` 等共享命令输出必须默认脱敏本机路径和 artifact path，只保留 count/file kind/verdict 等可共享证据；内部 `validateVideoDeliverables()` 返回仍可保留本地路径供 smoke 脚本读取文件，避免破坏 quality matrix。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
@@ -746,13 +747,15 @@ npm run smoke:video-ppt-quality-matrix -- \
 2. 更明确的 crop detector：针对 full-frame fallback 仍可见但边界不稳定的 public 页做 fixture。
 3. 清晰度/readability 分流：把低清晰、低对比和 fade 页更明确标为人工复核。
 4. OCR/subtitle 证据增强已补本地回归：只把 OCR 当作 page notes evidence，经过 `video_safe_evidence_text` 脱敏后写入 slide notes、`video_slides.md` 和 PPTX speaker notes；没有 transcript 时不生成或伪装 `subtitle_page_map`。
-5. 更多匿名公开视频课程样例：只选公开、非登录态、可下载、包含课件画面的短样例。
+5. validator/shared JSON 输出脱敏：保持内部 `validateVideoDeliverables()` 返回可供脚本读取的本地路径，但 CLI `--json` 和可复制共享报告默认把 `artifactsDir`、`files[].path` 等本机路径替换为 redacted marker，只保留 file kinds、summary counts、warning/error code 和 verdict。
+6. 更多匿名公开视频课程样例：只选公开、非登录态、可下载、包含课件画面的短样例。
 
 验收：
 
 - 每个窄修复必须有 Rust/Node 定向测试。
 - 复跑最小 public sample 或 synthetic fixture。
 - 不放宽 `validate-video-deliverables` 的 redaction/schema 约束。
+- 若切片涉及共享 JSON/报告，必须额外扫描输出中不含 `/Users/`、`/home/`、Windows drive path、`target/...generated_artifacts`、raw URL、token/cookie/bearer/password/provider key。
 - 不上传、不跑 live、不部署。
 
 #### 0.7.10 EP7 8 服务器部署门槛
@@ -821,11 +824,12 @@ Safety:
 
 #### 0.7.12 下一步推荐顺序
 
-1. 本轮先完成 EP0：计划文档和桌面副本同步，doc-only GitHub 提交，不发 8 服务器。
-2. 如果用户批准写主站非客户 smoke 记录，执行 EP2 主站上传视频 controlled smoke。
-3. 如果 operator 提供第三方 bearer/context，执行 EP3 第三方视频登记 special-trigger smoke。
-4. 如果用户批准 8 服务器部署窗口，先按 EP7 部署当前 handoff 修复，再执行 EP4 的 main handoff live pass。
-5. 如果客户或 operator 提供授权样例，执行 EP5；没有授权时只做 EP1/EP6 的本地质量复核。
+1. 本轮先完成 EP0：计划文档和桌面副本同步，可做 doc-only GitHub 提交，不发 8 服务器。
+2. 如果没有新增 live 授权，优先做 EP6 的本地硬化项 M6N：让 validator/shared JSON 输出默认脱敏本机 artifact path，同时保持内部 API 不破坏 quality matrix。
+3. 如果用户批准写主站非客户 smoke 记录，执行 EP2 主站上传视频 controlled smoke。
+4. 如果 operator 提供第三方 bearer/context，执行 EP3 第三方视频登记 special-trigger smoke。
+5. 如果用户批准 8 服务器部署窗口，先按 EP7 部署当前 handoff 修复，再执行 EP4 的 main handoff live pass。
+6. 如果客户或 operator 提供授权样例，执行 EP5；没有授权时只做 EP1/EP6 的本地质量复核和脱敏台账。
 
 #### 0.7.13 功能全量验收闭环
 
@@ -843,10 +847,11 @@ Safety:
 | 视频号/登录态 handoff | 本地 deterministic 逻辑已过；handoff self-test 已补负向 fixture 与无网络/provider/下载信号报告；live 前置 preflight 已补，能在不访问网络的情况下检查 main/external 模式、bearer/部署门槛和 handoff surface 预期；live pass 需要当前代码在 8 服务器 | 阻塞“现网 handoff 已验收”结论 | 需要用户单独批准 8 服务器部署窗口；验收只看 handoff，不抽视频 |
 | 授权录屏兜底 | runbook/helper/self-test/dry-run 门禁已具备；self-test 已补授权负向用例和 `sharedReceipt` 脱敏检查 | 阻塞“兜底样例已验收”结论 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，不默认 8 服务器 |
 | 客户授权质量矩阵 | 脚本支持 customer input 和 approval id redaction；真实样例缺失 | 阻塞 P2-2E complete | 需要客户/operator 授权样例；产物不进 Git |
+| 共享回执脱敏 | validator 已能输出 summary counts，quality matrix 已优先使用该 summary；下一步需要把 CLI `--json` 等共享输出默认改为路径脱敏，避免复制回执时带出本机 artifact path | 不阻塞 live 授权推进，但阻塞“共享 JSON 可直接外发”结论 | 执行 M6N：新增 redacted JSON helper/CLI gate、负向测试和真实 public candidate 复核 |
 
 执行路线：
 
-1. **无新授权时**：只执行 EP1/EP6。可以继续做本地 fixture、public sample 复核、validator/quality-matrix 风险门、文档台账；不能跑主站上传 live、第三方 live、录屏 live 或 8 服务器部署。
+1. **无新授权时**：只执行 EP1/EP6。优先完成 M6N shared JSON redaction hardening，然后继续做本地 fixture、public sample 复核、validator/quality-matrix 风险门、文档台账；不能跑主站上传 live、第三方 live、录屏 live 或 8 服务器部署。
 2. **批准主站写 smoke 数据后**：执行 EP2。完成条件是上传、登记、ingest、assistant run、`VideoExtraction`、HTML artifact 下载和 PPTX/Markdown/manifests 校验全部有脱敏回执。
 3. **提供第三方 bearer/context 后**：执行 EP3。完成条件是“视频素材登记”和“提取视频里的 PPT”特殊触发分别有回执，第三方 surface 可见产物或明确记录 `artifact_visibility_gap`。
 4. **批准 8 服务器部署窗口后**：先执行 EP7，再执行 EP4 handoff live。完成条件是现网只返回 `login_gated_video_source_not_supported` 三选项，不抓视频、不抽帧、不走 provider、不生成 PPT。
@@ -861,7 +866,7 @@ Safety:
 - 授权录屏只作为 fallback；录屏文件作为普通 MP4 输入复用现有 `VideoExtraction`，不引入绕过平台权限的新路径。
 - PPTX、`video_slides.md`、slide notes、rectangle manifest、selected manifest、final/published/version/extraction manifests、可选 quality report、条件性 subtitle map 的交付契约通过 validator。
 - `slide_quality_report.json` 对单页输出、full-frame fallback、字幕缺失、重复页、清晰度/可读性风险有可解释 risk flags；`needs_manual_review` 不被包装成 clean deliverable。
-- 所有回执都写入 `docs/validation/video-ppt-deliverable-smoke.md`，且不包含原始视频、帧图、PPTX、source URL、cookie、token、provider payload、数据库 URL、客户文件、私有 object path 或本地绝对 artifact path。
+- 所有回执都写入 `docs/validation/video-ppt-deliverable-smoke.md`，且不包含原始视频、帧图、PPTX、source URL、cookie、token、provider payload、数据库 URL、客户文件、私有 object path 或本地绝对 artifact path；validator CLI/shared JSON 输出也必须默认可安全复制，只保留路径脱敏后的 file kinds、counts、verdict 和 warning/error code。
 - 通过验证的切片可同步 GitHub；8 服务器部署、pull、build、restart 必须单独批准，并且部署后要有对应 live smoke 回执。
 
 给用户/运营的最小决策请求模板：
@@ -896,23 +901,24 @@ Safety:
 
 #### 0.7.14 2026-06-08 当前 HEAD 验收审计
 
-本节是截至当前同步基线 `a09ca4e` 的收口审计。后续若只有 doc-only commit，功能基线仍以 `a09ca4e` 为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
+本节是截至当前同步基线 `2cd3ce4` 的收口审计。后续若只有 doc-only commit，功能基线仍以 `2cd3ce4` 为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
 
 | 审计项 | 当前证据 | 是否可宣称完成 | 下一步 |
 | --- | --- | --- | --- |
 | 计划整合 | 本文件是 `docs/plans/` 下唯一 active plan；第 0.7 节已把原计划、视频测试、抽取效果复核、微信视频号限制、授权录屏兜底、GitHub 同步和 8 服务器部署门槛收进 EP0-EP7 | 可宣称“计划已收口为可执行方案” | 同步桌面副本，doc-only 提交 GitHub |
-| 无授权本地准备度 | `No-Auth Live-Preflight Acceptance Rollup` 已通过：上传 preflight/self-test、第三方 preflight/self-test、handoff preflight/self-test、授权录屏 self-test、质量矩阵 self-test、validator 19 项 | 可宣称“无授权本地 gate 已过” | 作为 live 前基线保留 |
+| 无授权本地准备度 | `No-Auth Live-Preflight Acceptance Rollup` 已通过；后续 validator 已扩展到 24 项，覆盖 PPTX notes XML 脱敏、selected manifest、PPTX/Markdown/selected_count 页数一致性和 summary counts | 可宣称“无授权本地 gate 已过” | 作为 live 前基线保留；下一步补 CLI/shared JSON 默认脱敏 |
 | 主站上传入口 | preflight 和 self-test 证明脚本、素材类型、触发语、写入范围、artifact/download contract 已就绪 | 不可宣称 live 上传入口已验收 | 需要用户批准写一条非客户主站 smoke 记录，然后同 fixture preflight -> live |
 | 第三方登记入口 | preflight 和 self-test 证明第三方 context/fixture/trigger shape、reply surface、最小 PPTX/Markdown contract 已就绪 | 不可宣称第三方 live 已验收 | 需要 bearer、`connection_id`、`source_id`、安全输入，然后同 context preflight -> live |
 | 微信视频号/登录态 handoff | 本地 deterministic early return、third-party unsupported card、handoff self-test/preflight 均已就绪 | 不可宣称现网 handoff 已验收 | 需要批准 8 服务器部署窗口，部署后 main preflight -> live；external 还需 bearer/context |
 | 授权录屏兜底 | runbook、helper、dry-run/self-test、授权负向门禁和 `sharedReceipt` 脱敏已就绪 | 不可宣称 live capture 已验收 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，8 内部录屏另批 |
 | 公开视频质量样例 | 三个 media.ccc slides 样例可生成 public evidence；主样例和第三样例 validator/matrix 通过但均 `needs_manual_review`，弱样例触发单页风险提示 | 可宣称 public course 样例可进入复核包；不可宣称 clean deliverable | 保持人工复核结论；不替代客户授权样例 |
+| validator/shared JSON 输出 | validator summary counts 已作为 quality matrix 计数来源；目前内部 API 仍返回本地文件路径供脚本读取，CLI `--json` 需要单独确认/修正为默认 redacted 输出 | 不可宣称共享 JSON 可直接外发 | M6N：新增 redacted output helper、测试和 public candidate smoke，不改 live 能力 |
 | 客户授权质量矩阵 | `--customer-deliverables`、approval-id 门禁和三输入组合矩阵脚本契约已完成 | 不可宣称 P2-2E 全量完成 | 等客户/operator 授权样例，产物不进 Git，只写脱敏结论 |
 | 8 服务器 | 本轮未 pull、build、restart、deploy；preflight 已明确 `deploymentApprovalRequired=true` | 不可宣称现网已更新到当前 handoff 修复 | 只有用户明确批准发版窗口后进入 EP7 |
 
 下一阶段的可执行顺序固定为：
 
-1. **无授权继续**：只做 EP1/EP6 本地质量窄修复、public 样例人工复核和文档台账。
+1. **无授权继续**：先做 M6N validator/shared JSON redaction hardening，再做 EP1/EP6 本地质量窄修复、public 样例人工复核和文档台账。
 2. **批准主站 smoke**：EP2 同 fixture preflight -> 主站 live controlled smoke -> validator/quality matrix -> 脱敏回执。
 3. **提供第三方凭据**：EP3 同 bearer/context/input preflight -> third-party live smoke -> surface/download 复核 -> 脱敏回执。
 4. **批准 8 发版窗口**：EP7 部署当前已推送 commit -> EP4 main handoff preflight/live -> external 按 bearer/context 补跑。
@@ -921,7 +927,7 @@ Safety:
 
 全量验收关闭条件：
 
-- M1 主站上传 live、M2 第三方 live、M3 现网 handoff live、M4 授权录屏样例、M9 三样例质量矩阵全部有脱敏回执。
+- M1 主站上传 live、M2 第三方 live、M3 现网 handoff live、M4 授权录屏样例、M6N shared JSON 脱敏、M9 三样例质量矩阵全部有脱敏回执。
 - 每个入口的失败都能落到 source access、video has no PPT、frame extraction、selection quality、crop quality、subtitle alignment、artifact visibility 或 deployment gap 之一。
 - `docs/validation/video-ppt-deliverable-smoke.md` 有最终 rollup；GitHub 已同步对应 commit；8 服务器只有在批准窗口内完成并有服务状态和 smoke 证据。
 
@@ -2301,7 +2307,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 3. 在用户明确批准 8 服务器部署窗口后，复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；部署后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
 4. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
 5. 客户/operator 授权后再跑 P2-2E-3 客户样例质量矩阵；不要把 public candidate 或 synthetic fixture 替代客户样例。
-6. 如果暂时没有 live/客户授权，再继续本地低风险切片：第二个公开视频课程样例、crop fallback 针对性 fixture、sharpness/readability 复核或字幕/OCR 公开样例；这些都不能替代 live gate。
+6. 如果暂时没有 live/客户授权，先做 validator/shared JSON 输出脱敏硬化，再继续第二个公开视频课程样例、crop fallback 针对性 fixture、sharpness/readability 复核或字幕/OCR 公开样例；这些都不能替代 live gate。
 
 本计划完成当前阶段的定义：
 
@@ -2334,6 +2340,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M6K | selected slides manifest local review-package gate | 无 live 授权；使用 validator fixture 和真实 public candidate deliverables | 已通过 `node --check tools/validate-video-deliverables.mjs`、`npm run test:video-deliverables` 22 项、真实 public candidate `validate-video-deliverables`、public-course quality matrix | 已完成：validator 必检 `selected_slides_manifest.json`，校验 selected/requested indices、dedupe counts、selected/rectangle/quality 跨文件页数一致；published list 不强制包含该 review manifest，发布可见性仍待 live artifact smoke | 未部署 |
 | M6L | PPTX/Markdown/selected_count 输出页数一致性 gate | 无 live 授权；使用 validator fixture 和真实 public candidate deliverables | 已通过 `node --check tools/validate-video-deliverables.mjs`、`npm run test:video-deliverables` 24 项、真实 public candidate `validate-video-deliverables`、quality matrix self-test、public-course quality matrix | 已完成：validator 统计 PPTX slide XML 数和 Markdown `Slide N` heading 数，并要求它们与 `selected_slides_manifest.selected_count` 一致；页数错配会失败 | 未部署 |
 | M6M | validator summary drives quality matrix counts | 无 live 授权；使用 validator fixture 和真实 public candidate deliverables | 已通过 `node --check tools/validate-video-deliverables.mjs`、`node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`npm run test:video-deliverables`、真实 public candidate validator JSON summary、quality matrix self-test、public-course quality matrix | 已完成：validator 返回 frame/selected/requested/PPTX/Markdown/rectangle/quality/subtitle counts，quality matrix 优先使用该 summary，public report 计数为 selected=3、PPTX=3、Markdown=3 | 未部署 |
+| M6N | validator/shared JSON 默认脱敏 | 无 live 授权；使用 validator fixture 和真实 public candidate deliverables | 计划执行：`node --check tools/validate-video-deliverables.mjs`、`npm run test:video-deliverables`、真实 public candidate `validate-video-deliverables --json` redaction scan、quality matrix self-test、public-course quality matrix、`git diff --check` | 待执行：CLI/shared JSON 不输出本机 artifact path，内部 API 仍可给 smoke 脚本读取本地文件；回执只记录 summary counts/file kinds/verdict | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |
