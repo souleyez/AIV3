@@ -288,3 +288,70 @@ Safety result:
 
 - no raw media URL, local object path, generated artifact path, provider payload, cookie, bearer token, database URL, credential, full customer document, or raw customer row was recorded;
 - no production write, live private-video smoke, service build, service restart, deployment, or 120-server action was run.
+
+## 2026-06-07 Controlled PPT-Playback Video Smoke
+
+Task source: follow-up to Task 3 and Task 10 after the video/PPT lane was promoted ahead of the remaining active-plan items.
+
+Scope clarified:
+
+- this smoke validates videos that already contain PPT/slide playback;
+- it does not claim to convert arbitrary ordinary videos into authored PPT decks;
+- login-gated/private/video-platform bypass sources remain out of scope;
+- the public page path is limited to pages that expose a direct video asset in supported HTML fields.
+
+Code deployed:
+
+- `6a565f0` added automatic stable PPT-page keyframe selection from decoded raw frames, preserving manual keep-list override behavior;
+- `442ceec` changed remote video frame extraction to download the approved public video URL into the extraction session before invoking ffmpeg, avoiding ffmpeg network-input instability while keeping URL redaction;
+- 8-server `/srv/aiv3/repo` fast-forwarded to `442ceec9c`;
+- `CC=clang CXX=clang++ cargo build --release -p media-worker` passed;
+- only `aiv3-media-worker.service` was restarted after the second media-worker deployment, and it returned `active`;
+- the known untracked `?? mode` entry remained untouched.
+
+Local verification before deployment:
+
+```text
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- `media-worker --lib` passed, 37 tests;
+- `platform-api video_extraction` passed, 3 tests;
+- `platform-api video_ppt` passed, 4 tests;
+- `npm run test:video-deliverables` passed, 15 tests;
+- `git diff --check` passed.
+
+8-server controlled smoke:
+
+- generated a non-customer MP4 that simulates 3 stable PPT pages playing in a video;
+- local-file extraction smoke completed with `frame_count=25`;
+- auto page selection returned `selection_source=auto_unique_slide_keyframes`, `selected_candidate_indices=[5,13,22]`, and `selected_count=3`;
+- final state was `final_pptx_ready`;
+- generated PPTX ZIP inspection found `[Content_Types].xml`, `ppt/presentation.xml`, and exactly 3 slide XML files;
+- a controlled public HTML page under the existing `v3.elepcloud.com` generated-artifacts alias was reachable and exposed the same MP4 by relative video reference;
+- the platform page-candidate resolver regression `public_video_page_extracts_video_sources_from_html` passed on 8-server;
+- HTTPS remote-video extraction smoke completed through the new download-first path with `input_kind=remote_video_url`, `input_url_redacted=true`, `input_downloaded=true`, `input_download_bytes=8429`, `frame_count=25`, `selected_candidate_indices=[5,13,22]`, `selected_count=3`, and exactly 3 PPTX slide XML files;
+- the frame manifest redaction check confirmed `input_path=[redacted]` and that the manifest did not contain the public source host.
+
+Service health after smoke:
+
+- `aiv3-platform-api.service`: active;
+- `aiv3-web.service`: active;
+- `aiv3-media-worker.service`: active;
+- `aiv3-ingest-worker.service`: active;
+- `aiv3-assistant-run-worker.service`: active;
+- workflow queue stats endpoint returned valid JSON.
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no source URL, generated artifact path, local extraction path, database URL, token, cookie, provider payload, raw customer row, or document body was recorded in this receipt;
+- the temporary high-port HTTP attempt was stopped and was not used for the passing smoke;
+- the passing smoke used the existing HTTPS generated-artifacts route and a non-sensitive synthetic PPT-playback MP4 only.

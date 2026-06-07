@@ -62,7 +62,7 @@ This ledger records DataMax gap-closure evidence. The current active execution p
 
 | Gate | Status | Receipt |
 | --- | --- | --- |
-| Priority Gate: video/PPT extraction deliverable | passed for local delivery contract and UI download loop; real accessible-source smoke remains operator-scoped | 2026-06-07 Task 3 priority-lane receipt added to `docs/validation/video-ppt-deliverable-smoke.md`; Task 10 delivery-loop receipt now confirms the video extraction summary and generated-project shelf expose prioritized PPTX, Markdown, delivery manifest, published manifest, version history, and artifact-index download actions through `/api/v3/html-artifacts/{artifact_id}/files/{index}` scoped by assistant run or local thread, without exposing raw local paths. `npm run test:video-deliverables` passed 15 tests, `node --test app/lib/html-artifact-manifest.test.mjs` passed 12 tests, `npm run build` passed with existing Next warnings only, targeted Rust video checks passed, and `scripts/run-assistant-run-worker-smoke.sh` passed with report `target/assistant-run-worker-smoke/assistant-run-worker-smoke-20260607T033438Z.md`. `pwsh`/PowerShell was unavailable on this macOS workstation, so the jump-host self-test remains skipped instead of substituting a real login-gated/private video. 8-server source sync is handled per task after commit; no deploy/restart was part of this gate. |
+| Priority Gate: video/PPT extraction deliverable | passed for local delivery contract, UI download loop, and controlled accessible-source smoke | 2026-06-07 Task 3 priority-lane receipt added to `docs/validation/video-ppt-deliverable-smoke.md`; Task 10 delivery-loop receipt confirms the video extraction summary and generated-project shelf expose prioritized PPTX, Markdown, delivery manifest, published manifest, version history, and artifact-index download actions through `/api/v3/html-artifacts/{artifact_id}/files/{index}` scoped by assistant run or local thread, without exposing raw local paths. Follow-up commits `6a565f0` and `442ceec` were deployed to 8-server; a non-customer PPT-playback MP4 and controlled public HTML page smoke proved auto page selection, remote URL redaction, download-first remote media handling, and a 3-slide screenshot PPTX. Login-gated/private video remains out of scope without explicit operator approval. |
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
 | P0 Gate B: report/static-page operations | passed for deployed `0f72ca37fc1e` | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. The deployed hygiene/focus-link patches make `xinbai-functional-modular-template-20260604` the primary default for Xinbai dataset-overlap matching, skip smoke/prewarm/fallback noise baselines, preserve public report card links after sanitization, and carry the current prompt focus into static-page SSE/report artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Focused capability routing smoke passed for template-reference, temporary-contract/area, and traffic-stat report materials. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
@@ -319,6 +319,44 @@ This ledger records DataMax gap-closure evidence. The current active execution p
 - Safety:
   - no raw media URL, local object path, generated artifact path, provider payload, cookie, bearer token, database URL, credential, full customer document, or raw customer row was recorded;
   - no production write, live private-video smoke, service build, service restart, deploy, or 120-server action was run.
+
+### 2026-06-07 Video PPT Controlled Accessible-Source Smoke
+
+- Purpose:
+  - advance the video/PPT priority lane from local contract proof to a controlled accessible-source proof;
+  - validate the clarified scope: videos that already contain PPT/slide playback, not arbitrary ordinary video-to-PPT conversion;
+  - verify the public-page path only for pages exposing a direct video asset.
+- Code change:
+  - `6a565f0` added automatic stable PPT-page representative selection from decoded raw frames while preserving manual keep-list override;
+  - `442ceec` changed remote video extraction to download the approved public video URL into the extraction session before invoking ffmpeg, because the 8-server ffmpeg build segfaulted on direct network URL input;
+  - remote frame manifests keep `input_path=[redacted]` and record only redacted URL state plus downloaded-byte metadata.
+- Local verification:
+  - `cargo fmt --check` passed;
+  - `CC=clang CXX=clang++ cargo test -p media-worker --lib` passed, 37 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib` passed, 3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib` passed, 4 tests;
+  - `npm run test:video-deliverables` passed, 15 tests;
+  - `git diff --check` passed.
+- 8-server rollout:
+  - `/srv/aiv3/repo` fast-forwarded to `442ceec9c`;
+  - `CC=clang CXX=clang++ cargo build --release -p media-worker` passed;
+  - `aiv3-media-worker.service` was restarted and confirmed active;
+  - known untracked `?? mode` remained untouched.
+- 8-server controlled smoke:
+  - generated a non-customer MP4 with 3 stable PPT-like pages;
+  - local-file extraction returned `frame_count=25`, `selection_source=auto_unique_slide_keyframes`, `selected_candidate_indices=[5,13,22]`, `selected_count=3`, and `final_pptx_ready`;
+  - PPTX ZIP inspection found exactly 3 slide XML files;
+  - a controlled public HTML page was reachable through the existing `v3.elepcloud.com` generated-artifacts route and exposed the MP4 by relative video reference;
+  - `CC=clang CXX=clang++ cargo test -p platform-api public_video_page_extracts_video_sources_from_html --lib` passed on 8-server;
+  - HTTPS remote-video extraction returned `input_kind=remote_video_url`, `input_url_redacted=true`, `input_downloaded=true`, `input_download_bytes=8429`, `frame_count=25`, `selected_candidate_indices=[5,13,22]`, `selected_count=3`, and exactly 3 PPTX slide XML files;
+  - frame manifest redaction check confirmed the public source host was not present in the manifest.
+- Service health after smoke:
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-media-worker.service`, `aiv3-ingest-worker.service`, and `aiv3-assistant-run-worker.service` were active;
+  - workflow queue stats returned valid JSON.
+- Safety:
+  - no customer/private/login-gated video was used;
+  - no raw source URL, local extraction path, generated artifact path, database URL, credential, token, cookie, provider payload, raw customer row, full document body, or secret env value was recorded;
+  - 120 server was not touched.
 
 ### 2026-06-07 Active Plan Task 11 Operator Observability Polish
 
