@@ -169,3 +169,70 @@ This is a data-quality gate and review contract, not a claim that visual slide-b
 ## Markdown Deck Follow-Up
 
 Complete video/PPT packages now also include `video_slides.md` as a final-output Markdown deck next to the screenshot PPTX. It mirrors the selected slide order, source frame file names, contact-sheet anchors, crop status, relative crop box, and available aligned narration without exposing local paths or source URLs. The validator treats this file as a required redacted Markdown deliverable so third parties can inspect the package without opening PPTX first.
+
+## 2026-06-07 Priority-Lane Local Completion Receipt
+
+Task source: `docs/plans/datamax-active-execution-plan.md` Task 3, "Video Extraction To PPT Deliverable Priority Lane".
+
+Scope proven locally:
+
+- supported source boundary remains uploaded video files, direct video URLs, and public pages that expose a direct video asset;
+- login-gated pages, QR login, cookies, private hosts, browser recording, and playback bypass remain out of scope;
+- the deterministic deliverable contract requires `video_slides_screenshot_based.pptx`, `video_slides.md`, `slide_notes.md`, `subtitle_page_map.json`, `slide_rectangles_manifest.json`, `extraction_artifacts_manifest.json`, `final_deliverables_manifest.json`, `published_deliverable_manifest.json`, and `published_version_history.json`;
+- public JSON/Markdown and assistant-visible payloads must redact local paths, source URLs, cookies, provider payloads, and token-like strings;
+- AssistantRun model-completion handoff remains queue-backed through `assistant_run / consume_model_completion_turn`.
+
+Current path audit:
+
+```text
+rg -n "video_extraction|VideoExtraction|extract_video_ppt|video_slides|pptx|PublishedVideoPpt|wechat_video|media-worker|assistant_run_model_completion" crates apps scripts docs -g "*.rs" -g "*.js" -g "*.mjs" -g "*.md" -g "*.sh" -g "*.ps1"
+```
+
+Result: 828 matching references across media-worker, workflow definitions, storage/domain durable published-version models, platform API/react-agent tools, web artifact manifest rendering, validators, scripts, and validation ledgers.
+
+Local deterministic checks at `26afa6e`:
+
+```text
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p media-worker durable_published_version --lib
+CC=clang CXX=clang++ cargo test -p media-worker model_completion --lib
+CC=clang CXX=clang++ cargo test -p storage auth_migrations_are_registered_in_order --lib
+CC=clang CXX=clang++ cargo test -p domain-model workflow_kind_roundtrips_video_extraction
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+CC=clang CXX=clang++ bash scripts/run-assistant-run-worker-smoke.sh
+```
+
+Result:
+
+- `npm run test:video-deliverables` passed, 15 tests.
+- `controlled_video_sample_deliverable_contract_is_complete` passed.
+- `slide_rectangle` passed, 4 tests.
+- `durable_published_version` passed, 2 tests.
+- `model_completion` passed.
+- `storage auth_migrations_are_registered_in_order` passed.
+- `domain-model workflow_kind_roundtrips_video_extraction` passed.
+- `platform-api video_extraction` passed, 3 tests.
+- `platform-api video_ppt` passed, 4 tests.
+- `scripts/run-assistant-run-worker-smoke.sh` passed; report: `target/assistant-run-worker-smoke/assistant-run-worker-smoke-20260607T021243Z.md`.
+- The assistant-run-worker smoke DB-backed consumer check was intentionally skipped because it requires an explicitly disposable test database.
+
+Non-local smoke status:
+
+- `powershell` / `pwsh` was not available on this macOS workstation, so `scripts/run-jump-host-video-deliverable-smoke.ps1 -SelfTest` was not run here.
+- No real login-gated or private video was substituted for the jump-host self-test.
+- A real video/provider smoke remains operator-scoped and requires an approved accessible source.
+
+8-server read-only state:
+
+- Repository: `/srv/aiv3/repo`.
+- Head checked after validation sync: `26afa6e2f`.
+- Status: `## main...origin/main` plus known untracked `mode`; left untouched.
+- `aiv3-media-worker.service`: active.
+- `aiv3-assistant-run-worker.service`: active.
+
+Safety result:
+
+- No raw customer media, local task directories, provider keys, cookies, source URLs, private file paths, raw provider payloads, or generated smoke artifacts were committed.
