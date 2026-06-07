@@ -1467,6 +1467,57 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Video PPT Quality Matrix Local Deliverables Input
+
+Task source: P2-2E-1 from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- extend the P2-2E quality matrix smoke beyond pure self-test so it can review a local video/PPT `generated_artifacts/` package;
+- reuse the public `validate-video-deliverables` contract instead of duplicating deliverable checks;
+- keep public course video and customer-authorized video cases pending until real approved inputs exist;
+- avoid live extraction, network fetches, uploads, browser recording, or deployment.
+
+Implemented behavior:
+
+- `npm run smoke:video-ppt-quality-matrix` now accepts `--synthetic-deliverables <path>`;
+- `VIDEO_PPT_QUALITY_MATRIX_SYNTHETIC_DELIVERABLES` can provide the same path through the environment;
+- `--self-test` and `--synthetic-deliverables` are mutually exclusive;
+- local deliverables mode writes `status=partial_local_deliverables_reviewed`, `self_test=false`, `input_mode=synthetic_deliverables`, and `matrix_complete=false`;
+- the synthetic case records only validator status, error/warning codes, checked file kinds, slide counts, quality score, risk flags, and summary counts;
+- report redaction keeps `source_urls_included=false`, `object_paths_included=false`, `credentials_included=false`, `provider_payloads_included=false`, and `deliverables_input_redacted=true`;
+- public course and customer-authorized cases remain `pending_accessible_sample` and `pending_authorization`.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --help
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty
+node tools/validate-video-deliverables.mjs target/video-ppt-quality-matrix-fixture/generated_artifacts
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty --output-dir target/video-ppt-quality-matrix-smoke
+npm run smoke:video-ppt-quality-matrix -- --self-test --synthetic-deliverables target/video-ppt-main-visible-release-gate-smoke/20260607135915/downloads
+```
+
+Result:
+
+- syntax check passed;
+- help output returned both `--self-test` and `--synthetic-deliverables` usage;
+- self-test passed with `case_count=3`, `deliverable_count=1`, `pending_count=2`;
+- temporary fixture validator passed for PPTX, final/published/version/extraction manifests, slide rectangle manifest, slide notes, Markdown deck, and `slide_quality_report.json`;
+- fixture has no `subtitle_page_map.json`, and validator accepted that as the existing conditional subtitle-map contract;
+- local deliverables matrix passed with `case_count=3`, `deliverable_count=1`, `pending_count=2`, `matrix_complete=false`;
+- generated local-deliverables matrix report: `target/video-ppt-quality-matrix-smoke/20260607T173025-54508-synthetic-deliverables.json`;
+- mutual-exclusion check failed as expected when both `--self-test` and `--synthetic-deliverables` were provided.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated fixture and smoke reports stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
 ## 2026-06-08 Video PPT Quality Matrix Self-Test Scaffold
 
 Task source: P2-2E from `docs/plans/datamax-active-execution-plan.md`.
