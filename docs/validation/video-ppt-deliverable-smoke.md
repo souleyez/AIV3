@@ -626,3 +626,28 @@ Safety result:
 - no customer/private/login-gated video was fetched;
 - no 8-server deployment, build, restart, service mutation, or 120-server action was run;
 - no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt.
+
+## 2026-06-07 Executable Plan Refresh
+
+Task source: user requested a plan-only consolidation after the video/PPT tests, extraction-quality review, WeChat Video Channels handoff research, and possible authorized recording fallback discussion.
+
+Scope:
+
+- refreshed the active plan as an executable next-stage plan rather than a code implementation slice;
+- kept P1-3 as the immediate active development queue, with separate steps for direct URL release gate, main-site uploaded-video smoke, third-party video registration special-trigger smoke, and login-gated/WeChat handoff smoke;
+- kept P2-1 as a later authorized-capture fallback MVP, starting with an isolated script and runbook instead of a server integration;
+- preserved the boundary that DataMax extracts PPT/slide/courseware frames already present in a video, and does not convert arbitrary ordinary video into authored PPT;
+- preserved the boundary that WeChat Video Channels and other login-gated links require upload, anonymous direct video URL, or operator-approved capture handling.
+
+Plan updates:
+
+- `docs/plans/datamax-active-execution-plan.md` now records current head `852d878`, the latest P1-1/P1-2/P1-3 direct URL gate commits, and the remaining P1-3B/P1-3C/P1-3D work;
+- P1-3 upload and third-party smoke steps now map to the real main-site upload APIs, external document parse API, external message API, artifact download surface, and required evidence fields;
+- P2-1 now has explicit phases for authorization record format, local/controlled-host capture, operator-approved sample smoke, and optional 8-server review;
+- the verification matrix and decision gates now separate live main-site writes, third-party bearer requirements, capture approval, and deployment permission.
+
+Safety result:
+
+- no code was changed in this refresh;
+- no live upload smoke, third-party smoke, private-video smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, raw media URL, local object path, or generated artifact local path was recorded.

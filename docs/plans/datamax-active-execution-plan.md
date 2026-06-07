@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-07 21:35 CST
-**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke 与质量复核已完成证据记录，后续按 P1/P2 切片继续开发。本计划编写本身不部署 8 服务器。
+**更新时间：** 2026-06-07 22:10 CST
+**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；下一步按 P1-3 upload/third-party smoke 和 P2-1 授权录屏兜底切片继续。本计划编写本身不部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 1. 计划原则
@@ -17,7 +17,7 @@
 
 ### 2.1 代码与部署基线
 
-- 当前 head 以 `git rev-parse HEAD` / `git rev-parse origin/main` 为准；最近已同步的计划收拢基线是 `33b6d9b Consolidate DataMax execution plan`。
+- 当前 head 以 `git rev-parse HEAD` / `git rev-parse origin/main` 为准；本次计划整理前两者均为 `852d878`，最近已同步提交是 `852d878 Add main-site video PPT release gate`。
 - 已记录的 8 服务器最新部署基线：`b1abad9cc`，已启用 `INGEST_REMOTE_MEDIA_ENABLED=true` 和 `INGEST_REMOTE_MEDIA_CACHE_DIR=/srv/aiv3/remote-media-cache`。
 - 8 服务器已知未跟踪文件：`?? mode`，继续保持不触碰。
 - P0 主站可见视频/PPT smoke 在主站 `https://v3.elepcloud.com` 通过；本轮未重新部署 8 服务器，下一次部署必须单独获得批准。
@@ -47,6 +47,14 @@
   修复中文提示中冒号/中文标点后的视频 URL 识别，避免用户发“提取这个视频里的 PPT：https://...”时漏掉直连 URL。
 - `b1abad9 Allow video parse placeholders to reach PPT extraction`
   修复视频文档 `parse_video_media` 因普通文档 placeholder parse 状态被自动重解析门拒绝的问题，让视频可以继续进入 `extract_video_ppt`。
+- `67f9b7a Update DataMax video PPT execution plan`
+  追加视频测试、视频号 handoff、公开页面 resolver 和授权录屏兜底的阶段性计划与验证口径。
+- `e4558a8 Add WeChat video PPT handoff`
+  视频号/登录态来源返回 `wechat_video_login_handoff`，不再误导为已解析视频内容。
+- `0d32415 Enhance public page video resolver`
+  公开页面 resolver 覆盖 video/source/OpenGraph/Twitter/JSON-LD 字段，并稳定失败原因。
+- `852d878 Add main-site video PPT release gate`
+  把主站 direct URL 视频/PPT smoke 固化为 `npm run smoke:video-ppt-main-visible` 发布可见性 gate。
 
 ### 2.4 已完成的受控公开视频 smoke
 
@@ -287,7 +295,7 @@
 
 ### P1-3：产物下载与发布可见性审计
 
-**状态：进行中；main-site direct URL release gate 已完成，主站上传视频和第三方视频登记 smoke 待补。**
+**状态：进行中；main-site direct URL release gate 已完成，主站上传视频 smoke 和第三方视频登记 special-trigger smoke 待补。**
 
 **目标：** 确认不同入口的最终产物都能被用户拿到。
 
@@ -298,11 +306,20 @@
 - 第三方上传/登记视频文件后触发。
 - 后端 workflow smoke。
 
+执行顺序：
+
+1. **P1-3A direct URL gate 已完成。** 继续保留 `smoke:video-ppt-main-visible` 作为每次发布前的非破坏性回归；优先 reuse 已完成 `assistant_run_id`，只有需要验证新部署时才新建公开样例 run。
+2. **P1-3B 主站上传视频 smoke。** 用非客户公开视频样例文件走主站上传链路：`/api/v3/local-document-uploads` 保存文件、`/api/v3/documents` 登记视频素材、`/api/v3/documents/{document_id}/ingest` 入队解析，然后在同一 local thread 明确发送“提取这个视频里的 PPT/幻灯片/课件”。目标是证明“上传视频文件”入口和 direct URL 入口一样能生成 assistant-run-bound 下载产物。
+3. **P1-3C 第三方视频登记 smoke。** 复用现有 external smoke 形态，先通过 `/v1/external/channels/{connection_id}/documents/parse` 登记一条公开视频文件或 loopback fixture，再通过 `/v1/external/channels/{connection_id}/events` 发送带 `dataset_external_ids` 或 `available_document_external_ids` 的消息，触发 `extract_video_ppt_transcript`。目标是证明第三方“登记视频素材”和“特殊触发抽取 PPT”之间的契约闭环。
+4. **P1-3D unsupported 展示复核。** 用视频号/登录态链接跑主站和第三方的 lightweight smoke，只验证 handoff artifact/卡片，不抓视频、不抽帧、不生成 PPT，防止产品文案回退为“已看过视频”。
+
 验收：
 
 - assistant-run-bound 的产物链接通过 `/api/v3/html-artifacts/{artifact_id}/files/{index}` 或等价公开 surface 暴露。
 - 没有 assistant_run_id 的后端 smoke 要标注“仅后端证据，不代表主站聊天可见”。
 - 下载链接权限正确：同一 run/thread 可访问，跨 scope 不泄露。
+- 上传和第三方 smoke 都必须记录：输入来源、document id 或 external document id、触发语、assistant run id、artifact id、`deliverable_status.state`、下载 file kinds、PPTX slide count、Markdown slide count、warning 解读。
+- 所有 smoke 只能用非客户、非登录态、可公开访问样例；生成下载保留在 `target/`，不提交。
 
 已完成证据：
 
@@ -312,10 +329,13 @@
 
 仍待补充：
 
-- 主站上传视频文件入口 smoke。
-- 第三方上传/登记视频文件后触发 PPT 抽取的端到端 smoke。
+- 新增或扩展 smoke 脚本覆盖主站上传视频文件入口，并追加验证回执。
+- 新增或扩展 third-party video smoke，覆盖登记视频素材后用“提取视频中的 PPT”特殊触发，并追加验证回执。
+- 用视频号链接复核 handoff 展示，证明失败提示仍是“上传文件/直连 URL/授权录屏”三选项。
 
 ### P2-1：授权录屏兜底 MVP 设计
+
+**状态：待启动；先做 isolated script / runbook 评审，不默认接入 8 服务器。**
 
 **目标：** 在不破坏主线能力、不绕过平台权限的前提下，支持“拿不到直链但 operator 已批准可播放”的视频源。
 
@@ -323,6 +343,13 @@
 
 - **优先路径：jump-host/Mac 录制。** 适合需要人工打开微信、扫码或客户端播放的场景，录完生成普通 `.mp4`，再上传到 DataMax。
 - **可选路径：8 服务器内部隔离录制。** 只适合服务器能合法访问并播放的网页，必须显式开关启用。
+
+阶段拆分：
+
+1. **P2-1A 方案冻结。** 输出 `docs/operations/video-capture-fallback-runbook.md`，明确授权记录、输入限制、录制时长、文件大小、保留期、日志脱敏和清理策略。该阶段只写文档和最小脚本设计，不部署。
+2. **P2-1B 本地/受控 host MVP。** 新增 isolated script 打开 operator 指定 URL，使用隔离 browser profile 和 FFmpeg/系统录屏生成 `.mp4`，再把 `.mp4` 作为普通上传视频输入现有 `VideoExtraction`。脚本不保存 cookie、storage、HAR 或二维码截图。
+3. **P2-1C 授权样例 smoke。** operator 提供一个已授权、可播放但无直链的视频页面，先人工确认边界，再录制 30-60 秒并抽取 PPT。回执要区分播放失败、录制失败、视频无 PPT、抽帧失败、PPT 质量不足。
+4. **P2-1D 8 服务器评审。** 只有用户明确批准后才评估 8 服务器内部录制；默认不启用、不部署、不重启服务。
 
 8 服务器内部录制最小组件：
 
@@ -346,6 +373,7 @@
 - 先用本地公开测试页录制一个 30-60 秒样例，证明录制文件可被现有 `VideoExtraction` 生成 `final_pptx_ready`。
 - 再由 operator 提供一个已授权、可播放但无直链的样例做受控 smoke。
 - smoke 失败时要能说明是播放失败、录制失败、视频无 PPT、抽帧失败、PPT 质量不足，不能统一报“解析失败”。
+- 8 服务器内部录制未获明确批准前，不能出现在默认生产路径、不能在主站自动触发、不能扩大第三方入口权限。
 
 ### P2-2：视频/PPT 质量增强
 
@@ -395,8 +423,8 @@ git status --short --branch
 如果切片涉及 Web：
 
 ```bash
-npm run build
-node --test app/lib/html-artifact-manifest.test.mjs
+npm --prefix apps/web run build
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
 ```
 
 如果切片涉及视频/PPT：
@@ -559,30 +587,129 @@ git diff --check
 - `apps/web/app/HomePageClient.js`
 - `crates/platform-api/src/lib.rs`
 - `crates/media-worker/src/lib.rs`
+- `scripts/smoke/video-ppt-main-visible.mjs`
+- 新增或扩展的 upload / third-party video smoke 脚本
 
-开发步骤：
+#### 5.6.1 direct URL release gate
 
-1. 以 assistant-run-bound smoke 为准，不以后端裸 workflow 为准。
-2. 复核 `video_extraction_summary` 是否暴露 prioritized download actions。
-3. 复核生成项目卡和打开后的 HTML artifact toolbar 是否复用同一组下载链接。
-4. 复核 scope：assistant run 或 local thread 可访问，跨 scope 不泄露。
-5. 复核 redaction：下载 metadata 不出现本地路径、source URL、cookie/token。
+当前已完成，后续作为回归 gate 使用：
+
+```bash
+npm run smoke:video-ppt-main-visible -- \
+  --base-url https://v3.elepcloud.com \
+  --assistant-run-id 46f57e74-85f9-4088-bad0-99f1ae0a6fea \
+  --local-thread-id video-ppt-main-visible-20260607-01 \
+  --timeout-ms 60000 \
+  --output-dir target/video-ppt-main-visible-release-gate-smoke
+```
+
+通过标准：
+
+- `artifactOk=true`。
+- `deliverableState=final_pptx_ready`。
+- 下载 file kinds 至少包含 `pptx`、`video_slides_markdown`、`final_deliverables_manifest`、`published_deliverable_manifest`、`published_version_history`、`extraction_artifacts_manifest`。
+- PPTX 有 OOXML central directory 必需 entry；PPTX slide count 与 Markdown `### Slide` 数一致。
+
+#### 5.6.2 主站上传视频 smoke
+
+实现方式：
+
+1. 新增 `scripts/smoke/video-ppt-upload-main.mjs`，或给 `video-ppt-main-visible.mjs` 增加 upload mode；优先新增脚本，避免 direct URL gate 变复杂。
+2. 脚本从公开样例 URL 下载 `.mp4` 到 `target/video-ppt-upload-main-smoke/fixture/`，或接收 `--fixture-file` 指向本地样例；不提交视频文件。
+3. POST `FormData(files=...)` 到 `/api/v3/local-document-uploads`，记录返回的 `object_key`、`content_type`、size，但报告里只写脱敏摘要。
+4. POST `/api/v3/documents`，body 按主站 `registerAndIngestUploadedFile` 契约提供 `dataset_id`、`title`、`object_key`、`content_type`、`metadata.initial_classification.media_kind=video`、`metadata.parse_state.stage=queued`。
+5. POST `/api/v3/documents/{document_id}/ingest`，等待解析/登记 workflow 完成或进入可触发状态。
+6. 在同一 local thread 发送“请提取刚上传视频里的 PPT/幻灯片/课件”，并确保 action 进入 `extract_video_ppt_transcript`，不是只停在普通 `parse_video_media`。
+7. 复用 direct URL gate 的 artifact 下载与 PPTX/Markdown validator。
+
+建议命令形态：
+
+```bash
+npm run smoke:video-ppt-upload-main -- \
+  --base-url https://v3.elepcloud.com \
+  --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \
+  --local-thread-id video-ppt-upload-main-20260607-01 \
+  --timeout-ms 300000 \
+  --output-dir target/video-ppt-upload-main-smoke
+```
+
+验收记录：
+
+- `local_thread_id`、上传返回摘要、`document_id`、ingest workflow id、assistant run id、artifact id。
+- `deliverable_status.state=final_pptx_ready`。
+- PPTX/Markdown/manifest 下载通过主站 HTML artifact file API。
+- 如果上传可登记但特殊触发失败，标记为 trigger 编排缺口；如果后端完成但主站无下载，标记为 artifact visibility 缺口。
+
+#### 5.6.3 第三方视频登记 special-trigger smoke
+
+实现方式：
+
+1. 以 `scripts/smoke/external-scoped-document-chat.mjs` 为参考，新增 `scripts/smoke/external-video-ppt.mjs`，保留 `--allow-missing-bearer` 仅用于本地/loopback 自测；真实主站必须提供 operator 管理的 inbound bearer，且不在日志打印。
+2. 通过 loopback fixture server 或公开视频 URL 构造视频文件输入，`content_type` 使用 `video/mp4`、`video/webm` 等已支持类型。
+3. POST `/v1/external/channels/{connection_id}/documents/parse`，body 至少包含 `source_id`、`dataset_external_id`、`document_external_id`、`revision_external_id`、`title`、`content_type`、`content_url`、`idempotency_key`；loopback 自测可用 `allow_http_loopback=true`。
+4. GET `/v1/external/channels/{connection_id}/documents/{document_external_id}/parse-detail` 轮询，确认视频素材已登记或进入可触发状态；如果普通 parse 对视频没有 chunk/evidence，也不能因此误判 PPT 抽取已完成。
+5. POST `/v1/external/channels/{connection_id}/events`，同一 `conversation_external_id` 带 `dataset_external_ids` 或 `available_document_external_ids`，文本明确写“提取这个视频里的 PPT/幻灯片/课件”。
+6. GET `/v1/external/channels/{connection_id}/assistant-runs/{run_id}/reply` 轮询，确认返回的视频抽取卡片、task status 或 follow-up artifact。
+7. 如第三方 surface 不能直接下载 HTML artifact 文件，至少要记录等价的公开产物 surface 和权限边界；否则标记为第三方发布可见性缺口。
+
+建议命令形态：
+
+```bash
+npm run smoke:external-video-ppt -- \
+  --base-url https://v3.elepcloud.com \
+  --connection-id generic-chat-main \
+  --source-id third-party-source-main \
+  --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \
+  --timeout-ms 300000 \
+  --output-dir target/external-video-ppt-smoke
+```
+
+验收记录：
+
+- `connection_id`、`source_id`、`dataset_external_id`、`document_external_id`、`conversation_external_id`、assistant run id。
+- 登记视频素材成功和特殊触发成功要分别记录，不能混成一条“解析成功”。
+- 输出必须是 `final_pptx_ready` 或明确失败分流；不能把普通文本回复当成 PPT 交付。
+
+#### 5.6.4 视频号/登录态 handoff smoke
+
+执行步骤：
+
+1. 主站普通消息发送视频号链接和“提取 PPT”触发语。
+2. 第三方 `/events` 发送同样语义的消息。
+3. 只检查 `wechat_video_login_handoff` 或同等卡片，不下载视频、不抽帧、不生成 PPT。
+4. 确认失败原因稳定为 `login_gated_video_source_not_supported`，三选项为上传视频文件、提供匿名直连视频 URL、申请授权录屏处理。
+
+验收：
+
+- 回复不得声称 DataMax 已看过视频内容、已完成 OCR、已生成 PPT。
+- 回复不得要求 cookie、扫码截图、账号密码或浏览器登录态。
+
+#### 5.6.5 P1-3 测试命令
 
 目标测试：
 
 ```bash
-node --test app/lib/html-artifact-manifest.test.mjs
-node --check app/lib/html-artifact-manifest.js
-npm run build
+node --check scripts/smoke/video-ppt-main-visible.mjs
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+node --check apps/web/app/lib/html-artifact-manifest.js
+npm --prefix apps/web run build
 npm run test:video-deliverables
 CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
 git diff --check
 ```
 
+如果新增 upload / third-party smoke 脚本：
+
+```bash
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+```
+
 验收：
 
 - 主站用户可直接拿到 PPTX 和 Markdown。
-- 后端 workflow smoke 与主站可见 smoke 在文档中明确区分。
+- 主站上传、直连 URL、第三方登记三类入口的证据在 `docs/validation/video-ppt-deliverable-smoke.md` 中分开记录。
+- 后端 workflow smoke、主站可见 smoke、第三方 smoke 在文档中明确区分。
 
 ### 5.7 P2-1 授权录屏 MVP 执行步骤
 
@@ -592,14 +719,29 @@ git diff --check
 - `docs/operations/video-capture-fallback-runbook.md`
 - `docs/validation/video-ppt-deliverable-smoke.md`
 
-第一阶段只做本地/受控 host：
+#### 5.7.1 文档和授权记录
 
-1. 用 Playwright 打开 operator 指定 URL。
-2. 使用隔离 browser profile，不加载用户日常浏览器 profile。
-3. 用 FFmpeg 从虚拟显示或系统采集设备录制固定时长。
-4. 输出 `.mp4` 到临时目录。
-5. 将 `.mp4` 作为普通视频素材进入现有抽取流程。
+先新增 runbook，定义每次录屏 job 必填字段：
+
+- `approval_id`：operator 批准编号。
+- `approved_by`：批准人或审批来源。
+- `source_host_redacted`：仅记录 host 或脱敏 URL 摘要。
+- `purpose`：为什么需要录屏，而不是直连 URL/上传文件。
+- `max_duration_seconds`：默认 60 秒，超过需要单独批准。
+- `capture_audio_allowed`：默认 false。
+- `retention_days`：默认 7 天以内；客户样例可更短。
+- `cleanup_policy`：成功/失败后如何清理 profile、录屏文件和中间产物。
+- `handoff_to_datamax`：录完后是上传主站、第三方登记，还是只做离线验证。
+
+#### 5.7.2 第一阶段本地/受控 host MVP
+
+1. 用 Playwright 打开 operator 指定 URL 或本地公开测试页。
+2. 使用隔离 browser profile，不加载用户日常浏览器 profile，不复用 DataMax 服务 cookie。
+3. 用 FFmpeg 从虚拟显示或系统采集设备录制固定时长；macOS 可评估 `avfoundation`，Linux 可评估 `x11grab`，Windows 可评估 `gdigrab`。
+4. 输出 `.mp4` 到 `target/authorized-capture-smoke/<run_id>/` 或 operator 指定临时目录。
+5. 将 `.mp4` 作为普通视频素材进入现有抽取流程，复用 P1-3 上传 smoke 或第三方登记 smoke。
 6. 清理临时 profile 和录屏文件，或按 operator 配置保留短期文件。
+7. 回执只记录 redacted host、文件大小、时长、hash 前缀、抽取状态和质量结论。
 
 第二阶段再评审是否接入 8 服务器：
 
@@ -613,6 +755,7 @@ git diff --check
 
 ```bash
 node --check scripts/capture-authorized-video.mjs
+node --check scripts/smoke/video-ppt-upload-main.mjs
 npm run test:video-deliverables
 CC=clang CXX=clang++ cargo test -p media-worker frame_extraction --lib
 git diff --check
@@ -624,6 +767,14 @@ git diff --check
 - 再有 operator 授权样例。
 - 再评审 8 服务器部署窗口。
 - 未批准前不部署、不启用。
+
+失败分流：
+
+- 播放失败：页面无法打开、需要登录、无法确认授权或播放控件不可用。
+- 录制失败：FFmpeg/虚拟显示/设备权限失败，未产出有效 `.mp4`。
+- 输入不适用：视频内容没有稳定 PPT/幻灯片/课件画面。
+- 抽取失败：录制文件可用，但 `VideoExtraction` 未生成 `final_pptx_ready`。
+- 质量不足：PPTX 可生成，但关键页缺失、重复严重、裁剪不可读或字幕映射缺失影响交付。
 
 ### 5.8 部署门槛
 
@@ -647,16 +798,22 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | --- | --- | --- | --- | --- |
 | 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 作为后端回归基线保留 |
 | 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过并纳入 `smoke:video-ppt-main-visible` release gate，PPTX/Markdown/manifest 可下载 | 作为 P1-3 回归基线保留 |
-| 主站上传视频 | 用户上传 `.mp4/.mov/...` | 上传登记后明确触发 PPT 抽取 | 能力已说明，仍需上传入口 smoke | P1-3 |
-| 第三方视频登记 | 第三方 `content_url` 或 attachment | 特殊触发后进入 `VideoExtraction` | 文档已说明，需端到端 smoke | P1-3 |
-| 公开视频页 | HTML 暴露 video/OG/JSON-LD/Twitter video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 后续用主站/第三方 smoke 复核展示 |
-| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | P1-2 handoff 已实现，拒绝原因稳定为 `login_gated_video_source_not_supported` | 后续用主站/第三方 smoke 复核展示 |
-| 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | 仅研究方案 | P2-1 |
+| 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | 能力已说明，仍需上传入口 smoke 脚本和 live/controlled 回执 | P1-3B |
+| 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | 文档已说明，需端到端 special-trigger smoke | P1-3C |
+| 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
+| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | P1-2 handoff 已实现，拒绝原因稳定为 `login_gated_video_source_not_supported` | P1-3D lightweight handoff smoke |
+| 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | 方案已收敛，待 isolated script/runbook 评审 | P2-1 |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
 ## 7. 决策门
 
-进入 P1/P2 前需要确认：
+进入 P1-3B/P1-3C 前需要确认：
+
+- 是否允许用主站 `https://v3.elepcloud.com` 进行非客户公开视频上传 smoke；该操作会写入一条 smoke 文档/任务记录，但不发版、不重启服务。
+- 第三方 live smoke 使用哪个 `connection_id`、`source_id` 和 inbound bearer；没有凭据时只能先做本地/loopback deterministic smoke。
+- smoke 数据保留策略：公开样例和 generated artifacts 可留在 `target/` 或测试 workspace，不能提交下载产物。
+
+进入 P2-1 前需要确认：
 
 - 是否允许在 8 服务器部署 capture fallback；如果允许，是否只针对公开可播放页面，还是允许人工登录后的短时受控 session。
 - 录屏产物保留期：默认建议 7 天，是否需要更短或按客户配置。
@@ -670,13 +827,15 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 继续 P1-3，补主站上传视频入口 smoke 和第三方视频登记端到端 smoke。
-2. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审。
-3. 最后在明确授权和部署窗口后，评审是否允许 8 服务器内部录屏开关。
+1. 继续 P1-3B，先做主站上传视频 smoke 脚本和受控样例回执，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest。
+2. 继续 P1-3C，做第三方视频登记 special-trigger smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路。
+3. 补 P1-3D lightweight handoff smoke，固定视频号/登录态链接的失败展示，防止误称已解析。
+4. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审；没有明确授权和部署窗口前，不接入 8 服务器。
+5. 最后根据 P1-3/P2-1 证据进入 P2-2 质量增强，重点处理 crop fallback、重复页、字幕页映射和逐页讲稿。
 
 本计划完成当前阶段的定义：
 
-- active plan 已收敛为当前可执行方案。
+- active plan 已收敛为当前可执行方案，并把 P1-3B/P1-3C/P1-3D/P2-1 拆成可执行步骤、命令形态和验收记录格式。
 - 后端公开视频 smoke、主站可见 smoke、抽取效果复核、视频号限制、授权录屏兜底都已纳入执行队列和验收矩阵。
 - GitHub 同步策略：计划/验证文档可按 doc-only 提交；功能或脚本提交必须绑定对应测试证据；任何 GitHub 同步都不等于 8 服务器发版。
 - 8 服务器未发版、未重启、未触碰 `mode`。
