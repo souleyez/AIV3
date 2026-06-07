@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { basename, extname, join } from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 
 const DEFAULT_BASE_URL = 'https://v3.elepcloud.com';
 const DEFAULT_FIXTURE_URL =
@@ -29,6 +29,16 @@ const REQUIRED_PPTX_ENTRIES = [
   'ppt/presentation.xml',
   'ppt/slides/slide1.xml',
 ];
+const SUPPORTED_VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi'];
+const LIVE_WRITE_STEPS = [
+  'local_document_upload',
+  'dataset_create_or_reuse',
+  'document_register',
+  'document_ingest_enqueue',
+  'assistant_run_create',
+  'html_artifact_poll',
+  'artifact_file_download',
+];
 
 function parseArgs(argv) {
   const args = {
@@ -47,6 +57,7 @@ function parseArgs(argv) {
     cookie: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_COOKIE || '',
     bearer: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_BEARER || '',
     selfTest: parseBoolean(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_SELF_TEST),
+    preflight: parseBoolean(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_PREFLIGHT),
     timeoutMs: Number(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     pollIntervalMs: Number(
       process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_POLL_INTERVAL_MS || DEFAULT_POLL_INTERVAL_MS,
@@ -95,6 +106,8 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--self-test') {
       args.selfTest = true;
+    } else if (arg === '--preflight') {
+      args.preflight = true;
     } else if (arg === '--timeout-ms') {
       args.timeoutMs = Number(requireValue(arg, next));
       index += 1;
@@ -114,6 +127,9 @@ function parseArgs(argv) {
 
   if (!args.fixtureFile && !args.fixtureUrl) {
     throw new Error('provide --fixture-url or --fixture-file');
+  }
+  if (args.selfTest && args.preflight) {
+    throw new Error('--self-test and --preflight cannot be combined');
   }
   if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 10_000) {
     throw new Error('--timeout-ms must be at least 10000');
@@ -135,6 +151,8 @@ function printHelp() {
   console.log(`Usage:
   npm run smoke:video-ppt-upload-main -- --self-test
 
+  npm run smoke:video-ppt-upload-main -- --preflight
+
   npm run smoke:video-ppt-upload-main -- \\
     --base-url https://v3.elepcloud.com \\
     --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \\
@@ -151,6 +169,7 @@ Checks:
 
 Notes:
   - --self-test does not call the network, upload files, create datasets, or create assistant runs
+  - --preflight validates fixture/source shape and live write scope without downloading or uploading
 `);
 }
 
@@ -479,6 +498,143 @@ function safeFixtureName(args, urlContentType = '') {
     return 'video-ppt-upload-smoke.webm';
   }
   return DEFAULT_FIXTURE_NAME;
+}
+
+function promptRequestsVideoPpt(prompt) {
+  return /ppt|powerpoint|slides?|幻灯片|课件/i.test(String(prompt || ''));
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function redactedLiveCommand(args, fixtureName) {
+  const fixtureArg = args.fixtureFile
+    ? '--fixture-file <redacted-local-video-file>'
+    : '--fixture-url <redacted-public-video-url>';
+  const fixtureNameArg = fixtureName ? ` --fixture-name ${shellQuote(fixtureName)}` : '';
+  return [
+    'npm run smoke:video-ppt-upload-main --',
+    `--base-url ${shellQuote('<target-v3-base-url>')}`,
+    fixtureArg,
+    fixtureNameArg.trim(),
+    `--local-thread-id ${shellQuote(args.localThreadId)}`,
+    `--output-dir ${shellQuote(args.outputDir)}`,
+  ].filter(Boolean).join(' ');
+}
+
+async function fixturePreflight(args) {
+  const sourceKind = args.fixtureFile ? 'file' : 'url';
+  const fileName = safeFixtureName(args);
+  const contentType = args.contentType || inferContentType(fileName, '');
+  const extension = extname(fileName).toLowerCase();
+  const mediaKind = inferUploadMediaKind(fileName, contentType);
+  const source = sourceKind === 'file'
+    ? await localFixturePreflight(args)
+    : {
+        kind: 'url',
+        ...redactedUrlSummary(args.fixtureUrl),
+      };
+  return {
+    sourceKind,
+    source,
+    fileName,
+    extension,
+    contentType,
+    mediaKind,
+    supportedExtension: SUPPORTED_VIDEO_EXTENSIONS.includes(extension),
+    promptRequestsVideoPpt: promptRequestsVideoPpt(args.prompt),
+  };
+}
+
+async function localFixturePreflight(args) {
+  const fixtureStat = await stat(args.fixtureFile);
+  if (!fixtureStat.isFile()) {
+    throw new Error('--fixture-file must point to a regular video file');
+  }
+  return {
+    kind: 'file',
+    fileName: basename(args.fixtureFile),
+    bytes: fixtureStat.size,
+    localPathRedacted: true,
+  };
+}
+
+async function runPreflight(args) {
+  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const fixture = await fixturePreflight(args);
+  const failures = [
+    fixture.mediaKind === 'video' ? '' : 'fixture_not_classified_as_video',
+    fixture.supportedExtension ? '' : 'unsupported_video_extension',
+    fixture.promptRequestsVideoPpt ? '' : 'prompt_does_not_request_video_ppt',
+  ].filter(Boolean);
+  const report = {
+    schema: 'v3.video_ppt_upload_main_smoke_preflight.v1',
+    summary: {
+      ok: failures.length === 0,
+      preflight: true,
+      runId,
+      networkCallsRun: false,
+      productionWriteAllowed: false,
+      liveWriteApprovalRequired: true,
+      fixtureDownloaded: false,
+      uploadAttempted: false,
+      datasetCreated: false,
+      documentRegistered: false,
+      assistantRunCreated: false,
+      failures,
+    },
+    target: {
+      baseUrl: redactedUrlSummary(args.baseUrl),
+      localThreadId: args.localThreadId,
+      datasetKey: args.datasetKey,
+      datasetTitle: args.datasetTitle,
+      datasetIdPresent: Boolean(args.datasetId),
+    },
+    fixture,
+    trigger: {
+      promptRequestsVideoPpt: fixture.promptRequestsVideoPpt,
+      promptLength: args.prompt.length,
+    },
+    liveWriteScope: {
+      requiresExplicitApproval: true,
+      plannedSteps: LIVE_WRITE_STEPS,
+      writesSmokeRecords: true,
+      deploysServices: false,
+    },
+    redaction: {
+      rawFixtureUrlIncluded: false,
+      localFixturePathIncluded: false,
+      cookiesIncluded: false,
+      bearerIncluded: false,
+      objectKeysIncluded: false,
+      providerPayloadsIncluded: false,
+    },
+    commandTemplate: redactedLiveCommand(args, fixture.fileName),
+  };
+  const serialized = JSON.stringify(report);
+  if (/https?:\/\/|token=|object_key|Bearer\s|\/Users\//i.test(serialized)) {
+    throw new Error('preflight report contains unredacted URL, token, object key, bearer marker, or local path');
+  }
+  await mkdir(args.outputDir, { recursive: true });
+  const reportPath = join(args.outputDir, `${runId}-preflight.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify({
+    ok: report.summary.ok,
+    preflight: true,
+    runId,
+    reportPath,
+    fixture: {
+      sourceKind: fixture.sourceKind,
+      fileName: fixture.fileName,
+      mediaKind: fixture.mediaKind,
+      supportedExtension: fixture.supportedExtension,
+    },
+    liveWriteApprovalRequired: true,
+  }, null, 2));
+  if (!report.summary.ok) {
+    process.exitCode = 1;
+  }
 }
 
 async function loadFixture(args, fixtureDir) {
@@ -1041,7 +1197,7 @@ async function assertSelfTestUploadContract(args, runId) {
     candidateSource: candidate.source,
     deliverableState: deliverableState(artifact),
     requiredFileKinds: REQUIRED_FILE_KINDS,
-    supportedVideoExtensions: supported.map((fileName) => extname(fileName)),
+    supportedVideoExtensions: SUPPORTED_VIDEO_EXTENSIONS,
     sourceSummaryRedacted: true,
     downloadValidation: {
       ok: downloadValidation.ok,
@@ -1090,6 +1246,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.selfTest) {
     await runSelfTest(args);
+    return;
+  }
+  if (args.preflight) {
+    await runPreflight(args);
     return;
   }
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);

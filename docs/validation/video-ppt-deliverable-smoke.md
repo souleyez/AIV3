@@ -3057,3 +3057,60 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated rollup reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared rollup receipt.
+
+## 2026-06-08 Main-Site Upload Smoke Preflight Gate
+
+Task source: P1-3B live upload smoke still needs approval to write a non-customer main-site smoke record; add a no-network preflight so the approved run has a checked fixture/scope before live execution.
+
+Scope:
+
+- add `smoke:video-ppt-upload-main -- --preflight`;
+- validate fixture/source shape, supported video extension, inferred video media kind, video-PPT trigger wording, live write scope, and report redaction;
+- avoid fixture download, file upload, dataset creation, document registration, ingest enqueue, assistant-run creation, artifact polling, and artifact downloads.
+
+Implemented behavior:
+
+- `--preflight` accepts the same fixture URL/file arguments as live mode but does not download URL fixtures or upload local files;
+- local `--fixture-file` preflight uses `stat` only and stores basename/size with `localPathRedacted=true`;
+- URL fixture preflight stores only scheme/host/extension, not the raw URL, path, or query;
+- preflight requires one of the supported video extensions `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, or `.avi`;
+- preflight no longer treats an unknown extension as `video/mp4` just because the live fallback content type defaults to MP4;
+- preflight report records `liveWriteApprovalRequired=true` and the planned live write steps;
+- preflight emits a redacted command template without raw base URL, raw fixture URL, local path, token, object key, or bearer value.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+npm run smoke:video-ppt-upload-main -- --help
+npm run smoke:video-ppt-upload-main -- --preflight --output-dir target/video-ppt-upload-main-preflight-final
+npm run smoke:video-ppt-upload-main -- --preflight --fixture-url https://example.com/not-video.txt --output-dir target/video-ppt-upload-main-preflight-negative-final
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir target/video-ppt-upload-main-self-test-preflight-final
+rg -n "https?://|token=|object_key|Bearer |/Users/|v3\.elepcloud\.com/generated-artifacts" target/video-ppt-upload-main-preflight-final target/video-ppt-upload-main-preflight-negative-final || true
+```
+
+Result:
+
+- upload smoke syntax check passed;
+- help output documents `--preflight`;
+- positive preflight passed with `ok=true`, `networkCallsRun=false`, `productionWriteAllowed=false`, `fixtureDownloaded=false`, `uploadAttempted=false`, `datasetCreated=false`, `documentRegistered=false`, and `assistantRunCreated=false`;
+- positive preflight classified the default `.mp4` fixture as `mediaKind=video` with `supportedExtension=true`;
+- negative `.txt` fixture preflight failed as expected with `ok=false`, `mediaKind=""`, and `supportedExtension=false`;
+- upload self-test still passed after the preflight change;
+- preflight redaction scan found no raw URL, token marker, object key marker, bearer marker, local absolute path, or raw sample URL.
+
+Remaining work:
+
+- this improves P1-3B readiness but does not run the live main-site upload smoke;
+- P1-3B still needs explicit user approval because live mode writes a non-customer smoke upload/document/run record;
+- after approval, run preflight with the exact approved fixture first, then run the live smoke with the same fixture.
+
+Safety result:
+
+- no live upload smoke was run;
+- no fixture video was downloaded;
+- no file was uploaded or registered;
+- no dataset, document, ingest job, assistant run, third-party event, or HTML artifact was created;
+- no browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated preflight/self-test reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared receipt.
