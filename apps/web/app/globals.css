@@ -6539,6 +6539,98 @@ body {
   background: rgba(248, 250, 252, 0.8);
 }
 
+.external-document-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.external-document-diagnostic {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.external-document-diagnostic-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.external-document-diagnostic-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.external-document-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+  color: #334155;
+  background: rgba(248, 250, 252, 0.82);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.external-document-badge-healthy {
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #047857;
+  background: rgba(236, 253, 245, 0.82);
+}
+
+.external-document-badge-warning {
+  border-color: rgba(245, 158, 11, 0.34);
+  color: #92400e;
+  background: rgba(255, 251, 235, 0.82);
+}
+
+.external-document-diagnostic-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.external-document-diagnostic-meta span,
+.external-document-diagnostic small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.external-document-diagnostic-meta span {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(241, 245, 249, 0.82);
+  font-weight: 700;
+}
+
+.external-document-diagnostic-healthy {
+  border-color: rgba(16, 185, 129, 0.24);
+}
+
+.external-document-diagnostic-warning {
+  border-color: rgba(245, 158, 11, 0.32);
+}
+
+.external-document-diagnostic-critical {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(254, 242, 242, 0.72);
+}
+
 .external-operations-notes {
   display: flex;
   flex-wrap: wrap;
@@ -8811,6 +8903,10 @@ body {
 
   .external-operations-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .external-document-diagnostics {
+    grid-template-columns: 1fr;
   }
 
   .external-capability-strip,

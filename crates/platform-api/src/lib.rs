@@ -14766,7 +14766,164 @@ async fn list_external_integrations(
                         s.database_default_dataset_id is null
                         or d.dataset_id::text = s.database_default_dataset_id
                      )
-               ) as database_latest_document_updated_at
+               ) as database_latest_document_updated_at,
+               coalesce((
+                   select jsonb_agg(recent.item order by recent.updated_at desc)
+                   from (
+                       select d.updated_at,
+                              jsonb_build_object(
+                                  'document_id', d.id,
+                                  'external_id', coalesce(
+                                      d.metadata #>> '{external_source,document_external_id}',
+                                      d.metadata #>> '{external_source,externalDocumentId}',
+                                      d.metadata #>> '{external_source,row_identity_hash}',
+                                      ''
+                                  ),
+                                  'dataset_ids', jsonb_build_array(d.dataset_id),
+                                  'canonical_document_id', d.canonical_document_id,
+                                  'dedup_state', coalesce(d.dedup_state, 'unknown'),
+                                  'parse_status', coalesce(
+                                      d.metadata ->> 'parse_status',
+                                      d.metadata ->> 'parseStatus',
+                                      d.lifecycle
+                                  ),
+                                  'index_status',
+                                      case
+                                          when d.lifecycle = 'failed' then 'failed'
+                                          when d.lifecycle = 'indexed' then 'indexed'
+                                          when exists (
+                                              select 1
+                                              from document_chunks c
+                                              where c.tenant_id = d.tenant_id
+                                                and c.document_id = d.id
+                                                and c.state = 'indexed'
+                                          ) then 'indexed'
+                                          when exists (
+                                              select 1
+                                              from document_chunks c
+                                              where c.tenant_id = d.tenant_id
+                                                and c.document_id = d.id
+                                          ) then 'extracted'
+                                          else 'pending'
+                                      end,
+                                  'enrichment_status',
+                                      case
+                                          when coalesce(d.dedup_state, 'unknown') = 'duplicate' then 'duplicate'
+                                          when exists (
+                                              select 1
+                                              from document_enrichment_runs r
+                                              where r.tenant_id = d.tenant_id
+                                                and r.document_id = d.id
+                                                and r.status in ('failed', 'dead_lettered')
+                                          ) then 'blocked'
+                                          when exists (
+                                              select 1
+                                              from document_enrichment_runs r
+                                              where r.tenant_id = d.tenant_id
+                                                and r.document_id = d.id
+                                                and r.status in ('running', 'claimed')
+                                          ) then 'running'
+                                          when exists (
+                                              select 1
+                                              from document_enrichment_runs r
+                                              where r.tenant_id = d.tenant_id
+                                                and r.document_id = d.id
+                                                and r.status in ('pending', 'queued')
+                                          ) then 'waiting'
+                                          when exists (
+                                              select 1
+                                              from document_enrichment_runs r
+                                              where r.tenant_id = d.tenant_id
+                                                and r.document_id = d.id
+                                                and r.status = 'succeeded'
+                                          ) then 'succeeded'
+                                          else 'not_started'
+                                      end,
+                                  'enrichment_counts', coalesce((
+                                      select jsonb_object_agg(counts.status, counts.status_count)
+                                      from (
+                                          select r.status, count(*)::int as status_count
+                                          from document_enrichment_runs r
+                                          where r.tenant_id = d.tenant_id
+                                            and r.document_id = d.id
+                                          group by r.status
+                                      ) counts
+                                  ), '{}'::jsonb),
+                                  'latest_task', (
+                                      select jsonb_build_object(
+                                          'task_id', t.id,
+                                          'queue', t.queue,
+                                          'task_key', t.task_key,
+                                          'status', t.status,
+                                          'attempt', t.attempt,
+                                          'max_attempts', t.max_attempts,
+                                          'available_at', t.available_at,
+                                          'claimed_at', t.claimed_at,
+                                          'finished_at', t.finished_at,
+                                          'updated_at', t.updated_at
+                                      )
+                                      from workflow_executions e
+                                      join workflow_tasks t
+                                        on t.tenant_id = e.tenant_id
+                                       and t.execution_id = e.id
+                                      where e.tenant_id = d.tenant_id
+                                        and e.dataset_id = d.dataset_id
+                                        and e.context ? 'document_id'
+                                        and e.context ->> 'document_id' = d.id::text
+                                      order by t.updated_at desc, t.created_at desc
+                                      limit 1
+                                  ),
+                                  'waiting_reason',
+                                      case
+                                          when coalesce(d.dedup_state, 'unknown') = 'duplicate' then 'duplicate_uses_canonical'
+                                          when d.lifecycle in ('received', 'extracted') then 'parse_or_index_pending'
+                                          when exists (
+                                              select 1
+                                              from document_enrichment_runs r
+                                              where r.tenant_id = d.tenant_id
+                                                and r.document_id = d.id
+                                                and r.status in ('pending', 'queued')
+                                          ) then 'enrichment_waiting'
+                                          else null
+                                      end,
+                                  'blocked_reason',
+                                      case
+                                          when d.lifecycle = 'failed' then 'parse_failed'
+                                          when exists (
+                                              select 1
+                                              from document_enrichment_runs r
+                                              where r.tenant_id = d.tenant_id
+                                                and r.document_id = d.id
+                                                and r.status in ('failed', 'dead_lettered')
+                                          ) then 'enrichment_failed'
+                                          else null
+                                      end,
+                                  'failure_summary',
+                                      case
+                                          when d.lifecycle = 'failed' then 'document_failed'
+                                          when exists (
+                                              select 1
+                                              from document_enrichment_runs r
+                                              where r.tenant_id = d.tenant_id
+                                                and r.document_id = d.id
+                                                and r.status in ('failed', 'dead_lettered')
+                                          ) then 'enrichment_failed'
+                                          else null
+                                      end,
+                                  'updated_at', d.updated_at
+                              ) as item
+                       from documents d
+                       where d.tenant_id = s.tenant_id
+                         and d.lifecycle <> 'archived'
+                         and d.metadata #>> '{external_source,source_id}' = s.id
+                         and (
+                            s.database_default_dataset_id is null
+                            or d.dataset_id::text = s.database_default_dataset_id
+                         )
+                       order by d.updated_at desc
+                       limit 8
+                   ) recent
+               ), '[]'::jsonb) as database_document_diagnostics
         from source_base s
         order by s.updated_at desc
         "#,
@@ -14793,6 +14950,22 @@ async fn list_external_integrations(
         } else {
             Value::Null
         };
+        let database_document_diagnostics = row.get::<Value, _>("database_document_diagnostics");
+        let mut drift_summary = external_source_drift_summary_with_database_readiness(
+            row.get("acl_snapshot_count"),
+            row.get("stale_acl_snapshot_count"),
+            row.get("failed_sync_count"),
+            row.get("latest_sync_status"),
+            row.get("latest_acl_captured_at"),
+            database_readiness,
+        );
+        if database_document_diagnostics
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        {
+            drift_summary["document_diagnostics"] = database_document_diagnostics.clone();
+            drift_summary["documentDiagnostics"] = database_document_diagnostics;
+        }
         integrations.push(ExternalIntegrationSummaryView {
             integration_id: row.get("id"),
             integration_kind: "source".to_string(),
@@ -14819,14 +14992,7 @@ async fn list_external_integrations(
             ),
             config_summary: external_integration_config_summary(&config_redacted),
             search_summary: external_search_evidence_summary(0, None),
-            drift_summary: external_source_drift_summary_with_database_readiness(
-                row.get("acl_snapshot_count"),
-                row.get("stale_acl_snapshot_count"),
-                row.get("failed_sync_count"),
-                row.get("latest_sync_status"),
-                row.get("latest_acl_captured_at"),
-                database_readiness,
-            ),
+            drift_summary,
             artifact_summary: external_artifact_summary(0, 0, 0, 0, 0, 0, 0, 0, None),
         });
     }
@@ -114017,6 +114183,49 @@ retrieve_evidence:
         .execute(state.storage.pool())
         .await
         .expect("chunk state should be updated");
+        let now = Utc::now();
+        state
+            .storage
+            .documents()
+            .record_content_fingerprint(
+                state.tenant_id,
+                document.id,
+                "database-readiness-document-diagnostic-fingerprint",
+                128,
+                now,
+            )
+            .await
+            .expect("document fingerprint should mark canonical state");
+        let enrichment_run = state
+            .storage
+            .document_enrichment_runs()
+            .create_or_get(
+                state.tenant_id,
+                &storage::NewDocumentEnrichmentRun {
+                    document_id: document.id,
+                    enrichment_kind: "fact_index_v2".to_string(),
+                    parse_version: Some("parse-v1".to_string()),
+                    input_fingerprint: "database-readiness-document-diagnostic-fingerprint"
+                        .to_string(),
+                    priority: 50,
+                    max_attempts: 2,
+                    available_at: now,
+                },
+                now,
+            )
+            .await
+            .expect("enrichment run should be created");
+        state
+            .storage
+            .document_enrichment_runs()
+            .mark_succeeded(
+                state.tenant_id,
+                enrichment_run.id,
+                &json!({"fact_count": 2}),
+                now + Duration::seconds(1),
+            )
+            .await
+            .expect("enrichment run should succeed");
 
         let Json(response) = list_external_integrations(State(state))
             .await
@@ -114036,6 +114245,31 @@ retrieve_evidence:
         assert_eq!(readiness["document_count"], json!(1));
         assert_eq!(readiness["indexed_document_count"], json!(1));
         assert_eq!(readiness["indexed_chunk_count"], json!(1));
+        let diagnostics = source.drift_summary["document_diagnostics"]
+            .as_array()
+            .expect("document diagnostics should be an array");
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic["document_id"], json!(document.id.to_string()));
+        assert_eq!(diagnostic["external_id"], json!("bi_traffic_area:1"));
+        assert_eq!(diagnostic["dataset_ids"], json!([dataset.id.to_string()]));
+        assert_eq!(
+            diagnostic["canonical_document_id"],
+            json!(document.id.to_string())
+        );
+        assert_eq!(diagnostic["dedup_state"], json!("canonical"));
+        assert_eq!(diagnostic["parse_status"], json!("parsed"));
+        assert_eq!(diagnostic["index_status"], json!("indexed"));
+        assert_eq!(diagnostic["enrichment_status"], json!("succeeded"));
+        assert_eq!(diagnostic["enrichment_counts"]["succeeded"], json!(1));
+        assert_eq!(
+            source.drift_summary["documentDiagnostics"][0]["document_id"],
+            json!(document.id.to_string())
+        );
+        assert!(diagnostic.get("title").is_none());
+        assert!(diagnostic.get("object_key").is_none());
+        assert!(diagnostic.get("raw_content").is_none());
+        assert!(diagnostic.get("provider_payload").is_none());
     }
 
     #[tokio::test]

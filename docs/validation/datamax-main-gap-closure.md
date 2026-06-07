@@ -73,6 +73,31 @@ This ledger records DataMax gap-closure evidence. The current active execution p
 
 ## Rollout Receipts
 
+### 2026-06-07 Active Plan Task 4 Document Enrichment And Dedup Diagnostics
+
+- Purpose:
+  - execute Task 4 from `docs/plans/datamax-active-execution-plan.md`;
+  - let the operator distinguish canonical, duplicate, parsed, indexed, enriched, waiting, and blocked document states without exposing raw document content.
+- Code change:
+  - external source summaries now expose a bounded, read-only `document_diagnostics` / `documentDiagnostics` array for recent source documents;
+  - each diagnostic keeps only document id, external id, dataset ids, canonical document id, `dedup_state`, parse/index/enrichment status, enrichment status counts, latest workflow-task state fields, and safe waiting/blocked/failure codes;
+  - diagnostics intentionally omit document title, object key, raw content, chunks, local paths, URLs, raw provider payloads, cookies, bearer tokens, database credentials, and secret env values;
+  - the external integrations helper now normalizes document diagnostics from explicit props or integration `config_summary` / `drift_summary`, applies path/URL/token redaction to reason text, and exposes compact labels/tone for operator UI;
+  - the external integrations page shows up to four compact document diagnostics under the operations cards.
+- Local verification:
+  - `cargo fmt` passed;
+  - `node --test app/lib/external-integrations.test.mjs` passed, 29 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_integrations_list_exposes_database_dataset_readiness --lib` passed, 1 test;
+  - `CC=clang CXX=clang++ cargo test -p storage enrichment --lib` passed, 1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_document --lib` passed, 9 tests;
+  - `npm run check:pure-third-party-guide-html` passed;
+  - `git diff --check` passed.
+- Safety:
+  - no real historical enrichment/backfill was run;
+  - no production row mapping, public third-party URL, auth method, required request field, or existing response field was changed;
+  - no raw document text, chunk content, object path, source URL, provider payload, cookie, bearer token, local key, database URL, or secret env value was recorded;
+  - 120 server was not touched.
+
 ### 2026-06-06 Current-Head Task 1 Release Gate
 
 - Purpose:

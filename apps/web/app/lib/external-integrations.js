@@ -318,6 +318,12 @@ export function normalizeIntegrationSummary(raw = {}) {
   const search = searchEvidenceSignal(searchSummary);
   const actionSummary = raw.action_summary && typeof raw.action_summary === 'object' ? raw.action_summary : {};
   const action = actionSignal(actionSummary);
+  const configSummary = raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {};
+  const documentDiagnostics = normalizeDocumentProcessingDiagnostics([
+    ...arrayFromAnyKey(raw, ['document_diagnostics', 'documentDiagnostics']),
+    ...arrayFromAnyKey(configSummary, ['document_diagnostics', 'documentDiagnostics']),
+    ...arrayFromAnyKey(driftSummary, ['document_diagnostics', 'documentDiagnostics']),
+  ]);
   return {
     id: String(raw.integration_id || ''),
     kind: String(raw.integration_kind || 'unknown'),
@@ -337,8 +343,8 @@ export function normalizeIntegrationSummary(raw = {}) {
     latestActionAt: raw.latest_action_at || null,
     actionSummary,
     actionSignal: action,
-    configSummary: raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {},
-    inboundAuth: inboundAuthSummary(raw.config_summary && typeof raw.config_summary === 'object' ? raw.config_summary : {}),
+    configSummary,
+    inboundAuth: inboundAuthSummary(configSummary),
     searchSummary,
     searchSignal: search,
     searchEvidenceRequiredCount: numberOrZero(searchSummary.required_count),
@@ -346,6 +352,7 @@ export function normalizeIntegrationSummary(raw = {}) {
     driftSignal: drift,
     artifactSummary,
     artifactSignal: artifact,
+    documentDiagnostics,
     signal: integrationSignal({
       pending,
       blocked,
@@ -1240,6 +1247,335 @@ export function normalizeWorkflowQueueStats(raw = {}) {
   };
 }
 
+function valueFromAnyKey(source = {}, keys = []) {
+  if (!source || typeof source !== 'object') {
+    return undefined;
+  }
+  for (const key of keys) {
+    if (
+      Object.prototype.hasOwnProperty.call(source, key)
+      && source[key] !== undefined
+      && source[key] !== null
+    ) {
+      return source[key];
+    }
+  }
+  return undefined;
+}
+
+function objectFromAnyKey(source = {}, keys = []) {
+  const value = valueFromAnyKey(source, keys);
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function arrayFromAnyKey(source = {}, keys = []) {
+  const value = valueFromAnyKey(source, keys);
+  return Array.isArray(value) ? value : [];
+}
+
+function stringFromAnyKey(source = {}, keys = []) {
+  const value = valueFromAnyKey(source, keys);
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value).trim();
+}
+
+function normalizeDiagnosticStatus(value, fallback = 'unknown') {
+  const normalized = String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[\s-]+/g, '_')
+    .toLowerCase()
+    .trim();
+  return normalized || fallback;
+}
+
+function uniqueStringArray(value = []) {
+  const rawItems = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const items = [];
+  for (const item of rawItems) {
+    const normalized = String(item || '').trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    items.push(normalized);
+  }
+  return items;
+}
+
+function redactDocumentDiagnosticText(value, maxLength = 180) {
+  let text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  text = text
+    .replace(/https?:\/\/[^\s<>"']+/gi, '[redacted:url]')
+    .replace(/\/(?:Users|Volumes|srv|tmp|var|private|home)\/[^\s<>"']+/g, '[redacted:path]')
+    .replace(/\b[A-Za-z]:\\[^\s<>"']+/g, '[redacted:path]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted:token]')
+    .replace(/\bv3in_[A-Za-z0-9._-]+/g, '[redacted:token]')
+    .replace(/\b(cookie|token|secret|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function normalizeStatusCountMap(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([key, count]) => [normalizeDiagnosticStatus(key), numberOrZero(count)])
+      .filter(([key, count]) => key && count > 0)
+      .slice(0, 20),
+  );
+}
+
+function enrichmentCountsFromRuns(runs = []) {
+  return runs.reduce((counts, run) => {
+    const status = normalizeDiagnosticStatus(run?.status);
+    counts[status] = numberOrZero(counts[status]) + 1;
+    return counts;
+  }, {});
+}
+
+function normalizeDocumentLatestTask(raw = {}) {
+  const latestTask = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+  if (!latestTask || !Object.keys(latestTask).length) {
+    return null;
+  }
+  return normalizeWorkflowTask({
+    id: latestTask.id || latestTask.task_id || latestTask.taskId || '',
+    ...latestTask,
+    task_key: latestTask.task_key || latestTask.taskKey || '',
+    logical_queue: latestTask.logical_queue || latestTask.logicalQueue || '',
+    logical_task_key: latestTask.logical_task_key || latestTask.logicalTaskKey || '',
+    max_attempts: latestTask.max_attempts || latestTask.maxAttempts || 0,
+    available_at: latestTask.available_at || latestTask.availableAt || null,
+    claimed_at: latestTask.claimed_at || latestTask.claimedAt || null,
+    finished_at: latestTask.finished_at || latestTask.finishedAt || null,
+    updated_at: latestTask.updated_at || latestTask.updatedAt || latestTask.available_at || null,
+    error: redactDocumentDiagnosticText(latestTask.error || latestTask.error_message || latestTask.errorMessage || ''),
+  });
+}
+
+function deriveEnrichmentStatus({ dedupState = 'unknown', counts = {}, explicit = '' } = {}) {
+  if (explicit) {
+    return normalizeDiagnosticStatus(explicit);
+  }
+  if (dedupState === 'duplicate') {
+    return 'duplicate';
+  }
+  if (numberOrZero(counts.failed) || numberOrZero(counts.dead_lettered)) {
+    return 'blocked';
+  }
+  if (numberOrZero(counts.running) || numberOrZero(counts.claimed)) {
+    return 'running';
+  }
+  if (numberOrZero(counts.pending) || numberOrZero(counts.queued)) {
+    return 'waiting';
+  }
+  if (numberOrZero(counts.succeeded)) {
+    return 'succeeded';
+  }
+  return 'not_started';
+}
+
+function documentDiagnosticTone(diagnostic = {}) {
+  const statuses = [
+    diagnostic.parseStatus,
+    diagnostic.indexStatus,
+    diagnostic.enrichmentStatus,
+    normalizeWorkflowStatusKey(diagnostic.latestTask?.status),
+  ];
+  if (
+    diagnostic.blockedReason
+    || diagnostic.failureSummary
+    || statuses.some((status) => ['failed', 'blocked', 'dead_lettered', 'cancelled'].includes(status))
+  ) {
+    return 'critical';
+  }
+  if (statuses.some((status) => ['pending', 'queued', 'waiting', 'running', 'claimed', 'processing'].includes(status))) {
+    return 'warning';
+  }
+  if (diagnostic.dedupState === 'duplicate') {
+    return 'neutral';
+  }
+  if (diagnostic.indexStatus === 'indexed' && ['succeeded', 'duplicate'].includes(diagnostic.enrichmentStatus)) {
+    return 'healthy';
+  }
+  return 'neutral';
+}
+
+function dedupStateLabel(state) {
+  switch (state) {
+    case 'canonical':
+      return 'Canonical';
+    case 'duplicate':
+      return '重复归档';
+    default:
+      return '去重未知';
+  }
+}
+
+function dedupStateTone(state) {
+  switch (state) {
+    case 'canonical':
+      return 'healthy';
+    case 'duplicate':
+      return 'neutral';
+    default:
+      return 'warning';
+  }
+}
+
+export function documentProcessingStatusLabel(status) {
+  switch (normalizeDiagnosticStatus(status)) {
+    case 'canonical':
+      return 'Canonical';
+    case 'duplicate':
+      return '重复';
+    case 'indexed':
+      return '已索引';
+    case 'extracted':
+    case 'parsed':
+    case 'succeeded':
+      return '已完成';
+    case 'partial_ready':
+    case 'enriched_partial':
+      return '部分完成';
+    case 'received':
+    case 'pending':
+    case 'queued':
+    case 'waiting':
+      return '等待中';
+    case 'running':
+    case 'claimed':
+    case 'processing':
+      return '处理中';
+    case 'not_started':
+      return '未开始';
+    case 'blocked':
+      return '已阻断';
+    case 'failed':
+    case 'dead_lettered':
+      return '失败';
+    case 'parse_or_index_pending':
+      return '解析/索引等待';
+    case 'enrichment_waiting':
+      return '深化等待';
+    case 'duplicate_uses_canonical':
+      return '使用 canonical';
+    case 'parse_failed':
+      return '解析失败';
+    case 'enrichment_failed':
+      return '深化失败';
+    case 'unknown':
+      return '未知';
+    default:
+      return status || '未知';
+  }
+}
+
+export function normalizeDocumentProcessingDiagnostic(raw = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const document = objectFromAnyKey(source, ['document']);
+  const parseState = objectFromAnyKey(source, ['parse_state', 'parseState']);
+  const workflow = objectFromAnyKey(source, ['workflow']);
+  const runs = [
+    ...arrayFromAnyKey(source, ['enrichment_runs', 'enrichmentRuns']),
+    ...arrayFromAnyKey(source, ['document_enrichment_runs', 'documentEnrichmentRuns']),
+  ];
+  const runCounts = enrichmentCountsFromRuns(runs);
+  const explicitCounts = normalizeStatusCountMap(
+    valueFromAnyKey(source, ['enrichment_counts', 'enrichmentCounts', 'enrichment_status_counts', 'enrichmentStatusCounts']),
+  );
+  const enrichmentCounts = Object.keys(explicitCounts).length ? explicitCounts : runCounts;
+  const dedupState = normalizeDiagnosticStatus(
+    stringFromAnyKey(source, ['dedup_state', 'dedupState'])
+      || stringFromAnyKey(document, ['dedup_state', 'dedupState']),
+  );
+  const latestTask = normalizeDocumentLatestTask(
+    valueFromAnyKey(source, ['latest_task', 'latestTask'])
+      || valueFromAnyKey(workflow, ['latest_task', 'latestTask'])
+      || {},
+  );
+  const parseStatus = normalizeDiagnosticStatus(
+    stringFromAnyKey(source, ['parse_status', 'parseStatus'])
+      || stringFromAnyKey(parseState, ['parse_status', 'parseStatus', 'model_status', 'modelStatus'])
+      || stringFromAnyKey(document, ['parse_status', 'parseStatus'])
+      || stringFromAnyKey(source, ['lifecycle'])
+      || stringFromAnyKey(document, ['lifecycle']),
+  );
+  const indexStatus = normalizeDiagnosticStatus(
+    stringFromAnyKey(source, ['index_status', 'indexStatus'])
+      || stringFromAnyKey(source, ['retrieval_status', 'retrievalStatus'])
+      || (numberOrZero(parseState.retrieval_evidence_count ?? parseState.retrievalEvidenceCount) > 0 ? 'indexed' : ''),
+  );
+  const enrichmentStatus = deriveEnrichmentStatus({
+    dedupState,
+    counts: enrichmentCounts,
+    explicit: stringFromAnyKey(source, ['enrichment_status', 'enrichmentStatus']),
+  });
+  const diagnostic = {
+    documentId: stringFromAnyKey(source, ['document_id', 'documentId'])
+      || stringFromAnyKey(document, ['id', 'document_id', 'documentId']),
+    externalId: stringFromAnyKey(source, ['external_id', 'externalId', 'document_external_id', 'documentExternalId'])
+      || stringFromAnyKey(document, ['external_id', 'externalId', 'document_external_id', 'documentExternalId']),
+    datasetIds: uniqueStringArray(
+      valueFromAnyKey(source, ['dataset_ids', 'datasetIds'])
+      || valueFromAnyKey(document, ['dataset_ids', 'datasetIds'])
+      || stringFromAnyKey(source, ['dataset_id', 'datasetId'])
+      || stringFromAnyKey(document, ['dataset_id', 'datasetId']),
+    ),
+    canonicalDocumentId: stringFromAnyKey(source, ['canonical_document_id', 'canonicalDocumentId'])
+      || stringFromAnyKey(document, ['canonical_document_id', 'canonicalDocumentId']),
+    dedupState,
+    dedupLabel: dedupStateLabel(dedupState),
+    dedupTone: dedupStateTone(dedupState),
+    parseStatus,
+    parseLabel: documentProcessingStatusLabel(parseStatus),
+    indexStatus,
+    indexLabel: documentProcessingStatusLabel(indexStatus),
+    enrichmentStatus,
+    enrichmentLabel: documentProcessingStatusLabel(enrichmentStatus),
+    latestTask,
+    latestTaskLabel: latestTask
+      ? `${workflowTaskKeyLabel(latestTask.logicalTaskKey || latestTask.taskKey)} · ${workflowStatusLabel(latestTask.status)}`
+      : '',
+    failureSummary: redactDocumentDiagnosticText(
+      stringFromAnyKey(source, ['failure_summary', 'failureSummary', 'last_error', 'lastError', 'error_message', 'errorMessage'])
+      || latestTask?.error
+      || '',
+    ),
+    blockedReason: redactDocumentDiagnosticText(stringFromAnyKey(source, ['blocked_reason', 'blockedReason'])),
+    waitingReason: redactDocumentDiagnosticText(stringFromAnyKey(source, ['waiting_reason', 'waitingReason'])),
+    enrichmentCounts,
+    updatedAt: stringFromAnyKey(source, ['updated_at', 'updatedAt'])
+      || stringFromAnyKey(document, ['updated_at', 'updatedAt'])
+      || latestTask?.updatedAt
+      || null,
+    redaction: {
+      rawContentIncluded: false,
+      rawDocumentPathIncluded: false,
+      rawProviderPayloadIncluded: false,
+    },
+  };
+  diagnostic.tone = documentDiagnosticTone(diagnostic);
+  return diagnostic;
+}
+
+export function normalizeDocumentProcessingDiagnostics(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map(normalizeDocumentProcessingDiagnostic)
+    .filter((item) => (
+      item.documentId
+      || item.externalId
+      || item.canonicalDocumentId
+      || item.parseStatus !== 'unknown'
+      || item.enrichmentStatus !== 'not_started'
+    ));
+}
+
 function queueTotal(queue, keys = ['queued', 'running', 'retrying']) {
   return keys.reduce((sum, key) => sum + numberOrZero(queue?.[key]), 0);
 }
@@ -1344,8 +1680,15 @@ export function buildOperationsSummary({
   workflowQueueStats = null,
   modelGatewayStatus = null,
   codexExecutorTasks = [],
+  documentDiagnostics = [],
 } = {}) {
   const normalizedIntegrations = Array.isArray(integrations) ? integrations : [];
+  const normalizedDocumentDiagnostics = normalizeDocumentProcessingDiagnostics([
+    ...(Array.isArray(documentDiagnostics) ? documentDiagnostics : []),
+    ...normalizedIntegrations.flatMap((item) => (
+      Array.isArray(item.documentDiagnostics) ? item.documentDiagnostics : []
+    )),
+  ]);
   const stats = workflowQueueStats?.queues
     ? workflowQueueStats
     : normalizeWorkflowQueueStats(workflowQueueStats || {});
@@ -1463,7 +1806,7 @@ export function buildOperationsSummary({
         '文档深化',
         queueStatsLoaded ? `${enrichmentQueue.active}` : '待读取',
         queueStatsLoaded
-          ? `队列 ${enrichmentQueue.queueCount} · 失败 ${enrichmentQueue.failed}`
+          ? `队列 ${enrichmentQueue.queueCount} · 失败 ${enrichmentQueue.failed} · 文档诊断 ${normalizedDocumentDiagnostics.length}`
           : '后台 enrichment 仅显示汇总',
         queueStatsLoaded ? operationsTone({ active: enrichmentQueue.active, failed: enrichmentQueue.failed }) : 'neutral',
       ),
@@ -1477,6 +1820,7 @@ export function buildOperationsSummary({
         queueStatsLoaded ? operationsTone({ active: fixedTaskQueue.active + lowQualityTaskCount, failed: fixedTaskQueue.failed }) : 'neutral',
       ),
     ],
+    documentDiagnostics: normalizedDocumentDiagnostics,
   };
 }
 

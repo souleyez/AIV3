@@ -1179,6 +1179,37 @@ export default function ExternalIntegrationsPageClient() {
             </article>
           ))}
         </div>
+        {operationsSummary.documentDiagnostics.length ? (
+          <div className="external-document-diagnostics" aria-label="文档处理诊断">
+            {operationsSummary.documentDiagnostics.slice(0, 4).map((item) => {
+              const documentLabel = item.externalId || item.documentId || '未标识文档';
+              const reason = item.blockedReason || item.failureSummary || item.waitingReason || '';
+              return (
+                <article className={`external-document-diagnostic external-document-diagnostic-${item.tone}`} key={`${item.documentId || item.externalId}-${item.updatedAt || ''}`}>
+                  <div className="external-document-diagnostic-head">
+                    <strong>{documentLabel}</strong>
+                    <span className={`external-document-badge external-document-badge-${item.dedupTone}`}>
+                      {item.dedupLabel}
+                    </span>
+                  </div>
+                  <div className="external-document-diagnostic-meta">
+                    <span>解析 {item.parseLabel}</span>
+                    <span>索引 {item.indexLabel}</span>
+                    <span>深化 {item.enrichmentLabel}</span>
+                  </div>
+                  {item.latestTask ? (
+                    <small>
+                      {item.latestTaskLabel}
+                      {item.latestTask.attempt ? ` · ${item.latestTask.attempt}/${item.latestTask.maxAttempts || '-'}` : ''}
+                    </small>
+                  ) : null}
+                  {reason ? <small>{reason}</small> : null}
+                  <small>{formatObservationTime(item.updatedAt)}</small>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
         <div className="external-operations-notes">
           {!operationsSummary.queueStatsLoaded ? (
             <span>队列统计待读取；只加载汇总队列，不加载任务详情。</span>

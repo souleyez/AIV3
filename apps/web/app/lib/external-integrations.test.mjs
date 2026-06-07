@@ -25,6 +25,7 @@ import {
   externalConversationStatusLabel,
   externalActionTraceFilename,
   databaseSourceStatusExportFilename,
+  documentProcessingStatusLabel,
   formatExternalConversationDuration,
   formatWorkflowDuration,
   formatObservationTime,
@@ -34,6 +35,8 @@ import {
   normalizeAuditItem,
   normalizeCodexExecutorTask,
   normalizeDatabaseSourceStatus,
+  normalizeDocumentProcessingDiagnostic,
+  normalizeDocumentProcessingDiagnostics,
   normalizeExternalConversationTest,
   normalizeExternalConversationTimeline,
   normalizeIntegrationSummary,
@@ -1109,6 +1112,81 @@ test('workflow queue stats helpers normalize logical queue counts', () => {
   assert.equal(workflowTaskKeyLabel('poll_static_page_publish'), '轮询页面发布');
 });
 
+test('document processing diagnostics normalize dedup, parse, enrichment, and latest task state', () => {
+  const diagnostic = normalizeDocumentProcessingDiagnostic({
+    document_id: 'doc-001',
+    external_id: 'bi_traffic_area:1',
+    dataset_ids: ['ds-001', 'ds-001', 'ds-002'],
+    canonical_document_id: 'doc-canonical',
+    dedup_state: 'duplicate',
+    parse_status: 'parsed',
+    index_status: 'indexed',
+    enrichment_counts: {
+      succeeded: 2,
+    },
+    latest_task: {
+      task_id: 'task-001',
+      task_key: 'fact_index_v2',
+      status: 'succeeded',
+      attempt: 1,
+      max_attempts: 2,
+      updated_at: '2026-06-07T03:00:00Z',
+    },
+    waiting_reason: 'duplicate_uses_canonical',
+    title: 'should not be included',
+    object_key: '/srv/aiv3/private/customer.md',
+    raw_content: 'should not be included',
+    provider_payload: { secret: 'should not be included' },
+  });
+
+  assert.equal(diagnostic.documentId, 'doc-001');
+  assert.equal(diagnostic.externalId, 'bi_traffic_area:1');
+  assert.deepEqual(diagnostic.datasetIds, ['ds-001', 'ds-002']);
+  assert.equal(diagnostic.canonicalDocumentId, 'doc-canonical');
+  assert.equal(diagnostic.dedupState, 'duplicate');
+  assert.equal(diagnostic.dedupLabel, '重复归档');
+  assert.equal(diagnostic.parseLabel, '已完成');
+  assert.equal(diagnostic.indexLabel, '已索引');
+  assert.equal(diagnostic.enrichmentStatus, 'duplicate');
+  assert.equal(diagnostic.latestTask.id, 'task-001');
+  assert.equal(diagnostic.latestTaskLabel, 'fact_index_v2 · 成功');
+  assert.equal(documentProcessingStatusLabel('parse_or_index_pending'), '解析/索引等待');
+
+  const rendered = JSON.stringify(diagnostic);
+  assert(!rendered.includes('should not be included'));
+  assert(!rendered.includes('/srv/aiv3/private/customer.md'));
+});
+
+test('document processing diagnostics redact paths, URLs, bearer tokens, and secret assignments', () => {
+  const [diagnostic] = normalizeDocumentProcessingDiagnostics([{
+    documentId: 'doc-redacted',
+    dedupState: 'canonical',
+    parseStatus: 'failed',
+    indexStatus: 'failed',
+    enrichmentStatus: 'blocked',
+    failureSummary: 'failed at /Users/manslive01/private/a.md from https://private.example/a?token=raw Bearer abcdefghijklmnop api_key=secret-value v3in_private_token',
+    latestTask: {
+      id: 'task-redacted',
+      status: 'failed',
+      error: 'C:\\Users\\soulzyn\\secret.txt cookie=session-secret',
+    },
+  }]);
+
+  assert.equal(diagnostic.tone, 'critical');
+  assert.equal(diagnostic.failureSummary.includes('[redacted:path]'), true);
+  assert.equal(diagnostic.failureSummary.includes('[redacted:url]'), true);
+  assert.equal(diagnostic.failureSummary.includes('Bearer [redacted:token]'), true);
+  assert.equal(diagnostic.failureSummary.includes('api_key=[redacted]'), true);
+  assert.equal(diagnostic.failureSummary.includes('[redacted:token]'), true);
+  assert.equal(diagnostic.latestTask.error.includes('[redacted:path]'), true);
+  assert.equal(diagnostic.latestTask.error.includes('cookie=[redacted]'), true);
+  const rendered = JSON.stringify(diagnostic);
+  assert(!rendered.includes('manslive01/private'));
+  assert(!rendered.includes('private.example'));
+  assert(!rendered.includes('session-secret'));
+  assert(!rendered.includes('v3in_private_token'));
+});
+
 test('buildOperationsSummary groups sanitized operator counters', () => {
   const integrations = [
     normalizeIntegrationSummary({
@@ -1139,6 +1217,24 @@ test('buildOperationsSummary groups sanitized operator counters', () => {
           document_count: 384,
           indexed_document_count: 384,
         },
+        document_diagnostics: [{
+          document_id: 'doc-database-001',
+          external_id: 'bi_traffic_area:1',
+          dataset_ids: ['ds-database'],
+          canonical_document_id: 'doc-database-001',
+          dedup_state: 'canonical',
+          parse_status: 'parsed',
+          index_status: 'indexed',
+          enrichment_status: 'succeeded',
+          latest_task: {
+            task_id: 'task-database-001',
+            task_key: 'fact_index_v2',
+            status: 'succeeded',
+            updated_at: '2026-06-07T03:00:00Z',
+          },
+          failure_summary: 'should redact https://private.example/doc token=secret',
+          object_key: '/Volumes/private/customer.json',
+        }],
       },
       config_summary: {
         database_source: {
@@ -1217,11 +1313,22 @@ test('buildOperationsSummary groups sanitized operator counters', () => {
   assert.equal(cardsByKey.static_report.value, '2');
   assert.equal(cardsByKey.data_ingestion.value, '1/1');
   assert.equal(cardsByKey.document_enrichment.value, '2');
+  assert.equal(cardsByKey.document_enrichment.detail.includes('文档诊断 1'), true);
   assert.equal(cardsByKey.low_quality.value, '1');
   assert.equal(cardsByKey.low_quality.detail.includes('不拦截正常回复'), true);
+  assert.equal(summary.documentDiagnostics.length, 1);
+  assert.equal(summary.documentDiagnostics[0].documentId, 'doc-database-001');
+  assert.equal(summary.documentDiagnostics[0].dedupState, 'canonical');
+  assert.equal(summary.documentDiagnostics[0].indexStatus, 'indexed');
+  assert.equal(summary.documentDiagnostics[0].enrichmentStatus, 'succeeded');
+  assert.equal(summary.documentDiagnostics[0].failureSummary.includes('[redacted:url]'), true);
+  assert.equal(summary.documentDiagnostics[0].failureSummary.includes('token=[redacted]'), true);
   const rendered = JSON.stringify(summary);
   assert(!rendered.includes('v3in_should_not_escape'));
   assert(!rendered.includes('MYSQL_PASSWORD_SHOULD_NOT_ESCAPE'));
+  assert(!rendered.includes('/Volumes/private/customer.json'));
+  assert(!rendered.includes('private.example'));
+  assert(!rendered.includes('token=secret'));
 });
 
 test('external integrations page does not include direct home navigation links', () => {

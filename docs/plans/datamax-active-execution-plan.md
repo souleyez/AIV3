@@ -51,8 +51,8 @@
 1. 已完成：计划文档整理。
 2. 已完成：当前 head 基线回执。
 3. 已优先完成：视频/页面材料提取为 PPT 交付物优先通道。
-4. 下一步：后台 enrichment / 去重诊断。
-5. duplicate / canonical read-through smoke。
+4. 已完成：后台 enrichment / 去重诊断。
+5. 下一步：duplicate / canonical read-through smoke。
 6. 被动回答质量离线语料。
 7. 数据源 row identity staging 自测。
 8. 静态页/报表回归语料强化。
@@ -267,7 +267,18 @@ git commit -m "Prioritize video PPT deliverable completion"
 
 ## Task 4：后台 Enrichment 与去重诊断
 
+**状态：已完成，2026-06-07。**
+
 **目标：** operator 能判断文档是否 canonical、duplicate、已解析、已索引、已 enrichment、等待中或被阻塞，同时不暴露原始文档内容。
+
+**结果：**
+
+- 外部 source summary 增加 bounded `document_diagnostics` / `documentDiagnostics`，最多返回最近 8 个源文档的安全状态摘要。
+- 诊断摘要只包含 document id、external id、dataset ids、canonical id、dedup 状态、parse/index/enrichment 状态、enrichment status counts、最新 workflow task 状态字段和 redacted waiting/blocked/failure reason。
+- 观测页 operations summary 增加文档诊断 helper 和紧凑 UI，最多显示 4 个文档诊断。
+- helper 对 reason 文本执行 URL、路径、Bearer、`v3in_` token、cookie/password/API key 类字符串 redaction。
+- 不返回或展示原始标题、正文、chunk、object path、source URL、provider payload、cookie、token、数据库连接串或 secret env。
+- 验证回执已写入 `docs/validation/datamax-main-gap-closure.md`。
 
 **文件：**
 
