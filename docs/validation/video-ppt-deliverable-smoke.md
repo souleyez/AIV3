@@ -1675,7 +1675,7 @@ Result:
 
 Remaining P2-2 work:
 
-- animation transition fixtures still need broader local coverage;
+- broader real-sample or complex animation-build review still needs coverage beyond this local fixture;
 - P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
 - P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
 
@@ -1733,7 +1733,7 @@ Result:
 
 Remaining P2-2 work:
 
-- animation transition fixtures still need broader local coverage;
+- broader real-sample or complex animation-build review still needs coverage beyond this local fixture;
 - P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
 - P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
 
@@ -1793,7 +1793,65 @@ Result:
 
 Remaining P2-2 work:
 
-- animation transition fixtures still need broader local coverage;
+- broader real-sample or complex animation-build review still needs coverage beyond this local fixture;
+- P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
+- P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated temp frames stayed under test temp directories and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
+## 2026-06-08 Short Animation Transition Auto-Selection Fixture
+
+Task source: P2-2C local quality fixture follow-up from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- prove short non-low-information animation transition frames between two stable PPT pages are not selected as final slide pages;
+- keep stable PPT pages selected before and after the animation transition;
+- keep the fixture local and deterministic, without claiming full real-sample animation-build quality completion;
+- avoid live extraction, network fetches, uploads, browser recording, or deployment.
+
+Implemented behavior:
+
+- added `auto_selects_stable_slides_without_short_animation_transition_frames`;
+- the fixture creates two stable PPT page segments with two visually distinct one-frame animation transition frames in between;
+- auto-selection keeps only the stable midpoint candidates `[2, 7]`;
+- the two animation frames are recorded in `auto_selection.rejected_clusters` with `reason=unstable_short_segment`;
+- selected slides manifest keeps `selected_count=2` and `selected_candidate_indices=[2, 7]`.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects_stable_slides_without_short_animation_transition_frames --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- short animation transition fixture passed;
+- `auto_selects` passed, 6 tests, covering stable PPT pages, dark/bright/flat low-information rejection, contentful dark-theme positive selection, and short animation transition rejection;
+- selected-slides regression passed;
+- controlled video sample deliverable contract passed;
+- slide rectangle regression passed, 5 tests;
+- video deliverable validator passed, 19 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- broader real-sample or complex animation-build review still needs coverage beyond this local fixture;
 - P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
 - P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
 

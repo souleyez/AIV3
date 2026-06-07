@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 02:10 CST
-**当前性质：** 开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback，讲师小窗/外部前景遮挡端到端 crop fixture 已通过；P2-2C 暗色、亮色和纯色低信息稳定段过滤本地切片已完成，降低黑屏、白屏、灰屏、亮色空白转场误选为 PPT 页的风险，且深色主题内容页防误伤 fixture 已通过；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，`slide_quality_report.json` 现在可输出 sharpness/readability risk，旧包兼容，且低对比字迹端到端质量报告 fixture 已通过；P2-2E 三样例质量矩阵 self-test scaffold 和 P2-2E-1 本地 `generated_artifacts/` 输入适配均已完成，quality matrix 现在可用 `--synthetic-deliverables <path>` 复用 deliverables validator 复核本地产物，但完整三样例验收仍需真实公开视频课程和客户授权样例。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E 真实 public/customer 质量矩阵仍待执行。本轮未部署 8 服务器。
+**更新时间：** 2026-06-08 02:18 CST
+**当前性质：** 开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback，讲师小窗/外部前景遮挡端到端 crop fixture 已通过；P2-2C 暗色、亮色、纯色低信息稳定段过滤和短动画转场本地 fixture 已完成，降低黑屏、白屏、灰屏、亮色空白、短动画转场误选为 PPT 页的风险，且深色主题内容页防误伤 fixture 已通过；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，`slide_quality_report.json` 现在可输出 sharpness/readability risk，旧包兼容，且低对比字迹端到端质量报告 fixture 已通过；P2-2E 三样例质量矩阵 self-test scaffold 和 P2-2E-1 本地 `generated_artifacts/` 输入适配均已完成，quality matrix 现在可用 `--synthetic-deliverables <path>` 复用 deliverables validator 复核本地产物，但完整三样例验收仍需真实公开视频课程和客户授权样例。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E 真实 public/customer 质量矩阵仍待执行。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 0. 下一阶段执行总览
@@ -27,7 +27,7 @@
 - 授权录屏兜底已有 runbook 和 isolated helper，但只通过 self-test/dry-run；没有执行 live capture，也没有接入 8 服务器生产服务。
 - 讲师小窗/外部前景遮挡的本地端到端 fixture 已证明 `foreground_component_v1` crop 能进入 rectangle manifest、selected slides、quality report 和 PPTX `a:srcRect`，减少 full-frame fallback。
 - `slide_quality_report.json` 已支持可选 sharpness/readability 字段：可解码帧记录 measured score/risk，不可解码帧记录 `unavailable/unknown`，低对比字迹会进入 high-risk review，不泄露本地 frame path。
-- 自动选页已拒绝短时不稳定段、暗色低信息稳定段、亮色低信息稳定段和近乎纯色低信息稳定段，避免黑屏、白屏、灰屏和空白转场被误选为 PPT 页；深色主题但有可见内容的课件页已有正向保留回归。
+- 自动选页已拒绝短时不稳定段、短动画转场帧、暗色低信息稳定段、亮色低信息稳定段和近乎纯色低信息稳定段，避免黑屏、白屏、灰屏、空白转场和短动画帧被误选为 PPT 页；深色主题但有可见内容的课件页已有正向保留回归。
 - `smoke:video-ppt-quality-matrix -- --self-test` 已固定 P2-2E 的三类样例矩阵结构；`--synthetic-deliverables <path>` 已可读取本地 `generated_artifacts/`，复用 `validate-video-deliverables` 生成脱敏复核结论。公开视频课程和客户授权样例必须继续等待真实输入/授权。
 
 ### 0.3 下一阶段优先顺序
@@ -40,13 +40,13 @@
 | 4 | P2-1C 授权录屏样例 | 待 operator 授权后可做 | approval id、可播放来源、最大时长、音频策略、保留期、handoff 目标 | 录制 MP4 的脱敏回执，随后复用上传或第三方视频 PPT 抽取 | 失败能分流为播放/录制/无 PPT/抽帧/质量问题；不绕过平台权限 |
 | 5 | P2-2E-2 真实公开视频课程样例 | 待样例后可做 | 匿名可下载公开视频课程或用户提供上传文件 | 公开视频课程的 PPTX/Markdown/质量报告/人工复核结论 | 记录黑边、讲师遮挡、转场、无字幕/弱字幕等真实质量风险，不用单一 synthetic 样例代替 |
 | 6 | P2-2E-3 客户授权视频样例 | 待授权后可做 | 客户/operator 授权、输入来源和保留策略 | 客户样例脱敏回执与质量结论；产物不进 Git | 区分可交付、需人工复核、不可交付，并记录 source access/video has no PPT/frame/crop/subtitle/artifact visibility 归因 |
-| 7 | P2-2B/P2-2C/P2-2F 继续本地质量 fixture | 可立即做；不跑 live | 无 live 授权；只用本地 fixture | 已补深色主题内容页防误伤、低对比字迹质量报告、讲师小窗 crop；继续覆盖动画转场 | 不替代真实公开视频课程或客户样例，只减少后续质量回归风险 |
+| 7 | P2-2B/P2-2C/P2-2F 继续本地质量 fixture | 可立即做；不跑 live | 无 live 授权；只用本地 fixture | 已补深色主题内容页防误伤、低对比字迹质量报告、讲师小窗 crop、短动画转场过滤 | 不替代真实公开视频课程或客户样例，只减少后续质量回归风险 |
 
 ### 0.4 可直接继续的本地开发切片
 
 P2-2E-1 已完成。若暂时没有主站上传授权、第三方 bearer 或 8 服务器部署窗口，仍可继续做更窄的本地质量切片，但不能用本地 fixture 代替 live 验收：
 
-1. 继续补 P2-2B/P2-2C 的本地回归 fixture，重点覆盖动画转场；暗色/亮色/纯色低信息稳定转场 guard、深色主题内容页防误伤 fixture、低对比字迹质量报告 fixture、讲师小窗/外部前景 crop 端到端 fixture 已完成。
+1. P2-2B/P2-2C/P2-2F 的基础本地质量 fixture 已覆盖暗色/亮色/纯色低信息稳定转场、深色主题内容页防误伤、低对比字迹质量报告、讲师小窗/外部前景 crop 和短动画转场；后续更复杂动画 build/真实遮挡仍需真实样例复核。
 2. 准备可公开匿名下载的公开视频课程样例候选，但在未确认来源可访问和适用前，不把搜索结果写成完成证据。
 3. 有真实公开视频课程或客户授权样例前，不声称三样例质量矩阵完成。
 4. 任何本地质量切片都不跑 live smoke、不下载私有视频、不上传文件、不部署；验证通过后追加 `docs/validation/video-ppt-deliverable-smoke.md` 回执并同步 GitHub。
@@ -134,6 +134,8 @@ P2-2E-1 已完成。若暂时没有主站上传授权、第三方 bearer 或 8 �
   自动选页在稳定段 midpoint 为极暗且低亮度变化时，将该稳定段写入 `rejected_clusters`，原因 `dark_low_information_stable_segment`，不再把黑屏/暗场转场作为 PPT 页面候选；已有稳定 PPT 页自动选择不受影响。
 - P2-2C 本轮深色主题防误伤切片
   新增 contentful dark-theme slide 回归 fixture：稳定深色背景但包含可见图形/课件内容的页面会进入 `selected_clusters`，不会被 `dark/flat_low_information_stable_segment` guard 写入 `rejected_clusters`。
+- P2-2C 本轮短动画转场切片
+  新增短动画转场 fixture：两段稳定 PPT 页之间的短暂动画帧写入 `unstable_short_segment` rejected clusters，最终 selected slides 只保留稳定页候选。
 - P2-2D 本轮 OCR evidence 对齐切片
   selected slides 现在会把时间窗内 keyframe OCR snippets 写入 `ocr_snippets`，并在 `slide_notes.md` 和 `video_slides.md` 中逐页显示 OCR evidence；`subtitle_page_map.json` 仍保持 transcript-only，不把 OCR 伪装为字幕。
 - P2-2D 本轮质量报告 OCR coverage 切片
@@ -517,7 +519,7 @@ git diff --check
 
 ### P2-2：视频/PPT 质量增强
 
-**状态：P2-2A 已完成本地验证；P2-2B bright-canvas detector 本地切片已完成，讲师小窗/外部前景遮挡端到端 crop fixture 已完成；P2-2C 暗色、亮色和纯色低信息稳定段过滤本地切片已完成，深色主题内容页防误伤 fixture 已完成；P2-2D OCR evidence 和质量报告 OCR coverage 本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，低对比字迹端到端质量报告 fixture 已完成；P2-2E 三样例质量矩阵 self-test scaffold 和本地 `generated_artifacts/` 输入适配已完成；P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 真实 public/customer 样例回执待后续执行。**
+**状态：P2-2A 已完成本地验证；P2-2B bright-canvas detector 本地切片已完成，讲师小窗/外部前景遮挡端到端 crop fixture 已完成；P2-2C 暗色、亮色和纯色低信息稳定段过滤、深色主题内容页防误伤和短动画转场 fixture 已完成；P2-2D OCR evidence 和质量报告 OCR coverage 本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，低对比字迹端到端质量报告 fixture 已完成；P2-2E 三样例质量矩阵 self-test scaffold 和本地 `generated_artifacts/` 输入适配已完成；P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 真实 public/customer 样例回执待后续执行。**
 
 **目标：** 提高截图型 PPT 的可读性，减少人工复核成本。
 
@@ -1081,7 +1083,7 @@ git diff --check
 开发顺序：
 
 1. 从已知公开视频样例导出候选帧 contact sheet，只记录 redacted file names 和 frame index，不提交图片。
-2. 增强课件区域检测前，先固定 regression fixture，覆盖黑边、讲师小窗、播放器边框、非课件画面和转场帧；当前已覆盖暗色/亮色/纯色低信息稳定转场、深色主题内容页不被低信息 guard 误拒，以及讲师小窗/外部前景遮挡的 `foreground_component_v1` 端到端 crop。
+2. 增强课件区域检测前，先固定 regression fixture，覆盖黑边、讲师小窗、播放器边框、非课件画面和转场帧；当前已覆盖暗色/亮色/纯色低信息稳定转场、短动画转场、深色主题内容页不被低信息 guard 误拒，以及讲师小窗/外部前景遮挡的 `foreground_component_v1` 端到端 crop。
 3. 对 `slide_rectangles_manifest` 增加 detector mode/status 解释，所有 detector crop 仍保持 `review_required=true`。
 4. 对候选帧选择增加稳定区间约束，避免短暂转场、动画过渡和讲师遮挡帧进入最终 PPTX。
 5. 对 dedupe 输出增加 removed candidate 摘要，方便人工判断是否误删。
@@ -1109,7 +1111,8 @@ git diff --check
 - 新增 `flat_low_information_stable_segment` rejection reason，稳定灰屏/loading 纯色段不再进入 selected slides。
 - 新增 contentful dark-theme slide 正向 fixture，稳定深色课件页有可见图形/内容时会被自动选择，`rejected_clusters` 保持为空。
 - 新增讲师小窗/外部前景遮挡端到端 fixture，`foreground_component_v1` crop 会贯穿 rectangle manifest、selected slides、quality report 和 PPTX `a:srcRect`。
-- `auto_selects` 回归现在覆盖稳定 PPT 页、暗色低信息稳定段、亮色低信息稳定段、纯色低信息稳定段和深色主题内容页五类场景。
+- 新增短动画转场 fixture，非低信息的短暂动画帧会写入 `unstable_short_segment`，最终 selected slides 只保留稳定 PPT 页。
+- `auto_selects` 回归现在覆盖稳定 PPT 页、暗色低信息稳定段、亮色低信息稳定段、纯色低信息稳定段、深色主题内容页和短动画转场六类场景。
 
 #### 5.8.3 P2-2D 字幕/OCR/转写对齐
 
@@ -1352,6 +1355,6 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M4 | P2-1C 授权录屏样例 | operator 授权记录、可播放来源、最大时长、音频策略、保留期、handoff 目标 | `capture:authorized-video` dry-run，live capture 后复用 P1-3 上传或第三方抽取 smoke | 录制 `.mp4` 可进入现有 `VideoExtraction`，并有质量结论 | 默认不启用；8 内部录制需单独批准 |
 | M5 | P2-2F 清晰度/可读性质量信号 | 无 live 授权；本地 fixture 即可 | 已通过 media-worker selected_slides/slide_rectangle/controlled sample/sharpness helper、低对比字迹端到端 fixture、deliverable validator、platform-api video tests、`git diff --check` | 已完成：`slide_quality_report.json` 显示 sharpness/readability risk，低对比字迹会提示 high-risk review，旧包兼容 | 未部署 |
 | M6 | P2-2E-1 质量矩阵本地 deliverables 输入 | 一次真实或合成视频/PPT 抽取输出的 `generated_artifacts/`；可用临时 target fixture | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`--help`、`--self-test --pretty`、`node tools/validate-video-deliverables.mjs target/video-ppt-quality-matrix-fixture/generated_artifacts`、`--synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty` | 已完成：matrix 可读取本地交付包并复用 validator，报告脱敏，public/customer gates 仍 pending | 未部署 |
-| M7 | P2-2C 低信息稳定段过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 分别写入低信息 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
+| M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |
