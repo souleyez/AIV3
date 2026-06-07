@@ -3305,7 +3305,7 @@ Scope:
 
 - update only the active plan and synchronized desktop copy;
 - keep `docs/plans/datamax-active-execution-plan.md` as the single active plan under `docs/plans/`;
-- add exact live-before-preflight sequencing for P1-3B main-site upload, P1-3C third-party video registration, and P1-3D login-gated handoff;
+- add exact preflight-before-live sequencing for P1-3B main-site upload, P1-3C third-party video registration, and P1-3D login-gated handoff;
 - add a current-head audit table that separates proven no-auth readiness from pending live/customer/deployment gates.
 
 Plan result:
@@ -3329,3 +3329,59 @@ Safety result:
 - no business code, smoke runner, validator, worker, API, UI, or deployment script was changed in this plan-only pass;
 - no live smoke, upload, third-party event, browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Current-Head No-Auth Acceptance Refresh
+
+Task source: continue toward full video PPT extraction completion without live-upload approval, third-party bearer/context, deployment window, or customer/operator sample authorization.
+
+Scope:
+
+- refresh the no-authorization acceptance evidence on current head `f2b2a1b`;
+- run only no-network preflights, offline self-tests, authorized-capture dry self-test, quality-matrix self-test, and the deliverables validator;
+- keep generated reports under `target/` and copy only redacted, high-level evidence into this ledger.
+
+Validation:
+
+```text
+npm run smoke:video-ppt-upload-main -- --preflight --output-dir target/video-ppt-upload-main-preflight-current-head
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir target/video-ppt-upload-main-self-test-current-head
+npm run smoke:external-video-ppt -- --preflight --allow-missing-bearer --output-dir target/external-video-ppt-preflight-current-head
+npm run smoke:external-video-ppt -- --self-test --output-dir target/external-video-ppt-self-test-current-head
+npm run smoke:video-ppt-handoff -- --preflight --allow-missing-bearer --output-dir target/video-ppt-handoff-preflight-current-head
+npm run smoke:video-ppt-handoff -- --self-test --output-dir target/video-ppt-handoff-self-test-current-head
+npm run capture:authorized-video -- --self-test --output-dir target/authorized-capture-self-test-current-head
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir target/video-ppt-quality-matrix-current-head
+npm run test:video-deliverables
+```
+
+Result:
+
+- main-site upload preflight passed with `ok=true`, `networkCallsRun=false`, `productionWriteAllowed=false`, `fixtureDownloaded=false`, `uploadAttempted=false`, `assistantRunCreated=false`, `mediaKind=video`, `supportedExtension=true`, and `liveWriteApprovalRequired=true`;
+- main-site upload self-test passed with `ok=true` and the offline minimal PPTX/Markdown download contract intact;
+- third-party video PPT preflight passed with `ok=true`, `networkCallsRun=false`, `fixtureRegistered=false`, `eventSent=false`, `replyPolled=false`, `deliverablesDownloadedFromNetwork=false`, `liveCredentialReady=false`, `mediaKind=video`, `supportedExtension=true`, and `expectedAction=extract_video_ppt_transcript`;
+- third-party video PPT self-test passed with `ok=true` and the offline minimal PPTX/Markdown reply/download contract intact;
+- video-channel/login-gated handoff preflight passed with `ok=true`, `targetModes=["main","external"]`, `sourcePageFetched=false`, `videoDownloaded=false`, `framesExtracted=false`, `ocrRun=false`, `pptGenerated=false`, `providerCalled=false`, `deploymentApprovalRequired=true`, `liveCredentialReady=false`, and `failureReason=login_gated_video_source_not_supported`;
+- video-channel/login-gated handoff self-test passed with `ok=true`;
+- authorized capture helper self-test passed with `ok=true`, `authorizationGateNegativeCaseCount=6`, and `authorizationGateNegativeCasesRejected=6`; shared evidence uses the redacted `sharedReceipt` contract only;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- video deliverables validator passed all 19 Node test cases.
+
+Remaining work:
+
+- this refresh does not run live main-site upload, live third-party registration/event, deployed handoff smoke, live authorized capture, or real customer-authorized quality review;
+- P1-3B still needs explicit approval to write a non-customer main-site smoke upload/document/run record;
+- P1-3C still needs approved inbound bearer, `connection_id`, `source_id`, and safe video input;
+- P1-3D still needs an approved 8-server deployment window before live handoff smoke, and external mode also needs bearer/context;
+- P2-1C and P2-2E still need operator/customer authorization and source inputs.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched by these preflights/self-tests;
+- no file was uploaded or registered;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no DataMax upload, dataset, document, assistant run, third-party event, reply poll, artifact poll, or HTML artifact was created;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared refresh receipt.
