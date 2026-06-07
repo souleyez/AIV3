@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**目标：** 保持 DataMax 只有一份可执行计划，并优先完成当前不依赖外部凭据、生产风险批准或业务决策的事项。当前优先级先收敛“视频/页面材料提取为 PPT 交付物”的通路，再继续处理后台深化解析、去重、问答质量、报表和第三方对接加固。
+**目标：** 保持 DataMax 只有一份可执行计划，并优先完成当前不依赖外部凭据、生产风险批准或业务决策的事项。当前下一步优先完成“视频抽取 PPT”交付闭环；Task 3 已完成本地确定性交付契约，后续先补齐可用性收尾、下载/打开 surface、失败状态和 operator-only smoke 准备，再继续处理 operator 观测页打磨与最终验证。
 
 **架构：** DataMax 继续作为权限、文档/数据入库、企业记忆、模型路由、媒体/视频提取交付物、静态页/报表产物和第三方契约的系统事实源。本计划优先安排可以本地完成、只读验证或低风险闭环的任务；需要 operator 凭据、业务拍板、外部 provider 额度或生产写入的事项统一挂起。
 
@@ -25,6 +25,7 @@
 
 - 历史计划归档提交：`f911862`。
 - 远端新增视频/PPT 优先通道提交：`88a03ed`，已整合进本中文版计划。
+- 2026-06-07 用户调整：视频抽取 PPT 收尾闭环优先于 operator 观测页打磨。
 - 8 服务器已知仓库漂移：未跟踪文件 `mode`，不要动。
 - 当前 completion audit：`docs/validation/datamax-main-gap-closure-completion-audit.md`。
 - 历史计划归档包：`C:\Users\soulzyn\Desktop\codex-backups\datamax-plan-consolidation-20260607-093057.zip`。
@@ -57,8 +58,9 @@
 7. 已完成：数据源 row identity staging 自测。
 8. 已完成：静态页/报表回归语料强化。
 9. 已完成：第三方数据库只读状态强化。
-10. 下一步：operator 观测页小幅打磨。
-11. 最终 validation 和可选部署。
+10. 下一步：视频抽取 PPT 交付闭环优先收尾。
+11. 顺延：operator 观测页小幅打磨。
+12. 最终 validation 和可选部署。
 
 每个任务通过测试后独立提交。
 
@@ -717,7 +719,97 @@ git commit -m "Expose third party database read only status"
 
 ---
 
-## Task 10：Operator 观测页小幅打磨
+## Task 10：视频抽取 PPT 交付闭环优先收尾
+
+**状态：待执行，当前最高优先级。**
+
+**目标：** 在 Task 3 已完成确定性交付契约的基础上，先把“用户给视频或公开视频页，系统产出可下载 PPT 包”的产品闭环收完。优先处理本地可完成、只读或确定性验证的工作：上传视频、直连视频 URL、公开视频页直连资源解析、生成包 manifest、PPTX/Markdown 下载、AssistantRun follow-up、失败/unsupported 状态和前端可见动作。真实登录态/私有视频仍保持 operator-only，不作为本任务阻塞。
+
+**文件：**
+
+- 检查/修改：`crates/media-worker/src/lib.rs`
+- 检查/修改：`crates/media-worker/src/main.rs`
+- 检查/修改：`crates/platform-api/src/lib.rs`
+- 检查/修改：`crates/platform-api/src/react_agent_tools.rs`
+- 检查/修改：`apps/web/app/HomePageClient.js`
+- 检查/修改：`tools/validate-video-deliverables.mjs`
+- 检查/修改：`scripts/run-assistant-run-worker-smoke.sh`
+- 检查/修改：`scripts/run-jump-host-video-deliverable-smoke.ps1`
+- 更新：`docs/validation/video-ppt-deliverable-smoke.md`
+- 更新：`docs/validation/datamax-main-gap-closure.md`
+
+**Step 1：复核 Task 3 后的剩余缺口**
+
+运行：
+
+```powershell
+rg -n "video_extraction|VideoExtraction|extract_video_ppt|video_slides|video_slides_screenshot_based|PublishedVideoPpt|pptx|unsupported|review_required|final_deliverables_manifest" crates apps scripts tools docs -g "*.rs" -g "*.js" -g "*.mjs" -g "*.md" -g "*.sh" -g "*.ps1"
+```
+
+重点确认：
+
+- 上传视频文件、直连视频 URL、公开视频页直连资源三类 source kind 都有同一套交付结果。
+- PPTX、Markdown、notes、subtitle/page map、slide rectangles、final/published manifests 都在公开 surface 有稳定引用。
+- 前端能看到 PPT 包已准备好、可下载/打开、需要人工复核或不支持登录态来源的状态。
+- AssistantRun follow-up 不泄露原始 source URL、本地路径、cookie、provider payload、token-like 字符串。
+
+**Step 2：优先补齐产品闭环**
+
+只做小范围收尾，不重构媒体管线：
+
+- 如果某个 source kind 没有同等 manifest/download surface，补齐到与 controlled sample 一致。
+- 如果前端只显示原始状态、不显示 PPT/Markdown 下载动作，补齐用户可见动作。
+- 如果失败、登录态、需要复核状态不够明确，补齐 redacted reason 和 handoff 状态。
+- 如果 validator 未覆盖真实 OOXML、manifest redaction、published-version history 或前端字段，优先补 validator。
+- 不绕过登录、扫码、cookie、私有 host、平台反爬或播放限制。
+
+**Step 3：运行目标测试**
+
+运行：
+
+```powershell
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p media-worker durable_published_version --lib
+CC=clang CXX=clang++ cargo test -p media-worker model_completion --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+node --check tools/validate-video-deliverables.mjs
+bash scripts/run-assistant-run-worker-smoke.sh
+```
+
+如果 DB-backed assistant-run-worker smoke 没有 disposable test database，记录 skip，不连接生产库。
+
+**Step 4：operator-only 真实视频 smoke 准备**
+
+运行脚本自检，不运行真实私有视频：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-jump-host-video-deliverable-smoke.ps1 -SelfTest
+```
+
+如果 `pwsh`/PowerShell 不可用，记录真实 skip 原因。真实登录态/私有视频 smoke 只有在 operator 提供批准过的可访问源、账号范围和回滚边界后才执行。
+
+**Step 5：更新验证记录**
+
+更新 `docs/validation/video-ppt-deliverable-smoke.md` 和 `docs/validation/datamax-main-gap-closure.md`，记录：
+
+- 本任务补齐了哪些视频抽取 PPT 闭环缺口。
+- 支持 source kind 和仍不支持的登录态/私有来源边界。
+- 每条测试命令的结果、报告路径和跳过原因。
+- 未记录原始媒体 URL、object path、cookie、token、provider payload 或客户内容。
+
+**Step 6：提交**
+
+```powershell
+git add crates apps tools scripts docs/validation
+git commit -m "Complete video PPT extraction delivery loop"
+```
+
+---
+
+## Task 11：Operator 观测页小幅打磨
 
 **目标：** 在不大改 UI 的前提下，让 operator 更容易看任务状态、第三方会话、文档入库、报表产物和异常原因。
 
@@ -768,7 +860,7 @@ git commit -m "Polish external integration observability"
 
 ---
 
-## Task 11：最终验证与可选部署
+## Task 12：最终验证与可选部署
 
 **目标：** 汇总以上独立任务结果。只有用户明确要求部署时才部署；否则只提交、推 GitHub、做 8 服务器只读检查。
 
