@@ -2772,7 +2772,7 @@ Scope:
 
 - add an offline self-test gate for `smoke:video-ppt-upload-main`;
 - let the main-site uploaded-video smoke contract be checked before the user approves a live main-site write;
-- verify artifact/download contract shape, video PPT extraction scope, supported video extensions, and redaction gates without network access;
+- verify artifact/download contract shape, minimal PPTX/Markdown download validation, video PPT extraction scope, supported video extensions, and redaction gates without network access;
 - avoid live upload, dataset creation, assistant-run creation, third-party events, browser capture, service build/restart, 8-server deployment, or 120-server action.
 
 Implemented behavior:
@@ -2783,6 +2783,9 @@ Implemented behavior:
 - self-test verifies required file kinds: `pptx`, `video_slides_markdown`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, and `extraction_artifacts_manifest`;
 - self-test verifies selected scope and scope candidate keep `intent=video_ppt_extraction`;
 - self-test verifies `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, and `.avi` are classified as video uploads;
+- self-test writes a minimal local PPTX ZIP fixture and Markdown deck under `target/`, then runs the same `validateDownloads` path used by live upload smoke;
+- self-test verifies the minimal PPTX central directory contains `[Content_Types].xml`, `ppt/presentation.xml`, and `ppt/slides/slide1.xml`;
+- self-test verifies PPTX slide count and Markdown `### Slide` heading count are both `1`;
 - self-test report records `networkCallsRun=false`, `productionWriteAllowed=false`, `fixtureDownloaded=false`, `uploadAttempted=false`, and `assistantRunCreated=false`;
 - `scripts/README.md` now documents the upload self-test and clarifies that live mode writes a controlled smoke upload/document/run record.
 
@@ -2803,6 +2806,7 @@ Result:
 - upload smoke self-test passed with `ok=true`;
 - self-test report summary showed `networkCallsRun=false`, `productionWriteAllowed=false`, `fixtureDownloaded=false`, `uploadAttempted=false`, and `assistantRunCreated=false`;
 - self-test contract showed `deliverableState=final_pptx_ready` and all six required deliverable kinds;
+- self-test download validation passed with `pptxSlideCount=1`, `markdownSlideHeadingCount=1`, and all three required PPTX entries present;
 - self-test contract showed supported extensions `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, and `.avi`;
 - redaction audit found no raw URL, token marker, bearer marker, or snake-case upload object key in the self-test report;
 - external video PPT self-test still passed as a control check;

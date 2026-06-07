@@ -861,6 +861,71 @@ function workflowIdFromIngest(ingest) {
     || null;
 }
 
+function minimalPptxFixtureBytes() {
+  return minimalZipBytes([
+    '[Content_Types].xml',
+    '_rels/.rels',
+    'ppt/presentation.xml',
+    'ppt/_rels/presentation.xml.rels',
+    'ppt/slides/slide1.xml',
+    'ppt/slides/_rels/slide1.xml.rels',
+    'ppt/notesSlides/notesSlide1.xml',
+  ]);
+}
+
+function minimalZipBytes(entryNames) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  for (const entryName of entryNames) {
+    const fileNameBytes = Buffer.from(entryName, 'utf8');
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(0, 18);
+    localHeader.writeUInt32LE(0, 22);
+    localHeader.writeUInt16LE(fileNameBytes.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, fileNameBytes);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(0, 20);
+    centralHeader.writeUInt32LE(0, 24);
+    centralHeader.writeUInt16LE(fileNameBytes.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, fileNameBytes);
+    offset += localHeader.length + fileNameBytes.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(entryNames.length, 8);
+  end.writeUInt16LE(entryNames.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
+
 function buildSelfTestArtifact() {
   return {
     id: 'html-artifact-self-test-video-extraction',
@@ -889,7 +954,39 @@ function buildSelfTestArtifact() {
   };
 }
 
-function assertSelfTestUploadContract() {
+async function buildSelfTestDownloads(args, runId) {
+  const downloadsDir = join(process.cwd(), args.outputDir, `${runId}-downloads`);
+  await mkdir(downloadsDir, { recursive: true });
+  const payloads = {
+    pptx: minimalPptxFixtureBytes(),
+    video_slides_markdown: Buffer.from('# Video Slides: Self Test\n\n### Slide 1: 00:00\n\nSelf test slide.\n', 'utf8'),
+    final_deliverables_manifest: Buffer.from('{"status":"self_test"}\n', 'utf8'),
+    published_deliverable_manifest: Buffer.from('{"status":"self_test"}\n', 'utf8'),
+    published_version_history: Buffer.from('{"status":"self_test"}\n', 'utf8'),
+    extraction_artifacts_manifest: Buffer.from('{"status":"self_test"}\n', 'utf8'),
+  };
+  const downloads = [];
+  for (const [index, kind] of REQUIRED_FILE_KINDS.entries()) {
+    const bytes = payloads[kind];
+    const localPath = join(downloadsDir, defaultDownloadName(kind, ''));
+    await writeFile(localPath, bytes);
+    downloads.push({
+      index,
+      kind,
+      ok: true,
+      status: 200,
+      contentType: kind === 'pptx' ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/octet-stream',
+      contentDisposition: '',
+      bytes: bytes.length,
+      localPath,
+      fileName: defaultDownloadName(kind, ''),
+      prefixHex: bytes.subarray(0, 12).toString('hex'),
+    });
+  }
+  return downloads;
+}
+
+async function assertSelfTestUploadContract(args, runId) {
   const dataset = {
     id: 'dataset-self-test-video-ppt-upload',
     key: DEFAULT_DATASET_KEY,
@@ -933,6 +1030,12 @@ function assertSelfTestUploadContract() {
     throw new Error('self-test redacted URL summary leaked path or query data');
   }
 
+  const downloads = await buildSelfTestDownloads(args, runId);
+  const downloadValidation = await validateDownloads(downloads);
+  if (!downloadValidation.ok) {
+    throw new Error(`self-test download validation failed: ${JSON.stringify(downloadValidation)}`);
+  }
+
   return {
     selectedScopeIntent: scope.intent,
     candidateSource: candidate.source,
@@ -940,12 +1043,18 @@ function assertSelfTestUploadContract() {
     requiredFileKinds: REQUIRED_FILE_KINDS,
     supportedVideoExtensions: supported.map((fileName) => extname(fileName)),
     sourceSummaryRedacted: true,
+    downloadValidation: {
+      ok: downloadValidation.ok,
+      pptxSlideCount: downloadValidation.pptx?.slideCount || 0,
+      markdownSlideHeadingCount: downloadValidation.markdown?.slideHeadingCount || 0,
+      requiredEntriesPresent: downloadValidation.pptx?.requiredEntriesPresent || {},
+    },
   };
 }
 
 async function runSelfTest(args) {
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const contract = assertSelfTestUploadContract();
+  const contract = await assertSelfTestUploadContract(args, runId);
   const report = {
     schema: 'v3.video_ppt_upload_main_smoke_self_test.v1',
     summary: {
