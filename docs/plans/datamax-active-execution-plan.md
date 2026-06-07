@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 04:30 CST
-**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；该 public candidate 仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。后续优先进入需要授权的 live gate 或客户授权样例；若暂时没有授权，再继续本地 crop/sharpness/第二公开视频样例窄修复。
+**更新时间：** 2026-06-08 04:47 CST
+**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。后续优先进入需要授权的 live gate 或客户授权样例；若暂时没有授权，再继续本地 crop/sharpness/字幕或更多 public 样例窄修复。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过。
@@ -9,7 +9,7 @@
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；没有执行 live capture，没有接入 8 服务器生产服务。
 - P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown、清晰度/可读性风险提示均有本地验证。
 - P2-2E 三样例质量矩阵 self-test scaffold、本地 `generated_artifacts/` 输入适配和 public-course deliverables 分类入口已完成；quality matrix 可用 `--synthetic-deliverables <path>` 复核合成类本地产物，也可用 `--public-course-deliverables <path>` 把匿名公开视频样例归到 `public_course_video`。
-- S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`；selected manifest 语义已修正为 `requested_selected_candidate_indices` 记录去重前请求，`selected_candidate_indices` 记录最终入选页；32x32 visual signature + changed-sample guard 已让 public candidate 从 5 页提升到 7 页，覆盖更多 build 内容；best-sharpness 代表帧选择把质量分提升到 61、sharpness high 页从 4 降到 3；visual-shape duplicate 已补保守去重路径和回归，shape-dedupe 复跑仍为 9 requested、7 selected、2 visual near duplicates、0 shape duplicates。该 public candidate 可作为真实公开视频样例回执，但质量结论仍是需人工复核，不是无条件可交付。
+- S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`；selected manifest 语义已修正为 `requested_selected_candidate_indices` 记录去重前请求，`selected_candidate_indices` 记录最终入选页；32x32 visual signature + changed-sample guard 已让 public candidate 从 5 页提升到 7 页，覆盖更多 build 内容；best-sharpness 代表帧选择把质量分提升到 61、sharpness high 页从 4 降到 3；visual-shape duplicate 已补保守去重路径和回归，shape-dedupe 复跑仍为 9 requested、7 selected、2 visual near duplicates、0 shape duplicates。第二/第三 public probe 证明额外匿名 slides 视频可跑通交付契约，其中 `Layered Nix Stores` 暴露并修复了白底模板 build 被 shape duplicate 误删的问题，修复后为 4 requested、3 selected、0 shape duplicates、quality score 68。当前 public 类样例可作为真实公开视频回执，但质量结论仍是需人工复核，不是无条件可交付。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
@@ -57,10 +57,11 @@
 P2-2E-1、P2-2E-2A 和 P2-2E-2B-Next 已完成。若暂时没有主站上传授权、第三方 bearer 或 8 服务器部署窗口，后续本地工作只能继续做更窄的质量 fixture、第二个公开视频样例或客户授权前的准备；任何本地 fixture 都不能替代 live 验收：
 
 1. P2-2E-2B-Next 完成结论：public candidate shape-dedupe 复跑仍是 9 requested、7 selected、2 visual near duplicates、0 shape duplicates，quality score 61，质量矩阵仍判 `needs_manual_review`；保守 shape duplicate 规则没有误删 build 页。
-2. P2-2B/P2-2C/P2-2F 的基础本地质量 fixture 已覆盖暗色/亮色/纯色低信息稳定转场、深色主题内容页防误伤、低对比字迹质量报告、讲师小窗/外部前景 crop 和短动画转场；后续更复杂动画 build/真实遮挡仍需真实样例复核。
-3. 若 public candidate validator 通过但质量分仍低，按 `slide_quality_report.json` 的 risk flags 判断是继续 crop/dedupe/清晰度修复，还是标记为 `需人工复核`。
-4. 已有 public candidate `需人工复核` 回执；客户授权样例仍缺失前，不声称三样例质量矩阵完成。
-5. 任何本地质量切片都不跑 live smoke、不下载私有视频、不上传文件、不部署；验证通过后追加 `docs/validation/video-ppt-deliverable-smoke.md` 回执并同步 GitHub。
+2. 第二/第三 public probe 完成结论：`Nix in Space` 只选出 1 页，降级为弱对照；`Layered Nix Stores` 先暴露 bright template build 被 shape duplicate 误删，新增 `visual_shape_duplicate_max_avg_luma` guard 后复跑为 4 requested、3 selected、1 visual near duplicate、0 shape duplicate、quality score 68。
+3. P2-2B/P2-2C/P2-2F 的基础本地质量 fixture 已覆盖暗色/亮色/纯色低信息稳定转场、深色主题内容页防误伤、低对比字迹质量报告、讲师小窗/外部前景 crop、短动画转场和白底 build 防误删；后续更复杂动画 build/真实遮挡仍需真实样例复核。
+4. 若 public candidate validator 通过但质量分仍低，按 `slide_quality_report.json` 的 risk flags 判断是继续 crop/dedupe/清晰度修复，还是标记为 `需人工复核`。
+5. 已有 public candidate `需人工复核` 回执；客户授权样例仍缺失前，不声称三样例质量矩阵完成。
+6. 任何本地质量切片都不跑 live smoke、不下载私有视频、不上传文件、不部署；验证通过后追加 `docs/validation/video-ppt-deliverable-smoke.md` 回执并同步 GitHub。
 
 ### 0.5 必须等待授权的动作
 
@@ -160,7 +161,9 @@ ffprobe -hide_banner -v error -show_format -show_streams "<candidate-video-url>"
 11. 复跑 public candidate 时使用新的 `target/video-ppt-public-candidate-extraction-shape-dedupe/` 输出目录；只提交代码、测试和脱敏回执，不提交视频、帧图、PPTX、Markdown 或 `target/` 产物。
 12. P2-2E-2B-Next 已完成保守 visual-shape duplicate 切片：新增 shape duplicate fixture，并把 `visual_shape_duplicate_count` 同步到 selected manifest、rectangle manifest 和 quality report summary；looser containment 曾误删 sparse text/build fixture，因此最终 signal-balance 门槛保持保守。
 13. shape-dedupe public candidate 最终复跑：`deliverable_state=final_pptx_ready`、`frame_count=96`、`requested_selected_count=9`、`selected_count=7`、`visual_duplicate_count=2`、`visual_shape_duplicate_count=0`、`quality_score=61`，validator 通过，public-course matrix 仍为 `needs_manual_review`。
-14. 当前 public candidate 只能证明真实公开视频样例可进入交付包并通过 contract；完整 P2-2E 仍缺客户授权样例。
+14. 第二 public probe `Nix in Space` 可匿名下载并通过交付契约，但只选出 1 页浏览器/Google Slides 画面，降级为弱对照样例。
+15. 第三 public probe `Layered Nix Stores` 暴露 bright template build 被 shape duplicate 误删：修复前 4 requested 被压到 1 selected；新增 `visual_shape_duplicate_max_avg_luma` 后复跑为 4 requested、3 selected、1 visual near duplicate、0 shape duplicates、quality score 68，validator 和 public-course matrix 通过。
+16. 当前 public candidates 只能证明真实公开视频样例可进入交付包并通过 contract；完整 P2-2E 仍缺客户授权样例。
 
 验收结论必须落到三类之一：
 
@@ -1613,6 +1616,14 @@ P2-2E-2B-Next 完成结果：
 - public candidate validator 通过，public-course quality matrix 仍为 `needs_manual_review`；
 - 页面级复核结论：最终页都是真实课件页，但仍包含弱 fade/清晰度/字幕缺失等风险，因此保持 `需人工复核`，不强行标记为 clean deliverable。
 
+第二/第三 public probe follow-up：
+
+- `Nix in Space` 可匿名下载并通过离线交付契约，但只选出 1 页浏览器/Google Slides 画面，作为弱对照记录，不作为更强 public-course 样例；
+- `Layered Nix Stores` 初次复跑暴露 bright template build 误删问题：shape duplicate 把 4 requested 压到 1 selected；
+- 新增 `visual_shape_duplicate_max_avg_luma=140.0` 和 `keeps_bright_template_build_states_out_of_visual_shape_dedupe`，避免白底模板 build 被 shape duplicate 删除；
+- `Layered Nix Stores` 修复后复跑为 `frame_count=22`、`requested_selected_count=4`、`selected_count=3`、`visual_duplicate_count=1`、`visual_shape_duplicate_count=0`、`quality_score=68`；
+- 修复后 `Layered Nix Stores` validator 通过，public-course quality matrix 仍为 `needs_manual_review`，客户授权样例仍 pending。
+
 ### 5.9 部署门槛
 
 本计划本轮不部署。后续如用户明确要求发 8 服务器，按以下门槛走：
@@ -1636,7 +1647,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 作为后端回归基线保留 |
 | 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过并纳入 `smoke:video-ppt-main-visible` release gate，PPTX/Markdown/manifest 可下载 | 作为 P1-3 回归基线保留 |
 | 无字幕 deliverable contract | 无 transcript/subtitle 的公开视频样例 | 没有 `subtitle_page_map.json` 时仍可交付截图型 PPTX，但必须标记 `missing_transcript_alignment` | P0-3 已完成本地切片；validator、media-worker package summary、published manifest、version history 和 durable manifest 已改为条件性契约 | 作为回归保留 |
-| 公开视频课程候选 | media.ccc/NixCon slides MP4 | 真实公开课件视频能通过 validator 并进入 quality matrix | S1 access probe 通过；S2A 离线抽取已生成 PPTX/Markdown/quality report，deliverables validator 通过，quality matrix 判为 `needs_manual_review`；selected manifest、稀疏文字/build 选页、best-sharpness 代表帧、visual-shape duplicate 保守去重均已完成本地修复；shape-dedupe 最终复跑仍为 7 页、质量分 61、`needs_manual_review` | 若无授权，可选第二个公开视频样例或继续 crop/sharpness 窄修复；完整 P2-2E 仍等待客户授权样例 |
+| 公开视频课程候选 | media.ccc/NixCon slides MP4 | 真实公开课件视频能通过 validator 并进入 quality matrix | S1 access probe 通过；S2A 离线抽取已生成 PPTX/Markdown/quality report，deliverables validator 通过，quality matrix 判为 `needs_manual_review`；selected manifest、稀疏文字/build 选页、best-sharpness 代表帧、visual-shape duplicate 保守去重均已完成本地修复；shape-dedupe 最终复跑仍为 7 页、质量分 61、`needs_manual_review`；`Nix in Space` 降级为 1 页弱对照；`Layered Nix Stores` 修复 bright-template build 误删后为 3 页、quality score 68、`needs_manual_review` | 若无授权，可继续 crop/sharpness/字幕公开样例窄修复；完整 P2-2E 仍等待客户授权样例 |
 | 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help 检查；live/controlled 回执待授权 | P1-3B |
 | 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 self-test；live 回执待 bearer/授权 | P1-3C live |
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
@@ -1698,6 +1709,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M6C | P2-2E-2B 稀疏文字/build 状态自动选页修复 | 无 live 授权；复用 `target/` 下 public candidate | 已通过 sparse-text build fixture、`auto_selects`、selected-slide tests、controlled contract、`npm run test:video-deliverables`、public candidate offline smoke、public candidate validator、public-course quality matrix | 已完成：visual signature 升级到 32x32，新增 changed-sample guard；public candidate 当前为 9 requested、7 selected、2 duplicates removed，覆盖更多 build 内容但仍需人工复核 | 未部署 |
 | M6D | P2-2E-2B 稳定段 best-sharpness 代表帧选择 | 无 live 授权；复用 `target/` 下 public candidate | 已通过 best-sharpness rule test、`auto_selects`、selected-slide tests、controlled contract、`npm run test:video-deliverables`、public candidate offline smoke、public candidate validator、public-course quality matrix | 已完成：稳定段内优先选 sharpness score 更高的代表帧；public candidate 当前 quality score=61、sharpness high=3、仍为 `needs_manual_review` | 未部署 |
 | M6E | P2-2E-2B-Next 页面级复核与 visual-shape/fade duplicate 窄修复 | 无 live 授权；复用 `target/` 下 public candidate | 已通过 `cargo fmt --check`、shape duplicate fixture、selected-slide/auto-select/controlled contract、`npm run test:video-deliverables`、`cargo check -p media-worker --bin video_ppt_offline_smoke`、shape-dedupe public candidate offline smoke、validator、public-course quality matrix | 已完成：保守 shape duplicate 计数进入 selected/rectangle/quality report；public candidate 仍为 7 页、quality score 61、`needs_manual_review`，且 build fixture 未被误删 | 未部署 |
+| M6F | P2-2E public probe follow-up 与白底 build 防误删 | 无 live 授权；使用额外 media.ccc public slides 样例 | 已通过 bright-template build guard fixture、shape duplicate fixture、selected-slide/auto-select tests、`Layered Nix Stores` fixed offline smoke、validator、public-course quality matrix | 已完成：`Nix in Space` 降级为 1 页弱对照；`Layered Nix Stores` 修复后从 1 页恢复到 3 页，`visual_shape_duplicate_count=0`，quality score=68，仍为 `needs_manual_review` | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |

@@ -1601,6 +1601,76 @@ Safety result:
 - public candidate media, frames, generated PPTX, manifests, quality matrix output, and contact-sheet review image stayed under `target/` and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
 
+## 2026-06-08 Second Public Course Probe And Bright Template Build Guard
+
+Task source: no-auth follow-up from `docs/plans/datamax-active-execution-plan.md` after P2-2E-2B-Next.
+
+Scope:
+
+- try additional anonymous public-course slides videos to avoid relying on a single media.ccc sample;
+- keep all downloads, frames, PPTX, Markdown, and matrix reports under `target/`;
+- verify that visual-shape duplicate does not remove meaningful white-background slide build states;
+- avoid main-site writes, third-party events, browser recording, service builds, service restarts, and 8-server deployment.
+
+Additional public probes:
+
+- `Nix in Space` slides MP4 was anonymously accessible and downloaded to `target/`; ffprobe reported about 296.8 seconds and about 9.9 MB.
+- `Nix in Space` offline smoke completed with `final_pptx_ready`, `frame_count=20`, but selected only 1 final page. Page-level review showed a browser/Google Slides screen with a single visible title-like slide. This candidate is useful as a contract smoke but downgraded as a weak public-course quality sample.
+- `Layered Nix Stores` slides MP4 was anonymously accessible and downloaded to `target/`; ffprobe reported about 332.4 seconds and about 15 MB.
+- Before the guard, `Layered Nix Stores` exposed an over-dedupe bug: requested candidates `[4, 8, 10, 16]` were reduced to `[4]` by `visual_shape_duplicate_count=3`, even though candidate 8 showed bullet content that candidate 4 did not.
+
+Implemented guard:
+
+- visual-shape duplicate now refuses bright/white-template signatures with average luma above the conservative threshold;
+- rectangle manifest records `visual_shape_duplicate_max_avg_luma`;
+- new fixture `keeps_bright_template_build_states_out_of_visual_shape_dedupe` creates a bright slide template with increasing bullet build states and verifies all requested pages are preserved with `visual_shape_duplicate_count=0`;
+- dark-theme shape duplicate coverage remains in `dedupes_selected_slide_manifest_by_visual_shape_similarity`.
+
+Validation:
+
+```text
+cargo fmt
+CC=clang CXX=clang++ cargo test -p media-worker keeps_bright_template_build_states_out_of_visual_shape_dedupe --lib
+CC=clang CXX=clang++ cargo test -p media-worker dedupes_selected_slide_manifest_by_visual_shape_similarity --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slide --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects --lib
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input <target-layered-nix-stores-slides-mp4> --output-root target/video-ppt-public-candidate-extraction-third-fixed --ffmpeg-bin /opt/homebrew/bin/ffmpeg --interval-seconds 15 --title "Public slides sample 3: Layered Nix Stores" --json-output target/video-ppt-public-candidate-extraction-third-fixed/offline-smoke-summary.json
+node tools/validate-video-deliverables.mjs <third-public-candidate-fixed-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <third-public-candidate-fixed-generated_artifacts> --pretty --output-dir target/video-ppt-public-candidate-quality-matrix-third-fixed
+```
+
+Result:
+
+- bright-template build-state guard fixture passed;
+- visual shape duplicate fixture still passed;
+- selected-slide regression passed, 5 tests;
+- auto-selection regression passed, 7 tests;
+- fixed `Layered Nix Stores` public smoke completed with `deliverable_state=final_pptx_ready`;
+- fixed `Layered Nix Stores` `frame_count=22`;
+- fixed `Layered Nix Stores` requested/final selected indices changed from over-deduped `[4]` to `[4, 8, 16]`;
+- fixed duplicate counts: `deduped_candidate_count=1`, `visual_duplicate_count=1`, `visual_shape_duplicate_count=0`;
+- remaining rejected candidate 10 was a visual near-duplicate of candidate 8;
+- fixed quality score: 68;
+- fixed rectangle status/mode: detector crop via `edge_projection_v1`, no full-frame fallback;
+- fixed risk flags: `missing_transcript_alignment`, `selected_slide_duplicates_removed`, and `manual_review_required`;
+- fixed public candidate validator passed for PPTX, Markdown, slide notes, rectangle manifest, quality report, and final/published/version/extraction manifests;
+- fixed public-course quality matrix passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`.
+
+Current conclusion:
+
+- second and third public probes confirm the pipeline can handle additional anonymous public slides videos, but both remain `needs_manual_review`;
+- `Nix in Space` is downgraded because it selected a single browser/Slides page;
+- `Layered Nix Stores` is a useful regression sample because it caught bright-template build over-dedupe and now preserves meaningful build content;
+- full P2-2E remains incomplete until a customer-authorized sample is available.
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no WeChat Video Channels page was fetched;
+- no main-site upload, third-party event, live smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- public probe media, frames, generated PPTX, manifests, and quality matrix outputs stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
+
 ## 2026-06-08 Public Candidate Sparse Text Build Auto-Selection
 
 Task source: P2-2E-2B / P2-2C follow-up from `docs/plans/datamax-active-execution-plan.md`.

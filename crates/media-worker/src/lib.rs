@@ -48,6 +48,7 @@ const VIDEO_VISUAL_SHAPE_DUPLICATE_MIN_JACCARD: f64 = 0.86;
 const VIDEO_VISUAL_SHAPE_DUPLICATE_MIN_CONTAINMENT: f64 = 0.96;
 const VIDEO_VISUAL_SHAPE_DUPLICATE_MIN_SIGNAL_BALANCE: f64 = 0.80;
 const VIDEO_VISUAL_SHAPE_DUPLICATE_MIN_SIGNAL_SAMPLES: usize = 6;
+const VIDEO_VISUAL_SHAPE_DUPLICATE_MAX_AVG_LUMA: f64 = 140.0;
 const VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF: f64 = 2.0;
 const VIDEO_AUTO_SLIDE_SEGMENT_CHANGED_SAMPLE_MIN_DIFF: u8 = 24;
 const VIDEO_AUTO_SLIDE_SEGMENT_MAX_CHANGED_SAMPLE_RATIO: f64 = 0.012;
@@ -1641,6 +1642,9 @@ fn video_visual_near_duplicate_match<'a>(
 
 fn video_visual_signature_shape_mask(signature: &VideoFrameVisualSignature) -> Option<Vec<bool>> {
     let (avg_luma, min_luma, max_luma) = video_visual_signature_luma_summary(signature)?;
+    if avg_luma > VIDEO_VISUAL_SHAPE_DUPLICATE_MAX_AVG_LUMA {
+        return None;
+    }
     let luma_range = max_luma.saturating_sub(min_luma);
     if luma_range < 12 {
         return None;
@@ -3675,6 +3679,7 @@ fn video_slide_rectangles_manifest_from_selected_slides(
             "visual_shape_duplicate_min_containment": VIDEO_VISUAL_SHAPE_DUPLICATE_MIN_CONTAINMENT,
             "visual_shape_duplicate_min_signal_balance": VIDEO_VISUAL_SHAPE_DUPLICATE_MIN_SIGNAL_BALANCE,
             "visual_shape_duplicate_min_signal_samples": VIDEO_VISUAL_SHAPE_DUPLICATE_MIN_SIGNAL_SAMPLES,
+            "visual_shape_duplicate_max_avg_luma": VIDEO_VISUAL_SHAPE_DUPLICATE_MAX_AVG_LUMA,
         },
         "crop_policy": {
             "mode": rectangle_extraction_mode,
@@ -8167,6 +8172,31 @@ mod tests {
         image.save(path).expect("test shape duplicate slide png");
     }
 
+    fn write_test_bright_template_build_slide_png(path: &Path, bullet_count: u8) {
+        let mut image = image::RgbImage::from_pixel(160, 90, image::Rgb([246, 246, 244]));
+        for y in 0..26 {
+            for x in 0..160 {
+                image.put_pixel(x, y, image::Rgb([18, 96, 190]));
+            }
+        }
+        for y in 8..15 {
+            for x in 18..86 {
+                image.put_pixel(x, y, image::Rgb([248, 248, 248]));
+            }
+        }
+        for bullet_index in 0..bullet_count {
+            let top = 38 + u32::from(bullet_index) * 14;
+            for y in top..top + 7 {
+                for x in 30..126 {
+                    image.put_pixel(x, y, image::Rgb([84, 84, 84]));
+                }
+            }
+        }
+        image
+            .save(path)
+            .expect("test bright template build slide png");
+    }
+
     fn write_test_solid_frame_png(path: &Path, tone: [u8; 3]) {
         let image = image::RgbImage::from_pixel(100, 80, image::Rgb(tone));
         image.save(path).expect("test solid frame png");
@@ -10966,6 +10996,62 @@ mod tests {
             slide_quality_report["summary"]["visual_shape_duplicate_count"],
             json!(1)
         );
+    }
+
+    #[test]
+    fn keeps_bright_template_build_states_out_of_visual_shape_dedupe() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-bright-template-build-dedupe-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        write_test_bright_template_build_slide_png(&raw_frames_dir.join("frame_000001.png"), 0);
+        write_test_bright_template_build_slide_png(&raw_frames_dir.join("frame_000002.png"), 1);
+        write_test_bright_template_build_slide_png(&raw_frames_dir.join("frame_000003.png"), 2);
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1, 2, 3]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 3,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["requested_selected_count"], json!(3));
+        assert_eq!(selected_slides["selected_count"], json!(3));
+        assert_eq!(
+            selected_slides["selected_candidate_indices"],
+            json!([1, 2, 3])
+        );
+        assert_eq!(selected_slides["deduped_candidate_count"], json!(0));
+        assert_eq!(selected_slides["visual_duplicate_count"], json!(0));
+        assert_eq!(selected_slides["visual_shape_duplicate_count"], json!(0));
     }
 
     #[test]
