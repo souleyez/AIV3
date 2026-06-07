@@ -53,8 +53,8 @@
 3. 已优先完成：视频/页面材料提取为 PPT 交付物优先通道。
 4. 已完成：后台 enrichment / 去重诊断。
 5. 已完成：duplicate / canonical read-through smoke。
-6. 下一步：被动回答质量离线语料。
-7. 数据源 row identity staging 自测。
+6. 已完成：被动回答质量离线语料。
+7. 下一步：数据源 row identity staging 自测。
 8. 静态页/报表回归语料强化。
 9. 第三方数据库只读状态强化。
 10. operator 观测页小幅打磨。
@@ -415,7 +415,18 @@ git commit -m "Add canonical document readthrough smoke"
 
 ## Task 6：被动回答质量离线语料
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 在不恢复 live hard gate、不拦截正常客户回答的前提下，找出低质量回答和漏触发动作，并形成可回放语料。
+
+**结果：**
+
+- 新增 `scripts/smoke/answer-quality-offline-corpus.mjs --self-test`，只运行本地确定性 fixture，不调用 DataMax、不入队 Codex、不影响客户回答。
+- 离线语料覆盖 10 类已知问题标签：邓工、一字 PDF、doc 问邓工、简历公司统计、多维简历排序、14 份简历项目经历、考勤缺勤/工时/日期格式、养老护理流程、新百取高/风险/销售缺口、临时简历附件范围。
+- 判定 label 覆盖 7 类：资料充足但回答不足、检索供料不相关、应生成报表但缺 artifact、报表链接缺失、报表链接重复、临时附件未进范围、第三方远程 fallback。
+- self-test 生成 redacted report，只记录 case id、覆盖标签、label/count、runtime/redaction flags，不记录原始问题、答案、证据、客户 payload、凭据或 provider payload。
+- 8 服务器只读门禁检查确认 hard gate 和 `answer_quality_autofix` 专用开关未设置，`answer_quality_autofix` 不在 task/capability allowlist 中；当前不会创建 live Codex task。
+- `node --check scripts/smoke/answer-quality-offline-corpus.mjs`、`node scripts/smoke/answer-quality-offline-corpus.mjs --self-test --pretty` 和 `CC=clang CXX=clang++ cargo test -p platform-api answer_quality --lib` 已通过。
 
 **文件：**
 

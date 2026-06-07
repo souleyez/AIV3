@@ -134,6 +134,42 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no raw document text, title, object path, source URL, row dump, payload, credential, cookie, bearer token, local key, database URL, or secret env value was recorded;
   - 120 server was not touched.
 
+### 2026-06-07 Active Plan Task 6 Passive Answer Quality Offline Corpus
+
+- Purpose:
+  - execute Task 6 from `docs/plans/datamax-active-execution-plan.md`;
+  - form a replayable offline corpus for low-quality answer and missed-action detection without restoring the live hard gate or blocking normal customer answers.
+- Code change:
+  - added `scripts/smoke/answer-quality-offline-corpus.mjs`;
+  - the script requires `--self-test`, uses deterministic local fixtures only, and does not call DataMax, enqueue Codex, mutate production state, or affect customer responses;
+  - the generated report records only case ids, coverage tags, labels, counts, runtime flags, and redaction flags.
+- Corpus coverage:
+  - self-test passed with 13 cases, 10 labeled coverage tags, and 7 label families;
+  - coverage tags: `deng_person`, `one_character_pdf`, `doc_deng_person`, `resume_company_stats`, `resume_multidimensional_ranking`, `resume_project_experience_14_docs`, `attendance_absence_workhour_date_format`, `elderly_turning_medicine_handoff`, `xinbai_high_risk_operations_gap`, and `temporary_resume_attachment_scope`;
+  - label counts: `weak_insufficient_evidence_answer=3`, `irrelevant_retrieval_supply=2`, `missing_report_artifact=1`, `missing_report_link=1`, `duplicate_report_link=1`, `temporary_attachment_not_in_scope=1`, and `third_party_remote_fallback=1`;
+  - self-test report: `target/answer-quality-offline-corpus-smoke/answer-quality-offline-corpus-self-test-20260607025726.json`.
+- Local verification:
+  - `node --check scripts/smoke/answer-quality-offline-corpus.mjs` passed;
+  - `node scripts/smoke/answer-quality-offline-corpus.mjs --self-test --pretty` passed, 13 cases and 7 labels;
+  - `CC=clang CXX=clang++ cargo test -p platform-api answer_quality --lib` passed, 35 tests.
+- 8-server read-only hard-gate validation:
+  - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED` present: false;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_GATE_ENABLED=true`: false;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED` present: false;
+  - `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`: false;
+  - `CODEX_HOST_TASK_ENABLED=true`: true;
+  - `CODEX_HOST_TASK_ALLOWLIST` contains `answer_quality_autofix`: false;
+  - `CODEX_HOST_CAPABILITY_ALLOWLIST` contains `answer_quality_autofix`: false;
+  - `CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES` contains `answer_quality_autofix`: false.
+- Conclusion:
+  - the new corpus is passive/offline only;
+  - live `answer_quality_autofix` Codex task creation remains impossible under current 8-server flags and allowlists;
+  - any future automatic optimization or customer-facing quality gate must use a separate controlled operator-approved plan.
+- Safety:
+  - no live chat, live parse, historical enrichment, production enqueue, row mapping, or service restart was run;
+  - no raw prompt, raw answer, evidence body, customer payload, document body, object path, source URL, row dump, credential, cookie, bearer token, local key, database URL, provider payload, or secret env value was recorded;
+  - 120 server was not touched.
+
 ### 2026-06-06 Current-Head Task 1 Release Gate
 
 - Purpose:
