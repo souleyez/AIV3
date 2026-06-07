@@ -475,6 +475,7 @@ function validateSlideQualityReport(report, errors) {
       break;
     }
   }
+  validateOptionalSlideQualitySharpness(report, slides, summary, errors);
 }
 
 function isValidSlideQualityRow(slide) {
@@ -489,8 +490,75 @@ function isValidSlideQualityRow(slide) {
     && ["low", "medium", "high"].includes(slide.ocr_risk)
     && Number.isInteger(slide.ocr_snippet_count)
     && slide.ocr_snippet_count >= 0
+    && isValidOptionalSlideSharpnessRow(slide)
     && typeof slide.review_required === "boolean"
     && isScore(slide.quality_score);
+}
+
+function validateOptionalSlideQualitySharpness(report, slides, summary, errors) {
+  const summaryKeys = [
+    "sharpness_low_count",
+    "sharpness_medium_count",
+    "sharpness_high_count",
+    "sharpness_unknown_count",
+  ];
+  const hasSharpnessSummary = summaryKeys.some((key) => Object.hasOwn(summary, key));
+  const hasSharpnessRows = slides.some((slide) => (
+    Object.hasOwn(slide ?? {}, "sharpness_status")
+      || Object.hasOwn(slide ?? {}, "sharpness_score")
+      || Object.hasOwn(slide ?? {}, "sharpness_risk")
+  ));
+  if (!hasSharpnessSummary && !hasSharpnessRows) {
+    return;
+  }
+  if (!summaryKeys.every((key) => Number.isInteger(summary[key]) && summary[key] >= 0)) {
+    errors.push(issue("slide_quality_report_sharpness_invalid", "slide quality report sharpness summary is invalid", "slide_quality_report"));
+    return;
+  }
+  if (!slides.every(hasValidCompleteSlideSharpness)) {
+    errors.push(issue("slide_quality_report_sharpness_invalid", "slide quality report sharpness rows are invalid", "slide_quality_report"));
+    return;
+  }
+  const counts = {
+    low: 0,
+    medium: 0,
+    high: 0,
+    unknown: 0,
+  };
+  for (const slide of slides) {
+    counts[slide.sharpness_risk] += 1;
+  }
+  if (
+    counts.low !== summary.sharpness_low_count
+    || counts.medium !== summary.sharpness_medium_count
+    || counts.high !== summary.sharpness_high_count
+    || counts.unknown !== summary.sharpness_unknown_count
+  ) {
+    errors.push(issue("slide_quality_report_sharpness_invalid", "slide quality report sharpness counts do not match slide rows", "slide_quality_report"));
+  }
+}
+
+function isValidOptionalSlideSharpnessRow(slide) {
+  const hasAnySharpnessField = Object.hasOwn(slide ?? {}, "sharpness_status")
+    || Object.hasOwn(slide ?? {}, "sharpness_score")
+    || Object.hasOwn(slide ?? {}, "sharpness_risk");
+  if (!hasAnySharpnessField) {
+    return true;
+  }
+  return hasValidCompleteSlideSharpness(slide);
+}
+
+function hasValidCompleteSlideSharpness(slide) {
+  if (!["measured", "unavailable"].includes(slide?.sharpness_status)) {
+    return false;
+  }
+  if (!["low", "medium", "high", "unknown"].includes(slide?.sharpness_risk)) {
+    return false;
+  }
+  if (slide.sharpness_status === "measured") {
+    return isScore(slide.sharpness_score) && slide.sharpness_risk !== "unknown";
+  }
+  return slide.sharpness_score === null && slide.sharpness_risk === "unknown";
 }
 
 function isScore(value) {

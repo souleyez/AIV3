@@ -49,6 +49,9 @@ const VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES: usize = 2;
 const VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES: usize = 96;
 const VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_AVG_LUMA: f64 = 24.0;
 const VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_LUMA_RANGE: u8 = 12;
+const VIDEO_SLIDE_SHARPNESS_TARGET_SAMPLES: f64 = 40_000.0;
+const VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE: i64 = 70;
+const VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE: i64 = 40;
 const VIDEO_REMOTE_INPUT_DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
 const VIDEO_REMOTE_INPUT_DEFAULT_TIMEOUT_SECS: u64 = 60;
 const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
@@ -2288,6 +2291,10 @@ fn video_slide_quality_report_from_manifests(
     let mut subtitle_missing_count = 0_u64;
     let mut ocr_mapped_count = 0_u64;
     let mut ocr_missing_count = 0_u64;
+    let mut sharpness_low_count = 0_u64;
+    let mut sharpness_medium_count = 0_u64;
+    let mut sharpness_high_count = 0_u64;
+    let mut sharpness_unknown_count = 0_u64;
     let mut slide_scores = Vec::<i64>::new();
     let slides = selected_candidates
         .iter()
@@ -2397,6 +2404,13 @@ fn video_slide_quality_report_from_manifests(
             } else {
                 "high"
             };
+            let sharpness = video_slide_sharpness_assessment_from_candidate(candidate);
+            match sharpness.risk {
+                "low" => sharpness_low_count += 1,
+                "medium" => sharpness_medium_count += 1,
+                "high" => sharpness_high_count += 1,
+                _ => sharpness_unknown_count += 1,
+            }
             let mut score = 100_i64;
             if crop_risk == "high" {
                 score -= 25;
@@ -2410,6 +2424,13 @@ fn video_slide_quality_report_from_manifests(
             }
             if ocr_risk == "medium" {
                 score -= 3;
+            }
+            if sharpness.risk == "high" {
+                score -= 12;
+            } else if sharpness.risk == "medium" {
+                score -= 5;
+            } else if sharpness.risk == "unknown" {
+                score -= 4;
             }
             if review_required {
                 score -= 5;
@@ -2430,6 +2451,9 @@ fn video_slide_quality_report_from_manifests(
                 "ocr_alignment_status": ocr_alignment_status,
                 "ocr_snippet_count": ocr_snippet_count,
                 "ocr_risk": ocr_risk,
+                "sharpness_status": sharpness.status,
+                "sharpness_score": sharpness.score,
+                "sharpness_risk": sharpness.risk,
                 "review_required": review_required,
                 "quality_score": score,
             })
@@ -2469,6 +2493,16 @@ fn video_slide_quality_report_from_manifests(
             "review_action": "review_slide_dedupe_manifest",
         }));
     }
+    if sharpness_high_count > 0 || sharpness_unknown_count > 0 {
+        risk_flags.push(json!({
+            "code": "frame_sharpness_review_required",
+            "severity": "medium",
+            "count": sharpness_high_count + sharpness_unknown_count,
+            "high_count": sharpness_high_count,
+            "unknown_count": sharpness_unknown_count,
+            "review_action": "review_blurry_or_unmeasured_slide_frames",
+        }));
+    }
     if review_required_count > 0 {
         risk_flags.push(json!({
             "code": "manual_review_required",
@@ -2496,6 +2530,10 @@ fn video_slide_quality_report_from_manifests(
             "subtitle_missing_count": subtitle_missing_count,
             "ocr_mapped_count": ocr_mapped_count,
             "ocr_missing_count": ocr_missing_count,
+            "sharpness_low_count": sharpness_low_count,
+            "sharpness_medium_count": sharpness_medium_count,
+            "sharpness_high_count": sharpness_high_count,
+            "sharpness_unknown_count": sharpness_unknown_count,
             "deduped_candidate_count": deduped_candidate_count,
             "exact_duplicate_count": exact_duplicate_count,
             "visual_duplicate_count": visual_duplicate_count,
@@ -2512,6 +2550,118 @@ fn video_slide_quality_report_from_manifests(
             "review_slide_quality_report_before_customer_delivery"
         },
     })
+}
+
+#[derive(Clone, Debug)]
+struct VideoSlideSharpnessAssessment {
+    status: &'static str,
+    score: Option<i64>,
+    risk: &'static str,
+}
+
+impl VideoSlideSharpnessAssessment {
+    fn unavailable() -> Self {
+        Self {
+            status: "unavailable",
+            score: None,
+            risk: "unknown",
+        }
+    }
+}
+
+fn video_slide_sharpness_assessment_from_candidate(
+    candidate: &Value,
+) -> VideoSlideSharpnessAssessment {
+    let Some(frame_path) = candidate.get("frame_path").and_then(Value::as_str) else {
+        return VideoSlideSharpnessAssessment::unavailable();
+    };
+    video_slide_sharpness_assessment(Path::new(frame_path))
+}
+
+fn video_slide_sharpness_assessment(frame: &Path) -> VideoSlideSharpnessAssessment {
+    let Some(score) = video_slide_sharpness_score(frame) else {
+        return VideoSlideSharpnessAssessment::unavailable();
+    };
+    let risk = if score >= VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE {
+        "low"
+    } else if score >= VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE {
+        "medium"
+    } else {
+        "high"
+    };
+    VideoSlideSharpnessAssessment {
+        status: "measured",
+        score: Some(score),
+        risk,
+    }
+}
+
+fn video_slide_sharpness_score(frame: &Path) -> Option<i64> {
+    let image = ImageReader::open(frame)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?
+        .to_luma8();
+    let (width, height) = image.dimensions();
+    if width < 2 || height < 2 {
+        return None;
+    }
+    let pixel_count = width as f64 * height as f64;
+    let sample_step = ((pixel_count / VIDEO_SLIDE_SHARPNESS_TARGET_SAMPLES)
+        .sqrt()
+        .ceil() as u32)
+        .max(1);
+    let mut gradients = Vec::<u16>::new();
+    let mut min_luma = u8::MAX;
+    let mut max_luma = u8::MIN;
+    for y in (0..height).step_by(sample_step as usize) {
+        for x in (0..width).step_by(sample_step as usize) {
+            let luma = image.get_pixel(x, y).0[0];
+            min_luma = min_luma.min(luma);
+            max_luma = max_luma.max(luma);
+            if x + 1 < width {
+                let right = image.get_pixel(x + 1, y).0[0];
+                gradients.push(luma.abs_diff(right) as u16);
+            }
+            if y + 1 < height {
+                let below = image.get_pixel(x, y + 1).0[0];
+                gradients.push(luma.abs_diff(below) as u16);
+            }
+            if sample_step > 1 && x + sample_step < width {
+                let right = image.get_pixel(x + sample_step, y).0[0];
+                gradients.push(luma.abs_diff(right) as u16);
+            }
+            if sample_step > 1 && y + sample_step < height {
+                let below = image.get_pixel(x, y + sample_step).0[0];
+                gradients.push(luma.abs_diff(below) as u16);
+            }
+        }
+    }
+    if gradients.len() < 16 {
+        return None;
+    }
+    let luma_range = max_luma.saturating_sub(min_luma);
+    if luma_range <= 3 {
+        return Some(0);
+    }
+    gradients.sort_unstable();
+    let top_count = (gradients.len() / 10).max(1);
+    let top_sum: u64 = gradients
+        .iter()
+        .rev()
+        .take(top_count)
+        .map(|value| *value as u64)
+        .sum();
+    let top_avg_gradient = top_sum as f64 / top_count as f64;
+    let normalized = ((top_avg_gradient / 70.0) * 100.0).round();
+    let score = normalized.clamp(0.0, 100.0) as i64;
+    if luma_range < 12 {
+        Some(score.min(25))
+    } else {
+        Some(score)
+    }
 }
 
 fn video_slide_rectangle_from_frame(
@@ -7727,6 +7877,31 @@ mod tests {
         image.save(path).expect("test solid frame png");
     }
 
+    fn write_test_sharp_text_slide_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(160, 90, image::Rgb([245, 245, 245]));
+        for y in 10..80 {
+            for x in 16..144 {
+                image.put_pixel(x, y, image::Rgb([252, 252, 252]));
+            }
+        }
+        for x in 28..132 {
+            image.put_pixel(x, 22, image::Rgb([20, 20, 20]));
+            image.put_pixel(x, 23, image::Rgb([20, 20, 20]));
+            image.put_pixel(x, 52, image::Rgb([30, 30, 30]));
+        }
+        for y in 34..70 {
+            image.put_pixel(36, y, image::Rgb([25, 25, 25]));
+            image.put_pixel(76, y, image::Rgb([25, 25, 25]));
+            image.put_pixel(118, y, image::Rgb([25, 25, 25]));
+        }
+        for y in 38..66 {
+            for x in [48, 52, 56, 90, 94, 98, 102] {
+                image.put_pixel(x, y, image::Rgb([15, 15, 15]));
+            }
+        }
+        image.save(path).expect("test sharp text slide png");
+    }
+
     fn assert_public_manifest_file_entry(files: &[Value], kind: &str, file_name: &str) {
         let file = files
             .iter()
@@ -7736,6 +7911,35 @@ mod tests {
         assert_eq!(file["file_name"], json!(file_name));
         assert_eq!(file["path"], json!("[redacted]"));
         assert_eq!(file["path_redacted"], json!(true));
+    }
+
+    #[test]
+    fn measures_slide_frame_sharpness_for_quality_report() {
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-sharpness-test-{}",
+            DocumentId::new()
+        ));
+        fs::create_dir_all(&output_root).expect("sharpness test dir");
+        let sharp_path = output_root.join("sharp-slide.png");
+        let solid_path = output_root.join("solid-slide.png");
+        let missing_path = output_root.join("missing-slide.png");
+        write_test_sharp_text_slide_png(&sharp_path);
+        write_test_solid_frame_png(&solid_path, [244, 244, 244]);
+
+        let sharp = video_slide_sharpness_assessment(&sharp_path);
+        assert_eq!(sharp.status, "measured");
+        assert_eq!(sharp.risk, "low");
+        assert!(sharp.score.unwrap_or_default() >= VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE);
+
+        let solid = video_slide_sharpness_assessment(&solid_path);
+        assert_eq!(solid.status, "measured");
+        assert_eq!(solid.risk, "high");
+        assert!(solid.score.unwrap_or(100) < VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE);
+
+        let missing = video_slide_sharpness_assessment(&missing_path);
+        assert_eq!(missing.status, "unavailable");
+        assert_eq!(missing.risk, "unknown");
+        assert_eq!(missing.score, None);
     }
 
     #[test]
@@ -9840,6 +10044,22 @@ mod tests {
         assert_eq!(
             slide_quality_report_json["summary"]["full_frame_fallback_count"],
             json!(2)
+        );
+        assert_eq!(
+            slide_quality_report_json["summary"]["sharpness_unknown_count"],
+            json!(2)
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["sharpness_status"],
+            json!("unavailable")
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["sharpness_score"],
+            Value::Null
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["sharpness_risk"],
+            json!("unknown")
         );
         assert_eq!(
             slide_quality_report_json["slides"][0]["crop_risk"],

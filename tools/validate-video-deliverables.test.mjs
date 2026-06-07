@@ -262,6 +262,8 @@ test("rejects malformed slide quality reports", () => {
   qualityReport.slide_count = 2;
   qualityReport.risk_count = 9;
   qualityReport.slides[0].crop_risk = "unknown";
+  qualityReport.slides[0].sharpness_status = "broken";
+  qualityReport.summary.sharpness_low_count = -1;
   qualityReport.summary.full_frame_fallback_count = -1;
   fs.writeFileSync(qualityReportPath, JSON.stringify(qualityReport, null, 2));
 
@@ -274,6 +276,7 @@ test("rejects malformed slide quality reports", () => {
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_risk_count_invalid"));
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_slide_row_invalid"));
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_summary_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_sharpness_invalid"));
 });
 
 test("rejects unredacted local paths in slide notes", () => {
@@ -425,6 +428,10 @@ function createCompleteDeliverables() {
           subtitle_missing_count: 0,
           ocr_mapped_count: 1,
           ocr_missing_count: 0,
+          sharpness_low_count: 1,
+          sharpness_medium_count: 0,
+          sharpness_high_count: 0,
+          sharpness_unknown_count: 0,
           deduped_candidate_count: 0,
           exact_duplicate_count: 0,
           visual_duplicate_count: 0,
@@ -448,6 +455,9 @@ function createCompleteDeliverables() {
             ocr_alignment_status: "window_mapped",
             ocr_snippet_count: 1,
             ocr_risk: "low",
+            sharpness_status: "measured",
+            sharpness_score: 82,
+            sharpness_risk: "low",
             review_required: true,
             quality_score: 55,
           },

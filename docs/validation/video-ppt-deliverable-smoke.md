@@ -1399,3 +1399,70 @@ Safety result:
 - no live upload smoke, third-party live smoke, private-video smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
+## 2026-06-08 Slide Sharpness Quality Signal Local Slice
+
+Task source: P2-2F from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- add optional sharpness/readability evidence to `slide_quality_report.json`;
+- keep the signal derived from selected slide frame image bytes only, without provider text or source URL dependence;
+- keep legacy packages valid when the quality report does not contain sharpness fields;
+- use low sharpness as a review signal, not as a hard failure for screenshot-based PPTX delivery;
+- do not change source access policy, WeChat Video Channels handling, capture fallback behavior, upload semantics, or third-party authorization.
+
+Implemented behavior:
+
+- media-worker measures selected slide frame sharpness when the internal frame can be decoded;
+- per-slide quality rows now include `sharpness_status`, `sharpness_score`, and `sharpness_risk`;
+- `sharpness_status=measured` uses a 0-100 score and `low`/`medium`/`high` risk;
+- undecodable or unavailable frames use `sharpness_status=unavailable`, `sharpness_score=null`, and `sharpness_risk=unknown`;
+- quality report summary now includes `sharpness_low_count`, `sharpness_medium_count`, `sharpness_high_count`, and `sharpness_unknown_count`;
+- reports add `frame_sharpness_review_required` when high/unknown sharpness pages need review;
+- validator keeps old reports compatible, but validates sharpness row fields, summary counts, score ranges, enum values, and row/summary consistency when sharpness fields are present;
+- direct sharpness fixture tests distinguish a crisp text-like slide from a uniform low-information frame.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+node --check tools/validate-video-deliverables.mjs
+node --test tools/validate-video-deliverables.test.mjs
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker measures_slide_frame_sharpness_for_quality_report --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+git diff --check
+```
+
+Result:
+
+- Rust formatting and format check passed;
+- validator syntax check passed;
+- validator tests passed, 19 tests;
+- `npm run test:video-deliverables` passed, 19 tests;
+- media-worker sharpness helper test passed, 1 test;
+- media-worker selected-slides test passed, 1 test;
+- controlled video sample deliverable contract passed, 1 test;
+- slide rectangle tests passed, 5 tests;
+- platform-api video extraction tests passed, 3 tests;
+- platform-api video PPT tests passed, 5 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- P2-2B/P2-2C still need broader real-sample quality review for crop fallback, transition frames, speaker obstruction, and dark-theme slides;
+- P2-2D still needs a real approved subtitle/transcript/OCR sample;
+- P2-2E still needs the three-sample quality review matrix and human review conclusions.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
