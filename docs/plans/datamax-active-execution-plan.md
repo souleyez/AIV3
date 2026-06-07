@@ -1,6 +1,6 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 02:18 CST
+**更新时间：** 2026-06-08 02:26 CST
 **当前性质：** 开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback，讲师小窗/外部前景遮挡端到端 crop fixture 已通过；P2-2C 暗色、亮色、纯色低信息稳定段过滤和短动画转场本地 fixture 已完成，降低黑屏、白屏、灰屏、亮色空白、短动画转场误选为 PPT 页的风险，且深色主题内容页防误伤 fixture 已通过；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成；P2-2F 清晰度/可读性质量信号本地切片已完成，`slide_quality_report.json` 现在可输出 sharpness/readability risk，旧包兼容，且低对比字迹端到端质量报告 fixture 已通过；P2-2E 三样例质量矩阵 self-test scaffold 和 P2-2E-1 本地 `generated_artifacts/` 输入适配均已完成，quality matrix 现在可用 `--synthetic-deliverables <path>` 复用 deliverables validator 复核本地产物，但完整三样例验收仍需真实公开视频课程和客户授权样例。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E 真实 public/customer 质量矩阵仍待执行。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
@@ -58,6 +58,177 @@ P2-2E-1 已完成。若暂时没有主站上传授权、第三方 bearer 或 8 �
 - 视频号/登录态 handoff 的 live pass 需要当前代码部署到 8 服务器后复跑；部署必须单独批准。
 - 任何录屏都必须有授权记录；没有 `approval_id`、批准人、来源、用途、时长、音频策略、保留期和 handoff 目标时不得执行 live capture。
 - 8 服务器内部录屏默认不启用；要评审依赖、隔离浏览器 profile、时长/容量/并发限制、清理策略和回滚窗口。
+
+### 0.6 下一阶段完整可执行方案
+
+本节是当前版本的实际执行入口。它把“继续开发”“测试视频里已有 PPT 的抽取效果”“微信视频号等拿不到视频文件的来源怎么处理”和“是否上 8 服务器”拆成独立门槛，避免把本地验证、live smoke、发版和授权录屏混在一起。
+
+#### 0.6.1 总体目标与不变量
+
+目标：
+
+1. 把视频中已经播放的 PPT、幻灯片、课件画面抽取成截图型 PPTX、`video_slides.md`、notes、manifest 和质量报告。
+2. 证明入口覆盖主站直链、主站上传、第三方登记和公开页面 resolver。
+3. 对微信视频号、登录态网页、客户私有平台等无法匿名下载视频文件的来源，给出可执行 handoff 或授权录屏兜底。
+4. 用合成样例、公开视频课程、客户授权样例三类输入复核抽取质量，而不是只靠一个公开视频直链样例。
+
+不变量：
+
+- 不把普通视频“创作成 PPT”；只抽取视频里已经出现的课件/幻灯片页面。
+- 不绕过登录、DRM、平台权限或客户授权；不要求用户交 cookie、扫码截图、账号密码、浏览器 storage 或 HAR。
+- 不把 self-test、synthetic fixture 或后端 workflow smoke 说成 live 主站验收。
+- 不提交原始视频、生成的 PPTX/帧图、客户文件、私有 object path、source URL、token、cookie、provider payload 或数据库 URL。
+- GitHub 同步可以做；8 服务器发版、pull、build、restart 必须单独得到用户明确批准。
+
+#### 0.6.2 默认执行顺序
+
+如果用户没有额外授权，默认先走不写生产数据、不部署的路线；一旦拿到授权，再进入对应 live gate。
+
+| 顺序 | 执行包 | 是否现在可做 | 是否写生产数据 | 是否需要 8 服务器部署 | 完成后得到什么 |
+| ---: | --- | --- | --- | --- | --- |
+| S1 | 公开视频课程候选准备与访问探测 | 可做 | 否 | 否 | 一个或多个匿名可下载、适合抽 PPT 的公开视频课程候选；只记录脱敏 metadata |
+| S2 | P2-2E public course 离线/受控抽取计划 | 取决于 S1 样例 | 否，除非走主站上传 smoke | 否 | 公开视频课程样例的抽取命令、质量复核表和失败归因模板 |
+| S3 | P1-3B 主站上传 controlled smoke | 待用户批准 | 是，写一条非客户 smoke 上传/文档/run | 否，除非现网缺修复 | 上传视频入口能否生成并下载 PPTX/Markdown/manifests 的 live 回执 |
+| S4 | P1-3C 第三方登记 controlled smoke | 待 bearer/context | 是，写第三方 smoke event/run | 否，除非现网缺修复 | 第三方“登记视频素材”和“提取视频里的 PPT”特殊触发的 live 回执 |
+| S5 | P1-3D 视频号/登录态 handoff live pass | 待部署窗口 | 只写 lightweight smoke，不抓视频 | 是，需批准后部署当前修复 | 主站/第三方返回 handoff 卡片，不走 provider、不生成 PPT |
+| S6 | P2-1C 授权录屏样例 | 待 operator 授权 | 录屏文件按授权策略保留 | 默认否；8 内部录屏另批 | 一个普通 MP4 输入，随后复用主站上传或第三方登记抽取 |
+| S7 | P2-2E 客户授权质量矩阵 | 待客户/operator 授权 | 视授权输入而定 | 否，除非质量修复需部署 | 客户样例脱敏质量结论：可交付、需复核或不可交付 |
+
+#### 0.6.3 公开视频课程样例执行计划
+
+目的：补齐 P2-2E 真实 public course 样例，验证真实课件视频中的黑边、讲师小窗、转场、弱字幕、低清晰度和重复页，而不是继续只依赖 synthetic fixture。
+
+候选标准：
+
+- 来源公开、非客户、非登录态、非 DRM。
+- 可以匿名下载或 Range 读取；优先 `.mp4`、`.webm`、`.m4v` 等直接视频 URL。
+- 视频内容明确包含正在播放的 PPT、幻灯片、白板课件或课程页面。
+- 文件大小和时长适合受控 smoke；优先短视频或可截取片段，不把大文件提交到 Git。
+- 记录只写 host、content type、size bucket、range support、duration、是否包含课件画面、为什么适合测试；不写敏感 query、私有 object path 或本地下载路径。
+
+访问探测建议：
+
+```bash
+curl -fsSI -L "<candidate-video-url>"
+curl -fsSIL -H "Range: bytes=0-1048575" "<candidate-video-url>"
+ffprobe -hide_banner -v error -show_format -show_streams "<candidate-video-url>"
+```
+
+如果必须下载，下载目录只能在 `target/` 下，例如 `target/video-ppt-public-course-fixtures/`；下载文件、抽帧、PPTX、contact sheet 和 matrix report 都不提交。
+
+抽取后复核：
+
+1. 用现有视频抽取流程生成 `generated_artifacts/`。
+2. 运行 `node tools/validate-video-deliverables.mjs <generated_artifacts>`。
+3. 运行 `npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <generated_artifacts> --pretty --output-dir target/video-ppt-quality-matrix-smoke`。
+4. 人工抽样检查 PPTX 页、`video_slides.md` 页数、`selected_slides_manifest`、`slide_rectangles_manifest`、`slide_quality_report.json`。
+5. 在 `docs/validation/video-ppt-deliverable-smoke.md` 追加脱敏回执；不能因为 public course 通过就标记 customer 样例完成。
+
+验收结论必须落到三类之一：
+
+- `可交付`：主要课件页完整可读，PPTX/Markdown/manifest 下载或本地包校验通过，质量报告无阻断风险。
+- `需人工复核`：PPTX 生成但存在较多 crop fallback、遮挡、重复页、低清晰度、缺字幕映射或页数偏差。
+- `不可交付`：视频不可匿名访问、内容没有 PPT/课件、抽帧失败、PPTX 无效、关键页缺失或产物无法安全发布。
+
+#### 0.6.4 微信视频号和登录态来源处理计划
+
+当前策略保持保守：`weixin.qq.com/sph/...`、`channels.weixin.qq.com/sph/...`、二维码登录页、私有播放页都不进入自动下载、抽帧或 OCR。原因是这些链接通常是播放入口，不是匿名可下载视频文件；公开文档和生态说明只支持打开/跳转到视频号视频，参数形态是 `finderUserName` 与 `feedId`，不是提供可下载媒体文件 URL。
+
+产品行为：
+
+1. 主站和第三方都返回 `login_gated_video_source_not_supported`。
+2. 回复只给三条路：上传视频文件、提供匿名直接视频 URL、申请授权录屏处理。
+3. 回复必须明确“当前没有拿到视频文件，因此还不能抽帧、OCR、转写或生成 PPT”。
+4. 不要求 cookie、扫码、账号密码、浏览器登录态或平台内部接口 payload。
+5. 如果用户之后上传同一视频文件或提供公开视频直链，则按普通视频输入重新触发“提取 PPT/幻灯片/课件”。
+
+live 验收只验证 handoff，不验证抽取：
+
+```bash
+npm run smoke:video-ppt-handoff -- --self-test
+npm run smoke:video-ppt-handoff -- \
+  --mode main \
+  --base-url https://v3.elepcloud.com \
+  --local-thread-id video-ppt-handoff-YYYYMMDD-01 \
+  --timeout-ms 60000 \
+  --output-dir target/video-ppt-handoff-main-smoke
+```
+
+执行门槛：
+
+- self-test 可随时跑。
+- main/external live pass 需要当前 deterministic handoff 修复已经部署到 8 服务器；部署必须单独批准。
+- 第三方 live pass 还需要 inbound bearer、`connection_id` 和 `source_id`。
+
+#### 0.6.5 授权录屏兜底计划
+
+录屏兜底只解决“operator 已合法播放但拿不到视频文件”的问题。录屏结果是一个普通 `.mp4` 输入，后续完全复用现有 `VideoExtraction`，不新建另一套 PPT 抽取逻辑。
+
+执行分层：
+
+1. 先让用户/客户尽量上传视频文件或给匿名直连 URL。
+2. 无直链但已授权播放时，优先在 operator workstation 或 jump-host 做短时录屏。
+3. 录完人工检查 MP4 是否确实包含课件/幻灯片画面，再通过 P1-3B 主站上传或 P1-3C 第三方登记触发抽取。
+4. 只有当业务明确要求服务器内部录制时，才评审 8 服务器 capture fallback；默认 `CAPTURE_FALLBACK_ENABLED=false`，不进入生产路径。
+
+最小授权记录：
+
+- `approval_id`
+- `approved_by`
+- `source_host_redacted`
+- `purpose`
+- `max_duration_seconds`
+- `capture_audio_allowed`
+- `retention_days`
+- `cleanup_policy`
+- `handoff_to_datamax`
+
+本地/受控 host 验收命令：
+
+```bash
+npm run capture:authorized-video -- --self-test
+npm run capture:authorized-video -- \
+  --dry-run \
+  --ack-authorized \
+  --approval-id APPROVAL-YYYYMMDD-001 \
+  --approved-by operator-name \
+  --url https://example.com/authorized-video-page \
+  --purpose "authorized courseware video; upload/direct URL unavailable" \
+  --duration-seconds 60 \
+  --handoff upload-main
+```
+
+8 服务器内部录屏评审项：
+
+- 显式开关，默认关闭。
+- 独立临时 browser profile，不持久化登录态。
+- Xvfb/Chrome/FFmpeg 或同等组件只用于短时任务。
+- 并发 1、最大时长、最大文件大小、目标目录容量、清理定时器全部有硬限制。
+- 日志仅记录 redacted host、job id、duration、file size、hash prefix、cleanup result。
+- 部署、依赖安装、服务 restart 和 rollback 窗口全部单独审批。
+
+#### 0.6.6 质量复核和完成定义
+
+每条真实样例回执必须包含：
+
+- 输入类别：direct URL、uploaded video、public page resolver、third-party registered video、authorized capture。
+- 触发语是否明确包含“提取 PPT/幻灯片/课件”。
+- workflow id、assistant run id 或 third-party run id。
+- `frame_count`、`selected_count`、PPTX slide count、Markdown slide count。
+- 交付文件：PPTX、`video_slides.md`、slide notes、rectangle manifest、selected slides manifest、final/published/version/extraction manifests、可选 quality report 和条件性 subtitle map。
+- 质量风险：crop fallback、speaker obstruction、transition frame、duplicate removal、subtitle missing、OCR missing、sharpness/readability risk。
+- 结论：可交付、需人工复核、不可交付。
+- 失败归因：source access、video has no PPT、frame extraction、crop quality、subtitle alignment、artifact visibility、authorization missing、deployment missing。
+
+阶段完成定义：
+
+- `计划完成`：本文件和桌面副本同步；下一阶段步骤、命令、授权门槛、验收证据和失败归因清楚；GitHub 可同步 doc-only 变更。
+- `本地质量完成`：相关 Rust/Node tests 和 `validate-video-deliverables` 通过，validation 台账有脱敏回执。
+- `主站入口完成`：P1-3B live controlled smoke 证明上传视频文件可以生成并下载 PPTX/Markdown/manifests。
+- `第三方入口完成`：P1-3C live controlled smoke 证明第三方登记视频后，特殊触发能返回可见产物或明确 artifact visibility 缺口。
+- `视频号处理完成`：P1-3D live pass 证明只返回 handoff，不抓取、不抽帧、不走 provider。
+- `录屏兜底完成`：P2-1C 授权样例生成 MP4，并复用普通视频抽取链路得到可复核结果。
+- `三样例质量矩阵完成`：合成 PPT、公开视频课程、客户授权样例三类都有脱敏回执和人工质量结论；任何一类 pending 时不得标记完整完成。
 
 ## 1. 计划原则
 
