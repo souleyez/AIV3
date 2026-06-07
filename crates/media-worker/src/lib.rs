@@ -11157,6 +11157,132 @@ mod tests {
     }
 
     #[test]
+    fn writes_foreground_component_crop_for_speaker_window_obstruction() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-speaker-window-crop-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        write_test_slide_with_external_foreground_png(&raw_frames_dir.join("frame_000001.png"));
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 1,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+        let files = manifest["files"].as_array().expect("files");
+
+        let slide_rectangles_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide rectangles manifest path");
+        let slide_rectangles: Value = serde_json::from_str(
+            &fs::read_to_string(slide_rectangles_path).expect("slide rectangles manifest"),
+        )
+        .expect("slide rectangles manifest json");
+        assert_eq!(
+            slide_rectangles["rectangle_extraction_status"],
+            json!("promoted_detector_crop")
+        );
+        assert_eq!(
+            slide_rectangles["rectangle_extraction_mode"],
+            json!("foreground_component_v1")
+        );
+        assert_eq!(slide_rectangles["promoted_rectangle_count"], json!(1));
+        assert_eq!(
+            slide_rectangles["rectangles"][0]["rectangle_source"],
+            json!("raw_frame_foreground_component")
+        );
+        assert_eq!(
+            slide_rectangles["rectangles"][0]["detector"]["name"],
+            json!("foreground_component_v1")
+        );
+        let crop_box = &slide_rectangles["rectangles"][0]["crop_box"];
+        assert_eq!(crop_box["x"], json!(0.2));
+        assert_eq!(crop_box["y"], json!(0.125));
+        assert_eq!(crop_box["width"], json!(0.6));
+        assert_eq!(crop_box["height"], json!(0.625));
+
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(
+            selected_slides["rectangle_extraction_mode"],
+            json!("foreground_component_v1")
+        );
+        assert_eq!(selected_slides["selected_count"], json!(1));
+
+        let slide_quality_report_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide quality report path");
+        let slide_quality_report =
+            fs::read_to_string(slide_quality_report_path).expect("slide quality report");
+        assert!(!slide_quality_report.contains(&raw_frames_dir.display().to_string()));
+        let slide_quality_report_json: Value =
+            serde_json::from_str(&slide_quality_report).expect("quality report json");
+        assert_eq!(
+            slide_quality_report_json["summary"]["detector_crop_count"],
+            json!(1)
+        );
+        assert_eq!(
+            slide_quality_report_json["summary"]["full_frame_fallback_count"],
+            json!(0)
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["rectangle_extraction_mode"],
+            json!("foreground_component_v1")
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["crop_risk"],
+            json!("medium")
+        );
+
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        let mut slide_xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .expect("slide xml")
+            .read_to_string(&mut slide_xml)
+            .expect("slide xml text");
+        assert!(slide_xml.contains(r#"<a:srcRect l="20000" r="20000" t="12500" b="25000"/>"#));
+        assert!(slide_xml.contains("crop promoted_detector_crop/foreground_component_v1"));
+        assert!(!slide_xml.contains(&raw_frames_dir.display().to_string()));
+    }
+
+    #[test]
     fn detects_slide_rectangle_from_edges_when_background_is_not_uniform() {
         let output_root = std::env::temp_dir().join(format!(
             "aidp-v3-video-edge-projection-test-{}",

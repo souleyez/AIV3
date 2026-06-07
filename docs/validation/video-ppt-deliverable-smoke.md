@@ -1675,7 +1675,65 @@ Result:
 
 Remaining P2-2 work:
 
-- speaker-window obstruction and animation transition fixtures still need broader local coverage;
+- animation transition fixtures still need broader local coverage;
+- P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
+- P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated temp frames stayed under test temp directories and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
+## 2026-06-08 Speaker-Window Foreground Crop Fixture
+
+Task source: P2-2B/P2-2C local quality fixture follow-up from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- prove a PPT frame with an external foreground obstruction can keep the slide rectangle instead of falling back to full-frame output;
+- verify the crop signal travels through rectangle manifest, selected slides manifest, quality report, and PPTX XML;
+- keep detector crops review-required and avoid claiming real-sample quality completion;
+- avoid live extraction, network fetches, uploads, browser recording, or deployment.
+
+Implemented behavior:
+
+- added `writes_foreground_component_crop_for_speaker_window_obstruction`;
+- the fixture uses an existing frame generator with a bright PPT canvas plus an external foreground strip representing a speaker-window/player overlay;
+- `slide_rectangles_manifest` records `rectangle_extraction_mode=foreground_component_v1`, `rectangle_source=raw_frame_foreground_component`, and `promoted_rectangle_count=1`;
+- `selected_slides_manifest` records the same foreground-component rectangle mode;
+- `slide_quality_report.json` records `detector_crop_count=1`, `full_frame_fallback_count=0`, and per-slide `crop_risk=medium`;
+- PPTX `slide1.xml` contains the expected DrawingML `a:srcRect` crop and redacted alt text `crop promoted_detector_crop/foreground_component_v1`;
+- public artifacts do not include the raw frame directory path.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- speaker-window/foreground-component end-to-end fixture passed;
+- slide rectangle detector regression passed, 5 tests;
+- selected-slides regression passed;
+- controlled video sample deliverable contract passed;
+- video deliverable validator passed, 19 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- animation transition fixtures still need broader local coverage;
 - P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
 - P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
 
@@ -1735,7 +1793,7 @@ Result:
 
 Remaining P2-2 work:
 
-- speaker-window obstruction and animation transition fixtures still need broader local coverage;
+- animation transition fixtures still need broader local coverage;
 - P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
 - P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
 
