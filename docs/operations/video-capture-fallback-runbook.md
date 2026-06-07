@@ -111,9 +111,10 @@ The script prints a handoff command after capture. Review the MP4 before running
 
 ## Report Contract
 
-The script writes a local report under `target/authorized-capture-smoke/`. The report may contain local temporary paths because it is not committed or copied into shared validation logs. Shared validation records should include only:
+The script writes a local report under `target/authorized-capture-smoke/`. The full local report may contain temporary paths because it is not committed or copied into shared validation logs. For shared validation records, copy only the report's `sharedReceipt` object and the high-level pass/fail result. `sharedReceipt` redacts approval values, local paths, and the full source URL.
 
-- approval id;
+- approval reference present/hash only, not the raw approval id;
+- approved-by reference present/hash only, not the raw operator value;
 - source host summary;
 - duration seconds;
 - capture mode;

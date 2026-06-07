@@ -6,7 +6,7 @@
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 和第三方视频登记 special-trigger smoke 均已补离线 self-test 下载校验，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
-- P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；没有执行 live capture，没有接入 8 服务器生产服务。
+- P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；self-test 已补授权负向用例和可复制的脱敏 `sharedReceipt`；没有执行 live capture，没有接入 8 服务器生产服务。
 - P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown、清晰度/可读性风险提示均有本地验证。
 - P2-2E 三样例质量矩阵 self-test scaffold、本地 `generated_artifacts/` 输入适配、public-course deliverables 分类入口、customer-authorized deliverables 输入入口和三输入组合矩阵已完成；quality matrix 可用 `--synthetic-deliverables <path>` 复核合成类本地产物，用 `--public-course-deliverables <path>` 把匿名公开视频样例归到 `public_course_video`，也可在获得明确授权后用 `--customer-deliverables <path> --customer-approval-id <approval_id>` 复核客户/operator 授权样例；三类输入同时提供时可生成 `matrix_complete=true` 的完整三类报告，approval id 不写入报告。
 - S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`；selected manifest 语义已修正为 `requested_selected_candidate_indices` 记录去重前请求，`selected_candidate_indices` 记录最终入选页；32x32 visual signature + changed-sample guard 已让 public candidate 从 5 页提升到 7 页，覆盖更多 build 内容；best-sharpness 代表帧选择把质量分提升到 61、sharpness high 页从 4 降到 3；visual-shape duplicate 已补保守去重路径和回归，shape-dedupe 复跑仍为 9 requested、7 selected、2 visual near duplicates、0 shape duplicates。第二/第三 public probe 证明额外匿名 slides 视频可跑通交付契约，其中 `Layered Nix Stores` 暴露并修复了白底模板 build 被 shape duplicate 误删的问题，修复后为 4 requested、3 selected、0 shape duplicates、quality score 68。当前 public 类样例可作为真实公开视频回执，但质量结论仍是需人工复核，不是无条件可交付。
@@ -754,7 +754,7 @@ Safety:
 | 主站上传入口 | 脚本已实现，离线 self-test 已补并覆盖最小 PPTX/Markdown 校验；live smoke 未跑 | 阻塞“上传入口已验收”结论 | 需要用户批准写一条非客户 smoke 记录 |
 | 第三方登记入口 | 脚本和 self-test 已实现，离线校验覆盖 reply surface 与最小 PPTX/Markdown；live bearer/context 缺失 | 阻塞“第三方入口已验收”结论 | 需要 inbound bearer、`connection_id`、`source_id` 和安全输入 |
 | 视频号/登录态 handoff | 本地 deterministic 逻辑已过；handoff self-test 已补负向 fixture 与无网络/provider/下载信号报告；live pass 需要当前代码在 8 服务器 | 阻塞“现网 handoff 已验收”结论 | 需要用户单独批准 8 服务器部署窗口；验收只看 handoff，不抽视频 |
-| 授权录屏兜底 | runbook/helper/self-test/dry-run 门禁已具备 | 阻塞“兜底样例已验收”结论 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，不默认 8 服务器 |
+| 授权录屏兜底 | runbook/helper/self-test/dry-run 门禁已具备；self-test 已补授权负向用例和 `sharedReceipt` 脱敏检查 | 阻塞“兜底样例已验收”结论 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，不默认 8 服务器 |
 | 客户授权质量矩阵 | 脚本支持 customer input 和 approval id redaction；真实样例缺失 | 阻塞 P2-2E complete | 需要客户/operator 授权样例；产物不进 Git |
 
 执行路线：

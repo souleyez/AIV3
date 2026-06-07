@@ -2945,3 +2945,61 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated self-test reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded in this shared receipt.
+
+## 2026-06-08 Authorized Capture Helper Self-Test Gate
+
+Task source: P2-1C readiness from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- strengthen `capture:authorized-video -- --self-test` before any operator-approved live capture is attempted;
+- verify authorization and policy failures locally without opening a browser, running FFmpeg, downloading video, uploading MP4, or touching production services;
+- add a redacted `sharedReceipt` object that can be copied into validation logs without carrying local paths, raw source URLs, approval values, credentials, or provider payloads.
+
+Implemented behavior:
+
+- self-test now exercises six negative authorization/policy fixtures:
+  - missing `--ack-authorized`;
+  - missing `--approval-id`;
+  - invalid non-http/non-https source URL;
+  - duration greater than the hard 300-second limit;
+  - live capture without `--browser-bin`;
+  - `--capture-audio` requested outside live capture mode;
+- local reports now include `sharedReceipt` with approval and operator references represented by presence flags and hash prefixes, not raw values;
+- `sharedReceipt` includes only source host/path summary, duration, retention, capture mode, file name, handoff mode, cleanup policy, and explicit redaction flags;
+- live reports add file size and hash prefix to `sharedReceipt.captureFile` only after an MP4 exists.
+
+Validation:
+
+```text
+node --check scripts/capture-authorized-video.mjs
+npm run capture:authorized-video -- --self-test --output-dir target/authorized-capture-self-test-gates-final
+node <sharedReceipt redaction scan>
+git diff --check
+```
+
+Result:
+
+- capture helper syntax check passed;
+- capture helper self-test passed with `ok=true`;
+- self-test summary showed `authorizationGateNegativeCaseCount=6` and `authorizationGateNegativeCasesRejected=6`;
+- rejected negative cases covered missing authorization ack, missing approval id, invalid URL scheme, overlong duration, live capture missing browser binary, and dry-run audio request;
+- `sharedReceipt.redactionFlags` showed `rawSourceUrlIncluded=false`, `localPathsIncluded=false`, `credentialsIncluded=false`, `providerPayloadsIncluded=false`, and `approvalValuesIncluded=false`;
+- redaction scan over `sharedReceipt` found no raw URL, local absolute path, cookie/token/password marker, or raw self-test approval/operator value.
+
+Remaining work:
+
+- this improves P2-1C offline readiness but does not run live capture;
+- P2-1C still needs a real operator approval record, playable authorized source, maximum duration, audio policy, retention policy, and handoff target;
+- any captured MP4 still must be reviewed manually and then fed into the normal main-site upload or third-party video registration path.
+
+Safety result:
+
+- no browser was opened;
+- no FFmpeg command was run;
+- no video page was fetched;
+- no MP4 was captured, downloaded, uploaded, OCRed, frame-extracted, or converted to PPT;
+- no DataMax upload, dataset, document, assistant run, third-party event, or HTML artifact was created;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated self-test reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in the shared receipt.

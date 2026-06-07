@@ -295,6 +295,10 @@ function sourceSummary(rawUrl) {
   };
 }
 
+function hashPrefix(value) {
+  return createHash('sha256').update(String(value || '')).digest('hex').slice(0, 16);
+}
+
 function browserArgs(args, profileDir) {
   return [
     `--user-data-dir=${profileDir}`,
@@ -431,13 +435,85 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
 
+function validationCaseArgs(args, overrides) {
+  return {
+    ...args,
+    browserArg: [...args.browserArg],
+    ffmpegArg: [...args.ffmpegArg],
+    ...overrides,
+  };
+}
+
+function assertValidateArgsRejects({ name, args, expected }) {
+  try {
+    validateArgs(args);
+    throw new Error(`${name} unexpectedly passed validation`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!expected.test(message)) {
+      throw new Error(`${name} rejected for the wrong reason: ${message}`);
+    }
+    return {
+      name,
+      rejected: true,
+      expected: expected.source,
+    };
+  }
+}
+
+function runAuthorizationGateNegativeCases(args) {
+  return [
+    assertValidateArgsRejects({
+      name: 'missing_ack_authorized',
+      args: validationCaseArgs(args, { ackAuthorized: false }),
+      expected: /--ack-authorized is required/,
+    }),
+    assertValidateArgsRejects({
+      name: 'missing_approval_id',
+      args: validationCaseArgs(args, { approvalId: '' }),
+      expected: /--approval-id is required/,
+    }),
+    assertValidateArgsRejects({
+      name: 'invalid_source_url_scheme',
+      args: validationCaseArgs(args, { url: 'file:///tmp/unauthorized-video.html' }),
+      expected: /--url must use http or https/,
+    }),
+    assertValidateArgsRejects({
+      name: 'capture_duration_too_long',
+      args: validationCaseArgs(args, { durationSeconds: MAX_DURATION_SECONDS + 1 }),
+      expected: /--duration-seconds must be an integer/,
+    }),
+    assertValidateArgsRejects({
+      name: 'live_capture_missing_browser_bin',
+      args: validationCaseArgs(args, {
+        dryRun: false,
+        runCapture: true,
+        browserBin: '',
+        ffmpegInput: '1:none',
+      }),
+      expected: /--browser-bin is required/,
+    }),
+    assertValidateArgsRejects({
+      name: 'dry_run_audio_request',
+      args: validationCaseArgs(args, { captureAudio: true }),
+      expected: /--capture-audio is only meaningful with --run-capture/,
+    }),
+  ];
+}
+
 async function runSelfTest(args, runId) {
   const runDir = join(process.cwd(), args.outputDir, runId);
   const profileDir = join(runDir, 'browser-profile');
   const outputPath = join(runDir, 'authorized-capture.mp4');
+  const authorizationGateNegativeCases = runAuthorizationGateNegativeCases(args);
   const report = buildPlanReport(args, runId, runDir, profileDir, outputPath);
   report.summary.ok = true;
   report.summary.selfTest = true;
+  report.summary.authorizationGateNegativeCaseCount = authorizationGateNegativeCases.length;
+  report.summary.authorizationGateNegativeCasesRejected = authorizationGateNegativeCases.filter(
+    (item) => item.rejected,
+  ).length;
+  report.authorizationGateNegativeCases = authorizationGateNegativeCases;
   report.capture = {
     attempted: false,
     dryRun: true,
@@ -448,6 +524,42 @@ async function runSelfTest(args, runId) {
   const reportPath = join(runDir, 'report.json');
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify({ ok: true, selfTest: true, runId, reportPath }, null, 2));
+}
+
+function buildSharedReceipt(args, outputPath) {
+  return {
+    schema: 'v3.authorized_capture_shared_receipt.v1',
+    approvalReferencePresent: Boolean(args.approvalId.trim()),
+    approvalIdHashPrefix: hashPrefix(args.approvalId),
+    approvalIdRedacted: true,
+    approvedByReferencePresent: Boolean(args.approvedBy.trim()),
+    approvedByHashPrefix: hashPrefix(args.approvedBy),
+    approvedByRedacted: true,
+    purposePresent: Boolean(args.purpose.trim()),
+    source: sourceSummary(args.url),
+    durationSeconds: args.durationSeconds,
+    retentionDays: args.retentionDays,
+    captureAudioAllowed: args.captureAudio,
+    captureMode: args.captureMode,
+    output: {
+      fileName: basename(outputPath),
+      localPathRedacted: true,
+      profilePathRedacted: true,
+      handoffMode: args.handoff,
+    },
+    cleanup: {
+      persistentProfileDisabled: !args.keepProfile,
+      failedOutputDeletedByDefault: !args.keepFailedOutput,
+      profileRemoved: null,
+    },
+    redactionFlags: {
+      rawSourceUrlIncluded: false,
+      localPathsIncluded: false,
+      credentialsIncluded: false,
+      providerPayloadsIncluded: false,
+      approvalValuesIncluded: false,
+    },
+  };
 }
 
 function buildPlanReport(args, runId, runDir, profileDir, outputPath) {
@@ -477,6 +589,7 @@ function buildPlanReport(args, runId, runDir, profileDir, outputPath) {
       qrScreenshotStored: false,
       runDir,
     },
+    sharedReceipt: buildSharedReceipt(args, outputPath),
     commands: {
       browser: {
         bin: args.browserBin || defaultBrowserHint(),
@@ -567,6 +680,9 @@ async function runCapture(args, runId) {
     await wait(2_000);
     ffmpegResult = await spawnAndWait(args.ffmpegBin, ffmpegArgs(args, outputPath));
     const receipt = await fileReceipt(outputPath);
+    if (receipt) {
+      report.sharedReceipt.captureFile = receipt;
+    }
     report.capture = {
       attempted: true,
       dryRun: false,
@@ -597,6 +713,7 @@ async function runCapture(args, runId) {
     } else {
       report.safety.profileRemoved = false;
     }
+    report.sharedReceipt.cleanup.profileRemoved = report.safety.profileRemoved;
   }
   const reportPath = join(runDir, 'report.json');
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
