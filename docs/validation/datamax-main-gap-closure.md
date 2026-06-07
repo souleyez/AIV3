@@ -98,6 +98,42 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no raw document text, chunk content, object path, source URL, provider payload, cookie, bearer token, local key, database URL, or secret env value was recorded;
   - 120 server was not touched.
 
+### 2026-06-07 Active Plan Task 5 Duplicate And Canonical Read-Through Smoke
+
+- Purpose:
+  - execute Task 5 from `docs/plans/datamax-active-execution-plan.md`;
+  - prove duplicate documents do not break third-party dataset/document authorization or create a "dataset has files but cannot answer" condition.
+- Code change:
+  - added `scripts/smoke/document-dedup-readthrough.mjs`;
+  - the script supports deterministic `--self-test` only and does not call DataMax or production services;
+  - self-test scenarios cover duplicate document reference read-through, duplicate dataset group read-through, multiple `dataset_external_ids`, mixed document + dataset authorization de-duplication, same-`conversation_external_id` scope inheritance, and changed-conversation isolation;
+  - the self-test report records only IDs, counts, case status, and redaction flags, not document body, object path, source URL, full payload, credential, bearer token, cookie, or provider payload.
+- Local verification:
+  - Task 5 audit command ran for `available_document_external_ids`, `dataset_external_ids`, `conversation_external_id`, `canonical_document_id`, `document_scope`, and `authorized`;
+  - `node scripts/smoke/document-dedup-readthrough.mjs --self-test --pretty` passed, 6 cases;
+  - self-test report: `target/document-dedup-readthrough-smoke/document-dedup-readthrough-self-test-20260607024745.json`;
+  - `CC=clang CXX=clang++ cargo test -p platform-api third_party_authorization --lib` ran and matched 0 tests;
+  - `CC=clang CXX=clang++ cargo test -p storage document_dedup --lib` ran and matched 0 tests;
+  - replacement targeted checks passed:
+    - `CC=clang CXX=clang++ cargo test -p storage document_canonical_enrichment --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api canonical_duplicate_read_through_reuses_chunks_evidence_and_facts --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_dataset_external_ids_authorize_multiple_groups --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_temporary_scope_restores_for_same_conversation_without_repeated_document_ids --lib`, 1 test;
+    - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_document_scope_builds_temporary_dataset_scope_from_available_documents --lib`, 1 test.
+- 8-server read-only validation:
+  - source-scoped query for `hy-sql-traffic-area` returned `documents=2407`, `datasets=4`, `distinct_canonical=2407`;
+  - per-dataset counts were `1589`, `384`, `384`, and `50`, all with `duplicates=0`;
+  - `dedup_state` distribution for `hy-sql-traffic-area` was `unknown=2407`;
+  - lifecycle distribution was `extracted=1588`, `indexed=819`;
+  - duplicate explanation for `hy-sql-traffic-area`: `duplicate_documents=0`, `canonical_targets=0`, `self_canonical=2407`;
+  - all-document aggregate returned `documents=2624`, `distinct_canonical=2624`, `duplicates=0`, `canonical=22`, `unknown=2602`;
+  - no current 8-server duplicate/canonical rows exist to explain a live "disabled/has files but cannot answer" issue.
+- Safety:
+  - no live parse, chat, historical enrichment, fingerprint backfill, or production mutation was run;
+  - read-only SQL printed only aggregate IDs/counts/statuses;
+  - no raw document text, title, object path, source URL, row dump, payload, credential, cookie, bearer token, local key, database URL, or secret env value was recorded;
+  - 120 server was not touched.
+
 ### 2026-06-06 Current-Head Task 1 Release Gate
 
 - Purpose:

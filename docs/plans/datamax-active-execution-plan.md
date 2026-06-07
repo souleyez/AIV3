@@ -52,8 +52,8 @@
 2. 已完成：当前 head 基线回执。
 3. 已优先完成：视频/页面材料提取为 PPT 交付物优先通道。
 4. 已完成：后台 enrichment / 去重诊断。
-5. 下一步：duplicate / canonical read-through smoke。
-6. 被动回答质量离线语料。
+5. 已完成：duplicate / canonical read-through smoke。
+6. 下一步：被动回答质量离线语料。
 7. 数据源 row identity staging 自测。
 8. 静态页/报表回归语料强化。
 9. 第三方数据库只读状态强化。
@@ -348,7 +348,18 @@ git commit -m "Expose document enrichment dedup diagnostics"
 
 ## Task 5：Duplicate 与 Canonical Read-Through Smoke
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 确认 8 服务器本地重复文档不会破坏第三方 dataset/file 授权，也不会导致“数据集下有文件但问不到”的问题。
+
+**结果：**
+
+- 新增 `scripts/smoke/document-dedup-readthrough.mjs --self-test`，确定性覆盖 duplicate document ref、duplicate dataset ref、多 `dataset_external_ids`、document + dataset 混合授权去重、同 `conversation_external_id` 范围继承和不同会话隔离。
+- 本地 canonical read-through Rust 覆盖已补跑，确认 duplicate document 能读取 canonical chunks、retrieval evidence 和 facts。
+- 计划中的 `third_party_authorization` / `document_dedup` 过滤词当前没有命中测试；已改用实际测试名补证。
+- 8 服务器只读聚合显示 `hy-sql-traffic-area` 当前 `documents=2407`、`datasets=4`、`duplicates=0`；全库聚合显示 `documents=2624`、`duplicates=0`、`canonical=22`、`unknown=2602`。
+- 当前 8 服务器没有 duplicate/canonical 现场样本可解释“已停用/问不到”；后续若出现 duplicate rows，可用本 smoke 和 read-through 聚合重新验证。
+- 验证回执已写入 `docs/validation/datamax-main-gap-closure.md`。
 
 **文件：**
 
