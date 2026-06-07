@@ -1525,6 +1525,81 @@ Safety result:
 - generated temp frames stayed under test temp directories and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Single-Slide Public Course Review Risk
+
+Task source: EP6 local quality narrow fix from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- surface weak one-page public-course outputs as a quality-review risk;
+- keep screenshot PPTX delivery valid when the package is otherwise complete;
+- avoid treating a single selected page as a clean full-course extraction result;
+- validate against the existing `Nix in Space` anonymous public slides probe;
+- avoid live smoke, uploads, third-party events, browser recording, or deployment.
+
+Implemented behavior:
+
+- `slide_quality_report.json` now adds `summary.single_slide_output=true` when `slide_count == 1`;
+- risk flags now include `single_slide_output_review_required` with `review_action=confirm_video_contains_only_one_ppt_or_reprocess_with_more_coverage`;
+- the risk is advisory and does not change `deliverable_status.state=final_pptx_ready`;
+- added `flags_single_slide_output_for_quality_review_without_blocking_delivery` to prove the review risk does not block PPTX delivery.
+
+Public sample evidence:
+
+- reran the weak public-course probe `Nix in Space` from the existing local public fixture;
+- offline smoke completed with `deliverable_state=final_pptx_ready`;
+- `frame_count=20`;
+- `selected_count=1`;
+- PPTX, `video_slides.md`, slide notes, slide rectangles, selected slides, quality report, final manifest, published manifest, version history, and extraction manifest were generated;
+- `subtitle_page_map.json` remained absent, which is valid for this no-transcript sample;
+- `slide_quality_report.json` records `slide_count=1`, `quality_score=50`, `summary.single_slide_output=true`, and `risk_count=4`;
+- risk flags are `full_frame_rectangle_fallback`, `missing_transcript_alignment`, `single_slide_output_review_required`, and `manual_review_required`;
+- `validate-video-deliverables` passed;
+- public-course quality matrix passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`.
+
+Validation:
+
+```text
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker flags_single_slide_output_for_quality_review_without_blocking_delivery --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slide --lib
+npm run test:video-deliverables
+cargo check -p media-worker --bin video_ppt_offline_smoke
+cargo run -p media-worker --bin video_ppt_offline_smoke -- <Nix in Space local public fixture>
+node tools/validate-video-deliverables.mjs <Nix in Space generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <Nix in Space generated_artifacts> --pretty
+git diff --check
+```
+
+Result:
+
+- formatting check passed;
+- single-slide review-risk regression passed;
+- controlled video sample deliverable contract passed;
+- selected-slide regression passed, 5 tests;
+- video deliverable validator tests passed, 19 tests;
+- offline smoke binary check passed;
+- `Nix in Space` offline smoke passed with `final_pptx_ready` and one selected page;
+- generated public deliverables passed validator;
+- public-course quality matrix still returns `needs_manual_review`, not a clean deliverable conclusion.
+
+Remaining work:
+
+- this does not complete P1-3B main-site upload live smoke;
+- this does not complete P1-3C third-party live smoke;
+- this does not complete P1-3D live handoff because 8-server deployment remains unapproved;
+- this does not complete P2-2E customer authorized sample quality matrix.
+
+Safety result:
+
+- no live main-site smoke was run;
+- no third-party event was sent;
+- no WeChat Video Channels source was fetched, captured, or bypassed;
+- no customer file, private URL, cookie, token, provider payload, database URL, private object path, or raw frame path was recorded;
+- generated videos, frames, PPTX, Markdown, manifests, matrix reports, and offline smoke outputs remained under `target/` and were not committed;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run.
+
 ## 2026-06-08 Visual Shape Duplicate Dedupe And Public Candidate Rerun
 
 Task source: P2-2E-2B-Next from `docs/plans/datamax-active-execution-plan.md`.

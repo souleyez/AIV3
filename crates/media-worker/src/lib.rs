@@ -2726,6 +2726,14 @@ fn video_slide_quality_report_from_manifests(
             "review_action": "review_blurry_or_unmeasured_slide_frames",
         }));
     }
+    if slide_count == 1 {
+        risk_flags.push(json!({
+            "code": "single_slide_output_review_required",
+            "severity": "medium",
+            "count": 1,
+            "review_action": "confirm_video_contains_only_one_ppt_or_reprocess_with_more_coverage",
+        }));
+    }
     if review_required_count > 0 {
         risk_flags.push(json!({
             "code": "manual_review_required",
@@ -2761,6 +2769,7 @@ fn video_slide_quality_report_from_manifests(
             "exact_duplicate_count": exact_duplicate_count,
             "visual_duplicate_count": visual_duplicate_count,
             "visual_shape_duplicate_count": visual_shape_duplicate_count,
+            "single_slide_output": slide_count == 1,
         },
         "risk_flags": risk_flags,
         "slides": slides,
@@ -10618,6 +10627,90 @@ mod tests {
         assert!(video_slides_markdown.contains("Source frame: `frame_000002.jpg`"));
         assert!(video_slides_markdown.contains("Crop status: promoted_full_frame_fallback"));
         assert!(!video_slides_markdown.contains(&raw_frames_dir.display().to_string()));
+    }
+
+    #[test]
+    fn flags_single_slide_output_for_quality_review_without_blocking_delivery() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-single-slide-review-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake-1").expect("frame 1");
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 1,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        let generated_artifacts = json!({
+            "status": "completed",
+            "files": files.clone()
+        });
+        let deliverable_status = video_deliverable_status(&generated_artifacts);
+        assert_eq!(
+            deliverable_status["state"],
+            json!("final_pptx_ready"),
+            "single-slide review risk must not block screenshot PPTX delivery"
+        );
+
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["selected_count"], json!(1));
+
+        let slide_quality_report_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide quality report path");
+        let slide_quality_report =
+            fs::read_to_string(slide_quality_report_path).expect("slide quality report");
+        assert!(!slide_quality_report.contains(&raw_frames_dir.display().to_string()));
+        let slide_quality_report_json: Value =
+            serde_json::from_str(&slide_quality_report).expect("quality report json");
+        assert_eq!(slide_quality_report_json["slide_count"], json!(1));
+        assert_eq!(
+            slide_quality_report_json["summary"]["single_slide_output"],
+            json!(true)
+        );
+        let single_slide_risk = slide_quality_report_json["risk_flags"]
+            .as_array()
+            .expect("risk flags")
+            .iter()
+            .find(|risk| risk["code"] == json!("single_slide_output_review_required"))
+            .expect("single slide risk flag");
+        assert_eq!(single_slide_risk["severity"], json!("medium"));
+        assert_eq!(
+            single_slide_risk["review_action"],
+            json!("confirm_video_contains_only_one_ppt_or_reprocess_with_more_coverage")
+        );
     }
 
     #[test]
