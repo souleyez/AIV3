@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 04:47 CST
-**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。后续优先进入需要授权的 live gate 或客户授权样例；若暂时没有授权，再继续本地 crop/sharpness/字幕或更多 public 样例窄修复。
+**更新时间：** 2026-06-08 04:54 CST
+**当前性质：** 开发执行版；当前入口是第 0.7 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵和 8 服务器部署门槛；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过。
@@ -307,6 +307,424 @@ npm run capture:authorized-video -- \
    - 第三方登记：必须获得 inbound bearer、`connection_id`、`source_id` 和输入来源。
    - 视频号/登录态 handoff live：必须先批准 8 服务器部署窗口；验收只看 handoff，不抽视频。
    - 授权录屏：必须有 approval record；录屏产物作为普通 MP4 输入，不新增绕过平台的抓取逻辑。
+
+### 0.7 收口版完整可执行计划
+
+本节是当前实际执行入口。第 0.6 节保留详细背景和历史 runbook；后续执行时先按本节的执行包推进，遇到需要命令细节或历史证据时再跳回第 1-9 节。
+
+#### 0.7.1 执行目标和边界
+
+目标：
+
+1. 继续围绕“提取视频里已经播放的 PPT/幻灯片/课件”开发，不把普通视频创作成 PPT。
+2. 用三个层级验证能力：本地 deterministic/fixture、匿名公开视频课程、客户或 operator 授权样例。
+3. 把主站上传、第三方登记、公开页面 resolver、视频号/登录态 handoff 和授权录屏兜底拆成独立 gate。
+4. 先完成计划和 GitHub 文档同步；后续代码或 live smoke 只在对应授权齐全时执行。
+
+硬边界：
+
+- 本轮计划编写不改业务代码、不跑 live smoke、不部署、不重启 8 服务器。
+- GitHub 同步允许 doc-only；GitHub 同步不等于 8 服务器发版。
+- 8 服务器只有在用户明确批准“发版/部署/重启服务”后才允许 pull、build、restart。
+- 120 服务器不在本计划范围内。
+- 不提交或打印原始视频、抽帧、PPTX、客户文件、私有 object path、source URL、cookie、token、provider payload、数据库 URL。
+- 微信视频号、登录态网页、二维码登录页和客户私有平台默认不自动抓取；只能走上传文件、匿名直连 URL 或 operator 授权录屏。
+
+#### 0.7.2 当前完成事实和剩余缺口
+
+| 方向 | 已完成事实 | 仍缺什么 | 下一步 |
+| --- | --- | --- | --- |
+| 主站 direct URL | `smoke:video-ppt-main-visible` 已证明 assistant-run-bound 可见产物，PPTX/Markdown/manifests 可下载 | 作为发布前回归保留，不代表上传入口 | 仅在新部署后按需复跑 |
+| 主站上传视频 | `smoke:video-ppt-upload-main` 已实现并本地验证脚本契约 | live controlled smoke 待用户批准，因为会写一条非客户 smoke 记录 | 执行包 EP2 |
+| 第三方登记视频 | `smoke:external-video-ppt` 已实现，self-test 通过 | live bearer、`connection_id`、`source_id` 和授权输入 | 执行包 EP3 |
+| 公开视频课程样例 | media.ccc 三个匿名 slides 样例跑通过；主样例 7 页、quality score 61，第三样例修复后 3 页、quality score 68 | 均仍是 `needs_manual_review`，不能替代客户授权样例 | 执行包 EP1/EP5 |
+| 微信视频号和登录态 | 主站 early return、第三方 deterministic card 本地测试通过 | live handoff pass 需要先部署到 8 服务器 | 执行包 EP4 |
+| 授权录屏 | runbook 和 isolated helper 已实现，self-test/dry-run/授权门禁通过 | 没有 live capture；8 服务器内部录屏未启用 | 执行包 EP4 |
+| 三样例质量矩阵 | synthetic self-test、public-course deliverables 输入已可用 | customer authorized sample pending | 执行包 EP5 |
+| 8 服务器 | 本轮不部署；历史部署基线保留在第 2 节 | P1-3D live pass 需要部署当前 handoff 修复后复跑 | 执行包 EP7 |
+
+#### 0.7.3 EP0 计划收口与 GitHub 文档同步
+
+目的：完成当前计划文档，不改代码、不跑 live、不发版。
+
+执行步骤：
+
+1. 更新仓库计划：`docs/plans/datamax-active-execution-plan.md`。
+2. 同步桌面副本：`/Users/manslive01/Desktop/datamax-active-execution-plan.md`。
+3. 做文档级检查，确认只有计划文档变更。
+4. 如工作树干净且 diff 为 doc-only，可提交并推送 GitHub。
+
+建议命令：
+
+```bash
+git status --short --branch
+cp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+cmp -s docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --stat
+git diff -- docs/plans/datamax-active-execution-plan.md
+git add docs/plans/datamax-active-execution-plan.md
+git commit -m "Refine DataMax executable plan"
+git push origin main
+```
+
+验收：
+
+- `git diff --check` 通过。
+- 桌面副本和仓库计划完全一致。
+- Git diff 只包含计划文档；不包含 `target/`、视频、抽帧、PPTX、客户文件。
+- 最终回执明确：未改业务代码、未部署 8 服务器、未触碰 120 服务器。
+
+#### 0.7.4 EP1 无授权本地基线和公开视频复核
+
+目的：在没有 live 授权时继续保住质量基线，避免把 synthetic fixture 误当客户验收。
+
+适用条件：
+
+- 没有主站上传授权。
+- 没有第三方 bearer/context。
+- 没有 8 服务器部署窗口。
+- 没有客户/operator 授权样例。
+
+必跑基线：
+
+```bash
+cargo fmt --check
+npm run test:video-deliverables
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty
+cargo check -p media-worker --bin video_ppt_offline_smoke
+git diff --check
+```
+
+公开视频交付包复核：
+
+```bash
+node tools/validate-video-deliverables.mjs <generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- \
+  --public-course-deliverables <generated_artifacts> \
+  --pretty \
+  --output-dir target/video-ppt-public-candidate-quality-matrix
+```
+
+当前 public 样例结论：
+
+1. `How to teach Nix in 5 minutes!`：96 帧，9 requested、7 selected、2 visual near duplicates、0 shape duplicates，quality score 61，validator 通过，结论 `needs_manual_review`。
+2. `Nix in Space`：20 帧，只选出 1 页，quality score 50，validator 通过但降级为弱对照样例。
+3. `Layered Nix Stores`：白底 build 防误删修复后 4 requested、3 selected、1 visual near duplicate、0 shape duplicates，quality score 68，validator 和 public-course matrix 通过，结论仍是 `needs_manual_review`。
+
+人工复核清单：
+
+- PPTX slide count、Markdown slide count、`selected_count` 是否一致。
+- 是否保留真实 build 状态，是否误删关键 bullet/page。
+- 是否有明显 fade/transition 页被当作最终页。
+- crop 模式是否过多 fallback；fallback 页是否仍可读。
+- `slide_quality_report.json` 的 sharpness/readability 风险是否影响交付。
+- 缺字幕/OCR 是否只是证据缺失；不得声称已完成逐页讲稿或字幕映射。
+
+验收：
+
+- 可把 public 样例标为 `可交付`、`需人工复核` 或 `不可交付`，但必须有脱敏回执。
+- 当前已有 public 样例应保持 `需人工复核`，除非人工复核和后续窄修复足以证明关键页完整可读。
+- public 样例不能替代 P2-2E customer authorized sample。
+
+#### 0.7.5 EP2 主站上传视频 controlled smoke
+
+目的：证明用户把 `.mp4/.mov/.m4v/.webm/.mkv/.avi` 上传到 V3 主站后，只要明确触发“提取 PPT/幻灯片/课件”，就能生成并下载截图型 PPTX、Markdown 和 manifests。
+
+进入条件：
+
+- 用户明确批准在主站写入一条非客户公开视频 smoke 记录。
+- 使用公开、非客户、非登录态、可安全保留或可清理的样例视频。
+- 不需要部署，除非 smoke 证明现网缺少已修复代码且用户另批部署。
+
+建议命令：
+
+```bash
+npm run smoke:video-ppt-upload-main -- \
+  --base-url https://v3.elepcloud.com \
+  --fixture-file target/video-ppt-public-course-probe/nix-teach-5min-slides.mp4 \
+  --fixture-name nix-teach-5min-slides-upload-smoke.mp4 \
+  --local-thread-id video-ppt-upload-main-YYYYMMDD-01 \
+  --prompt "请提取刚上传视频里的 PPT/幻灯片/课件，输出 PPTX、video_slides.md 和交付 manifest。" \
+  --output-dir target/video-ppt-upload-main-smoke
+```
+
+如果使用远程公开样例：
+
+```bash
+npm run smoke:video-ppt-upload-main -- \
+  --base-url https://v3.elepcloud.com \
+  --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \
+  --local-thread-id video-ppt-upload-main-YYYYMMDD-01 \
+  --output-dir target/video-ppt-upload-main-smoke
+```
+
+验收：
+
+- 创建或复用 smoke dataset，不污染客户数据。
+- 上传、文档登记、ingest、assistant run、视频 PPT 特殊触发完整跑通。
+- `deliverable_status.state=final_pptx_ready`。
+- PPTX、`video_slides.md`、final/published/version/extraction manifests 可通过 HTML artifact file API 下载。
+- PPTX OOXML entry 存在，PPTX slide count 与 Markdown slide count 一致。
+- 回执追加到 `docs/validation/video-ppt-deliverable-smoke.md`，只记录脱敏 ids 和文件 kind，不记录 token/cookie/source URL/private path。
+
+失败分流：
+
+- 上传失败：记录 upload/local-document API 问题。
+- ingest 失败：记录 video parse 或 queue 问题。
+- assistant run 未触发 `VideoExtraction`：记录特殊触发识别问题。
+- 有 PPTX 但无下载：记录 artifact visibility 问题。
+- 产物存在但质量差：进入 EP1/EP5 质量复核，不放宽 contract。
+
+#### 0.7.6 EP3 第三方视频登记 special-trigger smoke
+
+目的：证明第三方把视频素材登记给 DataMax 后，只有在用户明确说“提取视频里的 PPT/幻灯片/课件”时才进入 `VideoExtraction`，不是普通视频解析默认动作。
+
+进入条件：
+
+- operator 提供 inbound bearer。
+- 明确 `connection_id`、`source_id`。
+- 输入为公开视频直链、第三方自有对象存储匿名下载 URL，或已授权上传文件。
+- 不打印 bearer，不把请求 payload 原文写入文档。
+
+建议命令：
+
+```bash
+npm run smoke:external-video-ppt -- \
+  --base-url https://v3.elepcloud.com \
+  --connection-id <connection_id> \
+  --source-id <source_id> \
+  --content-url <anonymous_public_video_url> \
+  --external-document-id video-ppt-external-YYYYMMDD-01 \
+  --message "请提取这个视频里的 PPT/幻灯片/课件，并返回 PPTX、video_slides.md 和交付 manifest。" \
+  --output-dir target/external-video-ppt-smoke
+```
+
+本地无凭据时只能跑：
+
+```bash
+npm run smoke:external-video-ppt -- --self-test
+```
+
+验收：
+
+- 第三方登记视频素材和 special-trigger 消息分开记录。
+- 返回 run/reply/card 能说明 `final_pptx_ready` 或明确的失败分流。
+- 如第三方 surface 还不能下载 PPTX/Markdown/manifests，记录为 `artifact_visibility_gap`，不把后端成功当成第三方交付完成。
+- 回执只写脱敏 ids、状态、file kinds、质量结论。
+
+#### 0.7.7 EP4 微信视频号/登录态来源和授权录屏兜底
+
+目的：处理“客户只给链接，但链接里拿不到匿名视频文件”的真实场景，避免误导用户以为系统已经看过视频。
+
+默认来源分类：
+
+- `.mp4/.mov/.m4v/.webm/.mkv/.avi` 直链：进入普通视频输入。
+- 公开网页暴露 `<video>`、`<source>`、OpenGraph、Twitter、JSON-LD video URL：resolver 提取候选后进入普通视频输入。
+- `weixin.qq.com/sph/...`、`channels.weixin.qq.com/sph/...`、二维码登录页、私有播放页、需要 cookie 的页面：返回 handoff，不抓取、不抽帧、不 OCR、不生成 PPT。
+
+针对 `https://weixin.qq.com/sph/AhfmOtV8P5` 这类链接的产品回执：
+
+1. 当前没有拿到可匿名下载的视频文件，因此不能声称已解析视频内容。
+2. 给三条路：上传视频文件、提供匿名直接视频 URL、申请授权录屏处理。
+3. 如果之后上传同一视频文件，则按上传视频重新触发“提取视频中的 PPT/幻灯片/课件”。
+
+handoff live 验收：
+
+```bash
+npm run smoke:video-ppt-handoff -- --self-test
+npm run smoke:video-ppt-handoff -- \
+  --mode main \
+  --base-url https://v3.elepcloud.com \
+  --local-thread-id video-ppt-handoff-YYYYMMDD-01 \
+  --timeout-ms 60000 \
+  --output-dir target/video-ppt-handoff-main-smoke
+```
+
+进入条件：
+
+- self-test 可随时跑。
+- main live pass 需要当前 deterministic handoff 修复已部署到 8 服务器，所以必须先走 EP7 部署批准。
+- external live pass 还需要 inbound bearer、`connection_id`、`source_id`。
+
+授权录屏兜底：
+
+- 录屏只在 operator 已合法播放且有授权记录时执行。
+- 首选 workstation/jump-host 短时录制，生成普通 `.mp4` 后走 EP2 或 EP3。
+- 8 服务器内部录屏不是默认能力；必须单独评审和批准。
+
+授权记录最少包含：
+
+- `approval_id`
+- `approved_by`
+- `source_host_redacted`
+- `purpose`
+- `max_duration_seconds`
+- `capture_audio_allowed`
+- `retention_days`
+- `cleanup_policy`
+- `handoff_to_datamax`
+
+dry-run 命令：
+
+```bash
+npm run capture:authorized-video -- --self-test
+npm run capture:authorized-video -- \
+  --dry-run \
+  --ack-authorized \
+  --approval-id APPROVAL-YYYYMMDD-001 \
+  --approved-by operator-name \
+  --url https://example.com/authorized-video-page \
+  --purpose "authorized courseware video; upload/direct URL unavailable" \
+  --duration-seconds 60 \
+  --handoff upload-main
+```
+
+8 服务器内部录屏评审项：
+
+- `CAPTURE_FALLBACK_ENABLED=false` 默认关闭。
+- 独立临时 browser profile，不持久化登录态。
+- Xvfb/Chrome/FFmpeg 或等价组件只用于短时任务。
+- 并发 1、最大时长、最大文件大小、临时目录容量、清理定时器都有硬限制。
+- 日志只记录 redacted host、job id、duration、file size、hash prefix、cleanup result。
+- 依赖安装、服务 restart、回滚点和保留期全部单独审批。
+
+#### 0.7.8 EP5 客户或 operator 授权质量矩阵
+
+目的：完成 P2-2E 的真实三样例质量矩阵，不能只靠 synthetic 和 public samples。
+
+三类样例：
+
+| 类别 | 当前状态 | 完成条件 |
+| --- | --- | --- |
+| synthetic PPT playback | self-test 和本地 deliverables 输入已可用 | validator 通过，质量矩阵为 deliverable 或带明确风险 |
+| public course video | media.ccc 样例已跑通，当前 `needs_manual_review` | 至少一个 public 样例有脱敏回执和人工质量结论 |
+| customer authorized video | pending | 客户/operator 授权输入，产物不进 Git，回执脱敏 |
+
+客户样例执行：
+
+1. 确认授权、输入来源、保留期和清理策略。
+2. 如果是上传文件，走 EP2；如果是第三方登记，走 EP3；如果只有授权播放页，先走 EP4 录屏。
+3. 生成 `generated_artifacts/` 后运行 validator 和 quality matrix。
+4. 人工复核 PPTX/Markdown/manifest/quality report。
+5. 结论只能是 `可交付`、`需人工复核`、`不可交付` 三选一。
+
+质量矩阵命令：
+
+```bash
+node tools/validate-video-deliverables.mjs <generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- \
+  --synthetic-deliverables <synthetic_generated_artifacts> \
+  --pretty \
+  --output-dir target/video-ppt-quality-matrix-synthetic-smoke
+npm run smoke:video-ppt-quality-matrix -- \
+  --public-course-deliverables <public_generated_artifacts> \
+  --pretty \
+  --output-dir target/video-ppt-quality-matrix-public-smoke
+```
+
+如果后续脚本还没有 customer deliverables 参数，则 customer 样例先以 validation 回执和人工复核记录补足，随后再做脚本参数扩展；扩展前不得把 customer gate 标为完成。
+
+失败归因：
+
+- `source_access`: 无法匿名下载、授权不足、登录态不可用。
+- `video_has_no_ppt`: 视频内容没有 PPT/课件画面。
+- `frame_extraction`: FFmpeg、输入格式、时长或缓存失败。
+- `selection_quality`: 关键页缺失、重复页过多、转场页误选。
+- `crop_quality`: full-frame fallback 过多、讲师遮挡、边界错误。
+- `subtitle_alignment`: 没有 transcript/subtitle evidence 或页映射失败。
+- `artifact_visibility`: 产物生成但用户 surface 下载不可见。
+
+#### 0.7.9 EP6 后续本地质量窄修复
+
+目的：在没有 live/客户授权时，继续降低真实样例风险，但不把本地修复冒充 live 验收。
+
+可选切片：
+
+1. 单页输出风险提示：对真实 public sample 只选出 1 页的情况，加质量报告 review risk，而不是把 `final_pptx_ready` 改成失败。
+2. 更明确的 crop detector：针对 full-frame fallback 仍可见但边界不稳定的 public 页做 fixture。
+3. 清晰度/readability 分流：把低清晰、低对比和 fade 页更明确标为人工复核。
+4. OCR/subtitle 证据增强：只把 OCR 当作 page notes evidence，不伪装成 transcript/subtitle map。
+5. 更多匿名公开视频课程样例：只选公开、非登录态、可下载、包含课件画面的短样例。
+
+验收：
+
+- 每个窄修复必须有 Rust/Node 定向测试。
+- 复跑最小 public sample 或 synthetic fixture。
+- 不放宽 `validate-video-deliverables` 的 redaction/schema 约束。
+- 不上传、不跑 live、不部署。
+
+#### 0.7.10 EP7 8 服务器部署门槛
+
+本计划本轮不部署。后续只有用户明确要求“发 8 服务器/部署/重启服务”时才进入本包。
+
+进入条件：
+
+1. 待部署 commit 已推送 GitHub。
+2. 本地必要测试通过，至少覆盖受影响脚本、validator、media-worker/platform-api 定向测试。
+3. 明确本次部署目的：例如 P1-3D handoff live pass，而不是泛泛“同步一下”。
+4. 明确影响服务、回滚 commit、预计停机/重启窗口。
+5. 不触碰 120 服务器；不处理无关未跟踪文件。
+
+部署后验收：
+
+- 服务 active。
+- media-worker/API 日志无启动错误。
+- 如果目标是 P1-3D，则复跑 `smoke:video-ppt-handoff -- --mode main`，只验收 handoff card。
+- 如果目标是主站上传或第三方 smoke，则按 EP2/EP3 的 live 回执记录。
+- 失败时先记录错误和回滚点，不继续扩大范围。
+
+#### 0.7.11 统一回执模板
+
+每次执行包完成后，在 `docs/validation/video-ppt-deliverable-smoke.md` 追加脱敏回执：
+
+```text
+## YYYY-MM-DD <Execution Package Name>
+
+Scope:
+- input_type:
+- trigger:
+- authorization:
+- deployment:
+
+Evidence:
+- workflow_id / assistant_run_id / third_party_run_id:
+- artifact_id:
+- frame_count:
+- selected_count:
+- pptx_slide_count:
+- markdown_slide_count:
+- deliverable_state:
+- file_kinds:
+- validator:
+- quality_matrix:
+
+Quality:
+- crop:
+- dedupe:
+- transition/fade:
+- sharpness/readability:
+- subtitle/transcript:
+- ocr:
+
+Verdict:
+- deliverable | needs_manual_review | not_deliverable
+- reason:
+- next_action:
+
+Safety:
+- no customer raw files committed
+- no private paths/source URLs/tokens/cookies/provider payloads recorded
+- no 8-server deploy unless explicitly approved
+```
+
+#### 0.7.12 下一步推荐顺序
+
+1. 本轮先完成 EP0：计划文档和桌面副本同步，doc-only GitHub 提交，不发 8 服务器。
+2. 如果用户批准写主站非客户 smoke 记录，执行 EP2 主站上传视频 controlled smoke。
+3. 如果 operator 提供第三方 bearer/context，执行 EP3 第三方视频登记 special-trigger smoke。
+4. 如果用户批准 8 服务器部署窗口，先按 EP7 部署当前 handoff 修复，再执行 EP4 的 main handoff live pass。
+5. 如果客户或 operator 提供授权样例，执行 EP5；没有授权时只做 EP1/EP6 的本地质量复核。
 
 ## 1. 计划原则
 
