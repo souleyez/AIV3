@@ -3114,3 +3114,66 @@ Safety result:
 - no browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated preflight/self-test reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared receipt.
+
+## 2026-06-08 Third-Party Video PPT Smoke Preflight Gate
+
+Task source: P1-3C live third-party smoke still needs approved inbound bearer/context; add a no-network preflight so the approved run has checked third-party context, fixture/scope, and trigger payload before live execution.
+
+Scope:
+
+- add `smoke:external-video-ppt -- --preflight`;
+- validate connection/source presence, bearer gate, fixture/source shape, supported video extension, inferred video media kind, scoped video-PPT trigger payload, live write scope, and report redaction;
+- avoid fixture download, loopback fixture server, `/documents/parse`, parse-detail polling, `/events`, reply polling, and deliverable downloads.
+
+Implemented behavior:
+
+- `--preflight` accepts the same connection/source/fixture arguments as live mode but does not call the network;
+- preflight no longer hard-fails before reporting when bearer is absent; it reports `missing_bearer_for_live_external_smoke` unless a real bearer is supplied or `--allow-missing-bearer` is used for local shape checks;
+- `--allow-missing-bearer` lets local no-auth preflight validate fixture/context/trigger shape while still reporting `liveCredentialReady=false`;
+- local `--fixture-file` preflight uses `stat` only and stores basename/size with `localPathRedacted=true`;
+- URL fixture preflight stores only scheme/host/extension, not the raw URL, path, or query;
+- preflight requires one of the supported video extensions `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, or `.avi`;
+- preflight validates that the event text asks to extract PPT/slides/courseware from the video and that `requested_skills` contains `video_ppt_extraction` with `expected_action=extract_video_ppt_transcript`;
+- preflight emits a redacted command template without raw base URL, raw fixture URL, local path, token, object key, or bearer value.
+
+Validation:
+
+```text
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:external-video-ppt -- --help
+npm run smoke:external-video-ppt -- --preflight --output-dir target/external-video-ppt-preflight-missing-bearer-final
+npm run smoke:external-video-ppt -- --preflight --allow-missing-bearer --output-dir target/external-video-ppt-preflight-final
+npm run smoke:external-video-ppt -- --preflight --allow-missing-bearer --fixture-url https://example.com/not-video.txt --output-dir target/external-video-ppt-preflight-negative-final
+npm run smoke:external-video-ppt -- --self-test --output-dir target/external-video-ppt-self-test-preflight-final
+rg -n "https?://|token=|object_key|Bearer |/Users/|v3\.elepcloud\.com/generated-artifacts" target/external-video-ppt-preflight-final target/external-video-ppt-preflight-missing-bearer-final target/external-video-ppt-preflight-negative-final || true
+```
+
+Result:
+
+- external video PPT smoke syntax check passed;
+- help output documents `--preflight --allow-missing-bearer`;
+- missing-bearer preflight failed as expected with `ok=false`, `credentialGateSatisfied=false`, and `failures=["missing_bearer_for_live_external_smoke"]`;
+- local shape preflight with `--allow-missing-bearer` passed with `ok=true`, `networkCallsRun=false`, `fixtureRegistered=false`, `eventSent=false`, `replyPolled=false`, and `deliverablesDownloadedFromNetwork=false`;
+- local shape preflight reported `liveCredentialReady=false`, making clear it is not live-ready without an inbound bearer;
+- positive preflight classified the default `.mp4` fixture as `mediaKind=video` with `supportedExtension=true`;
+- positive preflight validated `requestedSkillIds=["video_ppt_extraction"]` and `expectedAction=extract_video_ppt_transcript`;
+- negative `.txt` fixture preflight failed as expected with `ok=false`, `mediaKind=""`, `supportedExtension=false`, and failures for non-video classification plus unsupported extension;
+- external video PPT self-test still passed after the preflight change;
+- preflight redaction scan found no raw URL, token marker, object key marker, bearer marker, local absolute path, or raw sample URL.
+
+Remaining work:
+
+- this improves P1-3C readiness but does not run the live third-party registration/event smoke;
+- P1-3C still needs approved inbound bearer, `connection_id`, `source_id`, and an authorized public/uploaded video input;
+- after approval, run preflight with the exact approved context/fixture first, then run the live smoke with the same context/fixture.
+
+Safety result:
+
+- no live third-party smoke was run;
+- no fixture video was downloaded;
+- no loopback fixture server was opened;
+- no `/documents/parse`, parse-detail poll, `/events`, reply poll, or deliverable download was performed;
+- no DataMax upload, dataset, document, ingest job, assistant run, third-party event, or HTML artifact was created;
+- no browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated preflight/self-test reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared receipt.

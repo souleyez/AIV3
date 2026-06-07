@@ -4,7 +4,7 @@
 **当前性质：** 开发执行版；当前入口是第 0.7 节，尤其是第 0.7.13 节的全量验收闭环。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出复核风险已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；本轮仍不部署 8 服务器。
 **状态摘要：**
 
-- P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
+- P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；self-test 已补授权负向用例和可复制的脱敏 `sharedReceipt`；没有执行 live capture，没有接入 8 服务器生产服务。
 - P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown、清晰度/可读性风险提示均有本地验证。
@@ -753,7 +753,7 @@ Safety:
 | 本地交付契约 | 已有 validator、media-worker、quality matrix 和 public probes 证据 | 不阻塞 | 后续代码变更都复跑最小相关验证 |
 | 公开视频质量样例 | 三个 media.ccc slides 样例可作为 public 证据，结论均偏 `needs_manual_review` | 不阻塞，但不能冒充客户样例 | 保留为真实 public 回执；继续窄修复只能降低风险，不能替代 live/customer gate |
 | 主站上传入口 | 脚本已实现，离线 self-test 已补并覆盖最小 PPTX/Markdown 校验；live 前置 preflight 已补，能在不下载/上传的情况下检查 fixture、扩展、触发语和写入范围；live smoke 未跑 | 阻塞“上传入口已验收”结论 | 需要用户批准写一条非客户 smoke 记录 |
-| 第三方登记入口 | 脚本和 self-test 已实现，离线校验覆盖 reply surface 与最小 PPTX/Markdown；live bearer/context 缺失 | 阻塞“第三方入口已验收”结论 | 需要 inbound bearer、`connection_id`、`source_id` 和安全输入 |
+| 第三方登记入口 | 脚本和 self-test 已实现，离线校验覆盖 reply surface 与最小 PPTX/Markdown；live 前置 preflight 已补，能在不访问网络的情况下检查 bearer/context 门禁、fixture、触发 payload 和写入范围；live bearer/context 缺失 | 阻塞“第三方入口已验收”结论 | 需要 inbound bearer、`connection_id`、`source_id` 和安全输入 |
 | 视频号/登录态 handoff | 本地 deterministic 逻辑已过；handoff self-test 已补负向 fixture 与无网络/provider/下载信号报告；live pass 需要当前代码在 8 服务器 | 阻塞“现网 handoff 已验收”结论 | 需要用户单独批准 8 服务器部署窗口；验收只看 handoff，不抽视频 |
 | 授权录屏兜底 | runbook/helper/self-test/dry-run 门禁已具备；self-test 已补授权负向用例和 `sharedReceipt` 脱敏检查 | 阻塞“兜底样例已验收”结论 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，不默认 8 服务器 |
 | 客户授权质量矩阵 | 脚本支持 customer input 和 approval id redaction；真实样例缺失 | 阻塞 P2-2E complete | 需要客户/operator 授权样例；产物不进 Git |

@@ -2,7 +2,7 @@
 
 import { createServer } from 'node:http';
 import { basename, extname, join } from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3000';
 const DEFAULT_CONNECTION_ID = 'generic-chat-main';
@@ -25,6 +25,14 @@ const REQUIRED_PPTX_ENTRIES = [
   '[Content_Types].xml',
   'ppt/presentation.xml',
   'ppt/slides/slide1.xml',
+];
+const SUPPORTED_VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi'];
+const LIVE_WRITE_STEPS = [
+  'documents_parse_register_video',
+  'parse_detail_poll',
+  'events_post_video_ppt_trigger',
+  'assistant_run_reply_poll',
+  'optional_deliverable_downloads',
 ];
 
 function parseArgs(argv) {
@@ -56,6 +64,7 @@ function parseArgs(argv) {
       process.env.EXTERNAL_VIDEO_PPT_SMOKE_SKIP_DELIVERABLE_DOWNLOADS,
     ),
     selfTest: parseBoolean(process.env.EXTERNAL_VIDEO_PPT_SMOKE_SELF_TEST),
+    preflight: parseBoolean(process.env.EXTERNAL_VIDEO_PPT_SMOKE_PREFLIGHT),
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -115,6 +124,8 @@ function parseArgs(argv) {
     } else if (arg === '--self-test') {
       args.selfTest = true;
       args.allowMissingBearer = true;
+    } else if (arg === '--preflight') {
+      args.preflight = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -123,7 +134,10 @@ function parseArgs(argv) {
     }
   }
 
-  if (!args.selfTest && !args.allowMissingBearer && !args.bearer) {
+  if (args.selfTest && args.preflight) {
+    throw new Error('--self-test and --preflight cannot be combined');
+  }
+  if (!args.selfTest && !args.preflight && !args.allowMissingBearer && !args.bearer) {
     throw new Error('--bearer is required unless --allow-missing-bearer or --self-test is set');
   }
   if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 10_000) {
@@ -149,6 +163,8 @@ function printHelp() {
 
   npm run smoke:external-video-ppt -- --self-test
 
+  npm run smoke:external-video-ppt -- --preflight --allow-missing-bearer
+
 Checks:
   - registers a video fixture through /v1/external/channels/{connection_id}/documents/parse
   - sends a third-party /events message scoped to the registered video
@@ -158,6 +174,7 @@ Checks:
 
 Notes:
   - --self-test does not call the network
+  - --preflight validates fixture/context/trigger shape and live write scope without network calls
   - live mode requires bearer unless --allow-missing-bearer is set for local loopback
   - --skip-deliverable-downloads only verifies the reply surface, not PPTX/Markdown files
 `);
@@ -244,6 +261,174 @@ function inferContentType(fileName, fallback = 'video/mp4') {
   if (lowerName.endsWith('.mkv')) return 'video/x-matroska';
   if (lowerName.endsWith('.avi')) return 'video/x-msvideo';
   return fallback;
+}
+
+function inferUploadMediaKind(fileName, contentType) {
+  const signal = `${fileName || ''} ${contentType || ''}`.toLowerCase();
+  return /(^|\W)video\//.test(signal) || /\.(mp4|mov|m4v|webm|mkv|avi|mpeg|mpg)(\W|$)/i.test(signal)
+    ? 'video'
+    : '';
+}
+
+function promptRequestsVideoPpt(prompt) {
+  return /ppt|powerpoint|slides?|幻灯片|课件/i.test(String(prompt || ''));
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function redactedLiveCommand(args, fixtureName) {
+  const fixtureArg = args.fixtureFile
+    ? '--fixture-file <redacted-local-video-file>'
+    : '--fixture-url <redacted-public-video-url>';
+  const fixtureNameArg = fixtureName ? ` --fixture-name ${shellQuote(fixtureName)}` : '';
+  return [
+    'npm run smoke:external-video-ppt --',
+    `--base-url ${shellQuote('<target-v3-base-url>')}`,
+    `--connection-id ${shellQuote(args.connectionId || '<connection-id>')}`,
+    `--source-id ${shellQuote(args.sourceId || '<source-id>')}`,
+    '--bearer <redacted-inbound-bearer>',
+    fixtureArg,
+    fixtureNameArg.trim(),
+    `--output-dir ${shellQuote(args.outputDir)}`,
+  ].filter(Boolean).join(' ');
+}
+
+async function localFixturePreflight(args) {
+  const fixtureStat = await stat(args.fixtureFile);
+  if (!fixtureStat.isFile()) {
+    throw new Error('--fixture-file must point to a regular video file');
+  }
+  return {
+    kind: 'file',
+    fileName: basename(args.fixtureFile),
+    bytes: fixtureStat.size,
+    localPathRedacted: true,
+  };
+}
+
+async function fixturePreflight(args) {
+  const sourceKind = args.fixtureFile ? 'file' : 'url';
+  const fileName = fixtureFileName(args);
+  const contentType = args.contentType || inferContentType(fileName, '');
+  const extension = extname(fileName).toLowerCase();
+  const mediaKind = inferUploadMediaKind(fileName, contentType);
+  const source = sourceKind === 'file'
+    ? await localFixturePreflight(args)
+    : {
+        kind: 'url',
+        ...redactedUrlSummary(args.fixtureUrl),
+      };
+  return {
+    sourceKind,
+    source,
+    fileName,
+    extension,
+    contentType,
+    mediaKind,
+    supportedExtension: SUPPORTED_VIDEO_EXTENSIONS.includes(extension),
+  };
+}
+
+async function runPreflight(args) {
+  const runId = makeRunId();
+  const fixture = await fixturePreflight(args);
+  const ids = buildFixtureIds(runId);
+  const payload = buildMessagePayload(args, ids, runId);
+  const credentialGateSatisfied = Boolean(args.bearer) || args.allowMissingBearer;
+  const liveCredentialReady = Boolean(args.bearer);
+  const failures = [
+    args.connectionId ? '' : 'missing_connection_id',
+    args.sourceId ? '' : 'missing_source_id',
+    credentialGateSatisfied ? '' : 'missing_bearer_for_live_external_smoke',
+    fixture.mediaKind === 'video' ? '' : 'fixture_not_classified_as_video',
+    fixture.supportedExtension ? '' : 'unsupported_video_extension',
+    promptRequestsVideoPpt(payload.text) ? '' : 'event_text_does_not_request_video_ppt',
+    payload.requested_skills?.some((skill) => skill.skill_id === 'video_ppt_extraction')
+      ? ''
+      : 'missing_video_ppt_requested_skill',
+  ].filter(Boolean);
+  const report = {
+    schema: 'v3.external_video_ppt_smoke_preflight.v1',
+    summary: {
+      ok: failures.length === 0,
+      preflight: true,
+      runId,
+      networkCallsRun: false,
+      productionWriteAllowed: false,
+      liveWriteApprovalRequired: true,
+      credentialGateSatisfied,
+      liveCredentialReady,
+      allowMissingBearer: args.allowMissingBearer,
+      fixtureDownloaded: false,
+      fixtureRegistered: false,
+      eventSent: false,
+      replyPolled: false,
+      deliverablesDownloadedFromNetwork: false,
+      failures,
+    },
+    target: {
+      baseUrl: redactedUrlSummary(args.baseUrl),
+      connectionIdPresent: Boolean(args.connectionId),
+      sourceIdPresent: Boolean(args.sourceId),
+      platform: args.platform,
+      tenantExternalIdPresent: Boolean(args.tenantExternalId),
+      botExternalIdPresent: Boolean(args.botExternalId),
+      senderExternalIdPresent: Boolean(args.senderExternalId),
+    },
+    fixture,
+    trigger: {
+      textRequestsVideoPpt: promptRequestsVideoPpt(payload.text),
+      defaultPromptGuardsAgainstOrdinaryVideoToPpt:
+        /不要把普通视频创作成 PPT/.test(payload.default_prompt),
+      requestedSkillIds: payload.requested_skills.map((skill) => skill.skill_id),
+      expectedAction: payload.requested_skills[0]?.arguments?.expected_action || null,
+      availableDocumentSourcePresent: Boolean(payload.available_document_source_id),
+      availableDocumentExternalIdsCount: payload.available_document_external_ids.length,
+      datasetExternalIdsCount: payload.dataset_external_ids.length,
+    },
+    liveWriteScope: {
+      requiresExplicitApproval: true,
+      plannedSteps: LIVE_WRITE_STEPS,
+      writesSmokeRecords: true,
+      deploysServices: false,
+    },
+    redaction: {
+      rawFixtureUrlIncluded: false,
+      localFixturePathIncluded: false,
+      bearerIncluded: false,
+      objectKeysIncluded: false,
+      providerPayloadsIncluded: false,
+    },
+    commandTemplate: redactedLiveCommand(args, fixture.fileName),
+  };
+  const serialized = JSON.stringify(report)
+    .replace(/--bearer <redacted-inbound-bearer>/g, '--auth <redacted>');
+  if (/https?:\/\/|token=|object_key|Bearer\s|\/Users\//i.test(serialized)) {
+    throw new Error('preflight report contains unredacted URL, token, object key, bearer marker, or local path');
+  }
+  await mkdir(args.outputDir, { recursive: true });
+  const reportPath = join(args.outputDir, `${runId}-preflight.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify({
+    ok: report.summary.ok,
+    preflight: true,
+    runId,
+    reportPath,
+    fixture: {
+      sourceKind: fixture.sourceKind,
+      fileName: fixture.fileName,
+      mediaKind: fixture.mediaKind,
+      supportedExtension: fixture.supportedExtension,
+    },
+    credentialGateSatisfied,
+    liveCredentialReady,
+    liveWriteApprovalRequired: true,
+  }, null, 2));
+  if (!report.summary.ok) {
+    process.exitCode = 1;
+  }
 }
 
 async function loadFixtureBytes(args) {
@@ -989,6 +1174,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.selfTest) {
     await runSelfTest(args);
+  } else if (args.preflight) {
+    await runPreflight(args);
   } else {
     await runLive(args);
   }
