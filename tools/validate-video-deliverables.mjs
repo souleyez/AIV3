@@ -359,6 +359,8 @@ function validateSlideRectanglesManifest(manifest, errors) {
     "full_frame_fallback",
     "simple_background_contrast_v1",
     "border_background_contrast_v2",
+    "foreground_component_v1",
+    "bright_canvas_v1",
     "edge_projection_v1",
     "mixed_detector_modes",
     "mixed_detector_and_full_frame_fallback",

@@ -145,7 +145,7 @@ The target host still needs `CC=clang CXX=clang++` for release builds because it
 
 ## Slide Rectangle Manifest Follow-Up
 
-The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and decodable JPEG/PNG frames also pass through a conservative visual-similarity dedupe to reject near-identical selected frames caused by compression or tiny capture differences. Remaining JPEG/PNG frames may be exported as `border_background_contrast_v2` detector crops when a clear non-background rectangle exists, refined as `foreground_component_v1` crops when a dominant connected slide component should exclude external foreground overlays, or `edge_projection_v1` crops when a non-uniform background makes the median-background crop unsafe but strong rectangular edge lines remain. The public validator still accepts older `simple_background_contrast_v1` manifests. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
+The public deliverable contract now also requires `slide_rectangles_manifest.json` for complete video/PPT packages. The current promoted mode is intentionally conservative: selected keep-list frames are de-duplicated in selection order, exact duplicate selected frame bytes are removed before PPTX generation, and decodable JPEG/PNG frames also pass through a conservative visual-similarity dedupe to reject near-identical selected frames caused by compression or tiny capture differences. Remaining JPEG/PNG frames may be exported as `border_background_contrast_v2` detector crops when a clear non-background rectangle exists, refined as `foreground_component_v1` crops when a dominant connected slide component should exclude external foreground overlays, exported as `edge_projection_v1` crops when a non-uniform background makes the median-background crop unsafe but strong rectangular edge lines remain, or exported as `bright_canvas_v1` crops when a low-contrast background still contains a large bright slide canvas. The public validator still accepts older `simple_background_contrast_v1` manifests. Ambiguous or undecodable frames remain relative full-frame fallback crops. Every crop still requires `review_required=true`.
 
 ### 2026-05-15 Target Foreground Component Crop Enablement
 
@@ -1079,6 +1079,65 @@ Remaining P2-2 work:
 - P2-2C: improve stable-interval selection, transition-frame filtering, and duplicate-page review output;
 - P2-2D: use an approved subtitle/transcript/OCR sample to improve `subtitle_page_map` and slide notes;
 - P2-2E: run the three-sample quality review matrix, including a customer video only after explicit authorization.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
+
+## 2026-06-08 Bright Canvas Slide Rectangle Detector Local Slice
+
+Task source: P2-2B from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- reduce full-frame fallback for a conservative class of slide frames where a bright PPT canvas is embedded in a low-contrast player or page background;
+- preserve existing detector priority for stronger detectors such as background contrast, foreground component refinement, and edge projection;
+- keep every detector crop marked `review_required=true`;
+- update the public validator so generated detector modes are accepted by the deliverable contract.
+
+Implemented behavior:
+
+- media-worker adds `bright_canvas_v1` as a fallback detector after background contrast and edge projection;
+- `bright_canvas_v1` only promotes a crop when a large bright rectangular region is clearly inside frame bounds, has a plausible slide aspect ratio, and enough bright-pixel density;
+- existing `edge_projection_v1` retains precedence for strong rectangular edge-line scenes;
+- aggregate rectangle mode can now surface `bright_canvas_v1`;
+- validator now accepts both `foreground_component_v1` and `bright_canvas_v1` as valid slide rectangle modes;
+- validator test coverage now proves both modes are accepted.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- rustfmt check passed;
+- slide rectangle tests passed, 5 tests, including the new low-contrast bright canvas fixture;
+- controlled video sample deliverable contract passed, 1 test;
+- selected-slides subtitle/quality-report path passed, 1 test;
+- platform-api video extraction tests passed, 3 tests;
+- platform-api video PPT tests passed, 5 tests;
+- video deliverables validator tests passed, 18 tests, including foreground component and bright canvas detector-mode acceptance;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- broader P2-2B crop quality work still needs real sample review against公开视频课程 and customer-authorized video;
+- P2-2C still needs stronger stable-interval, transition-frame, and duplicate-page handling;
+- P2-2D still needs an approved subtitle/transcript/OCR sample;
+- P2-2E still needs the three-sample quality review matrix and human review conclusions.
 
 Safety result:
 

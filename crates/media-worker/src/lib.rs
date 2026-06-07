@@ -2539,6 +2539,7 @@ fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetec
 
     video_detect_slide_rectangle_by_background_contrast(&image, width, height)
         .or_else(|| video_detect_slide_rectangle_by_edge_projection(&image, width, height))
+        .or_else(|| video_detect_slide_rectangle_by_bright_canvas(&image, width, height))
 }
 
 fn video_detect_slide_rectangle_by_background_contrast(
@@ -2803,6 +2804,95 @@ fn video_push_foreground_neighbor(
     Some(())
 }
 
+fn video_detect_slide_rectangle_by_bright_canvas(
+    image: &image::DynamicImage,
+    width: u32,
+    height: u32,
+) -> Option<VideoSlideRectangleDetection> {
+    if width < 32 || height < 32 {
+        return None;
+    }
+
+    let threshold = 212_u8;
+    let mut column_bright_counts = vec![0_u32; width as usize];
+    let mut row_bright_counts = vec![0_u32; height as usize];
+    let mut bright_pixel_count = 0_u64;
+
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = image.get_pixel(x, y).to_rgb();
+            if video_luma_from_rgb(&pixel.0) >= threshold {
+                column_bright_counts[x as usize] += 1;
+                row_bright_counts[y as usize] += 1;
+                bright_pixel_count += 1;
+            }
+        }
+    }
+
+    let image_area = u64::from(width) * u64::from(height);
+    if bright_pixel_count < image_area / 12 {
+        return None;
+    }
+
+    let column_threshold = (height / 6).max(6);
+    let row_threshold = (width / 6).max(6);
+    let min_x = column_bright_counts
+        .iter()
+        .position(|count| *count >= column_threshold)? as u32;
+    let max_x = column_bright_counts
+        .iter()
+        .rposition(|count| *count >= column_threshold)? as u32;
+    let min_y = row_bright_counts
+        .iter()
+        .position(|count| *count >= row_threshold)? as u32;
+    let max_y = row_bright_counts
+        .iter()
+        .rposition(|count| *count >= row_threshold)? as u32;
+
+    if min_x <= 1
+        || min_y <= 1
+        || max_x >= width.saturating_sub(2)
+        || max_y >= height.saturating_sub(2)
+    {
+        return None;
+    }
+
+    let box_width = max_x - min_x + 1;
+    let box_height = max_y - min_y + 1;
+    if box_width < width / 4 || box_height < height / 4 {
+        return None;
+    }
+    if box_width >= width.saturating_mul(19) / 20 && box_height >= height.saturating_mul(19) / 20 {
+        return None;
+    }
+
+    let aspect_ratio = f64::from(box_width) / f64::from(box_height);
+    if !(0.8..=2.7).contains(&aspect_ratio) {
+        return None;
+    }
+
+    let box_area = u64::from(box_width) * u64::from(box_height);
+    if bright_pixel_count.saturating_mul(100) < box_area.saturating_mul(55) {
+        return None;
+    }
+
+    Some(VideoSlideRectangleDetection {
+        x: video_relative_coord(min_x, width),
+        y: video_relative_coord(min_y, height),
+        width: video_relative_coord(box_width, width),
+        height: video_relative_coord(box_height, height),
+        image_width: width,
+        image_height: height,
+        signal_pixel_count: bright_pixel_count,
+        sample_count: image_area,
+        signal_source: "bright_canvas_luma",
+        detector_name: "bright_canvas_v1",
+        rectangle_source: "raw_frame_bright_canvas",
+        rectangle_extraction_mode: "bright_canvas_v1",
+        threshold,
+    })
+}
+
 fn video_image_index(x: u32, y: u32, width: u32) -> Option<usize> {
     usize::try_from(u64::from(y) * u64::from(width) + u64::from(x)).ok()
 }
@@ -3018,6 +3108,8 @@ fn video_slide_rectangle_aggregate_mode(selected_candidates: &[Value]) -> &'stat
             if detector_modes.len() == 1 {
                 if detector_modes.contains("foreground_component_v1") {
                     "foreground_component_v1"
+                } else if detector_modes.contains("bright_canvas_v1") {
+                    "bright_canvas_v1"
                 } else if detector_modes.contains("edge_projection_v1") {
                     "edge_projection_v1"
                 } else if detector_modes.contains("border_background_contrast_v2") {
@@ -7374,6 +7466,32 @@ mod tests {
             .expect("test gradient edge slide rectangle png");
     }
 
+    fn write_test_low_contrast_bright_canvas_slide_png(path: &Path) {
+        let mut image = image::RgbImage::new(120, 90);
+        for y in 0..90 {
+            for x in 0..120 {
+                let tone = 205 + ((x * 17 + y * 31) % 6) as u8;
+                image.put_pixel(x, y, image::Rgb([tone, tone, tone]));
+            }
+        }
+        for y in 18..72 {
+            for x in 26..104 {
+                image.put_pixel(x, y, image::Rgb([244, 244, 244]));
+            }
+        }
+        for x in 34..94 {
+            image.put_pixel(x, 30, image::Rgb([30, 60, 140]));
+            image.put_pixel(x, 50, image::Rgb([40, 40, 40]));
+        }
+        for y in 38..64 {
+            image.put_pixel(44, y, image::Rgb([210, 80, 80]));
+            image.put_pixel(82, y, image::Rgb([70, 120, 210]));
+        }
+        image
+            .save(path)
+            .expect("test low contrast bright canvas png");
+    }
+
     fn write_test_visual_slide_png(
         path: &Path,
         background: [u8; 3],
@@ -10082,6 +10200,40 @@ mod tests {
             json!("edge_projection_v1")
         );
         assert_eq!(rectangle["detector"]["name"], json!("edge_projection_v1"));
+    }
+
+    #[test]
+    fn detects_slide_rectangle_from_low_contrast_bright_canvas() {
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-bright-canvas-test-{}",
+            DocumentId::new()
+        ));
+        fs::create_dir_all(&output_root).expect("output root");
+        let frame_path = output_root.join("frame_000001.png");
+        write_test_low_contrast_bright_canvas_slide_png(&frame_path);
+
+        let detection = video_detect_slide_rectangle(&frame_path).expect("bright canvas crop");
+
+        assert_eq!(detection.detector_name, "bright_canvas_v1");
+        assert_eq!(detection.rectangle_source, "raw_frame_bright_canvas");
+        assert_eq!(detection.rectangle_extraction_mode, "bright_canvas_v1");
+        assert_eq!(detection.signal_source, "bright_canvas_luma");
+        assert!(detection.x >= 0.21 && detection.x <= 0.22);
+        assert_eq!(detection.y, 0.2);
+        assert_eq!(detection.width, 0.65);
+        assert_eq!(detection.height, 0.6);
+
+        let rectangle =
+            video_slide_rectangle_from_frame(1, 1, "frame_000001.png", 0.0, &frame_path);
+        assert_eq!(
+            rectangle["rectangle_source"],
+            json!("raw_frame_bright_canvas")
+        );
+        assert_eq!(
+            rectangle["rectangle_extraction_mode"],
+            json!("bright_canvas_v1")
+        );
+        assert_eq!(rectangle["detector"]["name"], json!("bright_canvas_v1"));
     }
 
     #[test]

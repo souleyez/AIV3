@@ -54,6 +54,29 @@ test("accepts detector-cropped slide rectangles", () => {
   assert.equal(result.ok, true);
 });
 
+test("accepts foreground component and bright canvas detector modes", () => {
+  for (const [mode, source] of [
+    ["foreground_component_v1", "raw_frame_foreground_component"],
+    ["bright_canvas_v1", "raw_frame_bright_canvas"],
+  ]) {
+    const sessionDir = createCompleteDeliverables();
+    const slideRectanglesPath = path.join(sessionDir, "generated_artifacts", "slide_rectangles_manifest.json");
+    const slideRectangles = JSON.parse(fs.readFileSync(slideRectanglesPath, "utf8"));
+    slideRectangles.status = "promoted_detector_crop";
+    slideRectangles.rectangle_extraction_status = "promoted_detector_crop";
+    slideRectangles.rectangle_extraction_mode = mode;
+    slideRectangles.rectangles[0].rectangle_source = source;
+    slideRectangles.rectangles[0].rectangle_extraction_status = "promoted_detector_crop";
+    slideRectangles.rectangles[0].rectangle_extraction_mode = mode;
+    slideRectangles.rectangles[0].crop_box = { unit: "relative", x: 0.2, y: 0.125, width: 0.6, height: 0.625 };
+    fs.writeFileSync(slideRectanglesPath, JSON.stringify(slideRectangles, null, 2));
+
+    const result = validateVideoDeliverables(sessionDir);
+
+    assert.equal(result.ok, true, `${mode} should be accepted`);
+  }
+});
+
 test("rejects missing review files", () => {
   const sessionDir = createCompleteDeliverables();
   fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_notes.md"));
