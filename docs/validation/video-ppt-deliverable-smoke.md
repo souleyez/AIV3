@@ -2885,3 +2885,63 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated self-test reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded in this shared receipt.
+
+## 2026-06-08 Video Channel Handoff Negative Self-Test Gate
+
+Task source: P1-3D readiness from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- strengthen `smoke:video-ppt-handoff -- --self-test` so the login-gated/WeChat Video Channels handoff surface has explicit negative proof;
+- keep the behavior as unsupported-source handoff, not video fetch, frame extraction, OCR, PPT generation, or browser capture;
+- reject false-positive surfaces that look like successful video PPT extraction or expose downloadable artifacts;
+- avoid network calls, provider/ReAct calls, DataMax uploads, fixture downloads, service build/restart, 8-server deployment, and 120-server action.
+
+Implemented behavior:
+
+- `assertHandoffSurface` now treats exposed artifact links as an unsafe handoff signal, same as `download_exports` and `final_pptx_ready`;
+- self-test report records `networkCallsRun=false`, `providerCalled=false`, `reactToolchainCalled=false`, `videoFetchAttempted=false`, `videoDownloaded=false`, `framesExtracted=false`, `ocrRun=false`, and `pptGenerated=false`;
+- self-test report records that no `final_pptx_ready`, artifact links, or download exports were exposed on the accepted main/external handoff fixtures;
+- self-test adds five negative fixtures and requires all five to be rejected:
+  - missing `login_gated_video_source_not_supported` reason;
+  - false success/download surface;
+  - artifact-link exposure;
+  - raw WeChat source URL leak;
+  - credential/cookie/login-state request.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-handoff.mjs
+npm run smoke:video-ppt-handoff -- --help
+npm run smoke:video-ppt-handoff -- --self-test --output-dir target/video-ppt-handoff-self-test-negative-gate-final
+rg -n "weixin\.qq\.com/sph|channels\.weixin\.qq\.com/sph|token=|Bearer |cookie|password|upload_object_key|generated_artifacts|/Users/" target/video-ppt-handoff-self-test-negative-gate-final || true
+```
+
+Result:
+
+- handoff smoke syntax check passed;
+- help output still documents that the smoke does not fetch the WeChat URL, download video, extract frames, OCR, or generate PPT;
+- handoff self-test passed with `ok=true`;
+- self-test summary showed `networkCallsRun=false`, `providerCalled=false`, `reactToolchainCalled=false`, `videoFetchAttempted=false`, `videoDownloaded=false`, `framesExtracted=false`, `ocrRun=false`, and `pptGenerated=false`;
+- accepted main/external handoff fixtures showed `artifactLinkCount=0`, `downloadExportCount=0`, `unsafeSuccessSignal=false`, and `unsafeArtifactLinkSignal=false`;
+- negative fixture gate showed `negativeFixtureCount=5` and `negativeFixturesRejected=5`;
+- redaction audit found no raw WeChat source URL, token marker, bearer marker, cookie/password marker, upload object key, generated-artifacts path, or local absolute path in the self-test report.
+
+Remaining work:
+
+- this improves P1-3D offline readiness but does not prove the current production main-site handoff surface;
+- P1-3D live pass still needs an approved 8-server deployment window before rerunning the main-site handoff smoke;
+- third-party live handoff still needs approved inbound bearer/context;
+- no video was extracted from a WeChat/login-gated source in this slice, and the expected product behavior remains handoff only.
+
+Safety result:
+
+- no live handoff smoke was run;
+- no source page was fetched;
+- no video was downloaded, uploaded, captured, OCRed, frame-extracted, or converted to PPT;
+- no provider/ReAct/model branch was called;
+- no DataMax upload, dataset, document, assistant run, third-party event, or HTML artifact was created;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated self-test reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded in this shared receipt.

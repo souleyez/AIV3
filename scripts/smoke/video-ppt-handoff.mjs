@@ -679,6 +679,7 @@ function assertHandoffSurface(kind, value) {
   const hasActionableNextSteps = hasRequiredNextStepKeys || hasChineseNextSteps(signal);
   const unsafeSuccessSignal = /final_pptx_ready|video_extraction_summary|download_exports|generated_artifacts|frame_extraction|frame_count|ocr_completed/i.test(signal)
     || surface.downloadExportCount > 0;
+  const unsafeArtifactLinkSignal = surface.artifactLinkCount > 0;
   const unsafeCredentialRequest = /(请|需要|提供|上传).{0,12}(cookie|账号|密码|二维码|扫码|登录态)/i.test(signal)
     && !/(不会|不要|不需要).{0,12}(cookie|账号|密码|二维码|扫码|登录态)/i.test(signal);
   const rawSourceLeaked = /(?:weixin\.qq\.com|channels\.weixin\.qq\.com)\/sph\//i.test(signal);
@@ -686,6 +687,7 @@ function assertHandoffSurface(kind, value) {
     && hasRequiredReason
     && hasActionableNextSteps
     && !unsafeSuccessSignal
+    && !unsafeArtifactLinkSignal
     && !unsafeCredentialRequest
     && !rawSourceLeaked;
   const summary = {
@@ -700,6 +702,7 @@ function assertHandoffSurface(kind, value) {
     hasHandoffType,
     hasActionableNextSteps,
     unsafeSuccessSignal,
+    unsafeArtifactLinkSignal,
     unsafeCredentialRequest,
     rawSourceLeaked,
     artifactLinkCount: surface.artifactLinkCount,
@@ -710,6 +713,104 @@ function assertHandoffSurface(kind, value) {
     throw new Error(`${kind} handoff surface validation failed: ${JSON.stringify(summary)}`);
   }
   return summary;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function validationSummaryFromError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const marker = ' handoff surface validation failed: ';
+  const markerIndex = message.indexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(message.slice(markerIndex + marker.length));
+  } catch {
+    return null;
+  }
+}
+
+function assertHandoffSurfaceRejects({ name, kind, value, expected }) {
+  try {
+    const summary = assertHandoffSurface(kind, value);
+    throw new Error(`${name} unexpectedly passed handoff validation: ${JSON.stringify(summary)}`);
+  } catch (error) {
+    const summary = validationSummaryFromError(error);
+    if (!summary) {
+      throw error;
+    }
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      if (summary[key] !== expectedValue) {
+        throw new Error(
+          `${name} rejected for the wrong reason: expected ${key}=${expectedValue}, got ${summary[key]}; summary=${JSON.stringify(summary)}`,
+        );
+      }
+    }
+    return {
+      name,
+      kind,
+      rejected: true,
+      expected,
+      summary,
+    };
+  }
+}
+
+function runNegativeHandoffSurfaceCases(mainArtifact, externalResponse) {
+  const missingReasonMain = cloneJson(mainArtifact);
+  delete missingReasonMain.payload.failure_reason;
+
+  const successExternal = cloneJson(externalResponse);
+  successExternal.reply.task_status = 'video_extraction_summary';
+  successExternal.reply.text = '视频 PPT 提取已完成，final_pptx_ready，可下载 PPTX。';
+  successExternal.reply.card.type = 'video_extraction_summary';
+  successExternal.reply.card.status = 'final_pptx_ready';
+  successExternal.reply.card.download_exports = [{ kind: 'pptx', url: '/download/video-slides.pptx' }];
+
+  const artifactLinkExternal = cloneJson(externalResponse);
+  artifactLinkExternal.reply.artifact_links = ['artifact://video-ppt-handoff-should-not-expose'];
+
+  const rawSourceMain = cloneJson(mainArtifact);
+  rawSourceMain.payload.blockedReason = '当前不抓取 https://weixin.qq.com/sph/AhfmOtV8P5，也不声称已生成 PPT。';
+
+  const credentialRequestMain = cloneJson(mainArtifact);
+  credentialRequestMain.payload.supportedNextSteps[2].detail = '请提供 cookie 或二维码登录态后继续处理。';
+
+  return [
+    assertHandoffSurfaceRejects({
+      name: 'main_missing_failure_reason',
+      kind: 'main',
+      value: missingReasonMain,
+      expected: { hasRequiredReason: false },
+    }),
+    assertHandoffSurfaceRejects({
+      name: 'external_success_download_exports',
+      kind: 'external',
+      value: successExternal,
+      expected: { unsafeSuccessSignal: true },
+    }),
+    assertHandoffSurfaceRejects({
+      name: 'external_artifact_link_leak',
+      kind: 'external',
+      value: artifactLinkExternal,
+      expected: { unsafeArtifactLinkSignal: true },
+    }),
+    assertHandoffSurfaceRejects({
+      name: 'main_raw_source_url_leak',
+      kind: 'main',
+      value: rawSourceMain,
+      expected: { rawSourceLeaked: true },
+    }),
+    assertHandoffSurfaceRejects({
+      name: 'main_credential_request',
+      kind: 'main',
+      value: credentialRequestMain,
+      expected: { unsafeCredentialRequest: true },
+    }),
+  ];
 }
 
 async function runSelfTest(args, runId) {
@@ -756,15 +857,32 @@ async function runSelfTest(args, runId) {
       },
     },
   };
+  const mainSurface = assertHandoffSurface('main', mainArtifact);
+  const externalSurface = assertHandoffSurface('external', externalResponse);
+  const negativeCases = runNegativeHandoffSurfaceCases(mainArtifact, externalResponse);
   const report = {
     summary: {
       ok: true,
       selfTest: true,
       runId,
       prompt: redactedPromptSummary(args.prompt),
+      networkCallsRun: false,
+      providerCalled: false,
+      reactToolchainCalled: false,
+      videoFetchAttempted: false,
+      videoDownloaded: false,
+      framesExtracted: false,
+      ocrRun: false,
+      pptGenerated: false,
+      finalPptxReadyExposed: false,
+      artifactLinksExposed: mainSurface.artifactLinkCount > 0 || externalSurface.artifactLinkCount > 0,
+      downloadExportsExposed: mainSurface.downloadExportCount > 0 || externalSurface.downloadExportCount > 0,
+      negativeFixtureCount: negativeCases.length,
+      negativeFixturesRejected: negativeCases.filter((item) => item.rejected).length,
     },
-    main: assertHandoffSurface('main', mainArtifact),
-    external: assertHandoffSurface('external', externalResponse),
+    main: mainSurface,
+    external: externalSurface,
+    negativeCases,
   };
   await mkdir(args.outputDir, { recursive: true });
   const reportPath = join(args.outputDir, `${runId}-self-test.json`);
