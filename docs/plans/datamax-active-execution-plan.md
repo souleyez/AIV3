@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**目标：** 保持 DataMax 只有一份可执行计划，并优先完成当前不依赖外部凭据、生产风险批准或业务决策的事项。视频抽取 PPT 交付闭环已在 Task 10 收尾；当前下一步继续处理 operator 观测页打磨，再进入最终验证。
+**目标：** 保持 DataMax 只有一份可执行计划，并优先完成当前不依赖外部凭据、生产风险批准或业务决策的事项。视频抽取 PPT 交付闭环已在 Task 10 收尾，operator 观测页已在 Task 11 打磨，Task 12 最终验证已完成；后续只剩外部凭据、业务决策或部署批准项。
 
 **架构：** DataMax 继续作为权限、文档/数据入库、企业记忆、模型路由、媒体/视频提取交付物、静态页/报表产物和第三方契约的系统事实源。本计划优先安排可以本地完成、只读验证或低风险闭环的任务；需要 operator 凭据、业务拍板、外部 provider 额度或生产写入的事项统一挂起。
 
@@ -29,7 +29,7 @@
 - 8 服务器已知仓库漂移：未跟踪文件 `mode`，不要动。
 - 当前 completion audit：`docs/validation/datamax-main-gap-closure-completion-audit.md`。
 - 历史计划归档包：`C:\Users\soulzyn\Desktop\codex-backups\datamax-plan-consolidation-20260607-093057.zip`。
-- Task 2 需要按执行时的真实 HEAD 重新记录本地、GitHub、8 服务器和服务状态。
+- 最新收尾验证在 Task 12 记录；最终提交后只做 GitHub 和 8 服务器源码同步，不部署、不重启服务。
 
 ## 外部资源/外部决策挂起项
 
@@ -60,7 +60,7 @@
 9. 已完成：第三方数据库只读状态强化。
 10. 已完成：视频抽取 PPT 交付闭环优先收尾。
 11. 已完成：operator 观测页小幅打磨。
-12. 下一步：最终 validation 和可选部署。
+12. 已完成：最终 validation；未部署，已做 8 服务器只读检查。
 
 每个任务通过测试后独立提交。
 
@@ -880,7 +880,19 @@ git commit -m "Polish external integration observability"
 
 ## Task 12：最终验证与可选部署
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 汇总以上独立任务结果。只有用户明确要求部署时才部署；否则只提交、推 GitHub、做 8 服务器只读检查。
+
+**结果：**
+
+- 本地收尾检查在 `25ee004` 通过：`git status --short --branch` 为 `## main...origin/main`，`git diff --check` 通过。
+- `npm run check:pure-third-party-guide-html` 通过，纯第三方指南和第三方 API HTML/公开副本均为最新。
+- 8 服务器只读检查通过：`/srv/aiv3/repo` 为 `## main...origin/main`，head `25ee00477`，只保留已知未跟踪文件 `mode`。
+- 8 服务器 `GET http://127.0.0.1:3000/v1/workflow-tasks/queue-stats` 可达，保存到 `/tmp/datamax-active-plan-final-qstats.json` 后通过 `python3 -m json.tool` 校验。
+- 用户未要求部署；本任务未运行 build、deploy、service restart，也未触碰 120 服务器。
+- Task 10 视频抽取 PPT 交付闭环和 Task 11 operator 观测页打磨的测试与回执已写入 `docs/validation/datamax-main-gap-closure.md`。
+- 外部凭据、业务决策、真实历史 backfill、生产行级映射、真实登录态视频 smoke 等仍按本计划挂起项处理。
 
 **文件：**
 

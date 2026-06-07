@@ -70,6 +70,7 @@ This ledger records DataMax gap-closure evidence. The current active execution p
 | P1 Gate D: low-quality answer recovery | passed for current safe-disabled deploy | Passive local implementation and smoke passed on 2026-06-06. Hard gate remains disabled. Production enqueue requires `CODEX_HOST_TASK_ENABLED=true`, `ASSISTANT_RUN_ANSWER_QUALITY_AUTOFIX_ENABLED=true`, `CODEX_HOST_TASK_ALLOWLIST` containing `answer_quality_autofix`, and host capability allowlist before live Codex task creation. Current-head `fc7c37048c76` runtime audit shows the customer-facing hard gate absent, the dedicated autofix flag absent, task allowlist excluding `answer_quality_autofix`, and host capability gates excluding `answer_quality_autofix`; local `answer_quality`, `answer_quality_autofix`, `assistant_run_answer_quality_gate`, codex-host-agent, and legacy quality-gate smoke all passed, so live enqueue remains intentionally disabled until an explicit operator decision. |
 | P1 Gate E: confirmed data ingestion | passed for current contract; row-level semantics decision pending | Local confirmed staging-to-dataset sync smoke passed on 2026-06-06. 8-server live source readiness passed for `hy-sql-traffic-area`. 8-server external data-ingestion analysis completed and returned a `v3_data_ingestion_staging_plan` with `human_review_required=true` and no raw credentials. Operator-confirmation routing is implemented and tested. 8-server authenticated operator confirm/sync smoke succeeded after retrieval-evidence idempotency commit `8fd0a1d`; sync `0f75e5ef-130a-4ba8-a4c6-efe880db5ce2` completed. The 577 vs 384 audit found source-row counts were being reported as materialized/indexed counts when MySQL identity mappings collapsed multiple rows into one document. Commit `8c72144aa5f9` separates source rows, unique materialized documents/chunks/evidence, and collapsed duplicate rows; 8-server re-sync `e9da6483-5705-416e-bdc2-a1cc219f6566` succeeded with source rows 577, unique documents/chunks/evidence 384, and collapsed duplicate rows 193. Current-head `7c2d92c5e8f7` read-only smoke still shows question/report readiness, four ready datasets, and the same two collapsed latest-sync tables: `bi_contract_warning` collapsed 94 rows and `bi_rentsales_detail` collapsed 99 rows. The Markdown summary now includes per-table recommended action, matching the JSON field. Production mapping stays unchanged until a row-level-vs-entity-level business decision is made and staging discriminator validation passes. |
 | P1 Gate F: operator observability | passed for deployed page and current local polish; authenticated model-gateway smoke remains operator-scoped | The external integrations page includes compact sanitized operations summary cards, protected/lazy task runtime details, conversation-test drilldown, database-source read-only state, and now redacted latest workflow-task failure reasons plus deduped artifact manifest links for Codex executor runtime inspect. Local `node --test app/lib/external-integrations.test.mjs` passed 31 tests and `npm run build` passed with existing Next warnings only. Earlier 8-server deploy to `2193e0cd5248` proved `/external-integrations` SSR and queue-stats access; current Task 11 is source-synced only unless deployment is explicitly requested. Model-gateway status remains protected and returned `401 auth_session_required` without a main-system operator session, so an authenticated model-gateway operator smoke remains pending. |
+| Final active-plan validation | passed for source-only closure; optional deploy not requested | Task 12 final validation at local head `25ee004` passed `git diff --check` and `npm run check:pure-third-party-guide-html`. 8-server read-only check showed `/srv/aiv3/repo` at `25ee00477`, `## main...origin/main`, only known untracked `?? mode`, and valid queue-stats JSON in `/tmp/datamax-active-plan-final-qstats.json`. Task 10 commit `3f8809b` and Task 11 commit `25ee004` are source-synced work; no deploy, service restart, 120-server action, raw payload, credential, customer row, document body, provider payload, object path, or token was recorded. |
 
 ## Rollout Receipts
 
@@ -338,6 +339,39 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no public third-party request/response field, auth method, URL, production row mapping, database schema, or source sync behavior changed;
   - no live source/customer database read, production write, service build, service restart, deploy, or 120-server action was run;
   - no credential, cookie, bearer token, local key, database URL, provider payload, raw customer row, full customer document, object path, or secret env value was recorded.
+
+### 2026-06-07 Active Plan Task 12 Final Validation
+
+- Purpose:
+  - execute Task 12 from `docs/plans/datamax-active-execution-plan.md`;
+  - close the active plan with source-only validation unless the operator explicitly asks for deployment.
+- Completed work recap:
+  - Task 10 video PPT extraction delivery loop was completed at commit `3f8809b`;
+  - Task 11 operator observability polish was completed at commit `25ee004`;
+  - the active plan and completion audit were updated to mark final validation complete while keeping external-decision items pending.
+- Local validation:
+  - `git status --short --branch` returned `## main...origin/main`;
+  - local head before this documentation update was `25ee004`;
+  - `git diff --check` passed;
+  - `npm run check:pure-third-party-guide-html` passed and confirmed both pure third-party guide and third-party API HTML/public copies are up to date.
+- 8-server read-only validation:
+  - `/srv/aiv3/repo` returned `## main...origin/main`;
+  - 8-server head before this documentation update was `25ee00477`;
+  - known untracked `?? mode` remained untouched;
+  - `GET http://127.0.0.1:3000/v1/workflow-tasks/queue-stats` wrote `/tmp/datamax-active-plan-final-qstats.json` and passed `python3 -m json.tool`.
+- Deployment:
+  - deployment was not requested;
+  - no 8-server service build or service restart was run;
+  - final action is GitHub push plus 8-server source-only fast-forward sync after this documentation commit.
+- Remaining external decisions:
+  - authenticated model-gateway smoke still requires a legitimate operator session;
+  - production row-level mapping for `bi_contract_warning` / `bi_rentsales_detail` still needs a business decision and staging discriminator proof;
+  - real historical backfill/enrichment still needs explicit operator approval of a tiny reviewed batch;
+  - real login-gated/private video smoke still needs an approved accessible source and account boundary.
+- Safety:
+  - no third-party public URL, auth method, required request field, existing response field, production row mapping, database schema, or source sync behavior changed in Task 12;
+  - no credential, cookie, bearer token, local key, database URL, provider payload, raw customer row, full customer document, raw queue payload, object path, or secret env value was recorded;
+  - 120 server was not touched.
 
 ### 2026-06-06 Current-Head Task 1 Release Gate
 

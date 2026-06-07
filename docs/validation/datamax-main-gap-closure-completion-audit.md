@@ -5,11 +5,11 @@ This audit maps the DataMax final definition of done to current evidence. The cu
 ## Current State
 
 - Date: 2026-06-07.
-- Local/GitHub head before this audit document update: `88a03edc`.
-- 8-server head before this audit document update: `88a03edc`.
+- Local/GitHub head before this audit document update: `25ee004`.
+- 8-server head before this audit document update: `25ee00477`.
 - 8-server status: `## main...origin/main` plus the pre-existing untracked `mode` file, left untouched.
-- Active 8-server services checked: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, `aiv3-static-page-worker.service`, `aiv3-media-worker.service`, and `aiv3-assistant-run-worker.service`.
-- Code drift note: after the current-head release-gate code receipts through `ca26bcd`, later commits through `88a03ed` changed plan/validation/dependency-install policy only. No service restart was required for these documentation/configuration-only commits.
+- Service note: Task 12 used source-status and queue-stats read-only checks only. No deployment, build, or service restart was requested or run.
+- Code drift note: after the current-head release-gate code receipts through `ca26bcd`, active-plan work through `25ee004` added source-only video/PPT delivery UI closure, operator observability polish, and validation/plan updates. Task 10 and Task 11 were pushed and source-synced only unless deployment is explicitly requested.
 - Current executable plan: `docs/plans/datamax-active-execution-plan.md`.
 
 ## 2026-06-07 Current-Head Baseline Receipt
@@ -23,6 +23,28 @@ This audit maps the DataMax final definition of done to current evidence. The cu
 - Docs check: `npm run check:pure-third-party-guide-html` passed locally; generated third-party guide HTML and public copies were up to date.
 - Safety: no secrets, raw queue payload, raw customer rows, full documents, cookies, local keys, provider payloads, or source credentials were recorded.
 
+## 2026-06-07 Final Active-Plan Validation Receipt
+
+- Local head before this documentation update: `25ee004`.
+- GitHub `origin/main` head before this documentation update: `25ee00477`.
+- 8-server head before this documentation update: `25ee00477`.
+- 8-server status: `## main...origin/main` plus the known untracked `mode`; the file was left untouched.
+- Completed active-plan source commits:
+  - Task 10 video PPT extraction delivery loop: `3f8809b`;
+  - Task 11 operator observability polish: `25ee004`.
+- Local checks:
+  - `git status --short --branch` returned `## main...origin/main`;
+  - `git diff --check` passed;
+  - `npm run check:pure-third-party-guide-html` passed and confirmed the pure third-party guide plus third-party API HTML/public copies are up to date.
+- 8-server read-only checks:
+  - `GET http://127.0.0.1:3000/v1/workflow-tasks/queue-stats` wrote `/tmp/datamax-active-plan-final-qstats.json`;
+  - `python3 -m json.tool /tmp/datamax-active-plan-final-qstats.json` passed.
+- Deployment note:
+  - deployment was not requested;
+  - no 8-server build, service restart, production backfill, production row mapping change, real private-video smoke, or 120-server action was run.
+- Safety:
+  - no credential, cookie, bearer token, local key, database URL, provider payload, raw customer row, full customer document, raw queue payload, object path, or secret env value was recorded.
+
 ## Status Legend
 
 - `Proven`: current evidence directly satisfies the requirement.
@@ -33,7 +55,7 @@ This audit maps the DataMax final definition of done to current evidence. The cu
 
 | # | Requirement | Status | Evidence | Remaining Work |
 | ---: | --- | --- | --- | --- |
-| 1 | Validation records final deployed commit and 8-server smoke receipts for current head. | Proven for deployed code; current plan/config head synced | `docs/validation/datamax-main-gap-closure.md` records release-gate receipts for deployed code through `ca26bcd`; local/GitHub/8 server are synchronized at `88a03ed`, with later commits plan/dependency-install policy only. The 2026-06-07 baseline receipt confirms active services, valid queue-stats JSON, and no change to known `mode`. | Re-run full release gate after behavior code changes, or if operator wants a fresh current-head mutation gate despite docs/config-only changes. |
+| 1 | Validation records final deployed commit and 8-server smoke receipts for current head. | Proven for deployed code; current active-plan source head validated | `docs/validation/datamax-main-gap-closure.md` records release-gate receipts for deployed code through `ca26bcd`. Active-plan Task 10 and Task 11 source commits are complete through `25ee004`; Task 12 final validation confirmed local `25ee004`, 8-server `25ee00477`, valid queue-stats JSON, current third-party guide HTML, and no change to known `mode`. | Run deployment build/restart and a fresh mutation gate only if the operator explicitly requests deploying the source-only Task 10/11 changes. |
 | 2 | Third-party public URL/auth/request/response contract is unchanged. | Proven | Task 10 follow-up at `7084aaf` confirmed source/public copies match, online full/pure MD/HTML return `200`, compatibility `v3_*`/`X-V3-*` names remain stable, and no public URL/auth/required request/existing response field changed. | Continue re-auditing after any additive customer-visible artifact/report behavior. |
 | 3 | Third-party ordinary 20-way, main-site 20-way, streaming, static-page 5-way, report/export, data-ingestion, and document-quality smokes pass or have explicit root-cause notes. | Proven with pending auth-only checks | Release gate receipts cover third-party 20-way, main-site scoped 20-way with dataset `31588c60-0885-47c4-81fe-4ff5c27de8e7`, main-site streaming, static-page 5-way, report/export, data-ingestion readiness, scoped documents, and document-quality. Authenticated model-gateway/operator checks have explicit credential root-cause notes. | Provide a legitimate operator credential to turn the remaining auth-dependent model-gateway smoke into passed. |
 | 4 | Xinbai report returns one clickable primary link, exposes export files, preserves normal answer text, and uses modular monthly template by default. | Proven | Focus-link closure and report/export smoke at `0f72ca37fc1e` confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one text report link, and `table-data.csv`, `report.ppt`, `report.md`. Template hygiene keeps `xinbai-functional-modular-template-20260604` as the primary default. | Keep focused report/export smoke in future release gates. |
@@ -44,7 +66,7 @@ This audit maps the DataMax final definition of done to current evidence. The cu
 | 9 | Low-quality recovery remains passive and cannot block normal answers. | Proven | Current-head audit at `fc7c37048c76` shows hard gate absent, dedicated live-autofix flag absent, and `answer_quality_autofix` absent from task/capability allowlists. Local answer-quality regressions pass. | Keep disabled unless operator explicitly enables passive collection/manual review and the dedicated gates. |
 | 10 | Template matching excludes stale Xinbai templates from normal customer-visible reuse. | Proven | Template hygiene tests and focused 8-server smoke confirm primary Xinbai modular template selection, old smoke/prewarm/fallback candidates skipped, and focus-bearing artifact links returned. | Do not delete old artifacts without explicit cleanup approval; keep runtime guards. |
 | 11 | Model-visible platform capabilities route report/static-page/document/data/proactive tasks without tool traces or contract changes. | Proven | Capability routing rollout exposes internal capability catalog and selected 8-server smoke passed template-reference, temporary-contract/area, and traffic-stat report materials; ordinary guards emitted no artifact links. | Add customer phrasing fixtures when new misroutes are observed. |
-| 12 | Online third-party integration docs match deployed additive contract and use DataMax naming. | Proven | Task 10 follow-up at `7084aaf` confirmed source/public MD/HTML copies match by SHA-256; public full/pure MD/HTML URLs returned `200`; DataMax naming, dataset scopes, artifact fields, report exports, SSE progress, and additive compatibility text were confirmed. The 2026-06-07 local `npm run check:pure-third-party-guide-html` also passed at `88a03ed`. | Rebuild/recheck docs after public contract additions. |
+| 12 | Online third-party integration docs match deployed additive contract and use DataMax naming. | Proven | Task 10 follow-up at `7084aaf` confirmed source/public MD/HTML copies match by SHA-256; public full/pure MD/HTML URLs returned `200`; DataMax naming, dataset scopes, artifact fields, report exports, SSE progress, and additive compatibility text were confirmed. The 2026-06-07 Task 12 local `npm run check:pure-third-party-guide-html` also passed at `25ee004`. | Rebuild/recheck docs after public contract additions. |
 | 13 | No raw credentials, raw customer rows, full documents, provider payloads, or secret env names are recorded. | Proven for this audit trail | Each smoke/runbook receipt records sanitized command shapes and safety boundaries. Recent audits did not print bearer tokens, database URLs, raw rows, full documents, cookies, local keys, provider keys, or provider payloads. | Continue using sanitized reports; do not paste raw env or customer data into validation docs. |
 
 ## Remaining External Decisions
