@@ -7,7 +7,7 @@
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；self-test 已补授权负向用例和可复制的脱敏 `sharedReceipt`；没有执行 live capture，没有接入 8 服务器生产服务。
-- P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown、清晰度/可读性风险提示均有本地验证。
+- P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown/PPTX speaker notes、清晰度/可读性风险提示均有本地验证。
 - P2-2E 三样例质量矩阵 self-test scaffold、本地 `generated_artifacts/` 输入适配、public-course deliverables 分类入口、customer-authorized deliverables 输入入口和三输入组合矩阵已完成；quality matrix 可用 `--synthetic-deliverables <path>` 复核合成类本地产物，用 `--public-course-deliverables <path>` 把匿名公开视频样例归到 `public_course_video`，也可在获得明确授权后用 `--customer-deliverables <path> --customer-approval-id <approval_id>` 复核客户/operator 授权样例；三类输入同时提供时可生成 `matrix_complete=true` 的完整三类报告，approval id 不写入报告。
 - 当前无授权离线验收 rollup 已通过并已包含 live 前置检查：主站上传 preflight/self-test、第三方视频 PPT preflight/self-test、视频号/登录态 handoff preflight/self-test、授权录屏 helper self-test、质量矩阵 self-test 和 video deliverables validator 19 项均通过；这不替代 live smoke、8 服务器部署验收或客户授权样例。
 - S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`；selected manifest 语义已修正为 `requested_selected_candidate_indices` 记录去重前请求，`selected_candidate_indices` 记录最终入选页；32x32 visual signature + changed-sample guard 已让 public candidate 从 5 页提升到 7 页，覆盖更多 build 内容；best-sharpness 代表帧选择把质量分提升到 61、sharpness high 页从 4 降到 3；visual-shape duplicate 已补保守去重路径和回归，shape-dedupe 复跑仍为 9 requested、7 selected、2 visual near duplicates、0 shape duplicates。第二/第三 public probe 证明额外匿名 slides 视频可跑通交付契约，其中 `Layered Nix Stores` 暴露并修复了白底模板 build 被 shape duplicate 误删的问题，修复后为 4 requested、3 selected、0 shape duplicates、quality score 68。当前 public 类样例可作为真实公开视频回执，但质量结论仍是需人工复核，不是无条件可交付。
@@ -741,7 +741,7 @@ npm run smoke:video-ppt-quality-matrix -- \
 1. 单页输出风险提示已完成：对真实 public sample 只选出 1 页的情况，`slide_quality_report.json` 增加 `single_slide_output_review_required` 和 `summary.single_slide_output=true`，但不把 `final_pptx_ready` 改成失败；`Nix in Space` 复跑已验证该路径。
 2. 更明确的 crop detector：针对 full-frame fallback 仍可见但边界不稳定的 public 页做 fixture。
 3. 清晰度/readability 分流：把低清晰、低对比和 fade 页更明确标为人工复核。
-4. OCR/subtitle 证据增强：只把 OCR 当作 page notes evidence，不伪装成 transcript/subtitle map。
+4. OCR/subtitle 证据增强已补本地回归：只把 OCR 当作 page notes evidence，写入 slide notes、`video_slides.md` 和 PPTX speaker notes；没有 transcript 时不生成或伪装 `subtitle_page_map`。
 5. 更多匿名公开视频课程样例：只选公开、非登录态、可下载、包含课件画面的短样例。
 
 验收：
@@ -2267,7 +2267,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 preflight/self-test；主站 early-return 和第三方 deterministic card 均已通过本地 endpoint/handler 测试，live pass 待部署后复跑 | P1-3D live |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |
 | 质量报告 | 已生成 PPTX/Markdown/manifest 的 video/PPT 包 | 输出可选 `slide_quality_report.json`，解释质量分和风险 | P2-2A 已完成本地验证；legacy 包兼容，新包质量报告可校验 | 作为后续样例复核辅助保留 |
-| 裁剪/稳定/字幕/清晰度增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射，并提示低清晰度/低可读性页 | P2-2B bright-canvas detector、P2-2C 暗色/亮色/纯色低信息稳定段过滤、P2-2D OCR evidence/quality-report coverage、P2-2F 清晰度/可读性信号本地切片已完成；P2-2E quality-matrix self-test scaffold 和 local deliverables input 已完成；真实 public/customer 样例矩阵和更广泛质量处理仍未完成 | 做 P2-2B/P2-2C follow-up、P2-2D sample、P2-2E public/customer real samples |
+| 裁剪/稳定/字幕/清晰度增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射，并提示低清晰度/低可读性页 | P2-2B bright-canvas detector、P2-2C 暗色/亮色/纯色低信息稳定段过滤、P2-2D OCR evidence/quality-report/PPTX speaker-notes coverage、P2-2F 清晰度/可读性信号本地切片已完成；P2-2E quality-matrix self-test scaffold 和 local deliverables input 已完成；真实 public/customer 样例矩阵和更广泛质量处理仍未完成 | 做 P2-2B/P2-2C follow-up、P2-2D sample、P2-2E public/customer real samples |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
 ## 7. 决策门

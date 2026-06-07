@@ -3385,3 +3385,59 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared refresh receipt.
+
+## 2026-06-08 OCR-Only PPTX Notes Regression
+
+Task source: EP6 local quality narrowing for OCR/subtitle evidence. Improve review evidence when a video slide has OCR text but no transcript/subtitle alignment, without treating OCR as a transcript page map.
+
+Scope:
+
+- add OCR snippets to screenshot PPTX speaker notes when selected slides have OCR evidence;
+- preserve the existing transcript notes behavior when transcript segments are present;
+- add an OCR-only media-worker regression proving no `subtitle_page_map` file is generated when transcript alignment is absent;
+- keep this as local quality/test work only, with no live upload, third-party event, capture, or deployment.
+
+Implemented behavior:
+
+- PPTX notes now include `OCR evidence: ...` for selected slides with OCR snippets;
+- OCR-only selected slides still report `missing_transcript`, do not create a `subtitle_page_map` artifact, and keep `has_subtitle_page_map=false`;
+- slide notes, `video_slides.md`, PPTX speaker notes, selected slide manifest, and `slide_quality_report.json` all carry OCR-only evidence consistently;
+- quality report records `ocr_mapped_count=1`, `ocr_snippet_count=1`, and keeps `missing_transcript_alignment` for the absent transcript.
+
+Validation:
+
+```text
+cargo fmt --check
+cargo test -p media-worker writes_ocr_notes_without_subtitle_page_map_when_transcript_missing --lib
+cargo test -p media-worker writes_subtitle_page_map_and_transcript_notes_for_selected_slides --lib
+cargo test -p media-worker final_video_deliverables_do_not_require_subtitle_page_map_without_transcript_alignment --lib
+cargo test -p media-worker --lib
+cargo check -p media-worker --bin video_ppt_offline_smoke
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- new OCR-only regression passed;
+- existing transcript/subtitle-page-map regression passed;
+- no-transcript deliverables regression passed;
+- media-worker lib suite passed: 53 tests;
+- `video_ppt_offline_smoke` compiled successfully;
+- video deliverables validator passed all 19 Node test cases;
+- whitespace diff check passed.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- customer-facing quality still depends on real authorized samples and manual review for crop, duplicate, subtitle, OCR, and readability risks.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, or local artifact paths were recorded in this shared receipt.

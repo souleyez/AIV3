@@ -4661,8 +4661,21 @@ fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
             format!(" Pre-page transcript: {text}.")
         })
         .unwrap_or_else(|| " Transcript/subtitle alignment is not yet verified.".to_string());
+    let ocr_note = candidate
+        .get("ocr_snippets")
+        .and_then(Value::as_array)
+        .filter(|snippets| !snippets.is_empty())
+        .map(|snippets| {
+            let text = snippets
+                .iter()
+                .filter_map(|snippet| video_item_text(snippet, &["text", "ocr_text", "summary"]))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(" OCR evidence: {text}.")
+        })
+        .unwrap_or_default();
     let note = format!(
-        "Source frame: {file_name}; candidate: {candidate_index}; timestamp: {timestamp}; internal path: [redacted].{transcript_note}"
+        "Source frame: {file_name}; candidate: {candidate_index}; timestamp: {timestamp}; internal path: [redacted].{transcript_note}{ocr_note}"
     );
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -12325,6 +12338,140 @@ mod tests {
             fs::read_to_string(final_manifest_path).expect("final deliverables manifest");
         assert!(final_manifest.contains("subtitle_page_map"));
         assert!(final_manifest.contains("speaker_notes_pre_page_alignment"));
+    }
+
+    #[test]
+    fn writes_ocr_notes_without_subtitle_page_map_when_transcript_missing() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-ocr-only-notes-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        fs::write(raw_frames_dir.join("frame_000001.jpg"), b"fake").expect("frame 1");
+        fs::write(raw_frames_dir.join("frame_000002.jpg"), b"fake").expect("frame 2");
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [2]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 2,
+            "interval_seconds": 1.0,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+        let chunk = test_chunk(json!({
+            "media": {
+                "transcript_segments": [],
+                "scenes": [],
+                "keyframe_ocr_snippets": [{
+                    "timestamp_seconds": 0.8,
+                    "text": "OCR-only title for selected slide",
+                    "ocr_confidence": 0.93
+                }]
+            }
+        }));
+
+        let manifest = write_video_extraction_text_artifacts(
+            &document,
+            &[chunk],
+            &frame_extraction,
+            &output_root,
+        )
+        .expect("ocr-only notes artifacts");
+
+        let files = manifest["files"].as_array().expect("files");
+        assert!(!files
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("subtitle_page_map")));
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides = fs::read_to_string(selected_slides_path).expect("selected slides");
+        assert!(selected_slides.contains("missing_transcript"));
+        assert!(selected_slides.contains("window_mapped"));
+        assert!(selected_slides.contains("OCR-only title for selected slide"));
+        let slide_notes_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_notes"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide notes path");
+        let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
+        assert!(slide_notes.contains("no aligned transcript segment"));
+        assert!(slide_notes.contains("Aligned OCR snippets"));
+        assert!(slide_notes.contains("OCR-only title for selected slide"));
+        let video_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("video_slides_markdown"))
+            .and_then(|file| file["path"].as_str())
+            .expect("video slides path");
+        let video_slides = fs::read_to_string(video_slides_path).expect("video slides");
+        assert!(video_slides.contains("no aligned transcript segment"));
+        assert!(video_slides.contains("OCR evidence"));
+        assert!(video_slides.contains("OCR-only title for selected slide"));
+        let slide_quality_report_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide quality report path");
+        let slide_quality_report =
+            fs::read_to_string(slide_quality_report_path).expect("slide quality report");
+        assert!(slide_quality_report.contains("\"subtitle_missing_count\": 1"));
+        assert!(slide_quality_report.contains("\"ocr_mapped_count\": 1"));
+        assert!(slide_quality_report.contains("\"ocr_snippet_count\": 1"));
+        assert!(slide_quality_report.contains("\"ocr_risk\": \"low\""));
+        assert!(slide_quality_report.contains("missing_transcript_alignment"));
+        let pptx_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("pptx"))
+            .and_then(|file| file["path"].as_str())
+            .expect("pptx path");
+        let mut archive =
+            ZipArchive::new(File::open(pptx_path).expect("pptx file")).expect("pptx zip");
+        let mut notes = String::new();
+        archive
+            .by_name("ppt/notesSlides/notesSlide1.xml")
+            .expect("notes slide")
+            .read_to_string(&mut notes)
+            .expect("notes slide text");
+        assert!(notes.contains("Transcript/subtitle alignment is not yet verified"));
+        assert!(notes.contains("OCR evidence"));
+        assert!(notes.contains("OCR-only title for selected slide"));
+        let final_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("final deliverables manifest path");
+        let final_manifest: Value = serde_json::from_slice(
+            &fs::read(final_manifest_path).expect("final deliverables manifest"),
+        )
+        .expect("final deliverables manifest json");
+        assert_eq!(
+            final_manifest["deliverable_status"]["has_subtitle_page_map"],
+            json!(false)
+        );
+        assert!(!final_manifest["evidence_outputs"]
+            .as_array()
+            .expect("evidence outputs")
+            .iter()
+            .any(|file| file["artifact_kind"] == json!("subtitle_page_map")));
+        assert!(final_manifest["deliverable_status"]["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|warning| warning["code"] == json!("speaker_notes_metadata_only")));
     }
 
     #[test]
