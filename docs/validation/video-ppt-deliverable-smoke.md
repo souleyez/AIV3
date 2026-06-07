@@ -1749,6 +1749,78 @@ Safety result:
 - public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
 
+## 2026-06-08 Public Course Quality Matrix Category Input
+
+Task source: P2-2E-2B from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- stop classifying the real public-course candidate through the synthetic deliverables input;
+- add a quality-matrix input that maps local `generated_artifacts/` into the `public_course_video` case;
+- keep customer-authorized video pending until explicit approval/input exists;
+- avoid main-site writes, third-party events, browser recording, service builds, service restarts, and 8-server deployment.
+
+Implemented behavior:
+
+- `scripts/smoke/video-ppt-quality-matrix.mjs` accepts `--public-course-deliverables <path>`;
+- environment fallback `VIDEO_PPT_QUALITY_MATRIX_PUBLIC_COURSE_DELIVERABLES` is supported;
+- `--public-course-deliverables` validates the path through `validateVideoDeliverables(path)`;
+- the report case id is `public-course-video-deliverables` and category is `public_course_video`;
+- `public_course_sample_required=false` and `public_course_deliverables_reviewed=true` when the public deliverables input is used;
+- `--self-test` remains mutually exclusive with deliverables inputs;
+- only one deliverables input flag may be used per report.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --help
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir target/video-ppt-quality-matrix-smoke
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir target/video-ppt-public-candidate-quality-matrix
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <public-candidate-generated_artifacts> --pretty --output-dir target/video-ppt-public-candidate-quality-matrix-synthetic-regression
+npm run smoke:video-ppt-quality-matrix -- --self-test --public-course-deliverables <public-candidate-generated_artifacts>
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts>
+```
+
+Result:
+
+- Node syntax check passed;
+- help output includes `--public-course-deliverables`;
+- self-test still passed with `deliverable=1`, `pending=2`;
+- public-course deliverables report passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, `pending_count=1`;
+- public-course report status: `partial_public_course_deliverables_reviewed`;
+- public-course report input mode: `public_course_deliverables`;
+- public case state: `final_pptx_ready`;
+- public case validator status: passed;
+- public case selected/PPTX/Markdown count: 5/5/5;
+- public case review conclusion: `needs_manual_review`;
+- customer-authorized case remains `pending_authorization`;
+- negative mutual-exclusion check failed as expected when `--self-test` and `--public-course-deliverables` were used together;
+- old `--synthetic-deliverables` path remained compatible.
+
+Quality matrix summary:
+
+- synthetic case: `deliverable`;
+- public-course case: `needs_manual_review`;
+- customer-authorized case: `pending_authorization`;
+- `matrix_complete=false`;
+- `live_smoke_run=false`;
+- `production_write_allowed=false`;
+- `generated_artifacts_committable=false`.
+
+Current conclusion:
+
+- P2-2E public-course category coverage is now stronger: the public candidate is no longer represented as a synthetic case or a pending sample.
+- Full P2-2E remains incomplete because the customer-authorized sample is still pending and the public sample still needs manual quality review or follow-up quality improvement.
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no WeChat Video Channels page was fetched;
+- no main-site upload, third-party event, live smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
+
 ## 2026-06-08 Video PPT Quality Matrix Local Deliverables Input
 
 Task source: P2-2E-1 from `docs/plans/datamax-active-execution-plan.md`.

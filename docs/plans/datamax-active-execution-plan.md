@@ -1,15 +1,15 @@
 # DataMax 当前唯一执行计划
 
 **更新时间：** 2026-06-08 03:11 CST
-**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，后续优先处理 public candidate 的质量风险分流，再进入需要授权或部署窗口的 live gate。
+**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口；后续优先处理 public candidate 的人工质量复核或窄修复，再进入需要授权或部署窗口的 live gate。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；没有执行 live capture，没有接入 8 服务器生产服务。
 - P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown、清晰度/可读性风险提示均有本地验证。
-- P2-2E 三样例质量矩阵 self-test scaffold 和 P2-2E-1 本地 `generated_artifacts/` 输入适配已完成；quality matrix 可用 `--synthetic-deliverables <path>` 复用 deliverables validator 复核本地产物。
-- S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、`selected_count=5`、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过，quality matrix 从 `not_deliverable` 改为 `needs_manual_review`。该 public candidate 可作为真实公开视频样例回执，但质量结论是需人工复核，不是无条件可交付。
+- P2-2E 三样例质量矩阵 self-test scaffold、本地 `generated_artifacts/` 输入适配和 public-course deliverables 分类入口已完成；quality matrix 可用 `--synthetic-deliverables <path>` 复核合成类本地产物，也可用 `--public-course-deliverables <path>` 把匿名公开视频样例归到 `public_course_video`。
+- S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、`selected_count=5`、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`，summary 为 `deliverable_count=1`、`needs_manual_review_count=1`、`pending_count=1`。该 public candidate 可作为真实公开视频样例回执，但质量结论是需人工复核，不是无条件可交付。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
@@ -39,13 +39,13 @@
 - 讲师小窗/外部前景遮挡的本地端到端 fixture 已证明 `foreground_component_v1` crop 能进入 rectangle manifest、selected slides、quality report 和 PPTX `a:srcRect`，减少 full-frame fallback。
 - `slide_quality_report.json` 已支持可选 sharpness/readability 字段：可解码帧记录 measured score/risk，不可解码帧记录 `unavailable/unknown`，低对比字迹会进入 high-risk review，不泄露本地 frame path。
 - 自动选页已拒绝短时不稳定段、短动画转场帧、暗色低信息稳定段、亮色低信息稳定段和近乎纯色低信息稳定段，避免黑屏、白屏、灰屏、空白转场和短动画帧被误选为 PPT 页；深色主题但有可见内容的课件页已有正向保留回归。
-- `smoke:video-ppt-quality-matrix -- --self-test` 已固定 P2-2E 的三类样例矩阵结构；`--synthetic-deliverables <path>` 已可读取本地 `generated_artifacts/`，复用 `validate-video-deliverables` 生成脱敏复核结论。公开视频课程和客户授权样例必须继续等待真实输入/授权。
+- `smoke:video-ppt-quality-matrix -- --self-test` 已固定 P2-2E 的三类样例矩阵结构；`--synthetic-deliverables <path>` 和 `--public-course-deliverables <path>` 已可读取本地 `generated_artifacts/`，复用 `validate-video-deliverables` 生成脱敏复核结论。公开视频课程样例已归入 public category 并判为 `needs_manual_review`；客户授权样例仍待授权。
 
 ### 0.3 下一阶段优先顺序
 
 | 优先级 | 切片 | 现在是否可做 | 需要输入/授权 | 交付物 | 验收口径 |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | P2-2E-2B public candidate 质量风险分流 | 可立即做；不跑 live | 无；只用已下载到 `target/` 的公开视频候选和本地产物 | 质量风险分析、必要时 crop/dedupe/sharpness 窄修复、validation 回执 | 解释 `needs_manual_review`：1 个 full-frame fallback、5 页缺字幕/OCR、2 个视觉重复去重、4 页清晰度复核风险 |
+| 1 | P2-2E-2B public candidate 人工质量复核/窄修复 | 可立即做；不跑 live | 无；只用已下载到 `target/` 的公开视频候选和本地产物 | 人工质量复核结论；必要时 crop/dedupe/sharpness 窄修复 | 已有 public-category matrix：synthetic deliverable=1、public needs_manual_review=1、customer pending=1；下一步确认 5 页是否客户可读 |
 | 2 | P1-3B 主站上传视频 controlled smoke | 待授权后可做 | 用户批准在主站写入一条非客户公开视频 smoke 记录 | live smoke 回执，含 dataset/document/assistant run/artifact/download 证据 | `smoke:video-ppt-upload-main` 产出 `final_pptx_ready`，PPTX/Markdown/manifests 可下载 |
 | 3 | P1-3C 第三方视频登记 special-trigger smoke | 待凭据后可做 | inbound bearer、`connection_id`、`source_id`、公开视频或上传文件 | live 第三方回执，区分“素材登记”和“PPT 抽取触发” | `smoke:external-video-ppt` 证明第三方 surface 可见；缺下载出口则记录为发布可见性缺口 |
 | 4 | P1-3D 视频号/登录态 handoff live pass | 待部署窗口后可做 | 用户批准 8 服务器部署；第三方模式还需 bearer/context | main/external handoff live 回执 | 只返回 `login_gated_video_source_not_supported` 三选项 handoff，不抓视频、不抽帧、不走 provider |
@@ -100,7 +100,7 @@ P2-2E-1 和 P2-2E-2A 已完成。若暂时没有主站上传授权、第三方 b
 | ---: | --- | --- | --- | --- | --- |
 | S1 | 公开视频课程候选准备与访问探测 | 已完成首个候选 | 否 | 否 | media.ccc/NixCon public slides candidate，匿名可下载、可 Range、抽样帧有多页 slide 状态 |
 | S2A | public candidate deliverable contract 修复与复跑 | 已完成 | 否 | 否 | public manifest redaction 修复后 validator 通过，quality matrix 结论为 `needs_manual_review` |
-| S2B | public candidate 质量增强分流 | 可立即做 | 否 | 否 | 按 crop/dedupe/sharpness/subtitle/OCR 风险决定继续窄修复，或正式标为需人工复核 |
+| S2B | public candidate 质量增强分流 | 部分完成；人工复核待做 | 否 | 否 | `--public-course-deliverables` 已把样例归入 public category；下一步按 crop/dedupe/sharpness/subtitle/OCR 风险决定继续窄修复，或正式标为需人工复核 |
 | S3 | P1-3B 主站上传 controlled smoke | 待用户批准 | 是，写一条非客户 smoke 上传/文档/run | 否，除非现网缺修复 | 上传视频入口能否生成并下载 PPTX/Markdown/manifests 的 live 回执 |
 | S4 | P1-3C 第三方登记 controlled smoke | 待 bearer/context | 是，写第三方 smoke event/run | 否，除非现网缺修复 | 第三方“登记视频素材”和“提取视频里的 PPT”特殊触发的 live 回执 |
 | S5 | P1-3D 视频号/登录态 handoff live pass | 待部署窗口 | 只写 lightweight smoke，不抓视频 | 是，需批准后部署当前修复 | 主站/第三方返回 handoff 卡片，不走 provider、不生成 PPT |
@@ -118,7 +118,7 @@ P2-2E-1 和 P2-2E-2A 已完成。若暂时没有主站上传授权、第三方 b
 - 当前可用 public candidate 是 media.ccc / NixCon 2023 的 `How to teach Nix in 5 minutes!` slides MP4：匿名可下载、支持 Range、页面有 `Slides -> Download mp4`，抽样帧确认有多页 slide 状态。
 - S2A 已复跑离线抽取：`frame_count=96`，`deliverable_state=final_pptx_ready`，PPTX、`video_slides.md`、slide notes、selected slides manifest、rectangle manifest、quality report 和发布 manifests 均生成；`selected_count=5`，PPTX/Markdown 均为 5 页。
 - public deliverables contract 已通过：`validate-video-deliverables` 接受 PPTX、final/published/version/extraction manifests、rectangle manifest、notes、Markdown 和 quality report；`subtitle_page_map.json` 缺失按无 transcript/subtitle evidence 的条件性交付处理。
-- quality matrix 已将该产物从 `not_deliverable` 改为 `needs_manual_review`：`quality_score=56`，风险包括 `full_frame_rectangle_fallback`、`missing_transcript_alignment`、`selected_slide_duplicates_removed`、`frame_sharpness_review_required` 和 `manual_review_required`。
+- quality matrix 已将该产物归到 `public_course_video` 并判为 `needs_manual_review`：`quality_score=56`，风险包括 `full_frame_rectangle_fallback`、`missing_transcript_alignment`、`selected_slide_duplicates_removed`、`frame_sharpness_review_required` 和 `manual_review_required`；矩阵 summary 为 synthetic deliverable 1、public needs manual review 1、customer pending 1。
 
 候选标准：
 
@@ -276,7 +276,7 @@ npm run capture:authorized-video -- \
    - 已通过 `cargo fmt --check`、`cargo check -p media-worker --bin video_ppt_offline_smoke`、`CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib`、`npm run test:video-deliverables`、public candidate `validate-video-deliverables` 和 quality matrix。
 
 3. P2-2E-2B 当前可做质量分流。
-   - validator 已通过，不再按 redaction/schema 失败处理。
+   - validator 已通过，`--public-course-deliverables` 已把样例归入 `public_course_video`，不再按 redaction/schema 或 public sample missing 处理。
    - 当前结论是 `needs_manual_review`，优先看 `full_frame_rectangle_fallback`、`missing_transcript_alignment`、`selected_slide_duplicates_removed`、`frame_sharpness_review_required`。
    - 若人工复核确认 5 页都可读，可把 public candidate 保持为 `需人工复核` 的真实样例回执。
    - 若关键页不可读，再按风险类型追加窄修复：crop detector、dedupe/selected indices 说明、sharpness/readability 或换第二个公开视频样例。
@@ -1480,15 +1480,15 @@ self-test 验收口径：
 - `source_urls_included=false`、`object_paths_included=false`、`credentials_included=false`、`provider_payloads_included=false`。
 - 报告写入 `target/video-ppt-quality-matrix-smoke/`，不提交生成报告。
 
-已完成本地 deliverables 输入适配 P2-2E-1：
+已完成本地 deliverables 输入适配 P2-2E-1 和 public-course 分类入口：
 
 实现结果：
 
-1. `scripts/smoke/video-ppt-quality-matrix.mjs` 已新增 `--synthetic-deliverables <path>` 和环境变量兜底 `VIDEO_PPT_QUALITY_MATRIX_SYNTHETIC_DELIVERABLES`。
-2. 该路径可指向一次视频/PPT 抽取输出的 `generated_artifacts/` 或等价目录；报告不写入原始视频路径、source URL、object path、cookie、token、provider payload。
-3. 脚本调用 `validateVideoDeliverables(path)` 作为交付契约入口；根据 validator errors/warnings、`final_deliverables_manifest.json` 和 `slide_quality_report.json` 生成 synthetic 类样例的 `deliverable_status`、`quality_report` 和 verdict。
-4. public course 和 customer authorized 两类仍然由同一份报告保留为 pending，`matrix_complete=false`，不会因为 synthetic deliverables 成功而声称三样例完成。
-5. 完整 deliverables fixture 写入 `target/video-ppt-quality-matrix-fixture/`，matrix 报告写入 `target/video-ppt-quality-matrix-smoke/`，均不提交。
+1. `scripts/smoke/video-ppt-quality-matrix.mjs` 已新增 `--synthetic-deliverables <path>`、`--public-course-deliverables <path>`、环境变量兜底 `VIDEO_PPT_QUALITY_MATRIX_SYNTHETIC_DELIVERABLES` 和 `VIDEO_PPT_QUALITY_MATRIX_PUBLIC_COURSE_DELIVERABLES`。
+2. 两类路径都可指向一次视频/PPT 抽取输出的 `generated_artifacts/` 或等价目录；报告不写入原始视频路径、source URL、object path、cookie、token、provider payload。
+3. 脚本调用 `validateVideoDeliverables(path)` 作为交付契约入口；根据 validator errors/warnings、`final_deliverables_manifest.json` 和 `slide_quality_report.json` 生成对应类别样例的 `deliverable_status`、`quality_report` 和 verdict。
+4. `--public-course-deliverables` 会把样例归到 `public_course_video`，不再把真实公开视频样例伪装成 synthetic case；customer authorized 仍然由同一份报告保留为 pending，`matrix_complete=false`。
+5. 完整 deliverables fixture、public candidate matrix 报告都写入 `target/`，均不提交。
 
 验证命令：
 
@@ -1497,6 +1497,7 @@ node --check scripts/smoke/video-ppt-quality-matrix.mjs
 npm run smoke:video-ppt-quality-matrix -- --help
 npm run smoke:video-ppt-quality-matrix -- --self-test --pretty
 npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty --output-dir target/video-ppt-quality-matrix-smoke
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/video-ppt-public-candidate-extraction/<session>/generated_artifacts --pretty --output-dir target/video-ppt-public-candidate-quality-matrix
 git diff --check
 ```
 
@@ -1507,7 +1508,8 @@ git diff --check
 - `npm run smoke:video-ppt-quality-matrix -- --self-test --pretty` 通过，`case_count=3`、`deliverable_count=1`、`pending_count=2`。
 - `node tools/validate-video-deliverables.mjs target/video-ppt-quality-matrix-fixture/generated_artifacts` 通过，完整包含 PPTX、final/published/version/extraction manifests、rectangle manifest、slide notes、Markdown 和 quality report；`subtitle_page_map` 缺失按条件性交付处理。
 - `npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty --output-dir target/video-ppt-quality-matrix-smoke` 通过，`deliverable_count=1`、`pending_count=2`、`matrix_complete=false`、`deliverables_input_redacted=true`。
-- 负向参数门禁已验证：同时传 `--self-test` 和 `--synthetic-deliverables` 会失败并提示只能二选一。
+- `npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables ... --pretty --output-dir target/video-ppt-public-candidate-quality-matrix` 通过，`deliverable_count=1`、`needs_manual_review_count=1`、`pending_count=1`、`public_course_sample_required=false`、`public_course_deliverables_reviewed=true`。
+- 负向参数门禁已验证：同时传 `--self-test` 和任一 deliverables 输入会失败并提示只能二选一。
 
 ### 5.9 部署门槛
 
@@ -1589,7 +1591,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M3 | P1-3D 视频号/登录态 handoff live pass | 用户批准 8 服务器部署窗口；第三方模式还需要 inbound bearer | 部署前本地测试、部署后 `npm run smoke:video-ppt-handoff -- --mode main`，第三方按授权补跑 | 主站/第三方返回 handoff 卡片，不抓视频、不生成 PPT、不走 provider | 仅在批准后 pull/build/restart 受影响服务 |
 | M4 | P2-1C 授权录屏样例 | operator 授权记录、可播放来源、最大时长、音频策略、保留期、handoff 目标 | `capture:authorized-video` dry-run，live capture 后复用 P1-3 上传或第三方抽取 smoke | 录制 `.mp4` 可进入现有 `VideoExtraction`，并有质量结论 | 默认不启用；8 内部录制需单独批准 |
 | M5 | P2-2F 清晰度/可读性质量信号 | 无 live 授权；本地 fixture 即可 | 已通过 media-worker selected_slides/slide_rectangle/controlled sample/sharpness helper、低对比字迹端到端 fixture、deliverable validator、platform-api video tests、`git diff --check` | 已完成：`slide_quality_report.json` 显示 sharpness/readability risk，低对比字迹会提示 high-risk review，旧包兼容 | 未部署 |
-| M6 | P2-2E-1 质量矩阵本地 deliverables 输入 | 一次真实或合成视频/PPT 抽取输出的 `generated_artifacts/`；可用临时 target fixture | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`--help`、`--self-test --pretty`、`node tools/validate-video-deliverables.mjs target/video-ppt-quality-matrix-fixture/generated_artifacts`、`--synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty` | 已完成：matrix 可读取本地交付包并复用 validator，报告脱敏，public/customer gates 仍 pending | 未部署 |
+| M6 | P2-2E-1 质量矩阵本地 deliverables 输入 | 一次真实或合成视频/PPT 抽取输出的 `generated_artifacts/`；可用临时 target fixture | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`--help`、`--self-test --pretty`、`node tools/validate-video-deliverables.mjs target/video-ppt-quality-matrix-fixture/generated_artifacts`、`--synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty`、`--public-course-deliverables <public-candidate-generated_artifacts> --pretty` | 已完成：matrix 可读取本地交付包并复用 validator，synthetic/public 可按类别分类，customer gate 仍 pending | 未部署 |
 | M6A | P2-2E-2A public candidate deliverable contract 修复 | 无 live 授权；复用 `target/` 下 public candidate | 已通过 `cargo fmt --check`、`cargo check -p media-worker --bin video_ppt_offline_smoke`、media-worker contract test、`npm run test:video-deliverables`、public candidate `validate-video-deliverables`、quality matrix | 已完成：public manifests redaction 修复，`selected_count=5`，validator 通过，quality matrix 结论 `needs_manual_review` | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |

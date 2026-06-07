@@ -15,6 +15,7 @@ function parseArgs(argv) {
   const args = {
     selfTest: false,
     syntheticDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_SYNTHETIC_DELIVERABLES || '',
+    publicCourseDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_PUBLIC_COURSE_DELIVERABLES || '',
     outputDir: process.env.VIDEO_PPT_QUALITY_MATRIX_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
     pretty: false,
   };
@@ -24,6 +25,8 @@ function parseArgs(argv) {
       args.selfTest = true;
     } else if (arg === '--synthetic-deliverables') {
       args.syntheticDeliverables = requiredValue(argv, index += 1, arg);
+    } else if (arg === '--public-course-deliverables') {
+      args.publicCourseDeliverables = requiredValue(argv, index += 1, arg);
     } else if (arg === '--output-dir') {
       args.outputDir = requiredValue(argv, index += 1, arg);
     } else if (arg === '--pretty') {
@@ -49,12 +52,14 @@ function usage() {
   return `Usage:
   npm run smoke:video-ppt-quality-matrix -- --self-test [--pretty] [--output-dir target/video-ppt-quality-matrix-smoke]
   npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<video-extraction>/generated_artifacts [--pretty]
+  npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/<video-extraction>/generated_artifacts [--pretty]
 
 Checks:
   - deterministic P2-2E quality matrix shape for video/PPT extraction
   - synthetic PPT-playback sample can be marked deliverable from local evidence
   - local synthetic deliverables can be validated and classified through the same matrix
-  - public-course and customer-authorized samples stay pending until real approved inputs exist
+  - local public-course deliverables can be validated and classified through the same matrix
+  - customer-authorized samples stay pending until real approved inputs exist
   - report never claims live/customer/video-channel extraction from self-test evidence
 
 Safety:
@@ -132,13 +137,39 @@ function buildPendingCustomerAuthorizedCase() {
 
 function buildCasesFromSyntheticDeliverables(inputPath) {
   return [
-    buildSyntheticCaseFromDeliverables(inputPath),
+    buildCaseFromDeliverables(inputPath, {
+      caseId: 'synthetic-ppt-playback-deliverables',
+      category: 'synthetic_ppt_playback',
+      inputType: 'local_video_ppt_deliverables',
+      sourceAccessStatus: 'local_fixture',
+      approvalStatus: 'not_required',
+    }),
     buildPendingPublicCourseCase(),
     buildPendingCustomerAuthorizedCase(),
   ];
 }
 
-function buildSyntheticCaseFromDeliverables(inputPath) {
+function buildCasesFromPublicCourseDeliverables(inputPath) {
+  return [
+    buildSelfTestSyntheticCase(),
+    buildCaseFromDeliverables(inputPath, {
+      caseId: 'public-course-video-deliverables',
+      category: 'public_course_video',
+      inputType: 'public_course_video_deliverables',
+      sourceAccessStatus: 'anonymous_public_video_fixture',
+      approvalStatus: 'not_required',
+    }),
+    buildPendingCustomerAuthorizedCase(),
+  ];
+}
+
+function buildCaseFromDeliverables(inputPath, {
+  caseId,
+  category,
+  inputType,
+  sourceAccessStatus,
+  approvalStatus,
+}) {
   const validation = validateVideoDeliverables(inputPath);
   const artifactsDir = validation.artifactsDir;
   const finalManifest = readJsonIfPresent(path.join(artifactsDir, 'final_deliverables_manifest.json'));
@@ -150,11 +181,11 @@ function buildSyntheticCaseFromDeliverables(inputPath) {
   const qualitySummary = qualityReport?.summary || {};
   const riskFlags = normalizeRiskFlags(qualityReport?.risk_flags);
   return {
-    case_id: 'synthetic-ppt-playback-deliverables',
-    category: 'synthetic_ppt_playback',
-    input_type: 'local_video_ppt_deliverables',
-    source_access_status: 'local_fixture',
-    approval_status: 'not_required',
+    case_id: caseId,
+    category,
+    input_type: inputType,
+    source_access_status: sourceAccessStatus,
+    approval_status: approvalStatus,
     trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
     deliverable_status: {
       state: deliverableState,
@@ -320,6 +351,30 @@ function buildSyntheticDeliverablesReport(inputPath) {
   return report;
 }
 
+function buildPublicCourseDeliverablesReport(inputPath) {
+  const report = buildQualityMatrixReport({
+    status: 'partial_public_course_deliverables_reviewed',
+    selfTest: false,
+    inputMode: 'public_course_deliverables',
+    cases: buildCasesFromPublicCourseDeliverables(inputPath),
+    gates: {
+      public_course_sample_required: false,
+      public_course_deliverables_reviewed: true,
+      customer_authorization_required: true,
+      local_deliverables_input_reviewed: true,
+    },
+    redaction: {
+      public_course_deliverables_input_redacted: true,
+    },
+    nextActions: [
+      'review the public course video quality risks and decide whether to keep needs_manual_review or improve crop/dedupe/sharpness',
+      'run customer sample review only after explicit customer/operator authorization',
+    ],
+  });
+  validateQualityMatrixReport(report);
+  return report;
+}
+
 function buildQualityMatrixReport({
   status,
   selfTest,
@@ -460,7 +515,7 @@ function makeRunId() {
 
 function writeReport(outputDir, report, pretty) {
   fs.mkdirSync(outputDir, { recursive: true });
-  const suffix = report.input_mode === 'synthetic_deliverables' ? 'synthetic-deliverables' : 'self-test';
+  const suffix = report.input_mode.replaceAll('_', '-');
   const reportPath = path.join(outputDir, `${makeRunId()}-${suffix}.json`);
   fs.writeFileSync(reportPath, JSON.stringify(report, null, pretty ? 2 : 0));
   return reportPath;
@@ -472,17 +527,28 @@ function main() {
     console.log(usage());
     return;
   }
-  if (args.selfTest && args.syntheticDeliverables) {
-    throw new Error('use either --self-test or --synthetic-deliverables, not both');
+  const deliverableInputs = [args.syntheticDeliverables, args.publicCourseDeliverables].filter(Boolean);
+  if (args.selfTest && deliverableInputs.length > 0) {
+    throw new Error('use either --self-test or deliverables input flags, not both');
   }
-  if (!args.selfTest && !args.syntheticDeliverables) {
-    throw new Error('--self-test or --synthetic-deliverables is required');
+  if (deliverableInputs.length > 1) {
+    throw new Error('use only one deliverables input flag per report');
   }
-  const report = args.syntheticDeliverables
-    ? buildSyntheticDeliverablesReport(args.syntheticDeliverables)
-    : buildSelfTestReport();
+  if (!args.selfTest && deliverableInputs.length === 0) {
+    throw new Error('--self-test, --synthetic-deliverables, or --public-course-deliverables is required');
+  }
+  let report;
+  if (args.syntheticDeliverables) {
+    report = buildSyntheticDeliverablesReport(args.syntheticDeliverables);
+  } else if (args.publicCourseDeliverables) {
+    report = buildPublicCourseDeliverablesReport(args.publicCourseDeliverables);
+  } else {
+    report = buildSelfTestReport();
+  }
   const reportPath = writeReport(args.outputDir, report, args.pretty);
-  const label = args.syntheticDeliverables ? 'local deliverables review' : 'self-test';
+  const label = report.input_mode === 'self_test'
+    ? 'self-test'
+    : `${report.input_mode.replaceAll('_', ' ')} review`;
   console.log([
     `OK video PPT quality matrix ${label}:`,
     `cases=${report.summary.case_count}`,
