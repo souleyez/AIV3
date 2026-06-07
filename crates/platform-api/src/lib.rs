@@ -21280,6 +21280,26 @@ async fn ingest_external_channel_message_with_connection_inner(
         .await
         .map_err(ApiError::from_storage)?;
 
+    if let Some(reply) = maybe_handle_external_channel_wechat_video_login_handoff(
+        state,
+        &run,
+        &message.conversation_external_id,
+        &assistant_request.prompt,
+        now,
+    )
+    .await?
+    {
+        return Ok((
+            StatusCode::ACCEPTED,
+            ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(run.id),
+                idempotency_key: message.idempotency_key.clone(),
+                reply,
+            },
+        ));
+    }
+
     if let Some(direct_answer) =
         assistant_run_xinbai_published_report_link_answer(&assistant_request.prompt)
     {
@@ -29513,6 +29533,12 @@ fn external_channel_reply_from_run_and_events(
     events: &[AssistantRunEvent],
     conversation_external_id: &str,
 ) -> Option<ExternalBotReplyView> {
+    if let Some(reply) = external_channel_wechat_video_login_handoff_reply_from_events(
+        events,
+        conversation_external_id,
+    ) {
+        return Some(reply);
+    }
     if let Some(reply) = external_channel_assistant_reply_from_run(run).map(|reply| {
         external_channel_assistant_text_reply_for_conversation(run, conversation_external_id, reply)
     }) {
@@ -30974,6 +31000,172 @@ fn external_image_structured_extract_payment_method(value: &str) -> Option<&'sta
     } else {
         None
     }
+}
+
+async fn maybe_handle_external_channel_wechat_video_login_handoff(
+    state: &AppState,
+    run: &AssistantRun,
+    conversation_external_id: &str,
+    prompt: &str,
+    now: DateTime<Utc>,
+) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
+    let Some(artifact) = wechat_video_login_handoff_artifact_from_prompt(run.id, prompt, now)
+    else {
+        return Ok(None);
+    };
+
+    let answer = wechat_video_login_handoff_answer_text();
+    let runtime_manifest = assistant_run_wechat_video_handoff_runtime_manifest("external_channel");
+    let mut handoff_execution_trail = value_array(run.execution_trail.clone());
+    handoff_execution_trail.push(json!({
+        "status": "completed",
+        "label": "外部通道视频号来源受限 handoff",
+        "reason": "login_gated_video_source_not_supported",
+        "at": now,
+    }));
+    let output_artifacts = vec![
+        json!({
+            "type": "assistant_message",
+            "role": ChatMessageRole::Assistant.as_str(),
+            "content": answer,
+            "source": "wechat_video_login_handoff",
+        }),
+        json!({
+            "type": "html_artifact",
+            "id": artifact.id,
+            "title": artifact.title,
+            "template_id": "wechat_video_login_handoff",
+            "content": answer,
+        }),
+    ];
+    let reply = external_channel_wechat_video_login_handoff_reply_for_conversation(
+        conversation_external_id,
+        &artifact,
+    );
+
+    state
+        .storage
+        .assistant_runs()
+        .update_runtime_manifest(state.tenant_id, run.id, &runtime_manifest)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .update_execution_trail(
+            state.tenant_id,
+            run.id,
+            &Value::Array(handoff_execution_trail),
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .attach_output_artifacts(state.tenant_id, run.id, &Value::Array(output_artifacts))
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.wechat_video_login_handoff_required".to_string(),
+                payload: json!({
+                    "reason": "login_gated_video_source_not_supported",
+                    "failure_reason": "login_gated_video_source_not_supported",
+                    "html_artifacts": [artifact],
+                    "reply": reply,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.completed".to_string(),
+                payload: json!({
+                    "service_lane": run.service_lane.clone(),
+                    "runtime": runtime_manifest,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Some(reply))
+}
+
+fn external_channel_wechat_video_login_handoff_reply_for_conversation(
+    conversation_external_id: &str,
+    artifact: &HtmlArtifactManifestView,
+) -> ExternalBotReplyView {
+    let mut card = artifact.payload.clone();
+    set_payload_value(&mut card, "type", json!("wechat_video_login_handoff"));
+    set_payload_value(
+        &mut card,
+        "template_id",
+        json!("wechat_video_login_handoff"),
+    );
+    set_payload_value(
+        &mut card,
+        "status",
+        json!("login_gated_video_source_not_supported"),
+    );
+    set_payload_value(&mut card, "artifact_id", json!(artifact.id));
+    set_payload_value(&mut card, "title", json!(artifact.title));
+    ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: ExternalBotReplyTypeView::Card,
+        text: Some(wechat_video_login_handoff_answer_text()),
+        card: Some(card),
+        artifact_links: Vec::new(),
+        task_status: Some("login_gated_video_source_not_supported".to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+fn external_channel_wechat_video_login_handoff_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let event = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == "assistant_run.wechat_video_login_handoff_required")?;
+    event
+        .payload
+        .get("reply")
+        .cloned()
+        .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok())
+        .or_else(|| {
+            let artifact = event
+                .payload
+                .get("html_artifacts")
+                .and_then(Value::as_array)?
+                .first()
+                .cloned()
+                .and_then(|artifact| {
+                    serde_json::from_value::<HtmlArtifactManifestView>(artifact).ok()
+                })?;
+            Some(
+                external_channel_wechat_video_login_handoff_reply_for_conversation(
+                    conversation_external_id,
+                    &artifact,
+                ),
+            )
+        })
 }
 
 fn external_image_structured_extract_reply_for_conversation(
@@ -105554,6 +105746,160 @@ mod tests {
         .expect("message events should be queryable");
         assert_eq!(event_count, 1);
         clear_assistant_openclaw_env();
+    }
+
+    #[tokio::test]
+    async fn generic_chat_wechat_video_ppt_handoff_short_circuits_provider() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping generic chat WeChat video handoff endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let _mode = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        let _provider = TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        let _model =
+            TestEnvVarRestore::set("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-provider-v1");
+        let _react = TestEnvVarRestore::set("ASSISTANT_RUN_REACT_ENABLED", "true");
+        let _openclaw = TestEnvVarRestore::set("OPENCLAW_EXTENSION_ENABLED", "true");
+        let _gateway_url =
+            TestEnvVarRestore::set("OPENCLAW_GATEWAY_BASE_URL", "http://127.0.0.1:9");
+        let _gateway_token =
+            TestEnvVarRestore::set("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-wechat-video-handoff-{}", Uuid::new_v4()),
+                "Generic Chat WeChat Video Handoff Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.message_external_id = "msg-wechat-video-ppt-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-wechat-video-ppt-001".to_string();
+        message.text = Some(
+            "https://weixin.qq.com/sph/AhfmOtV8P5 这个视频里有播放 PPT，帮我提取视频中的 PPT。"
+                .to_string(),
+        );
+        message.attachment_refs.clear();
+
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let first: ExternalChannelEventResponse = read_json_response(response).await;
+        let run_id = first.assistant_run_id.expect("assistant run id");
+
+        assert_eq!(first.reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(
+            first.reply.task_status.as_deref(),
+            Some("login_gated_video_source_not_supported")
+        );
+        assert!(first.reply.artifact_links.is_empty());
+        let card = first.reply.card.as_ref().expect("handoff card");
+        assert_eq!(card["type"], json!("wechat_video_login_handoff"));
+        assert_eq!(card["template_id"], json!("wechat_video_login_handoff"));
+        assert_eq!(
+            card["failure_reason"],
+            json!("login_gated_video_source_not_supported")
+        );
+        assert_eq!(
+            card["supported_next_steps"],
+            json!([
+                "upload_video_file",
+                "provide_direct_video_url",
+                "request_authorized_capture"
+            ])
+        );
+        assert!(card.get("download_exports").is_none());
+        let reply_text = serde_json::to_string(&first.reply).expect("reply should serialize");
+        assert!(!reply_text.contains("weixin.qq.com"));
+        assert!(!reply_text.contains("channels.weixin.qq.com"));
+
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should be queryable");
+        let event_names = events
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_names.contains(&"assistant_run.external_channel_message_received"));
+        assert!(event_names.contains(&"assistant_run.wechat_video_login_handoff_required"));
+        assert!(event_names.contains(&"assistant_run.completed"));
+        assert!(!event_names.iter().any(|event| {
+            event.contains("provider")
+                || event.contains("react")
+                || event.contains("external_channel_model_reply")
+        }));
+
+        let run = storage
+            .assistant_runs()
+            .get_by_id(tenant.id, run_id)
+            .await
+            .expect("assistant run lookup should succeed")
+            .expect("assistant run should exist");
+        assert_eq!(
+            run.runtime_manifest["model"],
+            json!("wechat-video-login-handoff-v1")
+        );
+        assert_eq!(
+            run.runtime_manifest["reason"],
+            json!("login_gated_video_source_not_supported")
+        );
+
+        let duplicate = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        let second: ExternalChannelEventResponse = read_json_response(duplicate).await;
+        assert_eq!(second.assistant_run_id, Some(run_id));
+        assert_eq!(second.reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(second.reply.task_status, first.reply.task_status);
+        assert_eq!(second.reply.card, first.reply.card);
+
+        let loaded = get_request(
+            app,
+            &format!("/v1/external/channels/generic-chat-main/assistant-runs/{run_id}/reply"),
+            None,
+        )
+        .await;
+        assert_eq!(loaded.status(), StatusCode::OK);
+        let loaded: ExternalChannelEventResponse = read_json_response(loaded).await;
+        assert_eq!(loaded.assistant_run_id, Some(run_id));
+        assert_eq!(loaded.reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(
+            loaded.reply.task_status.as_deref(),
+            Some("login_gated_video_source_not_supported")
+        );
     }
 
     #[tokio::test]

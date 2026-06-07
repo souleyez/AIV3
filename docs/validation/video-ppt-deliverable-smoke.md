@@ -962,3 +962,61 @@ Safety result:
 - no WeChat Video Channels URL was fetched;
 - no video download, frame extraction, OCR, PPT generation, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, or generated artifact local path was recorded.
+
+## 2026-06-07 Third-Party WeChat Handoff Deterministic Card
+
+Task source: P1-3D follow-up after the main-site handoff early-return fix; third-party `/events` still needed a deterministic unsupported-source surface that did not depend on model text.
+
+Scope:
+
+- make WeChat Video Channels / login-gated video PPT requests through `/v1/external/channels/{connection_id}/events` return the same product handoff as the main site;
+- keep the behavior as an unsupported-source card, not a video fetch, capture, OCR, frame extraction, or PPT generation path;
+- preserve idempotency and the existing third-party reply lookup endpoint.
+
+Implemented behavior:
+
+- after the external channel run is created and `assistant_run.external_channel_message_received` is recorded, matching prompts now immediately:
+  - write a direct-answer runtime manifest with `model=wechat-video-login-handoff-v1`;
+  - attach a short assistant message and `wechat_video_login_handoff` output artifact to the run;
+  - append `assistant_run.wechat_video_login_handoff_required` with the handoff HTML artifact and external card reply;
+  - append `assistant_run.completed`;
+  - return a `reply_type=card` response with `task_status=login_gated_video_source_not_supported`;
+- external reply reconstruction now checks the handoff event before assistant-message text, so duplicate idempotency and `/assistant-runs/{run_id}/reply` both restore the card instead of degrading to plain text;
+- the card exposes the three supported next steps: upload video file, provide anonymous direct video URL, or request authorized capture handling;
+- the card does not include `download_exports`, artifact links, raw WeChat URLs, cookies, QR-login handoff instructions, or credential-oriented fields.
+
+Validation:
+
+```text
+cargo fmt
+CC=clang CXX=clang++ cargo test -p platform-api generic_chat_wechat_video_ppt_handoff_short_circuits_provider --lib
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p platform-api wechat_video_login_handoff --lib
+CC=clang CXX=clang++ cargo test -p platform-api assistant_run_wechat_video_handoff_short_circuits_provider_and_lists_artifact --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run smoke:video-ppt-handoff -- --self-test
+npm run smoke:external-video-ppt -- --self-test
+```
+
+Result:
+
+- new third-party endpoint handoff test passed, 1 test;
+- existing WeChat Video login handoff unit tests passed, 3 tests;
+- main-site handler-level handoff test passed, 1 test;
+- video PPT platform-api tests passed, 5 tests, including the new third-party handoff endpoint test;
+- handoff smoke self-test passed;
+- third-party video/PPT smoke self-test passed;
+- rustfmt check passed.
+
+Remaining P1-3D work:
+
+- deploy only after explicit approval;
+- rerun `npm run smoke:video-ppt-handoff -- --mode main ...` against the deployed main site and append the live pass/fail receipt;
+- run `npm run smoke:video-ppt-handoff -- --mode external ...` only after approved inbound bearer/context is available.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no WeChat Video Channels URL was fetched;
+- no video download, upload, frame extraction, OCR, PPT generation, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, or generated artifact local path was recorded.
