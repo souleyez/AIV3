@@ -903,3 +903,62 @@ Safety result:
 - no video was downloaded, uploaded, extracted, OCRed, or converted to PPT in this slice;
 - no 8-server deployment, build, restart, config mutation, capture dependency install, or 120-server action was run;
 - no cookie, token, account credential, QR screenshot, browser storage, HAR, database URL, provider payload, raw customer row, full customer document, private object path, or generated artifact local path was recorded.
+
+## 2026-06-07 Main-Site WeChat Handoff Early Return Fix
+
+Task source: P1-3D live handoff visibility gap found by `smoke:video-ppt-handoff -- --mode main`.
+
+Scope:
+
+- fix current code so WeChat Video Channels / login-gated video PPT requests do not wait for provider/ReAct before returning handoff;
+- keep the behavior as an unsupported-source handoff, not a video fetch, capture, OCR, or PPT generation path;
+- strengthen test evidence so the main assistant-run endpoint exposes the handoff artifact through the normal HTML artifact list surface.
+
+Implemented behavior:
+
+- moved main-site WeChat video handoff into a deterministic early-return path inside assistant-run creation;
+- after the run is created and `assistant_run.started` is recorded, matching prompts now immediately:
+  - write a direct-answer runtime manifest with `model=wechat-video-login-handoff-v1`;
+  - attach an assistant message and `wechat_video_login_handoff` output artifact to the run;
+  - append `assistant_run.wechat_video_login_handoff_required` with the handoff HTML artifact;
+  - append `assistant_run.completed`;
+  - return the unsupported-source answer without calling ReAct or provider runtime;
+- removed the old post-completion handoff append path;
+- added a handler-level test that sets provider mode to an unreachable gateway and proves the handoff still succeeds and is listable through `/api/v3/html-artifacts`.
+
+Validation:
+
+```text
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p platform-api assistant_run_wechat_video_handoff_short_circuits_provider_and_lists_artifact --lib
+CC=clang CXX=clang++ cargo test -p platform-api wechat_video_login_handoff --lib
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+node --check scripts/smoke/video-ppt-handoff.mjs
+npm run smoke:video-ppt-handoff -- --self-test
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- rustfmt check passed;
+- new handler-level handoff test passed, 1 test;
+- existing WeChat Video login handoff unit tests passed, 3 tests;
+- HTML artifact manifest tests passed, 12 tests, with the existing Node module-type warning only.
+- video PPT platform-api tests passed, 4 tests;
+- video deliverables validator tests passed, 15 tests;
+- handoff smoke syntax/self-test passed.
+
+Remaining P1-3D work:
+
+- deploy only after explicit approval;
+- rerun `npm run smoke:video-ppt-handoff -- --mode main ...` against the deployed main site and append the live pass/fail receipt;
+- run third-party handoff live only after approved inbound bearer/context is available.
+
+Safety result:
+
+- no live smoke was rerun in this slice;
+- no WeChat Video Channels URL was fetched;
+- no video download, frame extraction, OCR, PPT generation, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, or generated artifact local path was recorded.

@@ -12880,6 +12880,128 @@ async fn create_assistant_run_inner(
         .await
         .map_err(ApiError::from_storage)?;
 
+    if let Some(artifact) =
+        wechat_video_login_handoff_artifact_from_prompt(run.id, &request.prompt, now)
+    {
+        let answer = wechat_video_login_handoff_answer_text();
+        let runtime_manifest = assistant_run_wechat_video_handoff_runtime_manifest("ordinary_chat");
+        let mut handoff_execution_trail = execution_trail.clone();
+        handoff_execution_trail.push(json!({
+            "status": "completed",
+            "label": "视频号来源受限 handoff",
+            "reason": "login_gated_video_source_not_supported",
+            "at": now,
+        }));
+        let output_artifacts = vec![
+            json!({
+                "type": "assistant_message",
+                "role": ChatMessageRole::Assistant.as_str(),
+                "content": answer,
+                "source": "wechat_video_login_handoff",
+            }),
+            json!({
+                "type": "html_artifact",
+                "id": artifact.id,
+                "title": artifact.title,
+                "template_id": "wechat_video_login_handoff",
+                "content": answer,
+            }),
+        ];
+        state
+            .storage
+            .assistant_runs()
+            .update_runtime_manifest(state.tenant_id, run.id, &runtime_manifest)
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .update_evidence_state(state.tenant_id, run.id, &evidence_state)
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .update_execution_trail(
+                state.tenant_id,
+                run.id,
+                &Value::Array(handoff_execution_trail.clone()),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let run = state
+            .storage
+            .assistant_runs()
+            .attach_output_artifacts(
+                state.tenant_id,
+                run.id,
+                &Value::Array(output_artifacts.clone()),
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.wechat_video_login_handoff_required".to_string(),
+                    payload: json!({
+                        "reason": "login_gated_video_source_not_supported",
+                        "failure_reason": "login_gated_video_source_not_supported",
+                        "html_artifacts": [artifact],
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.completed".to_string(),
+                    payload: json!({
+                        "service_lane": run.service_lane.clone(),
+                        "runtime": runtime_manifest.clone(),
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        let events = state
+            .storage
+            .assistant_runs()
+            .list_events(state.tenant_id, run.id)
+            .await
+            .map_err(ApiError::from_storage)?;
+        let diagnostics = assistant_run_detail_diagnostics(&run, &events);
+
+        return Ok((
+            StatusCode::CREATED,
+            Json(CreateAssistantRunResponse {
+                assistant_run_id: run.id,
+                assistant_message: AssistantRunMessageView {
+                    role: ChatMessageRole::Assistant,
+                    content: answer,
+                },
+                runtime: run.runtime_manifest,
+                selected_scope,
+                scope_candidates: value_array(scope_candidates),
+                evidence_state,
+                execution_trail: handoff_execution_trail,
+                output_artifacts,
+                required_confirmations: Vec::new(),
+                diagnostics,
+            }),
+        ));
+    }
+
     if let Some(direct_answer) = assistant_run_xinbai_published_report_link_answer(&request.prompt)
     {
         let runtime_manifest = assistant_run_xinbai_report_link_runtime_manifest("ordinary_chat");
@@ -13584,35 +13706,6 @@ async fn create_assistant_run_inner(
         .await
         .map_err(ApiError::from_storage)?;
 
-    if let Some(artifact) =
-        wechat_video_login_handoff_artifact_from_prompt(run.id, &request.prompt, now)
-    {
-        state
-            .storage
-            .assistant_runs()
-            .append_event(
-                state.tenant_id,
-                run.id,
-                &NewAssistantRunEvent {
-                    event_name: "assistant_run.wechat_video_login_handoff_required".to_string(),
-                    payload: json!({
-                        "reason": "login_gated_video_source_not_supported",
-                        "failure_reason": "login_gated_video_source_not_supported",
-                        "html_artifacts": [artifact.clone()],
-                    }),
-                    created_at: now,
-                },
-            )
-            .await
-            .map_err(ApiError::from_storage)?;
-        output_artifacts.push(json!({
-            "type": "html_artifact",
-            "id": artifact.id,
-            "title": artifact.title,
-            "template_id": "wechat_video_login_handoff",
-            "content": "当前不能自动从微信视频号链接拿到视频文件。请上传视频文件、提供可匿名下载的直接视频 URL，或申请授权录屏处理；拿到视频文件后再提取 PPT。",
-        }));
-    }
     let events = state
         .storage
         .assistant_runs()
@@ -79334,6 +79427,20 @@ fn report_render_summary_warnings(
     })]
 }
 
+fn wechat_video_login_handoff_answer_text() -> String {
+    "当前不能自动从微信视频号链接拿到视频文件。请上传视频文件、提供可匿名下载的直接视频 URL，或申请授权录屏处理；拿到视频文件后再提取 PPT。".to_string()
+}
+
+fn assistant_run_wechat_video_handoff_runtime_manifest(lane: &str) -> Value {
+    json!({
+        "mode": "direct_answer",
+        "provider": "platform_direct_answer",
+        "model": "wechat-video-login-handoff-v1",
+        "lane": lane,
+        "reason": "login_gated_video_source_not_supported",
+    })
+}
+
 fn wechat_video_login_handoff_artifact_from_prompt(
     run_id: AssistantRunId,
     prompt: &str,
@@ -124405,6 +124512,124 @@ retrieve_evidence:
         }))
         .expect_err("unsafe static page patch should be rejected");
         assert_eq!(unsafe_patch.payload.code, "invalid_static_page_operation");
+    }
+
+    #[tokio::test]
+    async fn assistant_run_wechat_video_handoff_short_circuits_provider_and_lists_artifact() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping assistant run wechat handoff endpoint test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "provider");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_PROVIDER", "openclaw");
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODEL", "assistant-run-provider-v1");
+        std::env::set_var("ASSISTANT_RUN_REACT_ENABLED", "true");
+        std::env::set_var("OPENCLAW_EXTENSION_ENABLED", "true");
+        std::env::set_var("OPENCLAW_GATEWAY_BASE_URL", "http://127.0.0.1:9");
+        std::env::set_var("OPENCLAW_GATEWAY_TOKEN", "test-openclaw-token");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-run-wechat-handoff-test-{}", Uuid::new_v4()),
+                "Assistant Run WeChat Handoff Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let local_thread_id = format!("assistant-run-wechat-handoff-{}", Uuid::new_v4());
+
+        let create_result = create_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateAssistantRunRequest {
+                prompt: "https://weixin.qq.com/sph/ActLMg4yTD 试试用智能助手提取这个视频的PPT"
+                    .to_string(),
+                local_thread_id: Some(local_thread_id.clone()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 0})),
+                selected_scope: Some(json!({"mode": "ordinary_chat"})),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            }),
+        )
+        .await;
+        clear_assistant_openclaw_env();
+        let (status, Json(response)) =
+            create_result.expect("wechat video handoff should not call provider");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(response
+            .assistant_message
+            .content
+            .contains("当前不能自动从微信视频号链接拿到视频文件"));
+        assert_eq!(
+            response.runtime["model"],
+            json!("wechat-video-login-handoff-v1")
+        );
+        assert!(response.output_artifacts.iter().any(|artifact| {
+            artifact.get("template_id") == Some(&json!("wechat_video_login_handoff"))
+        }));
+        assert!(response.execution_trail.iter().any(|step| {
+            step.get("label") == Some(&json!("视频号来源受限 handoff"))
+                && step.get("reason") == Some(&json!("login_gated_video_source_not_supported"))
+        }));
+
+        let Json(detail) = get_assistant_run(
+            State(state.clone()),
+            HeaderMap::new(),
+            Path(response.assistant_run_id.to_string()),
+        )
+        .await
+        .expect("assistant run detail should load");
+        let event_names = detail
+            .events
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert!(event_names.contains(&"assistant_run.started"));
+        assert!(event_names.contains(&"assistant_run.wechat_video_login_handoff_required"));
+        assert!(event_names.contains(&"assistant_run.completed"));
+        assert!(!event_names
+            .iter()
+            .any(|event| event.contains("provider") || event.contains("react")));
+        assert!(detail.run.output_artifacts.iter().any(|artifact| {
+            artifact.get("template_id") == Some(&json!("wechat_video_login_handoff"))
+        }));
+
+        let Json(artifacts) = list_html_artifacts(
+            State(state),
+            HeaderMap::new(),
+            Query(HtmlArtifactListQuery {
+                local_thread_id: None,
+                assistant_run_id: Some(response.assistant_run_id.to_string()),
+                report_plan_id: None,
+                limit: Some(10),
+            }),
+        )
+        .await
+        .expect("html artifact list should include handoff artifact");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0].template_id,
+            contracts::HtmlArtifactTemplateIdView::WechatVideoLoginHandoff
+        );
+        assert_eq!(
+            artifacts[0].payload["failure_reason"],
+            json!("login_gated_video_source_not_supported")
+        );
     }
 
     #[tokio::test]

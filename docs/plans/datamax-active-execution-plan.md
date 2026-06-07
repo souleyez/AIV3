@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-07 22:53 CST
-**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。live 上传/第三方回执仍待授权或凭据，P1-3D 主站 lightweight live 仍有可见性回执缺口，P2-1 live 授权样例未执行。本计划编写本身不部署 8 服务器。
+**更新时间：** 2026-06-07 23:05 CST
+**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行。本计划编写本身不部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 1. 计划原则
@@ -17,7 +17,7 @@
 
 ### 2.1 代码与部署基线
 
-- 当前 head 以 `git rev-parse HEAD` / `git rev-parse origin/main` 为准；P2-1 脚本开发前两者均为 `2b7c55c`，最近已同步提交是 `2b7c55c Add video PPT handoff smoke`。
+- 当前 head 以 `git rev-parse HEAD` / `git rev-parse origin/main` 为准；P1-3D early-return 修复前两者均为 `664f7a9`，最近已同步提交是 `664f7a9 Add authorized video capture fallback runbook`。
 - 已记录的 8 服务器最新部署基线：`b1abad9cc`，已启用 `INGEST_REMOTE_MEDIA_ENABLED=true` 和 `INGEST_REMOTE_MEDIA_CACHE_DIR=/srv/aiv3/remote-media-cache`。
 - 8 服务器已知未跟踪文件：`?? mode`，继续保持不触碰。
 - P0 主站可见视频/PPT smoke 在主站 `https://v3.elepcloud.com` 通过；本轮未重新部署 8 服务器，下一次部署必须单独获得批准。
@@ -60,9 +60,11 @@
 - `5fd11e6 Add third-party video PPT smoke`
   把第三方视频登记和“提取视频中的 PPT/幻灯片/课件”特殊触发固化为 smoke 脚本；本地语法、help 和 self-test 通过，live 第三方 bearer smoke 待授权凭据。
 - P1-3D 本轮新增 `npm run smoke:video-ppt-handoff`
-  把视频号/登录态来源的 lightweight handoff 固化为 smoke 脚本；本地语法、help、self-test、Rust handoff 单测和 HTML artifact 渲染测试通过。主站 live lightweight smoke 本轮未在 60 秒内看到 `wechat_video_login_handoff` artifact，先标记为当前主站可见性/部署回执缺口，不改成抓视频或抽帧。
+  把视频号/登录态来源的 lightweight handoff 固化为 smoke 脚本；本地语法、help、self-test、Rust handoff 单测和 HTML artifact 渲染测试通过。此前主站 live lightweight smoke 未在 60 秒内看到 `wechat_video_login_handoff` artifact，现已用 early-return 修复当前代码路径；live pass 待部署后复跑。
 - P2-1 本轮新增 `docs/operations/video-capture-fallback-runbook.md` 和 `npm run capture:authorized-video`
   把授权录屏兜底固定为 operator runbook 和 isolated capture helper；默认 self-test/dry-run 不打开浏览器或 FFmpeg，live capture 必须显式 `--run-capture --ack-authorized --approval-id ...`。本轮只跑 self-test/dry-run/负向授权门禁，不做真实录屏、不上传、不部署。
+- P1-3D 本轮 follow-up 修复
+  主站 assistant-run 创建对视频号/登录态 PPT 请求改为 deterministic early return：创建 run 后立即写 `wechat_video_login_handoff` event/artifact、完成 run 并返回，不再等待 ReAct/provider。handler 级测试在 provider 模式和不可达网关下通过，证明不会走模型，同时 `/api/v3/html-artifacts` 可列出 handoff artifact。
 
 ### 2.4 已完成的受控公开视频 smoke
 
@@ -319,7 +321,7 @@
 1. **P1-3A direct URL gate 已完成。** 继续保留 `smoke:video-ppt-main-visible` 作为每次发布前的非破坏性回归；优先 reuse 已完成 `assistant_run_id`，只有需要验证新部署时才新建公开样例 run。
 2. **P1-3B 主站上传视频 smoke。** `smoke:video-ppt-upload-main` 已实现，用非客户公开视频样例文件走主站上传链路：`/api/v3/local-document-uploads` 保存文件、`/api/v3/documents` 登记视频素材、`/api/v3/documents/{document_id}/ingest` 入队解析，然后在同一 local thread 明确发送“提取这个视频里的 PPT/幻灯片/课件”。目标是证明“上传视频文件”入口和 direct URL 入口一样能生成 assistant-run-bound 下载产物；真实主站运行会写入 smoke 记录，需授权后执行。
 3. **P1-3C 第三方视频登记 smoke。** `smoke:external-video-ppt` 已实现。脚本先通过 `/v1/external/channels/{connection_id}/documents/parse` 登记一条公开视频文件或 loopback fixture，再通过 `/v1/external/channels/{connection_id}/events` 发送带 `dataset_external_ids` 和 `available_document_external_ids` 的消息，触发 `extract_video_ppt_transcript`。本地 self-test 已覆盖第三方回复 surface 契约；live 主站运行必须使用 operator 管理的 inbound bearer，且需要授权后执行。
-4. **P1-3D unsupported 展示复核。** `smoke:video-ppt-handoff` 已实现。脚本用视频号/登录态链接跑主站和第三方的 lightweight smoke，只验证 `wechat_video_login_handoff` artifact 或等价 unsupported-source 卡片，不抓视频、不抽帧、不生成 PPT，防止产品文案回退为“已看过视频”。本地 self-test、Rust handoff 单测和 HTML artifact 测试已通过；主站 live lightweight smoke 本轮未在 60 秒内看到 handoff artifact，需部署/发布面确认后复跑。
+4. **P1-3D unsupported 展示复核。** `smoke:video-ppt-handoff` 已实现。脚本用视频号/登录态链接跑主站和第三方的 lightweight smoke，只验证 `wechat_video_login_handoff` artifact 或等价 unsupported-source 卡片，不抓视频、不抽帧、不生成 PPT，防止产品文案回退为“已看过视频”。本地 self-test、Rust handoff 单测和 HTML artifact 测试已通过；主站 handoff 已改为 deterministic early return，handler 级测试证明 provider/ReAct 不会被调用且 artifact list 可见。live pass 待部署后复跑。
 
 验收：
 
@@ -337,13 +339,13 @@
 - `npm run smoke:video-ppt-upload-main` 已纳入 package scripts 和 `scripts/README.md`；脚本语法、help、upload classifier、HTML artifact manifest 和 video deliverable validator 均已通过本地验证。
 - `npm run smoke:external-video-ppt` 已纳入 package scripts 和 `scripts/README.md`；脚本语法、help 和 `--self-test` 均已通过本地验证，self-test 不访问网络。
 - `npm run smoke:video-ppt-handoff` 已纳入 package scripts 和 `scripts/README.md`；脚本语法、help、`--self-test`、`cargo test -p platform-api wechat_video_login_handoff --lib`、HTML artifact manifest 测试均已通过。
-- P1-3D 主站 live lightweight smoke 已试跑一次：没有抓视频、没有抽帧、没有下载产物，但 60 秒内未发现 `wechat_video_login_handoff` artifact，标记为主站可见性/部署回执缺口。
+- P1-3D 主站 live lightweight smoke 已试跑一次：没有抓视频、没有抽帧、没有下载产物，但 60 秒内未发现 `wechat_video_login_handoff` artifact；当前代码已修复为 early return，本地 handler 级测试覆盖 artifact list，可在下次部署后复跑 live pass。
 
 仍待补充：
 
 - `scripts/smoke/video-ppt-upload-main.mjs` 已覆盖主站上传视频文件入口；仍需授权后跑主站 live/controlled 回执。
 - `scripts/smoke/external-video-ppt.mjs` 已覆盖第三方登记视频素材后用“提取视频中的 PPT”特殊触发；仍需 inbound bearer 和授权后跑 live/controlled 回执。
-- `scripts/smoke/video-ppt-handoff.mjs` 已覆盖视频号链接 handoff 展示复核；仍需主站部署/发布面复核后拿到 live pass 回执，第三方 live 仍需 inbound bearer。
+- `scripts/smoke/video-ppt-handoff.mjs` 已覆盖视频号链接 handoff 展示复核；主站代码路径已补 early return，仍需部署后拿到 live pass 回执，第三方 live 仍需 inbound bearer。
 
 ### P2-1：授权录屏兜底 MVP 设计
 
@@ -709,7 +711,7 @@ npm run smoke:video-ppt-handoff -- \
 
 - 回复不得声称 DataMax 已看过视频内容、已完成 OCR、已生成 PPT。
 - 回复不得要求 cookie、扫码截图、账号密码或浏览器登录态。
-- 如主站未返回 handoff artifact，标记为主站可见性/部署回执缺口；不要改为抓取视频号页面。
+- 如主站未返回 handoff artifact，先确认是否已部署 early-return 修复；不要改为抓取视频号页面。
 
 #### 5.6.5 P1-3 测试命令
 
@@ -844,7 +846,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help 检查；live/controlled 回执待授权 | P1-3B |
 | 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 self-test；live 回执待 bearer/授权 | P1-3C live |
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
-| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 live 60 秒未见 handoff artifact，待发布面复核 | P1-3D live |
+| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 early-return 修复已通过 handler 测试，live pass 待部署后复跑 | P1-3D live |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
@@ -872,7 +874,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 1. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
 2. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
-3. 复核 P1-3D 主站 lightweight handoff live surface：当前脚本已实现并自测通过，但主站 60 秒内未返回 handoff artifact；需要确认当前主站是否已包含 handoff commit/发布面，再复跑同一条 smoke。
+3. 复核 P1-3D 主站 lightweight handoff live surface：当前代码已用 early return 修复并通过 handler 测试；需要在部署窗口后复跑同一条 `smoke:video-ppt-handoff -- --mode main`，拿到 live pass 回执。
 4. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
 5. 最后根据 P1-3/P2-1 证据进入 P2-2 质量增强，重点处理 crop fallback、重复页、字幕页映射和逐页讲稿。
 
