@@ -17,6 +17,7 @@ use workflow_engine::{WorkflowCatalog, WorkflowSignal};
 const DEFAULT_QUEUE: &str = "ingest";
 const DEFAULT_WAKE_TASK_KEY: &str = "ingest_uploaded_document";
 const EXTERNAL_SOURCE_INGEST_TASK_KEY: &str = "ingest_external_content";
+const VIDEO_PARSE_MEDIA_TASK_KEY: &str = "parse_video_media";
 const POST_INGEST_FACT_INDEX_QUEUE: &str = "retrieval";
 const POST_INGEST_FACT_INDEX_TASK_KEY: &str = "cleanup_document_facts";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
@@ -159,8 +160,13 @@ async fn process_uploaded_document_task(
         let parse_status = outcome.parse_status();
         let parse_quality_status = outcome.parse_quality_status();
         let cloud_structured_provider = outcome.cloud_structured_provider();
-        let auto_reparse_decision =
-            auto_reparse_decision(&document, &parse_status, parse_quality_status.as_deref());
+        let video_placeholder_allowed =
+            video_parse_media_placeholder_allowed(&task.task_key, &document, &parse_status);
+        let auto_reparse_decision = if video_placeholder_allowed {
+            None
+        } else {
+            auto_reparse_decision(&document, &parse_status, parse_quality_status.as_deref())
+        };
         let chunks = build_document_chunks(dataset_id, document_id, &outcome);
         storage
             .document_chunks()
@@ -190,6 +196,16 @@ async fn process_uploaded_document_task(
                 auto_reparse_success_metadata(&document, extracted_at)
             {
                 metadata.insert("auto_reparse".to_string(), success_metadata);
+            }
+            if video_placeholder_allowed {
+                metadata.insert(
+                    "video_parse".to_string(),
+                    json!({
+                        "placeholder_allowed": true,
+                        "reason": "parse_video_media_defers_visual_extraction_to_media_worker",
+                        "next_workflow_task": "extract_video_ppt",
+                    }),
+                );
             }
         }
         let metadata_updates = json!({
@@ -518,6 +534,32 @@ fn auto_reparse_decision_for_attempts(
 
 fn parse_status_requires_auto_reparse(parse_status: &str) -> bool {
     matches!(parse_status, "parse_degraded" | "placeholder")
+}
+
+fn video_parse_media_placeholder_allowed(
+    task_key: &str,
+    document: &Document,
+    parse_status: &str,
+) -> bool {
+    task_key == VIDEO_PARSE_MEDIA_TASK_KEY
+        && parse_status == "placeholder"
+        && is_video_document_material(document)
+}
+
+fn is_video_document_material(document: &Document) -> bool {
+    let content_type = document.content_type.trim().to_ascii_lowercase();
+    if content_type.starts_with("video/") {
+        return true;
+    }
+
+    let object_key = document.object_key.trim().to_ascii_lowercase();
+    let object_key = object_key
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(object_key.as_str());
+    [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"]
+        .into_iter()
+        .any(|extension| object_key.ends_with(extension))
 }
 
 fn ingest_auto_reparse_enabled() -> bool {
@@ -2079,6 +2121,41 @@ mod tests {
         assert!(decision.reason.contains("auto reparse is disabled"));
     }
 
+    #[test]
+    fn video_parse_media_placeholder_bypasses_document_reparse_gate() {
+        let video_document = test_document_material(
+            "remote-course.mp4",
+            "https://cdn.example.com/course/lesson-01.mp4?token=redacted",
+            "application/octet-stream",
+        );
+        let pdf_document = test_document_material(
+            "remote-course.pdf",
+            "https://cdn.example.com/course/lesson-01.pdf",
+            "application/pdf",
+        );
+
+        assert!(video_parse_media_placeholder_allowed(
+            VIDEO_PARSE_MEDIA_TASK_KEY,
+            &video_document,
+            "placeholder"
+        ));
+        assert!(!video_parse_media_placeholder_allowed(
+            DEFAULT_WAKE_TASK_KEY,
+            &video_document,
+            "placeholder"
+        ));
+        assert!(!video_parse_media_placeholder_allowed(
+            VIDEO_PARSE_MEDIA_TASK_KEY,
+            &video_document,
+            "parsed"
+        ));
+        assert!(!video_parse_media_placeholder_allowed(
+            VIDEO_PARSE_MEDIA_TASK_KEY,
+            &pdf_document,
+            "placeholder"
+        ));
+    }
+
     #[tokio::test]
     async fn degraded_uploaded_document_is_failed_and_requeued_for_auto_reparse() {
         let _guard = shared_local_postgres_test_lock().lock().await;
@@ -2229,6 +2306,194 @@ mod tests {
         assert_eq!(tasks[1].task_key, DEFAULT_WAKE_TASK_KEY);
     }
 
+    #[tokio::test]
+    async fn video_parse_media_placeholder_advances_to_extract_video_ppt() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping video parse media workflow test: {reason}");
+                return;
+            }
+        };
+        reset_local_postgres_storage(&storage)
+            .await
+            .expect("test storage should reset");
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("video-parse-media-test-{}", uuid::Uuid::new_v4()),
+                "Video Parse Media Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("video-parse-{}", uuid::Uuid::new_v4()),
+                    title: "Video parse media dataset".to_string(),
+                    description: Some(
+                        "Video materials that continue to PPT extraction.".to_string(),
+                    ),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "React in 5 minutes".to_string(),
+                    object_key: "https://cdn.example.com/course/react-in-5-minutes.mp4".to_string(),
+                    content_type: "video/mp4".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+        let workflow_catalog = workflow_definitions::catalog();
+        let execution = test_video_extraction_execution(tenant.id, &workflow_catalog, &document);
+        let initial_event = test_video_extraction_event(&execution, &document);
+        storage
+            .workflow_executions()
+            .create_with_initial_event(&execution, &initial_event)
+            .await
+            .expect("workflow execution should be created");
+        platform_api::apply_workflow_signal_with_dependencies(
+            &storage,
+            &workflow_catalog,
+            &EventBus::Disabled,
+            tenant.id,
+            execution.id,
+            WorkflowSignal::Start,
+        )
+        .await
+        .expect("workflow should start");
+        platform_api::apply_workflow_signal_with_dependencies(
+            &storage,
+            &workflow_catalog,
+            &EventBus::Disabled,
+            tenant.id,
+            execution.id,
+            WorkflowSignal::StepCompleted {
+                task_key: "resolve_video_source".to_string(),
+                output: Some(json!({ "source_type": "direct_video_url" })),
+            },
+        )
+        .await
+        .expect("source resolution should advance workflow");
+        platform_api::apply_workflow_signal_with_dependencies(
+            &storage,
+            &workflow_catalog,
+            &EventBus::Disabled,
+            tenant.id,
+            execution.id,
+            WorkflowSignal::StepCompleted {
+                task_key: "register_video_asset".to_string(),
+                output: Some(json!({ "asset_state": "registered" })),
+            },
+        )
+        .await
+        .expect("registration should advance workflow");
+        let parse_task = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("tasks should load")
+            .into_iter()
+            .find(|task| task.task_key == VIDEO_PARSE_MEDIA_TASK_KEY)
+            .expect("parse_video_media should be enqueued");
+        let processor = StaticIngestProcessor {
+            outcome: IngestOutcome {
+                chunks: vec!["Placeholder media parse; visual extraction is deferred.".to_string()],
+                inferred_title: None,
+                parse_method: "placeholder".to_string(),
+                extracted_chars: 0,
+                used_placeholder: true,
+                metadata: json!({}),
+            },
+        };
+
+        process_uploaded_document_task(
+            &storage,
+            &workflow_catalog,
+            &EventBus::Disabled,
+            &processor,
+            parse_task,
+        )
+        .await
+        .expect("video placeholder parse should advance to PPT extraction");
+
+        let updated_execution = storage
+            .workflow_executions()
+            .get_by_id(tenant.id, execution.id)
+            .await
+            .expect("execution should load")
+            .expect("execution should exist");
+        assert_eq!(updated_execution.status, WorkflowStatus::Running);
+        assert_eq!(updated_execution.stage, "extracting_ppt");
+
+        let updated_document = storage
+            .documents()
+            .get_by_id(tenant.id, document.id)
+            .await
+            .expect("document should load")
+            .expect("document should exist");
+        assert_eq!(updated_document.lifecycle, DocumentLifecycle::Extracted);
+        assert_eq!(
+            updated_document
+                .metadata
+                .get("ingest")
+                .and_then(|value| value.pointer("/video_parse/placeholder_allowed")),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            updated_document
+                .metadata
+                .get("ingest")
+                .and_then(|value| value.pointer("/auto_reparse")),
+            None
+        );
+
+        let tasks = storage
+            .workflow_tasks()
+            .list_by_execution(execution.id)
+            .await
+            .expect("tasks should load");
+        assert!(tasks.iter().any(|task| {
+            task.task_key == VIDEO_PARSE_MEDIA_TASK_KEY
+                && task.status == WorkflowTaskStatus::Succeeded
+        }));
+        assert!(tasks.iter().any(|task| {
+            task.task_key == "extract_video_ppt" && task.status == WorkflowTaskStatus::Queued
+        }));
+    }
+
+    fn test_document_material(title: &str, object_key: &str, content_type: &str) -> Document {
+        let now = Utc::now();
+        Document {
+            id: DocumentId::new(),
+            tenant_id: domain_model::TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: title.to_string(),
+            object_key: object_key.to_string(),
+            content_type: content_type.to_string(),
+            lifecycle: DocumentLifecycle::Received,
+            secret_binding_ids: Vec::new(),
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     fn test_upload_ingest_execution(
         tenant_id: domain_model::TenantId,
         workflow_catalog: &WorkflowCatalog,
@@ -2274,6 +2539,55 @@ mod tests {
         }
     }
 
+    fn test_video_extraction_execution(
+        tenant_id: domain_model::TenantId,
+        workflow_catalog: &WorkflowCatalog,
+        document: &Document,
+    ) -> WorkflowExecution {
+        let definition = workflow_catalog
+            .find_definition(WorkflowKind::VideoExtraction)
+            .expect("video extraction workflow definition should exist");
+        let now = Utc::now();
+        let execution_id = WorkflowExecutionId::new();
+        let runtime_state = definition.initial_state(execution_id, now);
+        let mut context = runtime_state.context;
+        context.insert(
+            "retries_remaining".to_string(),
+            Value::Number(runtime_state.retries_remaining.into()),
+        );
+        context.insert(
+            "document_id".to_string(),
+            Value::String(document.id.to_string()),
+        );
+        context.insert(
+            "dataset_id".to_string(),
+            Value::String(document.dataset_id.to_string()),
+        );
+        context.insert(
+            "content_type".to_string(),
+            Value::String(document.content_type.clone()),
+        );
+        context.insert(
+            "object_key".to_string(),
+            Value::String(document.object_key.clone()),
+        );
+
+        WorkflowExecution {
+            id: execution_id,
+            tenant_id,
+            dataset_id: Some(document.dataset_id),
+            report_plan_id: None,
+            kind: WorkflowKind::VideoExtraction,
+            version: runtime_state.version,
+            stage: runtime_state.stage,
+            status: runtime_state.status,
+            attempt: 0,
+            context: Value::Object(context),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     fn test_upload_ingest_event(
         execution: &WorkflowExecution,
         document: &Document,
@@ -2283,6 +2597,28 @@ mod tests {
             execution_id: execution.id,
             sequence_no: 1,
             event_name: "workflow.execution_created".to_string(),
+            payload: json!({
+                "kind": execution.kind.as_str(),
+                "version": execution.version,
+                "status": execution.status.as_str(),
+                "stage": execution.stage,
+                "document_id": document.id,
+                "dataset_id": document.dataset_id,
+                "content_type": document.content_type,
+            }),
+            created_at: execution.created_at,
+        }
+    }
+
+    fn test_video_extraction_event(
+        execution: &WorkflowExecution,
+        document: &Document,
+    ) -> WorkflowEventRecord {
+        WorkflowEventRecord {
+            id: WorkflowEventId::new(),
+            execution_id: execution.id,
+            sequence_no: 1,
+            event_name: "video_extraction.created".to_string(),
             payload: json!({
                 "kind": execution.kind.as_str(),
                 "version": execution.version,
