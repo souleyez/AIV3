@@ -1,6 +1,6 @@
 # DataMax Main Gap Closure Validation
 
-This ledger records evidence for `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md`.
+This ledger records DataMax gap-closure evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older plan-file references inside historical receipt sections refer to archived source plans.
 
 ## Current 8-Server Baseline
 

@@ -1,6 +1,6 @@
 # DataMax Main Gap Closure Completion Audit
 
-This audit maps the final definition of done in `docs/plans/2026-06-06-datamax-main-gap-closure-plan.md` to current evidence.
+This audit maps the DataMax final definition of done to current evidence. The current active execution plan is `docs/plans/datamax-active-execution-plan.md`; older dated plan files have been consolidated and archived.
 
 ## Current State
 
@@ -10,7 +10,7 @@ This audit maps the final definition of done in `docs/plans/2026-06-06-datamax-m
 - 8-server status: `## main...origin/main` plus the pre-existing untracked `mode` file, left untouched.
 - Active 8-server services checked: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-codex-host-agent.service`, `aiv3-document-enrichment-worker.service`, `aiv3-ingest-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-static-page-worker.service`.
 - Code drift note: after the current-head release-gate code receipts through `ca26bcd`, later commits `fcd2401`, `f5ae5b8`, and `7084aaf` changed only plan/validation documentation. No service restart was required for these documentation-only commits.
-- Current executable plan: `docs/plans/2026-06-06-datamax-major-gap-executable-plan.md`.
+- Current executable plan: `docs/plans/datamax-active-execution-plan.md`.
 
 ## Status Legend
 
