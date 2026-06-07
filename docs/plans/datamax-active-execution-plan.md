@@ -1,8 +1,59 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 00:43 CST
-**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback；P2-2C 暗场/低信息稳定段过滤本地切片已完成，降低黑屏转场误选为 PPT 页的风险；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 仍待后续执行。本轮未部署 8 服务器。
+**更新时间：** 2026-06-08 00:52 CST
+**当前性质：** 完整可执行计划版；本轮只整理计划，不改业务代码，不跑 live smoke，不部署 8 服务器。P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback；P2-2C 暗场/低信息稳定段过滤本地切片已完成，降低黑屏转场误选为 PPT 页的风险；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成。P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E 三样例质量矩阵仍待执行；若继续本地开发，下一块优先做 P2-2F 清晰度/可读性质量信号。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
+
+## 0. 下一阶段执行总览
+
+这一节是后续开发的入口，下面第 1-9 节保留事实基线、详细 runbook、验证矩阵和历史回执。后续执行时先看本节确认边界，再跳到对应 runbook。
+
+### 0.1 本轮计划整理边界
+
+- 只允许改计划/验证文档；不改 `crates/`、`apps/`、`scripts/`、`tools/` 的业务实现。
+- 允许把计划文档同步到 GitHub；GitHub 同步不等于 8 服务器发版。
+- 8 服务器只能在用户明确批准“发版/部署/重启服务”后再 pull、build、restart；当前计划整理不做这些动作。
+- 不触碰 120 服务器。
+- 继续不记录密钥、cookie、扫码会话、数据库 URL、provider payload、原始客户文件、原始客户行、私有 object path 或内部下载地址。
+- “视频 PPT”只表示从视频里已经播放的 PPT/幻灯片/课件画面中抽取截图型 PPTX、Markdown、notes 和 manifest；不是把普通视频创作成可编辑原生 PPT。
+
+### 0.2 当前已证明的能力
+
+- 公开视频直链可进入 `VideoExtraction`，并生成 `final_pptx_ready`、截图型 PPTX、`video_slides.md`、slide notes、rectangle manifest、发布 manifest 和 version history。
+- 主站 assistant-run-bound 可见链路已证明：用户能通过 `/api/v3/html-artifacts/{artifact_id}/files/{index}` 下载 PPTX、Markdown 和 manifests。
+- 没有 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`；但只要文件存在、状态位为 true 或 manifest 声明该 artifact，就必须严格校验 mapped schema 和 redaction。
+- `.mp4`、`.mov`、`.m4v`、`.webm`、`.mkv`、`.avi` 可作为视频素材上传或登记；“提取 PPT/幻灯片/课件”仍是特殊触发。
+- 公开网页只能在暴露匿名可下载视频资源时自动解析；视频号/登录态链接保持 handoff，不抓取、不绕过登录、不声称已经看过视频。
+- 授权录屏兜底已有 runbook 和 isolated helper，但只通过 self-test/dry-run；没有执行 live capture，也没有接入 8 服务器生产服务。
+
+### 0.3 下一阶段优先顺序
+
+| 优先级 | 切片 | 现在是否可做 | 需要输入/授权 | 交付物 | 验收口径 |
+| ---: | --- | --- | --- | --- | --- |
+| 1 | P1-3B 主站上传视频 controlled smoke | 待授权后可做 | 用户批准在主站写入一条非客户公开视频 smoke 记录 | live smoke 回执，含 dataset/document/assistant run/artifact/download 证据 | `smoke:video-ppt-upload-main` 产出 `final_pptx_ready`，PPTX/Markdown/manifests 可下载 |
+| 2 | P1-3C 第三方视频登记 special-trigger smoke | 待凭据后可做 | inbound bearer、`connection_id`、`source_id`、公开视频或上传文件 | live 第三方回执，区分“素材登记”和“PPT 抽取触发” | `smoke:external-video-ppt` 证明第三方 surface 可见；缺下载出口则记录为发布可见性缺口 |
+| 3 | P1-3D 视频号/登录态 handoff live pass | 待部署窗口后可做 | 用户批准 8 服务器部署；第三方模式还需 bearer/context | main/external handoff live 回执 | 只返回 `login_gated_video_source_not_supported` 三选项 handoff，不抓视频、不抽帧、不走 provider |
+| 4 | P2-2F 清晰度/可读性质量信号 | 现在可本地开发 | 无 live 授权；只用本地 fixture | `slide_quality_report.json` 增加可选清晰度字段，validator 兼容旧包 | media-worker/validator/web 本地测试通过；不下载公开视频、不部署 |
+| 5 | P2-1C 授权录屏样例 | 待 operator 授权后可做 | approval id、可播放来源、最大时长、音频策略、保留期、handoff 目标 | 录制 MP4 的脱敏回执，随后复用上传或第三方视频 PPT 抽取 | 失败能分流为播放/录制/无 PPT/抽帧/质量问题；不绕过平台权限 |
+| 6 | P2-2E 三样例质量矩阵 | 部分待样例授权 | 合成视频、公开视频课程、客户授权视频 | 每个样例的 PPTX/Markdown/质量报告/人工复核结论 | 给出可交付、需人工复核、不可交付；生成产物不提交 |
+
+### 0.4 可直接继续的本地开发切片
+
+如果暂时没有主站上传授权、第三方 bearer 或 8 服务器部署窗口，下一步优先执行 P2-2F：
+
+1. 在 media-worker 生成的 `slide_quality_report.json` 中增加可选清晰度/可读性信号。
+2. 只从 selected slide 的本地 frame 解码结果计算指标；报告里只写分数、等级和 redacted frame file name，不写本地绝对路径。
+3. legacy 包没有这些字段时继续通过 validator；新包一旦包含字段，validator 校验类型、范围、枚举和 redaction。
+4. 质量分只作为人工复核提示，不把低清晰度自动等同于抽取失败。
+5. 该切片不跑 live smoke、不下载新视频、不上传、不部署；验证通过后再追加 `docs/validation/video-ppt-deliverable-smoke.md` 回执并同步 GitHub。
+
+### 0.5 必须等待授权的动作
+
+- 主站 live 上传 smoke 会写入主站测试数据，必须先获得用户明确批准。
+- 第三方 live smoke 需要 operator 管理的 inbound bearer 和目标连接信息；没有凭据只能跑 self-test。
+- 视频号/登录态 handoff 的 live pass 需要当前代码部署到 8 服务器后复跑；部署必须单独批准。
+- 任何录屏都必须有授权记录；没有 `approval_id`、批准人、来源、用途、时长、音频策略、保留期和 handoff 目标时不得执行 live capture。
+- 8 服务器内部录屏默认不启用；要评审依赖、隔离浏览器 profile、时长/容量/并发限制、清理策略和回滚窗口。
 
 ## 1. 计划原则
 
@@ -456,7 +507,7 @@ git diff --check
 
 ### P2-2：视频/PPT 质量增强
 
-**状态：P2-2A 已完成本地验证；P2-2B bright-canvas detector 本地切片已完成；P2-2C 暗场稳定段过滤本地切片已完成；P2-2D OCR evidence 和质量报告 OCR coverage 本地切片已完成；P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 待后续执行。**
+**状态：P2-2A 已完成本地验证；P2-2B bright-canvas detector 本地切片已完成；P2-2C 暗场稳定段过滤本地切片已完成；P2-2D OCR evidence 和质量报告 OCR coverage 本地切片已完成；P2-2F 清晰度/可读性质量信号是下一块无需 live 授权即可继续的本地切片；P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 三样例矩阵待后续执行。**
 
 **目标：** 提高截图型 PPT 的可读性，减少人工复核成本。
 
@@ -470,7 +521,9 @@ git diff --check
    强化候选帧选择，减少转场帧、遮挡帧、重复页和相似页面误保留；输出 dedupe 原因和可人工复核的 removed candidates 摘要。
 4. **P2-2D OCR/字幕/转写对齐。**
    在有字幕或转写的样例中补齐 `subtitle_page_map`，把逐页讲稿备注从 metadata-only 提升为可读讲稿；没有字幕时必须保留明确 `missing_transcript_alignment` warning。
-5. **P2-2E 多样例复核与交付判定。**
+5. **P2-2F 清晰度/可读性质量信号。**
+   在 `slide_quality_report.json` 中增加可选 sharpness/readability 字段，用本地 frame 解码结果给出 `sharpness_score`、`sharpness_risk` 和 summary counts；legacy 包兼容，报告不写原始 frame path。
+6. **P2-2E 多样例复核与交付判定。**
    用合成 PPT 视频、公开视频课程、真实客户上传视频三类样例分别给出可交付、需人工复核、不可交付结论，避免只用一个公开样例证明全部质量。
 
 质量报告 contract 要求：
@@ -479,7 +532,7 @@ git diff --check
 - `status` 只能表达 `waiting_for_selection`、`review_required`、`review_ready` 等可解释状态，不得把 warning 包装成成功。
 - `quality_score` 取值 0-100，计算依据要能从 manifest 推导，不能依赖 provider 文本。
 - `risk_flags` 至少覆盖 `full_frame_rectangle_fallback`、`missing_transcript_alignment`、`selected_slide_duplicates_removed`、`manual_review_required`。
-- 每页记录 slide number、candidate index、source frame 文件名摘要、timestamp label、rectangle mode/status、crop risk、subtitle alignment、review_required 和 page quality score。
+- 每页记录 slide number、candidate index、source frame 文件名摘要、timestamp label、rectangle mode/status、crop risk、subtitle alignment、OCR risk、可选 sharpness/readability risk、review_required 和 page quality score。
 - 不记录原始视频 URL、本地 frame 绝对路径、cookie、token、provider payload 或私有 object path。
 
 候选方向：
@@ -489,6 +542,7 @@ git diff --check
 - OCR/字幕/转写对齐，补齐 `subtitle_page_map`。
 - 多语言 slide notes 与逐页讲稿备注。
 - 质量评分：清晰度、重复度、遮挡、裁剪风险、字幕缺失。
+- 清晰度/可读性信号应从图像本身计算，不依赖 provider 文本；低清晰度只提示人工复核，不直接阻断交付。
 
 验收：
 
@@ -1063,7 +1117,56 @@ git diff --check
 - 无字幕样例仍显示 missing alignment warning，不误报为质量通过。
 - slide notes 的每页来源可解释，且不泄露 provider payload。
 
-#### 5.8.4 P2-2E 三类样例复核
+#### 5.8.4 P2-2F 清晰度/可读性质量信号
+
+这是当前无 live 授权时优先继续的本地质量切片。目标是让 reviewer 能更快发现“抽到了正确页但截图不够清晰/字太糊”的情况，不改变视频来源策略，也不把低分直接升级为交付失败。
+
+目标文件优先级：
+
+- `crates/media-worker/src/lib.rs`
+- `tools/validate-video-deliverables.mjs`
+- `tools/validate-video-deliverables.test.mjs`
+- `docs/validation/video-ppt-deliverable-smoke.md`
+- `docs/plans/datamax-active-execution-plan.md`
+
+开发步骤：
+
+1. 在 selected slides 生成质量报告前，读取内存里已经存在的 selected candidate `frame_path`，只用于本地解码和计算，不写进 public report。
+2. 增加一个轻量图像指标：解码为 luma，采样边缘/梯度或高分位梯度，输出 0-100 的 `sharpness_score`；白屏或低信息帧应得到高风险或 unavailable。
+3. 每页新增可选字段：
+   - `sharpness_status`：`measured` 或 `unavailable`；
+   - `sharpness_score`：0-100，unavailable 时为 `null`；
+   - `sharpness_risk`：`low`、`medium`、`high` 或 `unknown`。
+4. summary 增加可选计数：`sharpness_low_count`、`sharpness_medium_count`、`sharpness_high_count`、`sharpness_unknown_count`。
+5. risk flags 增加 `frame_sharpness_review_required`，只在 high/unknown 明显存在时提示人工复核；不要因此移除 `final_pptx_ready`。
+6. validator 对旧包保持兼容；新包如果出现 sharpness 字段，必须校验范围、枚举、summary/row 一致性和 redaction。
+7. 增加 Rust fixture：清晰文字/线条型 slide 应低风险，高度均匀或低信息帧应高风险或 unknown。
+8. 追加 validation 回执，说明该信号是质量复核辅助，不代表 OCR/字幕对齐完成。
+
+目标测试：
+
+```bash
+cargo fmt
+cargo fmt --check
+node --test tools/validate-video-deliverables.test.mjs
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+git diff --check
+```
+
+验收：
+
+- 新生成的 `slide_quality_report.json` 可以显示逐页 sharpness/readability 风险和 summary counts。
+- report、manifest、Markdown、前端下载 surface 不包含本地 frame 绝对路径、原始 source URL、cookie、token、provider payload 或私有 object path。
+- legacy package 没有 sharpness 字段仍能通过 validator。
+- 当前截图型 PPTX 交付主链路不被低清晰度直接阻断；低清晰度通过 quality report 和 warning 引导人工复核。
+- 不跑 live smoke，不下载新视频，不上传文件，不部署 8 服务器。
+
+#### 5.8.5 P2-2E 三类样例复核
 
 样例集：
 
@@ -1113,7 +1216,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 early-return 和第三方 deterministic card 均已通过本地 endpoint/handler 测试，live pass 待部署后复跑 | P1-3D live |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |
 | 质量报告 | 已生成 PPTX/Markdown/manifest 的 video/PPT 包 | 输出可选 `slide_quality_report.json`，解释质量分和风险 | P2-2A 已完成本地验证；legacy 包兼容，新包质量报告可校验 | 作为后续样例复核辅助保留 |
-| 裁剪/稳定/字幕增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射 | P2-2B bright-canvas detector、P2-2C 暗场稳定段过滤、P2-2D OCR evidence/quality-report coverage 本地切片已完成；真实样例矩阵和更广泛质量处理仍未完成 | P2-2B follow-up/P2-2C follow-up/P2-2D sample/P2-2E |
+| 裁剪/稳定/字幕/清晰度增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射，并提示低清晰度/低可读性页 | P2-2B bright-canvas detector、P2-2C 暗场稳定段过滤、P2-2D OCR evidence/quality-report coverage 本地切片已完成；P2-2F 清晰度/可读性信号待本地开发；真实样例矩阵和更广泛质量处理仍未完成 | P2-2F/P2-2B follow-up/P2-2C follow-up/P2-2D sample/P2-2E |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
 ## 7. 决策门
@@ -1142,7 +1245,8 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 2. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
 3. 在用户明确批准 8 服务器部署窗口后，复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；部署后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
 4. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
-5. 根据 P1-3/P2-1/P2-2A-D 证据继续 P2-2B/P2-2C/P2-2D/P2-2E：重点处理 crop fallback、重复页、转场帧、字幕页映射、逐页讲稿和三类样例人工复核。
+5. 如果暂时没有 live 授权或部署窗口，直接执行 P2-2F 清晰度/可读性质量信号本地切片：只改质量报告/validator/测试/文档，不下载新视频、不跑 live smoke、不部署。
+6. 根据 P1-3/P2-1/P2-2A-D/F 证据继续 P2-2B/P2-2C/P2-2D/P2-2E：重点处理 crop fallback、重复页、转场帧、字幕页映射、逐页讲稿和三类样例人工复核。
 
 本计划完成当前阶段的定义：
 
@@ -1160,4 +1264,5 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M2 | P1-3C 第三方视频登记 controlled smoke | inbound bearer、`connection_id`、`source_id`、可用公开视频或上传文件 | `npm run smoke:external-video-ppt` live；失败时跑 self-test 对照 | 第三方登记和特殊触发分开记录，产物 surface 明确 | 不部署，除非用户另批 |
 | M3 | P1-3D 视频号/登录态 handoff live pass | 用户批准 8 服务器部署窗口；第三方模式还需要 inbound bearer | 部署前本地测试、部署后 `npm run smoke:video-ppt-handoff -- --mode main`，第三方按授权补跑 | 主站/第三方返回 handoff 卡片，不抓视频、不生成 PPT、不走 provider | 仅在批准后 pull/build/restart 受影响服务 |
 | M4 | P2-1C 授权录屏样例 | operator 授权记录、可播放来源、最大时长、音频策略、保留期、handoff 目标 | `capture:authorized-video` dry-run，live capture 后复用 P1-3 上传或第三方抽取 smoke | 录制 `.mp4` 可进入现有 `VideoExtraction`，并有质量结论 | 默认不启用；8 内部录制需单独批准 |
-| M5 | P2-2E 三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | media-worker quality tests、deliverable validator、逐样例人工复核 | 每个样例给出可交付/需人工复核/不可交付结论 | 不部署，除非质量切片已通过并获批 |
+| M5 | P2-2F 清晰度/可读性质量信号 | 无 live 授权；本地 fixture 即可 | media-worker selected_slides/slide_rectangle、deliverable validator、platform-api video tests、`git diff --check` | `slide_quality_report.json` 显示 sharpness/readability risk，旧包兼容 | 不部署 |
+| M6 | P2-2E 三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | media-worker quality tests、deliverable validator、逐样例人工复核 | 每个样例给出可交付/需人工复核/不可交付结论 | 不部署，除非质量切片已通过并获批 |

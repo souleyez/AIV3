@@ -1372,3 +1372,30 @@ Safety result:
 - no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
+
+## 2026-06-08 Complete Executable Plan Refresh
+
+Task source: user requested the previous plan-only consolidation to be completed, including original plan scope, video/PPT extraction tests, extraction-quality review, WeChat Video Channels / login-gated source handling, and possible authorized recording fallback.
+
+Scope:
+
+- plan-only update; no worker/API/web/script implementation changes;
+- keep `docs/plans/datamax-active-execution-plan.md` as the single active plan;
+- make the next-stage order explicit: main-site uploaded-video smoke, third-party video registration special-trigger smoke, video-channel/login-gated handoff live pass after deployment approval, authorized capture sample after operator approval, and quality-review follow-up;
+- add a no-live-authorization local fallback slice: P2-2F sharpness/readability quality signals for `slide_quality_report.json`;
+- preserve the boundary that DataMax extracts slides/courseware already shown in a video, and does not convert arbitrary ordinary video into authored PPT;
+- preserve the boundary that WeChat Video Channels and login-gated sources are not auto-fetched; accepted next actions remain uploaded video file, anonymous direct video URL, or operator-approved capture handling.
+
+Plan updates:
+
+- active plan now starts with a concise execution overview, current proven capability baseline, next priority table, local-development fallback, and authorization gates;
+- P2-2 now includes P2-2F `sharpness/readability` as the next unblocked local quality slice;
+- runbook section 5.8 now contains P2-2F target files, implementation steps, validation commands, and acceptance criteria;
+- validation matrix, next-execution suggestions, and milestone table now include P2-2F separately from the three-sample P2-2E review matrix;
+- 8-server actions remain gated behind explicit approval and are not implied by GitHub sync.
+
+Safety result:
+
+- no live upload smoke, third-party live smoke, private-video smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
