@@ -3003,3 +3003,57 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated self-test reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in the shared receipt.
+
+## 2026-06-08 No-Auth Video PPT Local Acceptance Rollup
+
+Task source: after the P1-3B/P1-3C/P1-3D/P2-1C/P2-2E offline gates were strengthened, run a single no-authorization local acceptance sweep before asking for live approvals.
+
+Scope:
+
+- run only self-tests and local unit validation that do not require live credentials, uploads, browser capture, deployment, or customer inputs;
+- prove the current local contracts still compose after the upload, third-party, handoff, capture, and quality-matrix hardening slices;
+- keep generated reports under `target/` and copy only redacted summaries into this ledger.
+
+Validation:
+
+```text
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir target/video-ppt-upload-main-self-test-rollup-final
+npm run smoke:external-video-ppt -- --self-test --output-dir target/external-video-ppt-self-test-rollup-final
+npm run smoke:video-ppt-handoff -- --self-test --output-dir target/video-ppt-handoff-self-test-rollup-final
+npm run capture:authorized-video -- --self-test --output-dir target/authorized-capture-self-test-rollup-final
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir target/video-ppt-quality-matrix-rollup-final
+npm run test:video-deliverables
+node <rollup shared-summary redaction scan>
+```
+
+Result:
+
+- main-site upload self-test passed with `ok=true`, `networkCallsRun=false`, `productionWriteAllowed=false`, `uploadAttempted=false`, and `assistantRunCreated=false`;
+- main-site upload self-test download validation passed with minimal PPTX/Markdown counts of `1` slide each and required PPTX entries present;
+- third-party video PPT self-test passed with `ok=true`, `networkCallsRun=false`, `fixtureRegistered=false`, `eventSent=false`, and `deliverablesDownloadedFromNetwork=false`;
+- third-party self-test download validation passed with `pptxSlideCount=1` and `markdownSlideHeadingCount=1`;
+- video-channel/login-gated handoff self-test passed with `ok=true`, `networkCallsRun=false`, `providerCalled=false`, `videoFetchAttempted=false`, `pptGenerated=false`, `negativeFixtureCount=5`, and `negativeFixturesRejected=5`;
+- authorized capture helper self-test passed with `authorizationGateNegativeCaseCount=6` and `authorizationGateNegativeCasesRejected=6`; copied evidence used only `sharedReceipt`;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- video deliverables validator passed all 19 node test cases;
+- rollup shared-summary redaction scan passed with no raw WeChat source URL, token marker, bearer marker, password marker, upload object key, raw self-test approval/operator value, or local absolute path.
+
+Remaining work:
+
+- this rollup does not run live main-site upload, live third-party registration, deployed handoff smoke, live authorized capture, or real customer-authorized quality review;
+- P1-3B still needs explicit approval to write a non-customer main-site smoke upload/document/run record;
+- P1-3C still needs approved inbound bearer, `connection_id`, `source_id`, and safe video input;
+- P1-3D still needs an approved 8-server deployment window before live handoff smoke;
+- P2-1C/P2-2E still need operator/customer authorization and source inputs.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched by these self-tests;
+- no file was uploaded or registered;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no DataMax upload, dataset, document, assistant run, third-party event, or HTML artifact was created;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated rollup reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared rollup receipt.
