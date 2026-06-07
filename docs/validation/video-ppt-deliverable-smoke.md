@@ -3717,3 +3717,68 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Missing OCR Evidence Quality Risk
+
+Task source: EP6 local quality narrowing after shared validator JSON redaction. The slide quality report already exposed per-slide `ocr_risk`, but the summary risk list did not make missing OCR evidence visible to manual reviewers.
+
+Scope:
+
+- add a low-severity `missing_ocr_evidence` risk flag to `slide_quality_report.json` when selected slides have no OCR snippets;
+- keep OCR as review evidence only, not a substitute for transcript/subtitle page mapping;
+- prove OCR-only evidence does not trigger the new missing-OCR risk;
+- keep this as local media-worker quality work only, with no live upload, third-party event, browser capture, FFmpeg recording, deployment, or 120-server action.
+
+Implemented behavior:
+
+- selected slides without OCR evidence now increment `summary.ocr_missing_count` and add `risk_flags[].code=missing_ocr_evidence`;
+- the new risk uses `severity=low` and `review_action=run_or_review_ocr_evidence_before_customer_delivery`;
+- OCR-only deliverables still write redacted OCR evidence into slide notes, `video_slides.md`, and PPTX speaker notes, keep `has_subtitle_page_map=false` when transcript alignment is absent, and do not emit `missing_ocr_evidence`;
+- existing screenshot PPTX delivery remains non-blocking: the risk is for manual quality review, not a `final_pptx_ready` failure.
+
+Validation:
+
+```text
+cargo fmt --check
+cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+cargo test -p media-worker writes_ocr_notes_without_subtitle_page_map_when_transcript_missing --lib
+cargo test -p media-worker writes_subtitle_page_map_and_transcript_notes_for_selected_slides --lib
+cargo test -p media-worker --lib
+cargo check -p media-worker --bin video_ppt_offline_smoke
+node --check tools/validate-video-deliverables.mjs
+npm run test:video-deliverables
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input <local-public-course-mp4> --output-root <target-redacted> --ffmpeg-bin <ffmpeg-bin> --interval-seconds 15 --title <public-course-title> --json-output <target-redacted>
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts> --json
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- targeted media-worker tests passed for the base deliverable contract, OCR-only notes without subtitle page map, and subtitle page map with transcript/OCR notes;
+- media-worker lib suite passed: 53 tests;
+- `video_ppt_offline_smoke` compiled successfully;
+- video deliverables validator passed 27 Node test cases;
+- quality matrix self-test passed with 3 cases, 1 deliverable case, and 2 pending cases;
+- public-course offline smoke completed locally with `deliverable_state=final_pptx_ready`, `frame_count=96`, `selected_count=7`, `has_pptx=true`, `has_video_slides_markdown=true`, `has_slide_quality_report=true`, and `has_subtitle_page_map=false`;
+- public-course validator shared JSON passed with redacted paths and aligned counts: `selected_count=7`, `requested_selected_count=9`, `pptx_slide_count=7`, `markdown_slide_count=7`, `slide_rectangle_count=7`, and `quality_slide_count=7`;
+- public-course slide quality report now contains `missing_ocr_evidence` with `count=7` and `severity=low`;
+- public-course quality matrix remained `needs_manual_review`, with 3 cases, 1 deliverable case, 1 manual-review public-course case, and 1 pending customer-authorization case.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- customer-facing quality still depends on real authorized samples and manual review for crop, duplicate, subtitle, OCR, readability, and artifact visibility risks;
+- future production reports should treat `missing_ocr_evidence` as a review prompt, not as proof that PPT screenshot extraction failed.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no MP4 was captured or recorded; the only frame extraction was the local offline smoke from an existing public-course fixture under `target/`;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports and deliverables stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

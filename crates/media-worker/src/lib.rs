@@ -2706,6 +2706,14 @@ fn video_slide_quality_report_from_manifests(
             "review_action": "attach_or_parse_transcript_evidence",
         }));
     }
+    if ocr_missing_count > 0 {
+        risk_flags.push(json!({
+            "code": "missing_ocr_evidence",
+            "severity": "low",
+            "count": ocr_missing_count,
+            "review_action": "run_or_review_ocr_evidence_before_customer_delivery",
+        }));
+    }
     if deduped_candidate_count > 0 {
         risk_flags.push(json!({
             "code": "selected_slide_duplicates_removed",
@@ -10520,6 +10528,22 @@ mod tests {
             json!(2)
         );
         assert_eq!(
+            slide_quality_report_json["summary"]["ocr_missing_count"],
+            json!(2)
+        );
+        let missing_ocr_risk = slide_quality_report_json["risk_flags"]
+            .as_array()
+            .expect("risk flags")
+            .iter()
+            .find(|risk| risk["code"] == json!("missing_ocr_evidence"))
+            .expect("missing ocr evidence risk flag");
+        assert_eq!(missing_ocr_risk["severity"], json!("low"));
+        assert_eq!(missing_ocr_risk["count"], json!(2));
+        assert_eq!(
+            missing_ocr_risk["review_action"],
+            json!("run_or_review_ocr_evidence_before_customer_delivery")
+        );
+        assert_eq!(
             slide_quality_report_json["slides"][0]["sharpness_status"],
             json!("unavailable")
         );
@@ -12449,6 +12473,7 @@ mod tests {
         assert!(slide_quality_report.contains("\"ocr_snippet_count\": 2"));
         assert!(slide_quality_report.contains("\"ocr_risk\": \"low\""));
         assert!(slide_quality_report.contains("missing_transcript_alignment"));
+        assert!(!slide_quality_report.contains("missing_ocr_evidence"));
         let pptx_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("pptx"))
