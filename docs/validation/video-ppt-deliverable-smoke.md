@@ -3657,3 +3657,63 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, Markdown body, validator JSON body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Validator Shared JSON Redaction Gate
+
+Task source: M6N local hardening from the active executable plan. The validator internal API needs local paths so quality-matrix scripts can read generated files, but CLI/shared JSON output must be safe to copy into operator receipts.
+
+Scope:
+
+- add a redacted output helper for `validateVideoDeliverables` results;
+- make CLI `--json` output use the redacted result by default;
+- keep the internal `validateVideoDeliverables()` return unchanged for local smoke scripts;
+- redact local artifact directory, per-file paths, and local paths embedded in error messages;
+- keep this as local validator/test work only, with no live upload, third-party event, capture, or deployment.
+
+Implemented behavior:
+
+- shared JSON now includes `outputRedacted=true`;
+- shared JSON reports `artifactsDir="[redacted]"` with `artifactsDirRedacted=true`;
+- every `files[]` row reports `path="[redacted]"` with `pathRedacted=true`;
+- summary counts remain available for shared evidence;
+- error messages containing local filesystem paths are redacted before JSON output;
+- quality matrix still uses the internal API and can read local deliverable files.
+
+Validation:
+
+```text
+node --check tools/validate-video-deliverables.mjs
+npm run test:video-deliverables
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts> --json
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir <target-redacted>
+git diff --check
+```
+
+Result:
+
+- video deliverables validator passed 27 Node test cases, including three shared JSON redaction tests;
+- `node --check tools/validate-video-deliverables.mjs` passed;
+- real public candidate validator JSON passed the redaction scan and kept `selected_count=3`, `requested_selected_count=4`, `pptx_slide_count=3`, and `markdown_slide_count=3`;
+- `node --check scripts/smoke/video-ppt-quality-matrix.mjs` passed;
+- quality matrix self-test passed with 3 cases, 1 deliverable case, and 2 pending cases;
+- public-course quality matrix passed with 3 cases, 1 deliverable case, 1 `needs_manual_review` public-course case, and 1 pending customer-authorization case;
+- quality matrix report redaction scan passed under the shared-report rule set.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- customer-facing quality still depends on real authorized samples and manual review for crop, duplicate, subtitle, OCR, readability, and artifact visibility risks;
+- future shared receipts should copy only redacted summary fields, not raw validator JSON bodies.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports and deliverables stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

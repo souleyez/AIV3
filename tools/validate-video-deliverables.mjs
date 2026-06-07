@@ -325,6 +325,22 @@ export function validateVideoDeliverables(inputPath) {
   };
 }
 
+export function redactValidationResultForOutput(result) {
+  return {
+    ...result,
+    outputRedacted: true,
+    artifactsDir: "[redacted]",
+    artifactsDirRedacted: true,
+    errors: (result.errors || []).map(redactIssueForOutput),
+    warnings: (result.warnings || []).map(redactIssueForOutput),
+    files: (result.files || []).map((file) => ({
+      ...file,
+      path: "[redacted]",
+      pathRedacted: true,
+    })),
+  };
+}
+
 function buildValidationSummary({
   finalManifest,
   pptxSlideCount,
@@ -1047,6 +1063,27 @@ function issue(code, message, kind = "") {
   return { code, message, ...(kind ? { kind } : {}) };
 }
 
+function redactIssueForOutput(item) {
+  if (!item || typeof item !== "object") {
+    return item;
+  }
+  return {
+    ...item,
+    message: typeof item.message === "string"
+      ? redactUnsafeSharedText(item.message)
+      : item.message,
+  };
+}
+
+function redactUnsafeSharedText(text) {
+  return text
+    .replace(/(^|[\s"'({\[])[A-Za-z]:[\\/][^\s"',)}\]]+/g, "$1[redacted]")
+    .replace(/(^|[\s"'({\[])(?:\/Users|\/home|\/tmp|\/var|\/private|\/Volumes)\/[^\s"',)}\]]+/g, "$1[redacted]")
+    .replace(/(^|[\s"'({\[])(?:\.\/)?target\/[^\s"',)}\]]*generated_artifacts[^\s"',)}\]]*/g, "$1[redacted]")
+    .replace(/https?:\/\/[^\s<>"']*(?:token|cookie|authorization|bearer|provider_key|secret)[^\s<>"']*/gi, "[redacted]")
+    .replace(/bearer\s+[A-Za-z0-9._~+/=-]+/gi, "bearer [redacted]");
+}
+
 function printHumanResult(result) {
   const prefix = result.ok ? "OK" : "FAIL";
   console.log(`${prefix} video deliverables: ${result.artifactsDir}`);
@@ -1071,7 +1108,7 @@ if (isMainModule()) {
   const target = args.find((arg) => arg !== "--json");
   const result = validateVideoDeliverables(target || ".");
   if (jsonOutput) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(redactValidationResultForOutput(result), null, 2));
   } else {
     printHumanResult(result);
   }

@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { validateVideoDeliverables } from "./validate-video-deliverables.mjs";
+import { fileURLToPath } from "node:url";
+import {
+  redactValidationResultForOutput,
+  validateVideoDeliverables,
+} from "./validate-video-deliverables.mjs";
 
 test("accepts a complete video deliverables directory", () => {
   const sessionDir = createCompleteDeliverables();
@@ -23,6 +28,67 @@ test("accepts a complete video deliverables directory", () => {
     quality_slide_count: 1,
     subtitle_page_count: 1,
   });
+});
+
+test("redacts local paths from shared validator JSON output without mutating internal result", () => {
+  const sessionDir = createCompleteDeliverables();
+  const result = validateVideoDeliverables(sessionDir);
+  const pptxFile = result.files.find((file) => file.kind === "pptx");
+
+  assert.equal(result.ok, true);
+  assert.match(result.artifactsDir, /generated_artifacts$/);
+  assert.match(pptxFile.path, /video_slides_screenshot_based\.pptx$/);
+
+  const redacted = redactValidationResultForOutput(result);
+  const redactedJson = JSON.stringify(redacted);
+
+  assert.equal(redacted.ok, true);
+  assert.equal(redacted.outputRedacted, true);
+  assert.equal(redacted.artifactsDir, "[redacted]");
+  assert.equal(redacted.artifactsDirRedacted, true);
+  assert.ok(redacted.files.every((file) => file.path === "[redacted]" && file.pathRedacted === true));
+  assert.deepEqual(redacted.summary, result.summary);
+  assert.equal(redactedJson.includes(result.artifactsDir), false);
+  assert.equal(redactedJson.includes(pptxFile.path), false);
+
+  assert.match(result.artifactsDir, /generated_artifacts$/);
+  assert.match(pptxFile.path, /video_slides_screenshot_based\.pptx$/);
+});
+
+test("redacts local paths in validator error messages for shared JSON output", () => {
+  const missingPath = path.join(os.tmpdir(), "aidp-v3-missing-video-deliverables", "generated_artifacts");
+  const result = validateVideoDeliverables(missingPath);
+
+  assert.equal(result.ok, false);
+  assert.ok(JSON.stringify(result).includes(missingPath));
+
+  const redacted = redactValidationResultForOutput(result);
+  const redactedJson = JSON.stringify(redacted);
+
+  assert.equal(redacted.ok, false);
+  assert.equal(redacted.artifactsDir, "[redacted]");
+  assert.equal(redactedJson.includes(missingPath), false);
+  assert.equal(redactedJson.includes(os.tmpdir()), false);
+  assert.ok(redacted.errors.some((error) => error.message.includes("[redacted]")));
+});
+
+test("CLI --json prints redacted shared output", () => {
+  const sessionDir = createCompleteDeliverables();
+  const validatorPath = fileURLToPath(new URL("./validate-video-deliverables.mjs", import.meta.url));
+  const output = execFileSync(process.execPath, [validatorPath, sessionDir, "--json"], {
+    encoding: "utf8",
+  });
+  const parsed = JSON.parse(output);
+
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.outputRedacted, true);
+  assert.equal(parsed.artifactsDir, "[redacted]");
+  assert.ok(parsed.files.every((file) => file.path === "[redacted]" && file.pathRedacted === true));
+  assert.equal(output.includes(sessionDir), false);
+  assert.equal(output.includes("generated_artifacts"), false);
+  assert.equal(parsed.summary.selected_count, 1);
+  assert.equal(parsed.summary.pptx_slide_count, 1);
+  assert.equal(parsed.summary.markdown_slide_count, 1);
 });
 
 test("accepts legacy deliverables without optional slide quality report", () => {
