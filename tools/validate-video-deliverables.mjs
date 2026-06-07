@@ -42,6 +42,13 @@ const REQUIRED_FILES = [
     group: "review_outputs",
   },
   {
+    kind: "selected_slides_manifest",
+    fileName: "selected_slides_manifest.json",
+    statusFlag: "has_selected_slides_manifest",
+    group: "review_outputs",
+    publishedRequired: false,
+  },
+  {
     kind: "slide_notes",
     fileName: "slide_notes.md",
     statusFlag: "has_slide_notes",
@@ -181,6 +188,11 @@ export function validateVideoDeliverables(inputPath) {
     "slide_rectangles_manifest",
     errors,
   );
+  const selectedSlidesManifest = readJsonFile(
+    path.join(artifactsDir, "selected_slides_manifest.json"),
+    "selected_slides_manifest",
+    errors,
+  );
   const slideQualityReport = readJsonFile(
     path.join(artifactsDir, "slide_quality_report.json"),
     "slide_quality_report",
@@ -245,10 +257,15 @@ export function validateVideoDeliverables(inputPath) {
     validateSlideRectanglesManifest(slideRectanglesManifest, errors);
     validateRedactedJson(slideRectanglesManifest, "slide_rectangles_manifest", errors);
   }
+  if (selectedSlidesManifest) {
+    validateSelectedSlidesManifest(selectedSlidesManifest, errors);
+    validateRedactedJson(selectedSlidesManifest, "selected_slides_manifest", errors);
+  }
   if (slideQualityReport) {
     validateSlideQualityReport(slideQualityReport, errors);
     validateRedactedJson(slideQualityReport, "slide_quality_report", errors);
   }
+  validateSelectedSlideCounts(selectedSlidesManifest, slideRectanglesManifest, slideQualityReport, errors);
   const slideNotes = files.find((file) => file.kind === "slide_notes");
   if (slideNotes?.exists) {
     validateRedactedTextFile(slideNotes.path, "slide_notes", errors);
@@ -360,7 +377,7 @@ function validatePublishedManifest(manifest, errors, requiredFiles) {
     errors.push(issue("published_manifest_version_invalid", "published manifest immutable version metadata is invalid", "published_deliverable_manifest"));
   }
   const publishedFiles = Array.isArray(manifest.published_files) ? manifest.published_files : [];
-  for (const file of requiredFiles) {
+  for (const file of filesRequiredForPublishedSurface(requiredFiles)) {
     const entry = findFileEntry(publishedFiles, file);
     if (!entry) {
       errors.push(issue("published_manifest_missing_file", `published manifest does not include ${file.kind} ${file.fileName}`, file.kind));
@@ -393,7 +410,7 @@ function validatePublishedVersionHistory(manifest, errors, requiredFiles) {
       errors.push(issue("published_history_manifest_pointer_invalid", "published version history does not point to the published manifest", "published_version_history"));
     }
     const publishedFiles = Array.isArray(latest.published_files) ? latest.published_files : [];
-    for (const file of requiredFiles) {
+    for (const file of filesRequiredForPublishedSurface(requiredFiles)) {
       const entry = findFileEntry(publishedFiles, file);
       if (!entry) {
         errors.push(issue("published_history_missing_file", `published version history does not include ${file.kind} ${file.fileName}`, file.kind));
@@ -403,6 +420,10 @@ function validatePublishedVersionHistory(manifest, errors, requiredFiles) {
     }
   }
   validateRedactedJson(manifest, "published_version_history", errors);
+}
+
+function filesRequiredForPublishedSurface(requiredFiles) {
+  return requiredFiles.filter((file) => file.publishedRequired !== false);
 }
 
 function validateSubtitlePageMap(map, errors) {
@@ -450,6 +471,122 @@ function validateSlideRectanglesManifest(manifest, errors) {
   if (!rectangles.every(isValidSlideRectangle)) {
     errors.push(issue("slide_rectangles_crop_invalid", "slide rectangles must use a valid relative crop and require review", "slide_rectangles_manifest"));
   }
+}
+
+function validateSelectedSlidesManifest(manifest, errors) {
+  const selectedCandidates = Array.isArray(manifest.selected_candidates) ? manifest.selected_candidates : [];
+  const rejectedDuplicateCandidates = Array.isArray(manifest.rejected_duplicate_candidates)
+    ? manifest.rejected_duplicate_candidates
+    : [];
+  const selectedCandidateIndices = Array.isArray(manifest.selected_candidate_indices)
+    ? manifest.selected_candidate_indices
+    : [];
+  const requestedSelectedCandidateIndices = Array.isArray(manifest.requested_selected_candidate_indices)
+    ? manifest.requested_selected_candidate_indices
+    : [];
+  const validDedupeStatuses = new Set([
+    "selected_keep_list_order_deduped",
+    "exact_frame_content_deduped",
+    "visual_similarity_deduped",
+    "exact_and_visual_similarity_deduped",
+  ]);
+  if (manifest.status !== "ready_for_pptx_writer") {
+    errors.push(issue("selected_slides_not_ready", "selected slides manifest is not ready for the PPTX writer", "selected_slides_manifest"));
+  }
+  if (!validDedupeStatuses.has(manifest.dedupe_status)) {
+    errors.push(issue("selected_slides_dedupe_status_invalid", "selected slides dedupe status is invalid", "selected_slides_manifest"));
+  }
+  if (
+    !Number.isInteger(manifest.selected_count)
+    || manifest.selected_count < 1
+    || manifest.selected_count !== selectedCandidates.length
+    || manifest.selected_count !== selectedCandidateIndices.length
+  ) {
+    errors.push(issue("selected_slides_count_invalid", "selected_count must match selected candidates and final candidate indices", "selected_slides_manifest"));
+  }
+  if (
+    !Number.isInteger(manifest.requested_selected_count)
+    || manifest.requested_selected_count < manifest.selected_count
+    || manifest.requested_selected_count !== requestedSelectedCandidateIndices.length
+  ) {
+    errors.push(issue("selected_slides_requested_count_invalid", "requested_selected_count must match requested indices and be at least selected_count", "selected_slides_manifest"));
+  }
+  if (!isPositiveIntegerArray(selectedCandidateIndices) || !isPositiveIntegerArray(requestedSelectedCandidateIndices)) {
+    errors.push(issue("selected_slides_indices_invalid", "selected slide candidate indices must be positive integers", "selected_slides_manifest"));
+  }
+  if (!selectedCandidateIndices.every((index) => requestedSelectedCandidateIndices.includes(index))) {
+    errors.push(issue("selected_slides_indices_invalid", "final selected indices must be a subset of requested indices", "selected_slides_manifest"));
+  }
+  if (!selectedCandidates.every(isValidSelectedSlideCandidate)) {
+    errors.push(issue("selected_slides_candidate_invalid", "selected candidate rows are invalid", "selected_slides_manifest"));
+  }
+  validateSelectedSlidesDedupeCounts(manifest, rejectedDuplicateCandidates, errors);
+}
+
+function validateSelectedSlidesDedupeCounts(manifest, rejectedDuplicateCandidates, errors) {
+  for (const key of [
+    "deduped_candidate_count",
+    "exact_duplicate_count",
+    "visual_duplicate_count",
+    "visual_shape_duplicate_count",
+  ]) {
+    if (!Number.isInteger(manifest[key]) || manifest[key] < 0) {
+      errors.push(issue("selected_slides_dedupe_count_invalid", `selected slides ${key} is invalid`, "selected_slides_manifest"));
+      return;
+    }
+  }
+  if (manifest.deduped_candidate_count !== rejectedDuplicateCandidates.length) {
+    errors.push(issue("selected_slides_dedupe_count_invalid", "deduped candidate count does not match rejected duplicate rows", "selected_slides_manifest"));
+    return;
+  }
+  if (manifest.visual_shape_duplicate_count > manifest.visual_duplicate_count) {
+    errors.push(issue("selected_slides_dedupe_count_invalid", "visual shape duplicate count cannot exceed visual duplicate count", "selected_slides_manifest"));
+    return;
+  }
+  if (manifest.exact_duplicate_count + manifest.visual_duplicate_count !== manifest.deduped_candidate_count) {
+    errors.push(issue("selected_slides_dedupe_count_invalid", "exact plus visual duplicate counts must match deduped candidate count", "selected_slides_manifest"));
+  }
+}
+
+function validateSelectedSlideCounts(selectedSlidesManifest, slideRectanglesManifest, slideQualityReport, errors) {
+  if (!selectedSlidesManifest) {
+    return;
+  }
+  const selectedCount = selectedSlidesManifest.selected_count;
+  if (!Number.isInteger(selectedCount) || selectedCount < 1) {
+    return;
+  }
+  if (
+    slideRectanglesManifest
+    && Number.isInteger(slideRectanglesManifest.promoted_rectangle_count)
+    && slideRectanglesManifest.promoted_rectangle_count !== selectedCount
+  ) {
+    errors.push(issue("selected_slides_cross_count_mismatch", "selected_count does not match slide rectangle count", "selected_slides_manifest"));
+  }
+  if (
+    slideQualityReport
+    && Number.isInteger(slideQualityReport.slide_count)
+    && slideQualityReport.slide_count !== selectedCount
+  ) {
+    errors.push(issue("selected_slides_cross_count_mismatch", "selected_count does not match slide quality report count", "selected_slides_manifest"));
+  }
+}
+
+function isPositiveIntegerArray(values) {
+  return values.every((value) => Number.isInteger(value) && value >= 1);
+}
+
+function isValidSelectedSlideCandidate(candidate) {
+  return Number.isInteger(candidate?.candidate_index)
+    && candidate.candidate_index >= 1
+    && typeof candidate?.file_name === "string"
+    && candidate.file_name.length > 0
+    && typeof candidate?.timestamp_label === "string"
+    && candidate.timestamp_label.length > 0
+    && Number.isFinite(candidate?.timestamp_seconds)
+    && candidate.selection_status === "selected"
+    && typeof candidate?.slide_rectangle === "object"
+    && candidate.slide_rectangle !== null;
 }
 
 function validateSlideQualityReport(report, errors) {

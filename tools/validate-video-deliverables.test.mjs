@@ -11,7 +11,7 @@ test("accepts a complete video deliverables directory", () => {
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.files.length, 10);
+  assert.equal(result.files.length, 11);
   assert.ok(result.files.every((file) => file.exists));
 });
 
@@ -76,6 +76,31 @@ test("accepts detector-cropped slide rectangles", () => {
   assert.equal(result.ok, true);
 });
 
+test("accepts selected slides manifest without a published download entry", () => {
+  const sessionDir = createCompleteDeliverables();
+  const artifactsDir = path.join(sessionDir, "generated_artifacts");
+  const publishedManifestPath = path.join(artifactsDir, "published_deliverable_manifest.json");
+  const publishedManifest = JSON.parse(fs.readFileSync(publishedManifestPath, "utf8"));
+  publishedManifest.published_files = publishedManifest.published_files.filter(
+    (file) => file.artifact_kind !== "selected_slides_manifest",
+  );
+  fs.writeFileSync(publishedManifestPath, JSON.stringify(publishedManifest, null, 2));
+
+  const publishedVersionHistoryPath = path.join(artifactsDir, "published_version_history.json");
+  const publishedVersionHistory = JSON.parse(fs.readFileSync(publishedVersionHistoryPath, "utf8"));
+  publishedVersionHistory.versions[0].published_files = publishedVersionHistory.versions[0].published_files.filter(
+    (file) => file.artifact_kind !== "selected_slides_manifest",
+  );
+  publishedVersionHistory.versions[0].artifact_kinds = publishedVersionHistory.versions[0].artifact_kinds.filter(
+    (kind) => kind !== "selected_slides_manifest",
+  );
+  fs.writeFileSync(publishedVersionHistoryPath, JSON.stringify(publishedVersionHistory, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, true);
+});
+
 test("accepts foreground component and bright canvas detector modes", () => {
   for (const [mode, source] of [
     ["foreground_component_v1", "raw_frame_foreground_component"],
@@ -103,12 +128,14 @@ test("rejects missing review files", () => {
   const sessionDir = createCompleteDeliverables();
   fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_notes.md"));
   fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_rectangles_manifest.json"));
+  fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "selected_slides_manifest.json"));
 
   const result = validateVideoDeliverables(sessionDir);
 
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.code === "missing_required_file" && error.kind === "slide_notes"));
   assert.ok(result.errors.some((error) => error.code === "missing_required_file" && error.kind === "slide_rectangles_manifest"));
+  assert.ok(result.errors.some((error) => error.code === "missing_required_file" && error.kind === "selected_slides_manifest"));
 });
 
 test("rejects inconsistent final manifest status", () => {
@@ -268,6 +295,35 @@ test("rejects malformed slide rectangle manifests", () => {
   assert.ok(result.errors.some((error) => error.code === "slide_rectangles_crop_invalid"));
 });
 
+test("rejects malformed selected slides manifests", () => {
+  const sessionDir = createCompleteDeliverables();
+  const selectedSlidesPath = path.join(sessionDir, "generated_artifacts", "selected_slides_manifest.json");
+  const selectedSlides = JSON.parse(fs.readFileSync(selectedSlidesPath, "utf8"));
+  selectedSlides.status = "waiting_for_selection";
+  selectedSlides.dedupe_status = "unknown";
+  selectedSlides.selected_count = 2;
+  selectedSlides.requested_selected_count = 1;
+  selectedSlides.selected_candidate_indices = [2, 3];
+  selectedSlides.requested_selected_candidate_indices = [2];
+  selectedSlides.deduped_candidate_count = 3;
+  selectedSlides.exact_duplicate_count = 1;
+  selectedSlides.visual_duplicate_count = 1;
+  selectedSlides.visual_shape_duplicate_count = 2;
+  selectedSlides.selected_candidates[0].selection_status = "candidate";
+  fs.writeFileSync(selectedSlidesPath, JSON.stringify(selectedSlides, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "selected_slides_not_ready"));
+  assert.ok(result.errors.some((error) => error.code === "selected_slides_dedupe_status_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "selected_slides_count_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "selected_slides_requested_count_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "selected_slides_indices_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "selected_slides_candidate_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "selected_slides_dedupe_count_invalid"));
+});
+
 test("rejects malformed slide quality reports", () => {
   const sessionDir = createCompleteDeliverables();
   const qualityReportPath = path.join(sessionDir, "generated_artifacts", "slide_quality_report.json");
@@ -361,6 +417,7 @@ function createCompleteDeliverables() {
     "published_version_history",
     "extraction_artifacts_manifest",
     "slide_rectangles_manifest",
+    "selected_slides_manifest",
     "slide_quality_report",
     "slide_notes",
     "video_slides_markdown",
@@ -385,6 +442,7 @@ function createCompleteDeliverables() {
           has_published_version_history: true,
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
+          has_selected_slides_manifest: true,
           has_slide_quality_report: true,
           has_slide_notes: true,
           has_video_slides_markdown: true,
@@ -395,7 +453,7 @@ function createCompleteDeliverables() {
         ),
         final_outputs: files.filter((file) => ["pptx", "video_slides_markdown"].includes(file.artifact_kind)),
         review_outputs: files.filter((file) =>
-          ["slide_rectangles_manifest", "slide_quality_report", "slide_notes"].includes(file.artifact_kind),
+          ["slide_rectangles_manifest", "selected_slides_manifest", "slide_quality_report", "slide_notes"].includes(file.artifact_kind),
         ),
         evidence_outputs: files.filter((file) => file.artifact_kind === "subtitle_page_map"),
       },
@@ -425,6 +483,57 @@ function createCompleteDeliverables() {
             review_required: true,
           },
         ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  fs.writeFileSync(
+    path.join(artifactsDir, "selected_slides_manifest.json"),
+    JSON.stringify(
+      {
+        status: "ready_for_pptx_writer",
+        source: "manual_keep_list",
+        selection_source: "manual_keep_list",
+        title: "Fixture video",
+        candidate_manifest: "[redacted]",
+        contact_sheet_html: "[redacted]",
+        keep_list_template: "[redacted]",
+        selected_candidate_indices: [2],
+        requested_selected_candidate_indices: [2],
+        requested_selected_count: 1,
+        selected_count: 1,
+        deduped_candidate_count: 0,
+        exact_duplicate_count: 0,
+        visual_duplicate_count: 0,
+        visual_shape_duplicate_count: 0,
+        rectangle_extraction_status: "promoted_full_frame_fallback",
+        rectangle_extraction_mode: "full_frame_fallback",
+        dedupe_status: "selected_keep_list_order_deduped",
+        selected_candidates: [
+          {
+            candidate_index: 2,
+            contact_sheet_anchor: "frame-000002",
+            file_name: "frame_000002.jpg",
+            frame_path: "[redacted]",
+            selection_status: "selected",
+            timestamp_label: "0:00",
+            timestamp_seconds: 0.2,
+            rectangle_extraction_status: "promoted_full_frame_fallback",
+            slide_rectangle: {
+              unit: "relative",
+              x: 0,
+              y: 0,
+              width: 1,
+              height: 1,
+              source: "raw_frame_full_frame_fallback",
+            },
+            transcript_segments: [{ start_seconds: 0.2, end_seconds: 0.6, text: "Aligned transcript" }],
+            ocr_snippets: [{ text: "Aligned OCR", confidence: 0.91 }],
+          },
+        ],
+        rejected_duplicate_candidates: [],
       },
       null,
       2,
@@ -523,6 +632,7 @@ function createCompleteDeliverables() {
           has_published_version_history: true,
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
+          has_selected_slides_manifest: true,
           has_slide_quality_report: true,
           has_slide_notes: true,
           has_video_slides_markdown: true,
@@ -581,6 +691,7 @@ function fileNameForKind(kind) {
     published_version_history: "published_version_history.json",
     extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
     slide_rectangles_manifest: "slide_rectangles_manifest.json",
+    selected_slides_manifest: "selected_slides_manifest.json",
     slide_quality_report: "slide_quality_report.json",
     slide_notes: "slide_notes.md",
     video_slides_markdown: "video_slides.md",

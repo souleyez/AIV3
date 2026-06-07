@@ -3496,3 +3496,59 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, notes XML body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Selected Slides Manifest Validator Gate
+
+Task source: continue local acceptance hardening for the video PPT review package. The active plan treats `selected_slides_manifest.json` as a core review artifact for checking final page selection, requested-vs-final candidate indices, and dedupe behavior, but the public deliverables validator previously did not require or validate it.
+
+Scope:
+
+- make `selected_slides_manifest.json` a required local review-package file;
+- require final/extraction manifests to reference the selected manifest and mark its path redacted;
+- validate selected/requested candidate indices, selected count, requested count, dedupe status, and duplicate counters;
+- cross-check selected count against `slide_rectangles_manifest.promoted_rectangle_count` and `slide_quality_report.slide_count`;
+- keep selected manifest as a local review-package requirement, not a mandatory published download entry, because published artifact visibility still needs live main-site smoke evidence;
+- keep this as local validator/test work only, with no live upload, third-party event, capture, or deployment.
+
+Implemented behavior:
+
+- missing `selected_slides_manifest.json` now fails with `missing_required_file`;
+- malformed selected manifest rows fail with selected-manifest-specific error codes;
+- selected/requested indices must be positive integers, and final selected indices must be a subset of requested indices;
+- dedupe counters must be non-negative and internally consistent;
+- real public deliverables that include selected manifest in final/extraction but not in published download lists remain valid.
+
+Validation:
+
+```text
+node --check tools/validate-video-deliverables.mjs
+npm run test:video-deliverables
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir <target-redacted>
+git diff --check
+```
+
+Result:
+
+- video deliverables validator passed 22 Node test cases, including malformed selected manifest and local-review-only published-boundary coverage;
+- a real public candidate deliverables package passed `validate-video-deliverables` with `selected_slides_manifest.json` now listed and checked;
+- public-course quality matrix passed with the public candidate still classified as `needs_manual_review`, not `not_deliverable`;
+- selected manifest is now part of the local validator contract without overstating published artifact visibility.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- published/download visibility for review artifacts remains a live artifact-smoke question;
+- customer-facing quality still depends on real authorized samples and manual review for crop, duplicate, subtitle, OCR, readability, and artifact visibility risks.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports and deliverables stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, selected manifest body, or local artifact paths were recorded in this shared receipt.
