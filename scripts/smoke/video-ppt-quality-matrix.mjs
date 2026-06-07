@@ -57,6 +57,7 @@ function usage() {
   npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<video-extraction>/generated_artifacts [--pretty]
   npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/<video-extraction>/generated_artifacts [--pretty]
   npm run smoke:video-ppt-quality-matrix -- --customer-deliverables target/<video-extraction>/generated_artifacts [--pretty]
+  npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<synthetic>/generated_artifacts --public-course-deliverables target/<public>/generated_artifacts --customer-deliverables target/<customer>/generated_artifacts [--pretty]
 
 Checks:
   - deterministic P2-2E quality matrix shape for video/PPT extraction
@@ -64,6 +65,7 @@ Checks:
   - local synthetic deliverables can be validated and classified through the same matrix
   - local public-course deliverables can be validated and classified through the same matrix
   - local customer-authorized deliverables can be validated after explicit approval/input exists
+  - combined deliverables inputs can produce a complete three-category matrix when all required categories are provided
   - customer-authorized samples stay pending unless --customer-deliverables is provided
   - report never claims live/customer/video-channel extraction from self-test evidence
 
@@ -140,45 +142,35 @@ function buildPendingCustomerAuthorizedCase() {
   };
 }
 
-function buildCasesFromSyntheticDeliverables(inputPath) {
+function buildCasesFromDeliverableArgs(args) {
   return [
-    buildCaseFromDeliverables(inputPath, {
-      caseId: 'synthetic-ppt-playback-deliverables',
-      category: 'synthetic_ppt_playback',
-      inputType: 'local_video_ppt_deliverables',
-      sourceAccessStatus: 'local_fixture',
-      approvalStatus: 'not_required',
-    }),
-    buildPendingPublicCourseCase(),
-    buildPendingCustomerAuthorizedCase(),
-  ];
-}
-
-function buildCasesFromPublicCourseDeliverables(inputPath) {
-  return [
-    buildSelfTestSyntheticCase(),
-    buildCaseFromDeliverables(inputPath, {
-      caseId: 'public-course-video-deliverables',
-      category: 'public_course_video',
-      inputType: 'public_course_video_deliverables',
-      sourceAccessStatus: 'anonymous_public_video_fixture',
-      approvalStatus: 'not_required',
-    }),
-    buildPendingCustomerAuthorizedCase(),
-  ];
-}
-
-function buildCasesFromCustomerDeliverables(inputPath) {
-  return [
-    buildSelfTestSyntheticCase(),
-    buildPendingPublicCourseCase(),
-    buildCaseFromDeliverables(inputPath, {
-      caseId: 'customer-authorized-video-deliverables',
-      category: 'customer_authorized_video',
-      inputType: 'customer_uploaded_or_authorized_capture_deliverables',
-      sourceAccessStatus: 'customer_authorized_input',
-      approvalStatus: 'operator_authorized',
-    }),
+    args.syntheticDeliverables
+      ? buildCaseFromDeliverables(args.syntheticDeliverables, {
+        caseId: 'synthetic-ppt-playback-deliverables',
+        category: 'synthetic_ppt_playback',
+        inputType: 'local_video_ppt_deliverables',
+        sourceAccessStatus: 'local_fixture',
+        approvalStatus: 'not_required',
+      })
+      : buildSelfTestSyntheticCase(),
+    args.publicCourseDeliverables
+      ? buildCaseFromDeliverables(args.publicCourseDeliverables, {
+        caseId: 'public-course-video-deliverables',
+        category: 'public_course_video',
+        inputType: 'public_course_video_deliverables',
+        sourceAccessStatus: 'anonymous_public_video_fixture',
+        approvalStatus: 'not_required',
+      })
+      : buildPendingPublicCourseCase(),
+    args.customerDeliverables
+      ? buildCaseFromDeliverables(args.customerDeliverables, {
+        caseId: 'customer-authorized-video-deliverables',
+        category: 'customer_authorized_video',
+        inputType: 'customer_uploaded_or_authorized_capture_deliverables',
+        sourceAccessStatus: 'customer_authorized_input',
+        approvalStatus: 'operator_authorized',
+      })
+      : buildPendingCustomerAuthorizedCase(),
   ];
 }
 
@@ -348,82 +340,102 @@ function buildSelfTestReport() {
   return report;
 }
 
-function buildSyntheticDeliverablesReport(inputPath) {
+function buildDeliverablesReportFromArgs(args) {
+  const inputKinds = deliverablesInputKinds(args);
+  const allDeliverablesInputsReviewed = inputKinds.length === REQUIRED_CATEGORIES.length;
   const report = buildQualityMatrixReport({
-    status: 'partial_local_deliverables_reviewed',
+    status: allDeliverablesInputsReviewed
+      ? 'complete_deliverables_matrix_reviewed'
+      : statusForPartialDeliverablesInput(inputKinds),
     selfTest: false,
-    inputMode: 'synthetic_deliverables',
-    cases: buildCasesFromSyntheticDeliverables(inputPath),
+    inputMode: inputKinds.length > 1 ? 'combined_deliverables' : inputModeForSingleDeliverablesInput(inputKinds[0]),
+    matrixComplete: allDeliverablesInputsReviewed,
+    cases: buildCasesFromDeliverableArgs(args),
     gates: {
-      public_course_sample_required: true,
-      customer_authorization_required: true,
+      public_course_sample_required: !args.publicCourseDeliverables,
+      customer_authorization_required: !args.customerDeliverables,
+      synthetic_deliverables_reviewed: Boolean(args.syntheticDeliverables),
+      public_course_deliverables_reviewed: Boolean(args.publicCourseDeliverables),
+      customer_authorized_deliverables_reviewed: Boolean(args.customerDeliverables),
+      all_deliverables_inputs_reviewed: allDeliverablesInputsReviewed,
       local_deliverables_input_reviewed: true,
     },
     redaction: {
-      deliverables_input_redacted: true,
+      synthetic_deliverables_input_redacted: Boolean(args.syntheticDeliverables),
+      public_course_deliverables_input_redacted: Boolean(args.publicCourseDeliverables),
+      customer_authorized_deliverables_input_redacted: Boolean(args.customerDeliverables),
     },
-    nextActions: [
-      'review the local synthetic deliverables verdict and quality risks',
-      'run public course video review only with an anonymous direct video URL or upload fixture',
-      'run customer sample review only after explicit customer/operator authorization',
-    ],
+    nextActions: nextActionsForDeliverablesInputs(args),
   });
   validateQualityMatrixReport(report);
   return report;
 }
 
-function buildPublicCourseDeliverablesReport(inputPath) {
-  const report = buildQualityMatrixReport({
-    status: 'partial_public_course_deliverables_reviewed',
-    selfTest: false,
-    inputMode: 'public_course_deliverables',
-    cases: buildCasesFromPublicCourseDeliverables(inputPath),
-    gates: {
-      public_course_sample_required: false,
-      public_course_deliverables_reviewed: true,
-      customer_authorization_required: true,
-      local_deliverables_input_reviewed: true,
-    },
-    redaction: {
-      public_course_deliverables_input_redacted: true,
-    },
-    nextActions: [
-      'review the public course video quality risks and decide whether to keep needs_manual_review or improve crop/dedupe/sharpness',
-      'run customer sample review only after explicit customer/operator authorization',
-    ],
-  });
-  validateQualityMatrixReport(report);
-  return report;
+function deliverablesInputKinds(args) {
+  const kinds = [];
+  if (args.syntheticDeliverables) {
+    kinds.push('synthetic');
+  }
+  if (args.publicCourseDeliverables) {
+    kinds.push('public_course');
+  }
+  if (args.customerDeliverables) {
+    kinds.push('customer');
+  }
+  return kinds;
 }
 
-function buildCustomerDeliverablesReport(inputPath) {
-  const report = buildQualityMatrixReport({
-    status: 'partial_customer_authorized_deliverables_reviewed',
-    selfTest: false,
-    inputMode: 'customer_deliverables',
-    cases: buildCasesFromCustomerDeliverables(inputPath),
-    gates: {
-      public_course_sample_required: true,
-      customer_authorization_required: false,
-      customer_authorized_deliverables_reviewed: true,
-      local_deliverables_input_reviewed: true,
-    },
-    redaction: {
-      customer_authorized_deliverables_input_redacted: true,
-    },
-    nextActions: [
-      'review the customer-authorized video quality risks and decide whether it is deliverable, needs_manual_review, or not_deliverable',
-      'complete public course video review with an anonymous direct video URL or upload fixture if still pending',
-    ],
-  });
-  validateQualityMatrixReport(report);
-  return report;
+function inputModeForSingleDeliverablesInput(kind) {
+  if (kind === 'synthetic') {
+    return 'synthetic_deliverables';
+  }
+  if (kind === 'public_course') {
+    return 'public_course_deliverables';
+  }
+  if (kind === 'customer') {
+    return 'customer_deliverables';
+  }
+  return 'combined_deliverables';
+}
+
+function statusForPartialDeliverablesInput(inputKinds) {
+  if (inputKinds.length > 1) {
+    return 'partial_combined_deliverables_reviewed';
+  }
+  if (inputKinds[0] === 'synthetic') {
+    return 'partial_local_deliverables_reviewed';
+  }
+  if (inputKinds[0] === 'public_course') {
+    return 'partial_public_course_deliverables_reviewed';
+  }
+  if (inputKinds[0] === 'customer') {
+    return 'partial_customer_authorized_deliverables_reviewed';
+  }
+  return 'partial_deliverables_reviewed';
+}
+
+function nextActionsForDeliverablesInputs(args) {
+  const actions = [];
+  if (!args.syntheticDeliverables) {
+    actions.push('run synthetic PPT playback extraction and attach generated_artifacts when available');
+  }
+  if (!args.publicCourseDeliverables) {
+    actions.push('run public course video review only with an anonymous direct video URL or upload fixture');
+  }
+  if (!args.customerDeliverables) {
+    actions.push('run customer sample review only after explicit customer/operator authorization');
+  }
+  if (actions.length === 0) {
+    actions.push('review all three quality conclusions and record deliverable, needs_manual_review, or not_deliverable for each category');
+  }
+  return actions;
 }
 
 function buildQualityMatrixReport({
   status,
   selfTest,
   inputMode,
+  matrixComplete = false,
   cases: inputCases,
   gates = {},
   redaction = {},
@@ -448,7 +460,7 @@ function buildQualityMatrixReport({
     status,
     self_test: selfTest,
     input_mode: inputMode,
-    matrix_complete: false,
+    matrix_complete: matrixComplete,
     required_categories: REQUIRED_CATEGORIES,
     all_required_categories_present: allRequiredCategoriesPresent,
     summary,
@@ -523,8 +535,14 @@ function validateQualityMatrixReport(report) {
   if (report.schema !== 'v3.video_ppt_quality_matrix_smoke.v1') {
     throw new Error('invalid quality matrix report schema');
   }
-  if (report.matrix_complete !== false) {
-    throw new Error('quality matrix report must not claim full P2-2E completion');
+  if (typeof report.matrix_complete !== 'boolean') {
+    throw new Error('quality matrix report matrix_complete must be boolean');
+  }
+  if (
+    report.matrix_complete
+    && (report.summary.pending_count !== 0 || report.gates.all_deliverables_inputs_reviewed !== true)
+  ) {
+    throw new Error('quality matrix report must only be complete after all deliverables inputs are reviewed');
   }
   if (!report.all_required_categories_present) {
     throw new Error('quality matrix report must cover all required P2-2E categories');
@@ -580,19 +598,12 @@ function main() {
   if (args.selfTest && deliverableInputs.length > 0) {
     throw new Error('use either --self-test or deliverables input flags, not both');
   }
-  if (deliverableInputs.length > 1) {
-    throw new Error('use only one deliverables input flag per report');
-  }
   if (!args.selfTest && deliverableInputs.length === 0) {
     throw new Error('--self-test, --synthetic-deliverables, --public-course-deliverables, or --customer-deliverables is required');
   }
   let report;
-  if (args.syntheticDeliverables) {
-    report = buildSyntheticDeliverablesReport(args.syntheticDeliverables);
-  } else if (args.publicCourseDeliverables) {
-    report = buildPublicCourseDeliverablesReport(args.publicCourseDeliverables);
-  } else if (args.customerDeliverables) {
-    report = buildCustomerDeliverablesReport(args.customerDeliverables);
+  if (deliverableInputs.length > 0) {
+    report = buildDeliverablesReportFromArgs(args);
   } else {
     report = buildSelfTestReport();
   }

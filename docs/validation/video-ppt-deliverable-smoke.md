@@ -1600,15 +1600,16 @@ Safety result:
 - generated videos, frames, PPTX, Markdown, manifests, matrix reports, and offline smoke outputs remained under `target/` and were not committed;
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run.
 
-## 2026-06-08 Customer Deliverables Quality Matrix Input
+## 2026-06-08 Customer Deliverables And Combined Quality Matrix Input
 
 Task source: EP5/P2-2E quality matrix readiness from `docs/plans/datamax-active-execution-plan.md`.
 
 Scope:
 
 - add a quality-matrix input mode for explicitly authorized customer/operator video PPT deliverables;
-- keep self-test, synthetic, public-course, and customer-authorized modes mutually exclusive;
-- keep `matrix_complete=false` until all required categories are represented by approved evidence;
+- allow synthetic, public-course, and customer-authorized deliverables inputs to be combined into one report;
+- keep `--self-test` mutually exclusive with all deliverables inputs;
+- allow `matrix_complete=true` only when all required deliverables categories are represented by reviewed inputs;
 - use only local non-customer fixtures to prove script behavior;
 - avoid live smoke, uploads, third-party events, browser recording, or deployment.
 
@@ -1617,10 +1618,11 @@ Implemented behavior:
 - `scripts/smoke/video-ppt-quality-matrix.mjs` now accepts `--customer-deliverables <generated_artifacts>`;
 - `VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_DELIVERABLES` is supported as the environment fallback;
 - customer mode classifies the provided deliverables as `customer_authorized_video`;
-- customer mode sets `customer_authorized_deliverables_reviewed=true`, `customer_authorization_required=false`, and keeps `matrix_complete=false`;
-- reports still include synthetic and public categories so missing public/customer evidence cannot be hidden;
+- customer mode sets `customer_authorized_deliverables_reviewed=true` and `customer_authorization_required=false`;
+- reports still include all required categories so missing public/customer evidence cannot be hidden;
+- combined mode accepts synthetic, public, and customer deliverables together and writes `matrix_complete=true` only when all three are present;
 - quality evaluation now treats `summary.single_slide_output=true` as a review risk in addition to low score, crop fallback, and sharpness risks;
-- `scripts/README.md` documents that `--customer-deliverables` is only for explicitly approved customer/operator inputs.
+- `scripts/README.md` documents that deliverables flags can be combined, while `--customer-deliverables` is only for explicitly approved customer/operator inputs.
 
 Validation:
 
@@ -1631,7 +1633,7 @@ npm run smoke:video-ppt-quality-matrix -- --self-test --pretty
 npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <local-fixture-generated_artifacts> --pretty
 npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <single-slide-public-generated_artifacts> --pretty
 npm run smoke:video-ppt-quality-matrix -- --customer-deliverables <local-fixture-generated_artifacts> --pretty
-npm run smoke:video-ppt-quality-matrix -- --customer-deliverables <local-fixture-generated_artifacts> --public-course-deliverables <public-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <local-fixture-generated_artifacts> --public-course-deliverables <single-slide-public-generated_artifacts> --customer-deliverables <local-fixture-generated_artifacts> --pretty
 npm run smoke:video-ppt-quality-matrix -- --self-test --customer-deliverables <local-fixture-generated_artifacts>
 git diff --check
 ```
@@ -1644,12 +1646,14 @@ Result:
 - synthetic deliverables mode passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
 - public-course deliverables mode passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, and `pending_count=1`;
 - customer deliverables mode passed with `status=partial_customer_authorized_deliverables_reviewed`, `input_mode=customer_deliverables`, `matrix_complete=false`, `deliverable_count=2`, and `pending_count=1`;
+- combined three-input mode passed with `status=complete_deliverables_matrix_reviewed`, `input_mode=combined_deliverables`, `matrix_complete=true`, `deliverable_count=2`, `needs_manual_review_count=1`, and `pending_count=0`;
 - customer report redaction flags showed no source URLs, object paths, credentials, or provider payloads included;
-- negative customer+public and self-test+customer invocations failed as expected.
+- combined report redaction flags showed no source URLs, object paths, credentials, or provider payloads included;
+- negative self-test+customer invocation failed as expected.
 
 Remaining work:
 
-- this adds the customer-authorized input gate but does not supply a real customer/operator authorized sample;
+- this adds the customer-authorized input gate and combined three-input matrix gate but does not supply a real customer/operator authorized sample;
 - P2-2E remains incomplete until a real authorized customer sample is run and manually reviewed;
 - P1-3B/P1-3C/P1-3D live gates remain unchanged.
 
