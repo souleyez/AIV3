@@ -651,3 +651,57 @@ Safety result:
 - no code was changed in this refresh;
 - no live upload smoke, third-party smoke, private-video smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, raw media URL, local object path, or generated artifact local path was recorded.
+
+## 2026-06-07 Main-Site Uploaded Video Smoke Script Slice
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P1-3B.
+
+Scope:
+
+- add a reusable main-site uploaded-video smoke entrypoint without running a production upload in this slice;
+- keep direct URL release gate unchanged;
+- use only public/non-customer video fixtures when the smoke is run;
+- make the script follow the real main-site upload path before triggering video/PPT extraction.
+
+Implemented behavior:
+
+- added package script `smoke:video-ppt-upload-main`;
+- added `scripts/smoke/video-ppt-upload-main.mjs`;
+- documented the entrypoint in `scripts/README.md`;
+- the script creates or reuses a local-thread scoped smoke dataset through `/api/v3/datasets`;
+- the script uploads a fixture through `/api/v3/local-document-uploads`;
+- the script registers and ingests the uploaded video through `/api/v3/documents` and `/api/v3/documents/{document_id}/ingest`;
+- the script creates a dataset-scoped assistant run through `/api/v3/assistant-runs/stream` with an explicit PPT/slides/courseware extraction prompt;
+- the script waits for `video_extraction_summary`, requires `final_pptx_ready`, downloads PPTX/Markdown/manifests through `/api/v3/html-artifacts/{artifact_id}/files/{index}`, and validates PPTX OOXML entries plus Markdown/PPTX slide-count agreement;
+- the report records IDs and redacted summaries, but does not record upload object keys, server local upload paths, cookies, bearer tokens, database URLs, or provider payloads.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/video-ppt-main-visible.mjs
+npm run smoke:video-ppt-upload-main -- --help
+node --test apps/web/app/lib/upload-classifier.test.mjs
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+npm run test:video-deliverables
+```
+
+Result:
+
+- uploaded-video smoke script syntax check passed;
+- existing direct URL video/PPT smoke syntax check passed;
+- package entrypoint help command returned the expected usage and check list;
+- upload classifier tests passed, 7 tests, with the existing Node module-type warning only.
+- HTML artifact manifest tests passed, 12 tests, with the existing Node module-type warning only;
+- video deliverables validator tests passed, 15 tests.
+
+Remaining P1-3B work:
+
+- run a live/controlled main-site upload smoke after explicit approval, because it writes a controlled smoke upload/document/assistant-run record;
+- append the live report with `local_thread_id`, dataset id, document id, ingest workflow id, assistant run id, artifact id, `deliverableState`, downloaded file kinds, PPTX slide count, Markdown slide count, and warning interpretation.
+
+Safety result:
+
+- no live upload smoke, third-party smoke, private-video smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no customer/private/login-gated video was fetched;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, upload object key, server local upload path, or generated artifact local path was recorded.

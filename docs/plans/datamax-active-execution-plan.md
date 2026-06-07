@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
 **更新时间：** 2026-06-07 22:10 CST
-**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；下一步按 P1-3 upload/third-party smoke 和 P2-1 授权录屏兜底切片继续。本计划编写本身不部署 8 服务器。
+**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 脚本已实现，live 上传回执待授权；下一步按 P1-3 third-party smoke 和 P2-1 授权录屏兜底切片继续。本计划编写本身不部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 1. 计划原则
@@ -295,7 +295,7 @@
 
 ### P1-3：产物下载与发布可见性审计
 
-**状态：进行中；main-site direct URL release gate 已完成，主站上传视频 smoke 和第三方视频登记 special-trigger smoke 待补。**
+**状态：进行中；main-site direct URL release gate 已完成，主站上传视频 smoke 脚本已实现但 live 上传回执待授权，第三方视频登记 special-trigger smoke 待补。**
 
 **目标：** 确认不同入口的最终产物都能被用户拿到。
 
@@ -309,7 +309,7 @@
 执行顺序：
 
 1. **P1-3A direct URL gate 已完成。** 继续保留 `smoke:video-ppt-main-visible` 作为每次发布前的非破坏性回归；优先 reuse 已完成 `assistant_run_id`，只有需要验证新部署时才新建公开样例 run。
-2. **P1-3B 主站上传视频 smoke。** 用非客户公开视频样例文件走主站上传链路：`/api/v3/local-document-uploads` 保存文件、`/api/v3/documents` 登记视频素材、`/api/v3/documents/{document_id}/ingest` 入队解析，然后在同一 local thread 明确发送“提取这个视频里的 PPT/幻灯片/课件”。目标是证明“上传视频文件”入口和 direct URL 入口一样能生成 assistant-run-bound 下载产物。
+2. **P1-3B 主站上传视频 smoke。** `smoke:video-ppt-upload-main` 已实现，用非客户公开视频样例文件走主站上传链路：`/api/v3/local-document-uploads` 保存文件、`/api/v3/documents` 登记视频素材、`/api/v3/documents/{document_id}/ingest` 入队解析，然后在同一 local thread 明确发送“提取这个视频里的 PPT/幻灯片/课件”。目标是证明“上传视频文件”入口和 direct URL 入口一样能生成 assistant-run-bound 下载产物；真实主站运行会写入 smoke 记录，需授权后执行。
 3. **P1-3C 第三方视频登记 smoke。** 复用现有 external smoke 形态，先通过 `/v1/external/channels/{connection_id}/documents/parse` 登记一条公开视频文件或 loopback fixture，再通过 `/v1/external/channels/{connection_id}/events` 发送带 `dataset_external_ids` 或 `available_document_external_ids` 的消息，触发 `extract_video_ppt_transcript`。目标是证明第三方“登记视频素材”和“特殊触发抽取 PPT”之间的契约闭环。
 4. **P1-3D unsupported 展示复核。** 用视频号/登录态链接跑主站和第三方的 lightweight smoke，只验证 handoff artifact/卡片，不抓视频、不抽帧、不生成 PPT，防止产品文案回退为“已看过视频”。
 
@@ -329,7 +329,7 @@
 
 仍待补充：
 
-- 新增或扩展 smoke 脚本覆盖主站上传视频文件入口，并追加验证回执。
+- `scripts/smoke/video-ppt-upload-main.mjs` 已覆盖主站上传视频文件入口；仍需授权后跑主站 live/controlled 回执。
 - 新增或扩展 third-party video smoke，覆盖登记视频素材后用“提取视频中的 PPT”特殊触发，并追加验证回执。
 - 用视频号链接复核 handoff 展示，证明失败提示仍是“上传文件/直连 URL/授权录屏”三选项。
 
@@ -614,7 +614,7 @@ npm run smoke:video-ppt-main-visible -- \
 
 实现方式：
 
-1. 新增 `scripts/smoke/video-ppt-upload-main.mjs`，或给 `video-ppt-main-visible.mjs` 增加 upload mode；优先新增脚本，避免 direct URL gate 变复杂。
+1. 已新增 `scripts/smoke/video-ppt-upload-main.mjs`，保持 direct URL gate 不变，避免 `video-ppt-main-visible.mjs` 变复杂。
 2. 脚本从公开样例 URL 下载 `.mp4` 到 `target/video-ppt-upload-main-smoke/fixture/`，或接收 `--fixture-file` 指向本地样例；不提交视频文件。
 3. POST `FormData(files=...)` 到 `/api/v3/local-document-uploads`，记录返回的 `object_key`、`content_type`、size，但报告里只写脱敏摘要。
 4. POST `/api/v3/documents`，body 按主站 `registerAndIngestUploadedFile` 契约提供 `dataset_id`、`title`、`object_key`、`content_type`、`metadata.initial_classification.media_kind=video`、`metadata.parse_state.stage=queued`。
@@ -798,7 +798,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | --- | --- | --- | --- | --- |
 | 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 作为后端回归基线保留 |
 | 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过并纳入 `smoke:video-ppt-main-visible` release gate，PPTX/Markdown/manifest 可下载 | 作为 P1-3 回归基线保留 |
-| 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | 能力已说明，仍需上传入口 smoke 脚本和 live/controlled 回执 | P1-3B |
+| 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help 检查；live/controlled 回执待授权 | P1-3B |
 | 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | 文档已说明，需端到端 special-trigger smoke | P1-3C |
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
 | 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | P1-2 handoff 已实现，拒绝原因稳定为 `login_gated_video_source_not_supported` | P1-3D lightweight handoff smoke |
@@ -827,8 +827,8 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 继续 P1-3B，先做主站上传视频 smoke 脚本和受控样例回执，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest。
-2. 继续 P1-3C，做第三方视频登记 special-trigger smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路。
+1. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
+2. 继续 P1-3C，做第三方视频登记 special-trigger smoke 脚本和回执，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路。
 3. 补 P1-3D lightweight handoff smoke，固定视频号/登录态链接的失败展示，防止误称已解析。
 4. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审；没有明确授权和部署窗口前，不接入 8 服务器。
 5. 最后根据 P1-3/P2-1 证据进入 P2-2 质量增强，重点处理 crop fallback、重复页、字幕页映射和逐页讲稿。
