@@ -16,6 +16,7 @@ function parseArgs(argv) {
     selfTest: false,
     syntheticDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_SYNTHETIC_DELIVERABLES || '',
     publicCourseDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_PUBLIC_COURSE_DELIVERABLES || '',
+    customerDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_DELIVERABLES || '',
     outputDir: process.env.VIDEO_PPT_QUALITY_MATRIX_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
     pretty: false,
   };
@@ -27,6 +28,8 @@ function parseArgs(argv) {
       args.syntheticDeliverables = requiredValue(argv, index += 1, arg);
     } else if (arg === '--public-course-deliverables') {
       args.publicCourseDeliverables = requiredValue(argv, index += 1, arg);
+    } else if (arg === '--customer-deliverables') {
+      args.customerDeliverables = requiredValue(argv, index += 1, arg);
     } else if (arg === '--output-dir') {
       args.outputDir = requiredValue(argv, index += 1, arg);
     } else if (arg === '--pretty') {
@@ -53,13 +56,15 @@ function usage() {
   npm run smoke:video-ppt-quality-matrix -- --self-test [--pretty] [--output-dir target/video-ppt-quality-matrix-smoke]
   npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<video-extraction>/generated_artifacts [--pretty]
   npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/<video-extraction>/generated_artifacts [--pretty]
+  npm run smoke:video-ppt-quality-matrix -- --customer-deliverables target/<video-extraction>/generated_artifacts [--pretty]
 
 Checks:
   - deterministic P2-2E quality matrix shape for video/PPT extraction
   - synthetic PPT-playback sample can be marked deliverable from local evidence
   - local synthetic deliverables can be validated and classified through the same matrix
   - local public-course deliverables can be validated and classified through the same matrix
-  - customer-authorized samples stay pending until real approved inputs exist
+  - local customer-authorized deliverables can be validated after explicit approval/input exists
+  - customer-authorized samples stay pending unless --customer-deliverables is provided
   - report never claims live/customer/video-channel extraction from self-test evidence
 
 Safety:
@@ -163,6 +168,20 @@ function buildCasesFromPublicCourseDeliverables(inputPath) {
   ];
 }
 
+function buildCasesFromCustomerDeliverables(inputPath) {
+  return [
+    buildSelfTestSyntheticCase(),
+    buildPendingPublicCourseCase(),
+    buildCaseFromDeliverables(inputPath, {
+      caseId: 'customer-authorized-video-deliverables',
+      category: 'customer_authorized_video',
+      inputType: 'customer_uploaded_or_authorized_capture_deliverables',
+      sourceAccessStatus: 'customer_authorized_input',
+      approvalStatus: 'operator_authorized',
+    }),
+  ];
+}
+
 function buildCaseFromDeliverables(inputPath, {
   caseId,
   category,
@@ -209,6 +228,7 @@ function buildCaseFromDeliverables(inputPath, {
         ocr_missing_count: qualitySummary.ocr_missing_count || 0,
         sharpness_high_count: qualitySummary.sharpness_high_count || 0,
         sharpness_unknown_count: qualitySummary.sharpness_unknown_count || 0,
+        single_slide_output: qualitySummary.single_slide_output === true,
       },
     } : null,
     deliverables_input_redacted: true,
@@ -291,7 +311,8 @@ function evaluateCase(testCase) {
   const summary = quality.summary || {};
   const hasHighRiskFrames = (summary.full_frame_fallback_count || 0) > 0
     || (summary.sharpness_high_count || 0) > 0
-    || (summary.sharpness_unknown_count || 0) > 0;
+    || (summary.sharpness_unknown_count || 0) > 0
+    || summary.single_slide_output === true;
   if (quality.quality_score < 70 || hasHighRiskFrames) {
     return {
       verdict: 'needs_manual_review',
@@ -369,6 +390,30 @@ function buildPublicCourseDeliverablesReport(inputPath) {
     nextActions: [
       'review the public course video quality risks and decide whether to keep needs_manual_review or improve crop/dedupe/sharpness',
       'run customer sample review only after explicit customer/operator authorization',
+    ],
+  });
+  validateQualityMatrixReport(report);
+  return report;
+}
+
+function buildCustomerDeliverablesReport(inputPath) {
+  const report = buildQualityMatrixReport({
+    status: 'partial_customer_authorized_deliverables_reviewed',
+    selfTest: false,
+    inputMode: 'customer_deliverables',
+    cases: buildCasesFromCustomerDeliverables(inputPath),
+    gates: {
+      public_course_sample_required: true,
+      customer_authorization_required: false,
+      customer_authorized_deliverables_reviewed: true,
+      local_deliverables_input_reviewed: true,
+    },
+    redaction: {
+      customer_authorized_deliverables_input_redacted: true,
+    },
+    nextActions: [
+      'review the customer-authorized video quality risks and decide whether it is deliverable, needs_manual_review, or not_deliverable',
+      'complete public course video review with an anonymous direct video URL or upload fixture if still pending',
     ],
   });
   validateQualityMatrixReport(report);
@@ -527,7 +572,11 @@ function main() {
     console.log(usage());
     return;
   }
-  const deliverableInputs = [args.syntheticDeliverables, args.publicCourseDeliverables].filter(Boolean);
+  const deliverableInputs = [
+    args.syntheticDeliverables,
+    args.publicCourseDeliverables,
+    args.customerDeliverables,
+  ].filter(Boolean);
   if (args.selfTest && deliverableInputs.length > 0) {
     throw new Error('use either --self-test or deliverables input flags, not both');
   }
@@ -535,13 +584,15 @@ function main() {
     throw new Error('use only one deliverables input flag per report');
   }
   if (!args.selfTest && deliverableInputs.length === 0) {
-    throw new Error('--self-test, --synthetic-deliverables, or --public-course-deliverables is required');
+    throw new Error('--self-test, --synthetic-deliverables, --public-course-deliverables, or --customer-deliverables is required');
   }
   let report;
   if (args.syntheticDeliverables) {
     report = buildSyntheticDeliverablesReport(args.syntheticDeliverables);
   } else if (args.publicCourseDeliverables) {
     report = buildPublicCourseDeliverablesReport(args.publicCourseDeliverables);
+  } else if (args.customerDeliverables) {
+    report = buildCustomerDeliverablesReport(args.customerDeliverables);
   } else {
     report = buildSelfTestReport();
   }
