@@ -17,7 +17,10 @@ import {
   staticPageHtmlDownloadHref,
   staticPageHtmlFilename,
 } from '../lib/static-page-export-package';
-import { normalizeHtmlArtifactManifest } from '../lib/html-artifact-manifest';
+import {
+  normalizeHtmlArtifactManifest,
+  videoExtractionArtifactDownloadLinks,
+} from '../lib/html-artifact-manifest';
 
 const SURFACE_LABELS = {
   pc: 'PC',
@@ -395,6 +398,10 @@ function htmlArtifactGeneratedFiles(artifact) {
 }
 
 function preferredHtmlArtifactDownloads(artifact) {
+  const videoDownloads = videoExtractionArtifactDownloadLinks(artifact);
+  if (videoDownloads.length) {
+    return videoDownloads;
+  }
   const priority = [
     'table_data',
     'report_ppt',

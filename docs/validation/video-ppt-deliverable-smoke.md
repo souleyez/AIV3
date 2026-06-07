@@ -236,3 +236,55 @@ Non-local smoke status:
 Safety result:
 
 - No raw customer media, local task directories, provider keys, cookies, source URLs, private file paths, raw provider payloads, or generated smoke artifacts were committed.
+
+## 2026-06-07 Delivery-Loop UI Completion Receipt
+
+Task source: `docs/plans/datamax-active-execution-plan.md` Task 10, "Video PPT Extraction Delivery Loop".
+
+Scope completed:
+
+- the video extraction summary now exposes prioritized download actions for `video_slides_screenshot_based.pptx`, `video_slides.md`, `final_deliverables_manifest.json`, `published_deliverable_manifest.json`, `published_version_history.json`, and `extraction_artifacts_manifest.json`;
+- the same download priority is reused by the generated-project shelf card and the opened HTML artifact toolbar, so operators do not need to inspect raw manifest payloads to find PPT/Markdown/manifest files;
+- download hrefs are routed through `/api/v3/html-artifacts/{artifact_id}/files/{index}` with `assistant_run_id` or `local_thread_id` query scope, not through raw local file paths;
+- the existing read-only sandbox rendering still shows completion status, user notification, model follow-up, quality warnings, source-resolution audit, redaction boundary, transcript/scenes/OCR evidence, and generated file names without raw paths.
+
+Local checks at `771399b` plus local Task 10 changes:
+
+```text
+node --test app/lib/html-artifact-manifest.test.mjs
+node --check app/lib/html-artifact-manifest.js
+npm run test:video-deliverables
+node --check tools/validate-video-deliverables.mjs
+npm run build
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p media-worker durable_published_version --lib
+CC=clang CXX=clang++ cargo test -p media-worker model_completion --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+bash scripts/run-assistant-run-worker-smoke.sh
+```
+
+Result:
+
+- `node --test app/lib/html-artifact-manifest.test.mjs` passed, 12 tests, with the existing Node module-type warning only;
+- the new download-link helper test proves PPTX, Markdown, delivery manifest, published manifest, version history, and artifact index links are prioritized and do not include the fixture local path;
+- `node --check app/lib/html-artifact-manifest.js` passed;
+- `npm run test:video-deliverables` passed, 15 tests;
+- `node --check tools/validate-video-deliverables.mjs` passed;
+- `npm run build` in `apps/web` passed; Next reported existing middleware-deprecation and NFT tracing warnings only;
+- targeted media-worker checks passed: controlled deliverable contract 1 test, slide rectangle 4 tests, durable published version 2 tests, model-completion dispatch 1 test;
+- targeted platform-api checks passed: `video_extraction` 3 tests and `video_ppt` 4 tests;
+- `scripts/run-assistant-run-worker-smoke.sh` passed; report: `target/assistant-run-worker-smoke/assistant-run-worker-smoke-20260607T033438Z.md`;
+- DB-backed assistant-run-worker consumer checks remain intentionally scoped to disposable test databases only.
+
+Operator-only smoke status:
+
+- `pwsh` / `powershell` was unavailable on this macOS workstation, so `scripts/run-jump-host-video-deliverable-smoke.ps1 -SelfTest` was skipped with the literal reason `pwsh/powershell not found`;
+- no real login-gated/private video smoke was substituted;
+- real login-gated or private video extraction remains operator-scoped and requires an approved accessible source, account boundary, and rollback/cleanup scope.
+
+Safety result:
+
+- no raw media URL, local object path, generated artifact path, provider payload, cookie, bearer token, database URL, credential, full customer document, or raw customer row was recorded;
+- no production write, live private-video smoke, service build, service restart, deployment, or 120-server action was run.

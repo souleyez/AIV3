@@ -3214,6 +3214,20 @@ textarea {
   font-size: 15px;
 }
 
+.html-artifact-toolbar .html-artifact-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.html-artifact-toolbar .artifact-download-link {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .html-artifact-frame {
   width: 100%;
   height: 100%;

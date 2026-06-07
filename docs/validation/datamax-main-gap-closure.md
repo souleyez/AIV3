@@ -62,7 +62,7 @@ This ledger records DataMax gap-closure evidence. The current active execution p
 
 | Gate | Status | Receipt |
 | --- | --- | --- |
-| Priority Gate: video/PPT extraction deliverable | passed for deterministic local contract; real accessible-source smoke remains operator-scoped | 2026-06-07 Task 3 priority-lane receipt added to `docs/validation/video-ppt-deliverable-smoke.md`. Local audit found 828 video/PPT path references across worker/API/UI/validator/docs. `npm run test:video-deliverables` passed 15 tests. Targeted Rust checks passed for controlled deliverable package, slide rectangle/crop metadata, durable published-version manifest, redacted model-completion dispatch, storage migration registration, workflow kind registration, and platform API video extraction/video PPT routing. `scripts/run-assistant-run-worker-smoke.sh` passed at `26afa6e` with the DB-backed consumer check intentionally skipped unless a disposable test database is supplied. `powershell`/`pwsh` was unavailable on this macOS workstation, so the jump-host self-test was recorded as skipped instead of substituting a real login-gated/private video. 8-server read-only state confirmed `aiv3-media-worker.service` and `aiv3-assistant-run-worker.service` active at `26afa6e2f`, with known `mode` untouched. |
+| Priority Gate: video/PPT extraction deliverable | passed for local delivery contract and UI download loop; real accessible-source smoke remains operator-scoped | 2026-06-07 Task 3 priority-lane receipt added to `docs/validation/video-ppt-deliverable-smoke.md`; Task 10 delivery-loop receipt now confirms the video extraction summary and generated-project shelf expose prioritized PPTX, Markdown, delivery manifest, published manifest, version history, and artifact-index download actions through `/api/v3/html-artifacts/{artifact_id}/files/{index}` scoped by assistant run or local thread, without exposing raw local paths. `npm run test:video-deliverables` passed 15 tests, `node --test app/lib/html-artifact-manifest.test.mjs` passed 12 tests, `npm run build` passed with existing Next warnings only, targeted Rust video checks passed, and `scripts/run-assistant-run-worker-smoke.sh` passed with report `target/assistant-run-worker-smoke/assistant-run-worker-smoke-20260607T033438Z.md`. `pwsh`/PowerShell was unavailable on this macOS workstation, so the jump-host self-test remains skipped instead of substituting a real login-gated/private video. 8-server source sync is handled per task after commit; no deploy/restart was part of this gate. |
 | P0 Gate A: 20-way concurrency | passed for current deploy | Read-only 8-server queue/status baseline recorded. 8-server third-party streaming smoke passed with active bearer: 10 ordinary, 3 static-page, 2 reconnect, 15/15 OK, duplicate final messages 0, P95 6015 ms. External-channel 20-way smoke passed after the latest deploy with 20/20 OK and P95 4036 ms. Main-site 20-way smoke initially exposed a chat-session workflow-start bug; after commit `83e49529b9fd`, rerun passed with 20/20 accepted, 20/20 assistant messages, and P95 15906 ms. Static-page 5-way passed with 5/5 artifacts. Cloudflare fallback guard passed with configured concurrency 2. Document-quality local regression passed. |
 | P0 Gate B: report/static-page operations | passed for deployed `0f72ca37fc1e` | Accepted-template reuse and Xinbai template contract validated locally/publicly on 2026-06-06. The deployed hygiene/focus-link patches make `xinbai-functional-modular-template-20260604` the primary default for Xinbai dataset-overlap matching, skip smoke/prewarm/fallback noise baselines, preserve public report card links after sanitization, and carry the current prompt focus into static-page SSE/report artifact links. 8-server report export smoke passed for JSON and SSE, confirmed title `新世界百货经营管理月报表`, focus `取高机会`, one report surface, and accessible `table-data.csv`, `report.ppt`, `report.md`. Focused capability routing smoke passed for template-reference, temporary-contract/area, and traffic-stat report materials. |
 | P0 Gate C: controlled streaming | passed for current contract | Local stream regressions passed. 8 server has `ASSISTANT_RUN_LIVE_ANSWER_STREAM_ENABLED=true` with provider runtime `rightcode/gpt-5.5`. New reusable smoke `npm run smoke:main-assistant-streaming` passed against `https://v3.elepcloud.com`: new AssistantRun emitted 74 deltas, continue emitted 71 deltas, both ended with exactly one completed event and one done event, and no duplicate final-text delta was detected. |
@@ -286,6 +286,38 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - helper redaction covers URL/path/token/connection-string-like recent errors before display/export;
   - no credential, cookie, bearer token, local key, database URL, provider payload, raw customer row, full customer document, object path, or secret env value was recorded;
   - 120 server was not touched.
+
+### 2026-06-07 Active Plan Task 10 Video PPT Extraction Delivery Loop
+
+- Purpose:
+  - execute Task 10 from `docs/plans/datamax-active-execution-plan.md`;
+  - finish the local product loop for "video or public video material -> downloadable PPT package" without running private/login-gated video smoke.
+- Code change:
+  - added a tested `videoExtractionArtifactDownloadLinks` helper for `video_extraction_summary` artifacts;
+  - the helper prioritizes `pptx`, `video_slides_markdown`, `final_deliverables_manifest`, `published_deliverable_manifest`, `published_version_history`, and `extraction_artifacts_manifest`;
+  - generated-project cards and the opened HTML artifact toolbar now reuse the same prioritized video download links;
+  - download hrefs point to `/api/v3/html-artifacts/{artifact_id}/files/{index}` with `assistant_run_id` or `local_thread_id`, not to raw file paths;
+  - toolbar CSS now wraps video download buttons cleanly in the existing read-only HTML artifact viewer.
+- Local verification:
+  - `node --test app/lib/html-artifact-manifest.test.mjs` passed, 12 tests, with the existing Node module-type warning only;
+  - `node --check app/lib/html-artifact-manifest.js` passed;
+  - `npm run test:video-deliverables` passed, 15 tests;
+  - `node --check tools/validate-video-deliverables.mjs` passed;
+  - `npm run build` in `apps/web` passed; Next emitted only the existing middleware-deprecation and NFT tracing warnings;
+  - `CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete` passed, 1 test;
+  - `CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib` passed, 4 tests;
+  - `CC=clang CXX=clang++ cargo test -p media-worker durable_published_version --lib` passed, 2 tests;
+  - `CC=clang CXX=clang++ cargo test -p media-worker model_completion --lib` passed, 1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib` passed, 3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib` passed, 4 tests;
+  - `bash scripts/run-assistant-run-worker-smoke.sh` passed; report `target/assistant-run-worker-smoke/assistant-run-worker-smoke-20260607T033438Z.md`.
+- Operator-only smoke:
+  - `pwsh` / `powershell` was unavailable, so `scripts/run-jump-host-video-deliverable-smoke.ps1 -SelfTest` was skipped with the literal reason `pwsh/powershell not found`;
+  - no real login-gated/private video was substituted;
+  - real private/login-gated video smoke still requires an approved operator source, account boundary, and rollback/cleanup scope.
+- Safety:
+  - no raw media URL, local object path, generated artifact path, provider payload, cookie, bearer token, database URL, credential, full customer document, or raw customer row was recorded;
+  - no production write, live private-video smoke, service build, service restart, deploy, or 120-server action was run.
 
 ### 2026-06-06 Current-Head Task 1 Release Gate
 

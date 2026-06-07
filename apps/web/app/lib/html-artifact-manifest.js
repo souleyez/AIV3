@@ -634,6 +634,63 @@ function videoFollowUpActionLabel(action) {
   return VIDEO_FOLLOW_UP_ACTION_LABELS[action] || action || '后续动作';
 }
 
+const VIDEO_DOWNLOAD_PRIORITY = [
+  'pptx',
+  'video_slides_markdown',
+  'final_deliverables_manifest',
+  'published_deliverable_manifest',
+  'published_version_history',
+  'extraction_artifacts_manifest',
+  'slide_notes',
+  'subtitle_page_map',
+  'ppt_outline',
+  'transcript_text',
+];
+
+export function videoExtractionArtifactDownloadLinks(input = {}, options = {}) {
+  const result = normalizeHtmlArtifactManifest(input);
+  if (result.rejected || result.manifest.templateId !== 'video_extraction_summary') {
+    return [];
+  }
+  const payload = result.manifest.payload || {};
+  const generatedArtifacts = isPlainObject(payload.generatedArtifacts || payload.generated_artifacts)
+    ? payload.generatedArtifacts || payload.generated_artifacts
+    : {};
+  const sourceRunId = result.manifest.provenance?.sourceRunId || '';
+  const localThreadId = payload.localThreadId || payload.local_thread_id || '';
+  const params = new URLSearchParams();
+  if (sourceRunId) {
+    params.set('assistant_run_id', sourceRunId);
+  } else if (localThreadId) {
+    params.set('local_thread_id', localThreadId);
+  }
+  if (!params.toString()) {
+    return [];
+  }
+  const maxCount = Number.isInteger(options.maxCount) ? options.maxCount : 6;
+  const files = arrayOrEmpty(generatedArtifacts.files)
+    .map((file, index) => {
+      const kind = stringOrFallback(file?.artifactKind || file?.artifact_kind);
+      const fileName = displayArtifactFileName(file);
+      return {
+        index,
+        kind,
+        label: videoArtifactKindLabel(kind),
+        fileName,
+        downloadable: Boolean(file?.path && kind),
+        url: `/api/v3/html-artifacts/${encodeURIComponent(result.manifest.id)}/files/${index}?${params.toString()}`,
+      };
+    })
+    .filter((file) => file.downloadable);
+  return files
+    .sort((left, right) => {
+      const leftIndex = VIDEO_DOWNLOAD_PRIORITY.indexOf(left.kind);
+      const rightIndex = VIDEO_DOWNLOAD_PRIORITY.indexOf(right.kind);
+      return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+    })
+    .slice(0, Math.max(0, maxCount));
+}
+
 function videoModelCompletionRows(followUpModel = {}) {
   if (!isPlainObject(followUpModel) || !followUpModel.required) return [];
   const context = isPlainObject(followUpModel.completionContext || followUpModel.completion_context)

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**目标：** 保持 DataMax 只有一份可执行计划，并优先完成当前不依赖外部凭据、生产风险批准或业务决策的事项。当前下一步优先完成“视频抽取 PPT”交付闭环；Task 3 已完成本地确定性交付契约，后续先补齐可用性收尾、下载/打开 surface、失败状态和 operator-only smoke 准备，再继续处理 operator 观测页打磨与最终验证。
+**目标：** 保持 DataMax 只有一份可执行计划，并优先完成当前不依赖外部凭据、生产风险批准或业务决策的事项。视频抽取 PPT 交付闭环已在 Task 10 收尾；当前下一步继续处理 operator 观测页打磨，再进入最终验证。
 
 **架构：** DataMax 继续作为权限、文档/数据入库、企业记忆、模型路由、媒体/视频提取交付物、静态页/报表产物和第三方契约的系统事实源。本计划优先安排可以本地完成、只读验证或低风险闭环的任务；需要 operator 凭据、业务拍板、外部 provider 额度或生产写入的事项统一挂起。
 
@@ -58,8 +58,8 @@
 7. 已完成：数据源 row identity staging 自测。
 8. 已完成：静态页/报表回归语料强化。
 9. 已完成：第三方数据库只读状态强化。
-10. 下一步：视频抽取 PPT 交付闭环优先收尾。
-11. 顺延：operator 观测页小幅打磨。
+10. 已完成：视频抽取 PPT 交付闭环优先收尾。
+11. 下一步：operator 观测页小幅打磨。
 12. 最终 validation 和可选部署。
 
 每个任务通过测试后独立提交。
@@ -721,9 +721,17 @@ git commit -m "Expose third party database read only status"
 
 ## Task 10：视频抽取 PPT 交付闭环优先收尾
 
-**状态：待执行，当前最高优先级。**
+**状态：已完成，2026-06-07。**
 
 **目标：** 在 Task 3 已完成确定性交付契约的基础上，先把“用户给视频或公开视频页，系统产出可下载 PPT 包”的产品闭环收完。优先处理本地可完成、只读或确定性验证的工作：上传视频、直连视频 URL、公开视频页直连资源解析、生成包 manifest、PPTX/Markdown 下载、AssistantRun follow-up、失败/unsupported 状态和前端可见动作。真实登录态/私有视频仍保持 operator-only，不作为本任务阻塞。
+
+**结果：**
+
+- `video_extraction_summary` 增加可测试的优先下载 helper，按 PPTX、Markdown 讲义、交付清单、发布清单、版本历史、产物索引的顺序暴露下载动作。
+- 生成项目卡和打开后的 HTML artifact toolbar 复用同一组视频下载链接，链接只走 `/api/v3/html-artifacts/{artifact_id}/files/{index}`，通过 assistant run 或 local thread scope 取文件，不暴露原始本地路径。
+- 现有只读视频摘要继续展示交付状态、用户通知、model follow-up、质量提示、来源解析审计、脱敏边界、原文/场景/OCR 证据和生成文件名。
+- `docs/validation/video-ppt-deliverable-smoke.md` 和 `docs/validation/datamax-main-gap-closure.md` 已记录 Task 10 回执。
+- `pwsh` / PowerShell 本机不可用，jump-host 脚本自测按计划记录 skip；未用真实登录态/私有视频替代。
 
 **文件：**
 

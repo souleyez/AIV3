@@ -4,6 +4,7 @@ import { useEffect, useMemo } from 'react';
 import {
   isAllowedHtmlArtifactMessage,
   renderHtmlArtifactDocument,
+  videoExtractionArtifactDownloadLinks,
 } from '../../lib/html-artifact-manifest';
 
 function safePublishedPreviewSrc(manifest) {
@@ -36,6 +37,10 @@ export default function HtmlArtifactViewer({
   const publishedPreviewSrc = useMemo(
     () => safePublishedPreviewSrc(rendered.manifest),
     [rendered.manifest],
+  );
+  const videoDownloads = useMemo(
+    () => videoExtractionArtifactDownloadLinks(artifact || {}, { maxCount: 6 }),
+    [artifact],
   );
 
   useEffect(() => {
@@ -77,7 +82,20 @@ export default function HtmlArtifactViewer({
           <span>{rendered.manifest.templateLabel}</span>
           <strong>{rendered.manifest.title}</strong>
         </div>
-        <em>{publishedPreviewSrc ? '同源页面预览' : rendered.manifest.interactionMode === 'read_only' ? '只读沙箱' : '可提交意图'}</em>
+        <div className="html-artifact-toolbar-actions">
+          {videoDownloads.map((file) => (
+            <a
+              key={`${file.index}-${file.kind}`}
+              className="ghost-btn compact-action-btn artifact-download-link"
+              href={file.url}
+              download
+              title={file.fileName || file.label}
+            >
+              {file.label}
+            </a>
+          ))}
+          <em>{publishedPreviewSrc ? '同源页面预览' : rendered.manifest.interactionMode === 'read_only' ? '只读沙箱' : '可提交意图'}</em>
+        </div>
       </div>
       <iframe
         className="html-artifact-frame"

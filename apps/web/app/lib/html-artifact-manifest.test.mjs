@@ -4,6 +4,7 @@ import {
   isAllowedHtmlArtifactMessage,
   normalizeHtmlArtifactManifest,
   renderHtmlArtifactDocument,
+  videoExtractionArtifactDownloadLinks,
 } from './html-artifact-manifest.js';
 
 function baseManifest(overrides = {}) {
@@ -608,6 +609,71 @@ test('renders video extraction summary template', () => {
   assert.doesNotMatch(video.html, /private\.example/);
   assert.doesNotMatch(video.html, /secret-token/);
   assert.doesNotMatch(video.html, /secret-cookie/);
+});
+
+test('video extraction summary exposes prioritized redacted download links', () => {
+  const manifest = baseManifest({
+    id: 'video-extraction-summary',
+    sourceType: 'video_extraction',
+    templateId: 'video_extraction_summary',
+    title: '课程视频 · 视频提取摘要',
+    provenance: { producer: 'media-worker', reason: 'video_extraction_workflow_completed', sourceRunId: 'run-video-1' },
+    payload: {
+      generatedArtifacts: {
+        files: [{
+          artifactKind: 'transcript_text',
+          fileName: 'transcript.txt',
+          path: '/Users/private/video/generated_artifacts/transcript.txt',
+        }, {
+          artifactKind: 'pptx',
+          fileName: 'video_slides_screenshot_based.pptx',
+          path: '/Users/private/video/generated_artifacts/video_slides_screenshot_based.pptx',
+        }, {
+          artifactKind: 'published_deliverable_manifest',
+          fileName: 'published_deliverable_manifest.json',
+          path: '/Users/private/video/generated_artifacts/published_deliverable_manifest.json',
+        }, {
+          artifactKind: 'video_slides_markdown',
+          fileName: 'video_slides.md',
+          path: '/Users/private/video/generated_artifacts/video_slides.md',
+        }, {
+          artifactKind: 'final_deliverables_manifest',
+          fileName: 'final_deliverables_manifest.json',
+          path: '/Users/private/video/generated_artifacts/final_deliverables_manifest.json',
+        }, {
+          artifactKind: 'published_version_history',
+          fileName: 'published_version_history.json',
+          path: '/Users/private/video/generated_artifacts/published_version_history.json',
+        }, {
+          artifactKind: 'extraction_artifacts_manifest',
+          fileName: 'extraction_artifacts_manifest.json',
+          path: '/Users/private/video/generated_artifacts/extraction_artifacts_manifest.json',
+        }],
+      },
+    },
+  });
+
+  const downloads = videoExtractionArtifactDownloadLinks(manifest, { maxCount: 6 });
+
+  assert.deepEqual(downloads.map((file) => file.kind), [
+    'pptx',
+    'video_slides_markdown',
+    'final_deliverables_manifest',
+    'published_deliverable_manifest',
+    'published_version_history',
+    'extraction_artifacts_manifest',
+  ]);
+  assert.deepEqual(downloads.map((file) => file.label), [
+    'PPTX',
+    'Markdown 讲义',
+    '交付清单',
+    '发布清单',
+    '版本历史',
+    '产物索引',
+  ]);
+  assert.ok(downloads.every((file) => file.url.startsWith('/api/v3/html-artifacts/video-extraction-summary/files/')));
+  assert.ok(downloads.every((file) => file.url.includes('assistant_run_id=run-video-1')));
+  assert.ok(downloads.every((file) => !file.url.includes('/Users/private')));
 });
 
 test('renders legacy video login handoff as unsupported source guidance', () => {
