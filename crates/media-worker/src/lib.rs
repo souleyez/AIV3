@@ -2112,12 +2112,24 @@ fn selected_slides_manifest_from_keep_list(
             window_start_seconds,
             window_end_seconds,
         );
+        let ocr_snippets = video_ocr_snippets_for_window(
+            &evidence.keyframe_ocr_snippets,
+            window_start_seconds,
+            window_end_seconds,
+        );
         let subtitle_alignment_status = if evidence.transcript_segments.is_empty() {
             "missing_transcript"
         } else if transcript_segments.is_empty() {
             "unmatched"
         } else {
             "pre_page_mapped"
+        };
+        let ocr_alignment_status = if evidence.keyframe_ocr_snippets.is_empty() {
+            "missing_ocr"
+        } else if ocr_snippets.is_empty() {
+            "unmatched"
+        } else {
+            "window_mapped"
         };
         let slide_rectangle = video_slide_rectangle_from_frame(
             slide_index + 1,
@@ -2163,6 +2175,8 @@ fn selected_slides_manifest_from_keep_list(
             },
             "subtitle_alignment_status": subtitle_alignment_status,
             "transcript_segments": transcript_segments,
+            "ocr_alignment_status": ocr_alignment_status,
+            "ocr_snippets": ocr_snippets,
             "rectangle_extraction_status": "promoted_full_frame_fallback",
             "slide_rectangle": slide_rectangle,
             "contact_sheet_anchor": format!("candidate-{candidate_index}"),
@@ -3335,6 +3349,40 @@ fn video_transcript_segments_for_window(
         .collect()
 }
 
+fn video_ocr_snippets_for_window(
+    ocr_snippets: &[Value],
+    start_seconds: f64,
+    end_seconds: f64,
+) -> Vec<Value> {
+    ocr_snippets
+        .iter()
+        .filter_map(|snippet| {
+            let timestamp_seconds = video_ocr_snippet_timestamp_seconds(snippet)?;
+            if timestamp_seconds < start_seconds || timestamp_seconds > end_seconds {
+                return None;
+            }
+            Some(json!({
+                "timestamp_seconds": timestamp_seconds,
+                "timestamp_label": format_seconds(timestamp_seconds),
+                "text": video_item_text(snippet, &["text", "ocr_text", "summary"]).unwrap_or_default(),
+                "confidence": video_number_field(snippet, &["confidence", "ocr_confidence", "text_confidence"]),
+            }))
+        })
+        .collect()
+}
+
+fn video_ocr_snippet_timestamp_seconds(snippet: &Value) -> Option<f64> {
+    video_number_field(
+        snippet,
+        &[
+            "timestamp_seconds",
+            "timestampSeconds",
+            "time_seconds",
+            "timeSeconds",
+        ],
+    )
+}
+
 fn video_transcript_segment_midpoint_seconds(segment: &Value) -> f64 {
     let start = video_number_field(segment, &["start_seconds", "startSeconds", "start"]);
     let end = video_number_field(segment, &["end_seconds", "endSeconds", "end"]);
@@ -3373,7 +3421,7 @@ fn render_selected_slide_notes_markdown(
         .cloned()
         .unwrap_or_default();
     let mut output = format!("# Slide Notes: {}\n\n", document.title);
-    output.push_str("This file is deterministic evidence for the screenshot-based PPTX. It contains source frame, selection, rectangle, transcript-window, and review metadata without exposing local paths.\n\n");
+    output.push_str("This file is deterministic evidence for the screenshot-based PPTX. It contains source frame, selection, rectangle, transcript/OCR window, and review metadata without exposing local paths.\n\n");
     output.push_str("## Deck Summary\n\n");
     let requested_selected_count = selected_slides_manifest
         .get("requested_selected_count")
@@ -3497,16 +3545,37 @@ fn render_selected_slide_notes_markdown(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        if transcript_segments.is_empty() {
+        let ocr_snippets = candidate
+            .get("ocr_snippets")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if transcript_segments.is_empty() && ocr_snippets.is_empty() {
             output.push_str(&format!("- Speaker notes: Source frame metadata only for candidate {candidate_index}. Human/model review should align transcript/subtitles before customer delivery.\n\n"));
         } else {
-            output.push_str("- Speaker notes: pre-page transcript assignment is available and still requires review.\n");
-            output.push_str("- Aligned transcript:\n");
-            for segment in transcript_segments {
-                let text =
-                    video_item_text(&segment, &["text", "content", "summary"]).unwrap_or_default();
-                let range = video_time_range_label(&segment);
-                output.push_str(&format!("  - {}{}\n", optional_time_prefix(&range), text));
+            if transcript_segments.is_empty() {
+                output.push_str("- Speaker notes: no aligned transcript segment is available for this slide yet.\n");
+            } else {
+                output.push_str("- Speaker notes: pre-page transcript assignment is available and still requires review.\n");
+                output.push_str("- Aligned transcript:\n");
+                for segment in transcript_segments {
+                    let text = video_item_text(&segment, &["text", "content", "summary"])
+                        .unwrap_or_default();
+                    let range = video_time_range_label(&segment);
+                    output.push_str(&format!("  - {}{}\n", optional_time_prefix(&range), text));
+                }
+            }
+            if !ocr_snippets.is_empty() {
+                output.push_str("- Aligned OCR snippets:\n");
+                for snippet in ocr_snippets {
+                    let text = video_item_text(&snippet, &["text", "ocr_text", "summary"])
+                        .unwrap_or_default();
+                    let timestamp = snippet
+                        .get("timestamp_label")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    output.push_str(&format!("  - [{timestamp}] {text}\n"));
+                }
             }
             output.push('\n');
         }
@@ -3601,6 +3670,11 @@ fn render_video_slides_markdown(document: &Document, selected_slides_manifest: &
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let ocr_snippets = candidate
+            .get("ocr_snippets")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         if transcript_segments.is_empty() {
             output.push_str(
                 "- Narration: no aligned transcript segment is available for this slide yet.\n\n",
@@ -3613,6 +3687,21 @@ fn render_video_slides_markdown(document: &Document, selected_slides_manifest: &
                     .unwrap_or_else(|| "unknown".to_string());
                 let range = video_time_range_label(&segment);
                 output.push_str(&format!("- {}{}\n", optional_time_prefix(&range), text));
+            }
+            output.push('\n');
+        }
+        if !ocr_snippets.is_empty() {
+            output.push_str("OCR evidence:\n\n");
+            for snippet in ocr_snippets {
+                let text = video_item_text(&snippet, &["text", "ocr_text", "summary"])
+                    .map(|text| video_safe_evidence_text(&text))
+                    .unwrap_or_else(|| "unknown".to_string());
+                let timestamp = snippet
+                    .get("timestamp_label")
+                    .and_then(Value::as_str)
+                    .map(video_safe_evidence_text)
+                    .unwrap_or_else(|| "unknown".to_string());
+                output.push_str(&format!("- [{timestamp}] {text}\n"));
             }
             output.push('\n');
         }
@@ -10406,7 +10495,11 @@ mod tests {
                     "text": "Narration for the first selected slide"
                 }],
                 "scenes": [],
-                "keyframe_ocr_snippets": []
+                "keyframe_ocr_snippets": [{
+                    "timestamp_seconds": 0.8,
+                    "text": "OCR title for selected slide",
+                    "ocr_confidence": 0.91
+                }]
             }
         }));
 
@@ -10419,6 +10512,14 @@ mod tests {
         .expect("subtitle page map artifacts");
 
         let files = manifest["files"].as_array().expect("files");
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides = fs::read_to_string(selected_slides_path).expect("selected slides");
+        assert!(selected_slides.contains("window_mapped"));
+        assert!(selected_slides.contains("OCR title for selected slide"));
         let subtitle_page_map_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("subtitle_page_map"))
@@ -10436,6 +10537,16 @@ mod tests {
         let slide_notes = fs::read_to_string(slide_notes_path).expect("slide notes");
         assert!(slide_notes.contains("Aligned transcript"));
         assert!(slide_notes.contains("Narration for the first selected slide"));
+        assert!(slide_notes.contains("Aligned OCR snippets"));
+        assert!(slide_notes.contains("OCR title for selected slide"));
+        let video_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("video_slides_markdown"))
+            .and_then(|file| file["path"].as_str())
+            .expect("video slides path");
+        let video_slides = fs::read_to_string(video_slides_path).expect("video slides");
+        assert!(video_slides.contains("OCR evidence"));
+        assert!(video_slides.contains("OCR title for selected slide"));
         let pptx_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("pptx"))

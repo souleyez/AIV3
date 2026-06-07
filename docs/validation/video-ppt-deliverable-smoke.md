@@ -1202,3 +1202,58 @@ Safety result:
 - no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
+
+## 2026-06-08 Selected Slide OCR Evidence Local Slice
+
+Task source: P2-2D from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- carry time-windowed keyframe OCR snippets from parsed video evidence into selected slide artifacts;
+- expose OCR evidence in `slide_notes.md` and `video_slides.md` for per-slide review;
+- keep `subtitle_page_map.json` transcript-only, so OCR is not misrepresented as subtitles;
+- do not change source access, capture, WeChat Video Channels, upload, or third-party authorization behavior.
+
+Implemented behavior:
+
+- selected slide manifest now records `ocr_alignment_status` and `ocr_snippets` for snippets whose timestamp falls inside the slide transcript window;
+- `slide_notes.md` now renders `Aligned OCR snippets` when selected slides have OCR evidence;
+- `video_slides.md` now renders an `OCR evidence` section per slide when OCR snippets are available;
+- when transcript is missing but OCR exists, notes still say no transcript is aligned and show OCR separately;
+- subtitle page map generation remains based on transcript segments only.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- rustfmt check passed;
+- selected-slides transcript/OCR path passed, 1 test, including selected manifest, slide notes, and Markdown deck assertions;
+- controlled video sample deliverable contract passed, 1 test;
+- platform-api video extraction tests passed, 3 tests;
+- platform-api video PPT tests passed, 5 tests;
+- video deliverables validator tests passed, 18 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
+- `subtitle_page_map.json` still requires transcript/subtitle evidence and is not filled by OCR-only snippets;
+- P2-2E still needs the three-sample quality review matrix and human review conclusions.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
