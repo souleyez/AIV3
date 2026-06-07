@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 00:23 CST
-**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback；P2-2C 暗场/低信息稳定段过滤本地切片已完成，降低黑屏转场误选为 PPT 页的风险；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 仍待后续执行。本计划编写本身不部署 8 服务器。
+**更新时间：** 2026-06-08 00:30 CST
+**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容；P2-2B bright-canvas detector 本地切片已完成，可减少低对比亮色课件画布 fallback；P2-2C 暗场/低信息稳定段过滤本地切片已完成，降低黑屏转场误选为 PPT 页的风险；P2-2D OCR evidence 进入 selected slide notes/Markdown 且质量报告显示 OCR coverage 的本地切片已完成。计划复核新增 P0-3：无字幕样例 `has_subtitle_page_map=false` 与当前 validator 硬性要求 `subtitle_page_map.json` 的契约一致性，需要在下一轮开发先收口。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2B/P2-2C 更广泛质量处理、P2-2D 真实字幕/OCR 样例复核、P2-2E 仍待后续执行。本计划编写本身不部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 1. 计划原则
@@ -17,8 +17,9 @@
 
 ### 2.1 代码与部署基线
 
-- P2-2A 执行前本地 `HEAD=origin/main=d6abcf0`，对应 `d6abcf0 Refine DataMax executable plan`。P1-3D 主站 early-return 修复已同步到 `806be94 Short-circuit WeChat video handoff`，第三方 `/events` deterministic handoff follow-up 已同步到 `ad929ee`。
+- 本次计划复核时本地 `HEAD=origin/main=5d5e309`，对应 `5d5e309 Add OCR coverage to slide quality report`；工作区复核时干净。P1-3D 主站 early-return 修复已同步到 `806be94 Short-circuit WeChat video handoff`，第三方 `/events` deterministic handoff follow-up 已同步到 `ad929ee`，P2-2A/P2-2B/P2-2C/P2-2D 本地质量切片已同步到 `bca7481`、`b26049d`、`d558305`、`4c79f96`、`5d5e309`。
 - 本轮已复核上一轮遗留的 P2-2 质量报告草稿，确认改动集中在 `crates/media-worker/src/lib.rs`、`tools/validate-video-deliverables.mjs`、`tools/validate-video-deliverables.test.mjs`、`apps/web/app/lib/html-artifact-manifest.js`、`apps/web/app/components/InsightPanel.js`；已按 P2-2A 跑本地验证矩阵，结果见 `docs/validation/video-ppt-deliverable-smoke.md`。
+- 本次只读复核确认一个后续契约缺口：`crates/media-worker/src/lib.rs` 对没有 transcript/subtitle 映射的样例会让 `has_subtitle_page_map=false` 且不写 `subtitle_page_map.json`；但 `tools/validate-video-deliverables.mjs` 当前仍把 `subtitle_page_map.json` 放在 `REQUIRED_FILES` 中。该问题记录为 P0-3，下一轮开发优先修正 validator/文档契约；本计划编写阶段不改代码。
 - 已记录的 8 服务器最新部署基线：`b1abad9cc`，已启用 `INGEST_REMOTE_MEDIA_ENABLED=true` 和 `INGEST_REMOTE_MEDIA_CACHE_DIR=/srv/aiv3/remote-media-cache`。
 - 8 服务器已知未跟踪文件：`?? mode`，继续保持不触碰。
 - P0 主站可见视频/PPT smoke 在主站 `https://v3.elepcloud.com` 通过；本轮未重新部署 8 服务器，下一次部署必须单独获得批准。
@@ -260,6 +261,44 @@
 - 一份 `docs/validation/video-ppt-deliverable-smoke.md` 追加回执。
 - smoke 中记录：输入类型、触发方式、frame_count、selected_count、文件清单、warning 解读、人工复核结论。
 - 如果主站未暴露下载链接，记录为 P0 阻塞，不用后端成功掩盖前端失败。
+
+### P0-3：字幕页映射交付契约一致性
+
+**状态：待执行；本计划复核已确认契约漂移，下一轮开发优先处理。**
+
+**目标：** 把“没有字幕/转写的样例也能交付截图型 PPTX”和“有字幕页映射时必须严格校验”拆清楚，避免 validator、manifest、验证文档和主站质量说明互相矛盾。
+
+当前事实：
+
+- 受控公开视频和主站可见 smoke 都记录 `has_subtitle_page_map=false`，原因是样例没有可对齐字幕/转写证据；这不应阻塞截图型 PPTX、Markdown 和 manifest 交付。
+- media-worker 当前只在 `subtitle_page_map.status=mapped` 时写出 `subtitle_page_map.json` 并登记该 artifact。
+- `tools/validate-video-deliverables.mjs` 当前仍把 `subtitle_page_map.json` 放在 `REQUIRED_FILES` 中，并要求 final/published/extraction manifest 都包含该 artifact。
+- `docs/validation/video-ppt-deliverable-smoke.md` 的早期 public contract 段落仍把 `subtitle_page_map.json` 写成硬性必交付；后续回执又说明 `has_subtitle_page_map=false` 可接受。
+
+执行决策：
+
+1. 明确最终契约：`subtitle_page_map.json` 是条件性交付文件。`deliverable_status.has_subtitle_page_map=false` 且 evidence outputs 没有该 artifact 时，包仍可通过 validator，但必须保留 `missing_transcript_alignment` 或等价 warning。
+2. 如果 `subtitle_page_map.json` 存在，或 `has_subtitle_page_map=true`，validator 必须继续严格校验 schema、`status=mapped`、page count、assignment rule、transcript segments 和 redaction。
+3. published manifest 和 version history 也按同一规则处理：无字幕包不得声明有 subtitle map；有字幕包必须完整覆盖。
+4. validation 文档更新为“必交付基础包 + 条件性交付 subtitle map + 可选质量报告”的结构，不再把无字幕包描述成失败。
+5. 前端和质量报告说明继续区分 `missing_transcript_alignment`、`ocr_assisted`、`subtitle_aligned`，不得把 OCR snippets 伪装成 transcript/subtitle map。
+
+目标测试：
+
+```bash
+node --test tools/validate-video-deliverables.test.mjs
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+git diff --check
+```
+
+验收：
+
+- 无字幕样例：PPTX、Markdown、slide notes、rectangle manifest、quality report 和发布 manifest 完整时，validator 通过；`has_subtitle_page_map=false` 被当成质量限制，不当成缺文件失败。
+- 有字幕样例：必须生成 `subtitle_page_map.json`，且 validator 对 malformed/unmapped map 继续失败。
+- 文档和 smoke 回执统一说明 `subtitle_page_map` 是 transcript/subtitle evidence，不由 OCR-only snippets 填充。
+- 该切片只改契约、validator、测试和文档；不做 live smoke、不部署 8 服务器。
 
 ### P1-1：公开页面视频资源解析增强
 
@@ -555,6 +594,47 @@ git diff --check
 
 - `docs/validation/video-ppt-deliverable-smoke.md`
 - 不提交生成的 PPTX、帧图、原始视频或私有下载链接。
+
+### 5.3.1 P0-3 字幕页映射契约一致性执行步骤
+
+本节是下一轮开发的第一优先级。它不是质量增强，也不是 live smoke；它只收口 public deliverable contract。
+
+目标文件优先级：
+
+- `tools/validate-video-deliverables.mjs`
+- `tools/validate-video-deliverables.test.mjs`
+- `crates/media-worker/src/lib.rs`
+- `docs/validation/video-ppt-deliverable-smoke.md`
+- `docs/plans/datamax-active-execution-plan.md`
+
+开发步骤：
+
+1. 先增加一个无字幕 fixture：删除 `subtitle_page_map.json`，从 final/published/extraction manifest 中移除 `subtitle_page_map` artifact，设置 `deliverable_status.has_subtitle_page_map=false`，保留 `missing_transcript_alignment` warning。
+2. 调整 validator，把 `subtitle_page_map` 从无条件 `REQUIRED_FILES` 中移出，改为条件性文件：
+   - manifest 状态为 `has_subtitle_page_map=false` 且没有对应 artifact 时允许通过；
+   - 文件存在、状态为 true、或 manifest 声明该 artifact 时必须严格校验；
+   - manifest 声明不一致时仍失败。
+3. 保留 malformed subtitle map 的负向测试：`status=unmapped`、page count 不一致、没有 transcript segments、未脱敏路径都必须失败。
+4. 检查 media-worker 的 required kind 和 published version history 逻辑，确保无字幕包不会因为缺 map 被标记 `package_incomplete`，有字幕包仍完整登记。
+5. 更新 validation 文档，把 public contract 改成：
+   - 基础必交付：PPTX、`video_slides.md`、`slide_notes.md`、`slide_rectangles_manifest.json`、`extraction_artifacts_manifest.json`、`final_deliverables_manifest.json`、`published_deliverable_manifest.json`、`published_version_history.json`；
+   - 条件必交付：`subtitle_page_map.json`，仅 transcript/subtitle evidence 可 mapped 时出现；
+   - 可选辅助交付：`slide_quality_report.json`。
+
+验证命令：
+
+```bash
+node --test tools/validate-video-deliverables.test.mjs
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+git diff --check
+```
+
+验收记录：
+
+- 在 `docs/validation/video-ppt-deliverable-smoke.md` 追加 P0-3 回执，记录无字幕包通过、malformed subtitle map 仍失败、有字幕路径仍严格的证据。
+- 只提交代码/测试/文档；不提交生成 artifacts，不跑主站 live smoke，不部署 8 服务器。
 
 ### 5.4 P1-1 公开页面 resolver 增强执行步骤
 
@@ -1014,6 +1094,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | --- | --- | --- | --- | --- |
 | 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 作为后端回归基线保留 |
 | 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过并纳入 `smoke:video-ppt-main-visible` release gate，PPTX/Markdown/manifest 可下载 | 作为 P1-3 回归基线保留 |
+| 无字幕 deliverable contract | 无 transcript/subtitle 的公开视频样例 | 没有 `subtitle_page_map.json` 时仍可交付截图型 PPTX，但必须标记 `missing_transcript_alignment` | 计划复核确认当前 validator 仍硬性要求 subtitle map；契约需修正 | P0-3 |
 | 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help 检查；live/controlled 回执待授权 | P1-3B |
 | 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 self-test；live 回执待 bearer/授权 | P1-3C live |
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
@@ -1045,11 +1126,12 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
-2. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
-3. 复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；需要在部署窗口后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
-4. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
-5. 根据 P1-3/P2-1/P2-2A 证据继续 P2-2B/P2-2C/P2-2D：重点处理 crop fallback、重复页、转场帧、字幕页映射和逐页讲稿。
+1. 先执行 P0-3 字幕页映射契约一致性修正，避免无字幕公开视频样例在产品口径上是可交付、但公共 validator 又因缺 `subtitle_page_map.json` 判失败。
+2. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
+3. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
+4. 在用户明确批准 8 服务器部署窗口后，复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；部署后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
+5. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
+6. 根据 P1-3/P2-1/P2-2A-D 证据继续 P2-2B/P2-2C/P2-2D/P2-2E：重点处理 crop fallback、重复页、转场帧、字幕页映射、逐页讲稿和三类样例人工复核。
 
 本计划完成当前阶段的定义：
 
@@ -1057,3 +1139,14 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 - 后端公开视频 smoke、主站可见 smoke、抽取效果复核、视频号限制、授权录屏兜底都已纳入执行队列和验收矩阵。
 - GitHub 同步策略：计划/验证文档可按 doc-only 提交；功能或脚本提交必须绑定对应测试证据；任何 GitHub 同步都不等于 8 服务器发版。
 - 8 服务器未发版、未重启、未触碰 `mode`。
+
+## 9. 下一阶段里程碑表
+
+| 里程碑 | 执行内容 | 需要输入/授权 | 必跑验证 | 完成证据 | 8 服务器动作 |
+| --- | --- | --- | --- | --- | --- |
+| M0 | P0-3 subtitle map contract 修正 | 无；本地开发即可 | `node --test tools/validate-video-deliverables.test.mjs`、`npm run test:video-deliverables`、media-worker controlled sample、platform-api video_ppt、`git diff --check` | validator 接受无字幕包、拒绝坏 map；validation 文档口径统一 | 不部署 |
+| M1 | P1-3B 主站上传视频 controlled smoke | 用户批准在主站写入一条非客户公开视频 smoke 记录 | `npm run smoke:video-ppt-upload-main`，并下载 PPTX/Markdown/manifest 复核 | `docs/validation/video-ppt-deliverable-smoke.md` 追加上传入口回执 | 不部署，除非 smoke 证明现网缺已修复代码且用户另批 |
+| M2 | P1-3C 第三方视频登记 controlled smoke | inbound bearer、`connection_id`、`source_id`、可用公开视频或上传文件 | `npm run smoke:external-video-ppt` live；失败时跑 self-test 对照 | 第三方登记和特殊触发分开记录，产物 surface 明确 | 不部署，除非用户另批 |
+| M3 | P1-3D 视频号/登录态 handoff live pass | 用户批准 8 服务器部署窗口；第三方模式还需要 inbound bearer | 部署前本地测试、部署后 `npm run smoke:video-ppt-handoff -- --mode main`，第三方按授权补跑 | 主站/第三方返回 handoff 卡片，不抓视频、不生成 PPT、不走 provider | 仅在批准后 pull/build/restart 受影响服务 |
+| M4 | P2-1C 授权录屏样例 | operator 授权记录、可播放来源、最大时长、音频策略、保留期、handoff 目标 | `capture:authorized-video` dry-run，live capture 后复用 P1-3 上传或第三方抽取 smoke | 录制 `.mp4` 可进入现有 `VideoExtraction`，并有质量结论 | 默认不启用；8 内部录制需单独批准 |
+| M5 | P2-2E 三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | media-worker quality tests、deliverable validator、逐样例人工复核 | 每个样例给出可交付/需人工复核/不可交付结论 | 不部署，除非质量切片已通过并获批 |
