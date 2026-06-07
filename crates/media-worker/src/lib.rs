@@ -51,6 +51,7 @@ const VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_AVG_LUMA: f64 = 24.0;
 const VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_LUMA_RANGE: u8 = 12;
 const VIDEO_AUTO_SLIDE_BRIGHT_LOW_INFO_MIN_AVG_LUMA: f64 = 238.0;
 const VIDEO_AUTO_SLIDE_BRIGHT_LOW_INFO_MAX_LUMA_RANGE: u8 = 8;
+const VIDEO_AUTO_SLIDE_FLAT_LOW_INFO_MAX_LUMA_RANGE: u8 = 3;
 const VIDEO_SLIDE_SHARPNESS_TARGET_SAMPLES: f64 = 40_000.0;
 const VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE: i64 = 70;
 const VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE: i64 = 40;
@@ -1469,7 +1470,7 @@ impl VideoAutoSlideSelection {
                 "same_segment_max_avg_luma_diff": VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF,
                 "min_stable_frames": VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES,
                 "max_selected_pages": VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES,
-                "ordinary_video_guard": "short unstable visual changes and dark or bright low-information stable segments are rejected instead of auto-selecting every frame"
+                "ordinary_video_guard": "short unstable visual changes and dark, bright, or flat low-information stable segments are rejected instead of auto-selecting every frame"
             }
         })
     }
@@ -1574,6 +1575,9 @@ fn video_visual_signature_low_information_rejection(
             avg_luma,
             luma_range,
         ));
+    }
+    if luma_range <= VIDEO_AUTO_SLIDE_FLAT_LOW_INFO_MAX_LUMA_RANGE {
+        return Some(("flat_low_information_stable_segment", avg_luma, luma_range));
     }
     None
 }
@@ -1737,6 +1741,7 @@ fn video_finalize_auto_slide_cluster(
             "dark_max_luma_range": VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_LUMA_RANGE,
             "bright_min_avg_luma": VIDEO_AUTO_SLIDE_BRIGHT_LOW_INFO_MIN_AVG_LUMA,
             "bright_max_luma_range": VIDEO_AUTO_SLIDE_BRIGHT_LOW_INFO_MAX_LUMA_RANGE,
+            "flat_max_luma_range": VIDEO_AUTO_SLIDE_FLAT_LOW_INFO_MAX_LUMA_RANGE,
         }));
         return;
     }
@@ -10714,6 +10719,86 @@ mod tests {
         assert_eq!(
             candidate_manifest["auto_selection"]["rejected_clusters"][0]["reason"],
             json!("bright_low_information_stable_segment")
+        );
+        assert_eq!(
+            candidate_manifest["auto_selection"]["rejected_clusters"][0]
+                ["selected_candidate_index"],
+            json!(2)
+        );
+
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["selected_count"], json!(1));
+        assert_eq!(selected_slides["selected_candidate_indices"], json!([5]));
+    }
+
+    #[test]
+    fn auto_selects_slides_without_flat_stable_loading_segments() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-auto-flat-transition-guard-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+
+        for frame_index in 1..=3 {
+            write_test_solid_frame_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [126, 126, 126],
+            );
+        }
+        for frame_index in 4..=6 {
+            write_test_visual_slide_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [18, 18, 18],
+                [238, 238, 238],
+                22..86,
+                14..64,
+            );
+        }
+
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 6,
+            "interval_seconds": 0.2,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+        let files = manifest["files"].as_array().expect("files");
+
+        let candidate_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
+            .and_then(|file| file["path"].as_str())
+            .expect("candidate manifest path");
+        let candidate_manifest: Value = serde_json::from_str(
+            &fs::read_to_string(candidate_manifest_path).expect("candidate manifest"),
+        )
+        .expect("candidate manifest json");
+        assert_eq!(candidate_manifest["selected_candidate_indices"], json!([5]));
+        assert_eq!(
+            candidate_manifest["auto_selection"]["selected_clusters"][0]
+                ["selected_candidate_index"],
+            json!(5)
+        );
+        assert_eq!(
+            candidate_manifest["auto_selection"]["rejected_clusters"][0]["reason"],
+            json!("flat_low_information_stable_segment")
         );
         assert_eq!(
             candidate_manifest["auto_selection"]["rejected_clusters"][0]

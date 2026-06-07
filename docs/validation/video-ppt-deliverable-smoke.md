@@ -1467,23 +1467,24 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
-## 2026-06-08 Bright Low-Information Stable Segment Guard
+## 2026-06-08 Low-Information Stable Segment Guard
 
 Task source: P2-2C follow-up from `docs/plans/datamax-active-execution-plan.md`.
 
 Scope:
 
-- reduce false-positive auto-selected PPT pages from stable white screens, bright blanks, or bright transition frames;
-- keep the existing dark low-information stable-segment guard intact;
+- reduce false-positive auto-selected PPT pages from stable black screens, white screens, flat gray loading screens, bright blanks, or low-information transition frames;
+- keep the existing dark low-information stable-segment guard intact while extending it to bright and flat low-information segments;
 - preserve ordinary stable PPT page auto-selection and selected-slide deliverable contracts;
 - avoid live extraction, network fetches, uploads, browser recording, or deployment.
 
 Implemented behavior:
 
-- auto-selection now rejects both dark and bright low-information stable segments;
-- bright low-information rejection uses the midpoint frame luma summary from the existing visual-signature grid;
+- auto-selection now rejects dark, bright, and flat low-information stable segments;
+- low-information rejection uses the midpoint frame luma summary from the existing visual-signature grid;
 - rejected bright segments are recorded in `slide_image_candidates_manifest.auto_selection.rejected_clusters` with `reason=bright_low_information_stable_segment`;
-- `ordinary_video_guard` policy text now states that short unstable visual changes and dark or bright low-information stable segments are rejected;
+- rejected flat gray/loading segments are recorded with `reason=flat_low_information_stable_segment`;
+- `ordinary_video_guard` policy text now states that short unstable visual changes and dark, bright, or flat low-information stable segments are rejected;
 - selected slides, PPTX generation, rectangle manifests, and deliverable package output remain unchanged for valid stable PPT pages.
 
 Validation:
@@ -1493,6 +1494,7 @@ cargo fmt
 cargo fmt --check
 CC=clang CXX=clang++ cargo test -p media-worker auto_selects_slides_without_bright_stable_transition_segments --lib
 CC=clang CXX=clang++ cargo test -p media-worker auto_selects_slides_without_dark_stable_transition_segments --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects_slides_without_flat_stable_loading_segments --lib
 CC=clang CXX=clang++ cargo test -p media-worker auto_selects --lib
 CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
 CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
@@ -1507,7 +1509,8 @@ Result:
 - formatting and format check passed;
 - bright low-information guard test passed;
 - dark low-information guard test passed;
-- `auto_selects` passed, 3 tests;
+- flat low-information guard test passed;
+- `auto_selects` passed, 4 tests;
 - `selected_slides` filtered regression passed;
 - controlled video sample deliverable contract passed;
 - slide rectangle regression passed, 5 tests;
