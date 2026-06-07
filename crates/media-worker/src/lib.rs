@@ -2287,6 +2287,8 @@ fn video_slide_quality_report_from_manifests(
     let mut review_required_count = 0_u64;
     let mut subtitle_mapped_count = 0_u64;
     let mut subtitle_missing_count = 0_u64;
+    let mut ocr_mapped_count = 0_u64;
+    let mut ocr_missing_count = 0_u64;
     let mut slide_scores = Vec::<i64>::new();
     let slides = selected_candidates
         .iter()
@@ -2361,6 +2363,20 @@ fn video_slide_quality_report_from_manifests(
             } else {
                 subtitle_missing_count += 1;
             }
+            let ocr_snippet_count = candidate
+                .get("ocr_snippets")
+                .and_then(Value::as_array)
+                .map(|snippets| snippets.len())
+                .unwrap_or(0);
+            let ocr_alignment_status = candidate
+                .get("ocr_alignment_status")
+                .and_then(Value::as_str)
+                .unwrap_or("missing_ocr");
+            if ocr_snippet_count > 0 {
+                ocr_mapped_count += 1;
+            } else {
+                ocr_missing_count += 1;
+            }
             let crop_risk = if rectangle_status == "promoted_full_frame_fallback" {
                 "high"
             } else if review_required {
@@ -2375,6 +2391,13 @@ fn video_slide_quality_report_from_manifests(
             } else {
                 "high"
             };
+            let ocr_risk = if ocr_snippet_count > 0 {
+                "low"
+            } else if ocr_alignment_status == "unmatched" {
+                "medium"
+            } else {
+                "high"
+            };
             let mut score = 100_i64;
             if crop_risk == "high" {
                 score -= 25;
@@ -2385,6 +2408,9 @@ fn video_slide_quality_report_from_manifests(
                 score -= 15;
             } else if transcript_risk == "medium" {
                 score -= 8;
+            }
+            if ocr_risk == "medium" {
+                score -= 3;
             }
             if review_required {
                 score -= 5;
@@ -2402,6 +2428,9 @@ fn video_slide_quality_report_from_manifests(
                 "subtitle_alignment_status": subtitle_alignment_status,
                 "transcript_segment_count": transcript_segment_count,
                 "transcript_risk": transcript_risk,
+                "ocr_alignment_status": ocr_alignment_status,
+                "ocr_snippet_count": ocr_snippet_count,
+                "ocr_risk": ocr_risk,
                 "review_required": review_required,
                 "quality_score": score,
             })
@@ -2466,6 +2495,8 @@ fn video_slide_quality_report_from_manifests(
             "review_required_count": review_required_count,
             "subtitle_mapped_count": subtitle_mapped_count,
             "subtitle_missing_count": subtitle_missing_count,
+            "ocr_mapped_count": ocr_mapped_count,
+            "ocr_missing_count": ocr_missing_count,
             "deduped_candidate_count": deduped_candidate_count,
             "exact_duplicate_count": exact_duplicate_count,
             "visual_duplicate_count": visual_duplicate_count,
@@ -10539,6 +10570,15 @@ mod tests {
         assert!(slide_notes.contains("Narration for the first selected slide"));
         assert!(slide_notes.contains("Aligned OCR snippets"));
         assert!(slide_notes.contains("OCR title for selected slide"));
+        let slide_quality_report_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide quality report path");
+        let slide_quality_report =
+            fs::read_to_string(slide_quality_report_path).expect("slide quality report");
+        assert!(slide_quality_report.contains("\"ocr_snippet_count\": 1"));
+        assert!(slide_quality_report.contains("\"ocr_risk\": \"low\""));
         let video_slides_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("video_slides_markdown"))

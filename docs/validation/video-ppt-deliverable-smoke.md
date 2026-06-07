@@ -1257,3 +1257,57 @@ Safety result:
 - no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
+
+## 2026-06-08 Slide Quality Report OCR Coverage Local Slice
+
+Task source: P2-2D from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- make `slide_quality_report.json` summarize OCR coverage without requiring operators to inspect selected slide manifests first;
+- keep OCR as review evidence, not as a replacement for transcript/subtitle page mapping;
+- preserve legacy package compatibility and redaction checks.
+
+Implemented behavior:
+
+- `slide_quality_report.json` summary now includes `ocr_mapped_count` and `ocr_missing_count`;
+- each report slide row now includes `ocr_alignment_status`, `ocr_snippet_count`, and `ocr_risk`;
+- OCR risk is `low` when a slide has OCR snippets, `medium` for explicitly unmatched OCR evidence, and `high` when OCR is missing;
+- validator now requires OCR summary fields and per-slide OCR risk/count fields when a quality report is present;
+- validator fixture and media-worker selected-slides test cover the new OCR quality-report fields.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- rustfmt check passed;
+- selected-slides transcript/OCR/quality-report path passed, 1 test;
+- controlled video sample deliverable contract passed, 1 test;
+- platform-api video extraction tests passed, 3 tests;
+- platform-api video PPT tests passed, 5 tests;
+- video deliverables validator tests passed, 18 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
+- `subtitle_page_map.json` still requires transcript/subtitle evidence and is not filled by OCR-only snippets;
+- P2-2E still needs the three-sample quality review matrix and human review conclusions.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.

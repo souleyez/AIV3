@@ -410,6 +410,8 @@ function validateSlideQualityReport(report, errors) {
     "review_required_count",
     "subtitle_mapped_count",
     "subtitle_missing_count",
+    "ocr_mapped_count",
+    "ocr_missing_count",
     "deduped_candidate_count",
   ]) {
     if (!Number.isInteger(summary[key]) || summary[key] < 0) {
@@ -428,6 +430,9 @@ function isValidSlideQualityRow(slide) {
     && slide.source_frame.length > 0
     && ["low", "medium", "high"].includes(slide.crop_risk)
     && ["low", "medium", "high"].includes(slide.transcript_risk)
+    && ["low", "medium", "high"].includes(slide.ocr_risk)
+    && Number.isInteger(slide.ocr_snippet_count)
+    && slide.ocr_snippet_count >= 0
     && typeof slide.review_required === "boolean"
     && isScore(slide.quality_score);
 }
