@@ -766,3 +766,74 @@ Safety result:
 - no customer/private/login-gated video was fetched;
 - no WeChat Video Channels URL was bypassed or recorded as parsed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, upload object key, server local upload path, private object path, or generated artifact local path was recorded.
+
+## 2026-06-07 Video Login-Gated Handoff Smoke Script Slice
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P1-3D.
+
+Scope:
+
+- add a reusable lightweight handoff smoke for WeChat Video Channels and login-gated video PPT requests;
+- validate the unsupported-source handoff surface without fetching source pages, downloading video, extracting frames, OCR, or generating PPT;
+- cover both main-site `wechat_video_login_handoff` artifact shape and third-party equivalent unsupported-source card shape;
+- keep live third-party execution behind the inbound bearer gate.
+
+Implemented behavior:
+
+- added package script `smoke:video-ppt-handoff`;
+- added `scripts/smoke/video-ppt-handoff.mjs`;
+- documented the entrypoint in `scripts/README.md`;
+- refreshed the active plan to record P1-3D script completion and the current live visibility gap;
+- default mode is `--self-test` and does not call the network;
+- live modes are explicit: `--mode main`, `--mode external`, or `--mode both`;
+- main mode creates or reuses a lightweight assistant run, then polls `/api/v3/html-artifacts` for `wechat_video_login_handoff`;
+- external mode sends a scoped `/v1/external/channels/{connection_id}/events` message and polls `/assistant-runs/{run_id}/reply`;
+- the validator requires `login_gated_video_source_not_supported`;
+- the validator requires upload-video-file, anonymous direct-video-URL, and authorized-capture next steps;
+- the validator rejects success/download signals such as `final_pptx_ready`, `video_extraction_summary`, `download_exports`, frame extraction, or OCR-complete markers.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-handoff.mjs
+node scripts/smoke/video-ppt-handoff.mjs --help
+node scripts/smoke/video-ppt-handoff.mjs --self-test
+npm run smoke:video-ppt-handoff -- --help
+npm run smoke:video-ppt-handoff -- --self-test
+npm run smoke:video-ppt-handoff -- --mode main --base-url https://v3.elepcloud.com --local-thread-id video-ppt-handoff-20260607-01 --timeout-ms 60000 --output-dir target/video-ppt-handoff-main-smoke
+CC=clang CXX=clang++ cargo test -p platform-api wechat_video_login_handoff --lib
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- handoff smoke script syntax check passed;
+- direct help and npm help returned expected usage, checks, and live-mode notes;
+- direct self-test and npm self-test passed and did not call the network;
+- platform-api WeChat Video login handoff tests passed, 3 tests;
+- HTML artifact manifest tests passed, 12 tests, with the existing Node module-type warning only;
+- existing third-party video/PPT smoke syntax check passed;
+- video deliverables validator tests passed, 15 tests;
+- one main-site lightweight live smoke was attempted; it did not fetch the WeChat source, did not download video, did not extract frames, and did not generate PPT, but it also did not find `wechat_video_login_handoff` within 60 seconds.
+
+Current P1-3D live interpretation:
+
+- The script and local contract are ready.
+- Current main-site live surface is not yet proven because the handoff artifact was not visible within the smoke timeout.
+- Treat this as a main-site handoff visibility/deployment receipt gap, not as a reason to parse or capture the WeChat source.
+- Third-party live handoff smoke was not run because it requires an approved inbound bearer and target connection/source ids.
+
+Remaining P1-3D work:
+
+- after confirming the current main-site deployment includes the handoff artifact path, rerun the same `--mode main` smoke and append the pass/fail receipt;
+- after the user provides or approves third-party inbound bearer/context, run `--mode external` or `--mode both` and append the equivalent third-party receipt.
+
+Safety result:
+
+- no private/login-gated video page was fetched;
+- no WeChat Video Channels URL was treated as a direct media URL;
+- no video download, frame extraction, OCR, PPT generation, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, upload object key, server local upload path, private object path, or generated artifact local path was recorded.
