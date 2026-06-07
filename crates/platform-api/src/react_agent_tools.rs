@@ -2655,14 +2655,41 @@ fn is_video_document_material(document: &Document) -> bool {
 }
 
 fn first_url_in_text(text: &str) -> Option<&str> {
-    text.split_whitespace()
-        .find(|part| part.starts_with("http://") || part.starts_with("https://"))
-        .map(|part| {
-            part.trim_matches(|ch: char| {
-                matches!(ch, '，' | '。' | ',' | '.' | ')' | '）' | ']' | '】')
-            })
+    let start = [text.find("https://"), text.find("http://")]
+        .into_iter()
+        .flatten()
+        .min()?;
+    let tail = &text[start..];
+    let end = tail
+        .char_indices()
+        .find_map(|(index, ch)| {
+            (ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '"' | '\''
+                        | '<'
+                        | '>'
+                        | '，'
+                        | '。'
+                        | '；'
+                        | '、'
+                        | '！'
+                        | '？'
+                        | ','
+                        | ')'
+                        | '）'
+                        | ']'
+                        | '】'
+                        | '}'
+                        | '》'
+                ))
+            .then_some(index)
         })
-        .filter(|value| !value.is_empty())
+        .unwrap_or(tail.len());
+    let value = tail[..end]
+        .trim_matches(|ch: char| matches!(ch, '，' | '。' | ',' | '.' | ')' | '）' | ']' | '】'))
+        .trim();
+    (!value.is_empty()).then_some(value)
 }
 
 fn is_login_gated_video_source(source: &str) -> bool {
@@ -4359,6 +4386,30 @@ mod tests {
             json!("video/mp4")
         );
         assert!(result.final_answer.is_none());
+    }
+
+    #[test]
+    fn video_url_resolution_finds_direct_url_after_chinese_punctuation() {
+        let action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
+
+        let result = video_url_resolution_placeholder_result(
+            &action,
+            "请提取这个视频里的PPT：https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4",
+        );
+
+        assert_eq!(result.observation["status"], json!("completed"));
+        assert_eq!(
+            result.observation["reason"],
+            json!("direct_video_url_resolved")
+        );
+        assert_eq!(
+            result.observation["items"][0]["source_url"],
+            json!("https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4")
+        );
+        assert_eq!(
+            result.observation["items"][0]["content_type_guess"],
+            json!("video/mp4")
+        );
     }
 
     #[test]
