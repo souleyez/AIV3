@@ -3238,3 +3238,61 @@ Safety result:
 - no browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
 - generated preflight/self-test reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared receipt.
+
+## 2026-06-08 No-Auth Live-Preflight Acceptance Rollup
+
+Task source: after adding preflight gates for P1-3B main-site upload, P1-3C third-party video registration, and P1-3D video-channel/login-gated handoff, rerun the no-authorization local acceptance sweep with all live preflight gates included.
+
+Scope:
+
+- run only no-network preflights, offline self-tests, and local unit validation;
+- verify the three live-gate preflights compose with the existing upload, third-party, handoff, capture, quality-matrix, and deliverables-validator evidence;
+- keep generated reports under `target/` and copy only redacted summaries into this ledger.
+
+Validation:
+
+```text
+npm run smoke:video-ppt-upload-main -- --preflight --output-dir target/video-ppt-upload-main-preflight-rollup-2
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir target/video-ppt-upload-main-self-test-rollup-2
+npm run smoke:external-video-ppt -- --preflight --allow-missing-bearer --output-dir target/external-video-ppt-preflight-rollup-2
+npm run smoke:external-video-ppt -- --self-test --output-dir target/external-video-ppt-self-test-rollup-2
+npm run smoke:video-ppt-handoff -- --preflight --allow-missing-bearer --output-dir target/video-ppt-handoff-preflight-rollup-2
+npm run smoke:video-ppt-handoff -- --self-test --output-dir target/video-ppt-handoff-self-test-rollup-2
+npm run capture:authorized-video -- --self-test --output-dir target/authorized-capture-self-test-rollup-2
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir target/video-ppt-quality-matrix-rollup-2
+npm run test:video-deliverables
+node <rollup shared-summary redaction scan>
+```
+
+Result:
+
+- main-site upload preflight passed with `ok=true`, `fixtureDownloaded=false`, `uploadAttempted=false`, `assistantRunCreated=false`, `mediaKind=video`, and `supportedExtension=true`;
+- main-site upload self-test passed with `ok=true`; minimal PPTX/Markdown download validation passed with one slide each;
+- third-party video PPT preflight passed with `ok=true`, `fixtureRegistered=false`, `eventSent=false`, `liveCredentialReady=false`, and `expectedAction=extract_video_ppt_transcript`;
+- third-party video PPT self-test passed with `ok=true`; minimal PPTX/Markdown download validation passed with one slide each;
+- video-channel/login-gated handoff preflight passed with `ok=true`, `liveCredentialReady=false`, `deploymentApprovalRequired=true`, `providerCalled=false`, `pptGenerated=false`, and `failureReason=login_gated_video_source_not_supported`;
+- video-channel/login-gated handoff self-test passed with `negativeFixtureCount=5` and `negativeFixturesRejected=5`;
+- authorized capture helper self-test passed with `authorizationGateNegativeCaseCount=6` and `authorizationGateNegativeCasesRejected=6`; copied evidence used only `sharedReceipt`;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- video deliverables validator passed all 19 node test cases;
+- rollup shared-summary redaction scan passed with no raw WeChat source URL, raw URL, token marker, object key marker, bearer marker, cookie/password value marker, raw self-test approval/operator value, or local absolute path.
+
+Remaining work:
+
+- this rollup does not run live main-site upload, live third-party registration/event, deployed handoff smoke, live authorized capture, or real customer-authorized quality review;
+- P1-3B still needs explicit approval to write a non-customer main-site smoke upload/document/run record;
+- P1-3C still needs approved inbound bearer, `connection_id`, `source_id`, and safe video input;
+- P1-3D still needs an approved 8-server deployment window before live handoff smoke, and external mode still needs bearer/context;
+- P2-1C/P2-2E still need operator/customer authorization and source inputs.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched by these preflights/self-tests;
+- no file was uploaded or registered;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no DataMax upload, dataset, document, assistant run, third-party event, reply poll, artifact poll, or HTML artifact was created;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated rollup reports stayed under `target/` and were not committed;
+- no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared rollup receipt.
