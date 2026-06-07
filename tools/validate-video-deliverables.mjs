@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 
 const REQUIRED_FILES = [
   {
@@ -72,10 +73,12 @@ const OPTIONAL_FILES = [
 ];
 
 const LOCAL_PATH_PATTERNS = [
-  /[A-Za-z]:[\\/]/,
+  /(^|[\s"'({\[])[A-Za-z]:[\\/]/,
   /[\\/]Users[\\/]/,
   /[\\/]home[\\/]/,
-  /token=/i,
+  /https?:\/\/[^\s<>"']*(?:token|cookie|authorization|bearer|provider_key|secret)[^\s<>"']*/i,
+  /(?:token|cookie|authorization|provider_key|secret|password)\s*[:=]/i,
+  /bearer\s+[A-Za-z0-9._~+/=-]+/i,
 ];
 
 const REQUIRED_PPTX_ENTRIES = [
@@ -90,6 +93,10 @@ const REQUIRED_PPTX_ENTRIES = [
 
 const ZIP_EOCD_SIGNATURE = 0x06054b50;
 const ZIP_CENTRAL_FILE_HEADER_SIGNATURE = 0x02014b50;
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_COMPRESSION_STORED = 0;
+const ZIP_COMPRESSION_DEFLATED = 8;
+const PPTX_NOTES_XML_PATTERN = /^ppt\/notesSlides\/notesSlide\d+\.xml$/;
 
 export function resolveVideoDeliverablesPath(inputPath) {
   const absolutePath = path.resolve(inputPath || ".");
@@ -195,7 +202,7 @@ export function validateVideoDeliverables(inputPath) {
   if (pptx?.exists && !fileStartsWithZipMagic(pptx.path)) {
     errors.push(issue("pptx_zip_magic_missing", "PPTX does not start with ZIP magic bytes", "pptx"));
   } else if (pptx?.exists) {
-    const { invalidZip, missingEntries } = checkRequiredPptxEntries(pptx.path);
+    const { invalidZip, missingEntries, notesXmlEntries, unreadableNotesXmlEntries } = checkRequiredPptxEntries(pptx.path);
     if (invalidZip) {
       errors.push(issue("pptx_central_directory_missing", "PPTX ZIP central directory could not be read", "pptx"));
     }
@@ -205,6 +212,16 @@ export function validateVideoDeliverables(inputPath) {
         `PPTX is missing required OOXML entries: ${missingEntries.join(", ")}`,
         "pptx",
       ));
+    }
+    for (const entry of unreadableNotesXmlEntries) {
+      errors.push(issue(
+        "pptx_notes_xml_read_failed",
+        `PPTX notes XML could not be read: ${entry.name}: ${entry.reason}`,
+        "pptx_notes_xml",
+      ));
+    }
+    for (const entry of notesXmlEntries) {
+      validateRedactedText(entry.text, "pptx_notes_xml", errors);
     }
   }
 
@@ -691,21 +708,35 @@ function fileStartsWithZipMagic(filePath) {
 }
 
 function checkRequiredPptxEntries(filePath) {
-  const entryNames = readZipCentralDirectoryEntryNames(filePath);
-  if (!entryNames) {
+  const zip = readZipCentralDirectory(filePath);
+  if (!zip) {
     return {
       invalidZip: true,
       missingEntries: REQUIRED_PPTX_ENTRIES,
+      notesXmlEntries: [],
+      unreadableNotesXmlEntries: [],
     };
   }
-  const names = new Set(entryNames);
+  const names = new Set(zip.entries.map((entry) => entry.name));
+  const notesXmlEntries = [];
+  const unreadableNotesXmlEntries = [];
+  for (const entry of zip.entries.filter((candidate) => PPTX_NOTES_XML_PATTERN.test(candidate.name))) {
+    const content = readZipEntryContent(zip.bytes, entry);
+    if (content.error) {
+      unreadableNotesXmlEntries.push({ name: entry.name, reason: content.error });
+    } else {
+      notesXmlEntries.push({ name: entry.name, text: content.bytes.toString("utf8") });
+    }
+  }
   return {
     invalidZip: false,
     missingEntries: REQUIRED_PPTX_ENTRIES.filter((entry) => !names.has(entry)),
+    notesXmlEntries,
+    unreadableNotesXmlEntries,
   };
 }
 
-function readZipCentralDirectoryEntryNames(filePath) {
+function readZipCentralDirectory(filePath) {
   const bytes = fs.readFileSync(filePath);
   const eocdOffset = findEndOfCentralDirectory(bytes);
   if (eocdOffset < 0 || eocdOffset + 22 > bytes.length) {
@@ -718,7 +749,7 @@ function readZipCentralDirectoryEntryNames(filePath) {
     return null;
   }
 
-  const names = [];
+  const entries = [];
   let offset = centralDirectoryOffset;
   const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
   for (let index = 0; index < entryCount; index += 1) {
@@ -733,10 +764,49 @@ function readZipCentralDirectoryEntryNames(filePath) {
     if (fileNameEnd > centralDirectoryEnd) {
       return null;
     }
-    names.push(bytes.toString("utf8", fileNameStart, fileNameEnd));
+    entries.push({
+      name: bytes.toString("utf8", fileNameStart, fileNameEnd),
+      compressionMethod: bytes.readUInt16LE(offset + 10),
+      compressedSize: bytes.readUInt32LE(offset + 20),
+      uncompressedSize: bytes.readUInt32LE(offset + 24),
+      localHeaderOffset: bytes.readUInt32LE(offset + 42),
+    });
     offset = fileNameEnd + extraFieldLength + fileCommentLength;
   }
-  return names;
+  return { bytes, entries };
+}
+
+function readZipEntryContent(bytes, entry) {
+  if (
+    entry.localHeaderOffset === 0xffffffff
+    || entry.compressedSize === 0xffffffff
+    || entry.uncompressedSize === 0xffffffff
+  ) {
+    return { error: "zip64 entries are not supported by this validator" };
+  }
+  const headerOffset = entry.localHeaderOffset;
+  if (headerOffset + 30 > bytes.length || bytes.readUInt32LE(headerOffset) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+    return { error: "local file header is invalid" };
+  }
+  const fileNameLength = bytes.readUInt16LE(headerOffset + 26);
+  const extraFieldLength = bytes.readUInt16LE(headerOffset + 28);
+  const contentStart = headerOffset + 30 + fileNameLength + extraFieldLength;
+  const contentEnd = contentStart + entry.compressedSize;
+  if (contentEnd > bytes.length) {
+    return { error: "entry content extends past the ZIP boundary" };
+  }
+  const compressed = bytes.subarray(contentStart, contentEnd);
+  try {
+    if (entry.compressionMethod === ZIP_COMPRESSION_STORED) {
+      return { bytes: compressed };
+    }
+    if (entry.compressionMethod === ZIP_COMPRESSION_DEFLATED) {
+      return { bytes: zlib.inflateRawSync(compressed) };
+    }
+    return { error: `unsupported compression method ${entry.compressionMethod}` };
+  } catch (error) {
+    return { error: error.message };
+  }
 }
 
 function findEndOfCentralDirectory(bytes) {

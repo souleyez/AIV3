@@ -202,6 +202,21 @@ test("rejects zip pptx containers missing required OOXML entries", () => {
   assert.ok(result.errors.some((error) => error.code === "pptx_required_entry_missing" && error.kind === "pptx"));
 });
 
+test("rejects unredacted token-like text inside pptx speaker notes XML", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.writeFileSync(
+    path.join(sessionDir, "generated_artifacts", "video_slides_screenshot_based.pptx"),
+    minimalPptxFixtureBytes(
+      '<p:notes><p:txBody><a:t>OCR evidence https://private.example/video?token=secret</a:t></p:txBody></p:notes>',
+    ),
+  );
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "unredacted_local_path_or_token" && error.kind === "pptx_notes_xml"));
+});
+
 test("rejects unredacted local paths in public JSON", () => {
   const sessionDir = createCompleteDeliverables();
   const subtitleMapPath = path.join(sessionDir, "generated_artifacts", "subtitle_page_map.json");
@@ -600,7 +615,7 @@ function removeArtifactKind(value, artifactKind) {
   }
 }
 
-function minimalPptxFixtureBytes() {
+function minimalPptxFixtureBytes(notesXml = "") {
   return minimalZipBytes([
     "[Content_Types].xml",
     "_rels/.rels",
@@ -608,15 +623,17 @@ function minimalPptxFixtureBytes() {
     "ppt/_rels/presentation.xml.rels",
     "ppt/slides/slide1.xml",
     "ppt/slides/_rels/slide1.xml.rels",
-    "ppt/notesSlides/notesSlide1.xml",
+    { name: "ppt/notesSlides/notesSlide1.xml", content: notesXml },
   ]);
 }
 
-function minimalZipBytes(entryNames) {
+function minimalZipBytes(entries) {
   const localParts = [];
   const centralParts = [];
   let offset = 0;
-  for (const entryName of entryNames) {
+  for (const entry of entries) {
+    const entryName = typeof entry === "string" ? entry : entry.name;
+    const content = Buffer.from(typeof entry === "string" ? "" : (entry.content ?? ""), "utf8");
     const fileName = Buffer.from(entryName, "utf8");
     const localHeader = Buffer.alloc(30);
     localHeader.writeUInt32LE(0x04034b50, 0);
@@ -625,11 +642,11 @@ function minimalZipBytes(entryNames) {
     localHeader.writeUInt16LE(0, 8);
     localHeader.writeUInt32LE(0, 10);
     localHeader.writeUInt32LE(0, 14);
-    localHeader.writeUInt32LE(0, 18);
-    localHeader.writeUInt32LE(0, 22);
+    localHeader.writeUInt32LE(content.length, 18);
+    localHeader.writeUInt32LE(content.length, 22);
     localHeader.writeUInt16LE(fileName.length, 26);
     localHeader.writeUInt16LE(0, 28);
-    localParts.push(localHeader, fileName);
+    localParts.push(localHeader, fileName, content);
 
     const centralHeader = Buffer.alloc(46);
     centralHeader.writeUInt32LE(0x02014b50, 0);
@@ -639,8 +656,8 @@ function minimalZipBytes(entryNames) {
     centralHeader.writeUInt16LE(0, 10);
     centralHeader.writeUInt32LE(0, 12);
     centralHeader.writeUInt32LE(0, 16);
-    centralHeader.writeUInt32LE(0, 20);
-    centralHeader.writeUInt32LE(0, 24);
+    centralHeader.writeUInt32LE(content.length, 20);
+    centralHeader.writeUInt32LE(content.length, 24);
     centralHeader.writeUInt16LE(fileName.length, 28);
     centralHeader.writeUInt16LE(0, 30);
     centralHeader.writeUInt16LE(0, 32);
@@ -649,7 +666,7 @@ function minimalZipBytes(entryNames) {
     centralHeader.writeUInt32LE(0, 38);
     centralHeader.writeUInt32LE(offset, 42);
     centralParts.push(centralHeader, fileName);
-    offset += localHeader.length + fileName.length;
+    offset += localHeader.length + fileName.length + content.length;
   }
 
   const centralDirectory = Buffer.concat(centralParts);
@@ -657,8 +674,8 @@ function minimalZipBytes(entryNames) {
   end.writeUInt32LE(0x06054b50, 0);
   end.writeUInt16LE(0, 4);
   end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(entryNames.length, 8);
-  end.writeUInt16LE(entryNames.length, 10);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
   end.writeUInt32LE(centralDirectory.length, 12);
   end.writeUInt32LE(offset, 16);
   end.writeUInt16LE(0, 20);
