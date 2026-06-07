@@ -1588,6 +1588,84 @@ Safety result:
 - public candidate media and sampled frames stayed under `target/` and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Public Candidate Exploratory Extraction Blocked By Manifest Redaction
+
+Task source: S2A / P2-2E-2 from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- run a local exploratory extraction against the selected public media.ccc / NixCon slides candidate;
+- prove whether the candidate can reach screenshot-based PPTX generation;
+- reuse the deliverables validator and quality matrix as acceptance gates;
+- avoid main-site writes, third-party events, browser recording, service builds, service restarts, and 8-server deployment.
+
+Extraction result:
+
+- `deliverable_state=final_pptx_ready`
+- `frame_extraction_status=completed`
+- `frame_count=96`
+- PPTX generated: yes
+- `video_slides.md` generated: yes
+- `slide_notes.md` generated: yes
+- `selected_slides_manifest.json` generated: yes
+- `slide_rectangles_manifest.json` generated: yes
+- `slide_quality_report.json` generated: yes
+- `subtitle_page_map.json` generated: no, because there was no transcript/subtitle evidence for this candidate
+- selected slides observed from the selected-slides manifest: 5
+- PPTX slide count observed by quality matrix: 5
+- Markdown slide count observed by quality matrix: 5
+
+Quality report summary:
+
+- `quality_score=56`
+- risk flags included `full_frame_rectangle_fallback`, `missing_transcript_alignment`, `selected_slide_duplicates_removed`, `frame_sharpness_review_required`, and `manual_review_required`
+- summary counted 1 full-frame fallback, 4 detector crops, 5 missing transcript alignments, 5 missing OCR alignments, and 4 high sharpness/readability review risks
+
+Acceptance gate result:
+
+```text
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts>
+```
+
+Result: failed.
+
+Failure class:
+
+- `unredacted_local_path_or_token` in `final_deliverables_manifest.json`
+- `unredacted_local_path_or_token` in `extraction_artifacts_manifest.json`
+- `unredacted_local_path_or_token` in `published_deliverable_manifest.json`
+- `unredacted_local_path_or_token` in `published_version_history.json`
+
+Quality matrix result:
+
+```text
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <public-candidate-generated_artifacts> --pretty --output-dir target/video-ppt-public-candidate-quality-matrix
+```
+
+Result:
+
+- `matrix_complete=false`
+- `deliverable_count=0`
+- `not_deliverable_count=1`
+- `pending_accessible_sample_count=1`
+- `pending_authorization_count=1`
+- the local candidate package was classified as `deliverable_contract_invalid`, so the sample is not accepted yet
+
+Current conclusion:
+
+- The selected public candidate is suitable for continuing P2-2E because it is public, anonymously downloadable, has multiple slide states, and can reach screenshot-based PPTX generation.
+- The candidate is not accepted as a public-course quality sample until public manifests pass redaction validation.
+- The next development slice is to fix nested public-manifest redaction without relaxing `tools/validate-video-deliverables.mjs`, then rerun this same candidate.
+- If the validator passes after the fix, the remaining quality decision may still be `需人工复核` because this candidate has missing transcript alignment, duplicate removal, full-frame fallback, and sharpness/readability review risks.
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no WeChat Video Channels page was fetched;
+- no main-site upload, third-party event, live smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full validator-offending value was recorded.
+
 ## 2026-06-08 Video PPT Quality Matrix Local Deliverables Input
 
 Task source: P2-2E-1 from `docs/plans/datamax-active-execution-plan.md`.
