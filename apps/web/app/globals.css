@@ -7232,6 +7232,32 @@ body {
   line-height: 1.45;
 }
 
+.external-executor-error-banner {
+  display: grid;
+  gap: 4px;
+  margin: 0 12px 10px;
+  padding: 10px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.external-executor-error-banner strong,
+.external-executor-error-banner span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.external-executor-error-banner strong {
+  font-size: 12px;
+}
+
+.external-executor-error-banner span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .external-executor-pretty {
   display: grid;
   gap: 8px;

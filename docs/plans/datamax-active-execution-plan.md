@@ -59,8 +59,8 @@
 8. 已完成：静态页/报表回归语料强化。
 9. 已完成：第三方数据库只读状态强化。
 10. 已完成：视频抽取 PPT 交付闭环优先收尾。
-11. 下一步：operator 观测页小幅打磨。
-12. 最终 validation 和可选部署。
+11. 已完成：operator 观测页小幅打磨。
+12. 下一步：最终 validation 和可选部署。
 
 每个任务通过测试后独立提交。
 
@@ -819,7 +819,17 @@ git commit -m "Complete video PPT extraction delivery loop"
 
 ## Task 11：Operator 观测页小幅打磨
 
+**状态：已完成，2026-06-07。**
+
 **目标：** 在不大改 UI 的前提下，让 operator 更容易看任务状态、第三方会话、文档入库、报表产物和异常原因。
+
+**结果：**
+
+- Workflow task 错误、失败原因、重试原因统一通过观测页 redaction 处理后再展示，覆盖本地路径、URL、Bearer/token、cookie/password/API key/database URL 类字符串。
+- Codex executor runtime inspect 详情页增加“最近任务原因”提示，让 operator 不展开 JSON 也能看到脱敏失败原因。
+- Artifact manifest 正规化增加去重后的 `artifactLinks`，将 primary URL 纳入同一组可见链接；详情页继续单独显示“打开产物”，其他下载/公开链接按 rel 展示，避免重复 primary link。
+- `node --test app/lib/external-integrations.test.mjs` 和 `npm run build` 已通过；项目没有独立 lint script，本轮用现有 Web build 作为 JSX/Next 编译验证。
+- `docs/validation/datamax-main-gap-closure.md` 已记录 Task 11 回执。
 
 **文件：**
 

@@ -1095,7 +1095,7 @@ test('codex executor helpers expose poll retry and remote task id', () => {
     attempt: 2,
     max_attempts: 3,
     available_at: '2026-05-27T09:41:00Z',
-    error: 'Cloudflare Codex task timed out after 1800000ms; task_id=cf-001',
+    error: 'Cloudflare Codex task timed out after 1800000ms; task_id=cf-001 at /Users/private/run.log token=secret-value',
     payload: {
       cloudflare_orchestrator: {
         task_id: 'cf-001',
@@ -1105,6 +1105,10 @@ test('codex executor helpers expose poll retry and remote task id', () => {
   });
   assert.equal(task.cloudflareTaskId, 'cf-001');
   assert.equal(task.maxAttempts, 3);
+  assert.equal(task.error.includes('[redacted:path]'), true);
+  assert.equal(task.error.includes('token=[redacted]'), true);
+  assert(!task.error.includes('/Users/private'));
+  assert(!task.error.includes('secret-value'));
 
   const summary = codexExecutorInspectSummary({
     execution: {
@@ -1120,7 +1124,10 @@ test('codex executor helpers expose poll retry and remote task id', () => {
         artifact_type: 'static_page',
         artifact_kind: 'generated_artifact',
         primary_url: 'https://v3.elepcloud.com/generated-artifacts/demo/index.html',
-        links: [{ rel: 'public', url: 'https://v3.elepcloud.com/generated-artifacts/demo/index.html' }],
+        links: [
+          { rel: 'public', url: 'https://v3.elepcloud.com/generated-artifacts/demo/index.html' },
+          { rel: 'ppt', url: 'https://v3.elepcloud.com/generated-artifacts/demo/report.ppt' },
+        ],
         safety: {
           credentials_exposed: false,
           raw_logs_exposed: false,
@@ -1139,6 +1146,10 @@ test('codex executor helpers expose poll retry and remote task id', () => {
   assert.equal(summary.artifact_manifests.length, 1);
   assert.equal(summary.artifact_manifests[0].artifactType, 'static_page');
   assert.equal(summary.artifact_manifests[0].primaryUrl, 'https://v3.elepcloud.com/generated-artifacts/demo/index.html');
+  assert.deepEqual(summary.artifact_manifests[0].artifactLinks, [
+    { rel: 'primary', url: 'https://v3.elepcloud.com/generated-artifacts/demo/index.html' },
+    { rel: 'ppt', url: 'https://v3.elepcloud.com/generated-artifacts/demo/report.ppt' },
+  ]);
 });
 
 test('workflow queue stats helpers normalize logical queue counts', () => {

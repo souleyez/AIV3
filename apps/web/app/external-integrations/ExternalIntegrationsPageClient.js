@@ -1641,8 +1641,14 @@ export default function ExternalIntegrationsPageClient() {
                           : ''}
                         {codexExecutorInspect.poll_retry.next_available_at
                           ? ` · 下次 ${formatObservationTime(codexExecutorInspect.poll_retry.next_available_at)}`
-                          : ''}
+                        : ''}
                       </span>
+                    </div>
+                  ) : null}
+                  {codexExecutorInspect.latest_task?.failureReason ? (
+                    <div className="external-executor-error-banner">
+                      <strong>最近任务原因</strong>
+                      <span>{codexExecutorInspect.latest_task.failureReason}</span>
                     </div>
                   ) : null}
                   {codexExecutorInspect.pretty_summaries.length ? (
@@ -1663,6 +1669,7 @@ export default function ExternalIntegrationsPageClient() {
                     <div className="external-executor-artifacts" aria-label="产物清单">
                       {codexExecutorInspect.artifact_manifests.map((manifest, index) => {
                         const safetyLabels = artifactSafetyLabels(manifest.safety);
+                        const secondaryLinks = manifest.artifactLinks.filter((link) => link.url !== manifest.primaryUrl);
                         return (
                           <article key={`${artifactManifestLabel(manifest)}:${manifest.primaryUrl || index}`}>
                             <div>
@@ -1673,9 +1680,9 @@ export default function ExternalIntegrationsPageClient() {
                                 </a>
                               ) : null}
                             </div>
-                            {manifest.links.length ? (
+                            {secondaryLinks.length ? (
                               <span>
-                                {manifest.links.map((link) => (
+                                {secondaryLinks.map((link) => (
                                   <a key={`${link.rel}:${link.url}`} href={link.url} target="_blank" rel="noreferrer">
                                     {link.rel || 'link'}
                                   </a>

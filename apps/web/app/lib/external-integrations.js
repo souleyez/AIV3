@@ -1314,6 +1314,16 @@ export function normalizeWorkflowTask(item = {}) {
   const imageOrchestrator = payload.static_page_image_orchestrator && typeof payload.static_page_image_orchestrator === 'object'
     ? payload.static_page_image_orchestrator
     : {};
+  const safeError = redactDatabaseStatusText(
+    item.error
+      || item.error_message
+      || item.errorMessage
+      || item.failure_reason
+      || item.failureReason
+      || item.reason
+      || '',
+    240,
+  );
   return {
     id: item.id || '',
     status: item.status || '',
@@ -1328,7 +1338,8 @@ export function normalizeWorkflowTask(item = {}) {
     claimedAt: item.claimed_at || item.claimedAt || null,
     finishedAt: item.finished_at || item.finishedAt || null,
     updatedAt: item.updated_at || item.updatedAt || item.available_at || null,
-    error: item.error || '',
+    error: safeError,
+    failureReason: safeError,
     cloudflareTaskId: item.remote_task_id || item.remoteTaskId || item.cloudflareTaskId || cloudflare.task_id || cloudflare.taskId || imageOrchestrator.task_id || imageOrchestrator.taskId || '',
     cloudflareStatus: item.cloudflareStatus || cloudflare.status || '',
     cloudflareRuntimeTargetId: item.cloudflareRuntimeTargetId || cloudflare.runtime_target_id || cloudflare.runtimeTargetId || '',
@@ -2030,16 +2041,36 @@ export function normalizeArtifactManifest(item = {}) {
     : [];
   const refs = manifest.refs && typeof manifest.refs === 'object' ? manifest.refs : {};
   const safety = manifest.safety && typeof manifest.safety === 'object' ? manifest.safety : {};
+  const primaryUrl = manifest.primary_url || manifest.primaryUrl || '';
+  const artifactLinks = normalizeArtifactManifestLinks(primaryUrl, links);
   return {
     schema: manifest.schema || '',
     schemaVersion: Number(manifest.schema_version || manifest.schemaVersion || 0),
     artifactType: manifest.artifact_type || manifest.artifactType || '',
     artifactKind: manifest.artifact_kind || manifest.artifactKind || '',
-    primaryUrl: manifest.primary_url || manifest.primaryUrl || '',
+    primaryUrl,
     links,
+    artifactLinks,
     refs,
     safety,
   };
+}
+
+function normalizeArtifactManifestLinks(primaryUrl = '', links = []) {
+  const seen = new Set();
+  const items = [];
+  const add = (rel, url) => {
+    const normalizedUrl = String(url || '').trim();
+    if (!normalizedUrl || seen.has(normalizedUrl)) return;
+    seen.add(normalizedUrl);
+    items.push({
+      rel: String(rel || '').trim() || 'link',
+      url: normalizedUrl,
+    });
+  };
+  add('primary', primaryUrl);
+  links.forEach((link) => add(link.rel, link.url));
+  return items;
 }
 
 export function normalizeArtifactManifests(value = []) {
