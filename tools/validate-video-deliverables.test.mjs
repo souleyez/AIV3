@@ -261,8 +261,12 @@ test("rejects malformed slide quality reports", () => {
   qualityReport.quality_score = 101;
   qualityReport.slide_count = 2;
   qualityReport.risk_count = 9;
+  qualityReport.summary.single_slide_output = true;
   qualityReport.slides[0].crop_risk = "unknown";
   qualityReport.slides[0].sharpness_status = "broken";
+  qualityReport.risk_flags[0].severity = "critical";
+  qualityReport.risk_flags[0].count = 0;
+  delete qualityReport.risk_flags[0].review_action;
   qualityReport.summary.sharpness_low_count = -1;
   qualityReport.summary.full_frame_fallback_count = -1;
   fs.writeFileSync(qualityReportPath, JSON.stringify(qualityReport, null, 2));
@@ -276,6 +280,7 @@ test("rejects malformed slide quality reports", () => {
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_risk_count_invalid"));
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_slide_row_invalid"));
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_summary_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_risk_flags_invalid"));
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_sharpness_invalid"));
 });
 
@@ -419,7 +424,7 @@ function createCompleteDeliverables() {
         status: "review_required",
         quality_score: 55,
         slide_count: 1,
-        risk_count: 2,
+        risk_count: 3,
         summary: {
           full_frame_fallback_count: 1,
           detector_crop_count: 0,
@@ -435,10 +440,27 @@ function createCompleteDeliverables() {
           deduped_candidate_count: 0,
           exact_duplicate_count: 0,
           visual_duplicate_count: 0,
+          single_slide_output: true,
         },
         risk_flags: [
-          { code: "full_frame_rectangle_fallback", severity: "medium", count: 1 },
-          { code: "manual_review_required", severity: "medium", count: 1 },
+          {
+            code: "full_frame_rectangle_fallback",
+            severity: "medium",
+            count: 1,
+            review_action: "review_or_replace_full_frame_crops",
+          },
+          {
+            code: "single_slide_output_review_required",
+            severity: "medium",
+            count: 1,
+            review_action: "confirm_video_contains_only_one_ppt_or_reprocess_with_more_coverage",
+          },
+          {
+            code: "manual_review_required",
+            severity: "medium",
+            count: 1,
+            review_action: "review_slide_quality_report",
+          },
         ],
         slides: [
           {

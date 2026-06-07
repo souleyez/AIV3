@@ -1674,6 +1674,58 @@ Safety result:
 - generated matrix reports remained under `target/` and were not committed;
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run.
 
+## 2026-06-08 Slide Quality Risk Flag Schema Gate
+
+Task source: P2-2E/EP6 validation hardening from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- strengthen `slide_quality_report.json` validation so malformed risk flags cannot pass the deliverable contract;
+- cover the new `single_slide_output_review_required` risk introduced for weak one-page public-course outputs;
+- keep legacy packages without `slide_quality_report.json` valid;
+- avoid live smoke, uploads, third-party events, browser recording, or deployment.
+
+Implemented behavior:
+
+- `tools/validate-video-deliverables.mjs` now validates each quality `risk_flags` entry;
+- each risk flag must include a non-empty `code`, `severity` in `low|medium|high`, integer `count >= 1`, and non-empty `review_action`;
+- if `summary.single_slide_output=true`, the report must have `slide_count=1` and include `single_slide_output_review_required`;
+- if `single_slide_output_review_required` appears, `summary.single_slide_output` must be true;
+- validator keeps compatibility with reports that do not yet include `summary.single_slide_output`, unless the single-slide risk is present.
+
+Validation:
+
+```text
+node --check tools/validate-video-deliverables.mjs
+npm run test:video-deliverables
+node tools/validate-video-deliverables.mjs <current-single-slide-public-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <current-public-generated_artifacts> --public-course-deliverables <current-public-generated_artifacts> --customer-deliverables <current-public-generated_artifacts> --customer-approval-id <test-approval-id> --pretty
+git diff --check
+```
+
+Result:
+
+- validator syntax check passed;
+- video deliverable validator tests passed, 19 tests;
+- malformed slide quality report test now covers invalid risk flag severity/count/action and single-slide consistency;
+- current `Nix in Space` single-slide public deliverables still pass validator;
+- combined quality matrix using current generated deliverables passed with `case_count=3`, `needs_manual_review_count=3`, `pending_count=0`, and `matrix_complete=true`;
+- an older local target fixture with pre-schema risk flags is correctly treated as contract-invalid under the stricter validator and is not used as current positive evidence.
+
+Remaining work:
+
+- this does not complete live main-site upload, third-party live smoke, handoff deployment, authorized capture, or real customer sample validation;
+- customer-authorized matrix completion still requires a real authorized input and approval id.
+
+Safety result:
+
+- no live main-site smoke was run;
+- no third-party event was sent;
+- no WeChat Video Channels source was fetched, captured, or bypassed;
+- no customer file, private URL, cookie, token, provider payload, database URL, private object path, approval id value, or raw frame path was recorded;
+- generated validator and matrix outputs remained under `target/` and were not committed;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run.
+
 ## 2026-06-08 Visual Shape Duplicate Dedupe And Public Candidate Rerun
 
 Task source: P2-2E-2B-Next from `docs/plans/datamax-active-execution-plan.md`.

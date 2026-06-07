@@ -475,7 +475,48 @@ function validateSlideQualityReport(report, errors) {
       break;
     }
   }
+  validateSlideQualityRiskFlags(report, summary, riskFlags, errors);
   validateOptionalSlideQualitySharpness(report, slides, summary, errors);
+}
+
+function validateSlideQualityRiskFlags(report, summary, riskFlags, errors) {
+  if (!riskFlags.every(isValidSlideQualityRiskFlag)) {
+    errors.push(issue("slide_quality_report_risk_flags_invalid", "slide quality report risk flags are invalid", "slide_quality_report"));
+    return;
+  }
+  const riskCodes = new Set(riskFlags.map((flag) => flag.code));
+  if (
+    Object.hasOwn(summary, "single_slide_output")
+    && typeof summary.single_slide_output !== "boolean"
+  ) {
+    errors.push(issue("slide_quality_report_risk_flags_invalid", "slide quality report single-slide summary is invalid", "slide_quality_report"));
+    return;
+  }
+  if (
+    summary.single_slide_output === true
+    && (report.slide_count !== 1 || !riskCodes.has("single_slide_output_review_required"))
+  ) {
+    errors.push(issue("slide_quality_report_risk_flags_invalid", "single-slide output must include the single-slide review risk", "slide_quality_report"));
+    return;
+  }
+  if (
+    riskCodes.has("single_slide_output_review_required")
+    && summary.single_slide_output !== true
+  ) {
+    errors.push(issue("slide_quality_report_risk_flags_invalid", "single-slide review risk must match summary.single_slide_output", "slide_quality_report"));
+  }
+}
+
+function isValidSlideQualityRiskFlag(flag) {
+  return flag
+    && typeof flag === "object"
+    && typeof flag.code === "string"
+    && flag.code.length > 0
+    && ["low", "medium", "high"].includes(flag.severity)
+    && Number.isInteger(flag.count)
+    && flag.count >= 1
+    && typeof flag.review_action === "string"
+    && flag.review_action.length > 0;
 }
 
 function isValidSlideQualityRow(slide) {
