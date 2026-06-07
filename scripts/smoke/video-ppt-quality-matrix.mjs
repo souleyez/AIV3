@@ -17,6 +17,7 @@ function parseArgs(argv) {
     syntheticDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_SYNTHETIC_DELIVERABLES || '',
     publicCourseDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_PUBLIC_COURSE_DELIVERABLES || '',
     customerDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_DELIVERABLES || '',
+    customerApprovalId: process.env.VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_APPROVAL_ID || '',
     outputDir: process.env.VIDEO_PPT_QUALITY_MATRIX_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
     pretty: false,
   };
@@ -30,6 +31,8 @@ function parseArgs(argv) {
       args.publicCourseDeliverables = requiredValue(argv, index += 1, arg);
     } else if (arg === '--customer-deliverables') {
       args.customerDeliverables = requiredValue(argv, index += 1, arg);
+    } else if (arg === '--customer-approval-id') {
+      args.customerApprovalId = requiredValue(argv, index += 1, arg);
     } else if (arg === '--output-dir') {
       args.outputDir = requiredValue(argv, index += 1, arg);
     } else if (arg === '--pretty') {
@@ -56,17 +59,17 @@ function usage() {
   npm run smoke:video-ppt-quality-matrix -- --self-test [--pretty] [--output-dir target/video-ppt-quality-matrix-smoke]
   npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<video-extraction>/generated_artifacts [--pretty]
   npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/<video-extraction>/generated_artifacts [--pretty]
-  npm run smoke:video-ppt-quality-matrix -- --customer-deliverables target/<video-extraction>/generated_artifacts [--pretty]
-  npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<synthetic>/generated_artifacts --public-course-deliverables target/<public>/generated_artifacts --customer-deliverables target/<customer>/generated_artifacts [--pretty]
+  npm run smoke:video-ppt-quality-matrix -- --customer-deliverables target/<video-extraction>/generated_artifacts --customer-approval-id APPROVAL-... [--pretty]
+  npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<synthetic>/generated_artifacts --public-course-deliverables target/<public>/generated_artifacts --customer-deliverables target/<customer>/generated_artifacts --customer-approval-id APPROVAL-... [--pretty]
 
 Checks:
   - deterministic P2-2E quality matrix shape for video/PPT extraction
   - synthetic PPT-playback sample can be marked deliverable from local evidence
   - local synthetic deliverables can be validated and classified through the same matrix
   - local public-course deliverables can be validated and classified through the same matrix
-  - local customer-authorized deliverables can be validated after explicit approval/input exists
+  - local customer-authorized deliverables can be validated only after explicit approval/input exists
   - combined deliverables inputs can produce a complete three-category matrix when all required categories are provided
-  - customer-authorized samples stay pending unless --customer-deliverables is provided
+  - customer-authorized samples stay pending unless --customer-deliverables and --customer-approval-id are provided
   - report never claims live/customer/video-channel extraction from self-test evidence
 
 Safety:
@@ -169,6 +172,7 @@ function buildCasesFromDeliverableArgs(args) {
         inputType: 'customer_uploaded_or_authorized_capture_deliverables',
         sourceAccessStatus: 'customer_authorized_input',
         approvalStatus: 'operator_authorized',
+        approvalReferencePresent: true,
       })
       : buildPendingCustomerAuthorizedCase(),
   ];
@@ -180,6 +184,7 @@ function buildCaseFromDeliverables(inputPath, {
   inputType,
   sourceAccessStatus,
   approvalStatus,
+  approvalReferencePresent = false,
 }) {
   const validation = validateVideoDeliverables(inputPath);
   const artifactsDir = validation.artifactsDir;
@@ -197,6 +202,8 @@ function buildCaseFromDeliverables(inputPath, {
     input_type: inputType,
     source_access_status: sourceAccessStatus,
     approval_status: approvalStatus,
+    approval_reference_present: approvalReferencePresent,
+    approval_reference_redacted: approvalReferencePresent,
     trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
     deliverable_status: {
       state: deliverableState,
@@ -354,6 +361,7 @@ function buildDeliverablesReportFromArgs(args) {
     gates: {
       public_course_sample_required: !args.publicCourseDeliverables,
       customer_authorization_required: !args.customerDeliverables,
+      customer_approval_reference_present: Boolean(args.customerDeliverables && args.customerApprovalId),
       synthetic_deliverables_reviewed: Boolean(args.syntheticDeliverables),
       public_course_deliverables_reviewed: Boolean(args.publicCourseDeliverables),
       customer_authorized_deliverables_reviewed: Boolean(args.customerDeliverables),
@@ -364,6 +372,7 @@ function buildDeliverablesReportFromArgs(args) {
       synthetic_deliverables_input_redacted: Boolean(args.syntheticDeliverables),
       public_course_deliverables_input_redacted: Boolean(args.publicCourseDeliverables),
       customer_authorized_deliverables_input_redacted: Boolean(args.customerDeliverables),
+      customer_approval_reference_redacted: Boolean(args.customerDeliverables && args.customerApprovalId),
     },
     nextActions: nextActionsForDeliverablesInputs(args),
   });
@@ -597,6 +606,12 @@ function main() {
   ].filter(Boolean);
   if (args.selfTest && deliverableInputs.length > 0) {
     throw new Error('use either --self-test or deliverables input flags, not both');
+  }
+  if (args.customerDeliverables && !args.customerApprovalId) {
+    throw new Error('--customer-approval-id is required with --customer-deliverables');
+  }
+  if (args.customerApprovalId && !args.customerDeliverables) {
+    throw new Error('--customer-approval-id requires --customer-deliverables');
   }
   if (!args.selfTest && deliverableInputs.length === 0) {
     throw new Error('--self-test, --synthetic-deliverables, --public-course-deliverables, or --customer-deliverables is required');

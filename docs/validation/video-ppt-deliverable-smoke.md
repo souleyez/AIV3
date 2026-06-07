@@ -1617,6 +1617,8 @@ Implemented behavior:
 
 - `scripts/smoke/video-ppt-quality-matrix.mjs` now accepts `--customer-deliverables <generated_artifacts>`;
 - `VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_DELIVERABLES` is supported as the environment fallback;
+- customer deliverables now require `--customer-approval-id` or `VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_APPROVAL_ID`;
+- the raw approval id is not written into the report;
 - customer mode classifies the provided deliverables as `customer_authorized_video`;
 - customer mode sets `customer_authorized_deliverables_reviewed=true` and `customer_authorization_required=false`;
 - reports still include all required categories so missing public/customer evidence cannot be hidden;
@@ -1632,9 +1634,11 @@ npm run smoke:video-ppt-quality-matrix -- --help
 npm run smoke:video-ppt-quality-matrix -- --self-test --pretty
 npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <local-fixture-generated_artifacts> --pretty
 npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <single-slide-public-generated_artifacts> --pretty
-npm run smoke:video-ppt-quality-matrix -- --customer-deliverables <local-fixture-generated_artifacts> --pretty
-npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <local-fixture-generated_artifacts> --public-course-deliverables <single-slide-public-generated_artifacts> --customer-deliverables <local-fixture-generated_artifacts> --pretty
-npm run smoke:video-ppt-quality-matrix -- --self-test --customer-deliverables <local-fixture-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --customer-deliverables <local-fixture-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --customer-approval-id <test-approval-id>
+npm run smoke:video-ppt-quality-matrix -- --customer-deliverables <local-fixture-generated_artifacts> --customer-approval-id <test-approval-id> --pretty
+npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <local-fixture-generated_artifacts> --public-course-deliverables <single-slide-public-generated_artifacts> --customer-deliverables <local-fixture-generated_artifacts> --customer-approval-id <test-approval-id> --pretty
+npm run smoke:video-ppt-quality-matrix -- --self-test --customer-deliverables <local-fixture-generated_artifacts> --customer-approval-id <test-approval-id>
 git diff --check
 ```
 
@@ -1645,9 +1649,13 @@ Result:
 - self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
 - synthetic deliverables mode passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
 - public-course deliverables mode passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, and `pending_count=1`;
-- customer deliverables mode passed with `status=partial_customer_authorized_deliverables_reviewed`, `input_mode=customer_deliverables`, `matrix_complete=false`, `deliverable_count=2`, and `pending_count=1`;
+- customer deliverables without `--customer-approval-id` failed as expected;
+- `--customer-approval-id` without `--customer-deliverables` failed as expected;
+- customer deliverables mode with a test approval id passed with `status=partial_customer_authorized_deliverables_reviewed`, `input_mode=customer_deliverables`, `matrix_complete=false`, `deliverable_count=2`, and `pending_count=1`;
 - combined three-input mode passed with `status=complete_deliverables_matrix_reviewed`, `input_mode=combined_deliverables`, `matrix_complete=true`, `deliverable_count=2`, `needs_manual_review_count=1`, and `pending_count=0`;
 - customer report redaction flags showed no source URLs, object paths, credentials, or provider payloads included;
+- combined report records `customer_approval_reference_present=true` and `customer_approval_reference_redacted=true`;
+- combined report did not include the test approval id value;
 - combined report redaction flags showed no source URLs, object paths, credentials, or provider payloads included;
 - negative self-test+customer invocation failed as expected.
 
