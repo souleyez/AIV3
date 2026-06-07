@@ -3,12 +3,14 @@ use domain_model::{Document, DocumentChunk, WorkflowTask};
 use image::{GenericImageView, ImageReader, Pixel};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{hash_map::DefaultHasher, BTreeSet},
     fs::{self, File},
-    io::Write,
+    hash::{Hash, Hasher},
+    io::{Read, Write},
     net::IpAddr,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 use zip::{write::SimpleFileOptions, ZipWriter};
 
@@ -44,6 +46,8 @@ const VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF: f64 = 3.0;
 const VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF: f64 = 5.0;
 const VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES: usize = 2;
 const VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES: usize = 96;
+const VIDEO_REMOTE_INPUT_DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
+const VIDEO_REMOTE_INPUT_DEFAULT_TIMEOUT_SECS: u64 = 60;
 const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
     "pptx",
     "final_deliverables_manifest",
@@ -224,13 +228,6 @@ enum VideoFrameExtractionInput {
 }
 
 impl VideoFrameExtractionInput {
-    fn ffmpeg_arg(&self) -> String {
-        match self {
-            Self::LocalPath(path) => path.display().to_string(),
-            Self::RemoteUrl(url) => url.clone(),
-        }
-    }
-
     fn manifest_input_kind(&self) -> &'static str {
         match self {
             Self::LocalPath(_) => "local_media_path",
@@ -255,6 +252,13 @@ impl VideoFrameExtractionInput {
             Self::RemoteUrl(url) => value.replace(url, "[redacted]"),
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct PreparedVideoFrameExtractionInput {
+    ffmpeg_arg: String,
+    cached_input_path: Option<PathBuf>,
+    downloaded_bytes: Option<u64>,
 }
 
 pub fn run_video_frame_extraction_if_enabled(
@@ -320,6 +324,8 @@ fn run_video_frame_extraction_with_input(
     let session_dir = config
         .output_root
         .join(format!("video-extraction-{}", document.id));
+    let prepared_input = prepare_video_frame_extraction_input(input, &session_dir)
+        .map_err(|error| input.sanitize_process_output(error))?;
     let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
     fs::create_dir_all(&raw_frames_dir).map_err(|error| error.to_string())?;
     let output_pattern = raw_frames_dir.join(DEFAULT_RAW_FRAME_FILE_PATTERN);
@@ -330,7 +336,7 @@ fn run_video_frame_extraction_with_input(
         .arg("error")
         .arg("-y")
         .arg("-i")
-        .arg(input.ffmpeg_arg())
+        .arg(&prepared_input.ffmpeg_arg)
         .arg("-vf")
         .arg(&fps_filter)
         .arg(output_pattern.as_os_str())
@@ -363,6 +369,9 @@ fn run_video_frame_extraction_with_input(
         "input_kind": input.manifest_input_kind(),
         "input_path": input.manifest_input_value(),
         "input_url_redacted": input.input_url_redacted(),
+        "input_downloaded": prepared_input.cached_input_path.is_some(),
+        "input_download_bytes": prepared_input.downloaded_bytes,
+        "input_cache_path": prepared_input.cached_input_path.as_ref().map(|path| path.display().to_string()),
         "session_dir": session_dir.display().to_string(),
         "raw_frames_dir": raw_frames_dir.display().to_string(),
         "manifest_path": manifest_path.display().to_string(),
@@ -378,6 +387,114 @@ fn run_video_frame_extraction_with_input(
     fs::write(&manifest_path, manifest_bytes).map_err(|error| error.to_string())?;
 
     Ok(manifest)
+}
+
+fn prepare_video_frame_extraction_input(
+    input: &VideoFrameExtractionInput,
+    session_dir: &Path,
+) -> Result<PreparedVideoFrameExtractionInput, String> {
+    match input {
+        VideoFrameExtractionInput::LocalPath(path) => Ok(PreparedVideoFrameExtractionInput {
+            ffmpeg_arg: path.display().to_string(),
+            cached_input_path: None,
+            downloaded_bytes: None,
+        }),
+        VideoFrameExtractionInput::RemoteUrl(url) => {
+            let (path, bytes) = download_remote_video_frame_extraction_input(url, session_dir)?;
+            Ok(PreparedVideoFrameExtractionInput {
+                ffmpeg_arg: path.display().to_string(),
+                cached_input_path: Some(path),
+                downloaded_bytes: Some(bytes),
+            })
+        }
+    }
+}
+
+fn download_remote_video_frame_extraction_input(
+    raw_url: &str,
+    session_dir: &Path,
+) -> Result<(PathBuf, u64), String> {
+    let url = reqwest::Url::parse(raw_url.trim()).map_err(|_| "remote_media_invalid_url")?;
+    if !video_remote_media_url_allowed(url.as_str()) {
+        return Err("remote_media_url_not_allowed".to_string());
+    }
+    let max_bytes = env_u64(
+        "MEDIA_REMOTE_INPUT_MAX_BYTES",
+        VIDEO_REMOTE_INPUT_DEFAULT_MAX_BYTES,
+    );
+    let timeout_secs = env_u64(
+        "MEDIA_REMOTE_INPUT_TIMEOUT_SECS",
+        VIDEO_REMOTE_INPUT_DEFAULT_TIMEOUT_SECS,
+    )
+    .max(1);
+    let cache_dir = session_dir.join("remote_input");
+    fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+    let extension = video_remote_media_url_extension(url.as_str()).unwrap_or(".mp4");
+    let cache_key = video_remote_media_cache_key(url.as_str());
+    let target_path = cache_dir.join(format!("remote-video-{cache_key}{extension}"));
+    if target_path.is_file() {
+        let bytes = fs::metadata(&target_path)
+            .map_err(|error| error.to_string())?
+            .len();
+        return Ok((target_path, bytes));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "remote_media_client_build_failed")?;
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|_| "remote_media_fetch_failed")?;
+    if response.status().is_redirection() {
+        return Err("remote_media_redirect_not_followed".to_string());
+    }
+    if !response.status().is_success() {
+        return Err(format!("remote_media_http_{}", response.status().as_u16()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length > max_bytes)
+    {
+        return Err("remote_media_exceeds_max_bytes".to_string());
+    }
+    if !video_remote_media_response_type_allowed(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+    ) {
+        return Err("remote_media_response_type_not_allowed".to_string());
+    }
+
+    let temp_path = cache_dir.join(format!(
+        "remote-video-{cache_key}-{}.part{extension}",
+        std::process::id()
+    ));
+    let mut file = File::create(&temp_path).map_err(|error| error.to_string())?;
+    let mut downloaded = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        downloaded += read as u64;
+        if downloaded > max_bytes {
+            let _ = fs::remove_file(&temp_path);
+            return Err("remote_media_exceeds_max_bytes".to_string());
+        }
+        file.write_all(&buffer[..read])
+            .map_err(|error| error.to_string())?;
+    }
+    file.flush().map_err(|error| error.to_string())?;
+    fs::rename(&temp_path, &target_path).map_err(|error| error.to_string())?;
+    Ok((target_path, downloaded))
 }
 
 pub fn video_frame_extraction_plan(document: &Document) -> Value {
@@ -5214,15 +5331,37 @@ fn video_remote_media_host_allowed(host: &str) -> bool {
 }
 
 fn video_remote_media_url_has_video_extension(raw: &str) -> bool {
+    video_remote_media_url_extension(raw).is_some()
+}
+
+fn video_remote_media_url_extension(raw: &str) -> Option<&'static str> {
     let Ok(url) = reqwest::Url::parse(raw) else {
-        return false;
+        return None;
     };
     let path = url.path().to_ascii_lowercase();
     [
         ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".mpeg", ".mpg",
     ]
     .into_iter()
-    .any(|extension| path.ends_with(extension))
+    .find(|extension| path.ends_with(extension))
+}
+
+fn video_remote_media_response_type_allowed(response_type: &str) -> bool {
+    let media_type = response_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    media_type.is_empty()
+        || media_type.starts_with("video/")
+        || media_type == "application/octet-stream"
+}
+
+fn video_remote_media_cache_key(value: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn env_flag(key: &str, default: bool) -> bool {
@@ -5234,6 +5373,13 @@ fn env_flag(key: &str, default: bool) -> bool {
                 "1" | "true" | "yes" | "on"
             )
         })
+        .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(default)
 }
 
@@ -10095,6 +10241,17 @@ mod tests {
         assert!(video_remote_media_url_allowed(
             "https://cdn.example.com/course/lesson-01.mp4?token=redacted"
         ));
+        assert_eq!(
+            video_remote_media_url_extension(
+                "https://cdn.example.com/course/lesson-01.mp4?token=redacted"
+            ),
+            Some(".mp4")
+        );
+        assert!(video_remote_media_response_type_allowed("video/mp4"));
+        assert!(video_remote_media_response_type_allowed(
+            "application/octet-stream"
+        ));
+        assert!(!video_remote_media_response_type_allowed("text/html"));
     }
 
     #[test]
