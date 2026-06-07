@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "capture:authorized-video": "node scripts/capture-authorized-video.mjs",
     "smoke:external-channel-20way": "node scripts/smoke/external-channel-20way.mjs",
     "smoke:external-channel-streaming-10way": "node scripts/smoke/external-channel-streaming-10way.mjs",
     "smoke:external-report-export": "node scripts/smoke/external-report-export.mjs",

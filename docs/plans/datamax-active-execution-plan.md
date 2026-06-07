@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-07 22:45 CST
-**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；live 上传/第三方回执仍待授权或凭据，P1-3D 主站 lightweight live 仍有可见性回执缺口；下一步按 P2-1 授权录屏兜底切片继续。本计划编写本身不部署 8 服务器。
+**更新时间：** 2026-06-07 22:53 CST
+**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。live 上传/第三方回执仍待授权或凭据，P1-3D 主站 lightweight live 仍有可见性回执缺口，P2-1 live 授权样例未执行。本计划编写本身不部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 1. 计划原则
@@ -17,7 +17,7 @@
 
 ### 2.1 代码与部署基线
 
-- 当前 head 以 `git rev-parse HEAD` / `git rev-parse origin/main` 为准；P1-3D 脚本开发前两者均为 `5fd11e6`，最近已同步提交是 `5fd11e6 Add third-party video PPT smoke`。
+- 当前 head 以 `git rev-parse HEAD` / `git rev-parse origin/main` 为准；P2-1 脚本开发前两者均为 `2b7c55c`，最近已同步提交是 `2b7c55c Add video PPT handoff smoke`。
 - 已记录的 8 服务器最新部署基线：`b1abad9cc`，已启用 `INGEST_REMOTE_MEDIA_ENABLED=true` 和 `INGEST_REMOTE_MEDIA_CACHE_DIR=/srv/aiv3/remote-media-cache`。
 - 8 服务器已知未跟踪文件：`?? mode`，继续保持不触碰。
 - P0 主站可见视频/PPT smoke 在主站 `https://v3.elepcloud.com` 通过；本轮未重新部署 8 服务器，下一次部署必须单独获得批准。
@@ -61,6 +61,8 @@
   把第三方视频登记和“提取视频中的 PPT/幻灯片/课件”特殊触发固化为 smoke 脚本；本地语法、help 和 self-test 通过，live 第三方 bearer smoke 待授权凭据。
 - P1-3D 本轮新增 `npm run smoke:video-ppt-handoff`
   把视频号/登录态来源的 lightweight handoff 固化为 smoke 脚本；本地语法、help、self-test、Rust handoff 单测和 HTML artifact 渲染测试通过。主站 live lightweight smoke 本轮未在 60 秒内看到 `wechat_video_login_handoff` artifact，先标记为当前主站可见性/部署回执缺口，不改成抓视频或抽帧。
+- P2-1 本轮新增 `docs/operations/video-capture-fallback-runbook.md` 和 `npm run capture:authorized-video`
+  把授权录屏兜底固定为 operator runbook 和 isolated capture helper；默认 self-test/dry-run 不打开浏览器或 FFmpeg，live capture 必须显式 `--run-capture --ack-authorized --approval-id ...`。本轮只跑 self-test/dry-run/负向授权门禁，不做真实录屏、不上传、不部署。
 
 ### 2.4 已完成的受控公开视频 smoke
 
@@ -345,7 +347,7 @@
 
 ### P2-1：授权录屏兜底 MVP 设计
 
-**状态：待启动；先做 isolated script / runbook 评审，不默认接入 8 服务器。**
+**状态：runbook + isolated script 已实现；live 授权样例未执行；不默认接入 8 服务器。**
 
 **目标：** 在不破坏主线能力、不绕过平台权限的前提下，支持“拿不到直链但 operator 已批准可播放”的视频源。
 
@@ -356,9 +358,9 @@
 
 阶段拆分：
 
-1. **P2-1A 方案冻结。** 输出 `docs/operations/video-capture-fallback-runbook.md`，明确授权记录、输入限制、录制时长、文件大小、保留期、日志脱敏和清理策略。该阶段只写文档和最小脚本设计，不部署。
-2. **P2-1B 本地/受控 host MVP。** 新增 isolated script 打开 operator 指定 URL，使用隔离 browser profile 和 FFmpeg/系统录屏生成 `.mp4`，再把 `.mp4` 作为普通上传视频输入现有 `VideoExtraction`。脚本不保存 cookie、storage、HAR 或二维码截图。
-3. **P2-1C 授权样例 smoke。** operator 提供一个已授权、可播放但无直链的视频页面，先人工确认边界，再录制 30-60 秒并抽取 PPT。回执要区分播放失败、录制失败、视频无 PPT、抽帧失败、PPT 质量不足。
+1. **P2-1A 方案冻结已完成。** 已输出 `docs/operations/video-capture-fallback-runbook.md`，明确授权记录、输入限制、录制时长、文件大小、保留期、日志脱敏和清理策略。该阶段不部署。
+2. **P2-1B 本地/受控 host MVP 已完成。** 已新增 `scripts/capture-authorized-video.mjs` 和 `npm run capture:authorized-video`。脚本默认 self-test/dry-run，不打开浏览器或 FFmpeg；live capture 必须显式 `--run-capture --ack-authorized --approval-id ...`，使用临时浏览器 profile 和 FFmpeg/system capture，报告只记录脱敏 source summary。
+3. **P2-1C 授权样例 smoke 待执行。** operator 提供一个已授权、可播放但无直链的视频页面，先人工确认边界，再录制 30-60 秒并抽取 PPT。回执要区分播放失败、录制失败、视频无 PPT、抽帧失败、PPT 质量不足。
 4. **P2-1D 8 服务器评审。** 只有用户明确批准后才评估 8 服务器内部录制；默认不启用、不部署、不重启服务。
 
 8 服务器内部录制最小组件：
@@ -785,6 +787,17 @@ npm run smoke:video-ppt-handoff -- --self-test
 
 ```bash
 node --check scripts/capture-authorized-video.mjs
+npm run capture:authorized-video -- --help
+npm run capture:authorized-video -- --self-test
+npm run capture:authorized-video -- \
+  --dry-run \
+  --ack-authorized \
+  --approval-id DRYRUN-20260607-003 \
+  --approved-by operator-dryrun \
+  --url https://example.com/authorized-video-page \
+  --purpose dry-run-authorized-capture-plan \
+  --duration-seconds 30 \
+  --handoff upload-main
 node --check scripts/smoke/video-ppt-upload-main.mjs
 npm run test:video-deliverables
 CC=clang CXX=clang++ cargo test -p media-worker frame_extraction --lib
@@ -829,10 +842,10 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 后端公开视频 smoke | `react-in-5-minutes.mp4` 直链 | `final_pptx_ready`，PPTX/Markdown/manifest 生成 | 已通过，workflow `7bb6f92d-dbeb-4f4f-99e1-c2b029e063ba` | 作为后端回归基线保留 |
 | 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过并纳入 `smoke:video-ppt-main-visible` release gate，PPTX/Markdown/manifest 可下载 | 作为 P1-3 回归基线保留 |
 | 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help 检查；live/controlled 回执待授权 | P1-3B |
-| 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | 文档已说明，需端到端 special-trigger smoke | P1-3C |
+| 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 self-test；live 回执待 bearer/授权 | P1-3C live |
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
-| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | P1-2 handoff 已实现，拒绝原因稳定为 `login_gated_video_source_not_supported` | P1-3D lightweight handoff smoke |
-| 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | 方案已收敛，待 isolated script/runbook 评审 | P2-1 |
+| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 live 60 秒未见 handoff artifact，待发布面复核 | P1-3D live |
+| 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
 ## 7. 决策门
@@ -843,7 +856,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 - 第三方 live smoke 使用哪个 `connection_id`、`source_id` 和 inbound bearer；没有凭据时只能先做本地/loopback deterministic smoke。
 - smoke 数据保留策略：公开样例和 generated artifacts 可留在 `target/` 或测试 workspace，不能提交下载产物。
 
-进入 P2-1 前需要确认：
+进入 P2-1C/P2-1D 前需要确认：
 
 - 是否允许在 8 服务器部署 capture fallback；如果允许，是否只针对公开可播放页面，还是允许人工登录后的短时受控 session。
 - 录屏产物保留期：默认建议 7 天，是否需要更短或按客户配置。
@@ -851,7 +864,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 - 第三方系统是否愿意优先提供自己的视频文件直链，避免 DataMax 做平台录屏。
 - 主站 UI 是否需要新增“申请授权录屏处理”按钮，还是先用人工流程。
 
-没有上述确认前，录屏兜底只写方案，不进入生产实现。
+没有上述确认前，录屏兜底停留在 runbook/self-test/dry-run，不进入 live capture 或生产实现。
 
 ## 8. 下一次执行建议
 
@@ -860,7 +873,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 1. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
 2. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
 3. 复核 P1-3D 主站 lightweight handoff live surface：当前脚本已实现并自测通过，但主站 60 秒内未返回 handoff artifact；需要确认当前主站是否已包含 handoff commit/发布面，再复跑同一条 smoke。
-4. 再推进 P2-1 授权录屏兜底 MVP 的 isolated script / runbook 评审；没有明确授权和部署窗口前，不接入 8 服务器。
+4. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
 5. 最后根据 P1-3/P2-1 证据进入 P2-2 质量增强，重点处理 crop fallback、重复页、字幕页映射和逐页讲稿。
 
 本计划完成当前阶段的定义：

@@ -2,6 +2,10 @@
 
 Bootstrap, smoke, and developer automation scripts live here.
 
+Operational helper entrypoints:
+
+- `npm run capture:authorized-video`: isolated operator-approved capture helper for login-gated video PPT fallback. Default `--self-test` and `--dry-run` do not open a browser or run FFmpeg. Live capture requires `--run-capture --ack-authorized --approval-id ... --approved-by ... --url ...`; it uses a temporary browser profile, bounded FFmpeg recording, no audio by default, and prints a follow-up handoff command instead of uploading automatically.
+
 Current smoke entrypoints:
 
 - `run-assistant-run-worker-smoke.sh`: non-destructive Linux/deployment-target smoke for the AssistantRun background completion worker queue, workflow registration, and redacted video completion dispatch contract.

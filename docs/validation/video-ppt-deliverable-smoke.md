@@ -837,3 +837,69 @@ Safety result:
 - no WeChat Video Channels URL was treated as a direct media URL;
 - no video download, frame extraction, OCR, PPT generation, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, upload object key, server local upload path, private object path, or generated artifact local path was recorded.
+
+## 2026-06-07 Authorized Capture Fallback MVP Slice
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P2-1.
+
+Scope:
+
+- add a runbook and isolated helper for operator-approved capture fallback;
+- keep capture outside normal chat, workers, and production services;
+- require explicit authorization metadata before dry-run or live capture planning;
+- do not run live browser capture in this slice;
+- keep the captured MP4 handoff as a normal video upload or third-party video registration follow-up, not a separate PPT-generation path.
+
+Implemented behavior:
+
+- added `docs/operations/video-capture-fallback-runbook.md`;
+- added `scripts/capture-authorized-video.mjs`;
+- added package script `capture:authorized-video`;
+- documented the helper in `scripts/README.md`;
+- the runbook defines required approval fields, non-goals, operator flow, command examples, report contract, failure split, 8-server gate, and acceptance criteria;
+- the script defaults to `--self-test` / `--dry-run` workflows that do not open a browser and do not run FFmpeg;
+- live capture requires `--run-capture --ack-authorized --approval-id ... --approved-by ... --url ... --purpose ...`;
+- the script validates source URL scheme/host, duration hard limits, retention limit, capture mode, and handoff mode;
+- live capture path uses a temporary browser profile and FFmpeg command plan, deletes the profile by default, and prints a handoff command instead of uploading automatically;
+- reports store redacted source summary rather than full source URL.
+
+Validation:
+
+```text
+node --check scripts/capture-authorized-video.mjs
+node scripts/capture-authorized-video.mjs --help
+node scripts/capture-authorized-video.mjs --self-test
+node scripts/capture-authorized-video.mjs --dry-run --ack-authorized --approval-id DRYRUN-20260607-002 --approved-by operator-dryrun --url https://example.com/authorized-video-page --purpose dry-run-authorized-capture-plan --duration-seconds 30 --handoff upload-main
+npm run capture:authorized-video -- --help
+npm run capture:authorized-video -- --self-test
+npm run capture:authorized-video -- --dry-run --ack-authorized --approval-id DRYRUN-20260607-003 --approved-by operator-dryrun --url https://example.com/authorized-video-page --purpose dry-run-authorized-capture-plan --duration-seconds 30 --handoff upload-main
+node scripts/capture-authorized-video.mjs --dry-run --approval-id DRYRUN-NEGATIVE --approved-by operator-dryrun --url https://example.com/authorized-video-page --purpose missing-ack-negative-test
+npm run test:video-deliverables
+CC=clang CXX=clang++ cargo test -p media-worker frame_extraction --lib
+git diff --check
+```
+
+Result:
+
+- capture helper syntax check passed;
+- direct help and npm help returned expected usage and safety notes;
+- direct self-test and npm self-test passed without browser/FFmpeg execution;
+- direct dry-run and npm dry-run passed without browser/FFmpeg execution;
+- negative authorization gate passed: missing `--ack-authorized` is rejected before capture planning;
+- millisecond/PID run ids prevent self-test and dry-run reports from overwriting each other in parallel.
+- video deliverables validator tests passed, 15 tests;
+- media-worker frame extraction tests passed, 6 tests.
+
+Remaining P2-1 work:
+
+- run P2-1C only after an operator supplies an approved playable source, approval id, maximum duration, audio policy, retention policy, and handoff target;
+- after live capture, manually review the MP4 before running main upload or third-party video registration;
+- do not evaluate 8-server capture until the user explicitly approves a separate 8-server deployment/review window.
+
+Safety result:
+
+- no live browser was opened;
+- no FFmpeg capture was run;
+- no video was downloaded, uploaded, extracted, OCRed, or converted to PPT in this slice;
+- no 8-server deployment, build, restart, config mutation, capture dependency install, or 120-server action was run;
+- no cookie, token, account credential, QR screenshot, browser storage, HAR, database URL, provider payload, raw customer row, full customer document, private object path, or generated artifact local path was recorded.
