@@ -1614,6 +1614,95 @@ Safety result:
 - public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
 
+## 2026-06-08 Public Candidate Best-Sharpness Representative Selection
+
+Task source: P2-2E-2B / P2-2F follow-up from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- reduce weak fade/low-readability representatives when a stable visual segment has clearer frames available;
+- keep midpoint selection as a deterministic tie-break when sharpness scores are equal;
+- preserve existing short-transition, low-information, sparse-text build, dedupe, and deliverable contract behavior;
+- keep the public candidate as `needs_manual_review` until page-level review or further fade/crop tuning proves otherwise.
+
+Implemented behavior:
+
+- each auto-selection frame now carries a local `sharpness_score`;
+- stable cluster representative selection now chooses the highest sharpness score, then the frame closest to midpoint, then the lowest candidate index;
+- `auto_selection.selected_clusters[]` records `selected_sharpness_score`;
+- `selection_rule` remains `middle_frame_of_stable_visual_segment` when the midpoint wins, otherwise records `highest_sharpness_frame_of_stable_visual_segment`;
+- added `selects_highest_sharpness_frame_from_stable_auto_slide_cluster` to lock the selection rule and midpoint tie-break.
+
+Public candidate rerun result:
+
+- `deliverable_state=final_pptx_ready`;
+- `frame_count=96`;
+- `requested_selected_count=9`;
+- `selected_count=7`;
+- requested candidates: `[2, 16, 25, 31, 39, 55, 66, 85, 93]`;
+- final selected candidates: `[2, 16, 25, 31, 55, 85, 93]`;
+- `deduped_candidate_count=2`;
+- `visual_duplicate_count=2`;
+- `has_pptx=true`;
+- `has_video_slides_markdown=true`;
+- `has_slide_quality_report=true`;
+- `has_subtitle_page_map=false`;
+- `quality_score=61`;
+- `sharpness_high_count=3`;
+- public-course quality matrix conclusion remains `needs_manual_review`.
+
+Manual visual review note:
+
+- best-sharpness improves the public candidate slightly: quality score increased from 60 to 61 and high-sharpness-risk pages dropped from 4 to 3 in the latest public rerun;
+- the package still contains weak fade/title states and 1 full-frame fallback, so it is not a clean public-course deliverable;
+- next quality work should either add a targeted fade/low-contrast duplicate filter, improve crop fallback for the remaining page, or keep this public candidate formally classified as `needs_manual_review`.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker selects_highest_sharpness_frame_from_stable_auto_slide_cluster --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slide --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+npm run test:video-deliverables
+cargo check -p media-worker --bin video_ppt_offline_smoke
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input target/video-ppt-public-course-probe/nix-teach-5min-slides.mp4 --output-root target/video-ppt-public-candidate-extraction-bestsharp --ffmpeg-bin /opt/homebrew/bin/ffmpeg --interval-seconds 15 --title "Public slides sample: How to teach Nix in 5 minutes" --json-output target/video-ppt-public-candidate-extraction-bestsharp/offline-smoke-summary.json
+node tools/validate-video-deliverables.mjs target/video-ppt-public-candidate-extraction-bestsharp/<session>/generated_artifacts
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/video-ppt-public-candidate-extraction-bestsharp/<session>/generated_artifacts --pretty --output-dir target/video-ppt-public-candidate-quality-matrix-bestsharp
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- best-sharpness rule test passed;
+- `auto_selects` passed, 7 tests;
+- selected-slide regression passed, 4 tests;
+- controlled video sample deliverable contract passed;
+- video deliverable validator test suite passed, 19 tests;
+- offline smoke helper compiled;
+- public candidate offline smoke completed locally with `final_pptx_ready`;
+- public candidate deliverables validator passed;
+- public-course quality matrix passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`;
+- whitespace check passed.
+
+Remaining P2-2E work:
+
+- decide whether to keep this public candidate as the accepted `needs_manual_review` public sample or continue with a targeted fade/low-contrast duplicate filter;
+- full P2-2E remains incomplete until a customer/operator-authorized sample is supplied;
+- this slice does not satisfy upload live, third-party live, handoff live, or authorized capture gates.
+
+Safety result:
+
+- no main-site upload or live assistant run was created;
+- no third-party event was sent;
+- no WeChat Video Channels extraction, login bypass, cookie capture, browser recording, or authorized capture was performed;
+- no service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
+
 ## 2026-06-08 Public Candidate Selected Indices Semantics
 
 Task source: P2-2E-2B from `docs/plans/datamax-active-execution-plan.md`.

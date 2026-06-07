@@ -1428,6 +1428,7 @@ struct VideoAutoSlideFrame {
     candidate_index: usize,
     file_name: String,
     signature: VideoFrameVisualSignature,
+    sharpness_score: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -1467,7 +1468,7 @@ impl VideoAutoSlideSelection {
             "decodable_frame_count": self.decodable_frame_count,
             "undecodable_frame_count": self.undecodable_frame_count,
             "cluster_policy": {
-                "mode": "stable_ppt_page_segment_midpoint",
+                "mode": "stable_ppt_page_segment_best_sharpness_middle_tiebreak",
                 "visual_signature": format!("luma_{}x{}", VIDEO_VISUAL_SIGNATURE_GRID_SIZE, VIDEO_VISUAL_SIGNATURE_GRID_SIZE),
                 "same_segment_max_avg_luma_diff": VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF,
                 "same_segment_changed_sample_min_diff": VIDEO_AUTO_SLIDE_SEGMENT_CHANGED_SAMPLE_MIN_DIFF,
@@ -1662,6 +1663,7 @@ fn video_auto_slide_selection_from_frames(
             candidate_index,
             file_name,
             signature,
+            sharpness_score: video_slide_sharpness_score(frame),
         };
 
         let belongs_to_current = current_cluster
@@ -1760,7 +1762,7 @@ fn video_finalize_auto_slide_cluster(
         return;
     }
 
-    let selected_frame = &cluster.frames[frame_count / 2];
+    let (selected_frame, selection_rule) = video_select_auto_slide_cluster_frame(&cluster);
     if let Some((reason, avg_luma, luma_range)) =
         video_visual_signature_low_information_rejection(&selected_frame.signature)
     {
@@ -1771,6 +1773,7 @@ fn video_finalize_auto_slide_cluster(
             "last_candidate_index": last.candidate_index,
             "selected_candidate_index": selected_frame.candidate_index,
             "selected_file_name": selected_frame.file_name,
+            "selected_sharpness_score": selected_frame.sharpness_score,
             "avg_luma": avg_luma,
             "luma_range": luma_range,
             "dark_max_avg_luma": VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_AVG_LUMA,
@@ -1789,9 +1792,44 @@ fn video_finalize_auto_slide_cluster(
         "last_candidate_index": last.candidate_index,
         "selected_candidate_index": selected_frame.candidate_index,
         "selected_file_name": selected_frame.file_name,
+        "selected_sharpness_score": selected_frame.sharpness_score,
         "duration_seconds_estimate": video_round_similarity_score(frame_count as f64 * interval_seconds),
-        "selection_rule": "middle_frame_of_stable_visual_segment",
+        "selection_rule": selection_rule,
     }));
+}
+
+fn video_select_auto_slide_cluster_frame(
+    cluster: &VideoAutoSlideCluster,
+) -> (&VideoAutoSlideFrame, &'static str) {
+    let midpoint = cluster.frames.len() / 2;
+    let selected = cluster
+        .frames
+        .iter()
+        .enumerate()
+        .min_by_key(|(index, frame)| {
+            (
+                std::cmp::Reverse(frame.sharpness_score.unwrap_or(-1)),
+                index.abs_diff(midpoint),
+                frame.candidate_index,
+            )
+        })
+        .map(|(_, frame)| frame)
+        .unwrap_or_else(|| {
+            cluster
+                .frames
+                .get(midpoint)
+                .expect("cluster selected frame")
+        });
+    let midpoint_frame = cluster
+        .frames
+        .get(midpoint)
+        .expect("cluster midpoint frame");
+    let selection_rule = if selected.candidate_index == midpoint_frame.candidate_index {
+        "middle_frame_of_stable_visual_segment"
+    } else {
+        "highest_sharpness_frame_of_stable_visual_segment"
+    };
+    (selected, selection_rule)
 }
 
 fn video_round_similarity_score(value: f64) -> f64 {
@@ -10787,6 +10825,68 @@ mod tests {
         assert!(archive.by_name("ppt/media/image1.png").is_ok());
         assert!(archive.by_name("ppt/media/image2.png").is_ok());
         assert!(archive.by_name("ppt/media/image3.png").is_ok());
+    }
+
+    #[test]
+    fn selects_highest_sharpness_frame_from_stable_auto_slide_cluster() {
+        let signature = VideoFrameVisualSignature {
+            fingerprint: "test-signature".to_string(),
+            samples: vec![12, 64, 128, 220],
+        };
+        let cluster = VideoAutoSlideCluster {
+            frames: vec![
+                VideoAutoSlideFrame {
+                    candidate_index: 10,
+                    file_name: "frame_000010.png".to_string(),
+                    signature: signature.clone(),
+                    sharpness_score: Some(80),
+                },
+                VideoAutoSlideFrame {
+                    candidate_index: 11,
+                    file_name: "frame_000011.png".to_string(),
+                    signature: signature.clone(),
+                    sharpness_score: Some(20),
+                },
+                VideoAutoSlideFrame {
+                    candidate_index: 12,
+                    file_name: "frame_000012.png".to_string(),
+                    signature: signature.clone(),
+                    sharpness_score: Some(40),
+                },
+            ],
+        };
+        let (selected, selection_rule) = video_select_auto_slide_cluster_frame(&cluster);
+        assert_eq!(selected.candidate_index, 10);
+        assert_eq!(
+            selection_rule,
+            "highest_sharpness_frame_of_stable_visual_segment"
+        );
+
+        let midpoint_cluster = VideoAutoSlideCluster {
+            frames: vec![
+                VideoAutoSlideFrame {
+                    candidate_index: 20,
+                    file_name: "frame_000020.png".to_string(),
+                    signature: signature.clone(),
+                    sharpness_score: Some(60),
+                },
+                VideoAutoSlideFrame {
+                    candidate_index: 21,
+                    file_name: "frame_000021.png".to_string(),
+                    signature: signature.clone(),
+                    sharpness_score: Some(60),
+                },
+                VideoAutoSlideFrame {
+                    candidate_index: 22,
+                    file_name: "frame_000022.png".to_string(),
+                    signature,
+                    sharpness_score: Some(60),
+                },
+            ],
+        };
+        let (selected, selection_rule) = video_select_auto_slide_cluster_frame(&midpoint_cluster);
+        assert_eq!(selected.candidate_index, 21);
+        assert_eq!(selection_rule, "middle_frame_of_stable_visual_segment");
     }
 
     #[test]
