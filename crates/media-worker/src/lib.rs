@@ -3983,6 +3983,7 @@ fn render_selected_slide_notes_markdown(
                 output.push_str("- Aligned transcript:\n");
                 for segment in transcript_segments {
                     let text = video_item_text(&segment, &["text", "content", "summary"])
+                        .map(|text| video_safe_evidence_text(&text))
                         .unwrap_or_default();
                     let range = video_time_range_label(&segment);
                     output.push_str(&format!("  - {}{}\n", optional_time_prefix(&range), text));
@@ -3992,6 +3993,7 @@ fn render_selected_slide_notes_markdown(
                 output.push_str("- Aligned OCR snippets:\n");
                 for snippet in ocr_snippets {
                     let text = video_item_text(&snippet, &["text", "ocr_text", "summary"])
+                        .map(|text| video_safe_evidence_text(&text))
                         .unwrap_or_default();
                     let timestamp = snippet
                         .get("timestamp_label")
@@ -4643,11 +4645,13 @@ fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
     let file_name = candidate
         .get("file_name")
         .and_then(Value::as_str)
-        .unwrap_or("frame");
+        .map(video_safe_evidence_text)
+        .unwrap_or_else(|| "frame".to_string());
     let timestamp = candidate
         .get("timestamp_label")
         .and_then(Value::as_str)
-        .unwrap_or("unknown");
+        .map(video_safe_evidence_text)
+        .unwrap_or_else(|| "unknown".to_string());
     let transcript_note = candidate
         .get("transcript_segments")
         .and_then(Value::as_array)
@@ -4656,6 +4660,7 @@ fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
             let text = segments
                 .iter()
                 .filter_map(|segment| video_item_text(segment, &["text", "content", "summary"]))
+                .map(|text| video_safe_evidence_text(&text))
                 .collect::<Vec<_>>()
                 .join(" ");
             format!(" Pre-page transcript: {text}.")
@@ -4669,6 +4674,7 @@ fn render_pptx_notes_slide(slide_number: usize, candidate: &Value) -> String {
             let text = snippets
                 .iter()
                 .filter_map(|snippet| video_item_text(snippet, &["text", "ocr_text", "summary"]))
+                .map(|text| video_safe_evidence_text(&text))
                 .collect::<Vec<_>>()
                 .join(" ");
             format!(" OCR evidence: {text}.")
@@ -12378,6 +12384,10 @@ mod tests {
                     "timestamp_seconds": 0.8,
                     "text": "OCR-only title for selected slide",
                     "ocr_confidence": 0.93
+                }, {
+                    "timestamp_seconds": 0.9,
+                    "text": "https://private.example/video?token=secret",
+                    "ocr_confidence": 0.88
                 }]
             }
         }));
@@ -12403,6 +12413,8 @@ mod tests {
         assert!(selected_slides.contains("missing_transcript"));
         assert!(selected_slides.contains("window_mapped"));
         assert!(selected_slides.contains("OCR-only title for selected slide"));
+        assert!(selected_slides.contains("[redacted]"));
+        assert!(!selected_slides.contains("token=secret"));
         let slide_notes_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("slide_notes"))
@@ -12412,6 +12424,8 @@ mod tests {
         assert!(slide_notes.contains("no aligned transcript segment"));
         assert!(slide_notes.contains("Aligned OCR snippets"));
         assert!(slide_notes.contains("OCR-only title for selected slide"));
+        assert!(slide_notes.contains("[redacted]"));
+        assert!(!slide_notes.contains("token=secret"));
         let video_slides_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("video_slides_markdown"))
@@ -12421,6 +12435,8 @@ mod tests {
         assert!(video_slides.contains("no aligned transcript segment"));
         assert!(video_slides.contains("OCR evidence"));
         assert!(video_slides.contains("OCR-only title for selected slide"));
+        assert!(video_slides.contains("[redacted]"));
+        assert!(!video_slides.contains("token=secret"));
         let slide_quality_report_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
@@ -12430,7 +12446,7 @@ mod tests {
             fs::read_to_string(slide_quality_report_path).expect("slide quality report");
         assert!(slide_quality_report.contains("\"subtitle_missing_count\": 1"));
         assert!(slide_quality_report.contains("\"ocr_mapped_count\": 1"));
-        assert!(slide_quality_report.contains("\"ocr_snippet_count\": 1"));
+        assert!(slide_quality_report.contains("\"ocr_snippet_count\": 2"));
         assert!(slide_quality_report.contains("\"ocr_risk\": \"low\""));
         assert!(slide_quality_report.contains("missing_transcript_alignment"));
         let pptx_path = files
@@ -12449,6 +12465,8 @@ mod tests {
         assert!(notes.contains("Transcript/subtitle alignment is not yet verified"));
         assert!(notes.contains("OCR evidence"));
         assert!(notes.contains("OCR-only title for selected slide"));
+        assert!(notes.contains("[redacted]"));
+        assert!(!notes.contains("token=secret"));
         let final_manifest_path = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("final_deliverables_manifest"))

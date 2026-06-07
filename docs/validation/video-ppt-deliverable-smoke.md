@@ -3393,6 +3393,7 @@ Task source: EP6 local quality narrowing for OCR/subtitle evidence. Improve revi
 Scope:
 
 - add OCR snippets to screenshot PPTX speaker notes when selected slides have OCR evidence;
+- run transcript/OCR note text through `video_safe_evidence_text` before writing `slide_notes.md` or PPTX speaker notes;
 - preserve the existing transcript notes behavior when transcript segments are present;
 - add an OCR-only media-worker regression proving no `subtitle_page_map` file is generated when transcript alignment is absent;
 - keep this as local quality/test work only, with no live upload, third-party event, capture, or deployment.
@@ -3400,9 +3401,10 @@ Scope:
 Implemented behavior:
 
 - PPTX notes now include `OCR evidence: ...` for selected slides with OCR snippets;
+- token-like URLs, local paths, and secret-looking transcript/OCR text are redacted before being written into slide notes or PPTX speaker notes;
 - OCR-only selected slides still report `missing_transcript`, do not create a `subtitle_page_map` artifact, and keep `has_subtitle_page_map=false`;
-- slide notes, `video_slides.md`, PPTX speaker notes, selected slide manifest, and `slide_quality_report.json` all carry OCR-only evidence consistently;
-- quality report records `ocr_mapped_count=1`, `ocr_snippet_count=1`, and keeps `missing_transcript_alignment` for the absent transcript.
+- slide notes, `video_slides.md`, PPTX speaker notes, selected slide manifest, and `slide_quality_report.json` all carry OCR-only evidence consistently, while unsafe text is represented as `[redacted]`;
+- quality report records `ocr_mapped_count=1`, `ocr_snippet_count=2` for the redaction fixture, and keeps `missing_transcript_alignment` for the absent transcript.
 
 Validation:
 
@@ -3419,7 +3421,7 @@ git diff --check
 
 Result:
 
-- new OCR-only regression passed;
+- new OCR-only regression passed, including token-like OCR text redaction across selected slides, slide notes, `video_slides.md`, and PPTX speaker notes;
 - existing transcript/subtitle-page-map regression passed;
 - no-transcript deliverables regression passed;
 - media-worker lib suite passed: 53 tests;
