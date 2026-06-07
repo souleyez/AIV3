@@ -10820,6 +10820,80 @@ mod tests {
     }
 
     #[test]
+    fn auto_selects_contentful_dark_theme_slides_without_low_information_rejection() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-auto-dark-theme-slide-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+
+        for frame_index in 1..=3 {
+            write_test_visual_slide_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [10, 12, 18],
+                [92, 150, 230],
+                16..88,
+                12..68,
+            );
+        }
+
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 3,
+            "interval_seconds": 0.2,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+        let files = manifest["files"].as_array().expect("files");
+
+        let candidate_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
+            .and_then(|file| file["path"].as_str())
+            .expect("candidate manifest path");
+        let candidate_manifest: Value = serde_json::from_str(
+            &fs::read_to_string(candidate_manifest_path).expect("candidate manifest"),
+        )
+        .expect("candidate manifest json");
+        assert_eq!(candidate_manifest["status"], json!("auto_selected"));
+        assert_eq!(candidate_manifest["selected_candidate_indices"], json!([2]));
+        assert_eq!(
+            candidate_manifest["auto_selection"]["selected_clusters"][0]["status"],
+            json!("stable_ppt_page_segment")
+        );
+        assert_eq!(
+            candidate_manifest["auto_selection"]["selected_clusters"][0]
+                ["selected_candidate_index"],
+            json!(2)
+        );
+        assert_eq!(
+            candidate_manifest["auto_selection"]["rejected_clusters"],
+            json!([])
+        );
+
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["selected_count"], json!(1));
+        assert_eq!(selected_slides["selected_candidate_indices"], json!([2]));
+    }
+
+    #[test]
     fn detects_obvious_slide_rectangle_crop_from_png_frame() {
         let document = test_document();
         let output_root = std::env::temp_dir().join(format!(

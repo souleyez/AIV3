@@ -1628,3 +1628,61 @@ Safety result:
 - no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
+
+## 2026-06-08 Contentful Dark-Theme Slide Guard
+
+Task source: P2-2B/P2-2C local quality fixture follow-up from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- prove the dark/flat low-information guard does not reject stable dark-theme slides that contain visible courseware content;
+- keep the existing black-screen, white-screen, gray/loading-screen rejection behavior intact;
+- preserve selected-slide deliverable contracts and avoid live extraction, network fetches, uploads, browser recording, or deployment.
+
+Implemented behavior:
+
+- added `auto_selects_contentful_dark_theme_slides_without_low_information_rejection`;
+- the fixture creates a stable dark-background slide segment with visible blue courseware content;
+- auto-selection keeps the midpoint candidate in `selected_candidate_indices`;
+- the contentful dark-theme cluster is recorded as `stable_ppt_page_segment`;
+- `auto_selection.rejected_clusters` remains empty for that contentful dark-theme segment;
+- selected slides manifest remains `selected_count=1` with the same selected candidate index.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects_contentful_dark_theme_slides_without_low_information_rejection --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- new contentful dark-theme fixture passed;
+- `auto_selects` passed, 5 tests, covering stable PPT pages, dark low-information rejection, bright low-information rejection, flat low-information rejection, and contentful dark-theme positive selection;
+- selected-slides regression passed;
+- controlled video sample deliverable contract passed;
+- slide rectangle regression passed, 5 tests;
+- video deliverable validator passed, 19 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- speaker-window obstruction, animation transition, and low-contrast text fixtures still need broader local coverage;
+- P2-2D still needs a real approved sample with usable subtitles/transcript/OCR to verify alignment quality beyond deterministic fixture coverage;
+- P2-2E still needs public-course and customer-authorized real samples before the full three-sample quality matrix can be marked complete.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- generated temp frames stayed under test temp directories and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
