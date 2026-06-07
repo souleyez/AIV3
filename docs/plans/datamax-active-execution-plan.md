@@ -442,6 +442,21 @@ npm run smoke:video-ppt-quality-matrix -- \
 
 建议命令：
 
+先用同一素材跑 no-network preflight。preflight 只检查素材类型、触发语和 live 写入范围，不下载、不上传、不建 dataset/document/run：
+
+```bash
+npm run smoke:video-ppt-upload-main -- \
+  --preflight \
+  --base-url https://v3.elepcloud.com \
+  --fixture-file target/video-ppt-public-course-probe/nix-teach-5min-slides.mp4 \
+  --fixture-name nix-teach-5min-slides-upload-smoke.mp4 \
+  --local-thread-id video-ppt-upload-main-YYYYMMDD-01 \
+  --prompt "请提取刚上传视频里的 PPT/幻灯片/课件，输出 PPTX、video_slides.md 和交付 manifest。" \
+  --output-dir target/video-ppt-upload-main-preflight
+```
+
+preflight 通过、且用户仍明确批准写主站 smoke 记录后，再跑 live：
+
 ```bash
 npm run smoke:video-ppt-upload-main -- \
   --base-url https://v3.elepcloud.com \
@@ -456,6 +471,13 @@ npm run smoke:video-ppt-upload-main -- \
 
 ```bash
 npm run smoke:video-ppt-upload-main -- \
+  --preflight \
+  --base-url https://v3.elepcloud.com \
+  --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \
+  --local-thread-id video-ppt-upload-main-YYYYMMDD-01 \
+  --output-dir target/video-ppt-upload-main-preflight
+
+npm run smoke:video-ppt-upload-main -- \
   --base-url https://v3.elepcloud.com \
   --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \
   --local-thread-id video-ppt-upload-main-YYYYMMDD-01 \
@@ -464,6 +486,7 @@ npm run smoke:video-ppt-upload-main -- \
 
 验收：
 
+- live 前必须有同一 fixture/context 的 preflight 回执；preflight 成功不等于 live 成功。
 - 创建或复用 smoke dataset，不污染客户数据。
 - 上传、文档登记、ingest、assistant run、视频 PPT 特殊触发完整跑通。
 - `deliverable_status.state=final_pptx_ready`。
@@ -492,11 +515,41 @@ npm run smoke:video-ppt-upload-main -- \
 
 建议命令：
 
+没有 bearer 时只能做本地 shape check，不能作为 live-ready 证据：
+
+```bash
+npm run smoke:external-video-ppt -- \
+  --preflight \
+  --allow-missing-bearer \
+  --connection-id <connection_id> \
+  --source-id <source_id> \
+  --content-url <anonymous_public_video_url> \
+  --output-dir target/external-video-ppt-preflight-shape-only
+```
+
+operator 提供 bearer 后，先用同一 context/input 跑 live preflight：
+
+```bash
+npm run smoke:external-video-ppt -- \
+  --preflight \
+  --base-url https://v3.elepcloud.com \
+  --connection-id <connection_id> \
+  --source-id <source_id> \
+  --bearer "$EXTERNAL_VIDEO_PPT_SMOKE_BEARER" \
+  --content-url <anonymous_public_video_url> \
+  --external-document-id video-ppt-external-YYYYMMDD-01 \
+  --message "请提取这个视频里的 PPT/幻灯片/课件，并返回 PPTX、video_slides.md 和交付 manifest。" \
+  --output-dir target/external-video-ppt-preflight
+```
+
+preflight 通过后再跑 live：
+
 ```bash
 npm run smoke:external-video-ppt -- \
   --base-url https://v3.elepcloud.com \
   --connection-id <connection_id> \
   --source-id <source_id> \
+  --bearer "$EXTERNAL_VIDEO_PPT_SMOKE_BEARER" \
   --content-url <anonymous_public_video_url> \
   --external-document-id video-ppt-external-YYYYMMDD-01 \
   --message "请提取这个视频里的 PPT/幻灯片/课件，并返回 PPTX、video_slides.md 和交付 manifest。" \
@@ -511,6 +564,7 @@ npm run smoke:external-video-ppt -- --self-test
 
 验收：
 
+- live 前必须有同一 bearer/context/input 的 preflight 回执；`--allow-missing-bearer` 只能证明本地形状，不证明 live-ready。
 - 第三方登记视频素材和 special-trigger 消息分开记录。
 - 返回 run/reply/card 能说明 `final_pptx_ready` 或明确的失败分流。
 - 如第三方 surface 还不能下载 PPTX/Markdown/manifests，记录为 `artifact_visibility_gap`，不把后端成功当成第三方交付完成。
@@ -537,6 +591,12 @@ handoff live 验收：
 ```bash
 npm run smoke:video-ppt-handoff -- --self-test
 npm run smoke:video-ppt-handoff -- \
+  --preflight \
+  --mode main \
+  --base-url https://v3.elepcloud.com \
+  --local-thread-id video-ppt-handoff-YYYYMMDD-01 \
+  --output-dir target/video-ppt-handoff-main-preflight
+npm run smoke:video-ppt-handoff -- \
   --mode main \
   --base-url https://v3.elepcloud.com \
   --local-thread-id video-ppt-handoff-YYYYMMDD-01 \
@@ -549,6 +609,28 @@ npm run smoke:video-ppt-handoff -- \
 - self-test 可随时跑。
 - main live pass 需要当前 deterministic handoff 修复已部署到 8 服务器，所以必须先走 EP7 部署批准。
 - external live pass 还需要 inbound bearer、`connection_id`、`source_id`。
+- live 前必须先用同一 mode/context 跑 preflight；main preflight 不会抓取视频号链接，external preflight 还要检查 bearer/context 门禁。
+
+external handoff preflight/live 命令形态：
+
+```bash
+npm run smoke:video-ppt-handoff -- \
+  --preflight \
+  --mode external \
+  --base-url https://v3.elepcloud.com \
+  --connection-id <connection_id> \
+  --source-id <source_id> \
+  --bearer "$EXTERNAL_VIDEO_PPT_SMOKE_BEARER" \
+  --output-dir target/video-ppt-handoff-external-preflight
+
+npm run smoke:video-ppt-handoff -- \
+  --mode external \
+  --base-url https://v3.elepcloud.com \
+  --connection-id <connection_id> \
+  --source-id <source_id> \
+  --bearer "$EXTERNAL_VIDEO_PPT_SMOKE_BEARER" \
+  --output-dir target/video-ppt-handoff-external-smoke
+```
 
 授权录屏兜底：
 
@@ -807,6 +889,37 @@ Safety:
 - 产物不进 Git，只写脱敏质量结论
 - 用于补齐 P2-2E 三样例质量矩阵
 ```
+
+#### 0.7.14 2026-06-08 当前 HEAD 验收审计
+
+本节是截至当前同步基线 `a09ca4e` 的收口审计。后续若只有 doc-only commit，功能基线仍以 `a09ca4e` 为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
+
+| 审计项 | 当前证据 | 是否可宣称完成 | 下一步 |
+| --- | --- | --- | --- |
+| 计划整合 | 本文件是 `docs/plans/` 下唯一 active plan；第 0.7 节已把原计划、视频测试、抽取效果复核、微信视频号限制、授权录屏兜底、GitHub 同步和 8 服务器部署门槛收进 EP0-EP7 | 可宣称“计划已收口为可执行方案” | 同步桌面副本，doc-only 提交 GitHub |
+| 无授权本地准备度 | `No-Auth Live-Preflight Acceptance Rollup` 已通过：上传 preflight/self-test、第三方 preflight/self-test、handoff preflight/self-test、授权录屏 self-test、质量矩阵 self-test、validator 19 项 | 可宣称“无授权本地 gate 已过” | 作为 live 前基线保留 |
+| 主站上传入口 | preflight 和 self-test 证明脚本、素材类型、触发语、写入范围、artifact/download contract 已就绪 | 不可宣称 live 上传入口已验收 | 需要用户批准写一条非客户主站 smoke 记录，然后同 fixture preflight -> live |
+| 第三方登记入口 | preflight 和 self-test 证明第三方 context/fixture/trigger shape、reply surface、最小 PPTX/Markdown contract 已就绪 | 不可宣称第三方 live 已验收 | 需要 bearer、`connection_id`、`source_id`、安全输入，然后同 context preflight -> live |
+| 微信视频号/登录态 handoff | 本地 deterministic early return、third-party unsupported card、handoff self-test/preflight 均已就绪 | 不可宣称现网 handoff 已验收 | 需要批准 8 服务器部署窗口，部署后 main preflight -> live；external 还需 bearer/context |
+| 授权录屏兜底 | runbook、helper、dry-run/self-test、授权负向门禁和 `sharedReceipt` 脱敏已就绪 | 不可宣称 live capture 已验收 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，8 内部录屏另批 |
+| 公开视频质量样例 | 三个 media.ccc slides 样例可生成 public evidence；主样例和第三样例 validator/matrix 通过但均 `needs_manual_review`，弱样例触发单页风险提示 | 可宣称 public course 样例可进入复核包；不可宣称 clean deliverable | 保持人工复核结论；不替代客户授权样例 |
+| 客户授权质量矩阵 | `--customer-deliverables`、approval-id 门禁和三输入组合矩阵脚本契约已完成 | 不可宣称 P2-2E 全量完成 | 等客户/operator 授权样例，产物不进 Git，只写脱敏结论 |
+| 8 服务器 | 本轮未 pull、build、restart、deploy；preflight 已明确 `deploymentApprovalRequired=true` | 不可宣称现网已更新到当前 handoff 修复 | 只有用户明确批准发版窗口后进入 EP7 |
+
+下一阶段的可执行顺序固定为：
+
+1. **无授权继续**：只做 EP1/EP6 本地质量窄修复、public 样例人工复核和文档台账。
+2. **批准主站 smoke**：EP2 同 fixture preflight -> 主站 live controlled smoke -> validator/quality matrix -> 脱敏回执。
+3. **提供第三方凭据**：EP3 同 bearer/context/input preflight -> third-party live smoke -> surface/download 复核 -> 脱敏回执。
+4. **批准 8 发版窗口**：EP7 部署当前已推送 commit -> EP4 main handoff preflight/live -> external 按 bearer/context 补跑。
+5. **提供授权播放页**：EP4 capture dry-run -> live capture -> 人工确认 MP4 含 PPT 画面 -> EP2 或 EP3。
+6. **提供客户授权样例**：EP5 validator + synthetic/public/customer 三输入 quality matrix -> 人工结论。
+
+全量验收关闭条件：
+
+- M1 主站上传 live、M2 第三方 live、M3 现网 handoff live、M4 授权录屏样例、M9 三样例质量矩阵全部有脱敏回执。
+- 每个入口的失败都能落到 source access、video has no PPT、frame extraction、selection quality、crop quality、subtitle alignment、artifact visibility 或 deployment gap 之一。
+- `docs/validation/video-ppt-deliverable-smoke.md` 有最终 rollup；GitHub 已同步对应 commit；8 服务器只有在批准窗口内完成并有服务状态和 smoke 证据。
 
 ## 1. 计划原则
 
@@ -2148,10 +2261,10 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 主站可见 smoke | 同一公开视频直链 | 用户在主站看到下载动作 | 已通过并纳入 `smoke:video-ppt-main-visible` release gate，PPTX/Markdown/manifest 可下载 | 作为 P1-3 回归基线保留 |
 | 无字幕 deliverable contract | 无 transcript/subtitle 的公开视频样例 | 没有 `subtitle_page_map.json` 时仍可交付截图型 PPTX，但必须标记 `missing_transcript_alignment` | P0-3 已完成本地切片；validator、media-worker package summary、published manifest、version history 和 durable manifest 已改为条件性契约 | 作为回归保留 |
 | 公开视频课程候选 | media.ccc/NixCon slides MP4 | 真实公开课件视频能通过 validator 并进入 quality matrix | S1 access probe 通过；S2A 离线抽取已生成 PPTX/Markdown/quality report，deliverables validator 通过，quality matrix 判为 `needs_manual_review`；selected manifest、稀疏文字/build 选页、best-sharpness 代表帧、visual-shape duplicate 保守去重均已完成本地修复；shape-dedupe 最终复跑仍为 7 页、质量分 61、`needs_manual_review`；`Nix in Space` 降级为 1 页弱对照；`Layered Nix Stores` 修复 bright-template build 误删后为 3 页、quality score 68、`needs_manual_review` | 若无授权，可继续 crop/sharpness/字幕公开样例窄修复；完整 P2-2E 仍等待客户授权样例 |
-| 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help/self-test/最小 PPTX-Markdown 校验；live/controlled 回执待授权 | P1-3B |
-| 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 self-test/最小 PPTX-Markdown 校验；live 回执待 bearer/授权 | P1-3C live |
+| 主站上传视频 | 用户上传 `.mp4/.mov/.m4v/.webm/.mkv/.avi` | 上传登记后明确触发 PPT 抽取，并通过 artifact file API 下载 | `smoke:video-ppt-upload-main` 已实现并通过语法/help/preflight/self-test/最小 PPTX-Markdown 校验；preflight 不下载不上传，live/controlled 回执待授权 | P1-3B |
+| 第三方视频登记 | 第三方 `content_url` 或 attachment | 登记视频素材后，特殊触发进入 `VideoExtraction` 并返回可见产物 | `smoke:external-video-ppt` 已实现并通过 preflight/self-test/最小 PPTX-Markdown 校验；缺 bearer 时只能 shape check，live 回执待 bearer/授权 | P1-3C live |
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
-| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 early-return 和第三方 deterministic card 均已通过本地 endpoint/handler 测试，live pass 待部署后复跑 | P1-3D live |
+| 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 preflight/self-test；主站 early-return 和第三方 deterministic card 均已通过本地 endpoint/handler 测试，live pass 待部署后复跑 | P1-3D live |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |
 | 质量报告 | 已生成 PPTX/Markdown/manifest 的 video/PPT 包 | 输出可选 `slide_quality_report.json`，解释质量分和风险 | P2-2A 已完成本地验证；legacy 包兼容，新包质量报告可校验 | 作为后续样例复核辅助保留 |
 | 裁剪/稳定/字幕/清晰度增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射，并提示低清晰度/低可读性页 | P2-2B bright-canvas detector、P2-2C 暗色/亮色/纯色低信息稳定段过滤、P2-2D OCR evidence/quality-report coverage、P2-2F 清晰度/可读性信号本地切片已完成；P2-2E quality-matrix self-test scaffold 和 local deliverables input 已完成；真实 public/customer 样例矩阵和更广泛质量处理仍未完成 | 做 P2-2B/P2-2C follow-up、P2-2D sample、P2-2E public/customer real samples |
@@ -2198,9 +2311,9 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 里程碑 | 执行内容 | 需要输入/授权 | 必跑验证 | 完成证据 | 8 服务器动作 |
 | --- | --- | --- | --- | --- | --- |
 | M0 | P0-3 subtitle map contract 修正 | 无；本地开发即可 | 已通过 `node --test tools/validate-video-deliverables.test.mjs`、`npm run test:video-deliverables`、media-worker no-subtitle/controlled/durable tests、platform-api video_extraction/video_ppt、`git diff --check` | 已完成：validator 接受无字幕包、拒绝坏 map；validation 文档口径统一 | 未部署 |
-| M1 | P1-3B 主站上传视频 controlled smoke | 用户批准在主站写入一条非客户公开视频 smoke 记录 | `npm run smoke:video-ppt-upload-main`，并下载 PPTX/Markdown/manifest 复核 | `docs/validation/video-ppt-deliverable-smoke.md` 追加上传入口回执 | 不部署，除非 smoke 证明现网缺已修复代码且用户另批 |
-| M2 | P1-3C 第三方视频登记 controlled smoke | inbound bearer、`connection_id`、`source_id`、可用公开视频或上传文件 | `npm run smoke:external-video-ppt` live；失败时跑 self-test 对照 | 第三方登记和特殊触发分开记录，产物 surface 明确 | 不部署，除非用户另批 |
-| M3 | P1-3D 视频号/登录态 handoff live pass | 用户批准 8 服务器部署窗口；第三方模式还需要 inbound bearer | 部署前本地测试、部署后 `npm run smoke:video-ppt-handoff -- --mode main`，第三方按授权补跑 | 主站/第三方返回 handoff 卡片，不抓视频、不生成 PPT、不走 provider | 仅在批准后 pull/build/restart 受影响服务 |
+| M1 | P1-3B 主站上传视频 controlled smoke | 用户批准在主站写入一条非客户公开视频 smoke 记录 | 同 fixture `npm run smoke:video-ppt-upload-main -- --preflight`，通过后跑 live 并下载 PPTX/Markdown/manifest 复核 | `docs/validation/video-ppt-deliverable-smoke.md` 追加上传入口回执 | 不部署，除非 smoke 证明现网缺已修复代码且用户另批 |
+| M2 | P1-3C 第三方视频登记 controlled smoke | inbound bearer、`connection_id`、`source_id`、可用公开视频或上传文件 | 同 bearer/context/input `npm run smoke:external-video-ppt -- --preflight`，通过后跑 live；失败时跑 self-test 对照 | 第三方登记和特殊触发分开记录，产物 surface 明确 | 不部署，除非用户另批 |
+| M3 | P1-3D 视频号/登录态 handoff live pass | 用户批准 8 服务器部署窗口；第三方模式还需要 inbound bearer | 部署前本地测试、部署后同 mode/context `npm run smoke:video-ppt-handoff -- --preflight`，再跑 `--mode main` live，第三方按授权补跑 | 主站/第三方返回 handoff 卡片，不抓视频、不生成 PPT、不走 provider | 仅在批准后 pull/build/restart 受影响服务 |
 | M4 | P2-1C 授权录屏样例 | operator 授权记录、可播放来源、最大时长、音频策略、保留期、handoff 目标 | `capture:authorized-video` dry-run，live capture 后复用 P1-3 上传或第三方抽取 smoke | 录制 `.mp4` 可进入现有 `VideoExtraction`，并有质量结论 | 默认不启用；8 内部录制需单独批准 |
 | M5 | P2-2F 清晰度/可读性质量信号 | 无 live 授权；本地 fixture 即可 | 已通过 media-worker selected_slides/slide_rectangle/controlled sample/sharpness helper、低对比字迹端到端 fixture、deliverable validator、platform-api video tests、`git diff --check` | 已完成：`slide_quality_report.json` 显示 sharpness/readability risk，低对比字迹会提示 high-risk review，旧包兼容 | 未部署 |
 | M6 | P2-2E-1 质量矩阵本地 deliverables 输入 | 一次真实或合成视频/PPT 抽取输出的 `generated_artifacts/`；可用临时 target fixture | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`--help`、`--self-test --pretty`、`node tools/validate-video-deliverables.mjs target/video-ppt-quality-matrix-fixture/generated_artifacts`、`--synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty`、`--public-course-deliverables <public-candidate-generated_artifacts> --pretty` | 已完成：matrix 可读取本地交付包并复用 validator，synthetic/public 可按类别分类，customer gate 仍 pending | 未部署 |

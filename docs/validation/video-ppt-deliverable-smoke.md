@@ -3296,3 +3296,36 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated rollup reports stayed under `target/` and were not committed;
 - no cookie, token, bearer, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, raw approval id, or raw approved-by value was recorded in this shared rollup receipt.
+
+## 2026-06-08 Executable Plan Completion Audit
+
+Task source: plan-only follow-up to finish the consolidated executable plan after the upload, third-party, handoff, capture, and quality-matrix preflight gates were added.
+
+Scope:
+
+- update only the active plan and synchronized desktop copy;
+- keep `docs/plans/datamax-active-execution-plan.md` as the single active plan under `docs/plans/`;
+- add exact live-before-preflight sequencing for P1-3B main-site upload, P1-3C third-party video registration, and P1-3D login-gated handoff;
+- add a current-head audit table that separates proven no-auth readiness from pending live/customer/deployment gates.
+
+Plan result:
+
+- EP2 now requires a same-fixture no-network preflight before any live main-site upload controlled smoke;
+- EP3 now separates missing-bearer shape checks from live-ready bearer/context/input preflight and live execution;
+- EP4 now requires same-mode/context preflight before main or external handoff live pass;
+- the verification matrix and milestone table now include preflight as required evidence before live smoke;
+- the current-head audit records that no-auth preflight/self-test/validator gates are passed, while P1-3B, P1-3C, P1-3D, P2-1C, and P2-2E customer gates remain pending authorization or deployment approval.
+
+Remaining work:
+
+- P1-3B still needs explicit approval to write a non-customer main-site smoke upload/document/run record;
+- P1-3C still needs approved inbound bearer, `connection_id`, `source_id`, and safe video input;
+- P1-3D still needs an approved 8-server deployment window before live handoff smoke, and external mode also needs bearer/context;
+- P2-1C still needs operator approval record and playable source before any live capture;
+- P2-2E still needs a customer/operator-authorized sample before the full three-category quality matrix can be closed.
+
+Safety result:
+
+- no business code, smoke runner, validator, worker, API, UI, or deployment script was changed in this plan-only pass;
+- no live smoke, upload, third-party event, browser capture, FFmpeg command, service build, service restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, or local artifact paths were recorded in this shared receipt.
