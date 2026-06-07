@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 03:11 CST
-**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口；后续优先处理 public candidate 的人工质量复核或窄修复，再进入需要授权或部署窗口的 live gate。
+**更新时间：** 2026-06-08 03:31 CST
+**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口；本计划已把下一阶段拆成可直接执行的本地质量分流、live smoke、授权录屏和部署门槛。后续优先处理 public candidate 的人工质量复核或窄修复，再进入需要授权或部署窗口的 live gate。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过。
@@ -142,7 +142,7 @@ ffprobe -hide_banner -v error -show_format -show_streams "<candidate-video-url>"
 
 1. 用现有视频抽取流程生成 `generated_artifacts/`。
 2. 运行 `node tools/validate-video-deliverables.mjs <generated_artifacts>`。
-3. 运行 `npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables <generated_artifacts> --pretty --output-dir target/video-ppt-quality-matrix-smoke`。
+3. 运行 `npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <generated_artifacts> --pretty --output-dir target/video-ppt-public-candidate-quality-matrix`；`--synthetic-deliverables` 只用于合成 PPT 视频或合成 fixture，不用于真实公开视频课程样例。
 4. 人工抽样检查 PPTX 页、`video_slides.md` 页数、`selected_slides_manifest`、`slide_rectangles_manifest`、`slide_quality_report.json`。
 5. 在 `docs/validation/video-ppt-deliverable-smoke.md` 追加脱敏回执；不能因为 public course 通过就标记 customer 样例完成。
 
@@ -152,7 +152,9 @@ ffprobe -hide_banner -v error -show_format -show_streams "<candidate-video-url>"
 2. 复核 1 个 full-frame fallback 是否确实需要继续 crop detector 修复；如关键页仍可读，可保持 `需人工复核`。
 3. 缺字幕/OCR 属于样例证据缺失，不阻断截图型 PPTX，但不能声称已完成逐页讲稿或字幕页映射。
 4. 4 页清晰度/可读性风险需要人工确认是否影响客户可读性；若影响，再追加 P2-2F 窄修复或选第二个 public course 样例对照。
-5. 当前 public candidate 只能证明真实公开视频样例可进入交付包并通过 contract；完整 P2-2E 仍缺客户授权样例。
+5. 复核 selected manifest 语义是否足够清楚：当前 public candidate 是 `requested_selected_count=7`、`selected_count=5`，2 个候选被视觉去重；如 `selected_candidate_indices` 仍表示去重前候选，应在后续窄修复中拆成 requested/final 两组字段，避免人工复核误读。
+6. 对 final selected frames 做人工页面级复核：确认标题页、正文页和结束页是否可读，是否漏掉重要 build/content 状态，是否保留了较弱的 fade/transition 页。若关键页缺失或转场页被保留，再进入 P2-2C/P2-2F 的选页窄修复。
+7. 当前 public candidate 只能证明真实公开视频样例可进入交付包并通过 contract；完整 P2-2E 仍缺客户授权样例。
 
 验收结论必须落到三类之一：
 
@@ -278,6 +280,8 @@ npm run capture:authorized-video -- \
 3. P2-2E-2B 当前可做质量分流。
    - validator 已通过，`--public-course-deliverables` 已把样例归入 `public_course_video`，不再按 redaction/schema 或 public sample missing 处理。
    - 当前结论是 `needs_manual_review`，优先看 `full_frame_rectangle_fallback`、`missing_transcript_alignment`、`selected_slide_duplicates_removed`、`frame_sharpness_review_required`。
+   - 先记录人工复核结论，再决定是否做窄修复；不要为了把 public candidate 改成 `可交付` 而放宽 validator 或质量矩阵。
+   - 若修 selected manifest 语义，目标是让 `selected_count`、最终 `selected_candidate_indices` 和 PPTX/Markdown 页数一致，同时保留去重前 requested indices 供审计。
    - 若人工复核确认 5 页都可读，可把 public candidate 保持为 `需人工复核` 的真实样例回执。
    - 若关键页不可读，再按风险类型追加窄修复：crop detector、dedupe/selected indices 说明、sharpness/readability 或换第二个公开视频样例。
 
