@@ -520,3 +520,48 @@ Safety result:
 - no customer/private/login-gated video was fetched;
 - no 8-server deployment, build, restart, service mutation, or 120-server action was run;
 - no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt.
+
+## 2026-06-07 Public Page Video Resolver Slice
+
+Task source: `docs/plans/datamax-active-execution-plan.md` P1-1.
+
+Scope:
+
+- support public pages that expose anonymous direct video assets in static HTML fields;
+- keep login-gated, QR-login, private-host, JavaScript/data URL, and player-only pages outside automatic extraction;
+- stabilize resolver failure reasons so product and third-party callers can route next steps.
+
+Implemented behavior:
+
+- HTML candidate extraction now covers `<video src>`, `<source src>`, OpenGraph video fields, Twitter video fields, and JSON-LD `contentUrl`/`embedUrl`;
+- relative candidates are resolved against the page URL, then filtered through existing direct-video extension and public-host checks;
+- JSON-LD player `embedUrl` values are collected for review but rejected unless they are direct video URLs;
+- no-video pages return `public_page_no_video_asset`;
+- missing source URL returns `direct_video_url_required`;
+- login-gated sources remain `login_gated_video_source_not_supported`;
+- third-party docs now document public-page fields and `public_page_no_video_asset`.
+
+Validation:
+
+```text
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p platform-api public_video_page --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_url_resolution --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run check:pure-third-party-guide-html
+git diff --check
+```
+
+Result:
+
+- public page resolver tests passed: 6 tests;
+- video URL resolution tests passed: 5 tests;
+- video PPT tests passed: 4 tests;
+- third-party guide freshness check passed.
+
+Safety result:
+
+- no external public page was fetched in this slice; fixtures were local unit tests;
+- no customer/private/login-gated video was fetched;
+- no 8-server deployment, build, restart, service mutation, or 120-server action was run;
+- no cookie, token, database URL, raw provider payload, raw customer row, full customer document, raw local file path, or generated artifact local path was recorded in this receipt.

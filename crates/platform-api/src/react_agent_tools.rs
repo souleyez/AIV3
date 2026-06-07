@@ -1304,11 +1304,7 @@ fn video_url_resolution_placeholder_result(
     let source_url = requested_video_source_url(action, prompt);
     let source_text = source_url.unwrap_or_default();
     let (status, reason, items) = if source_text.is_empty() {
-        (
-            "rejected",
-            "direct_video_url_or_upload_required",
-            Vec::new(),
-        )
+        ("rejected", "direct_video_url_required", Vec::new())
     } else if is_login_gated_video_source(source_text) || prompt.contains("视频号") {
         (
             "rejected",
@@ -1489,7 +1485,7 @@ async fn resolve_public_video_page_source(
     }
 
     Err(PublicVideoPageResolutionFailure {
-        reason: "public_page_video_not_found",
+        reason: "public_page_no_video_asset",
         detail: "public page did not expose a direct video URL in supported fields".to_string(),
     })
 }
@@ -1520,7 +1516,7 @@ fn public_video_page_resolution_failure_result(
             "source_host": public_url_host_label(source_url),
             "supported_sources": ["uploaded_video_file", "direct_video_url", "public_page_resolvable_video"],
             "unsupported_sources": ["login_gated_page", "qr_login", "cookies", "screen_recording_bypass"],
-            "next_step": "请提供可直接访问的视频 URL，或上传视频文件；公开视频页面必须在 HTML 中暴露 video/source/og:video 直连地址。",
+            "next_step": "请提供可直接访问的视频 URL，或上传视频文件；公开视频页面必须在 HTML 中暴露 video/source、OpenGraph、Twitter video 或 JSON-LD contentUrl/embedUrl 直连地址。",
         }),
         trail_step: json!({
             "status": "rejected",
@@ -1535,14 +1531,14 @@ fn public_video_page_resolution_failure_result(
 
 fn video_resolution_failure_kind(reason: &str) -> &'static str {
     match reason {
-        "direct_video_url_or_upload_required" => "missing_source",
+        "direct_video_url_required" => "missing_source",
         "login_gated_video_source_not_supported" | "public_page_invalid_scheme" => {
             "unsupported_source"
         }
         "public_page_host_not_allowed"
         | "public_page_redirect_not_followed"
         | "public_page_too_large" => "resolver_blocked",
-        "public_page_fetch_failed" | "public_page_not_html" | "public_page_video_not_found" => {
+        "public_page_fetch_failed" | "public_page_not_html" | "public_page_no_video_asset" => {
             "unavailable_video"
         }
         _ => "resolver_failed",
@@ -1661,6 +1657,17 @@ fn extract_video_source_candidates_from_html(html: &str) -> Vec<String> {
             if let Some(content) = html_attr_value(tag, "content") {
                 candidates.push(content);
             }
+        } else if lower.starts_with("script") && html_script_tag_is_json_ld(tag) {
+            let body_start = end + 1;
+            let tail_lower = html[body_start..].to_ascii_lowercase();
+            if let Some(close_relative) = tail_lower.find("</script>") {
+                let body_end = body_start + close_relative;
+                candidates.extend(extract_video_source_candidates_from_json_ld(
+                    &html[body_start..body_end],
+                ));
+                cursor = body_end + "</script>".len();
+                continue;
+            }
         }
         cursor = end + 1;
     }
@@ -1677,10 +1684,52 @@ fn html_meta_tag_is_video(tag: &str) -> bool {
                 "og:video"
                     | "og:video:url"
                     | "og:video:secure_url"
+                    | "twitter:video"
+                    | "twitter:video:src"
                     | "twitter:player:stream"
                     | "video"
             )
         })
+}
+
+fn html_script_tag_is_json_ld(tag: &str) -> bool {
+    html_attr_value(tag, "type")
+        .map(|value| value.trim().eq_ignore_ascii_case("application/ld+json"))
+        .unwrap_or(false)
+}
+
+fn extract_video_source_candidates_from_json_ld(script_body: &str) -> Vec<String> {
+    let decoded = html_attr_unescape(script_body.trim());
+    let Ok(value) = serde_json::from_str::<Value>(&decoded) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    collect_json_ld_video_candidates(&value, &mut candidates);
+    candidates
+}
+
+fn collect_json_ld_video_candidates(value: &Value, candidates: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                if matches!(
+                    key.as_str(),
+                    "contentUrl" | "contentURL" | "embedUrl" | "embedURL"
+                ) {
+                    if let Some(raw) = child.as_str().map(str::trim).filter(|raw| !raw.is_empty()) {
+                        candidates.push(raw.to_string());
+                    }
+                }
+                collect_json_ld_video_candidates(child, candidates);
+            }
+        }
+        Value::Array(entries) => {
+            for entry in entries {
+                collect_json_ld_video_candidates(entry, candidates);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn extract_html_title(html: &str) -> Option<String> {
@@ -4332,6 +4381,25 @@ mod tests {
     }
 
     #[test]
+    fn video_url_resolution_placeholder_requires_direct_source() {
+        let action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
+
+        let result = video_url_resolution_placeholder_result(&action, "");
+
+        assert_eq!(result.observation["status"], json!("rejected"));
+        assert_eq!(
+            result.observation["reason"],
+            json!("direct_video_url_required")
+        );
+        assert_eq!(result.observation["failure_kind"], json!("missing_source"));
+        assert_eq!(
+            result.observation["failure_next_action"],
+            json!("provide_direct_video_url_or_upload")
+        );
+        assert!(result.final_answer.is_none());
+    }
+
+    #[test]
     fn video_url_resolution_placeholder_blocks_login_gated_sources() {
         let mut action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
         action.arguments = json!({"source_url": "https://weixin.qq.com/sph/ActLMg4yTD"});
@@ -4443,6 +4511,16 @@ mod tests {
               <head>
                 <title>公开课视频</title>
                 <meta property="og:video" content="/assets/intro.mp4?token=redacted&amp;v=1">
+                <meta name="twitter:video" content="https://media.example.com/course/twitter.mov">
+                <script type="application/ld+json">
+                  {
+                    "@context": "https://schema.org",
+                    "@type": "VideoObject",
+                    "name": "公开课视频",
+                    "contentUrl": "/assets/jsonld.m4v",
+                    "embedUrl": "https://player.example.com/embed/lesson"
+                  }
+                </script>
               </head>
               <body>
                 <video data-src="/ignored.mp4" src="./lesson-01.webm"></video>
@@ -4465,10 +4543,15 @@ mod tests {
             resolved,
             vec![
                 "https://example.com/assets/intro.mp4?token=redacted&v=1".to_string(),
+                "https://media.example.com/course/twitter.mov".to_string(),
+                "https://example.com/assets/jsonld.m4v".to_string(),
                 "https://example.com/course/lesson-01.webm".to_string(),
                 "https://cdn.example.com/course/lesson-02.mp4".to_string(),
             ]
         );
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate == "https://player.example.com/embed/lesson"));
     }
 
     #[test]
@@ -4497,13 +4580,29 @@ mod tests {
     }
 
     #[test]
+    fn public_video_page_handles_no_video_asset_fixture() {
+        let html = r#"
+            <html>
+              <head>
+                <title>没有视频</title>
+                <meta property="og:title" content="只有文字">
+              </head>
+              <body><a href="/article">普通文章</a></body>
+            </html>
+        "#;
+
+        assert_eq!(extract_html_title(html), Some("没有视频".to_string()));
+        assert!(extract_video_source_candidates_from_html(html).is_empty());
+    }
+
+    #[test]
     fn public_video_page_failure_result_is_structured() {
         let action = test_action(AssistantRunReactActionType::ResolveVideoUrl);
         let result = public_video_page_resolution_failure_result(
             &action,
             "https://example.com/page",
             PublicVideoPageResolutionFailure {
-                reason: "public_page_video_not_found",
+                reason: "public_page_no_video_asset",
                 detail: "no supported video tag".to_string(),
             },
         );
@@ -4511,7 +4610,7 @@ mod tests {
         assert_eq!(result.observation["status"], json!("rejected"));
         assert_eq!(
             result.observation["reason"],
-            json!("public_page_video_not_found")
+            json!("public_page_no_video_asset")
         );
         assert_eq!(
             result.observation["failure_kind"],
