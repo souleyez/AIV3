@@ -136,6 +136,7 @@ export function validateVideoDeliverables(inputPath) {
       errors: [issue("invalid_input", error.message)],
       warnings,
       files: [],
+      summary: {},
     };
   }
 
@@ -312,7 +313,41 @@ export function validateVideoDeliverables(inputPath) {
       exists,
       size,
     })),
+    summary: buildValidationSummary({
+      finalManifest,
+      pptxSlideCount,
+      markdownSlideCount,
+      selectedSlidesManifest,
+      slideRectanglesManifest,
+      slideQualityReport,
+      subtitlePageMap,
+    }),
   };
+}
+
+function buildValidationSummary({
+  finalManifest,
+  pptxSlideCount,
+  markdownSlideCount,
+  selectedSlidesManifest,
+  slideRectanglesManifest,
+  slideQualityReport,
+  subtitlePageMap,
+}) {
+  return {
+    frame_count: numberOrNull(finalManifest?.frame_extraction?.frame_count),
+    selected_count: numberOrNull(selectedSlidesManifest?.selected_count),
+    requested_selected_count: numberOrNull(selectedSlidesManifest?.requested_selected_count),
+    pptx_slide_count: numberOrNull(pptxSlideCount),
+    markdown_slide_count: numberOrNull(markdownSlideCount),
+    slide_rectangle_count: numberOrNull(slideRectanglesManifest?.promoted_rectangle_count),
+    quality_slide_count: numberOrNull(slideQualityReport?.slide_count),
+    subtitle_page_count: numberOrNull(subtitlePageMap?.page_count),
+  };
+}
+
+function numberOrNull(value) {
+  return Number.isFinite(value) ? value : null;
 }
 
 function conditionalFileIsRequired(file, files, manifests) {

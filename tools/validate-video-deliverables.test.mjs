@@ -13,6 +13,16 @@ test("accepts a complete video deliverables directory", () => {
   assert.deepEqual(result.errors, []);
   assert.equal(result.files.length, 11);
   assert.ok(result.files.every((file) => file.exists));
+  assert.deepEqual(result.summary, {
+    frame_count: null,
+    selected_count: 1,
+    requested_selected_count: 1,
+    pptx_slide_count: 1,
+    markdown_slide_count: 1,
+    slide_rectangle_count: 1,
+    quality_slide_count: 1,
+    subtitle_page_count: 1,
+  });
 });
 
 test("accepts legacy deliverables without optional slide quality report", () => {
@@ -34,6 +44,10 @@ test("accepts legacy deliverables without optional slide quality report", () => 
 
   assert.equal(result.ok, true);
   assert.equal(result.files.find((file) => file.kind === "slide_quality_report").exists, false);
+  assert.equal(result.summary.selected_count, 1);
+  assert.equal(result.summary.pptx_slide_count, 1);
+  assert.equal(result.summary.markdown_slide_count, 1);
+  assert.equal(result.summary.quality_slide_count, null);
 });
 
 test("accepts deliverables without subtitle page map when transcript alignment is unavailable", () => {

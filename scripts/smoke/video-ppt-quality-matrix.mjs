@@ -190,7 +190,11 @@ function buildCaseFromDeliverables(inputPath, {
   const artifactsDir = validation.artifactsDir;
   const finalManifest = readJsonIfPresent(path.join(artifactsDir, 'final_deliverables_manifest.json'));
   const qualityReport = readJsonIfPresent(path.join(artifactsDir, 'slide_quality_report.json'));
+  const validationSummary = validation.summary || {};
   const qualitySlideCount = Number.isInteger(qualityReport?.slide_count) ? qualityReport.slide_count : 0;
+  const selectedCount = numberOrNull(validationSummary.selected_count) ?? qualitySlideCount;
+  const pptxSlideCount = numberOrNull(validationSummary.pptx_slide_count) ?? selectedCount;
+  const markdownSlideCount = numberOrNull(validationSummary.markdown_slide_count) ?? selectedCount;
   const deliverableState = validation.ok
     ? finalManifest?.deliverable_status?.state || finalManifest?.status || 'final_pptx_ready'
     : 'deliverable_contract_invalid';
@@ -211,10 +215,10 @@ function buildCaseFromDeliverables(inputPath, {
       validator_error_codes: validation.errors.map((error) => error.code),
       validator_warning_codes: validation.warnings.map((warning) => warning.code),
       checked_file_kinds: validation.files.filter((file) => file.exists).map((file) => file.kind),
-      frame_count: numberOrNull(finalManifest?.frame_extraction?.frame_count),
-      selected_count: qualitySlideCount,
-      pptx_slide_count: qualitySlideCount,
-      markdown_slide_count: qualitySlideCount,
+      frame_count: numberOrNull(validationSummary.frame_count) ?? numberOrNull(finalManifest?.frame_extraction?.frame_count),
+      selected_count: selectedCount,
+      pptx_slide_count: pptxSlideCount,
+      markdown_slide_count: markdownSlideCount,
       has_quality_report: Boolean(qualityReport),
     },
     quality_report: qualityReport ? {

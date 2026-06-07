@@ -3605,3 +3605,55 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, Markdown body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Validator Summary Counts for Quality Matrix
+
+Task source: continue local acceptance hardening after the PPTX/Markdown/selected-count gate. The validator now has the authoritative artifact counts, but the quality matrix still derived `selected_count`, `pptx_slide_count`, and `markdown_slide_count` from `slide_quality_report.slide_count`.
+
+Scope:
+
+- return a structured `summary` from `validateVideoDeliverables`;
+- include frame count, selected count, requested selected count, PPTX slide count, Markdown slide count, slide rectangle count, quality report slide count, and subtitle page count;
+- make `smoke:video-ppt-quality-matrix` prefer validator summary counts for deliverables inputs;
+- keep this as local validator/script/test work only, with no live upload, third-party event, capture, or deployment.
+
+Implemented behavior:
+
+- `validateVideoDeliverables(...).summary` exposes the artifact-count evidence already checked by the validator;
+- quality matrix deliverables cases now report selected/PPTX/Markdown counts from validator summary, falling back to quality report only if summary data is absent;
+- public-course reports include `selected_slides_manifest` in checked file kinds and preserve aligned selected/PPTX/Markdown counts.
+
+Validation:
+
+```text
+node --check tools/validate-video-deliverables.mjs
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run test:video-deliverables
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts> --json
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- video deliverables validator passed 24 Node test cases;
+- real public candidate validator JSON summary showed selected/PPTX/Markdown/rectangle/quality counts all aligned at 3, with requested count 4;
+- quality matrix self-test passed;
+- public-course quality matrix passed with the public candidate still classified as a partial public-course review, with selected/PPTX/Markdown counts all 3 and `selected_slides_manifest` included in checked file kinds;
+- no generated PPTX, frame, Markdown body, OCR text, raw video, source URL, token, cookie, bearer value, approval id, customer content, or local artifact path was copied into this ledger.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- quality matrix completion still requires a customer/operator-authorized sample before the customer category can be closed.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg command was run;
+- no MP4 was captured, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports and deliverables stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, Markdown body, validator JSON body, or local artifact paths were recorded in this shared receipt.
