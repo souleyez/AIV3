@@ -2067,6 +2067,7 @@ fn selected_slides_manifest_from_keep_list(
 ) -> Value {
     let mut previous_timestamp_seconds = 0.0_f64;
     let mut selected_candidates = Vec::<Value>::new();
+    let mut final_selected_candidate_indices = Vec::<usize>::new();
     let mut rejected_duplicate_candidates = Vec::<Value>::new();
     let mut seen_content_fingerprints = BTreeSet::<String>::new();
     let mut seen_visual_signatures = Vec::<AcceptedVideoFrameVisualSignature>::new();
@@ -2178,6 +2179,7 @@ fn selected_slides_manifest_from_keep_list(
                 signature: signature.clone(),
             });
         }
+        final_selected_candidate_indices.push(*candidate_index);
         selected_candidates.push(json!({
             "candidate_index": candidate_index,
             "file_name": file_name,
@@ -2241,7 +2243,8 @@ fn selected_slides_manifest_from_keep_list(
         "keep_list_template": keep_list_template_path.display().to_string(),
         "selection_source": selection_source,
         "auto_selection": auto_selection,
-        "selected_candidate_indices": selected_candidate_indices,
+        "selected_candidate_indices": final_selected_candidate_indices,
+        "requested_selected_candidate_indices": selected_candidate_indices,
         "requested_selected_count": selected_candidate_indices.len(),
         "selected_count": selected_candidates.len(),
         "deduped_candidate_count": rejected_duplicate_candidates.len(),
@@ -10146,6 +10149,18 @@ mod tests {
         assert!(selected_slides.contains("frame_000001.jpg"));
         assert!(selected_slides.contains("promoted_full_frame_fallback"));
         assert!(selected_slides.contains("selected_keep_list_order_deduped"));
+        let selected_slides_json: Value =
+            serde_json::from_str(&selected_slides).expect("selected slides json");
+        assert_eq!(
+            selected_slides_json["selected_candidate_indices"],
+            json!([2, 1])
+        );
+        assert_eq!(
+            selected_slides_json["requested_selected_candidate_indices"],
+            json!([2, 1])
+        );
+        assert_eq!(selected_slides_json["selected_count"], json!(2));
+        assert_eq!(selected_slides_json["requested_selected_count"], json!(2));
         let selected_slides_ref = files
             .iter()
             .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
@@ -10361,6 +10376,11 @@ mod tests {
         .expect("selected slides manifest json");
         assert_eq!(selected_slides["requested_selected_count"], json!(3));
         assert_eq!(selected_slides["selected_count"], json!(2));
+        assert_eq!(
+            selected_slides["requested_selected_candidate_indices"],
+            json!([1, 2, 3])
+        );
+        assert_eq!(selected_slides["selected_candidate_indices"], json!([1, 3]));
         assert_eq!(selected_slides["deduped_candidate_count"], json!(1));
         assert_eq!(
             selected_slides["dedupe_status"],
@@ -10476,6 +10496,11 @@ mod tests {
         .expect("selected slides manifest json");
         assert_eq!(selected_slides["requested_selected_count"], json!(3));
         assert_eq!(selected_slides["selected_count"], json!(2));
+        assert_eq!(
+            selected_slides["requested_selected_candidate_indices"],
+            json!([1, 2, 3])
+        );
+        assert_eq!(selected_slides["selected_candidate_indices"], json!([1, 3]));
         assert_eq!(selected_slides["deduped_candidate_count"], json!(1));
         assert_eq!(selected_slides["exact_duplicate_count"], json!(0));
         assert_eq!(selected_slides["visual_duplicate_count"], json!(1));

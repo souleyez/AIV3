@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 03:31 CST
-**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口；本计划已把下一阶段拆成可直接执行的本地质量分流、live smoke、授权录屏和部署门槛。后续优先处理 public candidate 的人工质量复核或窄修复，再进入需要授权或部署窗口的 live gate。
+**更新时间：** 2026-06-08 03:37 CST
+**当前性质：** 开发执行版；当前入口是第 0.6 节。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，且 selected manifest 已拆清去重前 requested indices 与去重后 final indices。本计划已把下一阶段拆成可直接执行的本地质量分流、live smoke、授权录屏和部署门槛。后续优先处理 public candidate 的页面级人工质量复核或选页/crop/sharpness 窄修复，再进入需要授权或部署窗口的 live gate。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过。
@@ -9,7 +9,7 @@
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；没有执行 live capture，没有接入 8 服务器生产服务。
 - P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 进入 notes/Markdown、清晰度/可读性风险提示均有本地验证。
 - P2-2E 三样例质量矩阵 self-test scaffold、本地 `generated_artifacts/` 输入适配和 public-course deliverables 分类入口已完成；quality matrix 可用 `--synthetic-deliverables <path>` 复核合成类本地产物，也可用 `--public-course-deliverables <path>` 把匿名公开视频样例归到 `public_course_video`。
-- S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、`selected_count=5`、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`，summary 为 `deliverable_count=1`、`needs_manual_review_count=1`、`pending_count=1`。该 public candidate 可作为真实公开视频样例回执，但质量结论是需人工复核，不是无条件可交付。
+- S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、`selected_count=5`、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`，summary 为 `deliverable_count=1`、`needs_manual_review_count=1`、`pending_count=1`；selected manifest 语义已修正为 `requested_selected_candidate_indices` 记录去重前请求，`selected_candidate_indices` 记录最终入选页。该 public candidate 可作为真实公开视频样例回执，但质量结论是需人工复核，不是无条件可交付。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
@@ -45,7 +45,7 @@
 
 | 优先级 | 切片 | 现在是否可做 | 需要输入/授权 | 交付物 | 验收口径 |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | P2-2E-2B public candidate 人工质量复核/窄修复 | 可立即做；不跑 live | 无；只用已下载到 `target/` 的公开视频候选和本地产物 | 人工质量复核结论；必要时 crop/dedupe/sharpness 窄修复 | 已有 public-category matrix：synthetic deliverable=1、public needs_manual_review=1、customer pending=1；下一步确认 5 页是否客户可读 |
+| 1 | P2-2E-2B public candidate 人工质量复核/窄修复 | 可立即做；不跑 live | 无；只用已下载到 `target/` 的公开视频候选和本地产物 | selected manifest 语义已修；下一步是人工质量复核结论，必要时 crop/选页/sharpness 窄修复 | 已有 public-category matrix：synthetic deliverable=1、public needs_manual_review=1、customer pending=1；下一步确认 5 页是否客户可读 |
 | 2 | P1-3B 主站上传视频 controlled smoke | 待授权后可做 | 用户批准在主站写入一条非客户公开视频 smoke 记录 | live smoke 回执，含 dataset/document/assistant run/artifact/download 证据 | `smoke:video-ppt-upload-main` 产出 `final_pptx_ready`，PPTX/Markdown/manifests 可下载 |
 | 3 | P1-3C 第三方视频登记 special-trigger smoke | 待凭据后可做 | inbound bearer、`connection_id`、`source_id`、公开视频或上传文件 | live 第三方回执，区分“素材登记”和“PPT 抽取触发” | `smoke:external-video-ppt` 证明第三方 surface 可见；缺下载出口则记录为发布可见性缺口 |
 | 4 | P1-3D 视频号/登录态 handoff live pass | 待部署窗口后可做 | 用户批准 8 服务器部署；第三方模式还需 bearer/context | main/external handoff live 回执 | 只返回 `login_gated_video_source_not_supported` 三选项 handoff，不抓视频、不抽帧、不走 provider |
@@ -152,7 +152,7 @@ ffprobe -hide_banner -v error -show_format -show_streams "<candidate-video-url>"
 2. 复核 1 个 full-frame fallback 是否确实需要继续 crop detector 修复；如关键页仍可读，可保持 `需人工复核`。
 3. 缺字幕/OCR 属于样例证据缺失，不阻断截图型 PPTX，但不能声称已完成逐页讲稿或字幕页映射。
 4. 4 页清晰度/可读性风险需要人工确认是否影响客户可读性；若影响，再追加 P2-2F 窄修复或选第二个 public course 样例对照。
-5. 复核 selected manifest 语义是否足够清楚：当前 public candidate 是 `requested_selected_count=7`、`selected_count=5`，2 个候选被视觉去重；如 `selected_candidate_indices` 仍表示去重前候选，应在后续窄修复中拆成 requested/final 两组字段，避免人工复核误读。
+5. selected manifest 语义已完成窄修复：当前 public candidate 是 `requested_selected_count=7`、`selected_count=5`，2 个候选被视觉去重；`requested_selected_candidate_indices` 保留去重前请求，`selected_candidate_indices` 只保留最终进入 PPTX/Markdown 的 5 个候选，避免人工复核误读。
 6. 对 final selected frames 做人工页面级复核：确认标题页、正文页和结束页是否可读，是否漏掉重要 build/content 状态，是否保留了较弱的 fade/transition 页。若关键页缺失或转场页被保留，再进入 P2-2C/P2-2F 的选页窄修复。
 7. 当前 public candidate 只能证明真实公开视频样例可进入交付包并通过 contract；完整 P2-2E 仍缺客户授权样例。
 
@@ -281,7 +281,7 @@ npm run capture:authorized-video -- \
    - validator 已通过，`--public-course-deliverables` 已把样例归入 `public_course_video`，不再按 redaction/schema 或 public sample missing 处理。
    - 当前结论是 `needs_manual_review`，优先看 `full_frame_rectangle_fallback`、`missing_transcript_alignment`、`selected_slide_duplicates_removed`、`frame_sharpness_review_required`。
    - 先记录人工复核结论，再决定是否做窄修复；不要为了把 public candidate 改成 `可交付` 而放宽 validator 或质量矩阵。
-   - 若修 selected manifest 语义，目标是让 `selected_count`、最终 `selected_candidate_indices` 和 PPTX/Markdown 页数一致，同时保留去重前 requested indices 供审计。
+   - selected manifest 语义已修，`selected_count`、最终 `selected_candidate_indices` 和 PPTX/Markdown 页数一致，同时保留去重前 requested indices 供审计；后续窄修复不得回退该契约。
    - 若人工复核确认 5 页都可读，可把 public candidate 保持为 `需人工复核` 的真实样例回执。
    - 若关键页不可读，再按风险类型追加窄修复：crop detector、dedupe/selected indices 说明、sharpness/readability 或换第二个公开视频样例。
 
@@ -1597,6 +1597,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M5 | P2-2F 清晰度/可读性质量信号 | 无 live 授权；本地 fixture 即可 | 已通过 media-worker selected_slides/slide_rectangle/controlled sample/sharpness helper、低对比字迹端到端 fixture、deliverable validator、platform-api video tests、`git diff --check` | 已完成：`slide_quality_report.json` 显示 sharpness/readability risk，低对比字迹会提示 high-risk review，旧包兼容 | 未部署 |
 | M6 | P2-2E-1 质量矩阵本地 deliverables 输入 | 一次真实或合成视频/PPT 抽取输出的 `generated_artifacts/`；可用临时 target fixture | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`--help`、`--self-test --pretty`、`node tools/validate-video-deliverables.mjs target/video-ppt-quality-matrix-fixture/generated_artifacts`、`--synthetic-deliverables target/video-ppt-quality-matrix-fixture/generated_artifacts --pretty`、`--public-course-deliverables <public-candidate-generated_artifacts> --pretty` | 已完成：matrix 可读取本地交付包并复用 validator，synthetic/public 可按类别分类，customer gate 仍 pending | 未部署 |
 | M6A | P2-2E-2A public candidate deliverable contract 修复 | 无 live 授权；复用 `target/` 下 public candidate | 已通过 `cargo fmt --check`、`cargo check -p media-worker --bin video_ppt_offline_smoke`、media-worker contract test、`npm run test:video-deliverables`、public candidate `validate-video-deliverables`、quality matrix | 已完成：public manifests redaction 修复，`selected_count=5`，validator 通过，quality matrix 结论 `needs_manual_review` | 未部署 |
+| M6B | P2-2E-2B selected manifest 去重语义修复 | 无 live 授权；复用 `target/` 下 public candidate | 已通过 selected-slide/dedupe/auto-select tests、controlled contract、`npm run test:video-deliverables`、public candidate offline smoke、public candidate validator、`--public-course-deliverables` quality matrix | 已完成：`requested_selected_candidate_indices` 记录去重前请求，`selected_candidate_indices` 记录最终入选页；public candidate 为 7 requested、5 selected、2 visual duplicates removed | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |

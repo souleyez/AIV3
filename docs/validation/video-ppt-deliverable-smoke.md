@@ -1525,6 +1525,86 @@ Safety result:
 - generated temp frames stayed under test temp directories and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Public Candidate Selected Indices Semantics
+
+Task source: P2-2E-2B from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- clarify the selected slides manifest after exact/visual dedupe;
+- make final `selected_candidate_indices` match the pages that actually enter PPTX/Markdown;
+- preserve the pre-dedupe request for audit without confusing it with final selected pages;
+- keep the public candidate result in `needs_manual_review`, not force it to `deliverable`;
+- avoid live upload, third-party events, browser recording, or deployment.
+
+Implemented behavior:
+
+- `selected_slides_manifest.json` now writes `requested_selected_candidate_indices` for the requested/pre-dedupe candidate list;
+- `selected_candidate_indices` now contains only candidates that survive exact/visual dedupe and become final selected pages;
+- `requested_selected_count` continues to count requested candidates, while `selected_count` continues to count final selected slides;
+- selected-slide tests now assert both requested and final indices for manual, exact-dedupe, and visual-dedupe cases;
+- public candidate offline smoke was rerun locally under `target/`, producing a new `final_pptx_ready` package.
+
+Public candidate rerun result:
+
+- `deliverable_state=final_pptx_ready`;
+- `frame_count=96`;
+- `selected_count=5`;
+- `has_pptx=true`;
+- `has_video_slides_markdown=true`;
+- `has_slide_quality_report=true`;
+- `has_subtitle_page_map=false`;
+- requested candidates: `[3, 14, 33, 55, 66, 85, 93]`;
+- final selected candidates: `[3, 14, 33, 85, 93]`;
+- `deduped_candidate_count=2`;
+- `visual_duplicate_count=2`.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker selected_slide --lib
+CC=clang CXX=clang++ cargo test -p media-worker dedupes_selected_slide_manifest --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects_stable_ppt_pages_from_decodable_raw_frames_without_keep_list --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+npm run test:video-deliverables
+cargo check -p media-worker --bin video_ppt_offline_smoke
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input target/video-ppt-public-course-probe/nix-teach-5min-slides.mp4 --output-root target/video-ppt-public-candidate-extraction-selected-indices --ffmpeg-bin /opt/homebrew/bin/ffmpeg --interval-seconds 15 --title "Public slides sample: How to teach Nix in 5 minutes" --json-output target/video-ppt-public-candidate-extraction-selected-indices/offline-smoke-summary.json
+node tools/validate-video-deliverables.mjs target/video-ppt-public-candidate-extraction-selected-indices/<session>/generated_artifacts
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/video-ppt-public-candidate-extraction-selected-indices/<session>/generated_artifacts --pretty --output-dir target/video-ppt-public-candidate-quality-matrix-selected-indices
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- selected-slide regression passed, 4 tests;
+- selected-slide exact/visual dedupe regression passed, 2 tests;
+- stable PPT page auto-selection regression passed;
+- controlled video sample deliverable contract passed;
+- video deliverable validator test suite passed, 19 tests;
+- offline smoke helper compiled;
+- public candidate offline smoke completed locally with `final_pptx_ready`;
+- public candidate deliverables validator passed;
+- public-course quality matrix passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`;
+- whitespace check passed.
+
+Remaining P2-2E work:
+
+- page-level human review still needs to decide whether the 5 final pages are acceptable as a `needs_manual_review` public sample or whether a follow-up selection/crop/sharpness fix is needed;
+- the full three-sample quality matrix remains incomplete until a customer/operator-authorized sample is supplied;
+- this slice does not satisfy P1-3B upload live, P1-3C third-party live, P1-3D handoff live, or P2-1C authorized capture gates.
+
+Safety result:
+
+- no main-site upload or live assistant run was created;
+- no third-party event was sent;
+- no WeChat Video Channels extraction, login bypass, cookie capture, browser recording, or authorized capture was performed;
+- no service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media, frames, generated PPTX, manifests, and quality matrix output stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
+
 ## 2026-06-08 Public Slides Video Candidate Access Probe
 
 Task source: S1 / P2-2E-2 from `docs/plans/datamax-active-execution-plan.md`.
