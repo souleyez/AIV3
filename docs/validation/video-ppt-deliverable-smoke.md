@@ -1087,6 +1087,63 @@ Safety result:
 - no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
 
+## 2026-06-08 Dark Stable Segment Auto-Selection Guard Local Slice
+
+Task source: P2-2C from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- reduce false-positive auto-selected PPT pages from stable black screens or dark transition frames;
+- keep the rule narrow so dark-theme slides with visible text/graphics are not rejected only because they are dark;
+- preserve manual keep-list behavior and existing stable PPT page auto-selection.
+
+Implemented behavior:
+
+- auto-selection now computes luma summary from the midpoint frame of each stable visual cluster;
+- if the midpoint is both very dark and low-information, the cluster is written to `rejected_clusters` with reason `dark_low_information_stable_segment`;
+- rejected dark clusters do not enter `selected_candidate_indices`;
+- cluster policy text now documents that short unstable visual changes and dark low-information stable segments are rejected;
+- the rejected cluster records selected candidate index, average luma, luma range, and guard thresholds for review.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker auto_select --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run test:video-deliverables
+git diff --check
+```
+
+Result:
+
+- rustfmt check passed;
+- auto-select tests passed, 2 tests, including the new dark stable transition guard fixture;
+- selected-slides subtitle/quality-report path passed, 1 test;
+- controlled video sample deliverable contract passed, 1 test;
+- platform-api video extraction tests passed, 3 tests;
+- platform-api video PPT tests passed, 5 tests;
+- video deliverables validator tests passed, 18 tests;
+- whitespace check passed.
+
+Remaining P2-2 work:
+
+- P2-2C still needs broader transition-frame and speaker-obstruction handling against real公开视频课程 samples;
+- P2-2B still needs more crop-quality review across public and customer-authorized samples;
+- P2-2D still needs subtitle/transcript/OCR alignment samples;
+- P2-2E still needs the three-sample quality review matrix and human review conclusions.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.
+
 ## 2026-06-08 Bright Canvas Slide Rectangle Detector Local Slice
 
 Task source: P2-2B from `docs/plans/datamax-active-execution-plan.md`.

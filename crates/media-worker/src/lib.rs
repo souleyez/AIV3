@@ -47,6 +47,8 @@ const VIDEO_VISUAL_NEAR_DUPLICATE_MAX_AVG_DIFF: f64 = 3.0;
 const VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF: f64 = 5.0;
 const VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES: usize = 2;
 const VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES: usize = 96;
+const VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_AVG_LUMA: f64 = 24.0;
+const VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_LUMA_RANGE: u8 = 12;
 const VIDEO_REMOTE_INPUT_DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
 const VIDEO_REMOTE_INPUT_DEFAULT_TIMEOUT_SECS: u64 = 60;
 const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
@@ -1463,7 +1465,7 @@ impl VideoAutoSlideSelection {
                 "same_segment_max_avg_luma_diff": VIDEO_AUTO_SLIDE_SEGMENT_MAX_AVG_DIFF,
                 "min_stable_frames": VIDEO_AUTO_SLIDE_MIN_STABLE_FRAMES,
                 "max_selected_pages": VIDEO_AUTO_SLIDE_MAX_SELECTED_PAGES,
-                "ordinary_video_guard": "short unstable visual changes are rejected instead of auto-selecting every frame"
+                "ordinary_video_guard": "short unstable visual changes and dark low-information stable segments are rejected instead of auto-selecting every frame"
             }
         })
     }
@@ -1534,6 +1536,33 @@ fn video_visual_signature_avg_diff(
         .map(|(left, right)| u64::from(left.abs_diff(*right)))
         .sum();
     Some(total as f64 / left.samples.len() as f64)
+}
+
+fn video_visual_signature_luma_summary(
+    signature: &VideoFrameVisualSignature,
+) -> Option<(f64, u8, u8)> {
+    let min_luma = *signature.samples.iter().min()?;
+    let max_luma = *signature.samples.iter().max()?;
+    let total: u64 = signature
+        .samples
+        .iter()
+        .map(|sample| u64::from(*sample))
+        .sum();
+    let avg_luma = total as f64 / signature.samples.len() as f64;
+    Some((video_round_similarity_score(avg_luma), min_luma, max_luma))
+}
+
+fn video_visual_signature_is_dark_low_information(
+    signature: &VideoFrameVisualSignature,
+) -> Option<(bool, f64, u8)> {
+    let (avg_luma, min_luma, max_luma) = video_visual_signature_luma_summary(signature)?;
+    let luma_range = max_luma.saturating_sub(min_luma);
+    Some((
+        avg_luma <= VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_AVG_LUMA
+            && luma_range <= VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_LUMA_RANGE,
+        avg_luma,
+        luma_range,
+    ))
 }
 
 fn video_visual_near_duplicate_match<'a>(
@@ -1679,6 +1708,23 @@ fn video_finalize_auto_slide_cluster(
     }
 
     let selected_frame = &cluster.frames[frame_count / 2];
+    if let Some((true, avg_luma, luma_range)) =
+        video_visual_signature_is_dark_low_information(&selected_frame.signature)
+    {
+        rejected_clusters.push(json!({
+            "reason": "dark_low_information_stable_segment",
+            "candidate_count": frame_count,
+            "first_candidate_index": first.candidate_index,
+            "last_candidate_index": last.candidate_index,
+            "selected_candidate_index": selected_frame.candidate_index,
+            "selected_file_name": selected_frame.file_name,
+            "avg_luma": avg_luma,
+            "luma_range": luma_range,
+            "max_avg_luma": VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_AVG_LUMA,
+            "max_luma_range": VIDEO_AUTO_SLIDE_DARK_LOW_INFO_MAX_LUMA_RANGE,
+        }));
+        return;
+    }
     selected_candidate_indices.push(selected_frame.candidate_index);
     selected_clusters.push(json!({
         "status": "stable_ppt_page_segment",
@@ -7508,6 +7554,11 @@ mod tests {
         image.save(path).expect("test visual slide png");
     }
 
+    fn write_test_solid_frame_png(path: &Path, tone: [u8; 3]) {
+        let image = image::RgbImage::from_pixel(100, 80, image::Rgb(tone));
+        image.save(path).expect("test solid frame png");
+    }
+
     fn assert_public_manifest_file_entry(files: &[Value], kind: &str, file_name: &str) {
         let file = files
             .iter()
@@ -10002,6 +10053,86 @@ mod tests {
         assert!(archive.by_name("ppt/media/image1.png").is_ok());
         assert!(archive.by_name("ppt/media/image2.png").is_ok());
         assert!(archive.by_name("ppt/media/image3.png").is_ok());
+    }
+
+    #[test]
+    fn auto_selects_slides_without_dark_stable_transition_segments() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-auto-dark-transition-guard-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+
+        for frame_index in 1..=3 {
+            write_test_solid_frame_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [6, 6, 6],
+            );
+        }
+        for frame_index in 4..=6 {
+            write_test_visual_slide_png(
+                &raw_frames_dir.join(format!("frame_{frame_index:06}.png")),
+                [16, 16, 16],
+                [242, 242, 242],
+                20..80,
+                10..60,
+            );
+        }
+
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 6,
+            "interval_seconds": 0.2,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("candidate artifacts");
+        let files = manifest["files"].as_array().expect("files");
+
+        let candidate_manifest_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_image_candidates"))
+            .and_then(|file| file["path"].as_str())
+            .expect("candidate manifest path");
+        let candidate_manifest: Value = serde_json::from_str(
+            &fs::read_to_string(candidate_manifest_path).expect("candidate manifest"),
+        )
+        .expect("candidate manifest json");
+        assert_eq!(candidate_manifest["selected_candidate_indices"], json!([5]));
+        assert_eq!(
+            candidate_manifest["auto_selection"]["selected_clusters"][0]
+                ["selected_candidate_index"],
+            json!(5)
+        );
+        assert_eq!(
+            candidate_manifest["auto_selection"]["rejected_clusters"][0]["reason"],
+            json!("dark_low_information_stable_segment")
+        );
+        assert_eq!(
+            candidate_manifest["auto_selection"]["rejected_clusters"][0]
+                ["selected_candidate_index"],
+            json!(2)
+        );
+
+        let selected_slides_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("selected_slides_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("selected slides manifest path");
+        let selected_slides: Value = serde_json::from_str(
+            &fs::read_to_string(selected_slides_path).expect("selected slides manifest"),
+        )
+        .expect("selected slides manifest json");
+        assert_eq!(selected_slides["selected_count"], json!(1));
+        assert_eq!(selected_slides["selected_candidate_indices"], json!([5]));
     }
 
     #[test]
