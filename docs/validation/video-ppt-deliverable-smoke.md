@@ -1525,6 +1525,82 @@ Safety result:
 - generated temp frames stayed under test temp directories and were not committed;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Visual Shape Duplicate Dedupe And Public Candidate Rerun
+
+Task source: P2-2E-2B-Next from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- add a conservative contrast-normalized visual-shape duplicate path for selected video/PPT frames;
+- keep exact frame duplicate and visual near-duplicate behavior unchanged;
+- propagate shape duplicate counts through selected slides, slide rectangles, and slide quality report summaries;
+- protect sparse text/build-state pages from over-dedupe;
+- rerun the public media.ccc / NixCon slides candidate without live writes or deployment.
+
+Implemented behavior:
+
+- selected-slide dedupe can now reject `visual_shape_duplicate` candidates when the visual signature shape is high-confidence duplicate;
+- shape matching uses the 32x32 visual signature, a Jaccard threshold, a strict containment fallback, a signal-sample minimum, and a conservative signal-balance threshold;
+- `visual_duplicate_count` now includes both `visual_near_duplicate` and `visual_shape_duplicate`;
+- `visual_shape_duplicate_count` is written to `selected_slides_manifest.json`, `slide_rectangles_manifest.json`, and `slide_quality_report.json`;
+- rectangle manifest dedupe policy records the shape duplicate thresholds;
+- the deterministic fixture `dedupes_selected_slide_manifest_by_visual_shape_similarity` verifies selected manifest, rectangle manifest, and quality report summary counts;
+- an initial looser containment threshold over-deduped a sparse text/build fixture, so the signal-balance threshold was tightened and `auto_selects_sparse_text_build_states_in_public_course_style_slides` was kept as the guard.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker dedupes_selected_slide_manifest_by_visual_shape_similarity --lib
+CC=clang CXX=clang++ cargo test -p media-worker selected_slide --lib
+CC=clang CXX=clang++ cargo test -p media-worker auto_selects --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+npm run test:video-deliverables
+cargo check -p media-worker --bin video_ppt_offline_smoke
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input <target-public-candidate-mp4> --output-root target/video-ppt-public-candidate-extraction-shape-dedupe --ffmpeg-bin /opt/homebrew/bin/ffmpeg --interval-seconds 15 --title "Public slides sample: How to teach Nix in 5 minutes" --json-output target/video-ppt-public-candidate-extraction-shape-dedupe/offline-smoke-summary.json
+node tools/validate-video-deliverables.mjs <shape-dedupe-public-candidate-generated_artifacts>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <shape-dedupe-public-candidate-generated_artifacts> --pretty --output-dir target/video-ppt-public-candidate-quality-matrix-shape-dedupe-final
+git diff --check
+```
+
+Result:
+
+- formatting and format check passed;
+- visual shape duplicate fixture passed;
+- selected-slide regression passed, 5 tests;
+- auto-selection regression passed, 7 tests, including sparse text/build-state preservation;
+- controlled video sample deliverable contract passed;
+- video deliverable validator passed, 19 tests;
+- offline smoke helper compiled;
+- public candidate offline smoke completed with `deliverable_state=final_pptx_ready`;
+- public candidate `frame_count=96`;
+- public candidate requested/final selected counts: 9/7;
+- public candidate requested selected indices: `[2, 16, 25, 31, 39, 55, 66, 85, 93]`;
+- public candidate final selected indices: `[2, 16, 25, 31, 55, 85, 93]`;
+- public candidate duplicate counts: `deduped_candidate_count=2`, `exact_duplicate_count=0`, `visual_duplicate_count=2`, `visual_shape_duplicate_count=0`;
+- duplicate removals remained the two existing visual near-duplicates: candidate 39 matched 31, and candidate 66 matched 55;
+- rectangle manifest and quality report summary matched the selected manifest duplicate counts;
+- public candidate validator passed for PPTX, Markdown, slide notes, rectangle manifest, quality report, and final/published/version/extraction manifests;
+- public-course quality matrix passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`;
+- public candidate quality score remained 61;
+- risk flags remain `full_frame_rectangle_fallback`, `missing_transcript_alignment`, `selected_slide_duplicates_removed`, `frame_sharpness_review_required`, and `manual_review_required`.
+
+Page-level review conclusion:
+
+- the final selected frames are real courseware slides, not ordinary non-PPT video content;
+- the public sample still contains a weak title fade state and quality risks, so it should remain classified as `needs_manual_review`;
+- the conservative shape duplicate rule did not remove any additional public-candidate page in this rerun, which is acceptable because the sparse text/build regression proved that looser containment can over-dedupe meaningful build states;
+- this slice improves duplicate accounting and gives a guarded shape-dedupe path, but it does not complete full P2-2E because customer-authorized video remains pending.
+
+Safety result:
+
+- no customer/private/login-gated video was used;
+- no WeChat Video Channels page was fetched;
+- no main-site upload, third-party event, live smoke, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- public candidate media, frames, generated PPTX, manifests, quality matrix output, and contact-sheet review image stayed under `target/` and were not committed;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, generated artifact local path, or full public candidate media path was recorded.
+
 ## 2026-06-08 Public Candidate Sparse Text Build Auto-Selection
 
 Task source: P2-2E-2B / P2-2C follow-up from `docs/plans/datamax-active-execution-plan.md`.
