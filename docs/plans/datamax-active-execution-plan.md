@@ -48,10 +48,10 @@
 
 ## 当前执行顺序
 
-1. 计划文档整理。
-2. 当前 head 基线回执。
-3. 视频/页面材料提取为 PPT 交付物优先通道。
-4. 后台 enrichment / 去重诊断。
+1. 已完成：计划文档整理。
+2. 已完成：当前 head 基线回执。
+3. 已优先完成：视频/页面材料提取为 PPT 交付物优先通道。
+4. 下一步：后台 enrichment / 去重诊断。
 5. duplicate / canonical read-through smoke。
 6. 被动回答质量离线语料。
 7. 数据源 row identity staging 自测。
@@ -92,7 +92,16 @@
 
 ## Task 2：当前 Head 基线回执
 
+**状态：已完成，2026-06-07，提交 `26afa6e`。**
+
 **目标：** 记录当前本地、GitHub、8 服务器和只读运行状态，作为后续任务的起点。
+
+**结果：**
+
+- 本地、GitHub 和 8 服务器已同步到当时基线 head。
+- 8 服务器只保留已知未跟踪文件 `mode`，未触碰。
+- 只读队列状态和文档检查结果已写入 `docs/validation/datamax-main-gap-closure-completion-audit.md`。
+- `npm run check:pure-third-party-guide-html` 已通过。
 
 **文件：**
 
@@ -151,7 +160,18 @@ git commit -m "Record DataMax active baseline"
 
 ## Task 3：视频/页面材料提取为 PPT 交付物优先通道
 
+**状态：已优先完成，2026-06-07，提交 `29561a1`。**
+
 **目标：** 先收敛支持范围内的视频/PPT 交付路径：上传的视频文件、直连视频 URL、公开页面中可解析出的直连视频资源，应该产出完整且 redacted 的交付包，包括 transcript/material notes、选中页证据、`video_slides_screenshot_based.pptx`、`video_slides.md`、必要 manifest、可持久追踪的 published-version 元数据、前端可见下载/打开动作，以及 AssistantRun 后续消息告知用户 PPT 包已准备好。
+
+**结果：**
+
+- 本地确定性交付物契约已完成并验证。
+- 支持来源边界已固定为上传视频文件、直连视频 URL、公开页面中可解析出的直连视频资源。
+- 完整交付包要求已覆盖 PPTX、Markdown、slide notes、subtitle/page map、slide rectangles、extraction/final/published manifests 和 published-version history。
+- AssistantRun follow-up、API/UI 下载/打开 surface、durable published-version 元数据、manifest redaction 已纳入验证。
+- `docs/validation/video-ppt-deliverable-smoke.md` 和 `docs/validation/datamax-main-gap-closure.md` 已记录测试回执。
+- 真实登录态/私有视频 smoke 仍是 operator-only 挂起项，不作为后续开发阻塞。
 
 **边界：**
 
