@@ -36,6 +36,7 @@ pub const DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME: &str = "ppt_keep_list_templa
 pub const DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME: &str = "selected_slides_manifest.json";
 pub const DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME: &str = "slide_rectangles_manifest.json";
 pub const DEFAULT_SUBTITLE_PAGE_MAP_FILE_NAME: &str = "subtitle_page_map.json";
+pub const DEFAULT_SLIDE_QUALITY_REPORT_FILE_NAME: &str = "slide_quality_report.json";
 pub const DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME: &str = "slide_notes.md";
 pub const DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME: &str = "video_slides.md";
 pub const DEFAULT_PPTX_BUILD_PLAN_FILE_NAME: &str = "pptx_build_plan.json";
@@ -941,6 +942,19 @@ fn write_video_slide_candidate_review_files(
         .map_err(|error| error.to_string())?;
     }
 
+    let slide_quality_report_path = artifacts_dir.join(DEFAULT_SLIDE_QUALITY_REPORT_FILE_NAME);
+    let slide_quality_report = video_slide_quality_report_from_manifests(
+        document,
+        &selected_slides_manifest,
+        &slide_rectangles_manifest,
+        &subtitle_page_map,
+    );
+    fs::write(
+        &slide_quality_report_path,
+        video_public_json_bytes(&slide_quality_report)?,
+    )
+    .map_err(|error| error.to_string())?;
+
     let slide_notes_path = artifacts_dir.join(DEFAULT_SLIDE_NOTES_ARTIFACT_FILE_NAME);
     fs::write(
         &slide_notes_path,
@@ -974,12 +988,14 @@ fn write_video_slide_candidate_review_files(
         "contact_sheet_html_file_name": DEFAULT_CONTACT_SHEET_HTML_FILE_NAME,
         "keep_list_template": keep_list_template_path.display().to_string(),
         "keep_list_template_file_name": DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME,
-        "selected_slides_manifest": selected_slides_manifest_path.display().to_string(),
-        "selected_slides_manifest_file_name": DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME,
-        "slide_rectangles_manifest": slide_rectangles_manifest_path.display().to_string(),
-        "slide_rectangles_manifest_file_name": DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
-        "recommended_output": pptx_output_path.display().to_string(),
-        "recommended_output_file_name": DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
+            "selected_slides_manifest": selected_slides_manifest_path.display().to_string(),
+            "selected_slides_manifest_file_name": DEFAULT_SELECTED_SLIDES_MANIFEST_FILE_NAME,
+            "slide_rectangles_manifest": slide_rectangles_manifest_path.display().to_string(),
+            "slide_rectangles_manifest_file_name": DEFAULT_SLIDE_RECTANGLES_MANIFEST_FILE_NAME,
+            "slide_quality_report": slide_quality_report_path.display().to_string(),
+            "slide_quality_report_file_name": DEFAULT_SLIDE_QUALITY_REPORT_FILE_NAME,
+            "recommended_output": pptx_output_path.display().to_string(),
+            "recommended_output_file_name": DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME,
         "selection": {
             "mode": if selection_source == "auto_unique_slide_keyframes" { "auto_unique_slide_keyframes" } else { "manual_or_model_review_required" },
             "selected_candidate_indices": selected_candidate_indices.clone(),
@@ -1121,6 +1137,43 @@ fn write_video_slide_candidate_review_files(
         );
     }
 
+    let mut slide_quality_report_artifact = video_generated_artifact_file(
+        document,
+        "slide_quality_report",
+        "application/json",
+        &slide_quality_report_path,
+    );
+    if let Some(object) = slide_quality_report_artifact.as_object_mut() {
+        object.insert(
+            "status".to_string(),
+            slide_quality_report
+                .get("status")
+                .cloned()
+                .unwrap_or_else(|| json!("review_required")),
+        );
+        object.insert(
+            "quality_score".to_string(),
+            slide_quality_report
+                .get("quality_score")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "risk_count".to_string(),
+            slide_quality_report
+                .get("risk_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+        object.insert(
+            "slide_count".to_string(),
+            slide_quality_report
+                .get("slide_count")
+                .cloned()
+                .unwrap_or_else(|| json!(0)),
+        );
+    }
+
     let mut slide_candidates_artifact = video_generated_artifact_file(
         document,
         "slide_image_candidates",
@@ -1167,6 +1220,7 @@ fn write_video_slide_candidate_review_files(
         ),
         selected_slides_artifact,
         slide_rectangles_artifact,
+        slide_quality_report_artifact,
         video_generated_artifact_file(document, "slide_notes", "text/markdown", &slide_notes_path),
         video_generated_artifact_file(
             document,
@@ -2126,6 +2180,246 @@ fn selected_slides_manifest_from_keep_list(
             "review auto-selected PPT page frames, slide_rectangles_manifest.json, and generated screenshot PPTX before customer delivery"
         } else {
             "review slide_rectangles_manifest.json and build screenshot-based PPTX from selected_candidates only"
+        },
+    })
+}
+
+fn video_slide_quality_report_from_manifests(
+    document: &Document,
+    selected_slides_manifest: &Value,
+    slide_rectangles_manifest: &Value,
+    subtitle_page_map: &Value,
+) -> Value {
+    let selected_candidates = selected_slides_manifest
+        .get("selected_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let rectangles = slide_rectangles_manifest
+        .get("rectangles")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let subtitle_pages = subtitle_page_map
+        .get("pages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let subtitle_map_status = subtitle_page_map
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("not_mapped");
+    let deduped_candidate_count = selected_slides_manifest
+        .get("deduped_candidate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let exact_duplicate_count = selected_slides_manifest
+        .get("exact_duplicate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let visual_duplicate_count = selected_slides_manifest
+        .get("visual_duplicate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let mut full_frame_fallback_count = 0_u64;
+    let mut detector_crop_count = 0_u64;
+    let mut review_required_count = 0_u64;
+    let mut subtitle_mapped_count = 0_u64;
+    let mut subtitle_missing_count = 0_u64;
+    let mut slide_scores = Vec::<i64>::new();
+    let slides = selected_candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let slide_number = index + 1;
+            let candidate_index = candidate
+                .get("candidate_index")
+                .and_then(Value::as_u64)
+                .unwrap_or(slide_number as u64);
+            let rectangle = rectangles.iter().find(|rectangle| {
+                rectangle
+                    .get("slide_number")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|value| value == slide_number as u64)
+                    || rectangle
+                        .get("candidate_index")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|value| value == candidate_index)
+            });
+            let rectangle_status = rectangle
+                .and_then(|rectangle| rectangle.get("rectangle_extraction_status"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    candidate
+                        .get("rectangle_extraction_status")
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("missing_rectangle");
+            let rectangle_mode = rectangle
+                .and_then(|rectangle| rectangle.get("rectangle_extraction_mode"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let review_required = rectangle
+                .and_then(|rectangle| rectangle.get("review_required"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            if rectangle_status == "promoted_full_frame_fallback" {
+                full_frame_fallback_count += 1;
+            }
+            if rectangle_status == "promoted_detector_crop" {
+                detector_crop_count += 1;
+            }
+            if review_required {
+                review_required_count += 1;
+            }
+            let transcript_segment_count = candidate
+                .get("transcript_segments")
+                .and_then(Value::as_array)
+                .map(|segments| segments.len())
+                .unwrap_or(0);
+            let subtitle_alignment_status = candidate
+                .get("subtitle_alignment_status")
+                .and_then(Value::as_str)
+                .unwrap_or(if subtitle_map_status == "mapped" {
+                    "mapped"
+                } else {
+                    "missing_transcript"
+                });
+            let page_has_subtitle_segments = subtitle_pages.iter().any(|page| {
+                page.get("slide_number")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|value| value == slide_number as u64)
+                    && page
+                        .get("transcript_segments")
+                        .and_then(Value::as_array)
+                        .is_some_and(|segments| !segments.is_empty())
+            });
+            let transcript_ready = transcript_segment_count > 0 || page_has_subtitle_segments;
+            if transcript_ready {
+                subtitle_mapped_count += 1;
+            } else {
+                subtitle_missing_count += 1;
+            }
+            let crop_risk = if rectangle_status == "promoted_full_frame_fallback" {
+                "high"
+            } else if review_required {
+                "medium"
+            } else {
+                "low"
+            };
+            let transcript_risk = if transcript_ready {
+                "low"
+            } else if subtitle_alignment_status == "unmatched" {
+                "medium"
+            } else {
+                "high"
+            };
+            let mut score = 100_i64;
+            if crop_risk == "high" {
+                score -= 25;
+            } else if crop_risk == "medium" {
+                score -= 10;
+            }
+            if transcript_risk == "high" {
+                score -= 15;
+            } else if transcript_risk == "medium" {
+                score -= 8;
+            }
+            if review_required {
+                score -= 5;
+            }
+            let score = score.max(0);
+            slide_scores.push(score);
+            json!({
+                "slide_number": slide_number,
+                "candidate_index": candidate_index,
+                "source_frame": candidate.get("file_name").cloned().unwrap_or_else(|| json!("frame")),
+                "timestamp_label": candidate.get("timestamp_label").cloned().unwrap_or(Value::Null),
+                "rectangle_extraction_status": rectangle_status,
+                "rectangle_extraction_mode": rectangle_mode,
+                "crop_risk": crop_risk,
+                "subtitle_alignment_status": subtitle_alignment_status,
+                "transcript_segment_count": transcript_segment_count,
+                "transcript_risk": transcript_risk,
+                "review_required": review_required,
+                "quality_score": score,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let slide_count = slides.len();
+    let quality_score = if slide_scores.is_empty() {
+        0
+    } else {
+        (slide_scores.iter().sum::<i64>() as f64 / slide_scores.len() as f64).round() as i64
+    };
+    let mut risk_flags = Vec::<Value>::new();
+    if full_frame_fallback_count > 0 {
+        risk_flags.push(json!({
+            "code": "full_frame_rectangle_fallback",
+            "severity": "medium",
+            "count": full_frame_fallback_count,
+            "review_action": "review_or_replace_full_frame_crops",
+        }));
+    }
+    if subtitle_missing_count > 0 {
+        risk_flags.push(json!({
+            "code": "missing_transcript_alignment",
+            "severity": "medium",
+            "count": subtitle_missing_count,
+            "review_action": "attach_or_parse_transcript_evidence",
+        }));
+    }
+    if deduped_candidate_count > 0 {
+        risk_flags.push(json!({
+            "code": "selected_slide_duplicates_removed",
+            "severity": "low",
+            "count": deduped_candidate_count,
+            "exact_duplicate_count": exact_duplicate_count,
+            "visual_duplicate_count": visual_duplicate_count,
+            "review_action": "review_slide_dedupe_manifest",
+        }));
+    }
+    if review_required_count > 0 {
+        risk_flags.push(json!({
+            "code": "manual_review_required",
+            "severity": "medium",
+            "count": review_required_count,
+            "review_action": "review_slide_quality_report",
+        }));
+    }
+
+    json!({
+        "schema": "v3.video_ppt_slide_quality_report.v1",
+        "status": if slide_count == 0 { "waiting_for_selection" } else { "review_required" },
+        "source": "selected_slides_and_slide_rectangles",
+        "document_id": document.id.to_string(),
+        "dataset_id": document.dataset_id.to_string(),
+        "title": document.title,
+        "quality_score": quality_score,
+        "slide_count": slide_count,
+        "risk_count": risk_flags.len(),
+        "summary": {
+            "full_frame_fallback_count": full_frame_fallback_count,
+            "detector_crop_count": detector_crop_count,
+            "review_required_count": review_required_count,
+            "subtitle_mapped_count": subtitle_mapped_count,
+            "subtitle_missing_count": subtitle_missing_count,
+            "deduped_candidate_count": deduped_candidate_count,
+            "exact_duplicate_count": exact_duplicate_count,
+            "visual_duplicate_count": visual_duplicate_count,
+        },
+        "risk_flags": risk_flags,
+        "slides": slides,
+        "redaction": {
+            "status": "applied",
+            "policy": "source frames are file names only; internal paths and source URLs are redacted"
+        },
+        "next_action": if slide_count == 0 {
+            "fill_ppt_keep_list_template"
+        } else {
+            "review_slide_quality_report_before_customer_delivery"
         },
     })
 }
@@ -4118,6 +4412,7 @@ pub fn video_extraction_output_artifact_from_output(
                 "ppt_keep_list_template",
                 "selected_slides_manifest",
                 "slide_rectangles_manifest",
+                "slide_quality_report",
                 "slide_notes",
                 "pptx_build_plan",
             ],
@@ -5014,6 +5309,7 @@ fn video_artifact_group_counts(files: &[Value]) -> Value {
             "ppt_keep_list_template",
             "selected_slides_manifest",
             "slide_rectangles_manifest",
+            "slide_quality_report",
             "slide_notes",
             "pptx_build_plan",
         ]).len(),
@@ -5527,6 +5823,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
     let has_slide_notes = artifact_kinds.contains("slide_notes");
     let has_video_slides_markdown = artifact_kinds.contains("video_slides_markdown");
     let has_slide_rectangles_manifest = artifact_kinds.contains("slide_rectangles_manifest");
+    let has_slide_quality_report = artifact_kinds.contains("slide_quality_report");
     let has_subtitle_page_map = artifact_kinds.contains("subtitle_page_map");
     let mut warnings = video_generated_artifact_quality_warnings(
         &files,
@@ -5585,6 +5882,7 @@ fn video_deliverable_status(generated_artifacts: &Value) -> Value {
         "has_published_version_history": has_published_version_history,
         "has_extraction_artifacts_manifest": has_extraction_artifacts_manifest,
         "has_slide_rectangles_manifest": has_slide_rectangles_manifest,
+        "has_slide_quality_report": has_slide_quality_report,
         "has_slide_notes": has_slide_notes,
         "has_video_slides_markdown": has_video_slides_markdown,
         "has_subtitle_page_map": has_subtitle_page_map,
@@ -6040,6 +6338,7 @@ fn video_final_deliverables_manifest(
             "ppt_keep_list_template",
             "selected_slides_manifest",
             "slide_rectangles_manifest",
+            "slide_quality_report",
             "slide_notes",
             "pptx_build_plan",
         ]),
@@ -6125,6 +6424,7 @@ fn video_published_deliverable_manifest(
             "ppt_keep_list_template",
             "selected_slides_manifest",
             "slide_rectangles_manifest",
+            "slide_quality_report",
             "slide_notes",
             "pptx_build_plan",
         ]),
@@ -9068,6 +9368,28 @@ mod tests {
         assert!(slide_rectangles.contains("\"unit\": \"relative\""));
         assert!(slide_rectangles.contains("\"review_required\": true"));
         assert!(!slide_rectangles.contains(&raw_frames_dir.display().to_string()));
+        let slide_quality_report_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide quality report path");
+        let slide_quality_report =
+            fs::read_to_string(slide_quality_report_path).expect("slide quality report");
+        assert!(slide_quality_report.contains("v3.video_ppt_slide_quality_report.v1"));
+        assert!(slide_quality_report.contains("full_frame_rectangle_fallback"));
+        assert!(slide_quality_report.contains("manual_review_required"));
+        assert!(!slide_quality_report.contains(&raw_frames_dir.display().to_string()));
+        let slide_quality_report_json: Value =
+            serde_json::from_str(&slide_quality_report).expect("quality report json");
+        assert_eq!(slide_quality_report_json["slide_count"], json!(2));
+        assert_eq!(
+            slide_quality_report_json["summary"]["full_frame_fallback_count"],
+            json!(2)
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["crop_risk"],
+            json!("high")
+        );
         let keep_list = fs::read_to_string(keep_list_path).expect("preserved keep list");
         assert!(keep_list.contains("manual pick"));
         let pptx_plan_path = files
@@ -9137,6 +9459,7 @@ mod tests {
         assert!(final_manifest.contains("manifest_outputs"));
         assert!(final_manifest.contains("final_outputs"));
         assert!(final_manifest.contains("slide_notes"));
+        assert!(final_manifest.contains("slide_quality_report"));
         assert!(final_manifest.contains("video_slides_markdown"));
         assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_MARKDOWN_FILE_NAME));
         assert!(final_manifest.contains(DEFAULT_VIDEO_SLIDES_PPTX_FILE_NAME));

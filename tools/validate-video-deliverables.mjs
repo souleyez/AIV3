@@ -60,6 +60,14 @@ const REQUIRED_FILES = [
   },
 ];
 
+const OPTIONAL_FILES = [
+  {
+    kind: "slide_quality_report",
+    fileName: "slide_quality_report.json",
+    group: "review_outputs",
+  },
+];
+
 const LOCAL_PATH_PATTERNS = [
   /[A-Za-z]:[\\/]/,
   /[\\/]Users[\\/]/,
@@ -112,13 +120,16 @@ export function validateVideoDeliverables(inputPath) {
     };
   }
 
-  const files = REQUIRED_FILES.map((file) => {
+  const files = [
+    ...REQUIRED_FILES.map((file) => ({ ...file, required: true })),
+    ...OPTIONAL_FILES.map((file) => ({ ...file, required: false })),
+  ].map((file) => {
     const filePath = path.join(artifactsDir, file.fileName);
     const exists = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
     const size = exists ? fs.statSync(filePath).size : 0;
-    if (!exists) {
+    if (!exists && file.required) {
       errors.push(issue("missing_required_file", `${file.kind} file is missing`, file.kind));
-    } else if (size === 0) {
+    } else if (exists && size === 0) {
       errors.push(issue("empty_required_file", `${file.kind} file is empty`, file.kind));
     }
     return {
@@ -159,6 +170,11 @@ export function validateVideoDeliverables(inputPath) {
     "slide_rectangles_manifest",
     errors,
   );
+  const slideQualityReport = readJsonFile(
+    path.join(artifactsDir, "slide_quality_report.json"),
+    "slide_quality_report",
+    errors,
+  );
 
   const pptx = files.find((file) => file.kind === "pptx");
   if (pptx?.exists && !fileStartsWithZipMagic(pptx.path)) {
@@ -196,6 +212,10 @@ export function validateVideoDeliverables(inputPath) {
   if (slideRectanglesManifest) {
     validateSlideRectanglesManifest(slideRectanglesManifest, errors);
     validateRedactedJson(slideRectanglesManifest, "slide_rectangles_manifest", errors);
+  }
+  if (slideQualityReport) {
+    validateSlideQualityReport(slideQualityReport, errors);
+    validateRedactedJson(slideQualityReport, "slide_quality_report", errors);
   }
   const slideNotes = files.find((file) => file.kind === "slide_notes");
   if (slideNotes?.exists) {
@@ -355,6 +375,63 @@ function validateSlideRectanglesManifest(manifest, errors) {
   if (!rectangles.every(isValidSlideRectangle)) {
     errors.push(issue("slide_rectangles_crop_invalid", "slide rectangles must use a valid relative crop and require review", "slide_rectangles_manifest"));
   }
+}
+
+function validateSlideQualityReport(report, errors) {
+  const slides = Array.isArray(report.slides) ? report.slides : [];
+  const riskFlags = Array.isArray(report.risk_flags) ? report.risk_flags : [];
+  if (report.schema !== "v3.video_ppt_slide_quality_report.v1") {
+    errors.push(issue("slide_quality_report_schema_invalid", "slide quality report schema is invalid", "slide_quality_report"));
+  }
+  if (!["waiting_for_selection", "review_required", "review_ready"].includes(report.status)) {
+    errors.push(issue("slide_quality_report_status_invalid", "slide quality report status is invalid", "slide_quality_report"));
+  }
+  if (!isScore(report.quality_score)) {
+    errors.push(issue("slide_quality_report_score_invalid", "slide quality report quality_score is invalid", "slide_quality_report"));
+  }
+  if (!Number.isInteger(report.slide_count) || report.slide_count !== slides.length) {
+    errors.push(issue("slide_quality_report_slide_count_invalid", "slide quality report slide_count does not match slides", "slide_quality_report"));
+  }
+  if (!Number.isInteger(report.risk_count) || report.risk_count !== riskFlags.length) {
+    errors.push(issue("slide_quality_report_risk_count_invalid", "slide quality report risk_count does not match risk_flags", "slide_quality_report"));
+  }
+  if (report.status !== "waiting_for_selection" && slides.length < 1) {
+    errors.push(issue("slide_quality_report_slides_missing", "slide quality report has no slide rows", "slide_quality_report"));
+  }
+  if (!slides.every(isValidSlideQualityRow)) {
+    errors.push(issue("slide_quality_report_slide_row_invalid", "slide quality report slide rows are invalid", "slide_quality_report"));
+  }
+  const summary = report.summary || {};
+  for (const key of [
+    "full_frame_fallback_count",
+    "detector_crop_count",
+    "review_required_count",
+    "subtitle_mapped_count",
+    "subtitle_missing_count",
+    "deduped_candidate_count",
+  ]) {
+    if (!Number.isInteger(summary[key]) || summary[key] < 0) {
+      errors.push(issue("slide_quality_report_summary_invalid", `slide quality report summary ${key} is invalid`, "slide_quality_report"));
+      break;
+    }
+  }
+}
+
+function isValidSlideQualityRow(slide) {
+  return Number.isInteger(slide?.slide_number)
+    && slide.slide_number >= 1
+    && Number.isInteger(slide?.candidate_index)
+    && slide.candidate_index >= 1
+    && typeof slide?.source_frame === "string"
+    && slide.source_frame.length > 0
+    && ["low", "medium", "high"].includes(slide.crop_risk)
+    && ["low", "medium", "high"].includes(slide.transcript_risk)
+    && typeof slide.review_required === "boolean"
+    && isScore(slide.quality_score);
+}
+
+function isScore(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
 }
 
 function isValidSlideRectangle(rectangle) {

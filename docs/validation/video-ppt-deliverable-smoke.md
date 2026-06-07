@@ -1020,3 +1020,69 @@ Safety result:
 - no WeChat Video Channels URL was fetched;
 - no video download, upload, frame extraction, OCR, PPT generation, browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, or generated artifact local path was recorded.
+
+## 2026-06-07 Slide Quality Report Local Slice
+
+Task source: P2-2A from `docs/plans/datamax-active-execution-plan.md`.
+
+Scope:
+
+- add an optional `slide_quality_report.json` review artifact to video/PPT generated packages;
+- keep the report derived from selected slides, slide rectangles, subtitle page map, and dedupe metadata;
+- keep legacy packages valid when they do not contain `slide_quality_report.json`;
+- expose the report as a front-end download labeled `质量报告`;
+- do not change source access policy, WeChat Video Channels handling, capture fallback behavior, upload semantics, or third-party authorization.
+
+Implemented behavior:
+
+- media-worker writes `slide_quality_report.json` next to the screenshot PPTX, Markdown deck, slide notes, rectangle manifest, selected slides manifest, and other generated artifacts;
+- the report uses `schema=v3.video_ppt_slide_quality_report.v1`, includes an overall quality score, risk flags, summary counts, per-slide crop/transcript risk, and review actions;
+- report risk flags cover full-frame fallback crops, missing transcript alignment, selected duplicate removal, and manual review requirements;
+- `video_deliverable_status` exposes `has_slide_quality_report`;
+- final, published, and extraction manifests include `slide_quality_report` in review outputs when present;
+- `tools/validate-video-deliverables.mjs` validates the report if present, but does not require it for legacy package compatibility;
+- Web artifact download priority and InsightPanel labels now surface `slide_quality_report` as `质量报告`.
+
+Validation:
+
+```text
+cargo fmt
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p media-worker selected_slides --lib
+CC=clang CXX=clang++ cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete --lib
+CC=clang CXX=clang++ cargo test -p media-worker slide_rectangle --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_extraction --lib
+CC=clang CXX=clang++ cargo test -p platform-api video_ppt --lib
+npm run test:video-deliverables
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+node --check apps/web/app/components/InsightPanel.js
+node --check apps/web/app/lib/html-artifact-manifest.js
+npm --prefix apps/web run build
+```
+
+Result:
+
+- rustfmt check passed;
+- media-worker selected-slides quality-report path passed, 1 test;
+- controlled video sample deliverable contract passed, 1 test;
+- slide rectangle tests passed, 4 tests;
+- platform-api video extraction tests passed, 3 tests;
+- platform-api video PPT tests passed, 5 tests, including the third-party WeChat handoff regression;
+- video deliverables validator tests passed, 17 tests, including legacy-without-quality-report and malformed-quality-report cases;
+- HTML artifact manifest tests passed, 12 tests, with the existing Node module-type warning only;
+- InsightPanel and HTML artifact manifest syntax checks passed;
+- Web production build passed with the existing Next.js middleware deprecation and NFT tracing warnings.
+
+Remaining P2-2 work:
+
+- P2-2B: improve slide crop detection and reduce `full_frame_rectangle_fallback`;
+- P2-2C: improve stable-interval selection, transition-frame filtering, and duplicate-page review output;
+- P2-2D: use an approved subtitle/transcript/OCR sample to improve `subtitle_page_map` and slide notes;
+- P2-2E: run the three-sample quality review matrix, including a customer video only after explicit authorization.
+
+Safety result:
+
+- no live smoke was run in this slice;
+- no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
+- no browser capture, service build, service restart, 8-server deployment, or 120-server action was run;
+- no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, or generated artifact local path was recorded.

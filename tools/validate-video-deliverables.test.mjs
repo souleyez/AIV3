@@ -11,8 +11,29 @@ test("accepts a complete video deliverables directory", () => {
 
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
-  assert.equal(result.files.length, 9);
+  assert.equal(result.files.length, 10);
   assert.ok(result.files.every((file) => file.exists));
+});
+
+test("accepts legacy deliverables without optional slide quality report", () => {
+  const sessionDir = createCompleteDeliverables();
+  fs.unlinkSync(path.join(sessionDir, "generated_artifacts", "slide_quality_report.json"));
+  for (const manifestFileName of [
+    "final_deliverables_manifest.json",
+    "published_deliverable_manifest.json",
+    "published_version_history.json",
+    "extraction_artifacts_manifest.json",
+  ]) {
+    const manifestPath = path.join(sessionDir, "generated_artifacts", manifestFileName);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    removeArtifactKind(manifest, "slide_quality_report");
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.files.find((file) => file.kind === "slide_quality_report").exists, false);
 });
 
 test("accepts detector-cropped slide rectangles", () => {
@@ -187,6 +208,29 @@ test("rejects malformed slide rectangle manifests", () => {
   assert.ok(result.errors.some((error) => error.code === "slide_rectangles_crop_invalid"));
 });
 
+test("rejects malformed slide quality reports", () => {
+  const sessionDir = createCompleteDeliverables();
+  const qualityReportPath = path.join(sessionDir, "generated_artifacts", "slide_quality_report.json");
+  const qualityReport = JSON.parse(fs.readFileSync(qualityReportPath, "utf8"));
+  qualityReport.schema = "wrong";
+  qualityReport.quality_score = 101;
+  qualityReport.slide_count = 2;
+  qualityReport.risk_count = 9;
+  qualityReport.slides[0].crop_risk = "unknown";
+  qualityReport.summary.full_frame_fallback_count = -1;
+  fs.writeFileSync(qualityReportPath, JSON.stringify(qualityReport, null, 2));
+
+  const result = validateVideoDeliverables(sessionDir);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_schema_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_score_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_slide_count_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_risk_count_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_slide_row_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_summary_invalid"));
+});
+
 test("rejects unredacted local paths in slide notes", () => {
   const sessionDir = createCompleteDeliverables();
   fs.writeFileSync(
@@ -249,6 +293,7 @@ function createCompleteDeliverables() {
     "published_version_history",
     "extraction_artifacts_manifest",
     "slide_rectangles_manifest",
+    "slide_quality_report",
     "slide_notes",
     "video_slides_markdown",
     "subtitle_page_map",
@@ -272,6 +317,7 @@ function createCompleteDeliverables() {
           has_published_version_history: true,
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
+          has_slide_quality_report: true,
           has_slide_notes: true,
           has_video_slides_markdown: true,
           has_subtitle_page_map: true,
@@ -281,7 +327,7 @@ function createCompleteDeliverables() {
         ),
         final_outputs: files.filter((file) => ["pptx", "video_slides_markdown"].includes(file.artifact_kind)),
         review_outputs: files.filter((file) =>
-          ["slide_rectangles_manifest", "slide_notes"].includes(file.artifact_kind),
+          ["slide_rectangles_manifest", "slide_quality_report", "slide_notes"].includes(file.artifact_kind),
         ),
         evidence_outputs: files.filter((file) => file.artifact_kind === "subtitle_page_map"),
       },
@@ -318,6 +364,51 @@ function createCompleteDeliverables() {
   );
 
   fs.writeFileSync(
+    path.join(artifactsDir, "slide_quality_report.json"),
+    JSON.stringify(
+      {
+        schema: "v3.video_ppt_slide_quality_report.v1",
+        status: "review_required",
+        quality_score: 55,
+        slide_count: 1,
+        risk_count: 2,
+        summary: {
+          full_frame_fallback_count: 1,
+          detector_crop_count: 0,
+          review_required_count: 1,
+          subtitle_mapped_count: 1,
+          subtitle_missing_count: 0,
+          deduped_candidate_count: 0,
+          exact_duplicate_count: 0,
+          visual_duplicate_count: 0,
+        },
+        risk_flags: [
+          { code: "full_frame_rectangle_fallback", severity: "medium", count: 1 },
+          { code: "manual_review_required", severity: "medium", count: 1 },
+        ],
+        slides: [
+          {
+            slide_number: 1,
+            candidate_index: 2,
+            source_frame: "frame_000002.jpg",
+            timestamp_label: "0:00",
+            rectangle_extraction_status: "promoted_full_frame_fallback",
+            rectangle_extraction_mode: "full_frame_fallback",
+            crop_risk: "high",
+            subtitle_alignment_status: "pre_page_mapped",
+            transcript_segment_count: 1,
+            transcript_risk: "low",
+            review_required: true,
+            quality_score: 55,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  fs.writeFileSync(
     path.join(artifactsDir, "published_deliverable_manifest.json"),
     JSON.stringify(
       {
@@ -335,6 +426,7 @@ function createCompleteDeliverables() {
           has_published_version_history: true,
           has_extraction_artifacts_manifest: true,
           has_slide_rectangles_manifest: true,
+          has_slide_quality_report: true,
           has_slide_notes: true,
           has_video_slides_markdown: true,
           has_subtitle_page_map: true,
@@ -392,10 +484,34 @@ function fileNameForKind(kind) {
     published_version_history: "published_version_history.json",
     extraction_artifacts_manifest: "extraction_artifacts_manifest.json",
     slide_rectangles_manifest: "slide_rectangles_manifest.json",
+    slide_quality_report: "slide_quality_report.json",
     slide_notes: "slide_notes.md",
     video_slides_markdown: "video_slides.md",
     subtitle_page_map: "subtitle_page_map.json",
   }[kind];
+}
+
+function removeArtifactKind(value, artifactKind) {
+  if (Array.isArray(value)) {
+    for (let index = value.length - 1; index >= 0; index -= 1) {
+      const item = value[index];
+      if (item?.artifact_kind === artifactKind) {
+        value.splice(index, 1);
+      } else {
+        removeArtifactKind(item, artifactKind);
+      }
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (value.deliverable_status && typeof value.deliverable_status === "object") {
+    delete value.deliverable_status.has_slide_quality_report;
+  }
+  for (const nested of Object.values(value)) {
+    removeArtifactKind(nested, artifactKind);
+  }
 }
 
 function minimalPptxFixtureBytes() {

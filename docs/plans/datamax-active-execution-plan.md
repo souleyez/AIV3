@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-07 23:45 CST
-**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行。P2-2 质量增强拆成可执行子阶段，当前本地仅发现上一轮未提交质量报告草稿，需先复核再决定提交。本计划编写本身不部署 8 服务器。
+**更新时间：** 2026-06-07 23:52 CST
+**当前性质：** 下一阶段开发执行版；P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke、第三方视频登记 special-trigger smoke、视频号/登录态 handoff smoke 脚本已实现，本地脚本验证通过；P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过。P2-2A 可选 `slide_quality_report.json` 质量报告 contract 已完成本地验证，legacy 包兼容。live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2B/P2-2C/P2-2D/P2-2E 仍待后续质量增强。本计划编写本身不部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
 
 ## 1. 计划原则
@@ -17,8 +17,8 @@
 
 ### 2.1 代码与部署基线
 
-- 当前本地 `HEAD=origin/main=ad929ee`，对应 `ad929ee Short-circuit external WeChat video handoff`。P1-3D 主站 early-return 修复已同步到 `806be94 Short-circuit WeChat video handoff`，第三方 `/events` deterministic handoff follow-up 已同步到 `ad929ee`。
-- 本轮计划编写开始时，工作区已有上一轮遗留的未提交 P2-2 质量报告草稿：`crates/media-worker/src/lib.rs`、`tools/validate-video-deliverables.mjs`、`tools/validate-video-deliverables.test.mjs`、`apps/web/app/lib/html-artifact-manifest.js`、`apps/web/app/components/InsightPanel.js`。这些改动不能当作已交付基线；下一步必须先复核 diff、补齐验证、再决定提交或调整。
+- P2-2A 执行前本地 `HEAD=origin/main=d6abcf0`，对应 `d6abcf0 Refine DataMax executable plan`。P1-3D 主站 early-return 修复已同步到 `806be94 Short-circuit WeChat video handoff`，第三方 `/events` deterministic handoff follow-up 已同步到 `ad929ee`。
+- 本轮已复核上一轮遗留的 P2-2 质量报告草稿，确认改动集中在 `crates/media-worker/src/lib.rs`、`tools/validate-video-deliverables.mjs`、`tools/validate-video-deliverables.test.mjs`、`apps/web/app/lib/html-artifact-manifest.js`、`apps/web/app/components/InsightPanel.js`；已按 P2-2A 跑本地验证矩阵，结果见 `docs/validation/video-ppt-deliverable-smoke.md`。
 - 已记录的 8 服务器最新部署基线：`b1abad9cc`，已启用 `INGEST_REMOTE_MEDIA_ENABLED=true` 和 `INGEST_REMOTE_MEDIA_CACHE_DIR=/srv/aiv3/remote-media-cache`。
 - 8 服务器已知未跟踪文件：`?? mode`，继续保持不触碰。
 - P0 主站可见视频/PPT smoke 在主站 `https://v3.elepcloud.com` 通过；本轮未重新部署 8 服务器，下一次部署必须单独获得批准。
@@ -68,6 +68,8 @@
   主站 assistant-run 创建对视频号/登录态 PPT 请求改为 deterministic early return：创建 run 后立即写 `wechat_video_login_handoff` event/artifact、完成 run 并返回，不再等待 ReAct/provider。handler 级测试在 provider 模式和不可达网关下通过，证明不会走模型，同时 `/api/v3/html-artifacts` 可列出 handoff artifact。
 - P1-3D 本轮第三方 follow-up 修复
   第三方 `/v1/external/channels/{connection_id}/events` 对视频号/登录态 PPT 请求在创建 run 并记录 external message 后立即返回 `wechat_video_login_handoff` card，`task_status=login_gated_video_source_not_supported`，不触发 action/static/model/provider 分支；幂等重复和 `/assistant-runs/{run_id}/reply` 查询都从事件恢复同一张 card。
+- P2-2A 本轮质量报告 contract
+  视频/PPT 包新增可选 `slide_quality_report.json`，由 selected slides、slide rectangles、subtitle page map 和 dedupe summary 推导质量分、risk flags、逐页 crop/transcript 风险和人工复核建议；validator 兼容没有质量报告的 legacy 包，但新包若包含该文件必须通过 schema、score、summary、per-slide rows 和 redaction 校验；前端下载动作显示“质量报告”。
 
 ### 2.4 已完成的受控公开视频 smoke
 
@@ -395,7 +397,7 @@
 
 ### P2-2：视频/PPT 质量增强
 
-**状态：待复核执行；本地有上一轮未提交质量报告草稿，不作为已交付。**
+**状态：P2-2A 已完成本地验证；P2-2B/P2-2C/P2-2D/P2-2E 待后续执行。**
 
 **目标：** 提高截图型 PPT 的可读性，减少人工复核成本。
 
@@ -415,7 +417,7 @@
 质量报告 contract 要求：
 
 - `schema=v3.video_ppt_slide_quality_report.v1`。
-- `status` 只能表达 `waiting_for_selection`、`review_required`、`quality_ready` 等可解释状态，不得把 warning 包装成成功。
+- `status` 只能表达 `waiting_for_selection`、`review_required`、`review_ready` 等可解释状态，不得把 warning 包装成成功。
 - `quality_score` 取值 0-100，计算依据要能从 manifest 推导，不能依赖 provider 文本。
 - `risk_flags` 至少覆盖 `full_frame_rectangle_fallback`、`missing_transcript_alignment`、`selected_slide_duplicates_removed`、`manual_review_required`。
 - 每页记录 slide number、candidate index、source frame 文件名摘要、timestamp label、rectangle mode/status、crop risk、subtitle alignment、review_required 和 page quality score。
@@ -1009,7 +1011,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | 公开视频页 | HTML 暴露 video/source/OG/Twitter/JSON-LD video | 解析候选并抽取 PPT | P1-1 resolver fixtures 与失败分流已完成 | 用 P1-3 direct URL/page prompt 回归展示 |
 | 微信视频号链接 | `weixin.qq.com/sph/...` | 自动解析拒绝，给上传/直链/授权录屏选项 | `smoke:video-ppt-handoff` 已实现并通过 self-test；主站 early-return 和第三方 deterministic card 均已通过本地 endpoint/handler 测试，live pass 待部署后复跑 | P1-3D live |
 | 授权录屏兜底 | operator 已批准可播放页面 | 录制 `.mp4` 后复用现有抽取 | runbook 和 `capture:authorized-video` 已实现；self-test/dry-run/授权门禁通过，live 授权样例未执行 | P2-1C |
-| 质量报告 | 已生成 PPTX/Markdown/manifest 的 video/PPT 包 | 输出可选 `slide_quality_report.json`，解释质量分和风险 | 本地存在未提交草稿，待复核、验证、文档回执后再决定提交 | P2-2A |
+| 质量报告 | 已生成 PPTX/Markdown/manifest 的 video/PPT 包 | 输出可选 `slide_quality_report.json`，解释质量分和风险 | P2-2A 已完成本地验证；legacy 包兼容，新包质量报告可校验 | 作为后续样例复核辅助保留 |
 | 裁剪/稳定/字幕增强 | 合成 PPT、公开视频课程、客户授权视频 | 减少 fallback/重复/转场帧，补齐可用字幕页映射 | 计划已拆分，尚未作为已交付功能 | P2-2B/P2-2C/P2-2D/P2-2E |
 | 普通视频转 PPT | 没有 PPT/课件画面的普通视频 | 不触发或提示不适用 | 已明确边界 | 保持 |
 
@@ -1035,12 +1037,11 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 
 按风险和收益排序：
 
-1. 先处理当前本地未提交 P2-2A 质量报告草稿：复核 diff，跑 5.8.1 的最小测试矩阵，补 `docs/validation/video-ppt-deliverable-smoke.md` 回执；通过后再提交 GitHub，不部署 8 服务器。
-2. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
-3. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
-4. 复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；需要在部署窗口后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
-5. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
-6. 根据 P1-3/P2-1/P2-2A 证据继续 P2-2B/P2-2C/P2-2D：重点处理 crop fallback、重复页、转场帧、字幕页映射和逐页讲稿。
+1. 授权后运行 P1-3B 主站上传视频 live/controlled smoke，证明“用户上传视频文件”入口可交付 PPTX/Markdown/manifest，并把回执追加到验证记录。
+2. 授权后运行 P1-3C 第三方视频登记 live/controlled smoke，证明第三方登记视频素材后能通过“提取视频里的 PPT”触发同一交付链路；如 surface 缺少下载出口，标为第三方发布可见性缺口。
+3. 复核 P1-3D lightweight handoff live surface：当前代码已补齐主站 early return 和第三方 deterministic card，并通过本地 handler/endpoint 测试；需要在部署窗口后复跑 `smoke:video-ppt-handoff -- --mode main`，拿到 main live pass 回执，再在 inbound bearer/context 获批后跑 external live pass。
+4. 执行 P2-1C operator 授权样例 smoke：先 dry-run，再在授权 workstation/jump-host 录制 30-60 秒 MP4，人工复核后走主站上传或第三方登记视频 PPT 抽取；没有明确授权前不录屏。
+5. 根据 P1-3/P2-1/P2-2A 证据继续 P2-2B/P2-2C/P2-2D：重点处理 crop fallback、重复页、转场帧、字幕页映射和逐页讲稿。
 
 本计划完成当前阶段的定义：
 
