@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Keep one canonical executable plan for DataMax and finish the remaining work that can be handled without external credentials, production-risk approvals, or business decisions.
+**Goal:** Keep one canonical executable plan for DataMax and finish the remaining work that can be handled without external credentials, production-risk approvals, or business decisions. The immediate priority is to finish the video-to-PPT extraction deliverable path before continuing the remaining diagnostics and reporting hardening work.
 
-**Architecture:** DataMax remains the system of record for permissions, document/data ingestion, enterprise memory, model routing, static-page/report artifacts, and third-party contract behavior. This plan prioritizes local or read-only work that can be independently implemented and verified; items requiring operator credentials, business approval, provider quota, or production mutation are explicitly parked.
+**Architecture:** DataMax remains the system of record for permissions, document/data ingestion, enterprise memory, model routing, media/video extraction deliverables, static-page/report artifacts, and third-party contract behavior. This plan prioritizes local or read-only work that can be independently implemented and verified; items requiring operator credentials, business approval, provider quota, or production mutation are explicitly parked.
 
-**Tech Stack:** Rust workspace (`platform-api`, `storage`, workers, `codex-host-agent`), PostgreSQL, workflow tasks, Next.js web app, generated third-party docs, local/8-server smoke scripts, Markdown validation ledgers.
+**Tech Stack:** Rust workspace (`platform-api`, `storage`, `media-worker`, `assistant-run-worker`, other workers, `codex-host-agent`), PostgreSQL, workflow tasks, Next.js web app, generated third-party docs, local/8-server smoke scripts, Markdown validation ledgers.
 
 ---
 
@@ -40,6 +40,7 @@ These are not blockers for the independent work queue below.
 | Production low-load template prewarm | Creates background Image2/static-page work | Operator approves a short low-load window and cleanup check |
 | Full third-party database registration/sync public API | New public API/auth contract | Product decision to expose it and explicit interface review |
 | Cloudflare Codex production fallback reliance | Depends on external account/quota/config | Provider/host readiness and paid/quota state confirmed |
+| Real login-gated video extraction | Needs cookies, QR login, private host access, or browser playback/recording | Operator provides an approved accessible video source or explicitly approves a reviewed jump-host/provider smoke |
 
 ---
 
@@ -47,14 +48,15 @@ These are not blockers for the independent work queue below.
 
 1. Plan hygiene and documentation cleanup.
 2. Current-head baseline receipt.
-3. Background enrichment/dedup diagnostics.
-4. Duplicate/canonical read-through smoke.
-5. Passive answer-quality offline recovery corpus.
-6. Data-source row-identity staging self-test.
-7. Static-page/report regression corpus tightening.
-8. Third-party database read-only status hardening.
-9. Operator observability polish.
-10. Final validation ledger and optional deploy request.
+3. Video extraction to PPT deliverable priority lane.
+4. Background enrichment/dedup diagnostics.
+5. Duplicate/canonical read-through smoke.
+6. Passive answer-quality offline recovery corpus.
+7. Data-source row-identity staging self-test.
+8. Static-page/report regression corpus tightening.
+9. Third-party database read-only status hardening.
+10. Operator observability polish.
+11. Final validation ledger and optional deploy request.
 
 Each task should commit independently after tests pass.
 
@@ -139,7 +141,7 @@ Run:
 ```powershell
 git status --short --branch
 git rev-parse --short HEAD
-ssh 8服务器 'cd /srv/aiv3/repo && git status --short --branch && git rev-parse --short HEAD && systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-codex-host-agent.service aiv3-document-enrichment-worker.service aiv3-ingest-worker.service aiv3-retrieval-worker.service aiv3-static-page-worker.service'
+ssh 8服务器 'cd /srv/aiv3/repo && git status --short --branch && git rev-parse --short HEAD && systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-codex-host-agent.service aiv3-document-enrichment-worker.service aiv3-ingest-worker.service aiv3-retrieval-worker.service aiv3-static-page-worker.service aiv3-media-worker.service aiv3-assistant-run-worker.service'
 ```
 
 Expected: local and 8-server match, except the known 8-server `?? mode`.
@@ -162,6 +164,7 @@ Add a dated section to `docs/validation/datamax-main-gap-closure-completion-audi
 - local/GitHub head;
 - 8-server head;
 - active service list;
+- media and assistant-run worker state;
 - queue-stats reachable yes/no;
 - known `mode` untouched;
 - no secret or raw payload recorded.
@@ -175,7 +178,103 @@ git commit -m "Record DataMax active baseline"
 
 ---
 
-## Task 3: Background Enrichment And Dedup Diagnostics
+## Task 3: Video Extraction To PPT Deliverable Priority Lane
+
+**Files:**
+
+- Inspect/modify: `crates/media-worker/src/lib.rs`
+- Inspect/modify: `crates/media-worker/src/main.rs`
+- Inspect/modify: `crates/platform-api/src/lib.rs`
+- Inspect/modify: `crates/platform-api/src/react_agent_tools.rs`
+- Inspect/modify: `crates/storage/src/lib.rs`
+- Inspect/modify: `crates/domain-model/src/lib.rs`
+- Inspect/modify: `apps/web/app/HomePageClient.js`
+- Inspect/modify: `tools/validate-video-deliverables.mjs`
+- Inspect/modify: `scripts/run-assistant-run-worker-smoke.sh`
+- Inspect/modify: `scripts/run-jump-host-video-deliverable-smoke.ps1`
+- Update: `docs/validation/video-ppt-deliverable-smoke.md`
+- Update: `docs/validation/datamax-main-gap-closure.md`
+
+**Goal:** Finish the supported video-to-PPT path first: uploaded video files, direct video URLs, and public pages that expose a direct video asset should produce a complete redacted deliverable package with transcript/material notes, selected slide evidence, `video_slides_screenshot_based.pptx`, `video_slides.md`, required manifests, durable published-version metadata, visible download/open actions, and an AssistantRun follow-up that tells the user the PPT package is ready.
+
+**Safety boundaries:**
+
+- Do not bypass login-gated pages, QR login, cookies, private hosts, playback restrictions, or platform anti-bot controls.
+- Do not run browser recording or screen-capture extraction as a workaround.
+- Do not persist raw source URLs, local paths, cookies, provider payloads, or token-like strings in public manifests, assistant follow-ups, validation docs, or downloadable artifacts.
+- Do not run real jump-host/provider video smoke unless an operator supplies an approved accessible source and scope.
+
+**Step 1: Audit the current video/PPT path**
+
+Run:
+
+```powershell
+rg -n "video_extraction|VideoExtraction|extract_video_ppt|video_slides|pptx|PublishedVideoPpt|wechat_video|media-worker|assistant_run_model_completion" crates apps scripts docs -g "*.rs" -g "*.js" -g "*.mjs" -g "*.md" -g "*.sh" -g "*.ps1"
+```
+
+Expected: identify the current workflow registration, media-worker task steps, deliverable writer, public validator, durable published-version tables, AssistantRun follow-up dispatch, API download/open surfaces, and web UI state.
+
+**Step 2: Close the local deterministic deliverable contract**
+
+Ensure the controlled sample and code path cover:
+
+- supported source kinds: uploaded video file, direct video URL, public page resolvable to a direct video asset;
+- login-gated sources produce a handoff/unsupported state, not a request for cookies, QR login, or recording;
+- final package includes `video_slides_screenshot_based.pptx`, `video_slides.md`, `slide_notes.md`, `subtitle_page_map.json`, `slide_rectangles_manifest.json`, `extraction_artifacts_manifest.json`, `final_deliverables_manifest.json`, `published_deliverable_manifest.json`, and `published_version_history.json`;
+- PPTX is a real OOXML ZIP with `[Content_Types].xml`, `ppt/presentation.xml`, and slide entries;
+- selected slide duplicate/crop status is visible and review-required where needed;
+- all manifests and assistant-visible payloads are redacted;
+- API/UI surfaces expose a stable summary page plus PPTX/Markdown download actions without leaking private file paths.
+
+**Step 3: Run targeted local tests**
+
+Run:
+
+```powershell
+npm run test:video-deliverables
+cargo test -p media-worker controlled_video_sample_deliverable_contract_is_complete
+cargo test -p media-worker slide_rectangle --lib
+cargo test -p media-worker durable_published_version --lib
+cargo test -p media-worker model_completion --lib
+cargo test -p storage auth_migrations_are_registered_in_order --lib
+cargo test -p domain-model workflow_kind_roundtrips_video_extraction
+cargo test -p platform-api video_extraction --lib
+cargo test -p platform-api video_ppt --lib
+bash scripts/run-assistant-run-worker-smoke.sh
+```
+
+Expected: deterministic contract tests pass without real provider credentials, raw customer media, or production writes. The DB-backed assistant-run-worker smoke remains skipped unless pointed at an explicitly disposable test database.
+
+**Step 4: Add a read-only or self-test smoke for non-local validation**
+
+Run the jump-host validator self-test when PowerShell and `windows-jump` are available:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-jump-host-video-deliverable-smoke.ps1 -SelfTest
+```
+
+If running from macOS without PowerShell or jump-host access, record the skip reason and the local deterministic validator evidence instead. Do not substitute a real login-gated video.
+
+**Step 5: Update validation**
+
+Record in `docs/validation/video-ppt-deliverable-smoke.md` and `docs/validation/datamax-main-gap-closure.md`:
+
+- supported source boundary;
+- completed deliverable package shape;
+- tests run and whether jump-host self-test was run or skipped;
+- current state of `aiv3-media-worker.service` and `aiv3-assistant-run-worker.service` if checked on 8 server;
+- any remaining operator-only real-video smoke decision.
+
+**Step 6: Commit**
+
+```powershell
+git add crates apps tools scripts docs/validation
+git commit -m "Prioritize video PPT deliverable completion"
+```
+
+---
+
+## Task 4: Background Enrichment And Dedup Diagnostics
 
 **Files:**
 
@@ -242,7 +341,7 @@ git commit -m "Expose document enrichment diagnostics"
 
 ---
 
-## Task 4: Duplicate And Canonical Read-Through Smoke
+## Task 5: Duplicate And Canonical Read-Through Smoke
 
 **Files:**
 
@@ -289,7 +388,7 @@ git commit -m "Add document dedup readthrough smoke"
 
 ---
 
-## Task 5: Passive Answer-Quality Offline Recovery Corpus
+## Task 6: Passive Answer-Quality Offline Recovery Corpus
 
 **Files:**
 
@@ -349,7 +448,7 @@ git commit -m "Add offline answer quality corpus"
 
 ---
 
-## Task 6: Data-Source Row-Identity Staging Self-Test
+## Task 7: Data-Source Row-Identity Staging Self-Test
 
 **Files:**
 
@@ -395,7 +494,7 @@ git commit -m "Strengthen data source identity self test"
 
 ---
 
-## Task 7: Static-Page And Report Regression Corpus
+## Task 8: Static-Page And Report Regression Corpus
 
 **Files:**
 
@@ -442,7 +541,7 @@ git commit -m "Strengthen report routing regression corpus"
 
 ---
 
-## Task 8: Third-Party Database Read-Only Status Hardening
+## Task 9: Third-Party Database Read-Only Status Hardening
 
 **Files:**
 
@@ -493,7 +592,7 @@ git commit -m "Harden database source status summary"
 
 ---
 
-## Task 9: Operator Observability Polish
+## Task 10: Operator Observability Polish
 
 **Files:**
 
@@ -533,7 +632,7 @@ git commit -m "Polish DataMax operations summary"
 
 ---
 
-## Task 10: Final Validation And Optional Deploy
+## Task 11: Final Validation And Optional Deploy
 
 **Files:**
 
