@@ -91,6 +91,18 @@ const COMMANDS = [
     ],
   },
   {
+    id: 'media_worker_lib_tests',
+    description: 'media-worker video PPT extraction library tests',
+    command: 'cargo',
+    args: ['test', '-p', 'media-worker', '--lib'],
+  },
+  {
+    id: 'media_worker_offline_smoke_bin_check',
+    description: 'media-worker offline video PPT smoke binary compile check',
+    command: 'cargo',
+    args: ['check', '-p', 'media-worker', '--bin', 'video_ppt_offline_smoke'],
+  },
+  {
     id: 'video_deliverables_validator_syntax',
     description: 'video deliverables validator syntax check',
     command: process.execPath,
@@ -146,6 +158,7 @@ Checks:
   - runs login-gated video handoff self-test and preflight without network calls
   - runs authorized-capture self-test without opening a browser or FFmpeg
   - runs quality matrix self-test, including review-risk regression
+  - runs media-worker video PPT library tests and offline smoke binary check
   - runs video deliverables validator tests
 
 Safety:
