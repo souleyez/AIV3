@@ -7140,3 +7140,66 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 HTML Artifact Manifest Video PPT Rollup Evidence
+
+Task source: M6BL no-live follow-up. The video PPT pipeline already had upload, third-party, resolver, handoff, startup-briefing, quality, and artifact-contract gates. This slice adds the front-end HTML artifact manifest result surface to the same no-live rollup so a green local baseline also proves that generated video PPT outputs have a user-visible summary, prioritized downloads, and login-gated handoff guidance.
+
+Scope:
+
+- local no-live rollup code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- no-live rollup now runs `node --test apps/web/app/lib/html-artifact-manifest.test.mjs`;
+- no-live rollup extracts `v3.html_artifact_manifest_video_ppt_rollup_evidence.v1` from the TAP output;
+- `acceptance_status.no_live_evidence_summary` now records `html_artifact_manifest_evidence`, test/pass counts, video extraction summary template coverage, prioritized redacted download-link coverage, and legacy login-gated handoff guidance coverage;
+- rollup validation now fails if the passed report does not include the expected HTML artifact manifest schema, 12/12 TAP count, zero failures/cancellations, or any of the three video PPT result-surface coverage points.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+node --test apps/web/app/lib/html-artifact-manifest.test.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted html artifact evidence readback>"
+rg -n "<local-path-url-token-approval-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- HTML artifact manifest test suite passed with `test_count=12`, `pass_count=12`, and `fail_count=0`;
+- no-live rollup passed with `command_count=28`, `passed_count=28`, and `failed_count=0`;
+- `acceptance_status.no_live_evidence_summary.html_artifact_manifest_evidence=true`;
+- `html_artifact_manifest_test_count=12` and `html_artifact_manifest_pass_count=12`;
+- `html_artifact_video_extraction_summary_covered=true`;
+- `html_artifact_video_download_links_covered=true`;
+- `html_artifact_login_gated_handoff_covered=true`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval/operator values, or raw dry-run approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- the result surface evidence only proves the front-end manifest rendering contract and download prioritization are covered by the no-live baseline; it does not prove that a live customer sample has been processed.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

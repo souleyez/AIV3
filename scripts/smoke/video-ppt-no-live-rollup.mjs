@@ -162,6 +162,12 @@ const COMMANDS = [
     args: ['--test', 'apps/web/app/lib/assistant-startup-briefing.test.mjs'],
   },
   {
+    id: 'html_artifact_manifest_tests',
+    description: 'front-end HTML artifact manifest video PPT result surface tests',
+    command: process.execPath,
+    args: ['--test', 'apps/web/app/lib/html-artifact-manifest.test.mjs'],
+  },
+  {
     id: 'assistant_runtime_video_ppt_scope_tests',
     description: 'Rust assistant-runtime production video PPT scope tests',
     command: 'cargo',
@@ -260,6 +266,7 @@ Checks:
   - runs quality matrix self-test, including review-risk regression
   - runs front-end scope planner syntax/tests for video PPT trigger boundaries
   - runs front-end assistant startup briefing tests for video PPT source boundaries
+  - runs front-end HTML artifact manifest tests for video PPT result surfaces
   - runs Rust assistant-runtime video PPT scope tests
   - runs Rust platform-api video URL and public page resolver tests
   - runs Rust formatting check
@@ -381,6 +388,9 @@ function extractCommandEvidence(commandId, stdout, stderr = '', command = {}, ex
   }
   if (commandId === 'assistant_startup_briefing_tests') {
     return extractAssistantStartupBriefingTestsEvidence(stdout);
+  }
+  if (commandId === 'html_artifact_manifest_tests') {
+    return extractHtmlArtifactManifestTestsEvidence(stdout);
   }
   if (commandId === 'assistant_runtime_video_ppt_scope_tests') {
     return extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout);
@@ -948,6 +958,24 @@ function extractAssistantStartupBriefingTestsEvidence(stdout) {
   };
 }
 
+function extractHtmlArtifactManifestTestsEvidence(stdout) {
+  return {
+    schema: 'v3.html_artifact_manifest_video_ppt_rollup_evidence.v1',
+    test_count: parseTapSummaryCount(stdout, 'tests'),
+    pass_count: parseTapSummaryCount(stdout, 'pass'),
+    fail_count: parseTapSummaryCount(stdout, 'fail'),
+    cancelled_count: parseTapSummaryCount(stdout, 'cancelled'),
+    skipped_count: parseTapSummaryCount(stdout, 'skipped'),
+    todo_count: parseTapSummaryCount(stdout, 'todo'),
+    video_extraction_summary_template_covered:
+      stdout.includes('renders video extraction summary template'),
+    video_extraction_download_links_covered:
+      stdout.includes('video extraction summary exposes prioritized redacted download links'),
+    legacy_login_handoff_guidance_covered:
+      stdout.includes('renders legacy video login handoff as unsupported source guidance'),
+  };
+}
+
 function extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout) {
   const summary = parseRustTestSummary(stdout);
   return {
@@ -1456,6 +1484,8 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     commandById.get('platform_api_public_video_page_tests')?.evidence || {};
   const startupBriefingEvidence =
     commandById.get('assistant_startup_briefing_tests')?.evidence || {};
+  const htmlArtifactManifestEvidence =
+    commandById.get('html_artifact_manifest_tests')?.evidence || {};
   const passedEvidenceCommandCount = results.filter((result) => (
     result.status === 'passed' && result.evidence
   )).length;
@@ -1500,6 +1530,18 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       startupBriefingEvidence.system_capability_test_covered === true,
     assistant_startup_briefing_no_dataset_boundary_covered:
       startupBriefingEvidence.no_dataset_formatted_boundary_test_covered === true,
+    html_artifact_manifest_evidence:
+      hasPassedEvidence(commandById, 'html_artifact_manifest_tests'),
+    html_artifact_manifest_test_count:
+      htmlArtifactManifestEvidence.test_count ?? null,
+    html_artifact_manifest_pass_count:
+      htmlArtifactManifestEvidence.pass_count ?? null,
+    html_artifact_video_extraction_summary_covered:
+      htmlArtifactManifestEvidence.video_extraction_summary_template_covered === true,
+    html_artifact_video_download_links_covered:
+      htmlArtifactManifestEvidence.video_extraction_download_links_covered === true,
+    html_artifact_login_gated_handoff_covered:
+      htmlArtifactManifestEvidence.legacy_login_handoff_guidance_covered === true,
     production_assistant_runtime_evidence:
       hasPassedEvidence(commandById, 'assistant_runtime_video_ppt_scope_tests'),
     platform_api_video_url_resolution_evidence:
@@ -1687,6 +1729,7 @@ function validateReport(report) {
   validateAuthorizedCaptureDryRunEvidence(report);
   validateProductionTriggerEvidence(report);
   validateAssistantStartupBriefingEvidence(report);
+  validateHtmlArtifactManifestEvidence(report);
   validatePlatformApiResolverEvidence(report);
   validateAcceptanceStatus(report);
   const serialized = JSON.stringify(report);
@@ -1947,6 +1990,13 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.assistant_startup_briefing_video_ppt_boundary_covered !== true
     || evidence.assistant_startup_briefing_system_capability_covered !== true
     || evidence.assistant_startup_briefing_no_dataset_boundary_covered !== true
+    || evidence.html_artifact_manifest_evidence !== true
+    || evidence.html_artifact_manifest_test_count < 12
+    || evidence.html_artifact_manifest_pass_count
+      !== evidence.html_artifact_manifest_test_count
+    || evidence.html_artifact_video_extraction_summary_covered !== true
+    || evidence.html_artifact_video_download_links_covered !== true
+    || evidence.html_artifact_login_gated_handoff_covered !== true
     || evidence.production_assistant_runtime_evidence !== true
     || evidence.platform_api_video_url_resolution_evidence !== true
     || evidence.platform_api_public_video_page_evidence !== true
@@ -2069,6 +2119,29 @@ function validateAssistantStartupBriefingEvidence(report) {
     || evidence.video_ppt_source_routing_boundary_covered !== true
   ) {
     throw new Error('no-live rollup assistant startup briefing evidence is incomplete');
+  }
+}
+
+function validateHtmlArtifactManifestEvidence(report) {
+  const command = report.commands.find((result) => (
+    result.id === 'html_artifact_manifest_tests'
+  ));
+  if (!command || command.status !== 'passed') {
+    throw new Error('no-live rollup missing HTML artifact manifest evidence');
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.html_artifact_manifest_video_ppt_rollup_evidence.v1'
+    || evidence.test_count < 12
+    || evidence.pass_count !== evidence.test_count
+    || evidence.fail_count !== 0
+    || evidence.cancelled_count !== 0
+    || evidence.video_extraction_summary_template_covered !== true
+    || evidence.video_extraction_download_links_covered !== true
+    || evidence.legacy_login_handoff_guidance_covered !== true
+  ) {
+    throw new Error('no-live rollup HTML artifact manifest evidence is incomplete');
   }
 }
 
