@@ -56,6 +56,10 @@ The default smoke continues to report `metrics.recorded=false` unless real
 result rows are provided. `--require-metrics` fails when result rows are missing,
 malformed, incomplete, duplicated, or contain permission leaks.
 
+For deployment-target probes that intentionally use a small live sample instead
+of the full 30+ case baseline matrix, pass `--live-subset`. The default baseline
+coverage rules remain unchanged when this flag is omitted.
+
 Minimum row shape:
 
 ```json
@@ -283,11 +287,71 @@ Deployment interpretation:
 - Mainline runtime remains on `legacy_scan`.
 - Production EXPLAIN evidence is sufficient to prove new indexes exist and are
   usable, but not sufficient to enable `postgres_lexical` by default.
-- Remaining gate before flag-on: real live metrics from assistant-run or a
-  controlled JSONL generator.
+- Remaining gates before flag-on: fix/rerun the weak live ranking cases and add
+  assistant-run/customer-answer quality evidence.
+
+## 2026-06-09 8 Server NewBai Live Retrieval Metrics
+
+- Scope: controlled server-local retrieval-level live subset; no service
+  restart, no feature flag change, no assistant-run/LLM answer generation.
+- Server repo commit: `ec8856df0`
+- Dataset: `xinbai-project-materials`
+  (`d4923d83-6053-4feb-8005-b22ee51e0227`)
+- Generator: sequential `target/release/retrieval-search-cli search ... --limit
+  20` calls, converted to JSONL for the smoke evaluator.
+- Smoke command:
+
+```bash
+RETRIEVAL_QUALITY_SMOKE_SKIP_CARGO=true bash scripts/run-retrieval-quality-smoke.sh \
+  --baseline \
+  --live-subset \
+  --cases target/retrieval-quality-smoke/live-8-newbai-20260608T233723Z/live-8-newbai-cases.jsonl \
+  --results-jsonl target/retrieval-quality-smoke/live-8-newbai-20260608T233723Z/live-8-newbai-results.jsonl \
+  --require-metrics \
+  --report-dir target/retrieval-quality-smoke/live-8-newbai-20260608T233723Z/reports
+```
+
+- Result: passed
+- JSON report:
+  `target/retrieval-quality-smoke/live-8-newbai-20260608T233723Z/reports/retrieval-quality-smoke-20260608T233724Z.json`
+- Fixture policy: `live_subset`
+- Case count: `8`
+- Recall@20: `1.0`
+- MRR@20: `0.594246`
+- Citation accuracy: `1.0`
+- Answer pattern match rate: `0.625`
+- p95 latency ms: `88.0`
+- Permission leak count: `0`
+
+Expected-source rank observations:
+
+- `live-8-newbai-001`: expected source rank `18`; top hit was same document but
+  not the expected sheet-summary chunk.
+- `live-8-newbai-002`: expected source rank `1`.
+- `live-8-newbai-003`: expected source rank `2`; top hit was the January low
+  activity sheet while the prompt asked for February.
+- `live-8-newbai-004`: expected source rank `1`.
+- `live-8-newbai-005`: expected source rank `1`.
+- `live-8-newbai-006`: expected source rank `1`.
+- `live-8-newbai-007`: expected source rank `18`; top hit was the same workbook
+  but a row chunk rather than the workbook summary chunk.
+- `live-8-newbai-008`: expected source rank `7`; top hit was the related fixed
+  vs commission workbook rather than the expected `quekou/xuzengxiaoshou`
+  implementation chunks.
+
+Interpretation:
+
+- The live subset proves the current deployed retrieval path can produce
+  structured live metrics and has no permission leak in this sample.
+- It does not prove full assistant-run answer quality; generated `answer` values
+  are retrieval-result summaries, not model completions.
+- The low MRR and rank-18 cases show that source ranking still needs work before
+  enabling `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` by default.
+- Because the dataset uses historical evidence with empty `search_terms`, this
+  live subset should be re-run after reindexing or after a ranking change.
 
 ## Remaining Gaps
 
-- Real authenticated Recall@20, MRR@20, citation accuracy, and p95 latency are
-  not yet recorded.
+- Full assistant-run/customer-answer live quality metrics are not yet recorded;
+  the current live receipt is retrieval-level only.
 - `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` has not been enabled on 8 server.

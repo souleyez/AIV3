@@ -38,14 +38,14 @@ Phase 5: quality gate and release receipt
 
 暂不建议直接把 Qdrant 设为默认主链路。Qdrant 已在 compose 中存在，可以保留 adapter 接口；但当前用户目标更偏“清洗后统一入 PostgreSQL”，所以第一轮落地应优先降低运维复杂度。
 
-当前本地工作树已经进入 Phase 0/1 的最小版试做状态：fixture、baseline smoke、PostgreSQL lexical migration、retrieval worker lexical 写入、storage DB-side lexical search、platform feature flag 和核心回归测试已有本地改动。后续正式推进前，应先做一次代码审查和完整本地复测，再决定是否提交 GitHub 或申请 8 服务器灰度。
+Phase 0/1 最小版已经提交 GitHub 并部署到 8 服务器，当前线上仍保持 `legacy_scan` 默认行为。已完成 fixture、baseline smoke、PostgreSQL lexical migration、retrieval worker lexical 写入、storage DB-side lexical search、platform feature flag、8 服务器 schema/code 部署、生产 EXPLAIN 和 NewBai 检索级 live subset metrics。
 
 当前仍不能声称完成的事项：
 
-- 未记录 authenticated live dataset 的 Recall@20、MRR@20、citation accuracy、p95 latency。
-- 未记录 8 服务器或生产库 `EXPLAIN` 使用索引的证据。
+- 未记录完整 assistant-run/customer-answer 的 live 质量指标；当前已记录的是 `retrieval-search-cli` 检索级 live subset。
+- 未启用 `RETRIEVAL_SEARCH_BACKEND=postgres_lexical`，8 服务器线上仍是默认 `legacy_scan`。
 - 未启用 pgvector、Qdrant、hybrid RRF、reranker 或 structured database query plan。
-- 未做 GitHub sync、未部署 8 服务器、未修改线上 feature flag。
+- 未修复 live subset 暴露的排序问题；两个 NewBai case 的预期 source rank 为 `18`，一个为 `7`。
 
 ## 2. 当前证据基线
 
@@ -720,7 +720,7 @@ p95 retrieval latency <= 1500ms for 10k evidence local dataset
 - [x] 重新跑完整本地验收命令并确认当前工作树无格式/空白错误。
 - [x] 复核 migration 对现有库的兼容性，不包含 destructive operation；8 服务器部署前仍需确认全表回填和建索引锁窗口。
 - [x] 补 Phase 0B live/result evaluator，默认不传结果文件时不伪造指标。
-- [ ] 用真实受控结果文件记录 authenticated live dataset metrics。
+- [x] 用真实受控结果文件记录 8 服务器 NewBai retrieval-level live subset metrics。
 - [x] 完成 8 服务器只读 preflight，记录当前服务、schema、表规模和默认 legacy runtime 状态。
 - [x] 完成 8 服务器 schema/code 部署，保持 `RETRIEVAL_SEARCH_BACKEND=legacy_scan` 默认行为。
 - [x] 记录 PostgreSQL lexical 查询的生产/8 服务器 `EXPLAIN` 证据。
@@ -767,6 +767,7 @@ cargo test -p platform-api retrieval_hybrid --lib
 cargo test -p platform-api structured_query_plan --lib
 cargo test -p platform-api row_level_completeness_gate --lib
 bash scripts/run-retrieval-quality-smoke.sh --baseline --results-jsonl <path> --require-metrics
+bash scripts/run-retrieval-quality-smoke.sh --baseline --live-subset --cases <live-cases.jsonl> --results-jsonl <live-results.jsonl> --require-metrics
 ```
 
 ## 14. 8 服务器发版门槛
@@ -796,6 +797,7 @@ user explicitly approves 8 server deployment
 
 ```bash
 bash scripts/run-retrieval-quality-smoke.sh --base-url https://v3.elepcloud.com
+RETRIEVAL_QUALITY_SMOKE_SKIP_CARGO=true bash scripts/run-retrieval-quality-smoke.sh --baseline --live-subset --cases <live-cases.jsonl> --results-jsonl <live-results.jsonl> --require-metrics
 curl -s http://127.0.0.1:3000/healthz
 curl -s http://127.0.0.1:3000/readyz
 journalctl -u aiv3-platform-api.service --since "<deploy time>" -p warning --no-pager
@@ -820,19 +822,14 @@ journalctl -u aiv3-platform-api.service --since "<deploy time>" -p warning --no-
 
 ## 16. 下一步执行建议
 
-建议下一步只收口 Phase 0 + Phase 1，不进入 pgvector/hybrid：
+建议下一步仍只收口 Phase 0 + Phase 1，不进入 pgvector/hybrid。当前不建议直接打开 `postgres_lexical`；应先处理 NewBai live subset 里的排序弱点，并补 assistant-run/customer-answer 级质量证据：
 
 ```text
-P0-1: 复核 retrieval-quality fixtures 和 baseline smoke
-P0-2: 复核 live/result evaluator，默认不伪造指标
-P0-3: 补新百报表/数据库混合文档质量 case
-P1-1: 复核 lexical index migration
-P1-2: 复核 retrieval-worker search fields 写入
-P1-3: 复核 storage DB-side lexical search + ACL-before-ranking
-P1-4: 复核 platform-api feature flag 切换
-P1-5: 重新跑 deep-old/selected-document/owner/CJK regression
-P1-6: 重新生成本地验收 receipt
-P1-7: 代码审查后再决定是否提交 GitHub
+P1-8: 调整 ranking，使标题/Sheet-summary/月份等强信号不要被同工作簿行块压过
+P1-9: 对历史 NewBai evidence 做 reindex 或补 search_terms 回填策略
+P1-10: 用同一 live subset 对比 legacy_scan 与 postgres_lexical，记录 MRR/latency 差异
+P1-11: 补 assistant-run/customer-answer 级 NewBai smoke，验证不是只命中 evidence，而是回答能正确用 evidence
+P1-12: 通过后再申请 8 服务器 `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` 小流量灰度
 ```
 
 完成 P1 后再决定是否进入 pgvector。
