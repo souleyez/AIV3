@@ -4022,6 +4022,75 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Review Failure Class Summary Counts
+
+Task source: M6AR no-live follow-up. The failure-class summary evidence covered not-deliverable cases, but `needs_manual_review` samples also need stable, aggregate review reasons for customer/operator quality reports.
+
+Scope:
+
+- local quality-matrix and no-live rollup evidence slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- quality matrix self-test gates now expose `review_failure_class_summary_supported=true`;
+- quality matrix self-test gates now expose `review_failure_class_summary_needs_manual_review_count=8`;
+- quality matrix self-test gates now expose `review_failure_class_summary_counts`;
+- the expected review summary distribution is `manual_review=1`, `subtitle_alignment=1`, `ocr_evidence=1`, `crop_quality=1`, `selection_quality=2`, and `readability_quality=2`;
+- no-live rollup copies those review summary fields into `quality_matrix_self_test.evidence`;
+- no-live rollup validation fails if any review class count is missing or changed.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted review summary evidence readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir> <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- no-live rollup syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `pending_count=2`, and `not_deliverable_count=0`;
+- quality matrix gates reported `review_failure_class_summary_supported=true`;
+- quality matrix gates reported `review_failure_class_summary_needs_manual_review_count=8`;
+- quality matrix gates reported review summary counts `manual_review=1`, `subtitle_alignment=1`, `ocr_evidence=1`, `crop_quality=1`, `selection_quality=2`, and `readability_quality=2`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- no-live quality evidence copied the same review summary count map;
+- no-live quality evidence retained the five not-deliverable regression count map;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, or raw approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this review-summary evidence does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- future review-required risk flags must be mapped into this review summary gate before being used in customer/operator shared reports.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Failure Class Summary Regression Counts
 
 Task source: M6AQ no-live follow-up. The no-live rollup now carries the summary maps, but the deterministic self-test's three primary cases leave those maps empty. This slice exposes the five-class not-deliverable regression counts as explicit, redacted evidence.

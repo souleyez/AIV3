@@ -12,6 +12,14 @@ const REQUIRED_NOT_DELIVERABLE_FAILURE_CLASSES = [
   'artifact_visibility',
   'selection_quality',
 ];
+const EXPECTED_REVIEW_FAILURE_CLASS_COUNTS = {
+  manual_review: 1,
+  subtitle_alignment: 1,
+  ocr_evidence: 1,
+  crop_quality: 1,
+  selection_quality: 2,
+  readability_quality: 2,
+};
 
 const COMMANDS = [
   {
@@ -683,6 +691,11 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
     review_required_risk_flag_count: report.gates?.review_required_risk_flag_count,
     review_required_risk_flag_object_shape_supported: report.gates?.review_required_risk_flag_object_shape_supported,
     review_required_risk_flag_object_shape_case_count: report.gates?.review_required_risk_flag_object_shape_case_count,
+    review_failure_class_summary_supported: report.gates?.review_failure_class_summary_supported,
+    review_failure_class_summary_needs_manual_review_count:
+      report.gates?.review_failure_class_summary_needs_manual_review_count,
+    review_failure_class_summary_counts:
+      sanitizeCountMap(report.gates?.review_failure_class_summary_counts),
     not_deliverable_failure_class_count: report.gates?.not_deliverable_failure_class_count,
     not_deliverable_failure_classes: Array.isArray(report.gates?.not_deliverable_failure_classes)
       ? report.gates.not_deliverable_failure_classes
@@ -1525,6 +1538,9 @@ function validateQualityMatrixEvidence(report) {
     || evidence.review_required_risk_flag_count !== 8
     || evidence.review_required_risk_flag_object_shape_supported !== true
     || evidence.review_required_risk_flag_object_shape_case_count !== 8
+    || evidence.review_failure_class_summary_supported !== true
+    || evidence.review_failure_class_summary_needs_manual_review_count !== 8
+    || !hasExpectedReviewFailureClassCounts(evidence.review_failure_class_summary_counts)
     || evidence.not_deliverable_failure_class_count !== 5
     || !Array.isArray(evidence.not_deliverable_failure_classes)
     || !evidence.not_deliverable_failure_classes.includes('source_access')
@@ -1558,6 +1574,13 @@ function isCountMap(value) {
 function hasRequiredFailureClassCounts(counts) {
   return isCountMap(counts)
     && REQUIRED_NOT_DELIVERABLE_FAILURE_CLASSES.every((failureClass) => counts[failureClass] === 1);
+}
+
+function hasExpectedReviewFailureClassCounts(counts) {
+  return isCountMap(counts)
+    && Object.entries(EXPECTED_REVIEW_FAILURE_CLASS_COUNTS).every(
+      ([failureClass, expectedCount]) => counts[failureClass] === expectedCount,
+    );
 }
 
 function writeReport(outputDir, report, pretty) {

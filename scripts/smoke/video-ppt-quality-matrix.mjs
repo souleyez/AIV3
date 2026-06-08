@@ -27,6 +27,14 @@ const NOT_DELIVERABLE_FAILURE_CLASSES = [
   'artifact_visibility',
   'selection_quality',
 ];
+const EXPECTED_REVIEW_FAILURE_CLASS_COUNTS = {
+  manual_review: 1,
+  subtitle_alignment: 1,
+  ocr_evidence: 1,
+  crop_quality: 1,
+  selection_quality: 2,
+  readability_quality: 2,
+};
 
 function parseArgs(argv) {
   const args = {
@@ -453,6 +461,7 @@ function failureClassForQualityReview(summary, riskFlags) {
 
 function buildSelfTestReport() {
   const failureClassSummaryRegression = buildFailureClassSummaryRegression();
+  const reviewFailureClassSummaryRegression = buildReviewFailureClassSummaryRegression();
   const report = buildQualityMatrixReport({
     status: 'partial_local_self_test_ready',
     selfTest: true,
@@ -477,6 +486,11 @@ function buildSelfTestReport() {
         failureClassSummaryRegression.failure_class_counts,
       failure_class_summary_regression_not_deliverable_counts:
         failureClassSummaryRegression.not_deliverable_failure_class_counts,
+      review_failure_class_summary_supported: true,
+      review_failure_class_summary_needs_manual_review_count:
+        reviewFailureClassSummaryRegression.needs_manual_review_count,
+      review_failure_class_summary_counts:
+        reviewFailureClassSummaryRegression.needs_manual_review_failure_class_counts,
     },
     nextActions: [
       'run synthetic PPT playback extraction and attach real target/ report when available',
@@ -486,6 +500,7 @@ function buildSelfTestReport() {
   });
   validateSelfTestReport(report);
   validateExplicitReviewRiskRegression();
+  validateReviewFailureClassSummaryRegression(reviewFailureClassSummaryRegression);
   validateNotDeliverableFailureRegression();
   validateFailureClassSummaryRegression(failureClassSummaryRegression);
   return report;
@@ -547,6 +562,28 @@ function buildReviewRequiredRiskFlagObject(code) {
     count: 1,
     review_action: `review_${code}`,
   };
+}
+
+function buildReviewFailureClassSummaryRegression() {
+  const cases = [...REVIEW_REQUIRED_RISK_FLAGS].map((riskFlag) => {
+    const evaluation = evaluateCase(buildReviewRiskRegressionCase(riskFlag));
+    return {
+      case_id: `quality-matrix-review-class-summary-${riskFlag}`,
+      category: 'public_course_video',
+      evaluation,
+      expectation_matched: evaluation.verdict === 'needs_manual_review',
+    };
+  });
+  return summarizeCases(cases);
+}
+
+function validateReviewFailureClassSummaryRegression(summary) {
+  if (summary.needs_manual_review_count !== REVIEW_REQUIRED_RISK_FLAGS.size) {
+    throw new Error('quality matrix review failure class summary needs-manual-review count mismatch');
+  }
+  if (!hasExpectedReviewFailureClassCounts(summary.needs_manual_review_failure_class_counts)) {
+    throw new Error('quality matrix review failure class summary counts mismatch');
+  }
 }
 
 function validateNotDeliverableFailureRegression() {
@@ -890,6 +927,9 @@ function validateSelfTestReport(report) {
     || report.gates.review_required_risk_flag_object_shape_case_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !report.gates.review_required_risk_flags.includes('missing_ocr_evidence')
     || !report.gates.review_required_risk_flags.includes('single_slide_output_review_required')
+    || report.gates.review_failure_class_summary_supported !== true
+    || report.gates.review_failure_class_summary_needs_manual_review_count !== REVIEW_REQUIRED_RISK_FLAGS.size
+    || !hasExpectedReviewFailureClassCounts(report.gates.review_failure_class_summary_counts)
   ) {
     throw new Error('self-test report must expose the review-required risk flag gate');
   }
@@ -916,6 +956,15 @@ function hasRequiredFailureClassCounts(counts) {
     && typeof counts === 'object'
     && !Array.isArray(counts)
     && NOT_DELIVERABLE_FAILURE_CLASSES.every((failureClass) => counts[failureClass] === 1);
+}
+
+function hasExpectedReviewFailureClassCounts(counts) {
+  return counts
+    && typeof counts === 'object'
+    && !Array.isArray(counts)
+    && Object.entries(EXPECTED_REVIEW_FAILURE_CLASS_COUNTS).every(
+      ([failureClass, expectedCount]) => counts[failureClass] === expectedCount,
+    );
 }
 
 function validateQualityMatrixReport(report) {
