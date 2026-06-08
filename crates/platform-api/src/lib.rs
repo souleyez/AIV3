@@ -73829,11 +73829,13 @@ async fn register_document(
         &request.secret_binding_ids,
     );
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    load_visible_dataset_for_user(
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    load_visible_dataset_for_user_with_local_scope(
         &state,
         request.dataset_id,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .await?;
 
@@ -73873,11 +73875,13 @@ async fn create_document_ingest(
     let document_id = parse_document_id(&document_id)?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let document = load_visible_document_for_user(
+    let local_thread_id = local_thread_id_from_headers(&headers);
+    let document = load_visible_document_for_user_with_local_scope(
         &state,
         document_id,
         &active_secret_binding_ids,
         current_user_id,
+        local_thread_id.as_deref(),
     )
     .await?;
 
@@ -135866,6 +135870,32 @@ retrieve_evidence:
             .expect("request should return a response")
     }
 
+    async fn post_json_request_with_local_thread<T: serde::Serialize>(
+        app: Router,
+        uri: &str,
+        payload: &T,
+        cookie: Option<&str>,
+        local_thread_id: &str,
+    ) -> axum::response::Response {
+        let mut builder = axum::http::Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .header(LOCAL_THREAD_ID_HEADER, local_thread_id);
+        if let Some(cookie) = cookie {
+            builder = builder.header(axum::http::header::COOKIE, cookie);
+        }
+        let request = builder
+            .body(axum::body::Body::from(
+                serde_json::to_vec(payload).expect("request should serialize"),
+            ))
+            .expect("request should build");
+
+        app.oneshot(request)
+            .await
+            .expect("request should return a response")
+    }
+
     async fn patch_json_request<T: serde::Serialize>(
         app: Router,
         uri: &str,
@@ -137324,6 +137354,100 @@ retrieve_evidence:
         assert!(local_datasets
             .iter()
             .any(|dataset| dataset.id == created.id));
+    }
+
+    #[tokio::test]
+    async fn anonymous_local_only_dataset_allows_matching_thread_document_register_and_ingest() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let Some(harness) = build_auth_api_test_harness().await else {
+            return;
+        };
+        let local_thread_id = format!("browser-thread-upload-{}", Uuid::new_v4());
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/datasets",
+            &CreateDatasetRequest {
+                key: format!("local-only-upload-{}", Uuid::new_v4()),
+                title: "Local Only Upload Dataset".to_string(),
+                description: None,
+                visibility: None,
+                local_only: true,
+                local_thread_id: Some(local_thread_id.clone()),
+                secret_binding_ids: Vec::new(),
+                secret_fingerprint: None,
+                secret_label: None,
+            },
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let dataset: DatasetSummary = read_json_response(response).await;
+
+        let register_request = RegisterDocumentRequest {
+            dataset_id: dataset.id,
+            title: "Local thread video upload fixture.mp4".to_string(),
+            object_key: "/tmp/local-thread-video-upload-fixture.mp4".to_string(),
+            content_type: "video/mp4".to_string(),
+            secret_binding_ids: Vec::new(),
+            metadata: json!({
+                "smoke": {
+                    "kind": "anonymous_local_thread_upload_scope"
+                }
+            }),
+        };
+
+        let response = post_json_request(
+            harness.app.clone(),
+            "/v1/documents",
+            &register_request,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let error: ApiErrorResponse = read_json_response(response).await;
+        assert_eq!(error.code, "dataset_not_found");
+
+        let response = post_json_request_with_local_thread(
+            harness.app.clone(),
+            "/v1/documents",
+            &register_request,
+            None,
+            &local_thread_id,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let registered: RegisterDocumentResponse = read_json_response(response).await;
+
+        let response = post_json_request(
+            harness.app.clone(),
+            &format!("/v1/documents/{}/ingest", registered.document.id),
+            &json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = post_json_request_with_local_thread(
+            harness.app.clone(),
+            &format!("/v1/documents/{}/ingest", registered.document.id),
+            &json!({}),
+            None,
+            &local_thread_id,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response: CreateDocumentIngestResponse = read_json_response(response).await;
+        let tasks = harness
+            .storage
+            .workflow_tasks()
+            .list_by_execution(response.workflow_execution.id)
+            .await
+            .expect("workflow tasks should load");
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].queue, "ingest");
+        assert_eq!(tasks[0].task_key, "ingest_uploaded_document");
     }
 
     #[tokio::test]
