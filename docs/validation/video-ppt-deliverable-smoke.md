@@ -1400,6 +1400,72 @@ Safety result:
 - no video was downloaded, uploaded, fetched from WeChat Video Channels, captured, OCRed, or converted through a live workflow;
 - no cookie, token, database URL, provider payload, raw customer row, full customer document, private object path, raw source URL, raw frame path, upload object key, or generated artifact local path was recorded.
 
+## 2026-06-08 Plan-Only Final Executable Plan Closeout
+
+Task source: user confirmed this is a plan-only step and requested completion of the previous full executable plan. This closeout makes the final execution entry explicit and separates pushed GitHub baseline, local candidate script changes, live/customer/deployment gates, and 8-server restrictions.
+
+Scope:
+
+- plan-only update to `docs/plans/datamax-active-execution-plan.md`;
+- validation-ledger note only in this file;
+- desktop plan copy synchronization to `/Users/manslive01/Desktop/datamax-active-execution-plan.md`;
+- no business-code implementation in this step;
+- no main-site live upload smoke;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Plan updates:
+
+- added section `0.7.20 2026-06-08 plan-only 最终可执行方案` as the current execution entry;
+- corrected the top-level current baseline: pushed GitHub HEAD is `85222eb`, while M6AV customer authorization argument gate remains a local candidate until separately staged, verified, committed, and pushed;
+- kept the product boundary that video PPT means extracting slides/courseware already shown in a video, not creating an authored PPT from ordinary video;
+- kept WeChat Video Channels/login-gated/private playback sources on handoff unless an uploaded video file, anonymous direct video URL, or operator-approved capture exists;
+- made the execution split explicit: P0 plan-only, P1 no-live baseline, P2 main-site upload live, P3 third-party live, P4 handoff, P5 authorized capture, P6 customer quality matrix, P7 8-server deployment, P8 full closeout;
+- recorded that GitHub doc-only sync is allowed, but it must not stage scripts, apps, crates, generated artifacts, videos, frames, PPTX files, customer files, or private paths;
+- recorded that M6AV candidate scripts, if synchronized later, must run their own no-live syntax/self-test/redaction/`target` gates and still do not replace customer-authorized sample execution.
+
+Validation:
+
+```text
+git status --short --branch
+cp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --name-only
+git ls-files target | wc -l
+```
+
+Result:
+
+- desktop plan copy matches the repository plan;
+- `git diff --check` passed;
+- changed files are limited to plan/validation docs plus the already-isolated M6AV candidate scripts;
+- `git ls-files target | wc -l` returned `0`;
+- M6AV scripts remain local candidate code unless the user explicitly asks to collect that code slice.
+
+Remaining work:
+
+- P2 main-site upload live controlled smoke still needs explicit approval to write one non-customer smoke record and a safe video input;
+- P3 third-party live smoke still needs bearer, `connection_id`, `source_id`, and safe input;
+- P4 WeChat/login-gated handoff live pass still needs an approved 8-server deployment window;
+- P5 authorized capture live sample still needs a complete approval record and playable source;
+- P6 customer quality matrix still needs a customer/operator authorized sample and retention policy;
+- P7 8-server deployment remains blocked until the user explicitly approves a deployment window.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Slide Sharpness Quality Signal Local Slice
 
 Task source: P2-2F from `docs/plans/datamax-active-execution-plan.md`.
@@ -3964,6 +4030,75 @@ Safety result:
 - no file was uploaded or registered in DataMax;
 - no browser was opened and no FFmpeg capture command was run;
 - no MP4 was captured or recorded;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Customer Quality Matrix Authorization Argument Gate
+
+Task source: M6AV no-live follow-up. Customer-authorized deliverables are allowed only with explicit authorization metadata. The script already rejected missing approval ids at runtime; this slice turns that behavior into a self-test and no-live rollup gate.
+
+Scope:
+
+- local quality-matrix and no-live rollup argument-gate slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- quality matrix input-mode validation is now centralized in `validateInputModeArgs()`;
+- self-test now verifies that `--customer-deliverables` without `--customer-approval-id` is rejected;
+- self-test now verifies that `--customer-approval-id` without `--customer-deliverables` is rejected;
+- self-test now verifies that `--self-test` cannot be combined with customer deliverables input flags;
+- self-test verifies the valid customer argument shape can pass argument validation without reading a file;
+- self-test exposes `customer_authorization_argument_gate_supported=true`;
+- no-live rollup copies and validates that support bit in quality matrix evidence.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted customer authorization argument gate readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir> <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- no-live rollup syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=0`, `not_deliverable_count=0`, and `pending_count=2`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- quality matrix report exposed `customer_authorization_argument_gate_supported=true`;
+- quality matrix report retained `deliverables_mode_failure_class_gate_defaults_supported=true`;
+- no-live rollup quality evidence copied `customer_authorization_argument_gate_supported=true`;
+- no-live rollup quality evidence retained `deliverables_mode_failure_class_gate_defaults_supported=true`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, or raw approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this argument gate does not replace customer-authorized quality matrix execution; it only proves the customer input path cannot run without the required approval reference;
+- real customer/operator sample processing still requires explicit authorization, input source, and retention policy.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
