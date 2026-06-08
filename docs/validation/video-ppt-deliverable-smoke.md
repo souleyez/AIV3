@@ -5052,3 +5052,58 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Plan-Only Acceptance Status Matrix Rollup
+
+Task source: user asked to continue and complete the previous full executable planning step, with the explicit boundary that this is still a plan and code should not be changed.
+
+Scope:
+
+- plan-only documentation update;
+- no business code, smoke script, validator, worker, API, web app, or deployment change;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented documentation behavior:
+
+- `docs/plans/datamax-active-execution-plan.md` now marks M6AL as a plan-only acceptance status matrix;
+- section `0.7.18` now includes a full P0-P8 acceptance matrix that separates completed plan/no-live gates from pending live, customer, capture, and deployment gates;
+- the matrix records required inputs, completion evidence, and current blockers for P2 main-site upload live, P3 third-party live, P4 video号/login-gated handoff live, P5 authorized capture live sample, P6 customer quality matrix, P7 8-server deployment, and P8 final acceptance;
+- the plan adds a stage-by-stage next execution cadence and a single-gate operator request template;
+- the plan explicitly states that unverified script/code changes must not be mixed into P0 plan-only commits.
+
+Validation for this plan-only slice:
+
+```text
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --cached --name-only
+git diff --cached --stat
+git ls-files target | wc -l
+```
+
+Expected result:
+
+- repository plan and desktop plan copy match;
+- whitespace check passes;
+- staged files are documentation only;
+- no generated `target/` files are tracked.
+
+Remaining work:
+
+- this plan-only rollup does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- if the planned `acceptance_status` field is later added to the no-live rollup JSON, it must be handled as a separate P1 code slice with `node --check`, full no-live rollup, redaction scan, and validation ledger evidence.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
