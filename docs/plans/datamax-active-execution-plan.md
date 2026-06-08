@@ -1,6 +1,6 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 10:41 CST
+**更新时间：** 2026-06-08 10:47 CST
 **当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit 和 M6AF 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准。入口是第 0.7 节，尤其是第 0.7.13-0.7.17 节的全量验收闭环、当前 HEAD 审计、下一轮任务卡、M6AB plan-only 收口和当前收版执行方案；M6AC 把 quality matrix 的 review-required risk flag gate 扩展到真实 `slide_quality_report.risk_flags` 对象数组形态，M6AD-M6AF 则把 quality matrix、主站上传、第三方登记、视频号/登录态 handoff 和授权录屏 self-test 的脱敏 evidence 带入 no-live rollup 总报告。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
@@ -1161,9 +1161,9 @@ M6AB 完成定义：
 
 当前仓库事实：
 
-- 最新已推送 GitHub HEAD 以 `git log -1` 为准；当前工作树可能同时有计划文档改动和 M6AF no-live rollup 脚本改动。
-- 如果用户只要求“计划收口/整理方案”，只允许走 EP0/doc-only 路径，stage 文档，不 stage 功能脚本。
-- 如果用户要求“收 M6AF 代码切片并同步 GitHub”，必须走 M6AF 代码路径，复跑对应 no-live gate，并把脚本、计划和验证台账作为同一代码切片提交。
+- 最新已推送 GitHub HEAD 以 `git log -1` 为准；执行前必须先看 `git status --short --branch`，不要凭旧回执判断当前状态。
+- 如果工作树同时有文档改动和脚本/业务代码改动，必须先判定当前路径：用户只要求“计划收口/整理方案”时走 EP0/doc-only，用户要求“收 M6AF 代码切片并同步 GitHub”时走 M6AF 代码路径。
+- EP0/doc-only 只 stage 文档，不 stage 功能脚本；M6AF 代码路径必须复跑对应 no-live gate，并把脚本、计划和验证台账作为同一代码切片提交。
 - GitHub 同步不代表 8 服务器发版；8 服务器只在用户明确批准 EP7 后执行。
 - 120 服务器不在本计划内。
 

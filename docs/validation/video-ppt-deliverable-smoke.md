@@ -4688,3 +4688,62 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 No-Live Rollup Handoff And Capture Evidence
+
+Task source: M6AF follow-up after the no-live rollup already embedded quality-matrix, upload-main, and external-video-ppt evidence. The remaining local acceptance gap was that the top-level no-live report proved the handoff and authorized-capture commands passed, but did not copy their critical safety evidence into the rollup itself.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, service deployment, or 8/120 server access;
+- read only local child reports printed by the video PPT handoff self-test and authorized-capture self-test;
+- accept relative `target/` report paths, or absolute report paths only when they resolve under the current repo `target/` directory;
+- copy only redacted counts, booleans, status codes, and failure reasons into the no-live report, not child report paths or raw JSON bodies.
+
+Implemented behavior:
+
+- no-live rollup extracts `v3.video_ppt_handoff_rollup_evidence.v1` from the handoff self-test report;
+- handoff evidence records WeChat/video slide-output prompt recognition, no network/provider/ReAct/video fetch/download/frame/OCR/PPT/success/download signals, main/external `login_gated_video_source_not_supported`, 3 actionable next steps in each mode, and 5 negative fixtures rejected;
+- no-live rollup extracts `v3.authorized_capture_rollup_evidence.v1` from the authorized-capture self-test report;
+- authorized-capture evidence records dry-run/self-test mode, approval and approved-by redaction, 6 authorization-gate negative cases rejected, `capture_attempted=false`, dry-run browser/FFmpeg intent only, no persistent browser profile, no cookie/HAR/QR capture, no credentials, and no provider payloads;
+- rollup validation now fails if handoff or authorized-capture evidence is missing or incomplete.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live report evidence readback>"
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`;
+- handoff evidence recorded `prompt_mentions_wechat_video=true`, `prompt_wants_slide_output=true`, `network_calls_run=false`, `provider_called=false`, `video_downloaded=false`, `frames_extracted=false`, `ocr_run=false`, `ppt_generated=false`, and `final_pptx_ready_exposed=false`;
+- handoff evidence recorded both main and external `failure_reason=login_gated_video_source_not_supported`, `next_step_count=3`, `negative_fixture_count=5`, and `negative_fixtures_rejected=5`;
+- authorized-capture evidence recorded `mode=dry-run`, `self_test=true`, approval and approved-by redaction present, `authorization_gate_negative_case_count=6`, and `authorization_gate_negative_cases_rejected=6`;
+- authorized-capture evidence recorded `capture_attempted=false`, `dry_run=true`, `browser_would_run=true`, `ffmpeg_would_run=true`, `cookies_stored=false`, `har_stored=false`, `qr_screenshot_stored=false`, `credentials_included=false`, and `provider_payloads_included=false`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval values, or raw self-test operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- M6AF is a no-live evidence hardening slice only; full video PPT acceptance still requires the live/customer/deployment gates documented in the active plan.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

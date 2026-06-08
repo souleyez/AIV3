@@ -247,6 +247,12 @@ function extractCommandEvidence(commandId, stdout) {
   if (commandId === 'external_video_ppt_self_test') {
     return extractExternalVideoPptSelfTestEvidence(stdout);
   }
+  if (commandId === 'video_ppt_handoff_self_test') {
+    return extractVideoPptHandoffSelfTestEvidence(stdout);
+  }
+  if (commandId === 'authorized_capture_self_test') {
+    return extractAuthorizedCaptureSelfTestEvidence(stdout);
+  }
   if (commandId !== 'quality_matrix_self_test') {
     return null;
   }
@@ -326,6 +332,94 @@ function extractExternalVideoPptSelfTestEvidence(stdout) {
   };
 }
 
+function extractVideoPptHandoffSelfTestEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  return {
+    schema: 'v3.video_ppt_handoff_rollup_evidence.v1',
+    prompt_mentions_wechat_video: report.summary?.prompt?.mentionsWeChatVideo,
+    prompt_wants_slide_output: report.summary?.prompt?.wantsSlideOutput,
+    network_calls_run: report.summary?.networkCallsRun,
+    provider_called: report.summary?.providerCalled,
+    react_toolchain_called: report.summary?.reactToolchainCalled,
+    video_fetch_attempted: report.summary?.videoFetchAttempted,
+    video_downloaded: report.summary?.videoDownloaded,
+    frames_extracted: report.summary?.framesExtracted,
+    ocr_run: report.summary?.ocrRun,
+    ppt_generated: report.summary?.pptGenerated,
+    final_pptx_ready_exposed: report.summary?.finalPptxReadyExposed,
+    artifact_links_exposed: report.summary?.artifactLinksExposed,
+    download_exports_exposed: report.summary?.downloadExportsExposed,
+    negative_fixture_count: report.summary?.negativeFixtureCount,
+    negative_fixtures_rejected: report.summary?.negativeFixturesRejected,
+    main_ok: report.main?.ok,
+    main_failure_reason: report.main?.failureReason,
+    main_next_step_count: report.main?.nextStepKeys?.length,
+    main_has_required_reason: report.main?.hasRequiredReason,
+    main_has_handoff_type: report.main?.hasHandoffType,
+    main_has_actionable_next_steps: report.main?.hasActionableNextSteps,
+    main_unsafe_success_signal: report.main?.unsafeSuccessSignal,
+    main_unsafe_artifact_link_signal: report.main?.unsafeArtifactLinkSignal,
+    main_unsafe_credential_request: report.main?.unsafeCredentialRequest,
+    main_raw_source_leaked: report.main?.rawSourceLeaked,
+    external_ok: report.external?.ok,
+    external_failure_reason: report.external?.failureReason,
+    external_next_step_count: report.external?.nextStepKeys?.length,
+    external_has_required_reason: report.external?.hasRequiredReason,
+    external_has_handoff_type: report.external?.hasHandoffType,
+    external_has_actionable_next_steps: report.external?.hasActionableNextSteps,
+    external_unsafe_success_signal: report.external?.unsafeSuccessSignal,
+    external_unsafe_artifact_link_signal: report.external?.unsafeArtifactLinkSignal,
+    external_unsafe_credential_request: report.external?.unsafeCredentialRequest,
+    external_raw_source_leaked: report.external?.rawSourceLeaked,
+  };
+}
+
+function extractAuthorizedCaptureSelfTestEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  const receipt = report.sharedReceipt || {};
+  return {
+    schema: 'v3.authorized_capture_rollup_evidence.v1',
+    mode: report.summary?.mode,
+    self_test: report.summary?.selfTest,
+    approval_reference_present: receipt.approvalReferencePresent,
+    approval_id_redacted: receipt.approvalIdRedacted,
+    approved_by_reference_present: receipt.approvedByReferencePresent,
+    approved_by_redacted: receipt.approvedByRedacted,
+    purpose_present: receipt.purposePresent,
+    duration_seconds: receipt.durationSeconds,
+    retention_days: receipt.retentionDays,
+    capture_audio_allowed: receipt.captureAudioAllowed,
+    capture_mode_present: typeof receipt.captureMode === 'string' && receipt.captureMode.length > 0,
+    handoff_mode: receipt.output?.handoffMode,
+    authorization_gate_negative_case_count: report.summary?.authorizationGateNegativeCaseCount,
+    authorization_gate_negative_cases_rejected: report.summary?.authorizationGateNegativeCasesRejected,
+    capture_attempted: report.capture?.attempted,
+    dry_run: report.capture?.dryRun,
+    browser_would_run: report.capture?.browserWouldRun,
+    ffmpeg_would_run: report.capture?.ffmpegWouldRun,
+    ack_authorized: report.safety?.ackAuthorized,
+    isolated_browser_profile: report.safety?.isolatedBrowserProfile,
+    persistent_profile_disabled: report.safety?.persistentProfileDisabled,
+    raw_url_stored: report.safety?.rawUrlStored,
+    cookies_stored: report.safety?.cookiesStored,
+    har_stored: report.safety?.harStored,
+    qr_screenshot_stored: report.safety?.qrScreenshotStored,
+    local_path_redacted: receipt.output?.localPathRedacted,
+    profile_path_redacted: receipt.output?.profilePathRedacted,
+    approval_values_included: receipt.redactionFlags?.approvalValuesIncluded,
+    raw_source_url_included: receipt.redactionFlags?.rawSourceUrlIncluded,
+    local_paths_included: receipt.redactionFlags?.localPathsIncluded,
+    credentials_included: receipt.redactionFlags?.credentialsIncluded,
+    provider_payloads_included: receipt.redactionFlags?.providerPayloadsIncluded,
+  };
+}
+
 function extractQualityMatrixSelfTestEvidence(stdout) {
   const report = readJsonReportFromStdout(stdout);
   if (!report) {
@@ -352,12 +446,8 @@ function readJsonReportFromStdout(stdout) {
   if (!reportPath) {
     return null;
   }
-  const normalized = path.normalize(reportPath);
-  if (
-    path.isAbsolute(normalized)
-    || normalized.startsWith('..')
-    || !normalized.startsWith(`target${path.sep}`)
-  ) {
+  const normalized = safeLocalReportPath(reportPath);
+  if (!normalized) {
     return null;
   }
   try {
@@ -365,6 +455,19 @@ function readJsonReportFromStdout(stdout) {
   } catch {
     return null;
   }
+}
+
+function safeLocalReportPath(reportPath) {
+  const normalized = path.normalize(reportPath);
+  if (path.isAbsolute(normalized)) {
+    const resolved = path.resolve(normalized);
+    const targetRoot = path.join(process.cwd(), 'target') + path.sep;
+    return resolved.startsWith(targetRoot) ? resolved : '';
+  }
+  if (normalized.startsWith('..') || !normalized.startsWith(`target${path.sep}`)) {
+    return '';
+  }
+  return normalized;
 }
 
 function extractReportPathFromStdout(stdout) {
@@ -471,9 +574,106 @@ function validateReport(report) {
   validateQualityMatrixEvidence(report);
   validateUploadMainEvidence(report);
   validateExternalVideoPptEvidence(report);
+  validateVideoPptHandoffEvidence(report);
+  validateAuthorizedCaptureEvidence(report);
   const serialized = JSON.stringify(report);
   if (serialized.match(/[A-Za-z]:[\\/]|[\\/]Users[\\/]|[\\/]home[\\/]|https?:\/\/|token=|cookie=|bearer=/i)) {
     throw new Error('no-live rollup report contains unredacted local path, URL, or token-like text');
+  }
+}
+
+function validateVideoPptHandoffEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'video_ppt_handoff_self_test');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.video_ppt_handoff_rollup_evidence.v1'
+    || evidence.prompt_mentions_wechat_video !== true
+    || evidence.prompt_wants_slide_output !== true
+    || evidence.network_calls_run !== false
+    || evidence.provider_called !== false
+    || evidence.react_toolchain_called !== false
+    || evidence.video_fetch_attempted !== false
+    || evidence.video_downloaded !== false
+    || evidence.frames_extracted !== false
+    || evidence.ocr_run !== false
+    || evidence.ppt_generated !== false
+    || evidence.final_pptx_ready_exposed !== false
+    || evidence.artifact_links_exposed !== false
+    || evidence.download_exports_exposed !== false
+    || evidence.negative_fixture_count < 5
+    || evidence.negative_fixtures_rejected !== evidence.negative_fixture_count
+    || evidence.main_ok !== true
+    || evidence.main_failure_reason !== 'login_gated_video_source_not_supported'
+    || evidence.main_next_step_count !== 3
+    || evidence.main_has_required_reason !== true
+    || evidence.main_has_handoff_type !== true
+    || evidence.main_has_actionable_next_steps !== true
+    || evidence.main_unsafe_success_signal !== false
+    || evidence.main_unsafe_artifact_link_signal !== false
+    || evidence.main_unsafe_credential_request !== false
+    || evidence.main_raw_source_leaked !== false
+    || evidence.external_ok !== true
+    || evidence.external_failure_reason !== 'login_gated_video_source_not_supported'
+    || evidence.external_next_step_count !== 3
+    || evidence.external_has_required_reason !== true
+    || evidence.external_has_handoff_type !== true
+    || evidence.external_has_actionable_next_steps !== true
+    || evidence.external_unsafe_success_signal !== false
+    || evidence.external_unsafe_artifact_link_signal !== false
+    || evidence.external_unsafe_credential_request !== false
+    || evidence.external_raw_source_leaked !== false
+  ) {
+    throw new Error('no-live rollup handoff evidence is incomplete');
+  }
+}
+
+function validateAuthorizedCaptureEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'authorized_capture_self_test');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.authorized_capture_rollup_evidence.v1'
+    || evidence.mode !== 'dry-run'
+    || evidence.self_test !== true
+    || evidence.approval_reference_present !== true
+    || evidence.approval_id_redacted !== true
+    || evidence.approved_by_reference_present !== true
+    || evidence.approved_by_redacted !== true
+    || evidence.purpose_present !== true
+    || evidence.duration_seconds < 5
+    || evidence.retention_days < 0
+    || evidence.capture_audio_allowed !== false
+    || evidence.capture_mode_present !== true
+    || !['none', 'upload-main', 'external-video'].includes(evidence.handoff_mode)
+    || evidence.authorization_gate_negative_case_count < 6
+    || evidence.authorization_gate_negative_cases_rejected !== evidence.authorization_gate_negative_case_count
+    || evidence.capture_attempted !== false
+    || evidence.dry_run !== true
+    || evidence.browser_would_run !== true
+    || evidence.ffmpeg_would_run !== true
+    || evidence.ack_authorized !== true
+    || evidence.isolated_browser_profile !== true
+    || evidence.persistent_profile_disabled !== true
+    || evidence.raw_url_stored !== false
+    || evidence.cookies_stored !== false
+    || evidence.har_stored !== false
+    || evidence.qr_screenshot_stored !== false
+    || evidence.local_path_redacted !== true
+    || evidence.profile_path_redacted !== true
+    || evidence.approval_values_included !== false
+    || evidence.raw_source_url_included !== false
+    || evidence.local_paths_included !== false
+    || evidence.credentials_included !== false
+    || evidence.provider_payloads_included !== false
+  ) {
+    throw new Error('no-live rollup authorized-capture evidence is incomplete');
   }
 }
 
