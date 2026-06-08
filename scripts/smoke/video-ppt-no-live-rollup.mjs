@@ -1251,6 +1251,7 @@ function buildAcceptanceStatus({ summary, results }) {
   ];
   const pendingGateRequirementsSummary = buildPendingGateRequirementsSummary(gates);
   const approvalRequestSummary = buildApprovalRequestSummary(gates);
+  const nonExecutableGateReasonSummary = buildNonExecutableGateReasonSummary(gates);
   return {
     schema: 'v3.video_ppt_acceptance_status_rollup.v1',
     full_acceptance_ready: false,
@@ -1270,6 +1271,7 @@ function buildAcceptanceStatus({ summary, results }) {
     live_gate_readiness_summary: liveGateReadinessSummary,
     pending_gate_requirements_summary: pendingGateRequirementsSummary,
     approval_request_summary: approvalRequestSummary,
+    non_executable_gate_reason_summary: nonExecutableGateReasonSummary,
     gates,
     next_authorized_paths: [
       'P2_main_upload_live_smoke',
@@ -1363,6 +1365,57 @@ function buildPendingGateRequirementsSummary(gates = []) {
     full_acceptance_waits_on_live_customer_deployment:
       pendingGateIds.includes('P8_full_acceptance_close'),
     no_live_substitute_available_for_pending_gates: false,
+  };
+}
+
+function buildNonExecutableGateReasonSummary(gates = []) {
+  const gateById = new Map(gates.map((gate) => [gate.id, gate]));
+  const nonExecutableGateIds = [
+    'P2_main_upload_live_smoke',
+    'P3_external_video_ppt_live_smoke',
+    'P4_login_gated_handoff_live_pass',
+    'P5_authorized_capture_live_sample',
+    'P6_customer_authorized_quality_matrix',
+    'P7_server_deployment_gate',
+    'P8_full_acceptance_close',
+  ].filter((gateId) => gateById.has(gateId));
+  return {
+    schema: 'v3.video_ppt_non_executable_gate_reason_summary.v1',
+    full_acceptance_ready: false,
+    safe_to_share: true,
+    raw_values_included: false,
+    live_or_deploy_action_run: false,
+    no_live_substitute_available_for_non_executable_gates: false,
+    non_executable_gate_count: nonExecutableGateIds.length,
+    non_executable_gate_ids: nonExecutableGateIds,
+    blocker_category_count: 4,
+    blocker_categories: [
+      'authorization',
+      'credentials',
+      'deployment',
+      'customer_input',
+    ],
+    main_upload_live_smoke_non_executable: true,
+    main_upload_missing_write_approval: true,
+    main_upload_missing_safe_video_input: true,
+    external_video_ppt_live_smoke_non_executable: true,
+    external_missing_inbound_bearer: true,
+    external_missing_write_approval: true,
+    external_missing_safe_video_input: true,
+    login_gated_handoff_live_non_executable: true,
+    login_gated_handoff_missing_deployment_window: true,
+    authorized_capture_live_sample_non_executable: true,
+    authorized_capture_missing_approval_record: true,
+    authorized_capture_missing_playable_source: true,
+    authorized_capture_missing_retention_policy: true,
+    customer_quality_matrix_non_executable: true,
+    customer_quality_matrix_missing_authorized_sample: true,
+    customer_quality_matrix_missing_approval_id: true,
+    customer_quality_matrix_missing_retention_policy: true,
+    server_deployment_non_executable: true,
+    server_deployment_missing_explicit_window: true,
+    full_acceptance_close_non_executable: true,
+    full_acceptance_waits_on_live_customer_deployment: true,
   };
 }
 
@@ -1782,6 +1835,7 @@ function validateAcceptanceStatus(report) {
   validateLiveGateReadinessSummary(acceptance, report);
   validatePendingGateRequirementsSummary(acceptance, report);
   validateApprovalRequestSummary(acceptance, report);
+  validateNonExecutableGateReasonSummary(acceptance, report);
   for (const gateId of [
     'P2_main_upload_live_smoke',
     'P3_external_video_ppt_live_smoke',
@@ -1896,6 +1950,70 @@ function validatePendingGateRequirementsSummary(acceptance, report) {
     || pending.full_acceptance_waits_on_live_customer_deployment !== true
   ) {
     throw new Error('no-live rollup pending gate requirements summary does not match pending gates');
+  }
+}
+
+function validateNonExecutableGateReasonSummary(acceptance, report) {
+  const summary = acceptance.non_executable_gate_reason_summary;
+  if (
+    !summary
+    || summary.schema !== 'v3.video_ppt_non_executable_gate_reason_summary.v1'
+    || summary.full_acceptance_ready !== false
+    || summary.safe_to_share !== true
+    || summary.raw_values_included !== false
+    || summary.live_or_deploy_action_run !== false
+    || summary.no_live_substitute_available_for_non_executable_gates !== false
+  ) {
+    throw new Error('no-live rollup non-executable gate reason summary is incomplete');
+  }
+  if (report.summary.failed_count !== 0) {
+    return;
+  }
+  const requiredGateIds = [
+    'P2_main_upload_live_smoke',
+    'P3_external_video_ppt_live_smoke',
+    'P4_login_gated_handoff_live_pass',
+    'P5_authorized_capture_live_sample',
+    'P6_customer_authorized_quality_matrix',
+    'P7_server_deployment_gate',
+    'P8_full_acceptance_close',
+  ];
+  const summaryGateIds = Array.isArray(summary.non_executable_gate_ids)
+    ? summary.non_executable_gate_ids
+    : [];
+  const blockerCategories = Array.isArray(summary.blocker_categories)
+    ? summary.blocker_categories
+    : [];
+  if (
+    summary.non_executable_gate_count !== requiredGateIds.length
+    || summaryGateIds.length !== requiredGateIds.length
+    || requiredGateIds.some((gateId) => !summaryGateIds.includes(gateId))
+    || summary.blocker_category_count !== 4
+    || !['authorization', 'credentials', 'deployment', 'customer_input']
+      .every((category) => blockerCategories.includes(category))
+    || summary.main_upload_live_smoke_non_executable !== true
+    || summary.main_upload_missing_write_approval !== true
+    || summary.main_upload_missing_safe_video_input !== true
+    || summary.external_video_ppt_live_smoke_non_executable !== true
+    || summary.external_missing_inbound_bearer !== true
+    || summary.external_missing_write_approval !== true
+    || summary.external_missing_safe_video_input !== true
+    || summary.login_gated_handoff_live_non_executable !== true
+    || summary.login_gated_handoff_missing_deployment_window !== true
+    || summary.authorized_capture_live_sample_non_executable !== true
+    || summary.authorized_capture_missing_approval_record !== true
+    || summary.authorized_capture_missing_playable_source !== true
+    || summary.authorized_capture_missing_retention_policy !== true
+    || summary.customer_quality_matrix_non_executable !== true
+    || summary.customer_quality_matrix_missing_authorized_sample !== true
+    || summary.customer_quality_matrix_missing_approval_id !== true
+    || summary.customer_quality_matrix_missing_retention_policy !== true
+    || summary.server_deployment_non_executable !== true
+    || summary.server_deployment_missing_explicit_window !== true
+    || summary.full_acceptance_close_non_executable !== true
+    || summary.full_acceptance_waits_on_live_customer_deployment !== true
+  ) {
+    throw new Error('no-live rollup non-executable gate reason summary does not match pending gates');
   }
 }
 
