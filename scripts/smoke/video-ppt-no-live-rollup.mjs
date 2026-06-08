@@ -1093,6 +1093,10 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     quality_matrix_case_count: qualityEvidence.case_count ?? null,
     quality_matrix_deliverable_count: qualityEvidence.deliverable_count ?? null,
     quality_matrix_pending_count: qualityEvidence.pending_count ?? null,
+    quality_customer_authorization_argument_gate_supported:
+      qualityEvidence.customer_authorization_argument_gate_supported === true,
+    quality_customer_retention_policy_argument_gate_supported:
+      qualityEvidence.customer_retention_policy_argument_gate_supported === true,
     quality_review_required_risk_flag_count: qualityEvidence.review_required_risk_flag_count ?? null,
     not_deliverable_failure_class_count: qualityEvidence.not_deliverable_failure_class_count ?? null,
     review_failure_class_summary_needs_manual_review_count:
@@ -1276,6 +1280,8 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.quality_matrix_case_count !== 3
     || evidence.quality_matrix_deliverable_count !== 1
     || evidence.quality_matrix_pending_count !== 2
+    || evidence.quality_customer_authorization_argument_gate_supported !== true
+    || evidence.quality_customer_retention_policy_argument_gate_supported !== true
     || evidence.quality_review_required_risk_flag_count !== 8
     || evidence.not_deliverable_failure_class_count !== 5
     || evidence.review_failure_class_summary_needs_manual_review_count !== 8

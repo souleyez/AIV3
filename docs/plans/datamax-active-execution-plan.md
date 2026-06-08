@@ -1,10 +1,10 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 13:27 CST
-**当前性质：** 开发执行版；当前已推送 GitHub 功能基线以 `git log -1` 为准，M6AV customer authorization argument gate 已推送，本切片继续把 M6AW customer retention policy argument gate 纳入 quality matrix/no-live rollup。后续实际执行入口是第 0.7.20 节；第 0.7.18-0.7.19 节保留完整背景、命令和历史口径，但若与第 0.7.20 节冲突，以第 0.7.20 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 13:34 CST
+**当前性质：** 开发执行版；当前已推送 GitHub 功能基线以 `git log -1` 为准，M6AV customer authorization argument gate、M6AW customer retention policy argument gate 已完成，本切片继续把两类客户参数门禁汇总到 M6AX `acceptance_status.no_live_evidence_summary`。后续实际执行入口是第 0.7.20 节；第 0.7.18-0.7.19 节保留完整背景、命令和历史口径，但若与第 0.7.20 节冲突，以第 0.7.20 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
-- 本轮已先完成 plan-only 收口，并继续按 P1/no-live 代码切片收掉 M6AV/M6AW；没有跑 live、没有上传视频、没有发第三方事件、没有录屏、没有部署或触碰 8/120 服务器。后续默认仍按 P1/no-live 推进；任何 P2/P3/P4/P5/P6/P7 都需要对应授权、凭据、样例或部署窗口。
+- 本轮已先完成 plan-only 收口，并继续按 P1/no-live 代码切片收掉 M6AV/M6AW/M6AX；没有跑 live、没有上传视频、没有发第三方事件、没有录屏、没有部署或触碰 8/120 服务器。后续默认仍按 P1/no-live 推进；任何 P2/P3/P4/P5/P6/P7 都需要对应授权、凭据、样例或部署窗口。
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；self-test 已补授权负向用例和可复制的脱敏 `sharedReceipt`；没有执行 live capture，没有接入 8 服务器生产服务。
@@ -49,6 +49,7 @@
 - M6AU 已完成本地切片：quality matrix 现在对所有 report 默认输出 review-required gate、not-deliverable failure class gate、failure summary support 和 review summary support，并用 self-test 内部回归证明真实 deliverables 输入模式也会携带这些 metadata；no-live rollup 已复制并校验该 gate，最新 quality matrix self-test 和 no-live rollup 22/22 均通过，敏感扫描无输出，`target/` tracked 为 0。
 - M6AV 已完成本地切片：quality matrix 的客户授权参数门禁现在进入 self-test 和 no-live rollup evidence；缺 `--customer-approval-id`、孤立 approval id、self-test 混客户输入均会被拒绝，合法客户参数形态只通过参数门禁不读取文件；最新 quality matrix self-test 和 no-live rollup 22/22 均通过，敏感扫描无输出，`target/` tracked 为 0。
 - M6AW 已完成本地切片：quality matrix 的客户保留策略参数门禁进入 self-test 和 no-live rollup evidence；`--customer-deliverables` 现在必须同时带 `--customer-approval-id` 和 `--customer-retention-policy`，孤立 retention policy 会被拒绝，报告只记录 retention policy 引用存在且已脱敏；最新 quality matrix self-test 和 no-live rollup 22/22 均通过，敏感扫描无输出，`target/` tracked 为 0。
+- M6AX 已完成本地切片：no-live rollup 的 `acceptance_status.no_live_evidence_summary` 现在直接复制 `quality_customer_authorization_argument_gate_supported=true` 和 `quality_customer_retention_policy_argument_gate_supported=true`，使 P6 客户样例的授权/保留策略门禁在顶层验收摘要可见；最新 no-live rollup 22/22 通过，敏感扫描无输出，`target/` tracked 为 0。
 - 当前工作树隔离口径：如果后续本地 `scripts/smoke/video-ppt-quality-matrix.mjs` 或 `scripts/smoke/video-ppt-no-live-rollup.mjs` 再出现未提交改动，必须视为新的代码切片，未完成 gate 前不属于当前功能基线，不得混入 doc-only 提交。
 - 当前收版隔离口径：GitHub 最新已推送 HEAD 仍以 `git log -1` 为准；若只执行 EP0/doc-only 计划同步，不得 stage `scripts/smoke/video-ppt-no-live-rollup.mjs` 等功能脚本改动。若要同步 no-live rollup 代码切片，必须按第 0.7.17 的代码路径单独跑 gate、单独提交，仍不部署 8 服务器。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
@@ -1278,7 +1279,7 @@ M6AF 提交前必须确认：
 
 | 项 | 当前结论 | 可对外说法 | 不能说的内容 |
 | --- | --- | --- | --- |
-| GitHub 基线 | 最新已推送 HEAD 以 `git log -1` 为准；当前记录到 M6AW | 已有 no-live 基线、live preflight evidence、授权录屏 dry-run handoff evidence、acceptance status evidence、no-live acceptance evidence summary、live gate readiness summary、deliverables-mode gate metadata、customer authorization argument gate、customer retention policy argument gate、not-deliverable failure taxonomy evidence、failure class summary gate evidence、rollup summary maps evidence、not-deliverable regression summary count evidence 和 needs-manual-review summary count evidence | 不能把 no-live/preflight/dry-run/acceptance status/live readiness/failure taxonomy/failure summary maps/regression counts/review counts 说成 live 通过 |
+| GitHub 基线 | 最新已推送 HEAD 以 `git log -1` 为准；当前记录到 M6AX | 已有 no-live 基线、live preflight evidence、授权录屏 dry-run handoff evidence、acceptance status evidence、no-live acceptance evidence summary、live gate readiness summary、deliverables-mode gate metadata、customer authorization argument gate、customer retention policy argument gate、acceptance evidence summary customer gate bits、not-deliverable failure taxonomy evidence、failure class summary gate evidence、rollup summary maps evidence、not-deliverable regression summary count evidence 和 needs-manual-review summary count evidence | 不能把 no-live/preflight/dry-run/acceptance status/live readiness/failure taxonomy/failure summary maps/regression counts/review counts 说成 live 通过 |
 | no-live rollup | `smoke:video-ppt-no-live-rollup -- --self-test` 已收敛为 22 个无授权命令，并输出 `acceptance_status` | 可证明上传、第三方、handoff、capture self-test、capture dry-run、quality matrix、生产触发边界、preflight 门禁和全量验收状态矩阵在本地一键回归 | 不能替代主站 live、第三方 live、8 部署、客户样例 |
 | 触发边界 | 共享 fixture 覆盖“提取视频中的 PPT/幻灯片/课件”正向和“普通视频生成 PPT/介绍视频/只提字幕”负向 | 视频 PPT 是特殊触发，只抽取视频里已播放的课件画面 | 不能承诺把普通视频创作为可编辑 PPT |
 | 支持文件形态 | `.mp4`、`.mov`、`.m4v`、`.webm`、`.mkv`、`.avi` 可作为视频素材形态进入上传/登记/直链处理 | 支持用户上传视频或提供匿名直接视频 URL 后抽取截图型 PPTX/Markdown/notes/manifests | 不能承诺所有网页链接都能自动拿到视频文件 |
@@ -1675,7 +1676,7 @@ E. 客户质量样例：提供客户/operator 授权样例和保留策略，用�
 
 1. 走 P0：完成本节 plan-only 文档、桌面副本和 validation ledger 同步。
 2. 走 P1：authorized-capture dry-run evidence 已纳入 no-live rollup，仍未跑浏览器、未跑 FFmpeg、未部署。
-3. 下一轮若仍无授权，可继续本地 public/quality 窄修复；`acceptance_status` 字段已在 M6AM 落入 no-live report，not-deliverable failure taxonomy 已在 M6AN 落入 quality matrix/no-live rollup evidence，failure class summary gate 已在 M6AO 落入 quality matrix/no-live rollup evidence，三张 summary maps 已在 M6AP 落入 no-live rollup evidence，五类 not-deliverable regression summary counts 已在 M6AQ 落入 quality matrix/no-live rollup evidence，六类 needs-manual-review summary counts 已在 M6AR 落入 quality matrix/no-live rollup evidence，验收状态层 no-live evidence summary 已在 M6AS 落入 `acceptance_status`，live gate readiness summary 已在 M6AT 落入 `acceptance_status`，真实 deliverables-mode gate metadata 已在 M6AU 落入 quality matrix/no-live rollup evidence，客户授权参数门禁已在 M6AV 落入 quality matrix/no-live rollup evidence，客户保留策略参数门禁已在 M6AW 落入 quality matrix/no-live rollup evidence，后续只需在新增 gate、failure class、review class、客户授权/保留策略参数规则或 live gate readiness 字段时维护计数和验证。
+3. 下一轮若仍无授权，可继续本地 public/quality 窄修复；`acceptance_status` 字段已在 M6AM 落入 no-live report，not-deliverable failure taxonomy 已在 M6AN 落入 quality matrix/no-live rollup evidence，failure class summary gate 已在 M6AO 落入 quality matrix 和 no-live rollup evidence，三张 summary maps 已在 M6AP 落入 no-live rollup evidence，五类 not-deliverable regression summary counts 已在 M6AQ 落入 quality matrix/no-live rollup evidence，六类 needs-manual-review summary counts 已在 M6AR 落入 quality matrix/no-live rollup evidence，验收状态层 no-live evidence summary 已在 M6AS 落入 `acceptance_status`，live gate readiness summary 已在 M6AT 落入 `acceptance_status`，真实 deliverables-mode gate metadata 已在 M6AU 落入 quality matrix/no-live rollup evidence，客户授权参数门禁已在 M6AV 落入 quality matrix/no-live rollup evidence，客户保留策略参数门禁已在 M6AW 落入 quality matrix/no-live rollup evidence，两类客户门禁顶层验收摘要已在 M6AX 落入 `acceptance_status.no_live_evidence_summary`，后续只需在新增 gate、failure class、review class、客户授权/保留策略参数规则或 live gate readiness 字段时维护计数和验证。
 
 一旦用户给出授权：
 
@@ -1694,8 +1695,8 @@ E. 客户质量样例：提供客户/operator 授权样例和保留策略，用�
 | 主题 | 当前结论 | 下一步 |
 | --- | --- | --- |
 | 唯一 active plan | 仓库计划为 `docs/plans/datamax-active-execution-plan.md`，桌面副本为 `/Users/manslive01/Desktop/datamax-active-execution-plan.md` | 每次 plan-only 更新后先 `cp` 再 `cmp` |
-| GitHub 功能基线 | 最新功能基线以已推送 HEAD 为准，当前记录到 M6AW：no-live acceptance status + acceptance evidence summary + live gate readiness summary + deliverables-mode gate metadata + customer authorization argument gate + customer retention policy argument gate + quality failure taxonomy + failure class summary gate + rollup summary maps + not-deliverable regression counts + review summary counts | doc-only 可单独提交；功能脚本改动必须另跑 gate |
-| 当前工作树风险 | M6AV/M6AW 已按 P1/no-live 代码切片验证；后续若再出现未提交脚本改动，视为新的候选代码切片 | 不把未验证脚本改动混入 doc-only 提交 |
+| GitHub 功能基线 | 最新功能基线以已推送 HEAD 为准，当前记录到 M6AX：no-live acceptance status + acceptance evidence summary + live gate readiness summary + deliverables-mode gate metadata + customer authorization argument gate + customer retention policy argument gate + quality failure taxonomy + failure class summary gate + rollup summary maps + not-deliverable regression counts + review summary counts | doc-only 可单独提交；功能脚本改动必须另跑 gate |
+| 当前工作树风险 | M6AV/M6AW/M6AX 已按 P1/no-live 代码切片验证；后续若再出现未提交脚本改动，视为新的候选代码切片 | 不把未验证脚本改动混入 doc-only 提交 |
 | 主站上传 | `.mp4/.mov/.m4v/.webm/.mkv/.avi` 上传或匿名 direct URL 已有 no-live/self-test/preflight 基线 | 等用户批准写一条非客户主站 smoke 记录后跑 P2 |
 | 第三方登记 | 第三方视频素材登记和“提取视频里的 PPT”特殊触发已有 self-test/preflight 基线 | 等 bearer、`connection_id`、`source_id` 和安全输入后跑 P3 |
 | 公开视频样例 | 已有 public course 样例能生成截图型 PPTX/Markdown/manifests，结论是 `needs_manual_review` | 继续作为 public evidence，不替代客户授权样例 |
@@ -1822,8 +1823,8 @@ git push origin main
 
 | 项 | 当前状态 | 后续执行含义 |
 | --- | --- | --- |
-| 已推送 GitHub HEAD | 以 `git log -1` 为准；当前本切片记录到 M6AW | 已推送基线到 M6AW；后续继续以 `git log -1` 和当前验证结果为准 |
-| 本地工作树 | M6AV/M6AW 脚本候选已按 P1/no-live 收版；后续若出现新脚本/业务代码改动，必须重新隔离和验证 | plan-only 路径只 stage 文档；新代码候选必须另走 P1/no-live 或对应 live gate |
+| 已推送 GitHub HEAD | 以 `git log -1` 为准；当前本切片记录到 M6AX | 已推送基线到 M6AX；后续继续以 `git log -1` 和当前验证结果为准 |
+| 本地工作树 | M6AV/M6AW/M6AX 脚本候选已按 P1/no-live 收版；后续若出现新脚本/业务代码改动，必须重新隔离和验证 | plan-only 路径只 stage 文档；新代码候选必须另走 P1/no-live 或对应 live gate |
 | active plan | 仓库文件是 `docs/plans/datamax-active-execution-plan.md`，桌面副本是 `/Users/manslive01/Desktop/datamax-active-execution-plan.md` | 每次计划更新都先同步桌面副本并 `cmp` |
 | 8 服务器 | 本次不 pull、不 build、不 restart、不部署、不启用录屏 | 只有用户明确批准 P7 部署窗口后才能操作 |
 | 120 服务器 | 不在本阶段范围 | 不检查、不部署、不修改 |
@@ -3370,6 +3371,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M6AU | deliverables-mode quality matrix gate metadata | 无 live 授权；只执行 quality matrix self-test 和 no-live rollup | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、deliverables-mode gate evidence readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：所有 quality matrix report 默认携带 review-required risk gate、not-deliverable failure class gate、failure summary support 和 review summary support；self-test 内部回归证明真实 deliverables 输入模式也带这些 metadata，no-live rollup 复制并校验该支持位 | 未部署 |
 | M6AV | customer quality matrix authorization argument gate | 无 live 授权；只执行 quality matrix self-test 和 no-live rollup | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、customer authorization gate readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：quality matrix self-test 回归拒绝缺 `--customer-approval-id`、孤立 approval id 和 self-test 混客户输入；合法客户参数形态只通过参数门禁不读取文件；no-live rollup 复制并校验该支持位 | 未部署 |
 | M6AW | customer quality matrix retention policy argument gate | 无 live 授权；只执行 quality matrix self-test 和 no-live rollup | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、direct CLI negative argument checks、customer retention gate readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：quality matrix self-test 和 CLI 负向验证拒绝缺 `--customer-retention-policy`、孤立 retention policy 和 self-test 混客户输入；合法客户参数形态必须同时带 approval id 和 retention policy；no-live rollup 复制并校验该支持位 | 未部署 |
+| M6AX | acceptance evidence summary customer gate bits | 无 live 授权；只执行 no-live rollup self-test | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、acceptance evidence summary readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：`acceptance_status.no_live_evidence_summary` 直接复制 customer authorization 和 retention policy 参数门禁支持位，使 P6 客户样例的授权/保留策略门禁在顶层验收摘要可审计 | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |
