@@ -1252,6 +1252,7 @@ function buildAcceptanceStatus({ summary, results }) {
   const pendingGateRequirementsSummary = buildPendingGateRequirementsSummary(gates);
   const approvalRequestSummary = buildApprovalRequestSummary(gates);
   const nonExecutableGateReasonSummary = buildNonExecutableGateReasonSummary(gates);
+  const serverDeploymentPolicySummary = buildServerDeploymentPolicySummary(gates);
   return {
     schema: 'v3.video_ppt_acceptance_status_rollup.v1',
     full_acceptance_ready: false,
@@ -1272,6 +1273,7 @@ function buildAcceptanceStatus({ summary, results }) {
     pending_gate_requirements_summary: pendingGateRequirementsSummary,
     approval_request_summary: approvalRequestSummary,
     non_executable_gate_reason_summary: nonExecutableGateReasonSummary,
+    server_deployment_policy_summary: serverDeploymentPolicySummary,
     gates,
     next_authorized_paths: [
       'P2_main_upload_live_smoke',
@@ -1416,6 +1418,35 @@ function buildNonExecutableGateReasonSummary(gates = []) {
     server_deployment_missing_explicit_window: true,
     full_acceptance_close_non_executable: true,
     full_acceptance_waits_on_live_customer_deployment: true,
+  };
+}
+
+function buildServerDeploymentPolicySummary(gates = []) {
+  const gateById = new Map(gates.map((gate) => [gate.id, gate]));
+  return {
+    schema: 'v3.video_ppt_server_deployment_policy_summary.v1',
+    safe_to_share: true,
+    raw_values_included: false,
+    github_sync_allowed: true,
+    github_sync_implies_server_deployment: false,
+    deployment_action_run: false,
+    service_deployment_allowed: false,
+    server_8_touched: false,
+    server_8_deployment_requires_explicit_window: true,
+    server_8_pull_build_restart_allowed_without_window: false,
+    server_8_capture_fallback_default_enabled: false,
+    server_8_capture_fallback_requires_separate_approval: true,
+    server_120_out_of_scope: true,
+    server_120_touched: false,
+    deployment_gate_id: gateById.has('P7_server_deployment_gate')
+      ? 'P7_server_deployment_gate'
+      : null,
+    handoff_live_gate_after_deployment: gateById.has('P4_login_gated_handoff_live_pass')
+      ? 'P4_login_gated_handoff_live_pass'
+      : null,
+    deployable_commit_must_be_pushed: true,
+    post_deploy_target_smoke_required: true,
+    post_deploy_scope_limited_to_target_gate: true,
   };
 }
 
@@ -1836,6 +1867,7 @@ function validateAcceptanceStatus(report) {
   validatePendingGateRequirementsSummary(acceptance, report);
   validateApprovalRequestSummary(acceptance, report);
   validateNonExecutableGateReasonSummary(acceptance, report);
+  validateServerDeploymentPolicySummary(acceptance, report);
   for (const gateId of [
     'P2_main_upload_live_smoke',
     'P3_external_video_ppt_live_smoke',
@@ -2014,6 +2046,41 @@ function validateNonExecutableGateReasonSummary(acceptance, report) {
     || summary.full_acceptance_waits_on_live_customer_deployment !== true
   ) {
     throw new Error('no-live rollup non-executable gate reason summary does not match pending gates');
+  }
+}
+
+function validateServerDeploymentPolicySummary(acceptance, report) {
+  const summary = acceptance.server_deployment_policy_summary;
+  if (
+    !summary
+    || summary.schema !== 'v3.video_ppt_server_deployment_policy_summary.v1'
+    || summary.safe_to_share !== true
+    || summary.raw_values_included !== false
+    || summary.github_sync_allowed !== true
+    || summary.github_sync_implies_server_deployment !== false
+    || summary.deployment_action_run !== false
+    || summary.service_deployment_allowed !== false
+    || summary.server_8_touched !== false
+    || summary.server_8_deployment_requires_explicit_window !== true
+    || summary.server_8_pull_build_restart_allowed_without_window !== false
+    || summary.server_8_capture_fallback_default_enabled !== false
+    || summary.server_8_capture_fallback_requires_separate_approval !== true
+    || summary.server_120_out_of_scope !== true
+    || summary.server_120_touched !== false
+    || summary.deployment_gate_id !== 'P7_server_deployment_gate'
+    || summary.handoff_live_gate_after_deployment !== 'P4_login_gated_handoff_live_pass'
+    || summary.deployable_commit_must_be_pushed !== true
+    || summary.post_deploy_target_smoke_required !== true
+    || summary.post_deploy_scope_limited_to_target_gate !== true
+  ) {
+    throw new Error('no-live rollup server deployment policy summary is incomplete');
+  }
+  if (
+    report.gates?.service_deployment_allowed !== false
+    || report.gates?.server_8_touched !== false
+    || report.gates?.server_120_touched !== false
+  ) {
+    throw new Error('no-live rollup server deployment policy conflicts with safety gates');
   }
 }
 

@@ -7267,3 +7267,75 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Server Deployment Policy Summary
+
+Task source: M6BN no-live follow-up. The plan explicitly separates GitHub synchronization from 8-server deployment. This slice makes that boundary machine-readable inside the no-live acceptance report so a pushed commit cannot be mistaken for a server release, and so 120-server exclusion remains visible in the same report.
+
+Scope:
+
+- local no-live rollup code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- no-live rollup now emits `acceptance_status.server_deployment_policy_summary`;
+- the summary uses schema `v3.video_ppt_server_deployment_policy_summary.v1`;
+- the summary records that GitHub sync is allowed but does not imply server deployment;
+- the summary records that 8-server pull/build/restart requires an explicit deployment window;
+- the summary records that 8-server capture fallback is disabled by default and requires separate approval;
+- the summary records that 120 server is out of scope and untouched;
+- the summary records P7 as the deployment gate and P4 as the handoff live gate that follows deployment;
+- rollup validation fails if policy fields conflict with top-level no-live safety gates.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted server deployment policy readback>"
+rg -n "<local-path-url-token-approval-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=28`, `passed_count=28`, and `failed_count=0`;
+- server deployment policy schema was `v3.video_ppt_server_deployment_policy_summary.v1`;
+- `github_sync_allowed=true` and `github_sync_implies_server_deployment=false`;
+- `deployment_action_run=false` and `service_deployment_allowed=false`;
+- `server_8_touched=false`;
+- `server_8_deployment_requires_explicit_window=true`;
+- `server_8_pull_build_restart_allowed_without_window=false`;
+- `server_8_capture_fallback_default_enabled=false`;
+- `server_8_capture_fallback_requires_separate_approval=true`;
+- `server_120_out_of_scope=true` and `server_120_touched=false`;
+- deployment gate id was `P7_server_deployment_gate`;
+- handoff live gate after deployment was `P4_login_gated_handoff_live_pass`;
+- deployable commit must be pushed, post-deploy target smoke is required, and post-deploy scope is limited to the target gate;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval/operator values, or raw dry-run approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- this policy only proves the no-live report preserves deployment boundaries; it is not evidence that 8 server was deployed.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
