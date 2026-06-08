@@ -10,6 +10,16 @@ const REQUIRED_CATEGORIES = [
   'public_course_video',
   'customer_authorized_video',
 ];
+const REVIEW_REQUIRED_RISK_FLAGS = new Set([
+  'manual_review_required',
+  'missing_transcript_alignment',
+  'missing_ocr_evidence',
+  'full_frame_rectangle_fallback',
+  'selected_slide_duplicates_removed',
+  'frame_sharpness_review_required',
+  'slide_readability_review_required',
+  'single_slide_output_review_required',
+]);
 
 function parseArgs(argv) {
   const args = {
@@ -318,16 +328,16 @@ function evaluateCase(testCase) {
   const quality = testCase.quality_report;
   const summary = quality.summary || {};
   const riskFlags = new Set(Array.isArray(quality.risk_flags) ? quality.risk_flags : []);
+  const hasReviewRequiredRiskFlag = [...riskFlags].some((riskFlag) =>
+    REVIEW_REQUIRED_RISK_FLAGS.has(riskFlag),
+  );
   const hasHighRiskFrames = (summary.full_frame_fallback_count || 0) > 0
     || (summary.sharpness_high_count || 0) > 0
     || (summary.sharpness_unknown_count || 0) > 0
     || (summary.readability_high_count || 0) > 0
     || (summary.readability_unknown_count || 0) > 0
     || summary.single_slide_output === true
-    || riskFlags.has('manual_review_required')
-    || riskFlags.has('missing_transcript_alignment')
-    || riskFlags.has('frame_sharpness_review_required')
-    || riskFlags.has('slide_readability_review_required');
+    || hasReviewRequiredRiskFlag;
   if (quality.quality_score < 70 || hasHighRiskFrames) {
     return {
       verdict: 'needs_manual_review',
@@ -352,6 +362,8 @@ function buildSelfTestReport() {
       public_course_sample_required: true,
       customer_authorization_required: true,
       local_deliverables_input_reviewed: false,
+      review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
+      review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
     },
     nextActions: [
       'run synthetic PPT playback extraction and attach real target/ report when available',
@@ -365,12 +377,7 @@ function buildSelfTestReport() {
 }
 
 function validateExplicitReviewRiskRegression() {
-  for (const riskFlag of [
-    'manual_review_required',
-    'missing_transcript_alignment',
-    'frame_sharpness_review_required',
-    'slide_readability_review_required',
-  ]) {
+  for (const riskFlag of REVIEW_REQUIRED_RISK_FLAGS) {
     const evaluation = evaluateCase(buildReviewRiskRegressionCase(riskFlag));
     if (evaluation.verdict !== 'needs_manual_review') {
       throw new Error(`quality matrix review-risk regression failed for ${riskFlag}`);
@@ -379,6 +386,8 @@ function validateExplicitReviewRiskRegression() {
 }
 
 function buildReviewRiskRegressionCase(riskFlag) {
+  const singleSlideOutput = riskFlag === 'single_slide_output_review_required';
+  const selectedCount = singleSlideOutput ? 1 : 7;
   return {
     case_id: `quality-matrix-review-risk-${riskFlag}`,
     category: 'public_course_video',
@@ -388,25 +397,25 @@ function buildReviewRiskRegressionCase(riskFlag) {
     trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
     deliverable_status: {
       state: 'final_pptx_ready',
-      frame_count: 96,
-      selected_count: 7,
-      pptx_slide_count: 7,
-      markdown_slide_count: 7,
+      frame_count: singleSlideOutput ? 20 : 96,
+      selected_count: selectedCount,
+      pptx_slide_count: selectedCount,
+      markdown_slide_count: selectedCount,
       has_quality_report: true,
     },
     quality_report: {
       quality_score: 70,
       risk_flags: [riskFlag],
       summary: {
-        full_frame_fallback_count: 0,
-        detector_crop_count: 7,
+        full_frame_fallback_count: riskFlag === 'full_frame_rectangle_fallback' ? 1 : 0,
+        detector_crop_count: selectedCount,
         subtitle_missing_count: riskFlag === 'missing_transcript_alignment' ? 7 : 0,
-        ocr_missing_count: 0,
+        ocr_missing_count: riskFlag === 'missing_ocr_evidence' ? selectedCount : 0,
         sharpness_high_count: riskFlag === 'frame_sharpness_review_required' ? 1 : 0,
         sharpness_unknown_count: 0,
         readability_high_count: riskFlag === 'slide_readability_review_required' ? 1 : 0,
         readability_unknown_count: 0,
-        single_slide_output: false,
+        single_slide_output: singleSlideOutput,
       },
     },
   };
@@ -602,6 +611,14 @@ function validateSelfTestReport(report) {
   }
   if (report.summary.expectation_mismatch_count !== 0) {
     throw new Error('self-test report has expectation mismatches');
+  }
+  if (
+    !Array.isArray(report.gates.review_required_risk_flags)
+    || report.gates.review_required_risk_flag_count !== REVIEW_REQUIRED_RISK_FLAGS.size
+    || !report.gates.review_required_risk_flags.includes('missing_ocr_evidence')
+    || !report.gates.review_required_risk_flags.includes('single_slide_output_review_required')
+  ) {
+    throw new Error('self-test report must expose the review-required risk flag gate');
   }
 }
 

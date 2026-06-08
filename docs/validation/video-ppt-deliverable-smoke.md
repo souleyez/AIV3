@@ -4236,6 +4236,64 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Quality Matrix Review-Risk Flag Gate
+
+Task source: EP6 local quality hardening after the public-course samples remained `needs_manual_review`. The quality matrix already respected several explicit review risks, but some risk flags produced by media-worker still relied on score or summary side effects. This slice makes all review-required video PPT risk flags explicit in the matrix self-test gate.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
+- update only the local quality matrix smoke;
+- keep `screenshot_based_pptx` as a non-blocking informational flag;
+- ensure review-required risk flags force `needs_manual_review` even when slide counts align and `quality_score=70`.
+
+Implemented behavior:
+
+- added a centralized `REVIEW_REQUIRED_RISK_FLAGS` set to `scripts/smoke/video-ppt-quality-matrix.mjs`;
+- the set now includes `manual_review_required`, `missing_transcript_alignment`, `missing_ocr_evidence`, `full_frame_rectangle_fallback`, `selected_slide_duplicates_removed`, `frame_sharpness_review_required`, `slide_readability_review_required`, and `single_slide_output_review_required`;
+- `evaluateCase()` now treats any of those risk flags as a manual-review signal;
+- self-test internal regression now iterates every review-required risk flag, not just the original four;
+- the self-test report exposes `review_required_risk_flags` and `review_required_risk_flag_count` so shared evidence shows which risks are guarded.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+rg -n "<sensitive-value-patterns>" <quality-matrix-and-rollup-reports>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- quality matrix self-test passed with 3 visible cases, 1 deliverable synthetic case, and 2 pending cases;
+- self-test report exposed `review_required_risk_flag_count=8`;
+- exposed review-required risk flags were `manual_review_required`, `missing_transcript_alignment`, `missing_ocr_evidence`, `full_frame_rectangle_fallback`, `selected_slide_duplicates_removed`, `frame_sharpness_review_required`, `slide_readability_review_required`, and `single_slide_output_review_required`;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`;
+- sensitive-value report scan found no raw URLs, token query strings, object keys, bearer values, local absolute paths, generated-artifacts paths, provider keys, or password-like values;
+- `git diff --check` passed;
+- tracked `target/` file count remained 0.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- customer-facing quality still depends on real authorized samples and manual review for crop, duplicate, subtitle, OCR, readability, and artifact visibility risks.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Shared Video PPT Trigger Fixture
 
 Task source: M6Z in the active execution plan. After M6X/M6Y tightened production and smoke trigger guards, the same positive/negative prompt corpus still lived in several places. This slice makes the trigger regression corpus shared by upload-main smoke, third-party smoke, front-end scope planner tests, and Rust assistant-runtime tests.
