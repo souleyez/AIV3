@@ -524,6 +524,7 @@ function buildSelfTestReport() {
       customer_authorization_required: true,
       local_deliverables_input_reviewed: false,
       deliverables_mode_failure_class_gate_defaults_supported: true,
+      deliverables_summary_count_fields_supported: true,
       customer_authorization_argument_gate_supported: true,
       customer_retention_policy_argument_gate_supported: true,
       review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
@@ -995,6 +996,7 @@ function buildQualityMatrixReport({
       review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       review_required_risk_flag_object_shape_supported: true,
+      deliverables_summary_count_fields_supported: true,
       review_required_risk_failure_class_map_supported: true,
       review_required_risk_failure_class_map_count:
         Object.keys(REVIEW_REQUIRED_RISK_FAILURE_CLASS_MAP).length,
@@ -1093,6 +1095,7 @@ function validateSelfTestReport(report) {
     || report.gates.review_required_risk_failure_class_map_supported !== true
     || report.gates.review_required_risk_failure_class_map_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !hasExpectedReviewRiskFailureClassMap(report.gates.review_required_risk_failure_class_map)
+    || report.gates.deliverables_summary_count_fields_supported !== true
     || report.gates.review_failure_class_summary_supported !== true
     || report.gates.review_failure_class_summary_needs_manual_review_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !hasExpectedReviewFailureClassCounts(report.gates.review_failure_class_summary_counts)
@@ -1179,6 +1182,7 @@ function validateQualityMatrixReport(report) {
     || report.gates.review_required_risk_failure_class_map_supported !== true
     || report.gates.review_required_risk_failure_class_map_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !hasExpectedReviewRiskFailureClassMap(report.gates.review_required_risk_failure_class_map)
+    || report.gates.deliverables_summary_count_fields_supported !== true
   ) {
     throw new Error('quality matrix report must include review-required gate metadata');
   }

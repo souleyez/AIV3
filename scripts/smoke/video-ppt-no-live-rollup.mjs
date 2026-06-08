@@ -886,6 +886,8 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
       sanitizeStringMap(report.gates?.review_required_risk_failure_class_map),
     deliverables_mode_failure_class_gate_defaults_supported:
       report.gates?.deliverables_mode_failure_class_gate_defaults_supported,
+    deliverables_summary_count_fields_supported:
+      report.gates?.deliverables_summary_count_fields_supported,
     customer_authorization_argument_gate_supported:
       report.gates?.customer_authorization_argument_gate_supported,
     customer_retention_policy_argument_gate_supported:
@@ -1801,6 +1803,8 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       qualityEvidence.review_required_risk_failure_class_map_count ?? null,
     quality_review_required_risk_failure_class_map:
       sanitizeStringMap(qualityEvidence.review_required_risk_failure_class_map),
+    quality_deliverables_summary_count_fields_supported:
+      qualityEvidence.deliverables_summary_count_fields_supported === true,
     not_deliverable_failure_class_count: qualityEvidence.not_deliverable_failure_class_count ?? null,
     review_failure_class_summary_needs_manual_review_count:
       qualityEvidence.review_failure_class_summary_needs_manual_review_count ?? null,
@@ -2272,6 +2276,7 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || !hasExpectedReviewRiskFailureClassMap(
       evidence.quality_review_required_risk_failure_class_map,
     )
+    || evidence.quality_deliverables_summary_count_fields_supported !== true
     || evidence.not_deliverable_failure_class_count !== 5
     || evidence.review_failure_class_summary_needs_manual_review_count !== 8
     || !hasExpectedReviewFailureClassCounts(evidence.review_failure_class_summary_counts)
@@ -2877,6 +2882,7 @@ function validateQualityMatrixEvidence(report) {
     || evidence.review_required_risk_failure_class_map_count !== 8
     || !hasExpectedReviewRiskFailureClassMap(evidence.review_required_risk_failure_class_map)
     || evidence.deliverables_mode_failure_class_gate_defaults_supported !== true
+    || evidence.deliverables_summary_count_fields_supported !== true
     || evidence.customer_authorization_argument_gate_supported !== true
     || evidence.customer_retention_policy_argument_gate_supported !== true
     || evidence.review_failure_class_summary_supported !== true

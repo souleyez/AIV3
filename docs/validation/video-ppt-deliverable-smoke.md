@@ -7758,3 +7758,67 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Quality Matrix Summary Count Fields Support Gate
+
+Task source: M6BU P1/no-live follow-up. M6BT added validator summary count fields to real deliverables cases. This slice adds a machine-readable support gate so the no-live rollup fails if future changes silently remove those deliverables count fields from the quality matrix contract.
+
+Scope:
+
+- local quality matrix and no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- quality matrix reports now include `gates.deliverables_summary_count_fields_supported=true`;
+- quality matrix self-test validates that support gate;
+- no-live rollup extracts the support gate from the quality matrix self-test child report;
+- no-live rollup exposes `quality_deliverables_summary_count_fields_supported=true` in `acceptance_status.no_live_evidence_summary`;
+- no-live rollup validates the child evidence and acceptance summary support gate.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted quality matrix count-fields support readback>"
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live count-fields support readback>"
+rg -n "<local-path-url-token-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- both script syntax checks passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- quality matrix child report recorded `deliverables_summary_count_fields_supported=true`;
+- no-live rollup passed with `command_count=28`, `passed_count=28`, and `failed_count=0`;
+- no-live quality-matrix child evidence recorded `deliverables_summary_count_fields_supported=true`;
+- `acceptance_status.no_live_evidence_summary` recorded `quality_deliverables_summary_count_fields_supported=true`;
+- `acceptance_status.full_acceptance_ready=false` and `gate_count=8` remained unchanged;
+- path/credential scan found no raw URL, token query string, bearer value, cookie, authorization value, local absolute path, `target/.../generated_artifacts` path, or `video-extraction-*` identifier in generated reports;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- this only guards the M6BT quality matrix report-shape improvement from regression.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
