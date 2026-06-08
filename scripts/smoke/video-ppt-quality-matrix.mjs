@@ -471,6 +471,7 @@ function buildSelfTestReport() {
       public_course_sample_required: true,
       customer_authorization_required: true,
       local_deliverables_input_reviewed: false,
+      deliverables_mode_failure_class_gate_defaults_supported: true,
       review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       review_required_risk_flag_object_shape_supported: true,
@@ -503,6 +504,7 @@ function buildSelfTestReport() {
   validateReviewFailureClassSummaryRegression(reviewFailureClassSummaryRegression);
   validateNotDeliverableFailureRegression();
   validateFailureClassSummaryRegression(failureClassSummaryRegression);
+  validateDeliverablesModeGateMetadata();
   return report;
 }
 
@@ -709,6 +711,30 @@ function validateFailureClassSummaryRegression(summary) {
   }
 }
 
+function validateDeliverablesModeGateMetadata() {
+  const report = buildQualityMatrixReport({
+    status: 'partial_deliverables_gate_metadata_ready',
+    selfTest: false,
+    inputMode: 'combined_deliverables',
+    matrixComplete: false,
+    cases: buildSelfTestCases(),
+    gates: {
+      local_deliverables_input_reviewed: true,
+    },
+    nextActions: [
+      'verify deliverables-mode quality reports carry failure and review gate metadata',
+    ],
+  });
+  if (
+    report.gates.failure_class_summary_supported !== true
+    || report.gates.review_failure_class_summary_supported !== true
+    || report.gates.review_required_risk_flag_count !== REVIEW_REQUIRED_RISK_FLAGS.size
+    || report.gates.not_deliverable_failure_class_count !== NOT_DELIVERABLE_FAILURE_CLASSES.length
+  ) {
+    throw new Error('quality matrix deliverables-mode gate metadata regression failed');
+  }
+}
+
 function buildDeliverablesReportFromArgs(args) {
   const inputKinds = deliverablesInputKinds(args);
   const allDeliverablesInputsReviewed = inputKinds.length === REQUIRED_CATEGORIES.length;
@@ -840,6 +866,13 @@ function buildQualityMatrixReport({
       live_smoke_run: false,
       production_write_allowed: false,
       generated_artifacts_committable: false,
+      review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
+      review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
+      review_required_risk_flag_object_shape_supported: true,
+      not_deliverable_failure_classes: NOT_DELIVERABLE_FAILURE_CLASSES,
+      not_deliverable_failure_class_count: NOT_DELIVERABLE_FAILURE_CLASSES.length,
+      failure_class_summary_supported: true,
+      review_failure_class_summary_supported: true,
       ...gates,
     },
     redaction: {
@@ -992,6 +1025,28 @@ function validateQualityMatrixReport(report) {
     || !report.summary.needs_manual_review_failure_class_counts
   ) {
     throw new Error('quality matrix report must include failure class summaries');
+  }
+  if (
+    !Array.isArray(report.gates.review_required_risk_flags)
+    || report.gates.review_required_risk_flag_count !== REVIEW_REQUIRED_RISK_FLAGS.size
+    || report.gates.review_required_risk_flag_object_shape_supported !== true
+    || !report.gates.review_required_risk_flags.includes('missing_ocr_evidence')
+    || !report.gates.review_required_risk_flags.includes('single_slide_output_review_required')
+  ) {
+    throw new Error('quality matrix report must include review-required gate metadata');
+  }
+  if (
+    !Array.isArray(report.gates.not_deliverable_failure_classes)
+    || report.gates.not_deliverable_failure_class_count !== NOT_DELIVERABLE_FAILURE_CLASSES.length
+    || !report.gates.not_deliverable_failure_classes.includes('source_access')
+    || !report.gates.not_deliverable_failure_classes.includes('video_has_no_ppt')
+    || !report.gates.not_deliverable_failure_classes.includes('frame_extraction')
+    || !report.gates.not_deliverable_failure_classes.includes('artifact_visibility')
+    || !report.gates.not_deliverable_failure_classes.includes('selection_quality')
+    || report.gates.failure_class_summary_supported !== true
+    || report.gates.review_failure_class_summary_supported !== true
+  ) {
+    throw new Error('quality matrix report must include failure class gate metadata');
   }
   for (const category of REQUIRED_CATEGORIES) {
     if (!report.cases.some((testCase) => testCase.category === category)) {

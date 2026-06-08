@@ -3968,6 +3968,77 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Deliverables-Mode Quality Matrix Gate Metadata
+
+Task source: M6AU no-live follow-up. The quality matrix self-test exposed stable failure and review gates, but real `--synthetic-deliverables`, `--public-course-deliverables`, and `--customer-deliverables` reports also need the same gate metadata so customer/operator sample reports remain self-describing.
+
+Scope:
+
+- local quality-matrix and no-live rollup evidence slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `buildQualityMatrixReport()` now applies common review/failure gate metadata to every report, including deliverables input modes;
+- every quality matrix report now carries `review_required_risk_flags`, `review_required_risk_flag_count`, and `review_required_risk_flag_object_shape_supported`;
+- every quality matrix report now carries `not_deliverable_failure_classes`, `not_deliverable_failure_class_count`, `failure_class_summary_supported`, and `review_failure_class_summary_supported`;
+- quality matrix validation now fails if a report lacks those common review/failure gate fields;
+- self-test now runs an internal deliverables-mode gate metadata regression without writing a separate report;
+- self-test exposes `deliverables_mode_failure_class_gate_defaults_supported=true`;
+- no-live rollup copies and validates that support bit in quality matrix evidence.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted deliverables-mode gate evidence readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir> <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- no-live rollup syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=0`, `not_deliverable_count=0`, and `pending_count=2`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- quality matrix report exposed `deliverables_mode_failure_class_gate_defaults_supported=true`;
+- quality matrix report exposed `review_required_risk_flag_count=8`;
+- quality matrix report exposed `not_deliverable_failure_class_count=5`;
+- quality matrix report exposed `failure_class_summary_supported=true`;
+- quality matrix report exposed `review_failure_class_summary_supported=true`;
+- no-live rollup quality evidence copied `deliverables_mode_failure_class_gate_defaults_supported=true`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, or raw approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this metadata gate does not replace customer-authorized quality matrix execution; it only guarantees that future synthetic/public/customer deliverables reports carry the needed review/failure vocabulary;
+- customer/operator sample processing still requires explicit authorization, input source, and retention policy.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Acceptance Status Live Gate Readiness Summary
 
 Task source: M6AT no-live follow-up. M6AS made the no-live evidence coverage visible inside `acceptance_status`, but the live-gate blockers were still distributed across upload, external, handoff, and capture child evidence. This slice adds a compact readiness summary that states which live gates are preflight-ready and which authorization, credential, deployment, or customer inputs remain missing.
