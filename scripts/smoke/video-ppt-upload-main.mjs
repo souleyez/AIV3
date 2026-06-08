@@ -501,7 +501,48 @@ function safeFixtureName(args, urlContentType = '') {
 }
 
 function promptRequestsVideoPpt(prompt) {
-  return /ppt|powerpoint|slides?|幻灯片|课件/i.test(String(prompt || ''));
+  const text = String(prompt || '');
+  const mentionsSlides = /ppt|powerpoint|slides?|幻灯片|课件/i.test(text);
+  if (!mentionsSlides) {
+    return false;
+  }
+  const extractionIntent = /提取|抽取|抓取|导出|识别|extract|pull|capture|export|视频(?:里|中|里的|中的)|from (?:the )?video|shown in (?:the )?video/i
+    .test(text);
+  if (!extractionIntent) {
+    return false;
+  }
+  const ordinaryVideoToPpt = /普通视频|任意视频|把.*视频.*(?:生成|做成|制作|创作|转成|变成).*ppt|(?:make|create|generate|turn).{0,40}(?:ppt|powerpoint|slides).{0,40}(?:from|out of).{0,20}(?:the )?video|video[- ]to[- ]ppt/i
+    .test(text);
+  const extractionFromExistingSlides = /提取|抽取|抓取|extract|pull|capture|视频(?:里|中|里的|中的).*(?:ppt|powerpoint|slides?|幻灯片|课件)|(?:ppt|powerpoint|slides?|幻灯片|课件).*(?:视频里|视频中|already shown)/i
+    .test(text);
+  return !ordinaryVideoToPpt || extractionFromExistingSlides;
+}
+
+function assertVideoPptTriggerClassifier() {
+  const positivePrompts = [
+    '请提取刚上传视频里的 PPT/幻灯片/课件。',
+    '请提取视频中的PPT。',
+    '从这个视频中抽取课件页面。',
+    'Extract slides from this video.',
+  ];
+  const negativePrompts = [
+    '请总结这个视频。',
+    '请把普通视频变成PPT。',
+    'Create a PowerPoint from this ordinary video.',
+    '生成一个PPT介绍这段视频。',
+  ];
+  const missedPositives = positivePrompts.filter((prompt) => !promptRequestsVideoPpt(prompt));
+  if (missedPositives.length > 0) {
+    throw new Error(`video PPT trigger classifier missed positive prompts: ${missedPositives.join(' | ')}`);
+  }
+  const falsePositives = negativePrompts.filter((prompt) => promptRequestsVideoPpt(prompt));
+  if (falsePositives.length > 0) {
+    throw new Error(`video PPT trigger classifier accepted ordinary video-to-PPT prompts: ${falsePositives.join(' | ')}`);
+  }
+  return {
+    positivePromptCount: positivePrompts.length,
+    negativePromptCount: negativePrompts.length,
+  };
 }
 
 function shellQuote(value) {
@@ -1180,6 +1221,7 @@ async function assertSelfTestUploadContract(args, runId) {
   if (unsupported.length > 0) {
     throw new Error(`self-test upload classifier missed supported videos: ${unsupported.join(', ')}`);
   }
+  const triggerClassifier = assertVideoPptTriggerClassifier();
 
   const source = redactedUrlSummary(redactionProbeVideoUrl());
   if (
@@ -1201,6 +1243,7 @@ async function assertSelfTestUploadContract(args, runId) {
     deliverableState: deliverableState(artifact),
     requiredFileKinds: REQUIRED_FILE_KINDS,
     supportedVideoExtensions: SUPPORTED_VIDEO_EXTENSIONS,
+    triggerClassifier,
     sourceSummaryRedacted: true,
     downloadValidation: {
       ok: downloadValidation.ok,

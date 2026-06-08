@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 09:04 CST
-**当前性质：** 开发执行版；当前功能基线是本节所在 M6V commit，实际 hash 以 `git log -1` 为准；入口是第 0.7 节，尤其是第 0.7.13-0.7.14 节的全量验收闭环和当前 HEAD 审计。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出风险提示已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。deliverables validator 已补 PPTX speaker notes XML 脱敏扫描、selected manifest 必检、PPTX/Markdown/selected_count 页数一致性和 summary counts；M6N 已完成 validator/shared receipt JSON 输出脱敏，`--json` 类共享输出默认不带本机 artifact path，同时内部 API 仍保留脚本读取文件所需的本地路径。M6O 已完成 `missing_ocr_evidence` 质量报告风险标记。M6P 已完成 `full_frame_content_v1` detector；M6Q 已完成 readability-aware sharpness 分流；M6R 已补 quality matrix self-test 内部显式复核风险回归断言；M6S-M6U 已补并增强 `smoke:video-ppt-no-live-rollup` 一键无授权回归入口，串起主站上传、第三方登记、视频号/登录态 handoff、授权录屏 helper、quality matrix、Rust format check、media-worker Rust lib tests、offline smoke binary check 和 deliverables validator 的 self-test/preflight/check/test，18 个命令全部通过且报告安全 gate 证明没有 live、下载、上传、浏览器录屏、部署、8/120 服务器动作。M6V 已补第三方视频 PPT self-test contract，覆盖 `video_ppt_extraction` requested skill、`extract_video_ppt_transcript` action、六类视频扩展分类、非视频扩展拒绝和 URL 摘要脱敏。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 09:20 CST
+**当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit 和本地待提交 M6W 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准；入口是第 0.7 节，尤其是第 0.7.13-0.7.14 节的全量验收闭环和当前 HEAD 审计。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出风险提示已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。deliverables validator 已补 PPTX speaker notes XML 脱敏扫描、selected manifest 必检、PPTX/Markdown/selected_count 页数一致性和 summary counts；M6N 已完成 validator/shared receipt JSON 输出脱敏，`--json` 类共享输出默认不带本机 artifact path，同时内部 API 仍保留脚本读取文件所需的本地路径。M6O 已完成 `missing_ocr_evidence` 质量报告风险标记。M6P 已完成 `full_frame_content_v1` detector；M6Q 已完成 readability-aware sharpness 分流；M6R 已补 quality matrix self-test 内部显式复核风险回归断言；M6S-M6U 已补并增强 `smoke:video-ppt-no-live-rollup` 一键无授权回归入口，串起主站上传、第三方登记、视频号/登录态 handoff、授权录屏 helper、quality matrix、Rust format check、media-worker Rust lib tests、offline smoke binary check 和 deliverables validator 的 self-test/preflight/check/test，18 个命令全部通过且报告安全 gate 证明没有 live、下载、上传、浏览器录屏、部署、8/120 服务器动作。M6V 已补第三方视频 PPT self-test contract，覆盖 `video_ppt_extraction` requested skill、`extract_video_ppt_transcript` action、六类视频扩展分类、非视频扩展拒绝和 URL 摘要脱敏。M6W 已收紧主站上传和第三方 smoke 的视频 PPT 特殊触发 classifier：只有“提取/抽取视频里已经出现的 PPT/幻灯片/课件”类提示通过，`请把普通视频变成PPT`、`Create a PowerPoint from this ordinary video` 等负向提示会被 self-test 拒绝。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
@@ -23,6 +23,7 @@
 - M6T 已完成：`smoke:video-ppt-no-live-rollup` 已扩展到 17 命令，新增 `cargo test -p media-worker --lib` 和 `cargo check -p media-worker --bin video_ppt_offline_smoke`，把核心抽取库和离线 smoke binary 纳入同一个无授权回归入口。
 - M6U 已完成：`smoke:video-ppt-no-live-rollup` 已扩展到 18 命令，新增 `cargo fmt --check`，把 Rust workspace format gate 纳入同一个无授权回归入口。
 - M6V 已完成：第三方视频 PPT self-test 已补 payload/trigger/extension/redaction contract，证明第三方登记入口的离线回归不会只看 reply surface，而会同时守住“登记视频素材后特殊触发提取视频里的 PPT”的请求形态；上传和第三方 self-test 的假 URL redaction probe 也已改为分片构造，避免源码保留完整 URL/query-token 形态。
+- M6W 已完成：主站上传和第三方视频 PPT trigger classifier 已补正负向 regression，`提取视频中的PPT`、`从视频中抽取课件页面` 通过，`请把普通视频变成PPT`、`Create a PowerPoint from this ordinary video` 不通过，防止普通视频创作 PPT 被误当作抽取触发。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
@@ -30,6 +31,28 @@
 ## 0. 下一阶段执行总览
 
 这一节是后续开发的入口，下面第 1-9 节保留事实基线、详细 runbook、验证矩阵和历史回执。后续执行时先看本节确认边界，再跳到对应 runbook。
+
+### 0.0 当前执行入口索引
+
+本索引用来避免把本地质量验证、live smoke、微信视频号 handoff、授权录屏和 8 服务器发版混在一起。下一阶段只按当前授权状态选择一个执行包推进：
+
+| 当前输入/授权状态 | 执行包 | 允许动作 | 禁止动作 | 完成证据 |
+| --- | --- | --- | --- | --- |
+| 只有本地开发权限，没有 live 授权 | EP1/EP6 | 跑 no-live rollup、validator、quality matrix self-test、public candidate 本地复核、窄 fixture 修复、脱敏台账 | 不上传、不下载新客户视频、不跑 live smoke、不部署 8 服务器 | `smoke:video-ppt-no-live-rollup`、定向测试、`docs/validation/video-ppt-deliverable-smoke.md` 回执 |
+| 用户批准在主站写一条非客户 smoke 记录 | EP2 | 同一 fixture 先 preflight，再跑主站上传视频 live controlled smoke | 不部署、不重启服务；失败时不扩大到客户数据 | 上传/document/ingest/assistant run/artifact/PPTX/Markdown/manifests 脱敏回执 |
+| operator 提供第三方 bearer/context/input | EP3 | 同一 bearer/context/input 先 preflight，再跑第三方视频登记 special-trigger live smoke | 不打印 bearer，不把原始 payload/source URL 写入文档 | 视频素材登记与“提取视频里的 PPT”触发分别有回执；surface/download 缺口单独记录 |
+| 输入是微信视频号、登录态网页、二维码页或私有播放页 | EP4 | 返回 handoff：上传视频、匿名直连 URL、授权录屏三选项；live pass 仅验证 handoff | 不抓取、不绕过登录、不抽帧、不 OCR、不声称已生成 PPT | `login_gated_video_source_not_supported` handoff 回执；现网验证需先经 EP7 部署批准 |
+| operator 有合法播放授权但拿不到视频文件 | EP4 capture fallback | 先 dry-run，再短时录屏；录制 `.mp4` 人工确认含 PPT 画面后走 EP2 或 EP3 | 无 approval record 不录屏；8 服务器内部录屏默认不启用 | approval record、录屏摘要、普通 MP4 抽取回执、清理/保留策略 |
+| 客户或 operator 提供授权样例 | EP5 | 复核 customer deliverables，补齐 synthetic/public/customer 三类质量矩阵 | 客户原始文件、PPTX、帧图、私有路径不进 Git | `matrix_complete=true` 或明确 pending/failure 归因；脱敏质量结论 |
+| 用户明确批准发 8 服务器 | EP7 | 只部署已推送且验证通过的 commit，部署后跑目标 smoke | 不触碰 120 服务器；不顺手启用录屏；不处理无关未跟踪文件 | 服务状态、回滚点、目标 live smoke 回执 |
+| 只要求整理计划或同步 GitHub 文档 | EP0 | 更新计划、同步桌面副本、做 doc-only 检查；必要时只提交文档 | 不把现有未验证代码混入 doc-only 提交；不发 8 服务器 | 桌面副本 `cmp` 通过、`git diff --check` 通过、可选 doc-only commit |
+
+当前可对外说明的产品边界：
+
+- `.mp4`、`.mov`、`.m4v`、`.webm`、`.mkv`、`.avi` 是已支持的视频素材形态；只有用户明确要求“提取/抽取视频里已经播放的 PPT/幻灯片/课件”时，才进入视频 PPT 特殊触发。
+- 该能力输出截图型 PPTX、`video_slides.md`、notes、manifests 和质量报告；不承诺把普通视频创作成可编辑原生 PPT。
+- 客户只给链接时，系统先尝试匿名公开视频直链或公开页面 video metadata；拿不到直接视频文件时，必须 handoff 或走授权录屏，不能假装已经看过视频内容。
+- 公开视频样例已经能证明 pipeline 可跑通并进入 `needs_manual_review` 质量复核；客户授权样例缺失前，不标记 P2-2E 全量完成。
 
 ### 0.1 执行边界
 
@@ -909,7 +932,7 @@ Safety:
 
 #### 0.7.14 2026-06-08 当前 HEAD 验收审计
 
-本节是截至本节所在 M6N commit 的收口审计，实际 hash 以 `git log -1` 为准。后续若只有 doc-only commit，功能基线仍以本节 M6N commit 为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
+本节是截至已推送 GitHub 最新 commit 加本地待提交 M6W 切片的收口审计，实际代码落点以 `git log -1`、`git status` 和推送记录为准。后续若只有 doc-only commit，功能基线仍以最近一次已验证功能切片为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
 
 | 审计项 | 当前证据 | 是否可宣称完成 | 下一步 |
 | --- | --- | --- | --- |
@@ -2355,6 +2378,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M6R | quality matrix review-risk regression gate | 无 live 授权；使用 deterministic self-test case | 已通过 `node --check scripts/smoke/video-ppt-quality-matrix.mjs`、`npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>` | 已完成：self-test 内部构造 70 分、页数对齐、带显式复核风险的样例，逐项证明不会误判为 deliverable；self-test 报告仍保持 3 类 case 形状 | 未部署 |
 | M6S-M6U | video PPT no-live rollup gate | 无 live 授权；只执行 self-test/preflight/check/test | 已通过 `cargo fmt --check`、`node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、report redaction scan | 已完成：18 个无授权命令一键通过，覆盖主站上传、第三方登记、视频号 handoff、授权录屏 helper、quality matrix、Rust format check、media-worker lib tests、offline smoke binary check 和 deliverables validator；报告安全 gate 明确未跑 live、未下载、未上传、未录屏、未部署、未触碰 8/120 服务器 | 未部署 |
 | M6V | third-party video PPT self-test contract hardening | 无 live 授权；只执行 external/upload self-test 和 no-live rollup | 已通过 `node --check scripts/smoke/external-video-ppt.mjs`、`node --check scripts/smoke/video-ppt-upload-main.mjs`、`npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>`、`npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>`、self-test report redaction scan、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>` | 已完成：第三方 self-test 校验 `video_ppt_extraction` skill、`extract_video_ppt_transcript` action、available document/dataset scope、`.mp4/.mov/.m4v/.webm/.mkv/.avi` 分类、非视频扩展拒绝和 URL 摘要脱敏；上传/第三方 redaction probe 不再在源码保存完整 URL/query-token 形态 | 未部署 |
+| M6W | video PPT special-trigger classifier guard | 无 live 授权；只执行 upload/external self-test 和 no-live rollup | 已通过 `node --check scripts/smoke/video-ppt-upload-main.mjs`、`node --check scripts/smoke/external-video-ppt.mjs`、`npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>`、`npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>`、self-test report redaction scan、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>` | 已完成：主站/第三方 classifier 要求 PPT/幻灯片/课件提及与提取/抽取/from-video 意图同时存在；普通视频转 PPT/创作 PPT 负向提示不再通过，self-test 报告记录 4 正向和 4 负向用例 | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |

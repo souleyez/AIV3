@@ -4179,3 +4179,59 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Video PPT Special Trigger Classifier Guard
+
+Task source: the product boundary is that video PPT means extracting PPT/slides/courseware already shown in a video, not turning any ordinary video into an authored PPT. The upload-main and third-party smoke trigger classifier was too broad because a prompt containing only PPT/slides could pass. This slice tightens the local release gates before any live upload or third-party run.
+
+Scope:
+
+- keep the change no-live and self-test only;
+- apply the same trigger classifier behavior to main-site upload and third-party video PPT smokes;
+- add positive and negative regression prompts;
+- keep ordinary video-to-PPT creation prompts out of the video PPT extraction trigger path.
+
+Implemented behavior:
+
+- `promptRequestsVideoPpt()` now requires a PPT/slides/courseware mention plus extraction/from-video intent;
+- ordinary video-to-PPT wording such as "把普通视频变成PPT" or "Create a PowerPoint from this ordinary video" is rejected unless the prompt clearly asks to extract already-shown slides;
+- upload-main self-test now records a trigger classifier contract with positive and negative prompt counts;
+- external self-test now records the same trigger classifier contract.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>
+npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>
+rg -n "triggerClassifier|positivePromptCount|negativePromptCount" <upload-and-external-self-test-reports>
+rg -n "<local-path-url-token-patterns>" <upload-and-external-self-test-reports>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- upload-main and external script syntax checks passed;
+- upload-main self-test passed;
+- external self-test passed;
+- both self-test reports recorded `positivePromptCount=4` and `negativePromptCount=4`;
+- upload-main and external self-test report redaction scans found no local paths, URLs, token/cookie/bearer-like text, or session directories;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke or third-party live smoke;
+- live gates still require explicit write approval or inbound bearer/context.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
