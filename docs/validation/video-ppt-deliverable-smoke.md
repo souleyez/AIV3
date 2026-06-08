@@ -7339,3 +7339,73 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Public Candidate Current-Head Revalidation
+
+Task source: M6BO validation-only follow-up. Existing public-course deliverables under `target/` were available from prior extraction runs. This slice revalidates the current public candidate against the current HEAD without downloading video again, uploading anything, running live endpoints, or committing generated artifacts.
+
+Scope:
+
+- validation-only public-course deliverables review;
+- no code change required for this slice;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Commands:
+
+```text
+node tools/validate-video-deliverables.mjs <public-generated-artifacts> --json
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-generated-artifacts> --pretty --output-dir <target-redacted>
+node -e "<redacted public quality matrix readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- deliverables validator returned `ok=true`;
+- validator output redacted the artifacts directory and file paths;
+- checked file kinds included PPTX, final manifest, published manifest, version history, extraction manifest, slide rectangles manifest, selected slides manifest, slide notes, `video_slides.md`, and slide quality report;
+- selected slide count was `7`;
+- requested selected count was `9`;
+- PPTX slide count was `7`;
+- Markdown slide count was `7`;
+- slide rectangle count was `7`;
+- quality slide count was `7`;
+- subtitle page map remained absent, which is valid for this no-subtitle/no-transcript public sample contract;
+- public-course quality matrix returned `status=partial_public_course_deliverables_reviewed`;
+- `matrix_complete=false`;
+- `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`;
+- public course case category was `public_course_video`;
+- public source access status was `anonymous_public_video_fixture`;
+- public deliverable state was `final_pptx_ready`;
+- public validator status was ok;
+- public quality score was `70`;
+- public risk flags were `missing_transcript_alignment`, `missing_ocr_evidence`, `selected_slide_duplicates_removed`, and `manual_review_required`;
+- public evaluation verdict was `needs_manual_review`;
+- public failure class was `selection_quality`;
+- customer-authorized case stayed pending;
+- path/credential scan found no raw URL, token query string, bearer, cookie, provider key, password-like value, local absolute path, `target/.../generated_artifacts` path, or `video-extraction-*` identifier in the quality matrix report;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- this confirms the current public sample remains a real public-course `needs_manual_review` case, not a clean customer deliverable.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
