@@ -5171,3 +5171,69 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Quality Matrix Not-Deliverable Failure Taxonomy
+
+Task source: M6AN no-live follow-up. The quality matrix could already distinguish deliverable, needs manual review, pending accessible sample, and pending authorization, but customer/operator samples that fail later need stable failure classes rather than a generic extraction failure.
+
+Scope:
+
+- local quality-matrix and no-live rollup code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- quality matrix `evaluateCase()` now attaches a `failure_class` to pending, review, not-deliverable, and deliverable evaluations;
+- self-test still reports the same three primary P2-2E cases, but now exposes a `not_deliverable_failure_classes` gate;
+- internal self-test regressions cover five not-deliverable classes: `source_access`, `video_has_no_ppt`, `frame_extraction`, `artifact_visibility`, and `selection_quality`;
+- no-live rollup copies the failure taxonomy from the quality-matrix child report into `v3.video_ppt_quality_matrix_rollup_evidence.v1`;
+- no-live rollup validation now fails if the taxonomy count or any of the five required failure classes are missing.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted taxonomy evidence readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir> <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- no-live rollup syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `pending_count=2`, and `not_deliverable_count=0`;
+- quality matrix report exposed `not_deliverable_failure_class_count=5`;
+- quality matrix report exposed `source_access`, `video_has_no_ppt`, `frame_extraction`, `artifact_visibility`, and `selection_quality`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- no-live quality evidence copied the same five failure classes and retained `review_required_risk_flag_count=8`;
+- no-live quality evidence retained `live_smoke_run=false`, `production_write_allowed=false`, and `generated_artifacts_committable=false`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, or raw approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this taxonomy does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- additional live/customer failures may add classes later, but new classes must be represented in quality matrix self-test and no-live rollup evidence before being used in shared reports.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

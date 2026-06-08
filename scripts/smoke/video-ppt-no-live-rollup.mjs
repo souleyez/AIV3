@@ -676,6 +676,10 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
     review_required_risk_flag_count: report.gates?.review_required_risk_flag_count,
     review_required_risk_flag_object_shape_supported: report.gates?.review_required_risk_flag_object_shape_supported,
     review_required_risk_flag_object_shape_case_count: report.gates?.review_required_risk_flag_object_shape_case_count,
+    not_deliverable_failure_class_count: report.gates?.not_deliverable_failure_class_count,
+    not_deliverable_failure_classes: Array.isArray(report.gates?.not_deliverable_failure_classes)
+      ? report.gates.not_deliverable_failure_classes
+      : [],
     live_smoke_run: report.gates?.live_smoke_run,
     production_write_allowed: report.gates?.production_write_allowed,
     generated_artifacts_committable: report.gates?.generated_artifacts_committable,
@@ -1489,6 +1493,13 @@ function validateQualityMatrixEvidence(report) {
     || evidence.review_required_risk_flag_count !== 8
     || evidence.review_required_risk_flag_object_shape_supported !== true
     || evidence.review_required_risk_flag_object_shape_case_count !== 8
+    || evidence.not_deliverable_failure_class_count !== 5
+    || !Array.isArray(evidence.not_deliverable_failure_classes)
+    || !evidence.not_deliverable_failure_classes.includes('source_access')
+    || !evidence.not_deliverable_failure_classes.includes('video_has_no_ppt')
+    || !evidence.not_deliverable_failure_classes.includes('frame_extraction')
+    || !evidence.not_deliverable_failure_classes.includes('artifact_visibility')
+    || !evidence.not_deliverable_failure_classes.includes('selection_quality')
     || evidence.live_smoke_run !== false
     || evidence.production_write_allowed !== false
     || evidence.generated_artifacts_committable !== false

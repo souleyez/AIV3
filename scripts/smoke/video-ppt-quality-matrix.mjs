@@ -20,6 +20,13 @@ const REVIEW_REQUIRED_RISK_FLAGS = new Set([
   'slide_readability_review_required',
   'single_slide_output_review_required',
 ]);
+const NOT_DELIVERABLE_FAILURE_CLASSES = [
+  'source_access',
+  'video_has_no_ppt',
+  'frame_extraction',
+  'artifact_visibility',
+  'selection_quality',
+];
 
 function parseArgs(argv) {
   const args = {
@@ -286,11 +293,20 @@ function readJsonIfPresent(filePath) {
 }
 
 function evaluateCase(testCase) {
+  if (isSourceAccessFailure(testCase.source_access_status)) {
+    return {
+      verdict: 'source_access_failed',
+      reason: 'video source was not accessible as an anonymous direct video file or authorized input',
+      review_conclusion: 'not_deliverable',
+      failure_class: 'source_access',
+    };
+  }
   if (testCase.approval_status === 'missing' || testCase.source_access_status === 'approval_required') {
     return {
       verdict: 'pending_authorization',
       reason: 'operator approval and customer-safe source details are required',
       review_conclusion: 'not_run',
+      failure_class: null,
     };
   }
   if (testCase.source_access_status === 'sample_required') {
@@ -298,14 +314,17 @@ function evaluateCase(testCase) {
       verdict: 'pending_accessible_sample',
       reason: 'an approved public course video sample is required',
       review_conclusion: 'not_run',
+      failure_class: null,
     };
   }
   const deliverable = testCase.deliverable_status;
   if (!deliverable || deliverable.state !== 'final_pptx_ready') {
+    const failureClass = failureClassForNonReadyDeliverable(deliverable);
     return {
-      verdict: 'extraction_failed',
-      reason: 'final_pptx_ready was not proven',
+      verdict: verdictForFailureClass(failureClass),
+      reason: reasonForFailureClass(failureClass),
       review_conclusion: 'not_deliverable',
+      failure_class: failureClass,
     };
   }
   if (
@@ -316,6 +335,7 @@ function evaluateCase(testCase) {
       verdict: 'artifact_count_mismatch',
       reason: 'selected slide count, PPTX slide count, and Markdown slide count must match',
       review_conclusion: 'not_deliverable',
+      failure_class: 'selection_quality',
     };
   }
   if (!deliverable.has_quality_report || !testCase.quality_report) {
@@ -323,6 +343,7 @@ function evaluateCase(testCase) {
       verdict: 'quality_report_missing',
       reason: 'quality report is required for P2-2E review decisions',
       review_conclusion: 'needs_manual_review',
+      failure_class: 'artifact_visibility',
     };
   }
   const quality = testCase.quality_report;
@@ -343,13 +364,91 @@ function evaluateCase(testCase) {
       verdict: 'needs_manual_review',
       reason: 'quality report contains high-risk or low-score pages',
       review_conclusion: 'needs_manual_review',
+      failure_class: failureClassForQualityReview(summary, riskFlags),
     };
   }
   return {
     verdict: 'deliverable',
     reason: 'slide counts align and quality report has no high-risk local signals',
     review_conclusion: 'deliverable',
+    failure_class: null,
   };
+}
+
+function isSourceAccessFailure(sourceAccessStatus) {
+  return [
+    'anonymous_video_unavailable',
+    'login_gated_source_not_supported',
+    'private_source_not_authorized',
+    'source_access_failed',
+  ].includes(sourceAccessStatus);
+}
+
+function failureClassForNonReadyDeliverable(deliverable) {
+  const state = String(deliverable?.state || '');
+  const errorCodes = Array.isArray(deliverable?.validator_error_codes)
+    ? deliverable.validator_error_codes.map((code) => String(code))
+    : [];
+  if (['video_has_no_ppt', 'no_ppt_detected', 'no_slides_detected'].includes(state)) {
+    return 'video_has_no_ppt';
+  }
+  if (state.includes('frame') || state.includes('ffmpeg')) {
+    return 'frame_extraction';
+  }
+  if (state.includes('artifact') || state.includes('visibility') || errorCodes.length > 0) {
+    return 'artifact_visibility';
+  }
+  return 'frame_extraction';
+}
+
+function verdictForFailureClass(failureClass) {
+  if (failureClass === 'video_has_no_ppt') {
+    return 'video_has_no_ppt';
+  }
+  if (failureClass === 'artifact_visibility') {
+    return 'artifact_visibility_gap';
+  }
+  if (failureClass === 'source_access') {
+    return 'source_access_failed';
+  }
+  return 'extraction_failed';
+}
+
+function reasonForFailureClass(failureClass) {
+  if (failureClass === 'video_has_no_ppt') {
+    return 'video contains no detectable PPT, slide, or courseware pages';
+  }
+  if (failureClass === 'artifact_visibility') {
+    return 'required deliverable artifacts were not safely visible or valid';
+  }
+  if (failureClass === 'source_access') {
+    return 'video source was not accessible as an anonymous direct video file or authorized input';
+  }
+  return 'frame extraction or video processing did not produce a ready PPT package';
+}
+
+function failureClassForQualityReview(summary, riskFlags) {
+  if ((summary.full_frame_fallback_count || 0) > 0) {
+    return 'crop_quality';
+  }
+  if (summary.single_slide_output === true || riskFlags.has('selected_slide_duplicates_removed')) {
+    return 'selection_quality';
+  }
+  if (riskFlags.has('missing_transcript_alignment')) {
+    return 'subtitle_alignment';
+  }
+  if (riskFlags.has('missing_ocr_evidence')) {
+    return 'ocr_evidence';
+  }
+  if (
+    (summary.sharpness_high_count || 0) > 0
+    || (summary.sharpness_unknown_count || 0) > 0
+    || (summary.readability_high_count || 0) > 0
+    || (summary.readability_unknown_count || 0) > 0
+  ) {
+    return 'readability_quality';
+  }
+  return 'manual_review';
 }
 
 function buildSelfTestReport() {
@@ -366,6 +465,8 @@ function buildSelfTestReport() {
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       review_required_risk_flag_object_shape_supported: true,
       review_required_risk_flag_object_shape_case_count: REVIEW_REQUIRED_RISK_FLAGS.size,
+      not_deliverable_failure_classes: NOT_DELIVERABLE_FAILURE_CLASSES,
+      not_deliverable_failure_class_count: NOT_DELIVERABLE_FAILURE_CLASSES.length,
     },
     nextActions: [
       'run synthetic PPT playback extraction and attach real target/ report when available',
@@ -375,6 +476,7 @@ function buildSelfTestReport() {
   });
   validateSelfTestReport(report);
   validateExplicitReviewRiskRegression();
+  validateNotDeliverableFailureRegression();
   return report;
 }
 
@@ -434,6 +536,103 @@ function buildReviewRequiredRiskFlagObject(code) {
     count: 1,
     review_action: `review_${code}`,
   };
+}
+
+function validateNotDeliverableFailureRegression() {
+  for (const regressionCase of buildNotDeliverableRegressionCases()) {
+    const evaluation = evaluateCase(regressionCase);
+    if (evaluation.review_conclusion !== 'not_deliverable') {
+      throw new Error(`quality matrix failure regression was not not_deliverable: ${regressionCase.case_id}`);
+    }
+    if (evaluation.failure_class !== regressionCase.expected_failure_class) {
+      throw new Error(`quality matrix failure class mismatch for ${regressionCase.case_id}`);
+    }
+    if (evaluation.verdict !== regressionCase.expected_verdict) {
+      throw new Error(`quality matrix failure verdict mismatch for ${regressionCase.case_id}`);
+    }
+  }
+}
+
+function buildNotDeliverableRegressionCases() {
+  return [
+    {
+      case_id: 'quality-matrix-source-access-failed',
+      category: 'public_course_video',
+      input_type: 'public_course_video_url',
+      source_access_status: 'anonymous_video_unavailable',
+      approval_status: 'not_required',
+      trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
+      deliverable_status: null,
+      quality_report: null,
+      expected_failure_class: 'source_access',
+      expected_verdict: 'source_access_failed',
+    },
+    {
+      case_id: 'quality-matrix-video-has-no-ppt',
+      category: 'public_course_video',
+      input_type: 'public_course_video_deliverables',
+      source_access_status: 'anonymous_public_video_fixture',
+      approval_status: 'not_required',
+      trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
+      deliverable_status: {
+        state: 'video_has_no_ppt',
+      },
+      quality_report: null,
+      expected_failure_class: 'video_has_no_ppt',
+      expected_verdict: 'video_has_no_ppt',
+    },
+    {
+      case_id: 'quality-matrix-frame-extraction-failed',
+      category: 'public_course_video',
+      input_type: 'public_course_video_deliverables',
+      source_access_status: 'anonymous_public_video_fixture',
+      approval_status: 'not_required',
+      trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
+      deliverable_status: {
+        state: 'frame_extraction_failed',
+      },
+      quality_report: null,
+      expected_failure_class: 'frame_extraction',
+      expected_verdict: 'extraction_failed',
+    },
+    {
+      case_id: 'quality-matrix-artifact-visibility-gap',
+      category: 'public_course_video',
+      input_type: 'public_course_video_deliverables',
+      source_access_status: 'anonymous_public_video_fixture',
+      approval_status: 'not_required',
+      trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
+      deliverable_status: {
+        state: 'artifact_visibility_gap',
+        validator_error_codes: ['pptx_missing'],
+      },
+      quality_report: null,
+      expected_failure_class: 'artifact_visibility',
+      expected_verdict: 'artifact_visibility_gap',
+    },
+    {
+      case_id: 'quality-matrix-selection-count-mismatch',
+      category: 'public_course_video',
+      input_type: 'public_course_video_deliverables',
+      source_access_status: 'anonymous_public_video_fixture',
+      approval_status: 'not_required',
+      trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
+      deliverable_status: {
+        state: 'final_pptx_ready',
+        selected_count: 5,
+        pptx_slide_count: 4,
+        markdown_slide_count: 5,
+        has_quality_report: true,
+      },
+      quality_report: {
+        quality_score: 88,
+        risk_flags: [],
+        summary: {},
+      },
+      expected_failure_class: 'selection_quality',
+      expected_verdict: 'artifact_count_mismatch',
+    },
+  ];
 }
 
 function buildDeliverablesReportFromArgs(args) {
@@ -636,6 +835,17 @@ function validateSelfTestReport(report) {
     || !report.gates.review_required_risk_flags.includes('single_slide_output_review_required')
   ) {
     throw new Error('self-test report must expose the review-required risk flag gate');
+  }
+  if (
+    !Array.isArray(report.gates.not_deliverable_failure_classes)
+    || report.gates.not_deliverable_failure_class_count !== NOT_DELIVERABLE_FAILURE_CLASSES.length
+    || !report.gates.not_deliverable_failure_classes.includes('source_access')
+    || !report.gates.not_deliverable_failure_classes.includes('video_has_no_ppt')
+    || !report.gates.not_deliverable_failure_classes.includes('frame_extraction')
+    || !report.gates.not_deliverable_failure_classes.includes('artifact_visibility')
+    || !report.gates.not_deliverable_failure_classes.includes('selection_quality')
+  ) {
+    throw new Error('self-test report must expose the not-deliverable failure taxonomy gate');
   }
 }
 
