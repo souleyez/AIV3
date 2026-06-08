@@ -79232,7 +79232,7 @@ fn rank_retrieval_evidences_for_prompt<'a>(
         .iter()
         .map(|evidence| {
             let search_text = retrieval_evidence_search_text(evidence);
-            let lexical_score = query_variants
+            let mut lexical_score = query_variants
                 .iter()
                 .map(|query| {
                     lexical_query_score(evidence, &query.weights, query.norm)
@@ -79240,6 +79240,8 @@ fn rank_retrieval_evidences_for_prompt<'a>(
                         + lexical_domain_hint_score(&search_text, &query.text)
                 })
                 .fold(0.0, f64::max);
+            lexical_score +=
+                lexical_retrieval_original_query_signal_score(evidence, &search_text, prompt);
             let score = if lexical_score > 0.0 {
                 lexical_score
             } else {
@@ -79457,6 +79459,146 @@ fn lexical_original_query_signal_overlap_score(content: &str, prompt: &str) -> f
         }
     }
     cjk_score.min(0.24) + ascii_score.min(0.06)
+}
+
+fn lexical_retrieval_original_query_signal_score(
+    evidence: &RetrievalEvidence,
+    content: &str,
+    prompt: &str,
+) -> f64 {
+    let score = lexical_original_query_signal_overlap_score(content, prompt)
+        + lexical_ascii_field_signal_score(content, prompt)
+        + lexical_numeric_cjk_literal_signal_score(content, prompt)
+        + lexical_spreadsheet_overview_signal_score(evidence, content, prompt);
+    score.clamp(-0.16, 0.72)
+}
+
+fn lexical_ascii_field_signal_score(content: &str, prompt: &str) -> f64 {
+    let lower_content = content.to_ascii_lowercase();
+    let mut seen = BTreeSet::new();
+    let mut score: f64 = 0.0;
+    for term in lexical_query_term_weights(prompt).keys() {
+        if !seen.insert(term.clone())
+            || term.chars().count() < 4
+            || !term.chars().any(|value| value.is_ascii_alphanumeric())
+            || !lower_content.contains(&term.to_ascii_lowercase())
+        {
+            continue;
+        }
+        let char_count = term.chars().count();
+        score += if char_count >= 8 { 0.08 } else { 0.04 };
+    }
+    score.min(0.18)
+}
+
+fn lexical_numeric_cjk_literal_signal_score(content: &str, prompt: &str) -> f64 {
+    let prompt_literals = lexical_numeric_cjk_literals(prompt);
+    if prompt_literals.is_empty() {
+        return 0.0;
+    }
+
+    let mut score: f64 = 0.0;
+    let prompt_months = prompt_literals
+        .iter()
+        .filter(|literal| literal.ends_with('月'))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let content_literals = lexical_numeric_cjk_literals(content)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    for literal in &prompt_literals {
+        if content.contains(literal) {
+            score += if literal.ends_with('月') { 0.18 } else { 0.08 };
+        }
+    }
+
+    if !prompt_months.is_empty()
+        && !prompt_months
+            .iter()
+            .any(|literal| content_literals.contains(literal))
+        && content_literals
+            .iter()
+            .any(|literal| literal.ends_with('月'))
+    {
+        score -= 0.12;
+    }
+
+    score.clamp(-0.12, 0.32)
+}
+
+fn lexical_numeric_cjk_literals(content: &str) -> Vec<String> {
+    let mut literals = Vec::new();
+    let mut digits = String::new();
+    for value in content.chars() {
+        if value.is_ascii_digit() {
+            digits.push(value);
+            continue;
+        }
+        if !digits.is_empty() && matches!(value, '年' | '月' | '日' | '天') {
+            literals.push(format!("{digits}{value}"));
+        }
+        digits.clear();
+    }
+    literals
+}
+
+fn lexical_spreadsheet_overview_signal_score(
+    evidence: &RetrievalEvidence,
+    content: &str,
+    prompt: &str,
+) -> f64 {
+    if !prompt_requests_spreadsheet_overview(prompt) {
+        return 0.0;
+    }
+    let lowered_content = content.to_ascii_lowercase();
+    let overview_locator = evidence.chunk_index == 0
+        || lowered_content.contains("chunk 0")
+        || content.contains("Sheet 1");
+    let overview_content = content.contains("报表名")
+        || content.contains("数据来源")
+        || content.contains("计算方法")
+        || content.contains("口径")
+        || content.contains("表说明")
+        || content.contains("字段说明")
+        || content.contains("Sheet 1");
+    let mut score: f64 = if overview_locator && overview_content {
+        0.18
+    } else if overview_content {
+        0.08
+    } else {
+        0.0
+    };
+    if prompt.contains("计算方法") && content.contains("计算方法") {
+        score += 0.22;
+    }
+    if prompt.contains("数据来源") && content.contains("数据来源") {
+        score += 0.16;
+    }
+    if (prompt.contains("哪张表") || prompt.contains("哪个表") || prompt.contains("报表名"))
+        && content.contains("报表名")
+    {
+        score += 0.12;
+    }
+    score.min(0.42)
+}
+
+fn prompt_requests_spreadsheet_overview(prompt: &str) -> bool {
+    [
+        "计算方法",
+        "怎么算",
+        "算法",
+        "口径",
+        "数据来源",
+        "表说明",
+        "报表名",
+        "哪张表",
+        "哪个表",
+        "数据在哪里",
+        "字段说明",
+    ]
+    .iter()
+    .any(|signal| prompt.contains(signal))
 }
 
 fn retrieval_evidence_search_text(evidence: &RetrievalEvidence) -> String {
@@ -145420,6 +145562,145 @@ retrieve_evidence:
             select_retrieval_evidence_ids_for_prompt(&evidences, "固定资产申请怎么提交", 2);
 
         assert_eq!(selected, vec![section_id, broad_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_prefers_sheet_summary_for_calculation_method() {
+        let now = Utc::now();
+        let overview_id = RetrievalEvidenceId::new();
+        let sql_chunk_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            retrieval_ranking_test_evidence(
+                sql_chunk_id,
+                3,
+                "固定与提成取高预警V1.xlsx chunk 3 section Sheet 3 indexed for lexical retrieval recall.",
+                "固定与提成取高预警V1 SQL 明细：case when yyy.xuzengxiaoshou > 0 then yyy.quekou else 0 end。",
+                0.99,
+                1,
+                now,
+            ),
+            retrieval_ranking_test_evidence(
+                overview_id,
+                0,
+                "固定与提成取高预警V1.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "# Sheet 1 报表名：固定与提成两者取高 数据来源：OA系统 计算方法：根据租赁合同，比较固定金额与提成金额并取较高值形成预警。",
+                0.40,
+                18,
+                now,
+            ),
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "固定与提成取高预警V1 的计算方法是什么？",
+            1,
+        );
+
+        assert_eq!(selected, vec![overview_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_uses_month_token_to_disambiguate_low_activity_workbook() {
+        let now = Utc::now();
+        let january_id = RetrievalEvidenceId::new();
+        let february_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            retrieval_ranking_test_evidence(
+                january_id,
+                0,
+                "表2 低活跃品牌 - 1月超过8天无销售.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "Sheet 1 报表名：低活跃品牌 1月超过8天无销售 数据来源：销售日报。",
+                0.99,
+                1,
+                now,
+            ),
+            retrieval_ranking_test_evidence(
+                february_id,
+                0,
+                "表3 低活跃品牌 - 2月超过4天无销售.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "Sheet 1 报表名：低活跃品牌 2月超过4天无销售 数据来源：销售日报。",
+                0.40,
+                18,
+                now,
+            ),
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "低活跃品牌 2月 超过4天无销售 的数据在哪里？",
+            1,
+        );
+
+        assert_eq!(selected, vec![february_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_boosts_ascii_field_tokens() {
+        let now = Utc::now();
+        let broad_id = RetrievalEvidenceId::new();
+        let field_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            retrieval_ranking_test_evidence(
+                broad_id,
+                0,
+                "固定与提成取高.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "固定与提成取高汇总表展示品牌、门店、合同周期和销售机会。",
+                0.99,
+                1,
+                now,
+            ),
+            retrieval_ranking_test_evidence(
+                field_id,
+                3,
+                "固定与提成取高.xlsx chunk 3 section Sheet 3 indexed for lexical retrieval recall.",
+                "SQL 字段说明：quekou 表示销售缺口，xuzengxiaoshou 表示虚增销售，用于计算固定与提成取高预警。",
+                0.40,
+                18,
+                now,
+            ),
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "固定与提成取高 销售缺口 quekou xuzengxiaoshou",
+            1,
+        );
+
+        assert_eq!(selected, vec![field_id]);
+    }
+
+    fn retrieval_ranking_test_evidence(
+        id: RetrievalEvidenceId,
+        chunk_index: i32,
+        summary: &str,
+        content_excerpt: &str,
+        recall_score: f64,
+        rank_hint: usize,
+        now: DateTime<Utc>,
+    ) -> RetrievalEvidence {
+        let search_text = format!("{summary}\n{content_excerpt}");
+        RetrievalEvidence {
+            id,
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            execution_id: WorkflowExecutionId::new(),
+            document_id: DocumentId::new(),
+            document_chunk_id: DocumentChunkId::new(),
+            chunk_index,
+            source_locator: format!("documents/newbai.xlsx#chunk={chunk_index}"),
+            content_excerpt: content_excerpt.to_string(),
+            summary: summary.to_string(),
+            payload_filter_key: "dataset/newbai".to_string(),
+            embedding_model: "local-lexical-v1".to_string(),
+            recall_score,
+            evidence_manifest: json!({
+                "embedding": {
+                    "term_weights": lexical_query_term_weights(&search_text),
+                },
+                "recall": { "rank_hint": rank_hint },
+            }),
+            created_at: now,
+        }
     }
 
     #[test]

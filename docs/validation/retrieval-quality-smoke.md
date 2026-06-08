@@ -350,6 +350,60 @@ Interpretation:
 - Because the dataset uses historical evidence with empty `search_terms`, this
   live subset should be re-run after reindexing or after a ranking change.
 
+## 2026-06-09 Local NewBai Ranking Fix Receipt
+
+- Scope: local code/test receipt only; no GitHub push, no 8 server deploy, no
+  service restart, no `RETRIEVAL_SEARCH_BACKEND` change.
+- Code path changed: `rank_retrieval_evidences_for_prompt` now adds bounded
+  original-query signal scoring for retrieval evidence ranking.
+- New ranking signals covered by tests:
+  - Sheet summary / report overview wins when the prompt asks for calculation
+    method or data-source style information.
+  - Exact numeric CJK literals such as `2月` and `4天` disambiguate same-family
+    workbooks, with a small conflicting-month penalty.
+  - ASCII business field names such as `quekou` and `xuzengxiaoshou` are strong
+    exact-match anchors.
+
+Local commands run:
+
+```bash
+cargo fmt --check -p platform-api
+cargo test -p platform-api retrieval_ranking --lib
+cargo test -p platform-api select_retrieval_evidence_ids_for_prompt --lib
+cargo test -p platform-api retrieval_search_backend_parser_defaults_to_legacy_scan --lib
+bash -n scripts/run-retrieval-quality-smoke.sh
+git diff --check
+RETRIEVAL_QUALITY_SMOKE_SKIP_CARGO=true bash scripts/run-retrieval-quality-smoke.sh --baseline
+bash scripts/run-retrieval-quality-smoke.sh --baseline
+```
+
+Local results:
+
+- `retrieval_ranking`: `9` passed, including the three NewBai-style regression
+  cases for calculation method, month/day disambiguation, and ASCII field
+  tokens.
+- `select_retrieval_evidence_ids_for_prompt`: `4` passed.
+- `retrieval_search_backend_parser_defaults_to_legacy_scan`: passed; default
+  behavior remains `legacy_scan` unless the env flag is explicitly set.
+- Full baseline smoke result: passed.
+- Full baseline smoke JSON report:
+  `target/retrieval-quality-smoke/retrieval-quality-smoke-20260608T235718Z.json`
+- Fixture policy: `baseline`
+- Fixture count: `35`
+- Required fixture count: `30`
+- Permission leak count: `0`
+- Baseline metrics recorded: `false` as expected, because no live
+  `--results-jsonl` was supplied.
+
+Interpretation:
+
+- This locally closes the specific P1-8 ranking bug class exposed by the 8
+  server NewBai retrieval-level live subset.
+- It does not yet prove live improvement on 8. The same live subset must be
+  re-run after the patch is deployed, and assistant-run/customer-answer quality
+  evidence is still separate.
+- It does not justify enabling `postgres_lexical` by default.
+
 ## Remaining Gaps
 
 - Full assistant-run/customer-answer live quality metrics are not yet recorded;

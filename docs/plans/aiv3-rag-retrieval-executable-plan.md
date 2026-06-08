@@ -38,14 +38,14 @@ Phase 5: quality gate and release receipt
 
 暂不建议直接把 Qdrant 设为默认主链路。Qdrant 已在 compose 中存在，可以保留 adapter 接口；但当前用户目标更偏“清洗后统一入 PostgreSQL”，所以第一轮落地应优先降低运维复杂度。
 
-Phase 0/1 最小版已经提交 GitHub 并部署到 8 服务器，当前线上仍保持 `legacy_scan` 默认行为。已完成 fixture、baseline smoke、PostgreSQL lexical migration、retrieval worker lexical 写入、storage DB-side lexical search、platform feature flag、8 服务器 schema/code 部署、生产 EXPLAIN 和 NewBai 检索级 live subset metrics。
+Phase 0/1 最小版已经提交 GitHub 并部署到 8 服务器，当前线上仍保持 `legacy_scan` 默认行为。已完成 fixture、baseline smoke、PostgreSQL lexical migration、retrieval worker lexical 写入、storage DB-side lexical search、platform feature flag、8 服务器 schema/code 部署、生产 EXPLAIN 和 NewBai 检索级 live subset metrics。本地已补 P1-8 排序修正和回归测试，但尚未提交 GitHub、尚未部署 8 服务器、尚未用同一 live subset 复测线上 MRR。
 
 当前仍不能声称完成的事项：
 
 - 未记录完整 assistant-run/customer-answer 的 live 质量指标；当前已记录的是 `retrieval-search-cli` 检索级 live subset。
 - 未启用 `RETRIEVAL_SEARCH_BACKEND=postgres_lexical`，8 服务器线上仍是默认 `legacy_scan`。
 - 未启用 pgvector、Qdrant、hybrid RRF、reranker 或 structured database query plan。
-- 未修复 live subset 暴露的排序问题；两个 NewBai case 的预期 source rank 为 `18`，一个为 `7`。
+- P1-8 排序问题已有本地修正；两个 rank `18` 和一个 rank `7` 的 NewBai live subset 弱点仍需在部署后复测确认。
 
 ## 2. 当前证据基线
 
@@ -724,6 +724,8 @@ p95 retrieval latency <= 1500ms for 10k evidence local dataset
 - [x] 完成 8 服务器只读 preflight，记录当前服务、schema、表规模和默认 legacy runtime 状态。
 - [x] 完成 8 服务器 schema/code 部署，保持 `RETRIEVAL_SEARCH_BACKEND=legacy_scan` 默认行为。
 - [x] 记录 PostgreSQL lexical 查询的生产/8 服务器 `EXPLAIN` 证据。
+- [x] 本地修复 NewBai live subset 暴露的 ranking 弱点，并补 Sheet-summary、月份/天数、ASCII 字段名回归测试。
+- [ ] 部署 ranking 修正后，用同一 NewBai live subset 重跑 MRR/rank 证据。
 - [ ] 8 服务器启用 `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` 灰度。
 - [x] 针对新百报表/数据库混合文档样例补至少 3 条 retrieval-quality case。
 - [x] 代码审查确认 selected documents、owner scope、external temporary document scope 没有回退。
@@ -822,10 +824,10 @@ journalctl -u aiv3-platform-api.service --since "<deploy time>" -p warning --no-
 
 ## 16. 下一步执行建议
 
-建议下一步仍只收口 Phase 0 + Phase 1，不进入 pgvector/hybrid。当前不建议直接打开 `postgres_lexical`；应先处理 NewBai live subset 里的排序弱点，并补 assistant-run/customer-answer 级质量证据：
+建议下一步仍只收口 Phase 0 + Phase 1，不进入 pgvector/hybrid。当前不建议直接打开 `postgres_lexical`；应先部署并复测 NewBai ranking 修正，再补 assistant-run/customer-answer 级质量证据：
 
 ```text
-P1-8: 调整 ranking，使标题/Sheet-summary/月份等强信号不要被同工作簿行块压过
+P1-8: 本地已调整 ranking，使标题/Sheet-summary/月份等强信号不要被同工作簿行块压过；待部署后 live subset 复测
 P1-9: 对历史 NewBai evidence 做 reindex 或补 search_terms 回填策略
 P1-10: 用同一 live subset 对比 legacy_scan 与 postgres_lexical，记录 MRR/latency 差异
 P1-11: 补 assistant-run/customer-answer 级 NewBai smoke，验证不是只命中 evidence，而是回答能正确用 evidence
