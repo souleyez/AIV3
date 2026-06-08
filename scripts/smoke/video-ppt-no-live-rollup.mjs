@@ -1039,6 +1039,7 @@ function buildAcceptanceStatus({ summary, results }) {
 
 function buildLiveGateReadinessSummary(results = []) {
   const commandById = new Map(results.map((result) => [result.id, result]));
+  const uploadSelfTest = commandById.get('upload_main_self_test')?.evidence || {};
   const uploadPreflight = commandById.get('upload_main_preflight')?.evidence || {};
   const externalSelfTest = commandById.get('external_video_ppt_self_test')?.evidence || {};
   const externalPreflight = commandById.get('external_video_ppt_preflight')?.evidence || {};
@@ -1050,6 +1051,18 @@ function buildLiveGateReadinessSummary(results = []) {
     main_upload_preflight_ready: uploadPreflight.ok === true && uploadPreflight.preflight === true,
     main_upload_live_write_approval_required: uploadPreflight.live_write_approval_required === true,
     main_upload_writes_smoke_records: uploadPreflight.writes_smoke_records === true,
+    main_upload_artifact_self_test_ready:
+      uploadSelfTest.deliverable_state === 'final_pptx_ready'
+      && uploadSelfTest.required_file_kind_count >= 6
+      && uploadSelfTest.download_validation_ok === true,
+    main_upload_artifact_required_file_kind_count: uploadSelfTest.required_file_kind_count ?? null,
+    main_upload_artifact_pptx_slide_count: uploadSelfTest.pptx_slide_count ?? null,
+    main_upload_artifact_markdown_slide_heading_count:
+      uploadSelfTest.markdown_slide_heading_count ?? null,
+    main_upload_artifact_live_download_pending:
+      uploadPreflight.live_write_approval_required === true
+      && uploadPreflight.upload_attempted === false
+      && uploadPreflight.assistant_run_created === false,
     external_preflight_ready: externalPreflight.ok === true && externalPreflight.preflight === true,
     external_live_write_approval_required: externalPreflight.live_write_approval_required === true,
     external_context_present: externalPreflight.connection_id_present === true
@@ -1134,6 +1147,16 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       && externalEvidence.unsupported_non_video_extensions_rejected === true,
     unsupported_non_video_extensions_rejected:
       externalEvidence.unsupported_non_video_extensions_rejected === true,
+    main_upload_artifact_surface_ready:
+      uploadEvidence.deliverable_state === 'final_pptx_ready'
+      && uploadEvidence.required_file_kind_count >= 6
+      && uploadEvidence.download_validation_ok === true,
+    main_upload_artifact_required_file_kind_count: uploadEvidence.required_file_kind_count ?? null,
+    main_upload_artifact_pptx_slide_count: uploadEvidence.pptx_slide_count ?? null,
+    main_upload_artifact_markdown_slide_heading_count:
+      uploadEvidence.markdown_slide_heading_count ?? null,
+    main_upload_artifact_download_validation_ok:
+      uploadEvidence.download_validation_ok === true,
     external_artifact_surface_ready:
       externalEvidence.surface_ok === true
       && externalEvidence.surface_missing_export_kind_count === 0
@@ -1288,6 +1311,11 @@ function validateLiveGateReadinessSummary(acceptance, report) {
     readiness.main_upload_preflight_ready !== true
     || readiness.main_upload_live_write_approval_required !== true
     || readiness.main_upload_writes_smoke_records !== true
+    || readiness.main_upload_artifact_self_test_ready !== true
+    || readiness.main_upload_artifact_required_file_kind_count < 6
+    || readiness.main_upload_artifact_pptx_slide_count < 1
+    || readiness.main_upload_artifact_markdown_slide_heading_count < 1
+    || readiness.main_upload_artifact_live_download_pending !== true
     || readiness.external_preflight_ready !== true
     || readiness.external_live_write_approval_required !== true
     || readiness.external_context_present !== true
@@ -1350,6 +1378,11 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.supported_video_extension_evidence_surface_count !== 2
     || evidence.supported_video_extension_evidence_ready !== true
     || evidence.unsupported_non_video_extensions_rejected !== true
+    || evidence.main_upload_artifact_surface_ready !== true
+    || evidence.main_upload_artifact_required_file_kind_count < 6
+    || evidence.main_upload_artifact_pptx_slide_count < 1
+    || evidence.main_upload_artifact_markdown_slide_heading_count < 1
+    || evidence.main_upload_artifact_download_validation_ok !== true
     || evidence.external_artifact_surface_ready !== true
     || evidence.external_artifact_required_export_kind_count !== 6
     || evidence.external_artifact_export_kind_count < 6
