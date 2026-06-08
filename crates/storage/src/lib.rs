@@ -5125,6 +5125,60 @@ impl PgStaticPageDraftRepository {
         row.as_ref().map(map_static_page_draft_row).transpose()
     }
 
+    pub async fn find_accepted_baseline_by_public_url(
+        &self,
+        tenant_id: TenantId,
+        public_url: &str,
+    ) -> Result<Option<StaticPageDraft>> {
+        let public_url = public_url.trim();
+        if public_url.is_empty() {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, assistant_run_id, title, status, selected_scope,
+                   visibility_snapshot, source_refs, draft_payload, created_at, updated_at
+            from static_page_drafts
+            where tenant_id = $1
+              and (
+                    draft_payload #>> '{finalPage,publicUrl}' = $2
+                 or draft_payload #>> '{finalPage,public_url}' = $2
+                 or draft_payload #>> '{finalPage,generatedArtifactUrl}' = $2
+                 or draft_payload #>> '{finalPage,generated_artifact_url}' = $2
+                 or draft_payload #>> '{final_page,publicUrl}' = $2
+                 or draft_payload #>> '{final_page,public_url}' = $2
+                 or draft_payload #>> '{artifactStability,publicUrl}' = $2
+                 or draft_payload #>> '{artifactStability,public_url}' = $2
+                 or draft_payload #>> '{artifact_stability,public_url}' = $2
+                 or source_refs #>> '{artifact_stability,public_url}' = $2
+                 or source_refs #>> '{artifact_stability,publicUrl}' = $2
+              )
+              and coalesce(
+                    nullif(source_refs #>> '{artifact_stability,baseline_status}', ''),
+                    nullif(source_refs #>> '{artifact_stability,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{artifact_stability,baseline_status}', ''),
+                    nullif(draft_payload #>> '{artifact_stability,baselineStatus}', ''),
+                    nullif(draft_payload ->> 'baseline_status', ''),
+                    nullif(draft_payload ->> 'baselineStatus', ''),
+                    nullif(draft_payload #>> '{artifactStability,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{artifactStability,baseline_status}', ''),
+                    nullif(draft_payload #>> '{finalPage,baselineStatus}', ''),
+                    nullif(draft_payload #>> '{finalPage,baseline_status}', ''),
+                    nullif(draft_payload #>> '{final_page,baseline_status}', ''),
+                    nullif(draft_payload #>> '{final_page,baselineStatus}', '')
+              ) = 'accepted'
+            order by updated_at desc, created_at desc
+            limit 1
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(public_url)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(map_static_page_draft_row).transpose()
+    }
+
     pub async fn list_accepted_baselines(
         &self,
         tenant_id: TenantId,

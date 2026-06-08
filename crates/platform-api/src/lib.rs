@@ -34925,6 +34925,26 @@ fn static_page_template_draft_is_non_default_noise_baseline(draft: &StaticPageDr
     )
 }
 
+fn static_page_template_draft_is_local_generated_report_instance(draft: &StaticPageDraft) -> bool {
+    if static_page_template_draft_is_xinbai_primary_default_template(draft) {
+        return false;
+    }
+    let profile = static_page_template_draft_profile_text(draft);
+    let profile_lower = profile.to_ascii_lowercase();
+    static_page_template_text_contains_any(
+        &profile,
+        &profile_lower,
+        &[
+            "local_generated_artifact_first",
+            "static-page-renderer-v1-local-generated-artifact",
+            "direct_html_fallback\":true",
+            "directHtml\":true",
+            "v3_external_channel_static_page_local_generated_artifact",
+            "/database-static-pages/external-channel/",
+        ],
+    )
+}
+
 fn static_page_template_context_prefers_xinbai_primary(
     current_prompt: Option<&str>,
     selected_scope: &Value,
@@ -34973,6 +34993,85 @@ fn static_page_template_context_prefers_xinbai_primary(
                 "report",
             ],
         )
+}
+
+async fn find_static_page_xinbai_primary_template_baseline_by_public_url(
+    state: &AppState,
+    current_prompt: Option<&str>,
+    selected_scope: &Value,
+    source_refs: &Value,
+    current_user_id: Option<UserId>,
+    connection_id: Option<&str>,
+    current_tokens: &BTreeSet<String>,
+) -> std::result::Result<Option<(StaticPageDraft, StaticPageTemplateBaselineScore)>, ApiError> {
+    if !static_page_template_context_prefers_xinbai_primary(
+        current_prompt,
+        selected_scope,
+        source_refs,
+    ) {
+        return Ok(None);
+    }
+    let mut candidate_urls = vec![assistant_run_xinbai_published_report_url()];
+    if candidate_urls
+        .iter()
+        .all(|url| url != XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL)
+    {
+        candidate_urls.push(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL.to_string());
+    }
+    for public_url in candidate_urls {
+        let Some(draft) = state
+            .storage
+            .static_page_drafts()
+            .find_accepted_baseline_by_public_url(state.tenant_id, &public_url)
+            .await
+            .map_err(ApiError::from_storage)?
+        else {
+            continue;
+        };
+        if !static_page_draft_is_accepted_template_baseline(&draft)
+            || static_page_draft_is_template_fallback_baseline(&draft)
+            || static_page_template_draft_is_non_default_noise_baseline(&draft)
+            || static_page_template_draft_is_local_generated_report_instance(&draft)
+            || !static_page_template_draft_is_xinbai_primary_default_template(&draft)
+            || static_page_published_public_url_from_draft(&draft).is_none()
+        {
+            continue;
+        }
+        let draft_connection_id = external_channel_static_page_source_ref_string(
+            &draft.source_refs,
+            "channel_connection_id",
+        );
+        let visible_by_owner = static_page_owner_is_visible(draft.owner_user_id, current_user_id);
+        let visible_by_same_channel = connection_id
+            .is_some_and(|connection_id| draft_connection_id.as_deref() == Some(connection_id));
+        if !visible_by_owner && !visible_by_same_channel {
+            continue;
+        }
+        if let Some(connection_id) = connection_id {
+            if draft_connection_id
+                .as_deref()
+                .is_some_and(|value| value != connection_id)
+            {
+                continue;
+            }
+        }
+        if !static_page_template_intent_compatible(current_prompt, &draft) {
+            continue;
+        }
+        let baseline_tokens =
+            static_page_template_match_tokens(&draft.selected_scope, &draft.source_refs);
+        let mut candidate_score = static_page_template_baseline_score(
+            current_prompt,
+            selected_scope,
+            source_refs,
+            current_tokens,
+            &draft,
+            &baseline_tokens,
+        );
+        candidate_score.add(120, "pinned_xinbai_primary_public_url_lookup");
+        return Ok(Some((draft, candidate_score)));
+    }
+    Ok(None)
 }
 
 fn static_page_template_current_scope_mentions_recipient_role(
@@ -35250,6 +35349,35 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
     if current_tokens.is_empty() {
         return Ok(outcome);
     }
+    let current_prefers_xinbai_primary = static_page_template_context_prefers_xinbai_primary(
+        current_prompt,
+        selected_scope,
+        source_refs,
+    );
+    if current_prefers_xinbai_primary {
+        if let Some((draft, score)) =
+            find_static_page_xinbai_primary_template_baseline_by_public_url(
+                state,
+                current_prompt,
+                selected_scope,
+                source_refs,
+                current_user_id,
+                connection_id,
+                &current_tokens,
+            )
+            .await?
+        {
+            outcome.accepted_baseline_count = 1;
+            outcome.visible_published_baseline_count = 1;
+            outcome.scope_intersection_count = 1;
+            outcome.template_intent_match_count = 1;
+            outcome.default_prompt_match_count = 1;
+            outcome.selected_score = Some(score.score);
+            outcome.selected_features = score.features;
+            outcome.draft = Some(draft);
+            return Ok(outcome);
+        }
+    }
     let baselines = state
         .storage
         .static_page_drafts()
@@ -35260,11 +35388,6 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
     let mut best_match: Option<(StaticPageDraft, StaticPageTemplateBaselineScore)> = None;
     let mut best_xinbai_primary_match: Option<(StaticPageDraft, StaticPageTemplateBaselineScore)> =
         None;
-    let current_prefers_xinbai_primary = static_page_template_context_prefers_xinbai_primary(
-        current_prompt,
-        selected_scope,
-        source_refs,
-    );
     for draft in baselines {
         if !static_page_draft_is_accepted_template_baseline(&draft) {
             continue;
@@ -35292,6 +35415,9 @@ async fn find_static_page_template_baseline_by_dataset_overlap(
             continue;
         }
         if static_page_template_draft_is_non_default_noise_baseline(&draft) {
+            continue;
+        }
+        if static_page_template_draft_is_local_generated_report_instance(&draft) {
             continue;
         }
         if static_page_published_public_url_from_draft(&draft).is_none() {
@@ -35958,6 +36084,29 @@ fn static_page_artifact_stability_metadata(
         "updated_at": now,
         "updatedAt": now,
     })
+}
+
+fn static_page_source_refs_template_binding_eligible(source_refs: &Value) -> bool {
+    [
+        source_refs.get("template_binding_eligible"),
+        source_refs.get("templateBindingEligible"),
+        source_refs.pointer("/artifact_stability/template_binding_eligible"),
+        source_refs.pointer("/artifact_stability/templateBindingEligible"),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.as_bool().unwrap_or(false))
+        || [
+            source_refs.get("artifact_role"),
+            source_refs.get("artifactRole"),
+            source_refs.pointer("/artifact_stability/artifact_role"),
+            source_refs.pointer("/artifact_stability/artifactRole"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .any(|value| matches!(value, "template" | "default_template" | "report_template"))
 }
 
 fn apply_static_page_artifact_stability_to_source_refs(
@@ -41270,32 +41419,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         None
     };
     let direct_render_output = direct_render_result.as_ref().map(|(_draft, output)| output);
-    let generated_artifact_payload: Option<Value> =
-        if let Some((rendered_draft, render_output)) = direct_render_result.as_ref() {
-            let image_job_id = image_response.image_job.id.to_string();
-            let published = publish_external_static_page_render_output_as_generated_artifact(
-                run,
-                render_output,
-                &rendered_draft.source_refs,
-                now,
-            )?;
-            Some(
-                mark_external_static_page_local_generated_artifact_published(
-                    &state.storage,
-                    state.tenant_id,
-                    run,
-                    rendered_draft,
-                    render_output,
-                    Some(image_job_id.as_str()),
-                    &rendered_draft.source_refs,
-                    &published,
-                    now,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
+    let generated_artifact_payload: Option<Value> = None;
     let generated_artifact_url = generated_artifact_payload
         .as_ref()
         .and_then(|payload| payload.get("public_url"))
@@ -41339,6 +41463,15 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .and_then(Value::as_str)
         .unwrap_or(XINBAI_PUBLISHED_REPORT_TITLE);
     let status_url = external_channel_assistant_run_reply_status_url(connection_id, run.id);
+    let task_status = if generated_artifact_url.is_some() {
+        "static_page_published"
+    } else if codex_auto_publish_enabled {
+        "static_page_image2_auto_publish_pending"
+    } else if direct_render_output.is_some() {
+        "static_page_rendered"
+    } else {
+        "static_page_image_preview_queued"
+    };
     let poll_after_seconds = if auto_publish_after_preview
         && (generated_artifact_url.is_some() || direct_render_output.is_some())
     {
@@ -41362,6 +41495,7 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     "channel_connection_id": connection_id,
                     "platform": external_channel_platform_wire_value(&message.platform),
                     "message_external_id": message.message_external_id,
+                    "status": task_status,
                     "draft_id": draft_outcome.draft.id,
                     "image_job_id": image_response.image_job.id,
                     "render_output_id": direct_render_output
@@ -41445,9 +41579,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     } else {
                         Value::String(codex_auto_publish_readiness.reason.to_string())
                     },
-                    "direct_html_fallback": direct_render_output.is_some(),
-                    "provisional_direct_html": false,
-                    "local_generated_artifact_first": generated_artifact_url.is_some(),
+                    "direct_html_fallback": false,
+                    "provisional_direct_html": direct_render_output.is_some(),
+                    "local_generated_artifact_first": false,
                     "demo_generated_artifact_publish": false,
                     "codex_final_status": if codex_auto_publish_enabled {
                         Value::String("static_page_image2_auto_publish_pending".to_string())
@@ -41469,15 +41603,6 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         .await
         .map_err(ApiError::from_storage)?;
 
-    let task_status = if generated_artifact_url.is_some() {
-        "static_page_published"
-    } else if direct_render_output.is_some() {
-        "static_page_rendered"
-    } else if codex_auto_publish_enabled {
-        "static_page_image2_auto_publish_pending"
-    } else {
-        "static_page_image_preview_queued"
-    };
     let text = if let Some(public_url) = generated_artifact_url.as_deref() {
         external_channel_text_with_public_artifact_link(
             external_channel_static_page_customer_ready_text(),
@@ -41588,9 +41713,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             } else {
                 Value::String(codex_auto_publish_readiness.reason.to_string())
             },
-            "direct_html_fallback": direct_render_output.is_some(),
-            "provisional_direct_html": false,
-            "local_generated_artifact_first": generated_artifact_url.is_some(),
+            "direct_html_fallback": false,
+            "provisional_direct_html": direct_render_output.is_some(),
+            "local_generated_artifact_first": false,
             "demo_generated_artifact_publish": false,
             "codex_final_status": if codex_auto_publish_enabled {
                 Value::String("static_page_image2_auto_publish_pending".to_string())
@@ -54175,12 +54300,14 @@ fn collect_external_static_page_export_tables(
                 }
             }
             if !rows.is_empty() {
-                let score = external_static_page_export_table_score(path, &rows);
-                tables.push(ExternalStaticPageExportTable {
-                    path: path.to_string(),
-                    rows,
-                    score,
-                });
+                if !external_static_page_export_table_is_evidence_metadata(path, &rows) {
+                    let score = external_static_page_export_table_score(path, &rows);
+                    tables.push(ExternalStaticPageExportTable {
+                        path: path.to_string(),
+                        rows,
+                        score,
+                    });
+                }
             }
             for (index, item) in items.iter().take(32).enumerate() {
                 collect_external_static_page_export_tables(
@@ -54211,9 +54338,107 @@ fn collect_external_static_page_export_tables(
     }
 }
 
+fn external_static_page_export_table_is_evidence_metadata(
+    path: &str,
+    rows: &[BTreeMap<String, String>],
+) -> bool {
+    let lower_path = path.to_ascii_lowercase();
+    if lower_path.contains("business_tables") || lower_path.contains("businesstables") {
+        return false;
+    }
+    if [
+        "retrieval_evidence",
+        "retrievalevidence",
+        "evidence_state",
+        "evidencestate",
+        "document_chunks",
+        "documentchunks",
+    ]
+    .iter()
+    .any(|term| lower_path.contains(term))
+    {
+        return true;
+    }
+
+    let mut metadata_key_count = 0usize;
+    let mut business_key_count = 0usize;
+    for key in rows.iter().take(20).flat_map(|row| row.keys()) {
+        let lower_key = key.to_ascii_lowercase();
+        let compact_key = lower_key.replace(['_', '-', ' '], "");
+        if [
+            "datasetid",
+            "documentchunkid",
+            "documentid",
+            "retrievalevidenceid",
+            "sectiontitlehints",
+            "sourcelocator",
+            "chunkindex",
+            "sourceid",
+            "sourcetype",
+        ]
+        .iter()
+        .any(|term| compact_key.contains(term))
+        {
+            metadata_key_count += 1;
+        }
+        if [
+            "store",
+            "brand",
+            "date",
+            "sale",
+            "sales",
+            "revenue",
+            "rent",
+            "warning",
+            "gap",
+            "category",
+            "traffic",
+            "label",
+            "value",
+            "unit",
+            "metric",
+            "门店",
+            "分店",
+            "品牌",
+            "日期",
+            "销售",
+            "销售额",
+            "收入",
+            "租金",
+            "缺口",
+            "预警",
+            "取高",
+            "品类",
+            "客流",
+            "坪效",
+        ]
+        .iter()
+        .any(|term| lower_key.contains(term))
+        {
+            business_key_count += 1;
+        }
+    }
+    metadata_key_count >= 2 && business_key_count == 0
+}
+
 fn external_static_page_export_table_score(path: &str, rows: &[BTreeMap<String, String>]) -> usize {
     let lower_path = path.to_ascii_lowercase();
     let mut score = rows.len().min(1_000);
+    for term in [
+        "businesstables",
+        "business_tables",
+        "business",
+        "database_aggregate",
+        "databaseaggregate",
+        "dataset_fact_snapshot",
+        "fact_snapshot",
+        "sampledata",
+        "sample_data",
+    ] {
+        if lower_path.contains(term) {
+            score += 180;
+        }
+    }
     for term in [
         "table",
         "rows",
@@ -54332,6 +54557,9 @@ fn external_static_page_export_headers(rows: &[BTreeMap<String, String>]) -> Vec
             if headers.len() >= MAX_COLUMNS {
                 break;
             }
+            if external_static_page_export_header_is_internal_metadata(key) {
+                continue;
+            }
             headers.insert(key.clone());
         }
         if headers.len() >= MAX_COLUMNS {
@@ -54341,22 +54569,34 @@ fn external_static_page_export_headers(rows: &[BTreeMap<String, String>]) -> Vec
     headers.into_iter().collect()
 }
 
+fn external_static_page_export_header_is_internal_metadata(key: &str) -> bool {
+    let compact = key.to_ascii_lowercase().replace(['_', '-', ' '], "");
+    [
+        "datasetid",
+        "documentchunkid",
+        "documentid",
+        "retrievalevidenceid",
+        "sectiontitlehints",
+        "sourcelocator",
+        "sourceid",
+        "evidenceids",
+        "evidenceref",
+        "scanlimit",
+        "rowlimit",
+    ]
+    .iter()
+    .any(|term| compact.contains(term))
+}
+
 fn external_static_page_table_csv(table: &ExternalStaticPageExportTable) -> String {
-    let rows = if table.rows.is_empty() {
-        vec![
-            BTreeMap::from([
-                ("字段".to_string(), "状态".to_string()),
-                ("值".to_string(), "已生成".to_string()),
-            ]),
-            BTreeMap::from([
-                ("字段".to_string(), "来源".to_string()),
-                ("值".to_string(), table.path.clone()),
-            ]),
-        ]
-    } else {
-        table.rows.clone()
-    };
+    if table.rows.is_empty() {
+        return "\u{feff}".to_string();
+    }
+    let rows = table.rows.clone();
     let headers = external_static_page_export_headers(&rows);
+    if headers.is_empty() {
+        return "\u{feff}".to_string();
+    }
     let mut output = String::from("\u{feff}");
     output.push_str(
         &headers
@@ -56384,18 +56624,24 @@ async fn mark_external_static_page_local_generated_artifact_published(
 ) -> std::result::Result<Value, ApiError> {
     let dataset_artifact_key = static_page_dataset_artifact_key_from_source_refs(source_refs)
         .or_else(|| static_page_dataset_artifact_key_from_draft_context(draft));
+    let template_binding_eligible = static_page_source_refs_template_binding_eligible(source_refs);
+    let local_artifact_baseline_status = if template_binding_eligible {
+        "accepted"
+    } else {
+        "candidate"
+    };
     let mut next = draft.clone();
     next.source_refs = apply_static_page_artifact_stability_to_source_refs(
         next.source_refs,
         dataset_artifact_key.as_deref(),
-        "accepted",
+        local_artifact_baseline_status,
         Some(published.public_url.as_str()),
         now,
     );
     let mut payload = apply_static_page_artifact_stability_to_payload(
         next.draft_payload.clone(),
         dataset_artifact_key.as_deref(),
-        "accepted",
+        local_artifact_baseline_status,
         Some(published.public_url.as_str()),
         now,
     );
@@ -56578,7 +56824,7 @@ async fn mark_external_static_page_local_generated_artifact_published(
 
     let dataset_artifact_key_value = dataset_artifact_key.clone();
     let baseline_status = if dataset_artifact_key.is_some() {
-        Value::String("accepted".to_string())
+        Value::String(local_artifact_baseline_status.to_string())
     } else {
         Value::Null
     };
@@ -56627,6 +56873,7 @@ async fn mark_external_static_page_local_generated_artifact_published(
         "provisional_direct_html": false,
         "local_generated_artifact_first": true,
         "cloudflare_codex_used": false,
+        "template_binding_eligible": template_binding_eligible,
         "source_refs": updated_draft.source_refs,
         "dataset_artifact_key": dataset_artifact_key_value,
         "baseline_status": baseline_status,
@@ -88215,6 +88462,254 @@ fn static_page_template_adaptation_focus(prompt: Option<&str>) -> Vec<Value> {
     focus
 }
 
+fn static_page_template_patch_contract(
+    reference_id: Option<&str>,
+    prompt: Option<&str>,
+    focus: &[Value],
+) -> Value {
+    let explicit_redesign =
+        prompt.is_some_and(|prompt| static_page_prompt_requests_explicit_redesign(prompt));
+    let time_range = static_page_template_patch_time_range(prompt);
+    let chart_requests = static_page_template_patch_chart_requests(prompt);
+    let intent_classes = static_page_template_patch_intent_classes(
+        prompt,
+        focus,
+        time_range.as_deref(),
+        &chart_requests,
+        explicit_redesign,
+    );
+    let focus_code = static_page_template_patch_focus_code(prompt, focus);
+    let operation = if explicit_redesign {
+        "generate_new_template"
+    } else {
+        "patch_existing_template"
+    };
+    let preserve_style = !explicit_redesign;
+    json!({
+        "operation": operation,
+        "template_id": reference_id,
+        "templateId": reference_id,
+        "preserve_style": preserve_style,
+        "preserveStyle": preserve_style,
+        "requires_new_image2": explicit_redesign,
+        "requiresNewImage2": explicit_redesign,
+        "intent_classes": intent_classes,
+        "intentClasses": intent_classes,
+        "focus": focus_code,
+        "time_range": time_range,
+        "timeRange": time_range,
+        "chart_requests": chart_requests,
+        "chartRequests": chart_requests,
+        "data_refresh": true,
+        "dataRefresh": true,
+        "allowed_outputs": [
+            "data.json",
+            "data-snapshot.json",
+            "focus_query",
+            "module_order",
+            "chart_data",
+            "csv",
+            "ppt",
+            "markdown"
+        ],
+        "forbidden_outputs": [
+            "generic_html_final_fallback",
+            "random_template_switch",
+            "temporary_page_as_default_template",
+            "customer_visible_smoke_or_prewarm"
+        ]
+    })
+}
+
+fn static_page_template_patch_intent_classes(
+    prompt: Option<&str>,
+    focus: &[Value],
+    time_range: Option<&str>,
+    chart_requests: &[Value],
+    explicit_redesign: bool,
+) -> Vec<String> {
+    let mut classes = Vec::new();
+    if explicit_redesign {
+        classes.push("explicit_redesign".to_string());
+    }
+    if time_range.is_some() {
+        classes.push("time_range_change".to_string());
+    }
+    if static_page_template_patch_focus_code(prompt, focus).is_some() {
+        classes.push("focus_change".to_string());
+    }
+    if !chart_requests.is_empty() {
+        classes.push("chart_change".to_string());
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "模块顺序",
+            "排序",
+            "前置",
+            "置顶",
+            "放到",
+            "提到",
+            "module order",
+            "reorder",
+        ],
+    ) {
+        classes.push("module_reorder".to_string());
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "新增指标",
+            "增加指标",
+            "加指标",
+            "新增字段",
+            "增加字段",
+            "metric",
+            "add metric",
+        ],
+    ) {
+        classes.push("metric_addition".to_string());
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "刷新数据",
+            "更新数据",
+            "文档",
+            "文件",
+            "上传",
+            "excel",
+            "csv",
+            "合同",
+            "说明",
+            "document",
+            "refresh data",
+        ],
+    ) {
+        classes.push("document_data_refresh".to_string());
+    }
+    if classes.is_empty() {
+        classes.push("current_intent_patch".to_string());
+    }
+    classes
+}
+
+fn static_page_template_patch_focus_code(prompt: Option<&str>, focus: &[Value]) -> Option<String> {
+    if static_page_template_prompt_contains_any(prompt, &["取高", "高分成", "缺口"]) {
+        return Some("take_high_opportunity".to_string());
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "低活跃",
+            "不活跃",
+            "风险",
+            "零销售",
+            "无销售",
+            "客流下降",
+            "inactive",
+            "risk",
+        ],
+    ) {
+        return Some("low_activity_risk".to_string());
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &["门店", "分店", "店铺", "区域", "store", "region", "area"],
+    ) {
+        return Some("store_or_region_scope".to_string());
+    }
+    focus
+        .iter()
+        .filter_map(|item| item.get("code").and_then(Value::as_str))
+        .find(|code| *code != "current_intent_first")
+        .map(ToOwned::to_owned)
+}
+
+fn static_page_template_patch_time_range(prompt: Option<&str>) -> Option<String> {
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "最近一个月",
+            "近一个月",
+            "最近1个月",
+            "近1个月",
+            "本月",
+            "月报",
+            "latest month",
+        ],
+    ) {
+        return Some("latest_month".to_string());
+    }
+    if static_page_template_prompt_contains_any(prompt, &["近7日", "近七日", "最近7天", "last 7"])
+    {
+        return Some("last_7_days".to_string());
+    }
+    if static_page_template_prompt_contains_any(prompt, &["季度", "quarter"]) {
+        return Some("latest_quarter".to_string());
+    }
+    if static_page_template_prompt_contains_any(prompt, &["年度", "全年", "year"]) {
+        return Some("latest_year".to_string());
+    }
+    None
+}
+
+fn static_page_template_patch_chart_requests(prompt: Option<&str>) -> Vec<Value> {
+    let Some(chart_type) = static_page_template_patch_chart_type(prompt) else {
+        return Vec::new();
+    };
+    vec![json!({
+        "module": "comparison",
+        "type": chart_type,
+        "metric": static_page_template_patch_metric(prompt),
+        "dimension": static_page_template_patch_dimension(prompt),
+    })]
+}
+
+fn static_page_template_patch_chart_type(prompt: Option<&str>) -> Option<&'static str> {
+    if static_page_template_prompt_contains_any(prompt, &["柱状图", "柱形图", "bar chart", "bar"])
+    {
+        return Some("bar");
+    }
+    if static_page_template_prompt_contains_any(prompt, &["折线图", "趋势图", "line chart", "line"])
+    {
+        return Some("line");
+    }
+    if static_page_template_prompt_contains_any(prompt, &["饼图", "占比图", "pie chart", "pie"])
+    {
+        return Some("pie");
+    }
+    None
+}
+
+fn static_page_template_patch_metric(prompt: Option<&str>) -> &'static str {
+    if static_page_template_prompt_contains_any(prompt, &["月租金", "租金", "yuezujin", "rent"])
+    {
+        return "yuezujin";
+    }
+    if static_page_template_prompt_contains_any(prompt, &["取高", "高分成", "缺口"]) {
+        return "take_high_gap";
+    }
+    if static_page_template_prompt_contains_any(prompt, &["销售", "营业额", "营收", "sales"])
+    {
+        return "sales_amount";
+    }
+    "auto"
+}
+
+fn static_page_template_patch_dimension(prompt: Option<&str>) -> &'static str {
+    if static_page_template_prompt_contains_any(prompt, &["区域", "分区", "dist", "region"]) {
+        return "dist_name";
+    }
+    if static_page_template_prompt_contains_any(prompt, &["门店", "分店", "店铺", "store"]) {
+        return "shopdesc";
+    }
+    if static_page_template_prompt_contains_any(prompt, &["品牌", "brand"]) {
+        return "brandcode";
+    }
+    "auto"
+}
+
 fn static_page_template_adaptation_plan(
     reference_label: &str,
     reference_id: Option<&str>,
@@ -88224,6 +88719,7 @@ fn static_page_template_adaptation_plan(
 ) -> Value {
     let subject = static_page_template_prompt_subject(prompt, reference_label);
     let focus = static_page_template_adaptation_focus(prompt);
+    let patch_contract = static_page_template_patch_contract(reference_id, prompt, &focus);
     json!({
         "policy": "adapt_template_before_delivery",
         "templateUse": "style_structure_adjusted_to_current_intent",
@@ -88233,6 +88729,8 @@ fn static_page_template_adaptation_plan(
         "adaptedSubject": subject,
         "summary": format!("已基于客户本轮意向调整「{reference_label}」模板后再提供；模板只控制结构、版式和字段组织，事实内容仍以当前授权数据和证据为准。"),
         "focus": focus,
+        "patchContract": patch_contract.clone(),
+        "patch_contract": patch_contract,
         "moduleOrderRule": "current_intent_highest_relevance_first",
         "deliveryRule": "do_not_return_raw_or_generic_template; return adjusted_template_draft_or_continue_artifact_generation",
         "evidenceSummary": evidence_summary.cloned().unwrap_or(Value::Null),
@@ -89729,6 +90227,8 @@ fn build_static_page_data_snapshot_with_evidence(
         &module_bindings,
         &updated_at,
     );
+    let report_snapshot =
+        build_static_page_report_snapshot(&module_bindings, evidence_state, &validation_summary);
     json!({
         "version": 1,
         "snapshotVersion": snapshot_version,
@@ -89762,6 +90262,18 @@ fn build_static_page_data_snapshot_with_evidence(
         "data_source_candidates": data_source_candidates,
         "field_candidates": field_candidates,
         "module_bindings": module_bindings,
+        "reportSnapshot": report_snapshot.clone(),
+        "report_snapshot": report_snapshot.clone(),
+        "kpis": report_snapshot.get("kpis").cloned().unwrap_or_else(|| json!([])),
+        "filters": report_snapshot.get("filters").cloned().unwrap_or_else(|| json!([])),
+        "chartSeries": report_snapshot.get("chartSeries").cloned().unwrap_or_else(|| json!([])),
+        "chart_series": report_snapshot.get("chart_series").cloned().unwrap_or_else(|| json!([])),
+        "businessTables": report_snapshot.get("businessTables").cloned().unwrap_or_else(|| json!([])),
+        "business_tables": report_snapshot.get("business_tables").cloned().unwrap_or_else(|| json!({})),
+        "evidenceNotes": report_snapshot.get("evidenceNotes").cloned().unwrap_or_else(|| json!([])),
+        "evidence_notes": report_snapshot.get("evidence_notes").cloned().unwrap_or_else(|| json!([])),
+        "dataQuality": report_snapshot.get("dataQuality").cloned().unwrap_or_else(|| json!({})),
+        "data_quality": report_snapshot.get("data_quality").cloned().unwrap_or_else(|| json!({})),
         "structure_signals": structure_signals,
         "supplemental_metrics": supplemental_metrics.clone(),
         "supplementalMetrics": supplemental_metrics,
@@ -89770,6 +90282,312 @@ fn build_static_page_data_snapshot_with_evidence(
         "detailRowCount": validation_summary.get("detailRowCount").cloned().unwrap_or(Value::Null),
         "unitHints": validation_summary.get("unitHints").cloned().unwrap_or_else(|| json!([])),
     })
+}
+
+fn build_static_page_report_snapshot(
+    module_bindings: &[Value],
+    evidence_state: Option<&Value>,
+    validation_summary: &Value,
+) -> Value {
+    let mut kpis = Vec::new();
+    let mut chart_series = Vec::new();
+    let mut business_tables = Vec::new();
+    let mut business_tables_by_id = Map::new();
+
+    for (index, binding) in module_bindings.iter().enumerate() {
+        let module_id = binding
+            .get("moduleId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("module_{index}"));
+        let title = binding
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| module_id.clone());
+        let visualization_type = binding
+            .get("visualizationType")
+            .and_then(Value::as_str)
+            .unwrap_or("text-insight");
+        let sample_rows = binding
+            .get("sampleData")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if sample_rows.is_empty() {
+            continue;
+        }
+
+        let chart_points = sample_rows
+            .iter()
+            .filter_map(static_page_report_chart_point_from_sample)
+            .collect::<Vec<_>>();
+        if !chart_points.is_empty() {
+            chart_series.push(json!({
+                "moduleId": module_id,
+                "title": title,
+                "type": visualization_type,
+                "points": chart_points,
+            }));
+        }
+
+        if let Some(kpi) = static_page_report_kpi_from_binding(binding, &sample_rows) {
+            kpis.push(kpi);
+        }
+
+        let business_rows = sample_rows
+            .iter()
+            .filter(|row| static_page_report_sample_row_is_business(row))
+            .filter_map(static_page_report_business_row_from_sample)
+            .collect::<Vec<_>>();
+        if !business_rows.is_empty() {
+            let table_id = static_page_report_table_id(&module_id);
+            business_tables_by_id.insert(table_id.clone(), Value::Array(business_rows.clone()));
+            business_tables.push(json!({
+                "id": table_id,
+                "moduleId": module_id,
+                "title": title,
+                "rows": business_rows,
+            }));
+        }
+    }
+
+    let evidence_notes = static_page_report_evidence_notes(evidence_state);
+    let filters = json!([
+        {
+            "id": "time_range",
+            "label": "时间范围",
+            "required": true,
+            "default": "latest_available_month"
+        },
+        {
+            "id": "primary_partition",
+            "label": "主筛选维度",
+            "required": false,
+            "default": "auto"
+        }
+    ]);
+    let data_quality = json!({
+        "status": validation_summary
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| json!("unknown")),
+        "sampleRowCount": validation_summary
+            .get("sampleRowCount")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "detailRowCount": validation_summary
+            .get("detailRowCount")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "source": "report_snapshot_v1",
+    });
+
+    json!({
+        "schema": "v3.report_snapshot",
+        "schemaVersion": 1,
+        "kpis": kpis,
+        "filters": filters,
+        "chartSeries": chart_series,
+        "chart_series": chart_series,
+        "businessTables": business_tables,
+        "business_tables": Value::Object(business_tables_by_id),
+        "evidenceNotes": evidence_notes,
+        "evidence_notes": evidence_notes,
+        "dataQuality": data_quality,
+        "data_quality": data_quality,
+    })
+}
+
+fn static_page_report_chart_point_from_sample(row: &Value) -> Option<Value> {
+    let value = row.get("value").and_then(Value::as_f64)?;
+    let label = row
+        .get("label")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("未命名");
+    let mut point = Map::new();
+    point.insert("label".to_string(), json!(label));
+    point.insert("value".to_string(), json!(value));
+    for key in ["unit", "metric", "table", "kind", "fieldPath"] {
+        if let Some(value) = row.get(key).filter(|value| !value.is_null()) {
+            point.insert(key.to_string(), value.clone());
+        }
+    }
+    Some(Value::Object(point))
+}
+
+fn static_page_report_kpi_from_binding(binding: &Value, sample_rows: &[Value]) -> Option<Value> {
+    let first = sample_rows
+        .iter()
+        .find(|row| row.get("value").and_then(Value::as_f64).is_some())?;
+    Some(json!({
+        "moduleId": binding.get("moduleId").cloned().unwrap_or(Value::Null),
+        "title": binding.get("title").cloned().unwrap_or(Value::Null),
+        "label": first.get("label").cloned().unwrap_or(Value::Null),
+        "value": first.get("value").cloned().unwrap_or(Value::Null),
+        "unit": first.get("unit").cloned().unwrap_or(Value::Null),
+        "source": first.get("source").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn static_page_report_sample_row_is_business(row: &Value) -> bool {
+    let kind = row.get("kind").and_then(Value::as_str).unwrap_or_default();
+    let source = row
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    matches!(
+        kind,
+        "database_aggregate"
+            | "dataset_fact_snapshot"
+            | "field_candidate_sample"
+            | "explicit_metric"
+            | "explicit_data"
+    ) || matches!(
+        source,
+        "database_aggregate" | "dataset_fact_snapshot" | "field_candidate" | "dataset"
+    )
+}
+
+fn static_page_report_business_row_from_sample(row: &Value) -> Option<Value> {
+    let object = row.as_object()?;
+    let mut cleaned = Map::new();
+    for (key, value) in object {
+        if static_page_report_business_row_key_is_internal_metadata(key) {
+            continue;
+        }
+        if value.is_null() {
+            continue;
+        }
+        cleaned.insert(key.clone(), value.clone());
+    }
+    if cleaned.is_empty() {
+        return None;
+    }
+    Some(Value::Object(cleaned))
+}
+
+fn static_page_report_business_row_key_is_internal_metadata(key: &str) -> bool {
+    let compact = key.to_ascii_lowercase().replace(['_', '-', ' '], "");
+    [
+        "datasetid",
+        "documentchunkid",
+        "documentid",
+        "retrievalevidenceid",
+        "evidenceids",
+        "evidenceref",
+        "sourcedocumentid",
+        "sourcedocumentids",
+        "sourcelocator",
+        "sourcelocators",
+        "sourceid",
+        "sourcefactcount",
+        "sourcedocumentcount",
+        "scanlimit",
+        "rowlimit",
+    ]
+    .iter()
+    .any(|term| compact.contains(term))
+}
+
+fn static_page_report_table_id(module_id: &str) -> String {
+    let mut output = module_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    while output.contains("__") {
+        output = output.replace("__", "_");
+    }
+    let output = output.trim_matches('_');
+    if output.is_empty() {
+        "business_table".to_string()
+    } else {
+        output.to_string()
+    }
+}
+
+fn static_page_report_evidence_notes(evidence_state: Option<&Value>) -> Vec<Value> {
+    let Some(items) = evidence_state
+        .and_then(|state| state.get("supplied_items"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut notes = Vec::new();
+    for item in items {
+        match item.get("type").and_then(Value::as_str) {
+            Some("retrieval_evidence") => {
+                let Some(summary) = item
+                    .get("summary")
+                    .or_else(|| item.get("content_excerpt"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                notes.push(json!({
+                    "title": item
+                        .get("title")
+                        .or_else(|| item.get("document_title"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "summary": truncate_assistant_supply_text(summary, 600),
+                    "sourceLocator": item.get("source_locator").cloned().unwrap_or(Value::Null),
+                    "role": "supporting_evidence",
+                }));
+            }
+            Some("dataset_fact_snapshot") => {
+                let row_count_by_type = item
+                    .get("row_count_by_type")
+                    .or_else(|| item.pointer("/snapshot_manifest/row_count_by_type"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let Some(summary) = item.get("summary").and_then(Value::as_str).map(str::trim)
+                else {
+                    continue;
+                };
+                notes.push(json!({
+                    "title": item
+                        .get("dataset_title")
+                        .cloned()
+                        .unwrap_or_else(|| json!("数据集结构化事实快照")),
+                    "summary": truncate_assistant_supply_text(summary, 600),
+                    "role": "structured_fact_snapshot",
+                    "source": item.get("source").cloned().unwrap_or_else(|| json!("dataset_fact_snapshots")),
+                    "snapshotKind": item.get("snapshot_kind").cloned().unwrap_or(Value::Null),
+                    "snapshotKey": item.get("snapshot_key").cloned().unwrap_or(Value::Null),
+                    "scannedDocumentCount": item
+                        .get("scanned_document_count")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "sourceFactCount": item
+                        .get("source_fact_count")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                    "rowCountByType": row_count_by_type,
+                }));
+            }
+            _ => {}
+        }
+        if notes.len() >= 12 {
+            break;
+        }
+    }
+    notes
 }
 
 fn static_page_data_snapshot_version(
@@ -90180,6 +90998,9 @@ fn push_static_page_database_data_source_candidates(
     let mut aggregate_source_ids = BTreeSet::new();
     let mut aggregate_tables = BTreeSet::new();
     let mut aggregate_fields = BTreeSet::new();
+    let mut fact_snapshot_dataset_ids = BTreeSet::new();
+    let mut fact_snapshot_sources = BTreeSet::new();
+    let mut fact_snapshot_types = BTreeSet::new();
 
     for item in evidence_items {
         match item.get("type").and_then(Value::as_str).unwrap_or_default() {
@@ -90198,6 +91019,21 @@ fn push_static_page_database_data_source_candidates(
                 collect_static_page_candidate_string(item, "table", &mut aggregate_tables);
                 collect_static_page_candidate_string(item, "value_label", &mut aggregate_fields);
                 collect_static_page_candidate_string(item, "metric", &mut aggregate_fields);
+            }
+            "dataset_fact_snapshot" => {
+                collect_static_page_candidate_string(
+                    item,
+                    "dataset_id",
+                    &mut fact_snapshot_dataset_ids,
+                );
+                collect_static_page_candidate_string(item, "source", &mut fact_snapshot_sources);
+                if let Some(rows_by_type) = static_page_dataset_fact_snapshot_rows_by_type(item) {
+                    for (fact_type, rows) in rows_by_type {
+                        if rows.as_array().is_some_and(|items| !items.is_empty()) {
+                            fact_snapshot_types.insert(fact_type.clone());
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -90224,6 +91060,17 @@ fn push_static_page_database_data_source_candidates(
             "sourceDatabaseIds": aggregate_source_ids.into_iter().collect::<Vec<_>>(),
             "tables": aggregate_tables.into_iter().collect::<Vec<_>>(),
             "fields": aggregate_fields.into_iter().collect::<Vec<_>>(),
+        }));
+    }
+    if !fact_snapshot_types.is_empty() {
+        candidates.push(json!({
+            "sourceId": "dataset_fact_snapshot",
+            "type": "dataset_fact_snapshot",
+            "label": "文档结构化事实快照",
+            "available": true,
+            "datasetIds": fact_snapshot_dataset_ids.into_iter().collect::<Vec<_>>(),
+            "sources": fact_snapshot_sources.into_iter().collect::<Vec<_>>(),
+            "factTypes": fact_snapshot_types.into_iter().collect::<Vec<_>>(),
         }));
     }
 }
@@ -90282,6 +91129,14 @@ fn build_static_page_field_candidates(
             }
             "database_aggregate" => {
                 push_static_page_database_aggregate_field_candidates(
+                    &mut candidates,
+                    &mut seen,
+                    item,
+                    FIELD_CANDIDATE_LIMIT,
+                );
+            }
+            "dataset_fact_snapshot" => {
+                push_static_page_dataset_fact_snapshot_field_candidates(
                     &mut candidates,
                     &mut seen,
                     item,
@@ -90659,6 +91514,64 @@ fn push_static_page_database_aggregate_field_candidates(
     );
 }
 
+fn push_static_page_dataset_fact_snapshot_field_candidates(
+    candidates: &mut Vec<Value>,
+    seen: &mut BTreeSet<String>,
+    item: &Value,
+    limit: usize,
+) {
+    let Some(rows_by_type) = static_page_dataset_fact_snapshot_rows_by_type(item) else {
+        return;
+    };
+
+    for (fact_type, rows) in rows_by_type {
+        let Some(rows) = rows.as_array() else {
+            continue;
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        let field_path = static_page_dataset_fact_snapshot_field_path(fact_type);
+        let sample_data = static_page_dataset_fact_snapshot_sample_points_from_rows(
+            item,
+            fact_type,
+            rows,
+            Some(&field_path),
+        );
+        if sample_data.is_empty() {
+            continue;
+        }
+        push_static_page_field_candidate(
+            candidates,
+            seen,
+            json!({
+                "sourceId": "dataset_fact_snapshot",
+                "fieldPath": field_path,
+                "label": format!(
+                    "文档结构化事实：{}",
+                    static_page_dataset_fact_snapshot_type_label(fact_type)
+                ),
+                "kind": "document_fact_table",
+                "recommendedAggregation": "count",
+                "confidence": 0.88,
+                "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+                "datasetKey": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+                "snapshotKind": item.get("snapshot_kind").cloned().unwrap_or(Value::Null),
+                "snapshotKey": item.get("snapshot_key").cloned().unwrap_or(Value::Null),
+                "source": item.get("source").cloned().unwrap_or_else(|| json!("dataset_fact_snapshots")),
+                "factType": fact_type,
+                "metric": "fact_count",
+                "sampleRows": rows.len(),
+                "sampleData": sample_data,
+                "sourceFactCount": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
+                "sourceDocumentCount": item.get("source_document_count").cloned().unwrap_or(Value::Null),
+                "scannedDocumentCount": item.get("scanned_document_count").cloned().unwrap_or(Value::Null),
+            }),
+            limit,
+        );
+    }
+}
+
 fn static_page_module_binding_quality(
     module: &Value,
     binding: &Value,
@@ -90916,6 +91829,17 @@ fn build_static_page_module_sample_data(
             }
         }
 
+        if field_path.is_some_and(|field_path| field_path.starts_with("dataset.fact_snapshot")) {
+            let fact_snapshot_points = build_static_page_dataset_fact_snapshot_sample_points(
+                evidence_items,
+                module,
+                field_path,
+            );
+            if !fact_snapshot_points.is_empty() {
+                return Value::Array(fact_snapshot_points);
+            }
+        }
+
         let schema_points =
             build_static_page_database_schema_sample_points(evidence_items, module, field_path);
         if !schema_points.is_empty() {
@@ -90926,6 +91850,15 @@ fn build_static_page_module_sample_data(
             build_static_page_database_aggregate_sample_points(evidence_items, module, field_path);
         if !database_points.is_empty() {
             return Value::Array(database_points);
+        }
+
+        let fact_snapshot_points = build_static_page_dataset_fact_snapshot_sample_points(
+            evidence_items,
+            module,
+            field_path,
+        );
+        if !fact_snapshot_points.is_empty() {
+            return Value::Array(fact_snapshot_points);
         }
     }
 
@@ -91601,6 +92534,208 @@ fn static_page_database_aggregate_row_label(row: &Value, item: &Value, index: us
     static_page_explicit_point_label(row, index)
 }
 
+fn static_page_dataset_fact_snapshot_rows_by_type(item: &Value) -> Option<&Map<String, Value>> {
+    item.get("entity_rows_by_type")
+        .or_else(|| item.pointer("/snapshot_manifest/entity_rows_by_type"))
+        .and_then(Value::as_object)
+}
+
+fn static_page_dataset_fact_snapshot_field_path(fact_type: &str) -> String {
+    format!(
+        "dataset.fact_snapshot.{}",
+        static_page_report_table_id(fact_type)
+    )
+}
+
+fn static_page_dataset_fact_snapshot_field_path_fact_type(field_path: &str) -> Option<&str> {
+    field_path
+        .strip_prefix("dataset.fact_snapshot.")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn static_page_dataset_fact_snapshot_type_label(fact_type: &str) -> String {
+    match fact_type {
+        "organization" => "组织/公司",
+        "person" => "人员",
+        "role_position" => "角色/岗位",
+        "skill_technology" => "技能/技术",
+        "project_product_system" => "项目/产品/系统",
+        "location_area" => "地点/区域",
+        "education_certificate" => "教育/证书",
+        "date_period" => "日期/周期",
+        "section" => "章节",
+        "procedure_step" => "流程步骤",
+        "time_threshold" => "时间阈值",
+        "keyword" => "关键词",
+        _ => fact_type,
+    }
+    .to_string()
+}
+
+fn build_static_page_dataset_fact_snapshot_sample_points(
+    evidence_items: &[Value],
+    module: &Value,
+    field_path: Option<&str>,
+) -> Vec<Value> {
+    let visualization_type = module
+        .get("visualization")
+        .and_then(|visualization| visualization.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("text-insight");
+    let can_drive_module = static_page_visualization_needs_sample_rows(visualization_type)
+        || field_path
+            .map(|path| path.starts_with("dataset.fact_snapshot"))
+            .unwrap_or(false);
+    if !can_drive_module {
+        return Vec::new();
+    }
+
+    let Some((item, fact_type, rows)) =
+        static_page_dataset_fact_snapshot_best_rows(evidence_items, module, field_path)
+    else {
+        return Vec::new();
+    };
+    static_page_dataset_fact_snapshot_sample_points_from_rows(item, fact_type, rows, field_path)
+}
+
+fn static_page_dataset_fact_snapshot_best_rows<'a>(
+    evidence_items: &'a [Value],
+    module: &Value,
+    field_path: Option<&str>,
+) -> Option<(&'a Value, &'a str, &'a [Value])> {
+    let requested_fact_type =
+        field_path.and_then(static_page_dataset_fact_snapshot_field_path_fact_type);
+    let module_text =
+        static_page_database_aggregate_module_text(module, field_path).to_ascii_lowercase();
+    let mut best: Option<(&Value, &str, &[Value], i32)> = None;
+
+    for item in evidence_items
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("dataset_fact_snapshot"))
+    {
+        let Some(rows_by_type) = static_page_dataset_fact_snapshot_rows_by_type(item) else {
+            continue;
+        };
+        for (fact_type, rows) in rows_by_type {
+            let Some(rows) = rows.as_array() else {
+                continue;
+            };
+            if rows.is_empty() {
+                continue;
+            }
+            if let Some(requested_fact_type) = requested_fact_type {
+                if requested_fact_type != fact_type {
+                    continue;
+                }
+            }
+            let score =
+                static_page_dataset_fact_snapshot_type_score(fact_type, &module_text, rows.len());
+            if best
+                .as_ref()
+                .is_none_or(|(_, _, _, best_score)| score > *best_score)
+            {
+                best = Some((item, fact_type.as_str(), rows.as_slice(), score));
+            }
+        }
+    }
+
+    best.map(|(item, fact_type, rows, _score)| (item, fact_type, rows))
+}
+
+fn static_page_dataset_fact_snapshot_type_score(
+    fact_type: &str,
+    module_text: &str,
+    row_count: usize,
+) -> i32 {
+    let mut score = row_count.min(24) as i32;
+    let label = static_page_dataset_fact_snapshot_type_label(fact_type).to_lowercase();
+    let path = static_page_dataset_fact_snapshot_field_path(fact_type);
+    if module_text.contains(fact_type)
+        || module_text.contains(&label)
+        || module_text.contains(&path)
+    {
+        score += 80;
+    }
+    match fact_type {
+        "organization"
+            if prompt_has_any(module_text, &["公司", "组织", "客户", "门店", "品牌"]) =>
+        {
+            score += 40
+        }
+        "person" if prompt_has_any(module_text, &["人员", "联系人", "姓名", "员工"]) => {
+            score += 35
+        }
+        "role_position" if prompt_has_any(module_text, &["角色", "岗位", "职位"]) => {
+            score += 35
+        }
+        "location_area" if prompt_has_any(module_text, &["地点", "区域", "门店", "位置"]) => {
+            score += 35
+        }
+        "date_period" if prompt_has_any(module_text, &["日期", "时间", "周期", "月份", "趋势"]) => {
+            score += 30
+        }
+        "keyword" if prompt_has_any(module_text, &["关键词", "主题", "标签"]) => score += 25,
+        _ => {}
+    }
+    score
+}
+
+fn static_page_dataset_fact_snapshot_sample_points_from_rows(
+    item: &Value,
+    fact_type: &str,
+    rows: &[Value],
+    field_path: Option<&str>,
+) -> Vec<Value> {
+    let field_path = field_path
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| static_page_dataset_fact_snapshot_field_path(fact_type));
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            let label = static_page_dataset_fact_snapshot_row_label(row, index)?;
+            let value = static_page_dataset_fact_snapshot_row_value(row)?;
+            Some(json!({
+                "label": label,
+                "value": value,
+                "kind": "dataset_fact_snapshot",
+                "source": "dataset_fact_snapshot",
+                "fieldPath": field_path,
+                "datasetId": item.get("dataset_id").cloned().unwrap_or(Value::Null),
+                "datasetKey": item.get("dataset_key").cloned().unwrap_or(Value::Null),
+                "factType": fact_type,
+                "name": row.get("name").cloned().unwrap_or_else(|| json!(label)),
+                "normalizedName": row.get("normalized_name").cloned().unwrap_or(Value::Null),
+                "factCount": row.get("fact_count").cloned().unwrap_or(Value::Null),
+                "documentCount": row.get("document_count").cloned().unwrap_or(Value::Null),
+                "metric": "fact_count",
+                "sourceDocumentIds": row.get("source_document_ids").cloned().unwrap_or_else(|| json!([])),
+                "sourceLocators": row.get("source_locators").cloned().unwrap_or_else(|| json!([])),
+                "sourceFactCount": item.get("source_fact_count").cloned().unwrap_or(Value::Null),
+                "sourceDocumentCount": item.get("source_document_count").cloned().unwrap_or(Value::Null),
+            }))
+        })
+        .take(12)
+        .collect()
+}
+
+fn static_page_dataset_fact_snapshot_row_label(row: &Value, index: usize) -> Option<String> {
+    row.get("name")
+        .or_else(|| row.get("normalized_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(32).collect())
+        .or_else(|| Some(format!("事实 {}", index + 1)))
+}
+
+fn static_page_dataset_fact_snapshot_row_value(row: &Value) -> Option<f64> {
+    row.get("fact_count")
+        .and_then(static_page_json_number)
+        .or_else(|| row.get("document_count").and_then(static_page_json_number))
+        .or(Some(1.0))
+}
+
 fn static_page_media_sample_array_key(field_path: &str) -> Option<&'static str> {
     let normalized = field_path.to_ascii_lowercase();
     if normalized.contains("media.transcript") {
@@ -91921,6 +93056,12 @@ fn static_page_sample_data_quality(sample_data: &Value) -> &'static str {
     if items
         .iter()
         .any(|item| item.get("kind").and_then(Value::as_str) == Some("database_aggregate"))
+    {
+        return "evidence_value";
+    }
+    if items
+        .iter()
+        .any(|item| item.get("kind").and_then(Value::as_str) == Some("dataset_fact_snapshot"))
     {
         return "evidence_value";
     }
@@ -94700,6 +95841,91 @@ mod tests {
         assert!(focus
             .iter()
             .any(|item| item["label"] == json!("低活跃风险模块")));
+    }
+
+    #[test]
+    fn static_page_template_adaptation_contract_patches_time_range_without_new_image2() {
+        let plan = static_page_template_adaptation_plan(
+            "新百经营分析模板",
+            Some("xinbai-functional-modular-template-20260604"),
+            Some("新百经营分析报表-最近一个月"),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            plan["patch_contract"]["operation"],
+            json!("patch_existing_template")
+        );
+        assert_eq!(plan["patch_contract"]["requires_new_image2"], json!(false));
+        assert_eq!(plan["patch_contract"]["preserve_style"], json!(true));
+        assert_eq!(plan["patch_contract"]["time_range"], json!("latest_month"));
+        assert!(
+            value_array(plan["patch_contract"]["intent_classes"].clone())
+                .iter()
+                .any(|class| class == "time_range_change")
+        );
+        assert!(
+            value_array(plan["patch_contract"]["forbidden_outputs"].clone())
+                .iter()
+                .any(|item| item == "generic_html_final_fallback")
+        );
+    }
+
+    #[test]
+    fn static_page_template_adaptation_contract_captures_bar_chart_patch() {
+        let plan = static_page_template_adaptation_plan(
+            "新百经营分析模板",
+            Some("xinbai-functional-modular-template-20260604"),
+            Some("给一个按区域分析月租金的柱状图"),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            plan["patch_contract"]["operation"],
+            json!("patch_existing_template")
+        );
+        assert_eq!(
+            plan["patch_contract"]["chart_requests"][0]["type"],
+            json!("bar")
+        );
+        assert_eq!(
+            plan["patch_contract"]["chart_requests"][0]["metric"],
+            json!("yuezujin")
+        );
+        assert_eq!(
+            plan["patch_contract"]["chart_requests"][0]["dimension"],
+            json!("dist_name")
+        );
+        assert!(
+            value_array(plan["patch_contract"]["intent_classes"].clone())
+                .iter()
+                .any(|class| class == "chart_change")
+        );
+    }
+
+    #[test]
+    fn static_page_template_adaptation_contract_only_redesign_requires_new_image2() {
+        let plan = static_page_template_adaptation_plan(
+            "新百经营分析模板",
+            Some("xinbai-functional-modular-template-20260604"),
+            Some("重新设计暗色移动端版本"),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            plan["patch_contract"]["operation"],
+            json!("generate_new_template")
+        );
+        assert_eq!(plan["patch_contract"]["requires_new_image2"], json!(true));
+        assert_eq!(plan["patch_contract"]["preserve_style"], json!(false));
+        assert!(
+            value_array(plan["patch_contract"]["intent_classes"].clone())
+                .iter()
+                .any(|class| class == "explicit_redesign")
+        );
     }
 
     #[test]
@@ -99237,26 +100463,18 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(reply.artifact_links.len(), 1);
-        let public_url = reply.artifact_links[0].clone();
-        assert!(public_url.starts_with(
-            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/external-channel/"
-        ));
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert!(reply.artifact_links.is_empty());
         let card = reply.card.expect("card should be returned");
-        assert_eq!(card["status"], json!("static_page_published"));
-        assert_eq!(card["public_url"], json!(public_url));
-        assert_eq!(card["generated_artifact_url"], json!(public_url));
-        assert_eq!(card["artifact_links"], json!([public_url]));
-        assert!(card["data_url"]
-            .as_str()
-            .is_some_and(|value| value.ends_with("/data.json")));
-        assert!(card["data_snapshot_url"]
-            .as_str()
-            .is_some_and(|value| value.ends_with("/data-snapshot.json")));
-        assert_eq!(card["direct_html_fallback"], json!(true));
-        assert_eq!(card["provisional_direct_html"], json!(false));
-        assert_eq!(card["local_generated_artifact_first"], json!(true));
+        assert_eq!(card["status"], json!("static_page_rendered"));
+        assert!(card["public_url"].is_null());
+        assert!(card["generated_artifact_url"].is_null());
+        assert_eq!(card["artifact_links"], json!([]));
+        assert!(card["data_url"].is_null());
+        assert!(card["data_snapshot_url"].is_null());
+        assert_eq!(card["direct_html_fallback"], json!(false));
+        assert_eq!(card["provisional_direct_html"], json!(true));
+        assert_eq!(card["local_generated_artifact_first"], json!(false));
         assert_eq!(card["demo_generated_artifact_publish"], json!(false));
         assert_eq!(card["codex_auto_publish_ready"], json!(false));
         assert_eq!(
@@ -99295,17 +100513,15 @@ mod tests {
                 event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
             })
             .expect("pipeline event should be recorded");
-        assert_eq!(queued.payload["public_url"], card["public_url"]);
-        assert_eq!(
-            queued.payload["generated_artifact_url"],
-            card["generated_artifact_url"]
-        );
+        assert_eq!(queued.payload["status"], json!("static_page_rendered"));
+        assert!(queued.payload["public_url"].is_null());
+        assert!(queued.payload["generated_artifact_url"].is_null());
         assert_eq!(queued.payload["artifact_links"], card["artifact_links"]);
-        assert_eq!(queued.payload["direct_html_fallback"], json!(true));
-        assert_eq!(queued.payload["provisional_direct_html"], json!(false));
+        assert_eq!(queued.payload["direct_html_fallback"], json!(false));
+        assert_eq!(queued.payload["provisional_direct_html"], json!(true));
         assert_eq!(
             queued.payload["local_generated_artifact_first"],
-            json!(true)
+            json!(false)
         );
         assert_eq!(
             queued.payload["demo_generated_artifact_publish"],
@@ -99318,9 +100534,8 @@ mod tests {
         );
         assert_eq!(queued.payload["render_output_id"], card["render_output_id"]);
         assert_eq!(queued.payload["status_url"], card["status_url"]);
-        assert!(events.iter().any(|event| {
+        assert!(!events.iter().any(|event| {
             event.event_name == "assistant_run.external_channel_static_page_publish_completed"
-                && event.payload["public_url"] == card["public_url"]
         }));
 
         let draft_count_before = state
@@ -99349,11 +100564,8 @@ mod tests {
         .await
         .expect("model tool dispatch should not fail")
         .expect("model tool dispatch should reuse existing static-page reply");
-        assert_eq!(
-            tool_reply.task_status.as_deref(),
-            Some("static_page_published")
-        );
-        assert_eq!(tool_reply.artifact_links, vec![public_url.clone()]);
+        assert_eq!(tool_reply.task_status.as_deref(), Some("processing"));
+        assert!(tool_reply.artifact_links.is_empty());
         let events_after_tool = state
             .storage
             .assistant_runs()
@@ -100028,6 +101240,206 @@ mod tests {
                 ["public_url"],
             json!(public_url)
         );
+    }
+
+    #[tokio::test]
+    async fn static_page_template_overlap_finds_pinned_xinbai_template_beyond_recent_limit() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping pinned Xinbai template lookup test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("xinbai-pinned-template-{}", Uuid::new_v4()),
+                "Xinbai Pinned Template Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let now = Utc::now();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "dataset_external_ids": ["xinbai-project-dataset"],
+            "requested_dataset_external_ids": ["xinbai-project-dataset"]
+        });
+        let answer_policy = json!({
+            "default_prompt": "请面向业务用户，只使用已授权数据库源 hy-sql-traffic-area 的真实数据。"
+        });
+        let request_source_refs = json!({
+            "source": "external_channel_static_page_artifact_request",
+            "channel_connection_id": "generic-chat-main",
+            "database_source_ids": ["hy-sql-traffic-area"],
+            "dataset_external_ids": ["xinbai-project-dataset"],
+            "answer_policy": answer_policy.clone()
+        });
+        let baseline_run = state
+            .storage
+            .assistant_runs()
+            .create(
+                state.tenant_id,
+                &NewAssistantRun {
+                    user_id: None,
+                    local_thread_id: Some("xinbai-pinned-template".to_string()),
+                    user_prompt: "生成新百经营分析默认模板".to_string(),
+                    startup_briefing: json!({}),
+                    selected_scope: selected_scope.clone(),
+                    scope_candidates: json!([]),
+                    context_policy: json!({}),
+                    evidence_state: json!({"status": "supplied"}),
+                    service_lane: "external_channel".to_string(),
+                    execution_trail: json!([]),
+                    output_artifacts: json!([]),
+                    runtime_manifest: json!({}),
+                    created_at: now,
+                },
+            )
+            .await
+            .expect("baseline run should be created");
+        let primary_created_at = now - Duration::days(2);
+        let primary_source_refs = apply_static_page_artifact_stability_to_source_refs(
+            json!({
+                "source": "external_channel_static_page_artifact_request",
+                "channel_connection_id": "generic-chat-main",
+                "database_source_ids": ["hy-sql-traffic-area"],
+                "dataset_external_ids": ["xinbai-project-dataset"],
+                "answer_policy": answer_policy.clone(),
+                "artifact_role": "template",
+                "template_binding_eligible": true
+            }),
+            Some("xinbai-primary-default-template"),
+            "accepted",
+            Some(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL),
+            primary_created_at,
+        );
+        let primary_payload = apply_static_page_artifact_stability_to_payload(
+            json!({
+                "status": "rendered",
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL
+                },
+                "features": [
+                    "primary_default_template",
+                    "monthly_report_only_default_template",
+                    "project_unique_default_template",
+                    "xinbai_only_accepted_default_template"
+                ]
+            }),
+            Some("xinbai-primary-default-template"),
+            "accepted",
+            Some(XINBAI_PUBLISHED_REPORT_DEFAULT_PUBLIC_URL),
+            primary_created_at,
+        );
+        let primary_draft = state
+            .storage
+            .static_page_drafts()
+            .create(
+                state.tenant_id,
+                &NewStaticPageDraft {
+                    assistant_run_id: baseline_run.id,
+                    owner_user_id: None,
+                    title: "静态页：新百经营分析模板 - 功能区模块化月报".to_string(),
+                    status: StaticPageDraftStatus::Rendered,
+                    selected_scope: selected_scope.clone(),
+                    visibility_snapshot: json!({}),
+                    source_refs: primary_source_refs,
+                    draft_payload: primary_payload,
+                    created_at: primary_created_at,
+                },
+            )
+            .await
+            .expect("primary template should be created");
+
+        for index in 0..105 {
+            let created_at = now + Duration::seconds(index + 1);
+            let noise_url = format!(
+                "https://v3.elepcloud.com/generated-artifacts/database-static-pages/codex-host/noise-{index}/index.html"
+            );
+            let noise_source_refs = apply_static_page_artifact_stability_to_source_refs(
+                json!({
+                    "source": "external_channel_static_page_artifact_request",
+                    "channel_connection_id": "generic-chat-main",
+                    "database_source_ids": ["hy-sql-traffic-area"],
+                    "dataset_external_ids": ["xinbai-project-dataset"],
+                    "answer_policy": answer_policy.clone()
+                }),
+                Some(&format!("xinbai-noise-{index}")),
+                "accepted",
+                Some(&noise_url),
+                created_at,
+            );
+            let noise_payload = apply_static_page_artifact_stability_to_payload(
+                json!({
+                    "status": "rendered",
+                    "finalPage": {
+                        "status": "rendered",
+                        "publicUrl": noise_url
+                    }
+                }),
+                Some(&format!("xinbai-noise-{index}")),
+                "accepted",
+                Some(&noise_url),
+                created_at,
+            );
+            state
+                .storage
+                .static_page_drafts()
+                .create(
+                    state.tenant_id,
+                    &NewStaticPageDraft {
+                        assistant_run_id: baseline_run.id,
+                        owner_user_id: None,
+                        title: format!("静态页：smoke 测试页 并发编号 {index}"),
+                        status: StaticPageDraftStatus::Rendered,
+                        selected_scope: selected_scope.clone(),
+                        visibility_snapshot: json!({}),
+                        source_refs: noise_source_refs,
+                        draft_payload: noise_payload,
+                        created_at,
+                    },
+                )
+                .await
+                .expect("noise baseline should be created");
+        }
+
+        let recent = state
+            .storage
+            .static_page_drafts()
+            .list_accepted_baselines(state.tenant_id, 100)
+            .await
+            .expect("recent baselines should list");
+        assert!(!recent.iter().any(|draft| draft.id == primary_draft.id));
+
+        let outcome = find_static_page_template_baseline_by_dataset_overlap(
+            &state,
+            Some("新百经营分析报表-最近一个月"),
+            &selected_scope,
+            &request_source_refs,
+            None,
+            Some("generic-chat-main"),
+        )
+        .await
+        .expect("template lookup should succeed");
+
+        assert_eq!(
+            outcome.draft.as_ref().map(|draft| draft.id),
+            Some(primary_draft.id)
+        );
+        assert!(outcome
+            .selected_features
+            .iter()
+            .any(|feature| feature == "pinned_xinbai_primary_public_url_lookup"));
     }
 
     #[tokio::test]
@@ -100932,6 +102344,86 @@ mod tests {
     }
 
     #[test]
+    fn external_static_page_export_table_rejects_evidence_metadata_and_prefers_business_rows() {
+        let data_snapshot = json!({
+            "retrieval_evidence": [
+                {
+                    "datasetId": "dataset-1",
+                    "documentChunkId": "chunk-1",
+                    "documentId": "doc-1",
+                    "retrievalEvidenceId": "evidence-1",
+                    "sectionTitleHints": ["经营"],
+                    "sourceLocator": "page:1"
+                }
+            ],
+            "businessTables": {
+                "storeSales": [
+                    {"门店": "新街口店", "品牌": "咖啡品牌", "销售额": 12345, "取高缺口": 320}
+                ]
+            }
+        });
+        let table = external_static_page_best_export_table(&json!({}), &data_snapshot);
+
+        assert_eq!(table.path, "data_snapshot.businessTables.storeSales");
+        let csv = external_static_page_table_csv(&table);
+        assert!(csv.contains("门店"));
+        assert!(csv.contains("咖啡品牌"));
+        assert!(!csv.contains("documentChunkId"));
+        assert!(!csv.contains("retrievalEvidenceId"));
+        assert!(!csv.contains("sourceLocator"));
+    }
+
+    #[test]
+    fn external_static_page_export_table_does_not_fallback_to_metadata_summary() {
+        let data_snapshot = json!({
+            "retrieval_evidence": [
+                {
+                    "datasetId": "dataset-1",
+                    "documentChunkId": "chunk-1",
+                    "documentId": "doc-1",
+                    "retrievalEvidenceId": "evidence-1",
+                    "sectionTitleHints": ["经营"],
+                    "sourceLocator": "page:1"
+                }
+            ]
+        });
+        let table = external_static_page_best_export_table(&json!({}), &data_snapshot);
+
+        assert!(table.rows.is_empty());
+        let csv = external_static_page_table_csv(&table);
+        assert_eq!(csv, "\u{feff}");
+    }
+
+    #[test]
+    fn external_static_page_export_table_filters_internal_metadata_headers_from_business_rows() {
+        let data_snapshot = json!({
+            "business_tables": {
+                "top_area": [
+                    {
+                        "label": "百货",
+                        "value": 1856,
+                        "unit": "MB",
+                        "datasetId": "dataset-1",
+                        "sourceId": "hy-sql-traffic-area",
+                        "retrievalEvidenceId": "evidence-1",
+                        "sourceLocator": "internal://row/1"
+                    }
+                ]
+            }
+        });
+        let table = external_static_page_best_export_table(&json!({}), &data_snapshot);
+        let csv = external_static_page_table_csv(&table);
+
+        assert!(csv.contains("label"));
+        assert!(csv.contains("百货"));
+        assert!(csv.contains("value"));
+        assert!(!csv.contains("datasetId"));
+        assert!(!csv.contains("sourceId"));
+        assert!(!csv.contains("retrievalEvidenceId"));
+        assert!(!csv.contains("sourceLocator"));
+    }
+
+    #[test]
     fn external_static_page_local_generated_artifact_writes_download_exports() {
         let now = Utc::now();
         let artifact_root = std::env::temp_dir()
@@ -101148,34 +102640,27 @@ mod tests {
         .expect("static-page reply should be returned");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
-        assert_eq!(reply.artifact_links.len(), 1);
-        let public_url = reply.artifact_links[0].clone();
+        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert!(reply.artifact_links.is_empty());
         let card = reply.card.expect("card should be returned");
-        assert_eq!(card["status"], json!("static_page_published"));
-        assert_eq!(card["public_url"], json!(public_url));
-        assert_eq!(card["generated_artifact_url"], json!(public_url));
-        assert_eq!(card["artifact_links"], json!([public_url]));
-        let table_data_url = static_page_artifact_sibling_url(&public_url, "table-data.csv")
-            .expect("table data sibling url");
-        let ppt_download_url =
-            static_page_artifact_sibling_url(&public_url, "report.ppt").expect("ppt sibling url");
-        let markdown_download_url =
-            static_page_artifact_sibling_url(&public_url, "report.md").expect("md sibling url");
+        assert_eq!(
+            card["status"],
+            json!("static_page_image2_auto_publish_pending")
+        );
+        assert!(card["public_url"].is_null());
+        assert!(card["generated_artifact_url"].is_null());
+        assert_eq!(card["artifact_links"], json!([]));
         assert_eq!(card["title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
         assert_eq!(card["report_title"], json!(XINBAI_PUBLISHED_REPORT_TITLE));
-        assert_eq!(card["table_data_url"], json!(table_data_url.clone()));
-        assert_eq!(card["ppt_download_url"], json!(ppt_download_url.clone()));
-        assert_eq!(
-            card["markdown_download_url"],
-            json!(markdown_download_url.clone())
-        );
-        assert_eq!(card["download_exports"][0]["label"], json!("表格数据"));
+        assert!(card["table_data_url"].is_null());
+        assert!(card["ppt_download_url"].is_null());
+        assert!(card["markdown_download_url"].is_null());
+        assert_eq!(card["download_exports"], json!([]));
         assert_eq!(card["codex_auto_publish_ready"], json!(true));
         assert_eq!(card["auto_publish_after_preview"], json!(true));
-        assert_eq!(card["direct_html_fallback"], json!(true));
-        assert_eq!(card["provisional_direct_html"], json!(false));
-        assert_eq!(card["local_generated_artifact_first"], json!(true));
+        assert_eq!(card["direct_html_fallback"], json!(false));
+        assert_eq!(card["provisional_direct_html"], json!(true));
+        assert_eq!(card["local_generated_artifact_first"], json!(false));
         assert_eq!(card["demo_generated_artifact_publish"], json!(false));
         assert_eq!(
             card["codex_final_status"],
@@ -101186,7 +102671,7 @@ mod tests {
             .text
             .as_deref()
             .unwrap_or_default()
-            .contains("页面链接：[点击查看报表]"));
+            .contains("效果图无需客户确认"));
 
         let events = state
             .storage
@@ -101200,25 +102685,23 @@ mod tests {
                 event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
             })
             .expect("pipeline event should be recorded");
-        assert_eq!(queued.payload["public_url"], card["public_url"]);
         assert_eq!(
-            queued.payload["generated_artifact_url"],
-            card["generated_artifact_url"]
+            queued.payload["status"],
+            json!("static_page_image2_auto_publish_pending")
         );
+        assert!(queued.payload["public_url"].is_null());
+        assert!(queued.payload["generated_artifact_url"].is_null());
         assert_eq!(queued.payload["artifact_links"], card["artifact_links"]);
-        assert_eq!(queued.payload["table_data_url"], card["table_data_url"]);
-        assert_eq!(queued.payload["ppt_download_url"], card["ppt_download_url"]);
-        assert_eq!(
-            queued.payload["markdown_download_url"],
-            card["markdown_download_url"]
-        );
+        assert!(queued.payload["table_data_url"].is_null());
+        assert!(queued.payload["ppt_download_url"].is_null());
+        assert!(queued.payload["markdown_download_url"].is_null());
         assert_eq!(queued.payload["download_exports"], card["download_exports"]);
         assert_eq!(queued.payload["codex_auto_publish_ready"], json!(true));
-        assert_eq!(queued.payload["direct_html_fallback"], json!(true));
-        assert_eq!(queued.payload["provisional_direct_html"], json!(false));
+        assert_eq!(queued.payload["direct_html_fallback"], json!(false));
+        assert_eq!(queued.payload["provisional_direct_html"], json!(true));
         assert_eq!(
             queued.payload["local_generated_artifact_first"],
-            json!(true)
+            json!(false)
         );
 
         let restored = external_channel_static_page_reply_from_events(
@@ -101226,48 +102709,15 @@ mod tests {
             &message.conversation_external_id,
         )
         .expect("status reply should restore pipeline status");
-        assert_eq!(restored.reply_type, ExternalBotReplyTypeView::ArtifactLink);
-        assert_eq!(
-            restored.task_status.as_deref(),
-            Some("static_page_published")
-        );
-        assert_eq!(restored.artifact_links, vec![public_url.clone()]);
+        assert_eq!(restored.reply_type, ExternalBotReplyTypeView::TaskStatus);
+        assert_eq!(restored.task_status.as_deref(), Some("processing"));
+        assert!(restored.artifact_links.is_empty());
         let restored_card = restored.card.expect("restored card should be returned");
-        assert_eq!(restored_card["public_url"], json!(public_url));
-        assert_eq!(restored_card["table_data_url"], json!(table_data_url));
-        assert_eq!(restored_card["ppt_download_url"], json!(ppt_download_url));
-        assert_eq!(
-            restored_card["markdown_download_url"],
-            json!(markdown_download_url)
-        );
-        assert_eq!(
-            restored_card["download_exports"][2]["label"],
-            json!("文本下载（MD）")
-        );
-        assert_eq!(restored_card["provisional_direct_html"], json!(false));
-        assert!(restored
-            .text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("页面链接：[点击查看报表]"));
-
-        let completed = events
-            .iter()
-            .find(|event| {
-                event.event_name == "assistant_run.external_channel_static_page_publish_completed"
-            })
-            .expect("completed publish event should be recorded");
-        for key in [
-            "table_data_path",
-            "ppt_download_path",
-            "markdown_download_path",
-            "manifest_path",
-        ] {
-            let path = completed.payload[key]
-                .as_str()
-                .unwrap_or_else(|| panic!("{key} should be present"));
-            assert!(StdPath::new(path).exists(), "{key} should exist: {path}");
-        }
+        assert!(restored_card["public_url"].is_null());
+        assert_eq!(restored_card["provisional_direct_html"], json!(true));
+        assert!(!events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_completed"
+        }));
     }
 
     #[test]
@@ -112359,10 +113809,9 @@ retrieve_evidence:
             .expect("reply should be restored");
 
         assert_eq!(reply.reply_type, ExternalBotReplyTypeView::Text);
-        assert_eq!(
-            reply.text.as_deref(),
-            Some("这是模型对客户问题的正常回答。")
-        );
+        let text = reply.text.as_deref().unwrap_or_default();
+        assert!(text.contains("这是模型对客户问题的正常回答。"));
+        assert!(text.contains(&format!("页面链接：[点击查看报表]({public_url})")));
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
     }
 
@@ -126787,6 +128236,16 @@ retrieve_evidence:
             summary["supplemental_metrics"]["output_contract"]["store_area"][0],
             json!("data.storeList[].area")
         );
+        assert_eq!(
+            snapshot["evidenceNotes"][0]["role"],
+            json!("supporting_evidence")
+        );
+        assert!(snapshot["evidenceNotes"][0]["summary"]
+            .as_str()
+            .is_some_and(|value| value.contains("临时上传合同面积")));
+        assert!(snapshot["businessTables"]
+            .as_array()
+            .is_some_and(Vec::is_empty));
     }
 
     #[test]
@@ -126909,6 +128368,237 @@ retrieve_evidence:
             .iter()
             .any(|hint| hint.as_str() == Some("sum(up)")));
         assert!(unit_hints.iter().any(|hint| hint.as_str() == Some("MB")));
+        assert_eq!(
+            snapshot["reportSnapshot"]["schema"],
+            json!("v3.report_snapshot")
+        );
+        assert_eq!(
+            snapshot["business_tables"]["top_area"][0]["label"],
+            json!("百货")
+        );
+        assert_eq!(
+            snapshot["business_tables"]["top_area"][0]["value"],
+            json!(1856.0)
+        );
+        assert!(snapshot["business_tables"]["top_area"][0]
+            .get("datasetId")
+            .is_none());
+        assert!(snapshot["business_tables"]["top_area"][0]
+            .get("sourceId")
+            .is_none());
+        assert_eq!(
+            snapshot["chartSeries"][0]["points"][0]["value"],
+            json!(1856.0)
+        );
+    }
+
+    #[test]
+    fn static_page_data_snapshot_binds_document_fact_snapshot_rows() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [
+                {
+                    "id": "document-organizations",
+                    "title": "文档提到的组织",
+                    "dataBinding": {
+                        "sourceId": "dataset_fact_snapshot",
+                        "fieldPath": "dataset.fact_snapshot.organization"
+                    },
+                    "visualization": {"type": "bar-chart"}
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "dataset_fact_snapshot",
+                    "source": "dataset_fact_snapshots",
+                    "dataset_id": dataset_id.to_string(),
+                    "dataset_key": "mixed-customer-docs",
+                    "dataset_title": "客户补充文档",
+                    "snapshot_kind": "entity_rows_by_type",
+                    "snapshot_key": "default",
+                    "scanned_document_count": 3,
+                    "source_document_count": 3,
+                    "source_fact_count": 9,
+                    "row_count_by_type": {"organization": 2},
+                    "entity_rows_by_type": {
+                        "organization": [
+                            {
+                                "fact_type": "organization",
+                                "name": "新百 A 店",
+                                "normalized_name": "新百a店",
+                                "fact_count": 4,
+                                "document_count": 2,
+                                "source_document_ids": ["doc-1", "doc-2"],
+                                "source_locators": ["contracts/a.pdf#p=1"]
+                            },
+                            {
+                                "fact_type": "organization",
+                                "name": "新百 B 店",
+                                "normalized_name": "新百b店",
+                                "fact_count": 2,
+                                "document_count": 1,
+                                "source_document_ids": ["doc-3"],
+                                "source_locators": ["contracts/b.pdf#p=3"]
+                            }
+                        ]
+                    },
+                    "summary": "dataset fact snapshot: 3 documents, 9 facts, rows organization=2"
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+        let data_sources = value_array(snapshot["data_source_candidates"].clone());
+        let candidates = value_array(snapshot["field_candidates"].clone());
+        let sample_data = value_array(snapshot["module_bindings"][0]["sampleData"].clone());
+
+        assert!(data_sources.iter().any(|candidate| {
+            candidate["sourceId"] == json!("dataset_fact_snapshot")
+                && candidate["factTypes"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|item| item == "organization"))
+        }));
+        assert!(candidates.iter().any(|candidate| {
+            candidate["sourceId"] == json!("dataset_fact_snapshot")
+                && candidate["fieldPath"] == json!("dataset.fact_snapshot.organization")
+                && candidate["sampleRows"] == json!(2)
+        }));
+        assert_eq!(sample_data[0]["label"], json!("新百 A 店"));
+        assert_eq!(sample_data[0]["value"], json!(4.0));
+        assert_eq!(sample_data[0]["kind"], json!("dataset_fact_snapshot"));
+        assert_eq!(
+            snapshot["module_bindings"][0]["bindingQualityStatus"],
+            json!("confirmed")
+        );
+        assert_eq!(
+            snapshot["reportSnapshot"]["schema"],
+            json!("v3.report_snapshot")
+        );
+        assert_eq!(
+            snapshot["business_tables"]["document_organizations"][0]["name"],
+            json!("新百 A 店")
+        );
+        assert_eq!(
+            snapshot["business_tables"]["document_organizations"][0]["factCount"],
+            json!(4)
+        );
+        assert!(snapshot["business_tables"]["document_organizations"][0]
+            .get("sourceDocumentIds")
+            .is_none());
+        assert!(snapshot["business_tables"]["document_organizations"][0]
+            .get("sourceLocators")
+            .is_none());
+        assert_eq!(
+            snapshot["evidenceNotes"][0]["role"],
+            json!("structured_fact_snapshot")
+        );
+    }
+
+    #[test]
+    fn static_page_data_snapshot_mixes_database_and_document_fact_tables() {
+        let dataset_id = DatasetId::new();
+        let selected_scope = json!({
+            "mode": "user_selected",
+            "datasets": [dataset_id.to_string()],
+        });
+        let payload = json!({
+            "modules": [
+                {
+                    "id": "sales-ranking",
+                    "title": "数据库销售排行",
+                    "dataBinding": {
+                        "sourceId": "dataset",
+                        "fieldPath": "dataset.metrics_summary"
+                    },
+                    "visualization": {"type": "bar-chart"}
+                },
+                {
+                    "id": "document-keywords",
+                    "title": "补充文档关键词",
+                    "dataBinding": {
+                        "sourceId": "dataset_fact_snapshot",
+                        "fieldPath": "dataset.fact_snapshot.keyword"
+                    },
+                    "visualization": {"type": "table"}
+                }
+            ]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "supplied_items": [
+                {
+                    "type": "database_aggregate",
+                    "dataset_id": dataset_id.to_string(),
+                    "dataset_key": "hy-sql-traffic-area",
+                    "source_id": "hy-sql-traffic-area",
+                    "table": "bi_contract_warning",
+                    "dimensions": ["shopdesc"],
+                    "metric": "amttotal",
+                    "aggregation": "sum",
+                    "value_label": "amttotal",
+                    "rows": [{"shopdesc": "新百 A 店", "value": "120000"}],
+                    "scan_limit": 5000
+                },
+                {
+                    "type": "dataset_fact_snapshot",
+                    "source": "document_facts_scoped_aggregate",
+                    "dataset_id": dataset_id.to_string(),
+                    "dataset_key": "hy-sql-traffic-area",
+                    "snapshot_kind": "entity_rows_by_type",
+                    "snapshot_key": "default",
+                    "scanned_document_count": 2,
+                    "source_document_count": 2,
+                    "source_fact_count": 5,
+                    "row_count_by_type": {"keyword": 1},
+                    "entity_rows_by_type": {
+                        "keyword": [{
+                            "fact_type": "keyword",
+                            "name": "合同面积",
+                            "normalized_name": "合同面积",
+                            "fact_count": 3,
+                            "document_count": 2,
+                            "source_document_ids": ["doc-1", "doc-2"],
+                            "source_locators": ["supplement.docx#section=面积"]
+                        }]
+                    },
+                    "summary": "dataset fact snapshot: 2 documents, 5 facts, rows keyword=1"
+                }
+            ]
+        });
+
+        let snapshot = build_static_page_data_snapshot_with_evidence(
+            &payload,
+            &selected_scope,
+            Some(&evidence_state),
+            "assistant_run",
+        );
+
+        assert_eq!(
+            snapshot["business_tables"]["sales_ranking"][0]["label"],
+            json!("新百 A 店")
+        );
+        assert_eq!(
+            snapshot["business_tables"]["document_keywords"][0]["name"],
+            json!("合同面积")
+        );
+        assert_eq!(snapshot["businessTables"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            snapshot["chartSeries"][0]["points"][0]["value"],
+            json!(120000.0)
+        );
+        assert_eq!(snapshot["chartSeries"][1]["points"][0]["value"], json!(3.0));
     }
 
     #[test]
