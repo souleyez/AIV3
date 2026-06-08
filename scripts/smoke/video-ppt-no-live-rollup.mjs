@@ -680,6 +680,7 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
     not_deliverable_failure_classes: Array.isArray(report.gates?.not_deliverable_failure_classes)
       ? report.gates.not_deliverable_failure_classes
       : [],
+    failure_class_summary_supported: report.gates?.failure_class_summary_supported,
     live_smoke_run: report.gates?.live_smoke_run,
     production_write_allowed: report.gates?.production_write_allowed,
     generated_artifacts_committable: report.gates?.generated_artifacts_committable,
@@ -1500,6 +1501,7 @@ function validateQualityMatrixEvidence(report) {
     || !evidence.not_deliverable_failure_classes.includes('frame_extraction')
     || !evidence.not_deliverable_failure_classes.includes('artifact_visibility')
     || !evidence.not_deliverable_failure_classes.includes('selection_quality')
+    || evidence.failure_class_summary_supported !== true
     || evidence.live_smoke_run !== false
     || evidence.production_write_allowed !== false
     || evidence.generated_artifacts_committable !== false

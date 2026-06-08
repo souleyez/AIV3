@@ -467,6 +467,7 @@ function buildSelfTestReport() {
       review_required_risk_flag_object_shape_case_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       not_deliverable_failure_classes: NOT_DELIVERABLE_FAILURE_CLASSES,
       not_deliverable_failure_class_count: NOT_DELIVERABLE_FAILURE_CLASSES.length,
+      failure_class_summary_supported: true,
     },
     nextActions: [
       'run synthetic PPT playback extraction and attach real target/ report when available',
@@ -477,6 +478,7 @@ function buildSelfTestReport() {
   validateSelfTestReport(report);
   validateExplicitReviewRiskRegression();
   validateNotDeliverableFailureRegression();
+  validateFailureClassSummaryRegression();
   return report;
 }
 
@@ -635,6 +637,29 @@ function buildNotDeliverableRegressionCases() {
   ];
 }
 
+function validateFailureClassSummaryRegression() {
+  const cases = buildNotDeliverableRegressionCases().map((testCase) => {
+    const evaluation = evaluateCase(testCase);
+    return {
+      ...testCase,
+      evaluation,
+      expectation_matched: evaluation.verdict === testCase.expected_verdict,
+    };
+  });
+  const summary = summarizeCases(cases);
+  if (summary.not_deliverable_count !== NOT_DELIVERABLE_FAILURE_CLASSES.length) {
+    throw new Error('quality matrix failure class summary not-deliverable count mismatch');
+  }
+  for (const failureClass of NOT_DELIVERABLE_FAILURE_CLASSES) {
+    if (summary.failure_class_counts[failureClass] !== 1) {
+      throw new Error(`quality matrix failure class summary missing ${failureClass}`);
+    }
+    if (summary.not_deliverable_failure_class_counts[failureClass] !== 1) {
+      throw new Error(`quality matrix not-deliverable failure class summary missing ${failureClass}`);
+    }
+  }
+}
+
 function buildDeliverablesReportFromArgs(args) {
   const inputKinds = deliverablesInputKinds(args);
   const allDeliverablesInputsReviewed = inputKinds.length === REQUIRED_CATEGORIES.length;
@@ -791,6 +816,9 @@ function summarizeCases(cases) {
     pending_accessible_sample_count: 0,
     pending_authorization_count: 0,
     expectation_mismatch_count: 0,
+    failure_class_counts: {},
+    not_deliverable_failure_class_counts: {},
+    needs_manual_review_failure_class_counts: {},
   };
   for (const testCase of cases) {
     const verdict = testCase.evaluation.verdict;
@@ -808,9 +836,26 @@ function summarizeCases(cases) {
     if (testCase.expectation_matched === false) {
       summary.expectation_mismatch_count += 1;
     }
+    incrementFailureClassCounts(summary, testCase.evaluation);
   }
   summary.pending_count = summary.pending_accessible_sample_count + summary.pending_authorization_count;
   return summary;
+}
+
+function incrementFailureClassCounts(summary, evaluation) {
+  const failureClass = evaluation?.failure_class;
+  if (!failureClass) {
+    return;
+  }
+  summary.failure_class_counts[failureClass] = (summary.failure_class_counts[failureClass] || 0) + 1;
+  if (evaluation.review_conclusion === 'not_deliverable') {
+    summary.not_deliverable_failure_class_counts[failureClass] =
+      (summary.not_deliverable_failure_class_counts[failureClass] || 0) + 1;
+  }
+  if (evaluation.review_conclusion === 'needs_manual_review') {
+    summary.needs_manual_review_failure_class_counts[failureClass] =
+      (summary.needs_manual_review_failure_class_counts[failureClass] || 0) + 1;
+  }
 }
 
 function validateSelfTestReport(report) {
@@ -844,6 +889,7 @@ function validateSelfTestReport(report) {
     || !report.gates.not_deliverable_failure_classes.includes('frame_extraction')
     || !report.gates.not_deliverable_failure_classes.includes('artifact_visibility')
     || !report.gates.not_deliverable_failure_classes.includes('selection_quality')
+    || report.gates.failure_class_summary_supported !== true
   ) {
     throw new Error('self-test report must expose the not-deliverable failure taxonomy gate');
   }
@@ -867,6 +913,13 @@ function validateQualityMatrixReport(report) {
   }
   if (!Array.isArray(report.cases) || report.cases.length !== REQUIRED_CATEGORIES.length) {
     throw new Error('quality matrix report case count mismatch');
+  }
+  if (
+    !report.summary.failure_class_counts
+    || !report.summary.not_deliverable_failure_class_counts
+    || !report.summary.needs_manual_review_failure_class_counts
+  ) {
+    throw new Error('quality matrix report must include failure class summaries');
   }
   for (const category of REQUIRED_CATEGORIES) {
     if (!report.cases.some((testCase) => testCase.category === category)) {

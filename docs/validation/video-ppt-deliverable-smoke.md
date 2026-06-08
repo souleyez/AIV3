@@ -4022,6 +4022,73 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Quality Matrix Failure Class Summary Counts
+
+Task source: M6AO no-live follow-up. M6AN added stable failure classes; this slice adds explicit summary count objects so future customer/operator quality matrix reports can show both per-case failure classes and aggregate counts without hand-counting cases.
+
+Scope:
+
+- local quality-matrix and no-live rollup code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- quality matrix summaries now always include `failure_class_counts`, `not_deliverable_failure_class_counts`, and `needs_manual_review_failure_class_counts`;
+- summary counting increments from `evaluation.failure_class` and splits counts by `review_conclusion`;
+- self-test exposes `failure_class_summary_supported=true`;
+- internal regression builds one not-deliverable case for each required failure class and verifies each class increments both the all-failure and not-deliverable summary counts;
+- no-live rollup copies `failure_class_summary_supported` from the quality-matrix child report into its redacted evidence and fails validation if the gate is missing.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted failure summary evidence readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir> <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- no-live rollup syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `pending_count=2`, and `not_deliverable_count=0`;
+- quality matrix report included all three summary maps: `failure_class_counts`, `not_deliverable_failure_class_counts`, and `needs_manual_review_failure_class_counts`;
+- self-test gate reported `failure_class_summary_supported=true`;
+- self-test gate retained five not-deliverable failure classes: `source_access`, `video_has_no_ppt`, `frame_extraction`, `artifact_visibility`, and `selection_quality`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- no-live quality evidence copied `failure_class_summary_supported=true` and the same five not-deliverable failure classes;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, or raw approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this summary gate does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- additional live/customer failure classes must be represented in both quality matrix self-test regression and no-live rollup evidence before being used in shared reports.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Plan-Only Executable Plan Completion
 
 Task source: user requested a complete executable plan only, without code changes or 8-server deployment.
