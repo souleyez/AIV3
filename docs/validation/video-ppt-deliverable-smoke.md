@@ -3968,6 +3968,60 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Quality Matrix Object Risk Flag Gate
+
+Task source: M7/EP6 no-auth hardening after M6AA centralized the review-required risk flag set. Real `slide_quality_report.risk_flags` entries are objects with `code`, `severity`, `count`, and `review_action`, while some internal quality-matrix regressions only used string risk codes. This slice makes the quality matrix verdict path normalize both shapes before deciding whether a sample must remain `needs_manual_review`.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
+- keep the same 8 review-required risk codes from M6AA;
+- extend `scripts/smoke/video-ppt-quality-matrix.mjs` so `evaluateCase()` normalizes object-shaped and string-shaped risk flags through the same helper;
+- extend self-test regression so each of the 8 risk codes is tested in both string and object shapes.
+
+Implemented behavior:
+
+- `evaluateCase()` now uses `normalizeRiskFlags()` before building the risk flag set;
+- self-test internal regression checks all 8 review-required risk flags as strings;
+- self-test internal regression also checks all 8 review-required risk flags as objects matching the shape emitted by `slide_quality_report.risk_flags[]`;
+- self-test reports expose `review_required_risk_flag_object_shape_supported=true` and `review_required_risk_flag_object_shape_case_count=8`.
+
+Validation:
+
+```text
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted report summary readback>"
+```
+
+Result:
+
+- no-live rollup baseline passed before the slice with `command_count=18`, `passed_count=18`, and `failed_count=0`;
+- quality matrix syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `pending_count=2`, and `expectation_mismatch_count=0`;
+- self-test report exposed `review_required_risk_flag_count=8`;
+- self-test report exposed `review_required_risk_flag_object_shape_supported=true`;
+- self-test report exposed `review_required_risk_flag_object_shape_case_count=8`;
+- guarded risk flags remained `manual_review_required`, `missing_transcript_alignment`, `missing_ocr_evidence`, `full_frame_rectangle_fallback`, `selected_slide_duplicates_removed`, `frame_sharpness_review_required`, `slide_readability_review_required`, and `single_slide_output_review_required`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- future media-worker risk flags that require manual review must be added to the same quality-matrix gate and rerun through no-live rollup.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Video PPT No-Live Rollup Gate
 
 Task source: after the video PPT surface accumulated several independent no-live gates, the active plan needed a repeatable one-command rollup that proves the current local baseline without running live upload, third-party, handoff, capture, deployment, or customer-authorized actions.

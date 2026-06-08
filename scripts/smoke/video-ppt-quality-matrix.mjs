@@ -327,7 +327,7 @@ function evaluateCase(testCase) {
   }
   const quality = testCase.quality_report;
   const summary = quality.summary || {};
-  const riskFlags = new Set(Array.isArray(quality.risk_flags) ? quality.risk_flags : []);
+  const riskFlags = new Set(normalizeRiskFlags(quality.risk_flags));
   const hasReviewRequiredRiskFlag = [...riskFlags].some((riskFlag) =>
     REVIEW_REQUIRED_RISK_FLAGS.has(riskFlag),
   );
@@ -364,6 +364,8 @@ function buildSelfTestReport() {
       local_deliverables_input_reviewed: false,
       review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
+      review_required_risk_flag_object_shape_supported: true,
+      review_required_risk_flag_object_shape_case_count: REVIEW_REQUIRED_RISK_FLAGS.size,
     },
     nextActions: [
       'run synthetic PPT playback extraction and attach real target/ report when available',
@@ -382,10 +384,14 @@ function validateExplicitReviewRiskRegression() {
     if (evaluation.verdict !== 'needs_manual_review') {
       throw new Error(`quality matrix review-risk regression failed for ${riskFlag}`);
     }
+    const objectEvaluation = evaluateCase(buildReviewRiskRegressionCase(riskFlag, { objectRiskFlag: true }));
+    if (objectEvaluation.verdict !== 'needs_manual_review') {
+      throw new Error(`quality matrix object risk-flag regression failed for ${riskFlag}`);
+    }
   }
 }
 
-function buildReviewRiskRegressionCase(riskFlag) {
+function buildReviewRiskRegressionCase(riskFlag, { objectRiskFlag = false } = {}) {
   const singleSlideOutput = riskFlag === 'single_slide_output_review_required';
   const selectedCount = singleSlideOutput ? 1 : 7;
   return {
@@ -405,7 +411,7 @@ function buildReviewRiskRegressionCase(riskFlag) {
     },
     quality_report: {
       quality_score: 70,
-      risk_flags: [riskFlag],
+      risk_flags: [objectRiskFlag ? buildReviewRequiredRiskFlagObject(riskFlag) : riskFlag],
       summary: {
         full_frame_fallback_count: riskFlag === 'full_frame_rectangle_fallback' ? 1 : 0,
         detector_crop_count: selectedCount,
@@ -418,6 +424,15 @@ function buildReviewRiskRegressionCase(riskFlag) {
         single_slide_output: singleSlideOutput,
       },
     },
+  };
+}
+
+function buildReviewRequiredRiskFlagObject(code) {
+  return {
+    code,
+    severity: code === 'missing_ocr_evidence' ? 'low' : 'medium',
+    count: 1,
+    review_action: `review_${code}`,
   };
 }
 
@@ -615,6 +630,8 @@ function validateSelfTestReport(report) {
   if (
     !Array.isArray(report.gates.review_required_risk_flags)
     || report.gates.review_required_risk_flag_count !== REVIEW_REQUIRED_RISK_FLAGS.size
+    || report.gates.review_required_risk_flag_object_shape_supported !== true
+    || report.gates.review_required_risk_flag_object_shape_case_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !report.gates.review_required_risk_flags.includes('missing_ocr_evidence')
     || !report.gates.review_required_risk_flags.includes('single_slide_output_review_required')
   ) {
