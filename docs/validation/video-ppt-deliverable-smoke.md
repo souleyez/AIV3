@@ -4302,6 +4302,80 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Live Approval Command Template Evidence
+
+Task source: M6BF P1/no-live follow-up. M6BD/M6BE prove the live write approval gate itself, but operators also need copyable preflight command templates that visibly include the required approval flags without leaking approval ids, raw video URLs, local paths, or bearer values.
+
+Scope:
+
+- local no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- no-live rollup now reads upload-main preflight `commandTemplate` and stores only boolean evidence;
+- no-live rollup now reads external-video-ppt preflight `commandTemplate` and stores only boolean evidence;
+- upload-main preflight evidence must show the template contains `--ack-live-write` and `--approval-id <redacted-approval-id>`;
+- external preflight evidence must show the template contains `--ack-live-write`, `--approval-id <redacted-approval-id>`, and `--bearer <redacted-inbound-bearer>`;
+- both templates must report no raw approval value, raw URL, or local path;
+- `acceptance_status.no_live_evidence_summary` now records command-template readiness for both surfaces.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+node scripts/smoke/video-ppt-upload-main.mjs --preflight --output-dir <target-redacted>
+node scripts/smoke/external-video-ppt.mjs --preflight --allow-missing-bearer --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted command-template evidence readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- upload-main preflight passed and reported `liveWriteApprovalGateEnforced=true`;
+- external-video-ppt preflight passed and reported `liveWriteApprovalGateEnforced=true`;
+- no-live rollup passed with `command_count=24`, `passed_count=24`, and `failed_count=0`;
+- upload-main preflight evidence readback showed `command_template_present=true`;
+- upload-main preflight evidence readback showed `command_template_has_ack_live_write=true`;
+- upload-main preflight evidence readback showed `command_template_has_redacted_approval_id=true`;
+- upload-main preflight evidence readback showed `command_template_approval_values_included=false`, `command_template_raw_url_included=false`, and `command_template_local_path_included=false`;
+- external preflight evidence readback showed `command_template_present=true`;
+- external preflight evidence readback showed `command_template_has_ack_live_write=true`;
+- external preflight evidence readback showed `command_template_has_redacted_approval_id=true`;
+- external preflight evidence readback showed `command_template_has_redacted_bearer=true`;
+- external preflight evidence readback showed `command_template_approval_values_included=false`, `command_template_raw_url_included=false`, and `command_template_local_path_included=false`;
+- `acceptance_status.no_live_evidence_summary.live_approval_command_template_surface_count=2`;
+- `acceptance_status.no_live_evidence_summary.upload_main_live_approval_command_template_ready=true`;
+- `acceptance_status.no_live_evidence_summary.external_live_approval_command_template_ready=true`;
+- strict redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw approval/operator values, or raw self-test approval values; only non-secret field names such as `approval_reference_present` remained;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- P2 live still needs explicit write approval, safe video input, and controlled live execution;
+- P3 live still needs third-party credentials/context, safe input, and explicit third-party live write approval.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Live Approval Gate Self-Test Contract
 
 Task source: M6BE P1/no-live follow-up. M6BD added script-level live write approval gates and negative live-command checks. This slice adds deterministic self-test coverage for the approval argument combinations so future refactors cannot accidentally weaken the gate while keeping the CLI negative checks green.

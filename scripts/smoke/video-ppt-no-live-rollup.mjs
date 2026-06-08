@@ -440,6 +440,7 @@ function extractUploadMainPreflightEvidence(stdout) {
   if (!report) {
     return null;
   }
+  const commandTemplate = String(report.commandTemplate || '');
   return {
     schema: 'v3.video_ppt_upload_main_preflight_rollup_evidence.v1',
     report_schema: report.schema,
@@ -464,6 +465,15 @@ function extractUploadMainPreflightEvidence(stdout) {
     planned_step_count: report.liveWriteScope?.plannedSteps?.length,
     writes_smoke_records: report.liveWriteScope?.writesSmokeRecords,
     deploys_services: report.liveWriteScope?.deploysServices,
+    command_template_present: commandTemplate.length > 0,
+    command_template_has_ack_live_write: commandTemplate.includes('--ack-live-write'),
+    command_template_has_redacted_approval_id:
+      commandTemplate.includes('--approval-id <redacted-approval-id>'),
+    command_template_approval_values_included: /approval_ref|redacted-approval-ref/i
+      .test(commandTemplate),
+    command_template_raw_url_included: /https?:\/\//i.test(commandTemplate),
+    command_template_local_path_included: /\/Users\/|\/home\/|[A-Za-z]:\\/i
+      .test(commandTemplate),
     raw_fixture_url_included: report.redaction?.rawFixtureUrlIncluded,
     local_fixture_path_included: report.redaction?.localFixturePathIncluded,
     approval_id_included: report.redaction?.approvalIdIncluded,
@@ -537,6 +547,7 @@ function extractExternalVideoPptPreflightEvidence(stdout) {
   if (!report) {
     return null;
   }
+  const commandTemplate = String(report.commandTemplate || '');
   return {
     schema: 'v3.external_video_ppt_preflight_rollup_evidence.v1',
     report_schema: report.schema,
@@ -577,6 +588,17 @@ function extractExternalVideoPptPreflightEvidence(stdout) {
     planned_step_count: report.liveWriteScope?.plannedSteps?.length,
     writes_smoke_records: report.liveWriteScope?.writesSmokeRecords,
     deploys_services: report.liveWriteScope?.deploysServices,
+    command_template_present: commandTemplate.length > 0,
+    command_template_has_ack_live_write: commandTemplate.includes('--ack-live-write'),
+    command_template_has_redacted_approval_id:
+      commandTemplate.includes('--approval-id <redacted-approval-id>'),
+    command_template_has_redacted_bearer:
+      commandTemplate.includes('--bearer <redacted-inbound-bearer>'),
+    command_template_approval_values_included: /approval_ref|redacted-approval-ref/i
+      .test(commandTemplate),
+    command_template_raw_url_included: /https?:\/\//i.test(commandTemplate),
+    command_template_local_path_included: /\/Users\/|\/home\/|[A-Za-z]:\\/i
+      .test(commandTemplate),
     raw_fixture_url_included: report.redaction?.rawFixtureUrlIncluded,
     local_fixture_path_included: report.redaction?.localFixturePathIncluded,
     approval_id_included: report.redaction?.approvalIdIncluded,
@@ -1237,6 +1259,8 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
   const commandById = new Map(results.map((result) => [result.id, result]));
   const uploadEvidence = commandById.get('upload_main_self_test')?.evidence || {};
   const externalEvidence = commandById.get('external_video_ppt_self_test')?.evidence || {};
+  const uploadPreflight = commandById.get('upload_main_preflight')?.evidence || {};
+  const externalPreflight = commandById.get('external_video_ppt_preflight')?.evidence || {};
   const uploadApprovalNegative =
     commandById.get('upload_main_live_approval_gate_negative')?.evidence || {};
   const externalApprovalNegative =
@@ -1314,6 +1338,28 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       && externalEvidence.live_write_approval_rejects_missing_ack === true
       && externalEvidence.live_write_approval_accepts_complete_live_approval_shape === true
       && externalEvidence.live_write_approval_values_included === false,
+    live_approval_command_template_surface_count: [
+      uploadPreflight,
+      externalPreflight,
+    ].filter((evidence) =>
+      evidence.command_template_has_ack_live_write === true
+      && evidence.command_template_has_redacted_approval_id === true
+      && evidence.command_template_approval_values_included === false
+      && evidence.command_template_raw_url_included === false
+      && evidence.command_template_local_path_included === false).length,
+    upload_main_live_approval_command_template_ready:
+      uploadPreflight.command_template_has_ack_live_write === true
+      && uploadPreflight.command_template_has_redacted_approval_id === true
+      && uploadPreflight.command_template_approval_values_included === false
+      && uploadPreflight.command_template_raw_url_included === false
+      && uploadPreflight.command_template_local_path_included === false,
+    external_live_approval_command_template_ready:
+      externalPreflight.command_template_has_ack_live_write === true
+      && externalPreflight.command_template_has_redacted_approval_id === true
+      && externalPreflight.command_template_has_redacted_bearer === true
+      && externalPreflight.command_template_approval_values_included === false
+      && externalPreflight.command_template_raw_url_included === false
+      && externalPreflight.command_template_local_path_included === false,
     live_approval_negative_gate_count: [
       uploadApprovalNegative,
       externalApprovalNegative,
@@ -1609,6 +1655,9 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.live_approval_self_test_gate_surface_count !== 2
     || evidence.upload_main_live_approval_self_test_gate_supported !== true
     || evidence.external_live_approval_self_test_gate_supported !== true
+    || evidence.live_approval_command_template_surface_count !== 2
+    || evidence.upload_main_live_approval_command_template_ready !== true
+    || evidence.external_live_approval_command_template_ready !== true
     || evidence.live_approval_negative_gate_count !== 2
     || evidence.live_without_approval_rejected_before_network !== true
     || evidence.main_upload_artifact_surface_ready !== true
@@ -1712,6 +1761,12 @@ function validateUploadMainPreflightEvidence(report) {
     || evidence.planned_step_count < 7
     || evidence.writes_smoke_records !== true
     || evidence.deploys_services !== false
+    || evidence.command_template_present !== true
+    || evidence.command_template_has_ack_live_write !== true
+    || evidence.command_template_has_redacted_approval_id !== true
+    || evidence.command_template_approval_values_included !== false
+    || evidence.command_template_raw_url_included !== false
+    || evidence.command_template_local_path_included !== false
     || evidence.raw_fixture_url_included !== false
     || evidence.local_fixture_path_included !== false
     || evidence.approval_id_included !== false
@@ -1768,6 +1823,13 @@ function validateExternalVideoPptPreflightEvidence(report) {
     || evidence.planned_step_count < 5
     || evidence.writes_smoke_records !== true
     || evidence.deploys_services !== false
+    || evidence.command_template_present !== true
+    || evidence.command_template_has_ack_live_write !== true
+    || evidence.command_template_has_redacted_approval_id !== true
+    || evidence.command_template_has_redacted_bearer !== true
+    || evidence.command_template_approval_values_included !== false
+    || evidence.command_template_raw_url_included !== false
+    || evidence.command_template_local_path_included !== false
     || evidence.raw_fixture_url_included !== false
     || evidence.local_fixture_path_included !== false
     || evidence.approval_id_included !== false
