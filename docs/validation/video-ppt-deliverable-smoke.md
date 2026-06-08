@@ -4073,3 +4073,53 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 No-Live Rollup Rust Format Gate
+
+Task source: after M6T added media-worker Rust coverage to the no-live rollup, the same local pre-live gate still needed the Rust formatting check that earlier Rust quality slices used separately. Keeping `cargo fmt --check` in the one-command rollup reduces drift before GitHub sync and before any approved live smoke or deployment window.
+
+Scope:
+
+- extend `smoke:video-ppt-no-live-rollup` to include Rust workspace formatting;
+- keep the rollup no-live and local-only;
+- preserve the same redacted report schema and safety gates.
+
+Implemented behavior:
+
+- added `rust_format_check`: `cargo fmt --check`;
+- updated the script help and README to describe the Rust format check;
+- the rollup now runs 18 commands.
+
+Validation:
+
+```text
+cargo fmt --check
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report>
+```
+
+Result:
+
+- standalone Rust format check passed;
+- script syntax check passed;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`;
+- generated report included `rust_format_check`, `media_worker_lib_tests`, and `media_worker_offline_smoke_bin_check`;
+- report safety gates remained all no-live values;
+- report redaction scan found no local paths, URLs, token/cookie/bearer-like text, or session directories.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- use the 18-command rollup as the current local precondition before any approved live smoke or deployment window.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no MP4 was captured or recorded;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

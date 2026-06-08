@@ -91,6 +91,12 @@ const COMMANDS = [
     ],
   },
   {
+    id: 'rust_format_check',
+    description: 'Rust workspace formatting check',
+    command: 'cargo',
+    args: ['fmt', '--check'],
+  },
+  {
     id: 'media_worker_lib_tests',
     description: 'media-worker video PPT extraction library tests',
     command: 'cargo',
@@ -158,6 +164,7 @@ Checks:
   - runs login-gated video handoff self-test and preflight without network calls
   - runs authorized-capture self-test without opening a browser or FFmpeg
   - runs quality matrix self-test, including review-risk regression
+  - runs Rust formatting check
   - runs media-worker video PPT library tests and offline smoke binary check
   - runs video deliverables validator tests
 
