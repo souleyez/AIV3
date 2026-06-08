@@ -4022,6 +4022,65 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Plan-Only Executable Plan Completion
+
+Task source: user requested a complete executable plan only, without code changes or 8-server deployment.
+
+Scope:
+
+- plan-only consolidation for DataMax video PPT extraction;
+- no business code change in this slice;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Plan changes:
+
+- added `0.7.19 2026-06-08 本次完整可执行计划编写收口` as the current plan-only execution entry;
+- consolidated original plan, video test/extraction review, WeChat Video Channels and login-gated source handling, authorized capture fallback, GitHub sync, and 8-server deployment boundaries into one P0-P8 execution table;
+- updated the current feature baseline wording from M6AM-only to M6AN, including not-deliverable failure taxonomy evidence;
+- recorded that any local changes in `scripts/smoke/video-ppt-quality-matrix.mjs` or `scripts/smoke/video-ppt-no-live-rollup.mjs` are M6AO candidate code work and must not be mixed into a doc-only submission;
+- kept the active plan synchronized to `/Users/manslive01/Desktop/datamax-active-execution-plan.md`.
+
+Validation:
+
+```text
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --name-only
+git status --short --branch
+```
+
+Result:
+
+- desktop plan copy matched the repository plan by `cmp`;
+- final `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`;
+- intended doc-only staged files are limited to `docs/plans/datamax-active-execution-plan.md` and `docs/validation/video-ppt-deliverable-smoke.md`;
+- existing script changes, if present in the worktree, are intentionally excluded from this plan-only scope.
+
+Remaining work:
+
+- P2 main-site upload live controlled smoke still needs explicit approval to write one non-customer smoke record;
+- P3 third-party live smoke still needs bearer, `connection_id`, `source_id`, and safe input;
+- P4 WeChat/login-gated handoff live pass still needs an approved 8-server deployment window;
+- P5 authorized capture live sample still needs an approval record and playable source;
+- P6 customer quality matrix still needs a customer/operator authorized sample and retention policy;
+- P8 full acceptance cannot close until the live/customer/deployment gates have evidence or explicit non-executable reasons.
+
+Safety result:
+
+- no live upload was run;
+- no third-party event was posted;
+- no bearer or external credential was used;
+- no source video was downloaded, uploaded, registered, frame-extracted, OCRed, transcribed, or converted;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Executable Plan Final Lock And Change Isolation
 
 Task source: plan-only continuation to finish the consolidated executable plan, while the local working tree also contains an uncommitted M6AF no-live rollup script slice. This receipt records the plan/documentation boundary so doc-only synchronization does not accidentally include unconfirmed code changes or imply 8-server deployment.

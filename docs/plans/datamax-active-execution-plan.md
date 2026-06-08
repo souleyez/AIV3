@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 11:55 CST
-**当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit、M6AK 切片、M6AM no-live acceptance status 切片和 M6AN quality failure taxonomy 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准。入口是第 0.7 节，尤其是第 0.7.13-0.7.18 节的全量验收闭环、当前 HEAD 审计、下一轮任务卡、M6AB plan-only 收口、M6AJ no-live preflight evidence、M6AK 授权录屏 dry-run evidence、M6AL plan-only 验收状态矩阵、M6AM no-live report `acceptance_status`、M6AN not-deliverable failure taxonomy 和当前完整可执行方案；M6AC 把 quality matrix 的 review-required risk flag gate 扩展到真实 `slide_quality_report.risk_flags` 对象数组形态，M6AD-M6AN 则把 quality matrix、主站上传、第三方登记、视频号/登录态 handoff、授权录屏 self-test、授权录屏 dry-run handoff planning、生产触发边界、生产触发 evidence、三类 live preflight evidence、全量验收状态矩阵和不可交付失败归因纳入 no-live rollup 总报告。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 12:02 CST
+**当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit、M6AK 切片、M6AM no-live acceptance status 切片和 M6AN quality failure taxonomy 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准。入口是第 0.7 节，尤其是第 0.7.13-0.7.19 节的全量验收闭环、当前 HEAD 审计、下一轮任务卡、M6AB plan-only 收口、M6AJ no-live preflight evidence、M6AK 授权录屏 dry-run evidence、M6AL plan-only 验收状态矩阵、M6AM no-live report `acceptance_status`、M6AN not-deliverable failure taxonomy 和当前完整可执行方案；M6AC 把 quality matrix 的 review-required risk flag gate 扩展到真实 `slide_quality_report.risk_flags` 对象数组形态，M6AD-M6AN 则把 quality matrix、主站上传、第三方登记、视频号/登录态 handoff、授权录屏 self-test、授权录屏 dry-run handoff planning、生产触发边界、生产触发 evidence、三类 live preflight evidence、全量验收状态矩阵和不可交付失败归因纳入 no-live rollup 总报告。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
@@ -39,6 +39,7 @@
 - M6AL 已完成 plan-only 收口：第 0.7.18 新增全量验收状态矩阵，把 P0/P1 已完成、P2/P3/P4/P5/P6/P7/P8 待授权或待部署的状态、前置输入、完成证据和阻断原因固定下来，防止把 22/22 no-live、preflight 或 dry-run 误读成 live/customer/deployment 全量验收完成；本切片不改业务代码、不跑 live、不发 8。
 - M6AM 已完成本地切片：`smoke:video-ppt-no-live-rollup` 总报告现在输出并自校验 `acceptance_status`，schema 为 `v3.video_ppt_acceptance_status_rollup.v1`，精确校验 8 个 gate、完成/待授权/待凭据/待部署/待客户/待总收口计数和 safety flags；最新 no-live rollup 22/22 通过，redaction scan 无输出，`target/` tracked 为 0。
 - M6AN 已完成本地切片：quality matrix 新增不可交付失败归因 taxonomy，并在 self-test 内部回归 `source_access`、`video_has_no_ppt`、`frame_extraction`、`artifact_visibility` 和 `selection_quality`；no-live rollup 从 quality matrix 子报告复制该 taxonomy 并强制校验，最新 quality matrix self-test 和 no-live rollup 均通过，敏感扫描无输出。
+- 当前工作树隔离口径：本次用户要求仍是 plan-only；如果本地 `scripts/smoke/video-ppt-quality-matrix.mjs` 或 `scripts/smoke/video-ppt-no-live-rollup.mjs` 存在未提交改动，它们视为下一轮 M6AO 候选代码切片，未完成 gate 前不属于当前功能基线，不得混入 doc-only 提交。
 - 当前收版隔离口径：GitHub 最新已推送 HEAD 仍以 `git log -1` 为准；若只执行 EP0/doc-only 计划同步，不得 stage `scripts/smoke/video-ppt-no-live-rollup.mjs` 等功能脚本改动。若要同步 no-live rollup 代码切片，必须按第 0.7.17 的代码路径单独跑 gate、单独提交，仍不部署 8 服务器。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
@@ -948,7 +949,7 @@ Safety:
 
 #### 0.7.14 2026-06-08 当前 HEAD 验收审计
 
-本节是截至已推送 GitHub 最新 commit 加本节新增 M6AM 切片的收口审计，实际代码落点以 `git log -1`、`git status` 和推送记录为准。后续若只有 doc-only commit，功能基线仍以最近一次已验证功能切片为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
+本节是截至已推送 GitHub 最新 commit 加 M6AN quality failure taxonomy 切片的收口审计，实际代码落点以 `git log -1`、`git status` 和推送记录为准。后续若只有 doc-only commit，功能基线仍以最近一次已验证功能切片为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
 
 | 审计项 | 当前证据 | 是否可宣称完成 | 下一步 |
 | --- | --- | --- | --- |
@@ -1259,13 +1260,13 @@ M6AF 提交前必须确认：
 
 本节是当前真正执行入口，回答三件事：现在已经到哪里、下一步按什么顺序做、每一步需要什么授权和证据。旧章节保留历史细节，但后续执行优先按本节选择路径。
 
-本节起源于 plan-only 收口；M6AM 已把其中的验收状态矩阵落到 no-live rollup report。它不代表 live smoke 已完成，不代表客户样例已复核，不代表 8 服务器已部署，也不代表视频号/登录态来源可以被自动解析。
+本节起源于 plan-only 收口；M6AM 已把其中的验收状态矩阵落到 no-live rollup report，M6AN 已把 quality matrix 不可交付失败归因 taxonomy 落到 no-live rollup evidence。它不代表 live smoke 已完成，不代表客户样例已复核，不代表 8 服务器已部署，也不代表视频号/登录态来源可以被自动解析。
 
 ##### 0.7.18.1 当前事实快照
 
 | 项 | 当前结论 | 可对外说法 | 不能说的内容 |
 | --- | --- | --- | --- |
-| GitHub 基线 | 最新已推送 HEAD 以 `git log -1` 为准；当前记录到 M6AM | 已有 no-live 基线、live preflight evidence、授权录屏 dry-run handoff evidence 和 acceptance status evidence | 不能把 no-live/preflight/dry-run/acceptance status 说成 live 通过 |
+| GitHub 基线 | 最新已推送 HEAD 以 `git log -1` 为准；当前记录到 M6AN | 已有 no-live 基线、live preflight evidence、授权录屏 dry-run handoff evidence、acceptance status evidence 和 not-deliverable failure taxonomy evidence | 不能把 no-live/preflight/dry-run/acceptance status/failure taxonomy 说成 live 通过 |
 | no-live rollup | `smoke:video-ppt-no-live-rollup -- --self-test` 已收敛为 22 个无授权命令，并输出 `acceptance_status` | 可证明上传、第三方、handoff、capture self-test、capture dry-run、quality matrix、生产触发边界、preflight 门禁和全量验收状态矩阵在本地一键回归 | 不能替代主站 live、第三方 live、8 部署、客户样例 |
 | 触发边界 | 共享 fixture 覆盖“提取视频中的 PPT/幻灯片/课件”正向和“普通视频生成 PPT/介绍视频/只提字幕”负向 | 视频 PPT 是特殊触发，只抽取视频里已播放的课件画面 | 不能承诺把普通视频创作为可编辑 PPT |
 | 支持文件形态 | `.mp4`、`.mov`、`.m4v`、`.webm`、`.mkv`、`.avi` 可作为视频素材形态进入上传/登记/直链处理 | 支持用户上传视频或提供匿名直接视频 URL 后抽取截图型 PPTX/Markdown/notes/manifests | 不能承诺所有网页链接都能自动拿到视频文件 |
@@ -1661,7 +1662,7 @@ E. 客户质量样例：提供客户/operator 授权样例和保留策略，用�
 
 1. 走 P0：完成本节 plan-only 文档、桌面副本和 validation ledger 同步。
 2. 走 P1：authorized-capture dry-run evidence 已纳入 no-live rollup，仍未跑浏览器、未跑 FFmpeg、未部署。
-3. 下一轮若仍无授权，可继续本地 public/quality 窄修复；`acceptance_status` 字段已在 M6AM 落入 no-live report，后续只需在新增 gate 时维护其计数和验证。
+3. 下一轮若仍无授权，可继续本地 public/quality 窄修复；`acceptance_status` 字段已在 M6AM 落入 no-live report，not-deliverable failure taxonomy 已在 M6AN 落入 quality matrix/no-live rollup evidence，后续只需在新增 gate 或 failure class 时维护计数和验证。
 
 一旦用户给出授权：
 
@@ -1670,6 +1671,135 @@ E. 客户质量样例：提供客户/operator 授权样例和保留策略，用�
 3. 再 P7 + P4：批准 8 部署后验证视频号/登录态 handoff live surface。
 4. 再 P5：operator 授权录屏样例，录屏 MP4 回到 P2/P3。
 5. 最后 P6/P8：客户授权样例质量矩阵和全量验收收口。
+
+#### 0.7.19 2026-06-08 本次完整可执行计划编写收口
+
+本节是本次 plan-only 工作的最终入口。它把原计划、后续视频测试提取、抽取效果复核、微信视频号/在线不可直连视频处理、授权录屏兜底、GitHub 同步和 8 服务器部署边界收成一张可执行表。后续执行时优先看本节；历史章节保留证据细节和命令补充。
+
+##### 0.7.19.1 当前收口结论
+
+| 主题 | 当前结论 | 下一步 |
+| --- | --- | --- |
+| 唯一 active plan | 仓库计划为 `docs/plans/datamax-active-execution-plan.md`，桌面副本为 `/Users/manslive01/Desktop/datamax-active-execution-plan.md` | 每次 plan-only 更新后先 `cp` 再 `cmp` |
+| GitHub 功能基线 | 最新功能基线以已推送 HEAD 为准，当前记录到 M6AN：no-live acceptance status + quality failure taxonomy | doc-only 可单独提交；功能脚本改动必须另跑 gate |
+| 当前工作树风险 | 若本地存在 `scripts/smoke/video-ppt-quality-matrix.mjs` 或 `scripts/smoke/video-ppt-no-live-rollup.mjs` 未提交改动，视为 M6AO 候选，不属于本次 plan-only 收口 | 不 stage 这些脚本；除非用户明确切到代码收版 |
+| 主站上传 | `.mp4/.mov/.m4v/.webm/.mkv/.avi` 上传或匿名 direct URL 已有 no-live/self-test/preflight 基线 | 等用户批准写一条非客户主站 smoke 记录后跑 P2 |
+| 第三方登记 | 第三方视频素材登记和“提取视频里的 PPT”特殊触发已有 self-test/preflight 基线 | 等 bearer、`connection_id`、`source_id` 和安全输入后跑 P3 |
+| 公开视频样例 | 已有 public course 样例能生成截图型 PPTX/Markdown/manifests，结论是 `needs_manual_review` | 继续作为 public evidence，不替代客户授权样例 |
+| 微信视频号/登录态链接 | `weixin.qq.com/sph/...`、二维码页、登录态页、私有播放页默认 handoff，不自动抓取 | 部署后只验收 handoff live；不能宣称已拿到视频或已生成 PPT |
+| 授权录屏 | runbook/helper/self-test/dry-run 已具备，只作为 operator 合法播放但拿不到文件的兜底 | 有 approval record 后先 workstation/jump-host dry-run；录屏 MP4 再走 P2/P3 |
+| 8 服务器 | 本次不部署、不 pull、不 build、不 restart、不启用录屏 | 只有用户明确批准 P7 部署窗口后执行 |
+
+##### 0.7.19.2 可执行路径总表
+
+| 路径 | 触发条件 | 允许做 | 必须产出 | 禁止项 |
+| --- | --- | --- | --- | --- |
+| P0 plan-only | 只整理计划、盘进度、准备下一阶段 | 更新计划、validation ledger、桌面副本；可 doc-only GitHub 同步 | `cmp` 一致、`git diff --check`、staged 只含文档 | 不 stage 脚本/业务代码；不跑 live；不发 8 |
+| P1 no-live baseline | 没有 live/客户/部署授权但要继续本地质量工作 | 跑 no-live rollup、validator、quality matrix self-test、本地 fixture/public 复核 | 22/22 或新增 gate 对应结果、redaction scan、`target/` tracked 为 0 | 不上传、不发第三方事件、不录屏、不下载客户视频 |
+| P2 主站上传 live | 用户批准写一条非客户主站 smoke 记录 | 同 fixture preflight -> live 上传 -> 抽取 -> 下载/validator/quality matrix | 上传/document/run/artifact/PPTX/Markdown/manifests 脱敏回执 | 不顺手部署；失败不扩大到客户数据 |
+| P3 第三方 live | bearer/context/input 齐全 | 同 context preflight -> live 登记视频 -> special trigger | 素材登记和“提取视频里的 PPT”触发分别有回执 | 不打印 bearer；不记录 raw payload/source URL |
+| P4 视频号/登录态 handoff | 用户给视频号、二维码页、登录态网页、私有播放页 | 返回上传文件、匿名 direct URL、授权录屏三选项；部署后可 live 验证 handoff | `login_gated_video_source_not_supported`，且无抽帧/OCR/PPT 成功信号 | 不绕过登录、不要 cookie/HAR/storage、不伪造成功 |
+| P5 授权录屏兜底 | operator 有合法播放授权但拿不到文件 | approval record -> dry-run -> 短时录屏 -> 人工确认 MP4 -> P2/P3 | `sharedReceipt`、MP4 摘要、后续普通视频抽取回执 | 无 approval 不录屏；8 内部录屏不默认启用 |
+| P6 客户质量矩阵 | 客户/operator 提供授权样例和保留策略 | validator + synthetic/public/customer 三输入 quality matrix + 人工复核 | `matrix_complete=true` 或明确 pending/failure 归因 | public/synthetic 不得冒充客户样例 |
+| P7 8 服务器部署 | 用户明确批准发版窗口 | 部署已推送且验证过的 commit；部署后跑目标 smoke | 服务 active、部署 HEAD、回滚点、目标 smoke 回执 | 不触碰 120；不处理无关文件；不启用录屏开关 |
+| P8 全量收口 | P2-P7 均有回执或明确不可执行原因 | 汇总 validation ledger、GitHub/部署状态、风险和结论 | 最终 rollup：通过/需复核/不可交付/阻断均明确 | 任一 live/customer/deploy gate 缺证据时不称全量完成 |
+
+##### 0.7.19.3 视频输入和触发判断
+
+1. 支持的视频文件形态是 `.mp4`、`.mov`、`.m4v`、`.webm`、`.mkv`、`.avi`，前提是用户上传文件、提供匿名直接视频 URL，或公开页面确实暴露可匿名访问的视频 asset。
+2. 特殊触发只接受“提取/抽取视频中的 PPT/幻灯片/课件/课程页面”这一类意图。
+3. 普通视频总结、普通视频生成 PPT、根据视频内容创作介绍 PPT、只提字幕、从非视频文档抽 slide，不进入视频 PPT 抽取。
+4. 如果链接无法得到匿名视频文件，结果不是失败重试，而是 handoff：上传文件、提供匿名 direct URL、或申请授权录屏。
+5. 录屏产出的 `.mp4` 不是新解析路径，只是一个普通视频输入；后续仍必须走上传或第三方视频登记抽取。
+
+##### 0.7.19.4 抽取效果复核口径
+
+每个真实或授权样例只允许落到三类结论之一：
+
+| 结论 | 条件 | 后续动作 |
+| --- | --- | --- |
+| `deliverable` | PPTX、`video_slides.md`、notes、selected manifest、rectangle manifest、final/published/version/extraction manifests、quality report 通过；主要课件页完整可读；无阻断 risk flags | 可作为通过回执，但仍保留脱敏检查 |
+| `needs_manual_review` | 产物生成，但有缺字幕/OCR、重复页、单页输出、full-frame fallback、清晰度/可读性、crop 或人工复核风险 | 记录风险，不包装成 clean deliverable；必要时回 P1/P6 做窄修复 |
+| `not_deliverable` | 拿不到视频、视频没有 PPT/课件画面、抽帧失败、关键页缺失、PPTX 无效、产物不可发布或授权不成立 | 归因到 failure class，停止该样例或请求新输入 |
+
+当前 M6AN 固定的不可交付失败归因 taxonomy：
+
+- `source_access`: 无法取得匿名视频文件、授权不足、登录态不可用。
+- `video_has_no_ppt`: 视频可播放但没有 PPT/幻灯片/课件画面。
+- `frame_extraction`: FFmpeg、格式、时长、缓存或抽帧链路失败。
+- `artifact_visibility`: 后端生成但主站/第三方 surface 无法安全下载或展示。
+- `selection_quality`: 关键页缺失、重复页过多、转场页误选、页面覆盖不足。
+
+已纳入 review-required gate 的风险至少包括：
+
+- `manual_review_required`
+- `missing_transcript_alignment`
+- `missing_ocr_evidence`
+- `full_frame_rectangle_fallback`
+- `selected_slide_duplicates_removed`
+- `frame_sharpness_review_required`
+- `slide_readability_review_required`
+- `single_slide_output_review_required`
+
+##### 0.7.19.5 微信视频号和服务器录屏研究边界
+
+针对 `https://weixin.qq.com/sph/...` 这类链接，当前产品口径固定为：
+
+1. 如果系统没有拿到匿名直接视频文件，就不能声称已经看过视频内容。
+2. 不能自动抽帧、OCR、转写或生成 PPT。
+3. 只返回 handoff：上传 `.mp4` 等视频文件、提供匿名 direct URL、或申请授权录屏。
+4. 不要求用户提供 cookie、扫码截图、账号密码、浏览器 storage、HAR 或平台内部接口 payload。
+
+8 服务器内部录屏只作为后续研究项，不进入当前主线：
+
+1. 默认保持关闭，不启用 `CAPTURE_FALLBACK_ENABLED`。
+2. 先做方案评审，再做 read-only dependency audit；任何安装依赖、改环境变量、启用浏览器/FFmpeg、服务 restart 都要单独审批。
+3. 优先 workstation/jump-host PoC，证明录屏 MP4 能按普通视频输入通过 P2/P3。
+4. 若以后批准 8 服务器 PoC，必须独立 job/user/profile/temp dir，并发 1、时长/容量/保留期硬限制、日志脱敏、清理和回滚明确。
+5. 服务器录屏成功也只表示得到一个授权 MP4 输入，不表示微信视频号或登录态平台可以被自动解析。
+
+##### 0.7.19.6 本次 plan-only 收版命令
+
+```bash
+git status --short --branch
+cp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --name-only
+```
+
+如果需要把本次计划同步 GitHub，只允许 doc-only staging：
+
+```bash
+git add docs/plans/datamax-active-execution-plan.md docs/validation/video-ppt-deliverable-smoke.md
+git diff --cached --name-only
+git diff --cached --stat
+git commit -m "Finalize DataMax video PPT executable plan"
+git push origin main
+```
+
+提交前必须确认：
+
+- staged 文件只包含计划或 validation ledger 文档。
+- 没有把 `scripts/`、`apps/`、`crates/`、`target/`、视频、帧图、PPTX、Markdown 产物、客户文件或私有路径混入提交。
+- 当前若有 M6AO 候选脚本改动，先保持未 staged；后续用户确认后按 P1/no-live 代码切片单独跑 gate 和提交。
+- GitHub 同步不等于 8 服务器发版；8 服务器仍需 P7 单独批准。
+
+##### 0.7.19.7 下一步推荐顺序
+
+如果没有新增授权，下一步只做 P0 或 P1：
+
+1. P0：提交/同步本计划和 validation ledger，确保桌面副本一致。
+2. P1：如果要继续开发，先处理 M6AO 候选脚本切片或新的 public/quality 窄修复；必须跑 syntax、quality matrix self-test、no-live rollup、redaction scan、`target/` tracked 检查。
+
+如果用户给出授权，按这个顺序推进：
+
+1. P2：主站上传 live controlled smoke，这是客户最自然入口。
+2. P3：第三方视频登记 + “提取视频里的 PPT”特殊触发 live smoke。
+3. P7 -> P4：批准部署后验证视频号/登录态 handoff live surface。
+4. P5：operator 授权录屏样例，录屏 MP4 回到 P2/P3。
+5. P6：客户授权样例 quality matrix。
+6. P8：汇总全量验收，明确通过、需人工复核、不可交付和剩余阻断。
 
 ## 1. 计划原则
 
