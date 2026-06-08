@@ -4302,6 +4302,77 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Approval Request Summary Evidence
+
+Task source: M6BI P1/no-live follow-up. The no-live rollup already records pending gates and readiness evidence; this slice adds a machine-readable `approval_request_summary` so the remaining live/customer/deployment requests can be inspected without reading prose or exposing raw values.
+
+Scope:
+
+- local no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `acceptance_status.approval_request_summary.schema=v3.video_ppt_approval_request_summary.v1`;
+- approval request summary lists P2-P7 as actionable request gates;
+- summary records main upload write approval and safe video input requirements;
+- summary records external bearer, connection id, source id, write approval, and safe video input requirements;
+- summary records login-gated handoff deployment-window requirement;
+- summary records authorized capture approval record, playable authorized source, and retention policy requirements;
+- summary records customer quality matrix authorized sample, approval id, and retention policy requirements;
+- summary records 8-server explicit deployment window requirement;
+- summary records `safe_to_share=true` and `raw_values_included=false`.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted approval request summary readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup passed with `command_count=24`, `passed_count=24`, and `failed_count=0`;
+- readback showed `approval_request_summary.schema=v3.video_ppt_approval_request_summary.v1`;
+- readback showed `request_count=6`;
+- readback showed request gate ids for P2 main upload, P3 external video PPT, P4 login-gated handoff, P5 authorized capture, P6 customer quality matrix, and P7 server deployment;
+- readback showed `safe_to_share=true`;
+- readback showed `raw_values_included=false`;
+- readback showed main upload write approval required;
+- readback showed external inbound bearer required;
+- readback showed login-gated handoff requires server 8 deployment window;
+- readback showed authorized capture requires approval record;
+- readback showed customer quality matrix requires authorized sample;
+- readback showed server deployment requires explicit window;
+- readback showed full acceptance waits on live/customer/deployment gates;
+- `acceptance_status.full_acceptance_ready=false` remained unchanged.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- P2 live still needs explicit write approval, safe video input, and controlled live execution;
+- P3 live still needs third-party credentials/context, safe input, and explicit third-party live write approval.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Command Template Self-Test Contract
 
 Task source: M6BH P1/no-live follow-up. M6BF/M6BG made command-template readiness visible in preflight evidence, no-live evidence summary, and live gate readiness summary. This slice adds script-level self-test contracts so upload-main and external-video-ppt self-tests directly validate redacted live command templates instead of relying only on preflight extraction.

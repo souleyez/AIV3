@@ -1130,6 +1130,7 @@ function buildAcceptanceStatus({ summary, results }) {
     },
   ];
   const pendingGateRequirementsSummary = buildPendingGateRequirementsSummary(gates);
+  const approvalRequestSummary = buildApprovalRequestSummary(gates);
   return {
     schema: 'v3.video_ppt_acceptance_status_rollup.v1',
     full_acceptance_ready: false,
@@ -1148,6 +1149,7 @@ function buildAcceptanceStatus({ summary, results }) {
     no_live_evidence_summary: noLiveEvidenceSummary,
     live_gate_readiness_summary: liveGateReadinessSummary,
     pending_gate_requirements_summary: pendingGateRequirementsSummary,
+    approval_request_summary: approvalRequestSummary,
     gates,
     next_authorized_paths: [
       'P2_main_upload_live_smoke',
@@ -1168,6 +1170,50 @@ function buildAcceptanceStatus({ summary, results }) {
       server_8_touched: false,
       server_120_touched: false,
     },
+  };
+}
+
+function buildApprovalRequestSummary(gates = []) {
+  const gateById = new Map(gates.map((gate) => [gate.id, gate]));
+  const actionableGateIds = [
+    'P2_main_upload_live_smoke',
+    'P3_external_video_ppt_live_smoke',
+    'P4_login_gated_handoff_live_pass',
+    'P5_authorized_capture_live_sample',
+    'P6_customer_authorized_quality_matrix',
+    'P7_server_deployment_gate',
+  ];
+  const actionableGates = actionableGateIds
+    .map((gateId) => gateById.get(gateId))
+    .filter(Boolean);
+  return {
+    schema: 'v3.video_ppt_approval_request_summary.v1',
+    request_count: actionableGates.length,
+    request_gate_ids: actionableGateIds,
+    safe_to_share: true,
+    raw_values_included: false,
+    no_live_substitute_available_for_requests: false,
+    main_upload_requires_write_approval: true,
+    main_upload_requires_safe_video_input: true,
+    main_upload_required_ack_flag: '--ack-live-write',
+    main_upload_required_approval_id_placeholder: '<approval_ref>',
+    external_requires_write_approval: true,
+    external_requires_inbound_bearer: true,
+    external_requires_connection_id: true,
+    external_requires_source_id: true,
+    external_requires_safe_video_input: true,
+    external_required_ack_flag: '--ack-live-write',
+    external_required_approval_id_placeholder: '<approval_ref>',
+    login_gated_handoff_requires_server_8_deployment_window: true,
+    authorized_capture_requires_approval_record: true,
+    authorized_capture_requires_playable_authorized_source: true,
+    authorized_capture_requires_retention_policy: true,
+    customer_quality_matrix_requires_authorized_sample: true,
+    customer_quality_matrix_requires_approval_id: true,
+    customer_quality_matrix_requires_retention_policy: true,
+    server_deployment_requires_explicit_window: true,
+    full_acceptance_waits_on_live_customer_deployment:
+      Boolean(gateById.get('P8_full_acceptance_close')),
   };
 }
 
@@ -1554,6 +1600,7 @@ function validateAcceptanceStatus(report) {
   validateNoLiveAcceptanceEvidenceSummary(acceptance, report);
   validateLiveGateReadinessSummary(acceptance, report);
   validatePendingGateRequirementsSummary(acceptance, report);
+  validateApprovalRequestSummary(acceptance, report);
   for (const gateId of [
     'P2_main_upload_live_smoke',
     'P3_external_video_ppt_live_smoke',
@@ -1573,6 +1620,60 @@ function validateAcceptanceStatus(report) {
     ) {
       throw new Error(`no-live rollup acceptance status gate is incomplete: ${gateId}`);
     }
+  }
+}
+
+function validateApprovalRequestSummary(acceptance, report) {
+  const summary = acceptance.approval_request_summary;
+  if (
+    !summary
+    || summary.schema !== 'v3.video_ppt_approval_request_summary.v1'
+    || summary.safe_to_share !== true
+    || summary.raw_values_included !== false
+    || summary.no_live_substitute_available_for_requests !== false
+  ) {
+    throw new Error('no-live rollup approval request summary is incomplete');
+  }
+  if (report.summary.failed_count !== 0) {
+    return;
+  }
+  const requiredGateIds = [
+    'P2_main_upload_live_smoke',
+    'P3_external_video_ppt_live_smoke',
+    'P4_login_gated_handoff_live_pass',
+    'P5_authorized_capture_live_sample',
+    'P6_customer_authorized_quality_matrix',
+    'P7_server_deployment_gate',
+  ];
+  const requestGateIds = Array.isArray(summary.request_gate_ids)
+    ? summary.request_gate_ids
+    : [];
+  if (
+    summary.request_count !== requiredGateIds.length
+    || requestGateIds.length !== requiredGateIds.length
+    || requiredGateIds.some((gateId) => !requestGateIds.includes(gateId))
+    || summary.main_upload_requires_write_approval !== true
+    || summary.main_upload_requires_safe_video_input !== true
+    || summary.main_upload_required_ack_flag !== '--ack-live-write'
+    || summary.main_upload_required_approval_id_placeholder !== '<approval_ref>'
+    || summary.external_requires_write_approval !== true
+    || summary.external_requires_inbound_bearer !== true
+    || summary.external_requires_connection_id !== true
+    || summary.external_requires_source_id !== true
+    || summary.external_requires_safe_video_input !== true
+    || summary.external_required_ack_flag !== '--ack-live-write'
+    || summary.external_required_approval_id_placeholder !== '<approval_ref>'
+    || summary.login_gated_handoff_requires_server_8_deployment_window !== true
+    || summary.authorized_capture_requires_approval_record !== true
+    || summary.authorized_capture_requires_playable_authorized_source !== true
+    || summary.authorized_capture_requires_retention_policy !== true
+    || summary.customer_quality_matrix_requires_authorized_sample !== true
+    || summary.customer_quality_matrix_requires_approval_id !== true
+    || summary.customer_quality_matrix_requires_retention_policy !== true
+    || summary.server_deployment_requires_explicit_window !== true
+    || summary.full_acceptance_waits_on_live_customer_deployment !== true
+  ) {
+    throw new Error('no-live rollup approval request summary does not match pending gates');
   }
 }
 
