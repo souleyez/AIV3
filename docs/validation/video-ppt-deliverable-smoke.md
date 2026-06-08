@@ -7541,3 +7541,73 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Single-Slide Weak Public Sample Current-Head Revalidation
+
+Task source: M6BR validation-only follow-up. Existing `Nix in Space` public-course deliverables under `target/` were available from prior extraction runs. This slice revalidates the weak single-slide public sample against the current HEAD to prove it remains review-required rather than being misclassified as a clean public-course deliverable.
+
+Scope:
+
+- validation-only weak public-course deliverables review;
+- no code change required for this slice;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Commands:
+
+```text
+node tools/validate-video-deliverables.mjs <single-slide-public-generated-artifacts> --json
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <single-slide-public-generated-artifacts> --pretty --output-dir <target-redacted>
+node -e "<redacted single-slide public quality matrix readback>"
+rg -n "<local-path-url-token-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- deliverables validator returned `ok=true`;
+- validator output redacted the artifacts directory and file paths;
+- checked file kinds included PPTX, final manifest, published manifest, version history, extraction manifest, slide rectangles manifest, selected slides manifest, slide notes, `video_slides.md`, and slide quality report;
+- selected slide count was `1`;
+- requested selected count was `1`;
+- PPTX slide count was `1`;
+- Markdown slide count was `1`;
+- slide rectangle count was `1`;
+- quality slide count was `1`;
+- subtitle page map remained absent, which is valid for this no-subtitle/no-transcript public sample contract;
+- public-course quality matrix returned `status=partial_public_course_deliverables_reviewed`;
+- `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`;
+- public course case category was `public_course_video`;
+- public source access status was `anonymous_public_video_fixture`;
+- public deliverable state was `final_pptx_ready`;
+- public validator status was ok;
+- public quality score was `50`;
+- public risk flags were `full_frame_rectangle_fallback`, `missing_transcript_alignment`, `single_slide_output_review_required`, and `manual_review_required`;
+- public quality summary recorded `full_frame_fallback_count=1`, `detector_crop_count=0`, `subtitle_missing_count=1`, `ocr_missing_count=1`, `sharpness_high_count=0`, `readability_high_count=0`, and `single_slide_output=true`;
+- public evaluation verdict was `needs_manual_review`;
+- public failure class was `crop_quality`;
+- customer-authorized case stayed pending;
+- path/credential scan found no raw URL, token query string, bearer value, cookie, authorization value, local absolute path, `target/.../generated_artifacts` path, or `video-extraction-*` identifier in the quality matrix report;
+- `git diff --check` passed before this receipt was added;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- this confirms the weak single-slide public sample remains a review-required contract sample, not a full public-course quality pass.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
