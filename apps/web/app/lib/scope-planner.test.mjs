@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { planAssistantScope, selectPlannerDatasetId } from './scope-planner.js';
+
+const videoPptTriggerCases = loadVideoPptTriggerCases();
 
 const datasets = [
   {
@@ -23,6 +26,17 @@ const datasets = [
     wordCount: 900,
   },
 ];
+
+function loadVideoPptTriggerCases() {
+  const fixture = JSON.parse(readFileSync(
+    new URL('../../../../fixtures/video-ppt-trigger-classifier/trigger-cases.json', import.meta.url),
+    'utf8',
+  ));
+  assert.equal(fixture.schema, 'v3.video_ppt_trigger_classifier_fixture.v1');
+  assert.ok(Array.isArray(fixture.positive));
+  assert.ok(Array.isArray(fixture.negative));
+  return fixture;
+}
 
 test('scope planner keeps user selected dataset as highest priority', () => {
   const plan = planAssistantScope({
@@ -234,29 +248,27 @@ test('scope planner does not use PPT extraction for transcript-only video reques
   assert.equal(plan.supplyStrategy.recommendedActions.includes('media.extract_ppt_transcript'), false);
 });
 
-test('scope planner rejects ordinary video-to-PPT generation as extraction trigger', () => {
-  for (const prompt of [
-    '请把普通视频变成PPT。',
-    'Create a PowerPoint from this ordinary video.',
-    '生成一个PPT介绍这段视频。',
-    '生成PPT介绍这段视频，并提取字幕。',
-  ]) {
-    const plan = planAssistantScope({ prompt, datasets });
+test('scope planner rejects shared negative video PPT trigger fixture', () => {
+  for (const triggerCase of videoPptTriggerCases.negative) {
+    const plan = planAssistantScope({ prompt: triggerCase.prompt, datasets });
     assert.equal(
       plan.supplyStrategy.recommendedActions.includes('media.extract_ppt_transcript'),
       false,
-      prompt,
+      triggerCase.id,
     );
   }
 });
 
-test('scope planner keeps existing video slide extraction prompts positive', () => {
-  const plan = planAssistantScope({
-    prompt: 'Extract slides from this video: talk.mp4',
-    datasets,
-  });
+test('scope planner follows shared positive video PPT trigger fixture', () => {
+  for (const triggerCase of videoPptTriggerCases.positive) {
+    const plan = planAssistantScope({ prompt: triggerCase.prompt, datasets });
 
-  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
+    assert.deepEqual(
+      plan.supplyStrategy.recommendedActions,
+      triggerCase.expected_scope_actions,
+      triggerCase.id,
+    );
+  }
 });
 
 test('scope planner auto-selects media dataset for audio and video prompts', () => {

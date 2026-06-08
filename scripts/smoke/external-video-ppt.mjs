@@ -2,6 +2,7 @@
 
 import { createServer } from 'node:http';
 import { basename, extname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3000';
@@ -34,6 +35,10 @@ const LIVE_WRITE_STEPS = [
   'assistant_run_reply_poll',
   'optional_deliverable_downloads',
 ];
+const TRIGGER_CASES_URL = new URL(
+  '../../fixtures/video-ppt-trigger-classifier/trigger-cases.json',
+  import.meta.url,
+);
 
 function parseArgs(argv) {
   const args = {
@@ -300,32 +305,50 @@ function promptRequestsVideoPpt(prompt) {
   return !ordinaryVideoToPpt || extractionFromExistingSlides;
 }
 
-function assertVideoPptTriggerClassifier() {
-  const positivePrompts = [
-    '请提取这个视频里的 PPT/幻灯片/课件。',
-    '请提取视频中的PPT。',
-    '从这个视频中抽取课件页面。',
-    'Extract slides from this video.',
-  ];
-  const negativePrompts = [
-    '请总结这个视频。',
-    '请把普通视频变成PPT。',
-    'Create a PowerPoint from this ordinary video.',
-    '生成一个PPT介绍这段视频。',
-    '生成PPT介绍这段视频，并提取字幕。',
-    'Extract slides from the document.',
-  ];
-  const missedPositives = positivePrompts.filter((prompt) => !promptRequestsVideoPpt(prompt));
-  if (missedPositives.length > 0) {
-    throw new Error(`video PPT trigger classifier missed positive prompts: ${missedPositives.join(' | ')}`);
+function loadVideoPptTriggerCases() {
+  const fixture = JSON.parse(readFileSync(TRIGGER_CASES_URL, 'utf8'));
+  if (fixture.schema !== 'v3.video_ppt_trigger_classifier_fixture.v1') {
+    throw new Error('unexpected video PPT trigger fixture schema');
   }
-  const falsePositives = negativePrompts.filter((prompt) => promptRequestsVideoPpt(prompt));
-  if (falsePositives.length > 0) {
-    throw new Error(`video PPT trigger classifier accepted ordinary video-to-PPT prompts: ${falsePositives.join(' | ')}`);
+  const positive = Array.isArray(fixture.positive) ? fixture.positive : [];
+  const negative = Array.isArray(fixture.negative) ? fixture.negative : [];
+  for (const item of [...positive, ...negative]) {
+    if (!item?.id || !item?.prompt) {
+      throw new Error('video PPT trigger fixture cases must include id and prompt');
+    }
   }
   return {
-    positivePromptCount: positivePrompts.length,
-    negativePromptCount: negativePrompts.length,
+    version: Number(fixture.version || 0),
+    positive,
+    negative,
+  };
+}
+
+function assertVideoPptTriggerClassifier() {
+  const triggerCases = loadVideoPptTriggerCases();
+  const missedPositives = triggerCases.positive.filter(({ prompt }) => !promptRequestsVideoPpt(prompt));
+  if (missedPositives.length > 0) {
+    throw new Error(
+      `video PPT trigger classifier missed positive prompts: ${missedPositives
+        .map(({ id }) => id)
+        .join(' | ')}`,
+    );
+  }
+  const falsePositives = triggerCases.negative.filter(({ prompt }) => promptRequestsVideoPpt(prompt));
+  if (falsePositives.length > 0) {
+    throw new Error(
+      `video PPT trigger classifier accepted ordinary video-to-PPT prompts: ${falsePositives
+        .map(({ id }) => id)
+        .join(' | ')}`,
+    );
+  }
+  return {
+    fixtureSchema: 'v3.video_ppt_trigger_classifier_fixture.v1',
+    fixtureVersion: triggerCases.version,
+    sharedFixtureCaseCount: triggerCases.positive.length + triggerCases.negative.length,
+    scriptSpecificCaseCount: 0,
+    positivePromptCount: triggerCases.positive.length,
+    negativePromptCount: triggerCases.negative.length,
   };
 }
 

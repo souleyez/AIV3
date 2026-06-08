@@ -4236,6 +4236,77 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Shared Video PPT Trigger Fixture
+
+Task source: M6Z in the active execution plan. After M6X/M6Y tightened production and smoke trigger guards, the same positive/negative prompt corpus still lived in several places. This slice makes the trigger regression corpus shared by upload-main smoke, third-party smoke, front-end scope planner tests, and Rust assistant-runtime tests.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
+- add one shared trigger fixture for video PPT prompts;
+- wire upload-main and third-party smoke self-tests to that fixture;
+- wire front-end scope planner and Rust assistant-runtime tests to that fixture;
+- keep the production trigger boundary unchanged except for aligning the front-end English source hint with the already-supported Rust/smoke `video` source hint.
+
+Implemented behavior:
+
+- added `fixtures/video-ppt-trigger-classifier/trigger-cases.json` with `schema=v3.video_ppt_trigger_classifier_fixture.v1`;
+- the fixture currently has 6 positive prompts and 6 negative prompts;
+- positive prompts cover uploaded-video Chinese, generic video Chinese, courseware extraction Chinese, English `Extract slides from this video`, and file-name English `talk.mkv`;
+- negative prompts cover video summary, ordinary video-to-PPT, English ordinary video-to-PPT, video-introduction PPT generation, subtitle-only extraction, and document slide extraction;
+- upload-main and third-party smoke self-tests now report `fixtureVersion=1`, `sharedFixtureCaseCount=12`, `scriptSpecificCaseCount=0`, `positivePromptCount=6`, and `negativePromptCount=6`;
+- front-end scope planner tests and Rust assistant-runtime tests now read the same fixture and assert the expected `media.extract_ppt_transcript` / `media.resolve_video_url` action list;
+- front-end `VIDEO_PPT_SOURCE_PATTERN` now includes English `video`, matching the Rust and smoke source hints and keeping `Extract slides from this video.` positive without accepting ordinary video-to-PPT generation.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>
+npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>
+node --check apps/web/app/lib/scope-planner.js
+node --test apps/web/app/lib/scope-planner.test.mjs
+cargo test -p assistant-runtime --lib
+cargo fmt --check
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- upload-main script syntax check passed;
+- external script syntax check passed;
+- upload-main self-test passed and recorded shared fixture counts `12/6/6`;
+- external self-test passed and recorded shared fixture counts `12/6/6`;
+- front-end scope planner syntax check passed;
+- front-end scope planner tests passed, 21 tests;
+- Rust assistant-runtime library tests passed, 34 tests;
+- Rust formatting check passed after mechanical `cargo fmt`;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`;
+- sensitive-value report scan found no raw URLs, token query strings, object keys, bearer values, local absolute paths, generated-artifacts paths, provider keys, or password-like values;
+- `git diff --check` passed;
+- tracked `target/` file count remained 0.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- future prompt additions should go into the shared fixture first, then let upload-main smoke, external smoke, front-end tests, and Rust tests consume the same corpus;
+- if production code is later refactored into a shared classifier implementation, that must be a separate slice with its own tests and rollout gate.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Production Scope Video PPT Trigger Guard
 
 Task source: after the smoke trigger classifier was tightened, production scope planning still had broader video PPT intent checks. This slice moves the same product boundary into the front-end scope planner and Rust assistant-runtime recommendation path so `media.extract_ppt_transcript` is not recommended for ordinary video-to-PPT generation or transcript-only video requests.

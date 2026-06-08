@@ -1,0 +1,62 @@
+{
+  "schema": "v3.video_ppt_trigger_classifier_fixture.v1",
+  "version": 1,
+  "positive": [
+    {
+      "id": "uploaded-video-ppt-zh",
+      "prompt": "请提取刚上传视频里的 PPT/幻灯片/课件。",
+      "expected_scope_actions": ["media.extract_ppt_transcript"]
+    },
+    {
+      "id": "generic-video-ppt-zh",
+      "prompt": "请提取这个视频里的 PPT/幻灯片/课件。",
+      "expected_scope_actions": ["media.extract_ppt_transcript"]
+    },
+    {
+      "id": "extract-video-ppt-zh",
+      "prompt": "请提取视频中的PPT。",
+      "expected_scope_actions": ["media.extract_ppt_transcript"]
+    },
+    {
+      "id": "extract-courseware-zh",
+      "prompt": "从这个视频中抽取课件页面。",
+      "expected_scope_actions": ["media.extract_ppt_transcript"]
+    },
+    {
+      "id": "extract-slides-en",
+      "prompt": "Extract slides from this video.",
+      "expected_scope_actions": ["media.extract_ppt_transcript"]
+    },
+    {
+      "id": "extract-slides-file-en",
+      "prompt": "Extract slides from this video: talk.mkv",
+      "expected_scope_actions": ["media.resolve_video_url", "media.extract_ppt_transcript"]
+    }
+  ],
+  "negative": [
+    {
+      "id": "summarize-video-zh",
+      "prompt": "请总结这个视频。"
+    },
+    {
+      "id": "ordinary-video-to-ppt-zh",
+      "prompt": "请把普通视频变成PPT。"
+    },
+    {
+      "id": "ordinary-video-to-ppt-en",
+      "prompt": "Create a PowerPoint from this ordinary video."
+    },
+    {
+      "id": "intro-ppt-zh",
+      "prompt": "生成一个PPT介绍这段视频。"
+    },
+    {
+      "id": "subtitle-only-extraction-zh",
+      "prompt": "生成PPT介绍这段视频，并提取字幕。"
+    },
+    {
+      "id": "document-slides-en",
+      "prompt": "Extract slides from the document."
+    }
+  ]
+}

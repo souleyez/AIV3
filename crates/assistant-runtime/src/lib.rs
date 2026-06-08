@@ -2421,7 +2421,34 @@ mod tests {
     use chrono::Utc;
     use contracts::{AssistantRunCodexActionContractView, AssistantRunCodexSafetyPolicyView};
     use domain_model::{DatasetLifecycle, DatasetVisibility, TenantId};
-    use std::collections::BTreeMap;
+    use serde::Deserialize;
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    #[derive(Debug, Deserialize)]
+    struct VideoPptTriggerFixture {
+        schema: String,
+        positive: Vec<VideoPptTriggerCase>,
+        negative: Vec<VideoPptTriggerCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct VideoPptTriggerCase {
+        id: String,
+        prompt: String,
+        #[serde(default)]
+        expected_scope_actions: Vec<String>,
+    }
+
+    fn video_ppt_trigger_cases() -> VideoPptTriggerFixture {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/video-ppt-trigger-classifier/trigger-cases.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let fixture: VideoPptTriggerFixture = serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
+        assert_eq!(fixture.schema, "v3.video_ppt_trigger_classifier_fixture.v1");
+        fixture
+    }
 
     fn dataset(title: &str, key: &str) -> Dataset {
         Dataset {
@@ -3785,15 +3812,11 @@ mod tests {
     }
 
     #[test]
-    fn video_ppt_scope_rejects_ordinary_video_to_ppt_generation() {
-        for prompt in [
-            "请把普通视频变成PPT。",
-            "Create a PowerPoint from this ordinary video.",
-            "生成一个PPT介绍这段视频。",
-            "生成PPT介绍这段视频，并提取字幕。",
-        ] {
+    fn video_ppt_scope_rejects_shared_negative_trigger_fixture() {
+        let fixture = video_ppt_trigger_cases();
+        for trigger_case in &fixture.negative {
             let plan = plan_scope(ScopePlannerInput {
-                prompt,
+                prompt: &trigger_case.prompt,
                 visible_datasets: &[dataset("订单", "orders"), dataset("客服", "support")],
                 selected_dataset_id: None,
                 conversation_memory_available: false,
@@ -3806,24 +3829,30 @@ mod tests {
                 !actions
                     .iter()
                     .any(|action| action == "media.extract_ppt_transcript"),
-                "{prompt}"
+                "{}",
+                trigger_case.id
             );
         }
     }
 
     #[test]
-    fn video_ppt_scope_keeps_existing_slide_extraction_positive() {
-        let plan = plan_scope(ScopePlannerInput {
-            prompt: "Extract slides from this video: talk.mkv",
-            visible_datasets: &[dataset("订单", "orders"), dataset("客服", "support")],
-            selected_dataset_id: None,
-            conversation_memory_available: false,
-        });
+    fn video_ppt_scope_follows_shared_positive_trigger_fixture() {
+        let fixture = video_ppt_trigger_cases();
+        for trigger_case in &fixture.positive {
+            let plan = plan_scope(ScopePlannerInput {
+                prompt: &trigger_case.prompt,
+                visible_datasets: &[dataset("订单", "orders"), dataset("客服", "support")],
+                selected_dataset_id: None,
+                conversation_memory_available: false,
+            });
 
-        assert_eq!(
-            plan.selected_scope["supply_policy"]["recommendedActions"],
-            json!(["media.resolve_video_url", "media.extract_ppt_transcript"])
-        );
+            assert_eq!(
+                plan.selected_scope["supply_policy"]["recommendedActions"],
+                json!(trigger_case.expected_scope_actions),
+                "{}",
+                trigger_case.id
+            );
+        }
     }
 
     #[test]

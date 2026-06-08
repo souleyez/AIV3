@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 09:47 CST
-**当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit 和 M6Y 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准；入口是第 0.7 节，尤其是第 0.7.13-0.7.15 节的全量验收闭环、当前 HEAD 审计和下一轮任务卡。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出风险提示已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。deliverables validator 已补 PPTX speaker notes XML 脱敏扫描、selected manifest 必检、PPTX/Markdown/selected_count 页数一致性和 summary counts；M6N 已完成 validator/shared receipt JSON 输出脱敏，`--json` 类共享输出默认不带本机 artifact path，同时内部 API 仍保留脚本读取文件所需的本地路径。M6O 已完成 `missing_ocr_evidence` 质量报告风险标记。M6P 已完成 `full_frame_content_v1` detector；M6Q 已完成 readability-aware sharpness 分流；M6R 已补 quality matrix self-test 内部显式复核风险回归断言；M6S-M6U 已补并增强 `smoke:video-ppt-no-live-rollup` 一键无授权回归入口，串起主站上传、第三方登记、视频号/登录态 handoff、授权录屏 helper、quality matrix、Rust format check、media-worker Rust lib tests、offline smoke binary check 和 deliverables validator 的 self-test/preflight/check/test，18 个命令全部通过且报告安全 gate 证明没有 live、下载、上传、浏览器录屏、部署、8/120 服务器动作。M6V 已补第三方视频 PPT self-test contract，覆盖 `video_ppt_extraction` requested skill、`extract_video_ppt_transcript` action、六类视频扩展分类、非视频扩展拒绝和 URL 摘要脱敏。M6W 已收紧主站上传和第三方 smoke 的视频 PPT 特殊触发 classifier：只有“提取/抽取视频里已经出现的 PPT/幻灯片/课件”类提示通过，`请把普通视频变成PPT`、`Create a PowerPoint from this ordinary video` 等负向提示会被 self-test 拒绝。M6X 已把同一触发保护下沉到前端 scope planner 和 Rust assistant-runtime 推荐动作：只有视频上下文、PPT/幻灯片/课件输出和提取/from-video 意图同时成立时才推荐 `media.extract_ppt_transcript`，普通视频转 PPT 和 transcript-only 视频请求不推荐 PPT 抽取。M6Y 已把主站上传和第三方 smoke classifier 对齐生产规则，新增无视频上下文和“生成 PPT 介绍视频并提取字幕”负向回归，self-test 报告现在记录 4 个正向和 6 个负向触发用例。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；0.7.15 只新增下一轮可执行任务卡，不改变功能基线；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 09:58 CST
+**当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit 和 M6Z 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准；入口是第 0.7 节，尤其是第 0.7.13-0.7.15 节的全量验收闭环、当前 HEAD 审计和下一轮任务卡。P2-2E-2A public candidate 本地交付契约修复已完成，P2-2E-2B 已补 public-course deliverables 专用质量矩阵入口，selected manifest 已拆清去重前 requested indices 与去重后 final indices，稀疏文字/build 状态自动选页和稳定段 best-sharpness 代表帧选择也已补本地回归。P2-2E-2B-Next 已完成保守 visual-shape duplicate 去重切片、页面级复核和 shape-dedupe public candidate 复跑；后续第二/第三公开视频探测补充了 `Nix in Space` 降级样例和 `Layered Nix Stores` 白底 build 保护回归，修复了 bright template 被 shape duplicate 误删 build 页的问题。EP6 单页输出风险提示已完成，`Nix in Space` 复跑会在 `slide_quality_report.json` 标记 `single_slide_output_review_required`，但仍保持 `final_pptx_ready`。deliverables validator 已补 PPTX speaker notes XML 脱敏扫描、selected manifest 必检、PPTX/Markdown/selected_count 页数一致性和 summary counts；M6N 已完成 validator/shared receipt JSON 输出脱敏，`--json` 类共享输出默认不带本机 artifact path，同时内部 API 仍保留脚本读取文件所需的本地路径。M6O 已完成 `missing_ocr_evidence` 质量报告风险标记。M6P 已完成 `full_frame_content_v1` detector；M6Q 已完成 readability-aware sharpness 分流；M6R 已补 quality matrix self-test 内部显式复核风险回归断言；M6S-M6U 已补并增强 `smoke:video-ppt-no-live-rollup` 一键无授权回归入口，串起主站上传、第三方登记、视频号/登录态 handoff、授权录屏 helper、quality matrix、Rust format check、media-worker Rust lib tests、offline smoke binary check 和 deliverables validator 的 self-test/preflight/check/test，18 个命令全部通过且报告安全 gate 证明没有 live、下载、上传、浏览器录屏、部署、8/120 服务器动作。M6V 已补第三方视频 PPT self-test contract，覆盖 `video_ppt_extraction` requested skill、`extract_video_ppt_transcript` action、六类视频扩展分类、非视频扩展拒绝和 URL 摘要脱敏。M6W 已收紧主站上传和第三方 smoke 的视频 PPT 特殊触发 classifier：只有“提取/抽取视频里已经出现的 PPT/幻灯片/课件”类提示通过，`请把普通视频变成PPT`、`Create a PowerPoint from this ordinary video` 等负向提示会被 self-test 拒绝。M6X 已把同一触发保护下沉到前端 scope planner 和 Rust assistant-runtime 推荐动作：只有视频上下文、PPT/幻灯片/课件输出和提取/from-video 意图同时成立时才推荐 `media.extract_ppt_transcript`，普通视频转 PPT 和 transcript-only 视频请求不推荐 PPT 抽取。M6Y 已把主站上传和第三方 smoke classifier 对齐生产规则，新增无视频上下文和“生成 PPT 介绍视频并提取字幕”负向回归；M6Z 已把正负向触发语收敛到 shared fixture，upload-main smoke、external smoke、前端 scope planner test 和 Rust assistant-runtime test 均读取同一 corpus，报告记录 6 个正向和 6 个负向触发用例。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable。第 0.7 节把后续工作收口为可执行包，覆盖主站上传、第三方登记、微信视频号/登录态 handoff、授权录屏兜底、客户授权质量矩阵、GitHub 同步和 8 服务器部署门槛；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
@@ -26,6 +26,7 @@
 - M6W 已完成：主站上传和第三方视频 PPT trigger classifier 已补正负向 regression，`提取视频中的PPT`、`从视频中抽取课件页面` 通过，`请把普通视频变成PPT`、`Create a PowerPoint from this ordinary video` 不通过，防止普通视频创作 PPT 被误当作抽取触发。
 - M6X 已完成本地切片：前端 `scope-planner` 和 Rust `assistant-runtime` 现在共享同一类触发边界，`media.extract_ppt_transcript` 只在“视频来源 + PPT/幻灯片/课件输出 + 提取/抽取/from-video 意图”同时成立时推荐；`请把普通视频变成PPT`、`Create a PowerPoint from this ordinary video`、`生成一个PPT介绍这段视频` 和 transcript-only 视频请求不会推荐视频 PPT 抽取。
 - M6Y 已完成本地切片：主站上传和第三方 smoke classifier 不再接受没有视频上下文的 `Extract slides from the document`，也不再因 `生成PPT介绍这段视频，并提取字幕` 中的“提取字幕”误放行；两个 self-test 报告均记录 4 个正向和 6 个负向触发用例，no-live rollup 18/18 通过。
+- M6Z 已完成本地切片：新增 `fixtures/video-ppt-trigger-classifier/trigger-cases.json`，upload-main smoke、external smoke、前端 scope planner test 和 Rust assistant-runtime test 共享同一正负向触发语 corpus；前端英文 `video` source hint 已与 Rust/smoke 对齐，两个 self-test 报告记录 12 个 shared fixture case、6 个正向和 6 个负向触发用例，no-live rollup 18/18 通过。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
 **唯一 active plan：** `docs/plans/datamax-active-execution-plan.md`
@@ -934,7 +935,7 @@ Safety:
 
 #### 0.7.14 2026-06-08 当前 HEAD 验收审计
 
-本节是截至已推送 GitHub 最新 commit 加本节新增 M6Y 切片的收口审计，实际代码落点以 `git log -1`、`git status` 和推送记录为准。后续若只有 doc-only commit，功能基线仍以最近一次已验证功能切片为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
+本节是截至已推送 GitHub 最新 commit 加本节新增 M6Z 切片的收口审计，实际代码落点以 `git log -1`、`git status` 和推送记录为准。后续若只有 doc-only commit，功能基线仍以最近一次已验证功能切片为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
 
 | 审计项 | 当前证据 | 是否可宣称完成 | 下一步 |
 | --- | --- | --- | --- |
@@ -946,12 +947,13 @@ Safety:
 | 授权录屏兜底 | runbook、helper、dry-run/self-test、授权负向门禁和 `sharedReceipt` 脱敏已就绪 | 不可宣称 live capture 已验收 | 需要 operator approval record 和可播放来源；默认 workstation/jump-host，8 内部录屏另批 |
 | 公开视频质量样例 | 三个 media.ccc slides 样例可生成 public evidence；主样例和第三样例 validator/matrix 通过但均 `needs_manual_review`，弱样例触发单页风险提示 | 可宣称 public course 样例可进入复核包；不可宣称 clean deliverable | 保持人工复核结论；不替代客户授权样例 |
 | validator/shared JSON 输出 | M6N 已完成：helper 和 CLI `--json` 默认输出 redacted JSON；真实 public candidate JSON 脱敏扫描通过，summary 为 selected=3、requested=4、PPTX=3、Markdown=3；quality matrix self-test/public-course 复跑通过 | 可宣称共享 JSON 可直接外发 | 后续台账只复制 summary，不复制原始 JSON body 或本机路径 |
+| 触发语共享 fixture | M6Z 已完成：upload-main smoke、external smoke、前端 scope planner test 和 Rust assistant-runtime test 读取同一 shared fixture；fixture 版本 1，12 个 shared case，6 正向/6 负向；no-live rollup 18/18 通过 | 可宣称“触发语回归 corpus 已统一” | 后续新增正负向 prompt 先改 fixture，再复跑 M6Z gate |
 | 客户授权质量矩阵 | `--customer-deliverables`、approval-id 门禁和三输入组合矩阵脚本契约已完成 | 不可宣称 P2-2E 全量完成 | 等客户/operator 授权样例，产物不进 Git，只写脱敏结论 |
 | 8 服务器 | 本轮未 pull、build、restart、deploy；preflight 已明确 `deploymentApprovalRequired=true` | 不可宣称现网已更新到当前 handoff 修复 | 只有用户明确批准发版窗口后进入 EP7 |
 
 下一阶段的可执行顺序固定为：
 
-1. **无授权继续**：M6N 已完成；继续做 EP1/EP6 本地质量窄修复、public 样例人工复核和文档台账。
+1. **无授权继续**：M6N/M6Z 已完成；继续做 EP1/EP6 本地质量窄修复、public 样例人工复核和文档台账。
 2. **批准主站 smoke**：EP2 同 fixture preflight -> 主站 live controlled smoke -> validator/quality matrix -> 脱敏回执。
 3. **提供第三方凭据**：EP3 同 bearer/context/input preflight -> third-party live smoke -> surface/download 复核 -> 脱敏回执。
 4. **批准 8 发版窗口**：EP7 部署当前已推送 commit -> EP4 main handoff preflight/live -> external 按 bearer/context 补跑。
@@ -985,7 +987,7 @@ git ls-files target | wc -l
 
 | 任务卡 | 何时执行 | 允许动作 | 完成证据 | 不能宣称 |
 | --- | --- | --- | --- | --- |
-| Card A: M6Z 触发语共享 fixture | 无新增 live 授权时优先执行 | 新增/改测试 fixture、smoke self-test、scope planner test、assistant-runtime test；只跑本地验证 | 统一正负向 prompt corpus，JS/Rust/smoke 测试读取同一 fixture，no-live rollup 通过 | 不能宣称 live 上传、第三方或现网 handoff 已验收 |
+| Card A: M6Z 触发语共享 fixture | 已完成；后续新增触发语时复跑 | 更新 shared fixture、smoke self-test、scope planner test、assistant-runtime test；只跑本地验证 | 统一正负向 prompt corpus，JS/Rust/smoke 测试读取同一 fixture，no-live rollup 通过 | 不能宣称 live 上传、第三方或现网 handoff 已验收 |
 | Card B: EP2 主站上传 smoke | 用户明确批准写一条非客户主站 smoke 记录 | 同一 fixture 先 preflight，再 live 上传、触发抽取、下载复核 | 上传/document/ingest/assistant run/artifact/PPTX/Markdown/manifests 脱敏回执 | 不能顺手部署；失败不能扩大到客户数据 |
 | Card C: EP3 第三方 special-trigger smoke | operator 提供 bearer、`connection_id`、`source_id` 和安全输入 | 同一 bearer/context/input 先 preflight，再 live 第三方登记和特殊触发 | 第三方视频素材登记与“提取视频里的 PPT”触发分别有回执 | 不能打印 bearer 或记录原始 payload/source URL |
 | Card D: EP7 -> EP4 现网 handoff | 用户明确批准 8 服务器部署窗口 | 只部署已推送且验证过的 commit；部署后跑 handoff preflight/live | `login_gated_video_source_not_supported` 三选项 handoff，服务状态和回滚点 | 不能抽视频、不能录屏、不能启用 capture fallback |
@@ -994,6 +996,8 @@ git ls-files target | wc -l
 | Card G: EP0 doc-only 同步 | 只整理计划或回执时 | 更新 repo 文档、同步桌面副本、可 doc-only commit/push | `cmp`、`git diff --check`、doc-only diff、GitHub commit | 不能混入未验证代码或 generated artifacts |
 
 Card A: M6Z 触发语共享 fixture 详细计划：
+
+状态：已完成，2026-06-08；本节保留为后续新增触发语时的复跑入口。
 
 目的：消除主站 smoke、第三方 smoke、前端 scope planner test 和 Rust assistant-runtime test 里重复维护正负向触发语造成的漂移。M6Z 只统一测试语料和回归入口，不改变生产触发边界；若后续要抽出生产共享分类器，另起切片评审。
 
@@ -1070,7 +1074,7 @@ Card B-F 的最小输入请求：
 
 当前是否可继续开发的判断：
 
-- 可以继续本地开发：M6Z、EP1/EP6、本地 quality fixture、公开视频复核、文档台账。
+- 可以继续本地开发：EP1/EP6、本地 quality fixture、公开视频复核、文档台账；后续新增触发语时按 M6Z 复跑。
 - 可以同步 GitHub：通过验证的代码/测试/文档或 doc-only 计划变更。
 - 不能宣称功能全量完成：EP2 live、EP3 live、EP4 现网 handoff、授权录屏 live、EP5 customer matrix 仍缺授权或部署窗口。
 - 不能发 8 服务器：除非用户下一步明确批准 EP7。
@@ -2494,7 +2498,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M6W | video PPT special-trigger classifier guard | 无 live 授权；只执行 upload/external self-test 和 no-live rollup | 已通过 `node --check scripts/smoke/video-ppt-upload-main.mjs`、`node --check scripts/smoke/external-video-ppt.mjs`、`npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>`、`npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>`、self-test report redaction scan、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>` | 已完成：主站/第三方 classifier 要求 PPT/幻灯片/课件提及与提取/抽取/from-video 意图同时存在；普通视频转 PPT/创作 PPT 负向提示不再通过，self-test 报告记录 4 正向和 4 负向用例 | 未部署 |
 | M6X | production scope video PPT trigger guard | 无 live 授权；只执行 front-end/Rust local tests 和 no-live rollup | 已通过 `node --check apps/web/app/lib/scope-planner.js`、`node --test apps/web/app/lib/scope-planner.test.mjs`、`cargo test -p assistant-runtime --lib`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、`git diff --check` | 已完成：前端 scope planner 和 Rust assistant-runtime 都拒绝 ordinary video-to-PPT generation 和 transcript-only 视频请求推荐 `media.extract_ppt_transcript`，同时保留 direct URL、uploaded video、mkv/avi、English `Extract slides from this video` 等正向触发；既有 18 项 no-live 视频 PPT gate 仍全绿 | 未部署 |
 | M6Y | smoke classifier parity with production trigger guard | 无 live 授权；只执行 upload/external self-test 和 no-live rollup | 已通过 `node --check scripts/smoke/video-ppt-upload-main.mjs`、`node --check scripts/smoke/external-video-ppt.mjs`、`npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>`、`npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>`、report redaction scan、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、`git diff --check` | 已完成：smoke classifier 要求视频上下文、slide 输出和 extraction verb 同时存在；`生成PPT介绍这段视频，并提取字幕` 与 `Extract slides from the document` 均为负向；两个 self-test 报告记录 4 正向/6 负向，18 项 no-live gate 仍全绿 | 未部署 |
-| M6Z | shared video PPT trigger prompt fixture | 无 live 授权；只执行 fixture/test/smoke 本地切片 | 计划中：新增 `fixtures/video-ppt-trigger-classifier/trigger-cases.json` 后，必跑 upload/external self-test、scope-planner test、assistant-runtime lib test、cargo fmt、no-live rollup、redaction scan、`git diff --check` | 待执行：把 upload smoke、external smoke、前端 scope planner test 和 Rust assistant-runtime test 的正负向触发语收敛到同一 fixture，防止后续 ordinary video-to-PPT 负向保护漂移；不改变生产触发边界，除非另起切片 | 未部署 |
+| M6Z | shared video PPT trigger prompt fixture | 无 live 授权；只执行 fixture/test/smoke 本地切片 | 已通过 `node --check scripts/smoke/video-ppt-upload-main.mjs`、`node --check scripts/smoke/external-video-ppt.mjs`、upload/external self-test、`node --check apps/web/app/lib/scope-planner.js`、`node --test apps/web/app/lib/scope-planner.test.mjs`、`cargo test -p assistant-runtime --lib`、`cargo fmt --check`、no-live rollup、report redaction scan、`git diff --check` | 已完成：新增 shared trigger fixture，upload smoke、external smoke、前端 scope planner test 和 Rust assistant-runtime test 的正负向触发语收敛到同一 corpus；两个 self-test 报告记录 12 个 shared case、6 正向/6 负向；前端英文 `video` source hint 与 Rust/smoke 对齐；18 项 no-live gate 仍全绿 | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |

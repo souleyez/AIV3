@@ -3,7 +3,7 @@ import { attachVisibleDocumentsToDatasets, datasetDocumentTitleHints } from './d
 const MEDIA_DATASET_PATTERN = /音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
 const RESUME_DATASET_PATTERN = /简历|履历|候选人|求职|招聘|人才|面试|任职|工作经历|教育经历|项目经历|雇主|公司名|就职公司|resume|cv|candidate|recruit/i;
 const RESUME_ENTITY_SCAN_PATTERN = /(?=.*(简历|履历|候选人|求职|招聘|人才|resume|cv|candidate))(?=.*(公司名|公司|企业|雇主|任职|就职|工作经历|经历|company|employer))(?=.*(多少|几个|哪些|列出|统计|汇总|分布|全部|所有|提到|公司名|count|list|all))/i;
-const VIDEO_PPT_SOURCE_PATTERN = /视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传/i;
+const VIDEO_PPT_SOURCE_PATTERN = /视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传|video/i;
 const VIDEO_PPT_SLIDE_OUTPUT_PATTERN = /ppt|powerpoint|slides?|幻灯片|课件/i;
 const VIDEO_PPT_EXTRACTION_INTENT_PATTERN = /提取|抽取|抓取|导出|识别|extract|pull|capture|export|视频(?:里|中|里的|中的)|from (?:the )?video|shown in (?:the )?video/i;
 const ORDINARY_VIDEO_TO_PPT_PATTERN = /普通视频|任意视频|ordinary video|把.*视频.*(?:生成|做成|制作|创作|转成|变成).*ppt|(?:make|create|generate|turn).{0,40}(?:ppt|powerpoint|slides).{0,40}(?:from|out of).{0,20}(?:the )?video|video[- ]to[- ]ppt/i;
