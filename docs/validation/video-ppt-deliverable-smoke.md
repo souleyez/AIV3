@@ -5107,3 +5107,67 @@ Safety result:
 - no browser was opened and no FFmpeg capture command was run;
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 No-Live Rollup Acceptance Status Evidence
+
+Task source: M6AM follow-up after the plan-only M6AL matrix. This slice turns the plan's acceptance-status matrix into a top-level no-live rollup report field so a green local rollup cannot be misread as full live/customer/deployment acceptance.
+
+Scope:
+
+- local no-live code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- no-live rollup now emits `acceptance_status` with schema `v3.video_ppt_acceptance_status_rollup.v1`;
+- the status records `full_acceptance_ready=false`, `current_phase=no_live_local_baseline`, and exact no-live command/pass/fail counts;
+- the status records 8 gates: P1 no-live baseline passed, P2 main upload pending authorization, P3 external video PPT pending credentials, P4 login-gated handoff pending deployment approval, P5 authorized capture live sample pending authorization, P6 customer quality matrix pending customer input, P7 server deployment pending deployment approval, and P8 full acceptance pending live/customer gates;
+- every live/customer/deployment gate records `no_live_substitute_available=false` and nonempty `requires`;
+- the status records safety flags showing no live smoke, production write, browser capture, service deployment, 8-server action, or 120-server action occurred;
+- rollup validation now fails if the acceptance status schema, gate count, exact pending counts, P1 status, pending gate requirements, or safety flags are incomplete.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted acceptance status readback>"
+rg -n "<local-path-url-token-approval-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- acceptance status schema was `v3.video_ppt_acceptance_status_rollup.v1`;
+- acceptance status recorded `full_acceptance_ready=false`, `current_phase=no_live_local_baseline`, `no_live_status=passed`, `gate_count=8`, and `completed_gate_count=1`;
+- pending counts were exact: authorization 2, credentials 1, deployment 2, customer 1, full acceptance 1;
+- P1 was `passed` and marked as the only no-live-substitutable gate;
+- P2, P3, P4, P5, P6, P7, and P8 were all pending with `no_live_substitute_available=false` and nonempty requirements;
+- safety flags recorded no live smoke, no production write, no browser capture, no service deployment, no 8-server touch, and no 120-server touch;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval/operator values, or raw dry-run approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- the acceptance status is deliberately `full_acceptance_ready=false` until those live/customer/deployment gates have real evidence or explicit non-executable reasons.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

@@ -807,16 +807,17 @@ function sanitizeExcerpt(text) {
 
 function buildReport({ startedAt, results }) {
   const failed = results.filter((result) => result.status !== 'passed');
+  const summary = {
+    command_count: results.length,
+    passed_count: results.length - failed.length,
+    failed_count: failed.length,
+  };
   return {
     schema: 'v3.video_ppt_no_live_rollup.v1',
     status: failed.length === 0 ? 'passed' : 'failed',
     started_at: startedAt.toISOString(),
     completed_at: new Date().toISOString(),
-    summary: {
-      command_count: results.length,
-      passed_count: results.length - failed.length,
-      failed_count: failed.length,
-    },
+    summary,
     gates: {
       live_smoke_run: false,
       production_write_allowed: false,
@@ -835,6 +836,7 @@ function buildReport({ startedAt, results }) {
       credentials_included: false,
       provider_payloads_included: false,
     },
+    acceptance_status: buildAcceptanceStatus({ summary }),
     next_actions: failed.length === 0
       ? [
         'keep this as the no-live regression rollup before live upload, third-party, handoff, capture, or deployment gates',
@@ -842,6 +844,132 @@ function buildReport({ startedAt, results }) {
       : [
         'inspect failed command locally and rerun the no-live rollup before any live gate',
       ],
+  };
+}
+
+function buildAcceptanceStatus({ summary }) {
+  const noLivePassed = summary.failed_count === 0;
+  const gates = [
+    {
+      id: 'P1_no_live_baseline',
+      status: noLivePassed ? 'passed' : 'failed',
+      evidence: [
+        'no_live_command_results',
+        'embedded_rollup_evidence',
+        'redaction_validation',
+      ],
+      no_live_substitute_available: true,
+    },
+    {
+      id: 'P2_main_upload_live_smoke',
+      status: 'pending_authorization',
+      requires: [
+        'main_site_non_customer_write_approval',
+        'safe_video_input',
+        'same_fixture_preflight_then_live',
+      ],
+      no_live_substitute_available: false,
+    },
+    {
+      id: 'P3_external_video_ppt_live_smoke',
+      status: 'pending_credentials',
+      requires: [
+        'inbound_bearer',
+        'connection_id',
+        'source_id',
+        'safe_video_input',
+      ],
+      no_live_substitute_available: false,
+    },
+    {
+      id: 'P4_login_gated_handoff_live_pass',
+      status: 'pending_deployment_approval',
+      requires: [
+        'server_8_deployment_window_approval',
+        'main_handoff_live_smoke',
+        'external_context_if_external_mode',
+      ],
+      no_live_substitute_available: false,
+    },
+    {
+      id: 'P5_authorized_capture_live_sample',
+      status: 'pending_authorization',
+      requires: [
+        'operator_approval_record',
+        'playable_authorized_source',
+        'retention_policy',
+        'manual_mp4_review_before_extraction',
+      ],
+      no_live_substitute_available: false,
+    },
+    {
+      id: 'P6_customer_authorized_quality_matrix',
+      status: 'pending_customer_input',
+      requires: [
+        'customer_or_operator_authorized_sample',
+        'customer_approval_id',
+        'retention_policy',
+      ],
+      no_live_substitute_available: false,
+    },
+    {
+      id: 'P7_server_deployment_gate',
+      status: 'pending_deployment_approval',
+      requires: [
+        'explicit_server_8_deployment_window',
+        'pre_deploy_local_gate',
+        'post_deploy_target_smoke',
+      ],
+      no_live_substitute_available: false,
+    },
+    {
+      id: 'P8_full_acceptance_close',
+      status: 'pending_live_and_customer_gates',
+      requires: [
+        'P2_or_explicit_not_executable_reason',
+        'P3_or_explicit_not_executable_reason',
+        'P4_live_pass_or_undeployed_reason',
+        'P5_live_sample_or_missing_approval_reason',
+        'P6_customer_matrix_or_pending_customer_reason',
+      ],
+      no_live_substitute_available: false,
+    },
+  ];
+  return {
+    schema: 'v3.video_ppt_acceptance_status_rollup.v1',
+    full_acceptance_ready: false,
+    current_phase: 'no_live_local_baseline',
+    no_live_status: noLivePassed ? 'passed' : 'failed',
+    no_live_command_count: summary.command_count,
+    no_live_passed_count: summary.passed_count,
+    no_live_failed_count: summary.failed_count,
+    gate_count: gates.length,
+    completed_gate_count: noLivePassed ? 1 : 0,
+    pending_authorization_gate_count: 2,
+    pending_credentials_gate_count: 1,
+    pending_deployment_gate_count: 2,
+    pending_customer_gate_count: 1,
+    pending_full_acceptance_gate_count: 1,
+    gates,
+    next_authorized_paths: [
+      'P2_main_upload_live_smoke',
+      'P3_external_video_ppt_live_smoke',
+      'P7_then_P4_login_gated_handoff_live_pass',
+      'P5_authorized_capture_live_sample',
+      'P6_customer_authorized_quality_matrix',
+    ],
+    safe_local_next_actions: [
+      'public_quality_fixture_narrow_fix',
+      'no_live_acceptance_regression_maintenance',
+    ],
+    safety: {
+      live_smoke_run: false,
+      production_write_allowed: false,
+      browser_capture_allowed: false,
+      service_deployment_allowed: false,
+      server_8_touched: false,
+      server_120_touched: false,
+    },
   };
 }
 
@@ -874,9 +1002,72 @@ function validateReport(report) {
   validateAuthorizedCaptureEvidence(report);
   validateAuthorizedCaptureDryRunEvidence(report);
   validateProductionTriggerEvidence(report);
+  validateAcceptanceStatus(report);
   const serialized = JSON.stringify(report);
   if (serialized.match(/[A-Za-z]:[\\/]|[\\/]Users[\\/]|[\\/]home[\\/]|https?:\/\/|token=|cookie=|bearer=/i)) {
     throw new Error('no-live rollup report contains unredacted local path, URL, or token-like text');
+  }
+}
+
+function validateAcceptanceStatus(report) {
+  const acceptance = report.acceptance_status;
+  const expectedNoLiveStatus = report.summary.failed_count === 0 ? 'passed' : 'failed';
+  const expectedCompletedGateCount = report.summary.failed_count === 0 ? 1 : 0;
+  if (
+    !acceptance
+    || acceptance.schema !== 'v3.video_ppt_acceptance_status_rollup.v1'
+    || acceptance.full_acceptance_ready !== false
+    || acceptance.current_phase !== 'no_live_local_baseline'
+    || acceptance.no_live_command_count !== report.summary.command_count
+    || acceptance.no_live_passed_count !== report.summary.passed_count
+    || acceptance.no_live_failed_count !== report.summary.failed_count
+    || acceptance.no_live_status !== expectedNoLiveStatus
+    || acceptance.gate_count !== 8
+    || acceptance.completed_gate_count !== expectedCompletedGateCount
+    || acceptance.pending_authorization_gate_count !== 2
+    || acceptance.pending_credentials_gate_count !== 1
+    || acceptance.pending_deployment_gate_count !== 2
+    || acceptance.pending_customer_gate_count !== 1
+    || acceptance.pending_full_acceptance_gate_count !== 1
+    || !Array.isArray(acceptance.gates)
+    || acceptance.gates.length !== 8
+    || acceptance.safety?.live_smoke_run !== false
+    || acceptance.safety?.production_write_allowed !== false
+    || acceptance.safety?.browser_capture_allowed !== false
+    || acceptance.safety?.service_deployment_allowed !== false
+    || acceptance.safety?.server_8_touched !== false
+    || acceptance.safety?.server_120_touched !== false
+  ) {
+    throw new Error('no-live rollup acceptance status matrix is incomplete');
+  }
+  const gateById = new Map((acceptance.gates || []).map((gate) => [gate.id, gate]));
+  const noLiveGate = gateById.get('P1_no_live_baseline');
+  if (
+    !noLiveGate
+    || noLiveGate.status !== expectedNoLiveStatus
+    || noLiveGate.no_live_substitute_available !== true
+  ) {
+    throw new Error('no-live rollup acceptance status no-live gate is incomplete');
+  }
+  for (const gateId of [
+    'P2_main_upload_live_smoke',
+    'P3_external_video_ppt_live_smoke',
+    'P4_login_gated_handoff_live_pass',
+    'P5_authorized_capture_live_sample',
+    'P6_customer_authorized_quality_matrix',
+    'P7_server_deployment_gate',
+    'P8_full_acceptance_close',
+  ]) {
+    const gate = gateById.get(gateId);
+    if (
+      !gate
+      || gate.no_live_substitute_available !== false
+      || !Array.isArray(gate.requires)
+      || gate.requires.length === 0
+      || !String(gate.status || '').startsWith('pending')
+    ) {
+      throw new Error(`no-live rollup acceptance status gate is incomplete: ${gateId}`);
+    }
   }
 }
 
