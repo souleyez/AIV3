@@ -4302,6 +4302,83 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Live Approval Gate Self-Test Contract
+
+Task source: M6BE P1/no-live follow-up. M6BD added script-level live write approval gates and negative live-command checks. This slice adds deterministic self-test coverage for the approval argument combinations so future refactors cannot accidentally weaken the gate while keeping the CLI negative checks green.
+
+Scope:
+
+- local script self-test and no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- upload-main self-test now reports `v3.video_ppt_live_write_approval_gate_contract.v1`;
+- external-video-ppt self-test now reports the same live approval gate contract;
+- each contract covers 6 cases: missing ack and approval, missing approval, missing ack, preflight without approval, self-test without approval, and complete live approval shape;
+- each contract records 3 negative and 3 positive cases;
+- no-live rollup extracts and validates the contract for both upload-main and external-video-ppt;
+- `acceptance_status.no_live_evidence_summary` now records `live_approval_self_test_gate_surface_count=2`, `upload_main_live_approval_self_test_gate_supported=true`, and `external_live_approval_self_test_gate_supported=true`.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+node scripts/smoke/video-ppt-upload-main.mjs --self-test --output-dir <target-redacted>
+node scripts/smoke/external-video-ppt.mjs --self-test --output-dir <target-redacted>
+node -e "<redacted self-test contract readback>"
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted rollup summary readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- syntax checks passed for upload-main, external-video-ppt, and no-live rollup scripts;
+- upload-main self-test passed and reported `schema=v3.video_ppt_live_write_approval_gate_contract.v1`;
+- external-video-ppt self-test passed and reported `schema=v3.video_ppt_live_write_approval_gate_contract.v1`;
+- both self-test contracts reported `caseCount=6`, `negativeCaseCount=3`, and `positiveCaseCount=3`;
+- both contracts reported `rejectsMissingAckAndApproval=true`, `rejectsMissingApproval=true`, and `rejectsMissingAck=true`;
+- both contracts reported `allowsPreflightWithoutApproval=true`, `allowsSelfTestWithoutApproval=true`, and `acceptsCompleteLiveApprovalShape=true`;
+- both contracts reported `approvalValuesIncluded=false`;
+- no-live rollup passed with `command_count=24`, `passed_count=24`, and `failed_count=0`;
+- rollup readback showed upload-main and external self-test evidence each had `live_write_approval_gate_case_count=6`;
+- rollup readback showed both surfaces reject missing ack/approval and accept complete approval shape;
+- `acceptance_status.no_live_evidence_summary.live_approval_self_test_gate_surface_count=2`;
+- `acceptance_status.no_live_evidence_summary.upload_main_live_approval_self_test_gate_supported=true`;
+- `acceptance_status.no_live_evidence_summary.external_live_approval_self_test_gate_supported=true`;
+- `acceptance_status.no_live_evidence_summary.live_approval_negative_gate_count=2`;
+- `acceptance_status.no_live_evidence_summary.live_without_approval_rejected_before_network=true`;
+- strict redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw approval/operator values, or raw self-test approval values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- P2 live still needs explicit write approval, safe video input, and controlled live execution;
+- P3 live still needs third-party credentials/context, safe input, and explicit third-party live write approval.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Live Write Approval Script Gate
 
 Task source: M6BD P1/no-live follow-up. Main-site upload and third-party video PPT live smoke already advertised live write approval in preflight, but the live command path also needs a script-level gate so accidental production writes cannot happen without explicit operator approval.

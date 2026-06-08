@@ -389,6 +389,7 @@ function extractUploadMainSelfTestEvidence(stdout) {
     return null;
   }
   const trigger = report.contract?.triggerClassifier || {};
+  const approvalGate = report.contract?.liveWriteApprovalGate || {};
   return {
     schema: 'v3.video_ppt_upload_main_rollup_evidence.v1',
     selected_scope_intent: report.contract?.selectedScopeIntent,
@@ -402,6 +403,21 @@ function extractUploadMainSelfTestEvidence(stdout) {
     trigger_script_specific_case_count: trigger.scriptSpecificCaseCount,
     positive_prompt_count: trigger.positivePromptCount,
     negative_prompt_count: trigger.negativePromptCount,
+    live_write_approval_gate_schema: approvalGate.schema,
+    live_write_approval_gate_case_count: approvalGate.caseCount,
+    live_write_approval_gate_negative_case_count: approvalGate.negativeCaseCount,
+    live_write_approval_gate_positive_case_count: approvalGate.positiveCaseCount,
+    live_write_approval_rejects_missing_ack_and_approval:
+      approvalGate.rejectsMissingAckAndApproval,
+    live_write_approval_rejects_missing_approval: approvalGate.rejectsMissingApproval,
+    live_write_approval_rejects_missing_ack: approvalGate.rejectsMissingAck,
+    live_write_approval_allows_preflight_without_approval:
+      approvalGate.allowsPreflightWithoutApproval,
+    live_write_approval_allows_self_test_without_approval:
+      approvalGate.allowsSelfTestWithoutApproval,
+    live_write_approval_accepts_complete_live_approval_shape:
+      approvalGate.acceptsCompleteLiveApprovalShape,
+    live_write_approval_values_included: approvalGate.approvalValuesIncluded,
     source_summary_redacted: report.contract?.sourceSummaryRedacted,
     download_validation_ok: report.contract?.downloadValidation?.ok,
     pptx_slide_count: report.contract?.downloadValidation?.pptxSlideCount,
@@ -464,6 +480,7 @@ function extractExternalVideoPptSelfTestEvidence(stdout) {
     return null;
   }
   const trigger = report.contract?.triggerClassifier || {};
+  const approvalGate = report.contract?.liveWriteApprovalGate || {};
   return {
     schema: 'v3.external_video_ppt_rollup_evidence.v1',
     trigger_text_requests_video_ppt: report.contract?.triggerTextRequestsVideoPpt,
@@ -484,6 +501,21 @@ function extractExternalVideoPptSelfTestEvidence(stdout) {
     trigger_script_specific_case_count: trigger.scriptSpecificCaseCount,
     positive_prompt_count: trigger.positivePromptCount,
     negative_prompt_count: trigger.negativePromptCount,
+    live_write_approval_gate_schema: approvalGate.schema,
+    live_write_approval_gate_case_count: approvalGate.caseCount,
+    live_write_approval_gate_negative_case_count: approvalGate.negativeCaseCount,
+    live_write_approval_gate_positive_case_count: approvalGate.positiveCaseCount,
+    live_write_approval_rejects_missing_ack_and_approval:
+      approvalGate.rejectsMissingAckAndApproval,
+    live_write_approval_rejects_missing_approval: approvalGate.rejectsMissingApproval,
+    live_write_approval_rejects_missing_ack: approvalGate.rejectsMissingAck,
+    live_write_approval_allows_preflight_without_approval:
+      approvalGate.allowsPreflightWithoutApproval,
+    live_write_approval_allows_self_test_without_approval:
+      approvalGate.allowsSelfTestWithoutApproval,
+    live_write_approval_accepts_complete_live_approval_shape:
+      approvalGate.acceptsCompleteLiveApprovalShape,
+    live_write_approval_values_included: approvalGate.approvalValuesIncluded,
     surface_ok: report.surface?.ok,
     surface_export_count: report.surface?.exportCount,
     surface_export_kind_count: report.surface?.exportKinds?.length,
@@ -1257,6 +1289,31 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       && externalEvidence.unsupported_non_video_extensions_rejected === true,
     unsupported_non_video_extensions_rejected:
       externalEvidence.unsupported_non_video_extensions_rejected === true,
+    live_approval_self_test_gate_surface_count: [
+      uploadEvidence,
+      externalEvidence,
+    ].filter((evidence) =>
+      evidence.live_write_approval_gate_schema
+        === 'v3.video_ppt_live_write_approval_gate_contract.v1'
+      && evidence.live_write_approval_rejects_missing_ack_and_approval === true
+      && evidence.live_write_approval_rejects_missing_approval === true
+      && evidence.live_write_approval_rejects_missing_ack === true
+      && evidence.live_write_approval_accepts_complete_live_approval_shape === true
+      && evidence.live_write_approval_values_included === false).length,
+    upload_main_live_approval_self_test_gate_supported:
+      uploadEvidence.live_write_approval_gate_case_count >= 6
+      && uploadEvidence.live_write_approval_rejects_missing_ack_and_approval === true
+      && uploadEvidence.live_write_approval_rejects_missing_approval === true
+      && uploadEvidence.live_write_approval_rejects_missing_ack === true
+      && uploadEvidence.live_write_approval_accepts_complete_live_approval_shape === true
+      && uploadEvidence.live_write_approval_values_included === false,
+    external_live_approval_self_test_gate_supported:
+      externalEvidence.live_write_approval_gate_case_count >= 6
+      && externalEvidence.live_write_approval_rejects_missing_ack_and_approval === true
+      && externalEvidence.live_write_approval_rejects_missing_approval === true
+      && externalEvidence.live_write_approval_rejects_missing_ack === true
+      && externalEvidence.live_write_approval_accepts_complete_live_approval_shape === true
+      && externalEvidence.live_write_approval_values_included === false,
     live_approval_negative_gate_count: [
       uploadApprovalNegative,
       externalApprovalNegative,
@@ -1549,6 +1606,9 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.supported_video_extension_evidence_surface_count !== 2
     || evidence.supported_video_extension_evidence_ready !== true
     || evidence.unsupported_non_video_extensions_rejected !== true
+    || evidence.live_approval_self_test_gate_surface_count !== 2
+    || evidence.upload_main_live_approval_self_test_gate_supported !== true
+    || evidence.external_live_approval_self_test_gate_supported !== true
     || evidence.live_approval_negative_gate_count !== 2
     || evidence.live_without_approval_rejected_before_network !== true
     || evidence.main_upload_artifact_surface_ready !== true
@@ -1741,6 +1801,21 @@ function validateLiveApprovalNegativeEvidence(report, commandId) {
   ) {
     throw new Error(`no-live rollup live approval negative evidence is incomplete: ${commandId}`);
   }
+}
+
+function hasCompleteLiveApprovalSelfTestGate(evidence) {
+  return evidence.live_write_approval_gate_schema
+    === 'v3.video_ppt_live_write_approval_gate_contract.v1'
+    && evidence.live_write_approval_gate_case_count >= 6
+    && evidence.live_write_approval_gate_negative_case_count >= 3
+    && evidence.live_write_approval_gate_positive_case_count >= 3
+    && evidence.live_write_approval_rejects_missing_ack_and_approval === true
+    && evidence.live_write_approval_rejects_missing_approval === true
+    && evidence.live_write_approval_rejects_missing_ack === true
+    && evidence.live_write_approval_allows_preflight_without_approval === true
+    && evidence.live_write_approval_allows_self_test_without_approval === true
+    && evidence.live_write_approval_accepts_complete_live_approval_shape === true
+    && evidence.live_write_approval_values_included === false;
 }
 
 function validateVideoPptHandoffPreflightEvidence(report) {
@@ -1954,6 +2029,7 @@ function validateUploadMainEvidence(report) {
     || evidence.trigger_script_specific_case_count !== 0
     || evidence.positive_prompt_count < 6
     || evidence.negative_prompt_count < 6
+    || !hasCompleteLiveApprovalSelfTestGate(evidence)
     || evidence.source_summary_redacted !== true
     || evidence.download_validation_ok !== true
     || evidence.pptx_slide_count < 1
@@ -1996,6 +2072,7 @@ function validateExternalVideoPptEvidence(report) {
     || evidence.trigger_script_specific_case_count !== 0
     || evidence.positive_prompt_count < 6
     || evidence.negative_prompt_count < 6
+    || !hasCompleteLiveApprovalSelfTestGate(evidence)
     || evidence.surface_ok !== true
     || evidence.surface_export_count < 6
     || evidence.surface_export_kind_count < 6

@@ -164,6 +164,72 @@ function validateLiveWriteApproval(args) {
   }
 }
 
+function assertLiveWriteApprovalGateContract() {
+  const cases = [
+    {
+      id: 'live_missing_ack_and_approval',
+      args: { selfTest: false, preflight: false, ackLiveWrite: false, approvalId: '' },
+      expectAllowed: false,
+    },
+    {
+      id: 'live_missing_approval',
+      args: { selfTest: false, preflight: false, ackLiveWrite: true, approvalId: '' },
+      expectAllowed: false,
+    },
+    {
+      id: 'live_missing_ack',
+      args: { selfTest: false, preflight: false, ackLiveWrite: false, approvalId: 'redacted-approval-ref' },
+      expectAllowed: false,
+    },
+    {
+      id: 'preflight_without_approval',
+      args: { selfTest: false, preflight: true, ackLiveWrite: false, approvalId: '' },
+      expectAllowed: true,
+    },
+    {
+      id: 'self_test_without_approval',
+      args: { selfTest: true, preflight: false, ackLiveWrite: false, approvalId: '' },
+      expectAllowed: true,
+    },
+    {
+      id: 'live_with_ack_and_approval',
+      args: { selfTest: false, preflight: false, ackLiveWrite: true, approvalId: 'redacted-approval-ref' },
+      expectAllowed: true,
+    },
+  ];
+  const results = cases.map((testCase) => {
+    let allowed = true;
+    try {
+      validateLiveWriteApproval(testCase.args);
+    } catch {
+      allowed = false;
+    }
+    if (allowed !== testCase.expectAllowed) {
+      throw new Error(`live write approval gate self-test failed: ${testCase.id}`);
+    }
+    return { id: testCase.id, allowed };
+  });
+  return {
+    schema: 'v3.video_ppt_live_write_approval_gate_contract.v1',
+    caseCount: cases.length,
+    negativeCaseCount: results.filter((result) => result.allowed === false).length,
+    positiveCaseCount: results.filter((result) => result.allowed === true).length,
+    rejectsMissingAckAndApproval: results.some((result) =>
+      result.id === 'live_missing_ack_and_approval' && result.allowed === false),
+    rejectsMissingApproval: results.some((result) =>
+      result.id === 'live_missing_approval' && result.allowed === false),
+    rejectsMissingAck: results.some((result) =>
+      result.id === 'live_missing_ack' && result.allowed === false),
+    allowsPreflightWithoutApproval: results.some((result) =>
+      result.id === 'preflight_without_approval' && result.allowed === true),
+    allowsSelfTestWithoutApproval: results.some((result) =>
+      result.id === 'self_test_without_approval' && result.allowed === true),
+    acceptsCompleteLiveApprovalShape: results.some((result) =>
+      result.id === 'live_with_ack_and_approval' && result.allowed === true),
+    approvalValuesIncluded: false,
+  };
+}
+
 function requireValue(name, value) {
   if (!value || value.startsWith('--')) {
     throw new Error(`${name} requires a value`);
@@ -1287,6 +1353,7 @@ async function assertSelfTestUploadContract(args, runId) {
     throw new Error(`self-test upload classifier missed supported videos: ${unsupported.join(', ')}`);
   }
   const triggerClassifier = assertVideoPptTriggerClassifier();
+  const liveWriteApprovalGate = assertLiveWriteApprovalGateContract();
 
   const source = redactedUrlSummary(redactionProbeVideoUrl());
   if (
@@ -1309,6 +1376,7 @@ async function assertSelfTestUploadContract(args, runId) {
     requiredFileKinds: REQUIRED_FILE_KINDS,
     supportedVideoExtensions: SUPPORTED_VIDEO_EXTENSIONS,
     triggerClassifier,
+    liveWriteApprovalGate,
     sourceSummaryRedacted: true,
     downloadValidation: {
       ok: downloadValidation.ok,
