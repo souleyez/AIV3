@@ -4077,6 +4077,60 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 No-Live Rollup Upload And External Trigger Evidence
+
+Task source: M6AE follow-up after M6AD embedded quality-matrix evidence in the no-live rollup. The final video PPT feature depends on both main-site uploaded video and third-party registered video respecting the same "extract PPT/slides/courseware already shown in a video" trigger boundary. This slice embeds the upload-main and external-video-ppt self-test contract evidence into the same top-level no-live report.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
+- read only local child reports printed by upload-main and external-video-ppt self-tests;
+- accept only relative `target/` report paths;
+- copy only counts, booleans, action ids, and file-kind counts into the no-live report, not child report paths or raw JSON bodies.
+
+Implemented behavior:
+
+- no-live rollup extracts `v3.video_ppt_upload_main_rollup_evidence.v1` from the upload-main self-test report;
+- no-live rollup extracts `v3.external_video_ppt_rollup_evidence.v1` from the third-party video PPT self-test report;
+- upload evidence records `selected_scope_intent=video_ppt_extraction`, `deliverable_state=final_pptx_ready`, 6 required file kinds, 6 supported video extensions, shared trigger fixture version 1, 12 shared trigger cases, 6 positive prompts, 6 negative prompts, and minimum PPTX/Markdown download validation;
+- external evidence records `trigger_text_requests_video_ppt=true`, ordinary-video-to-PPT guard enabled, requested `video_ppt_extraction` skill, expected `extract_video_ppt_transcript` action, registered-document scope fields, 6 supported video extensions, non-video rejection, shared trigger fixture counts, and minimum PPTX/Markdown download validation;
+- rollup validation now fails if upload-main or external self-test evidence is missing or incomplete.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live report evidence readback>"
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report>
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`;
+- upload evidence recorded `selected_scope_intent=video_ppt_extraction`, `deliverable_state=final_pptx_ready`, `trigger_shared_fixture_case_count=12`, `positive_prompt_count=6`, `negative_prompt_count=6`, `download_validation_ok=true`, and all upload no-live safety booleans false;
+- external evidence recorded `trigger_text_requests_video_ppt=true`, `default_prompt_guards_ordinary_video_to_ppt=true`, `requested_video_ppt_skill=true`, `expected_action=extract_video_ppt_transcript`, `trigger_shared_fixture_case_count=12`, `positive_prompt_count=6`, `negative_prompt_count=6`, `unsupported_non_video_extensions_rejected=true`, `download_validation_ok=true`, and all external no-live safety booleans false;
+- quality matrix evidence from M6AD remained present in the same report with 8 review-required risk flags and object-shape support;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, or password-like values.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- future acceptance-critical child reports should expose similarly narrow evidence in the top-level no-live rollup.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Video PPT No-Live Rollup Gate
 
 Task source: after the video PPT surface accumulated several independent no-live gates, the active plan needed a repeatable one-command rollup that proves the current local baseline without running live upload, third-party, handoff, capture, deployment, or customer-authorized actions.

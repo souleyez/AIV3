@@ -241,10 +241,89 @@ function runCommand(command) {
 }
 
 function extractCommandEvidence(commandId, stdout) {
+  if (commandId === 'upload_main_self_test') {
+    return extractUploadMainSelfTestEvidence(stdout);
+  }
+  if (commandId === 'external_video_ppt_self_test') {
+    return extractExternalVideoPptSelfTestEvidence(stdout);
+  }
   if (commandId !== 'quality_matrix_self_test') {
     return null;
   }
   return extractQualityMatrixSelfTestEvidence(stdout);
+}
+
+function extractUploadMainSelfTestEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  const trigger = report.contract?.triggerClassifier || {};
+  return {
+    schema: 'v3.video_ppt_upload_main_rollup_evidence.v1',
+    selected_scope_intent: report.contract?.selectedScopeIntent,
+    candidate_source: report.contract?.candidateSource,
+    deliverable_state: report.contract?.deliverableState,
+    required_file_kind_count: report.contract?.requiredFileKinds?.length,
+    supported_video_extension_count: report.contract?.supportedVideoExtensions?.length,
+    trigger_fixture_schema: trigger.fixtureSchema,
+    trigger_fixture_version: trigger.fixtureVersion,
+    trigger_shared_fixture_case_count: trigger.sharedFixtureCaseCount,
+    trigger_script_specific_case_count: trigger.scriptSpecificCaseCount,
+    positive_prompt_count: trigger.positivePromptCount,
+    negative_prompt_count: trigger.negativePromptCount,
+    source_summary_redacted: report.contract?.sourceSummaryRedacted,
+    download_validation_ok: report.contract?.downloadValidation?.ok,
+    pptx_slide_count: report.contract?.downloadValidation?.pptxSlideCount,
+    markdown_slide_heading_count: report.contract?.downloadValidation?.markdownSlideHeadingCount,
+    network_calls_run: report.summary?.networkCallsRun,
+    production_write_allowed: report.summary?.productionWriteAllowed,
+    fixture_downloaded: report.summary?.fixtureDownloaded,
+    upload_attempted: report.summary?.uploadAttempted,
+    assistant_run_created: report.summary?.assistantRunCreated,
+    source_urls_included: report.safety?.sourceUrlsIncluded,
+    object_keys_included: report.safety?.objectKeysIncluded,
+    cookies_included: report.safety?.cookiesIncluded,
+    bearer_included: report.safety?.bearerIncluded,
+    provider_payloads_included: report.safety?.providerPayloadsIncluded,
+  };
+}
+
+function extractExternalVideoPptSelfTestEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  const trigger = report.contract?.triggerClassifier || {};
+  return {
+    schema: 'v3.external_video_ppt_rollup_evidence.v1',
+    trigger_text_requests_video_ppt: report.contract?.triggerTextRequestsVideoPpt,
+    default_prompt_guards_ordinary_video_to_ppt:
+      report.contract?.defaultPromptGuardsAgainstOrdinaryVideoToPpt,
+    requested_video_ppt_skill: Array.isArray(report.contract?.requestedSkillIds)
+      ? report.contract.requestedSkillIds.includes('video_ppt_extraction')
+      : false,
+    expected_action: report.contract?.expectedAction,
+    available_document_source_present: report.contract?.availableDocumentSourcePresent,
+    available_document_external_ids_count: report.contract?.availableDocumentExternalIdsCount,
+    dataset_external_ids_count: report.contract?.datasetExternalIdsCount,
+    supported_video_extension_count: report.contract?.supportedVideoExtensions?.length,
+    unsupported_non_video_extensions_rejected: report.contract?.unsupportedNonVideoExtensionsRejected,
+    trigger_fixture_schema: trigger.fixtureSchema,
+    trigger_fixture_version: trigger.fixtureVersion,
+    trigger_shared_fixture_case_count: trigger.sharedFixtureCaseCount,
+    trigger_script_specific_case_count: trigger.scriptSpecificCaseCount,
+    positive_prompt_count: trigger.positivePromptCount,
+    negative_prompt_count: trigger.negativePromptCount,
+    source_summary_redacted: report.contract?.sourceSummaryRedacted,
+    download_validation_ok: report.downloadValidation?.ok,
+    pptx_slide_count: report.downloadValidation?.pptxSlideCount,
+    markdown_slide_heading_count: report.downloadValidation?.markdownSlideHeadingCount,
+    network_calls_run: report.summary?.networkCallsRun,
+    fixture_registered: report.summary?.fixtureRegistered,
+    event_sent: report.summary?.eventSent,
+    deliverables_downloaded_from_network: report.summary?.deliverablesDownloadedFromNetwork,
+  };
 }
 
 function extractQualityMatrixSelfTestEvidence(stdout) {
@@ -269,11 +348,10 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
 }
 
 function readJsonReportFromStdout(stdout) {
-  const match = stdout.match(/\breport=([^\s]+)/);
-  if (!match) {
+  const reportPath = extractReportPathFromStdout(stdout);
+  if (!reportPath) {
     return null;
   }
-  const reportPath = match[1];
   const normalized = path.normalize(reportPath);
   if (
     path.isAbsolute(normalized)
@@ -286,6 +364,19 @@ function readJsonReportFromStdout(stdout) {
     return JSON.parse(fs.readFileSync(normalized, 'utf8'));
   } catch {
     return null;
+  }
+}
+
+function extractReportPathFromStdout(stdout) {
+  const reportEquals = stdout.match(/\breport=([^\s]+)/);
+  if (reportEquals) {
+    return reportEquals[1];
+  }
+  try {
+    const parsed = JSON.parse(stdout.trim());
+    return typeof parsed.reportPath === 'string' ? parsed.reportPath : '';
+  } catch {
+    return '';
   }
 }
 
@@ -378,9 +469,85 @@ function validateReport(report) {
     throw new Error('no-live rollup safety gates are invalid');
   }
   validateQualityMatrixEvidence(report);
+  validateUploadMainEvidence(report);
+  validateExternalVideoPptEvidence(report);
   const serialized = JSON.stringify(report);
   if (serialized.match(/[A-Za-z]:[\\/]|[\\/]Users[\\/]|[\\/]home[\\/]|https?:\/\/|token=|cookie=|bearer=/i)) {
     throw new Error('no-live rollup report contains unredacted local path, URL, or token-like text');
+  }
+}
+
+function validateUploadMainEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'upload_main_self_test');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.video_ppt_upload_main_rollup_evidence.v1'
+    || evidence.selected_scope_intent !== 'video_ppt_extraction'
+    || evidence.candidate_source !== 'video_ppt_upload_main_smoke'
+    || evidence.deliverable_state !== 'final_pptx_ready'
+    || evidence.required_file_kind_count < 6
+    || evidence.supported_video_extension_count < 6
+    || evidence.trigger_fixture_schema !== 'v3.video_ppt_trigger_classifier_fixture.v1'
+    || evidence.trigger_shared_fixture_case_count !== evidence.positive_prompt_count + evidence.negative_prompt_count
+    || evidence.trigger_script_specific_case_count !== 0
+    || evidence.positive_prompt_count < 6
+    || evidence.negative_prompt_count < 6
+    || evidence.source_summary_redacted !== true
+    || evidence.download_validation_ok !== true
+    || evidence.pptx_slide_count < 1
+    || evidence.markdown_slide_heading_count < 1
+    || evidence.network_calls_run !== false
+    || evidence.production_write_allowed !== false
+    || evidence.fixture_downloaded !== false
+    || evidence.upload_attempted !== false
+    || evidence.assistant_run_created !== false
+    || evidence.source_urls_included !== false
+    || evidence.object_keys_included !== false
+    || evidence.cookies_included !== false
+    || evidence.bearer_included !== false
+    || evidence.provider_payloads_included !== false
+  ) {
+    throw new Error('no-live rollup upload-main evidence is incomplete');
+  }
+}
+
+function validateExternalVideoPptEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'external_video_ppt_self_test');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.external_video_ppt_rollup_evidence.v1'
+    || evidence.trigger_text_requests_video_ppt !== true
+    || evidence.default_prompt_guards_ordinary_video_to_ppt !== true
+    || evidence.requested_video_ppt_skill !== true
+    || evidence.expected_action !== 'extract_video_ppt_transcript'
+    || evidence.available_document_source_present !== true
+    || evidence.available_document_external_ids_count < 1
+    || evidence.dataset_external_ids_count < 1
+    || evidence.supported_video_extension_count < 6
+    || evidence.unsupported_non_video_extensions_rejected !== true
+    || evidence.trigger_fixture_schema !== 'v3.video_ppt_trigger_classifier_fixture.v1'
+    || evidence.trigger_shared_fixture_case_count !== evidence.positive_prompt_count + evidence.negative_prompt_count
+    || evidence.trigger_script_specific_case_count !== 0
+    || evidence.positive_prompt_count < 6
+    || evidence.negative_prompt_count < 6
+    || evidence.source_summary_redacted !== true
+    || evidence.download_validation_ok !== true
+    || evidence.pptx_slide_count < 1
+    || evidence.markdown_slide_heading_count < 1
+    || evidence.network_calls_run !== false
+    || evidence.fixture_registered !== false
+    || evidence.event_sent !== false
+    || evidence.deliverables_downloaded_from_network !== false
+  ) {
+    throw new Error('no-live rollup external-video evidence is incomplete');
   }
 }
 
