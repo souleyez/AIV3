@@ -43,6 +43,7 @@ function parseArgs(argv) {
     publicCourseDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_PUBLIC_COURSE_DELIVERABLES || '',
     customerDeliverables: process.env.VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_DELIVERABLES || '',
     customerApprovalId: process.env.VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_APPROVAL_ID || '',
+    customerRetentionPolicy: process.env.VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_RETENTION_POLICY || '',
     outputDir: process.env.VIDEO_PPT_QUALITY_MATRIX_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
     pretty: false,
   };
@@ -58,6 +59,8 @@ function parseArgs(argv) {
       args.customerDeliverables = requiredValue(argv, index += 1, arg);
     } else if (arg === '--customer-approval-id') {
       args.customerApprovalId = requiredValue(argv, index += 1, arg);
+    } else if (arg === '--customer-retention-policy') {
+      args.customerRetentionPolicy = requiredValue(argv, index += 1, arg);
     } else if (arg === '--output-dir') {
       args.outputDir = requiredValue(argv, index += 1, arg);
     } else if (arg === '--pretty') {
@@ -84,8 +87,8 @@ function usage() {
   npm run smoke:video-ppt-quality-matrix -- --self-test [--pretty] [--output-dir target/video-ppt-quality-matrix-smoke]
   npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<video-extraction>/generated_artifacts [--pretty]
   npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables target/<video-extraction>/generated_artifacts [--pretty]
-  npm run smoke:video-ppt-quality-matrix -- --customer-deliverables target/<video-extraction>/generated_artifacts --customer-approval-id APPROVAL-... [--pretty]
-  npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<synthetic>/generated_artifacts --public-course-deliverables target/<public>/generated_artifacts --customer-deliverables target/<customer>/generated_artifacts --customer-approval-id APPROVAL-... [--pretty]
+  npm run smoke:video-ppt-quality-matrix -- --customer-deliverables target/<video-extraction>/generated_artifacts --customer-approval-id APPROVAL-... --customer-retention-policy RETENTION-... [--pretty]
+  npm run smoke:video-ppt-quality-matrix -- --synthetic-deliverables target/<synthetic>/generated_artifacts --public-course-deliverables target/<public>/generated_artifacts --customer-deliverables target/<customer>/generated_artifacts --customer-approval-id APPROVAL-... --customer-retention-policy RETENTION-... [--pretty]
 
 Checks:
   - deterministic P2-2E quality matrix shape for video/PPT extraction
@@ -95,7 +98,7 @@ Checks:
   - local public-course deliverables can be validated and classified through the same matrix
   - local customer-authorized deliverables can be validated only after explicit approval/input exists
   - combined deliverables inputs can produce a complete three-category matrix when all required categories are provided
-  - customer-authorized samples stay pending unless --customer-deliverables and --customer-approval-id are provided
+  - customer-authorized samples stay pending unless --customer-deliverables, --customer-approval-id, and --customer-retention-policy are provided
   - report never claims live/customer/video-channel extraction from self-test evidence
 
 Safety:
@@ -115,8 +118,14 @@ function validateInputModeArgs(args) {
   if (args.customerDeliverables && !args.customerApprovalId) {
     throw new Error('--customer-approval-id is required with --customer-deliverables');
   }
+  if (args.customerDeliverables && !args.customerRetentionPolicy) {
+    throw new Error('--customer-retention-policy is required with --customer-deliverables');
+  }
   if (args.customerApprovalId && !args.customerDeliverables) {
     throw new Error('--customer-approval-id requires --customer-deliverables');
+  }
+  if (args.customerRetentionPolicy && !args.customerDeliverables) {
+    throw new Error('--customer-retention-policy requires --customer-deliverables');
   }
   if (!args.selfTest && deliverableInputs.length === 0) {
     throw new Error('--self-test, --synthetic-deliverables, --public-course-deliverables, or --customer-deliverables is required');
@@ -222,6 +231,7 @@ function buildCasesFromDeliverableArgs(args) {
         sourceAccessStatus: 'customer_authorized_input',
         approvalStatus: 'operator_authorized',
         approvalReferencePresent: true,
+        retentionPolicyReferencePresent: true,
       })
       : buildPendingCustomerAuthorizedCase(),
   ];
@@ -234,6 +244,7 @@ function buildCaseFromDeliverables(inputPath, {
   sourceAccessStatus,
   approvalStatus,
   approvalReferencePresent = false,
+  retentionPolicyReferencePresent = false,
 }) {
   const validation = validateVideoDeliverables(inputPath);
   const artifactsDir = validation.artifactsDir;
@@ -257,6 +268,8 @@ function buildCaseFromDeliverables(inputPath, {
     approval_status: approvalStatus,
     approval_reference_present: approvalReferencePresent,
     approval_reference_redacted: approvalReferencePresent,
+    retention_policy_reference_present: retentionPolicyReferencePresent,
+    retention_policy_reference_redacted: retentionPolicyReferencePresent,
     trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
     deliverable_status: {
       state: deliverableState,
@@ -494,6 +507,7 @@ function buildSelfTestReport() {
       local_deliverables_input_reviewed: false,
       deliverables_mode_failure_class_gate_defaults_supported: true,
       customer_authorization_argument_gate_supported: true,
+      customer_retention_policy_argument_gate_supported: true,
       review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       review_required_risk_flag_object_shape_supported: true,
@@ -765,6 +779,7 @@ function validateCustomerAuthorizationArgumentRegression() {
     publicCourseDeliverables: '',
     customerDeliverables: '',
     customerApprovalId: '',
+    customerRetentionPolicy: '',
   };
   const invalidCases = [
     {
@@ -773,9 +788,23 @@ function validateCustomerAuthorizationArgumentRegression() {
       expected: /--customer-approval-id is required/,
     },
     {
+      name: 'missing_customer_retention_policy',
+      args: {
+        ...baseArgs,
+        customerDeliverables: 'customer-deliverables-redacted',
+        customerApprovalId: 'customer-approval-redacted',
+      },
+      expected: /--customer-retention-policy is required/,
+    },
+    {
       name: 'customer_approval_without_deliverables',
       args: { ...baseArgs, customerApprovalId: 'customer-approval-redacted' },
       expected: /--customer-approval-id requires --customer-deliverables/,
+    },
+    {
+      name: 'customer_retention_policy_without_deliverables',
+      args: { ...baseArgs, customerRetentionPolicy: 'customer-retention-redacted' },
+      expected: /--customer-retention-policy requires --customer-deliverables/,
     },
     {
       name: 'self_test_with_customer_deliverables',
@@ -784,6 +813,7 @@ function validateCustomerAuthorizationArgumentRegression() {
         selfTest: true,
         customerDeliverables: 'customer-deliverables-redacted',
         customerApprovalId: 'customer-approval-redacted',
+        customerRetentionPolicy: 'customer-retention-redacted',
       },
       expected: /use either --self-test or deliverables input flags/,
     },
@@ -803,6 +833,7 @@ function validateCustomerAuthorizationArgumentRegression() {
     ...baseArgs,
     customerDeliverables: 'customer-deliverables-redacted',
     customerApprovalId: 'customer-approval-redacted',
+    customerRetentionPolicy: 'customer-retention-redacted',
   });
 }
 
@@ -821,6 +852,7 @@ function buildDeliverablesReportFromArgs(args) {
       public_course_sample_required: !args.publicCourseDeliverables,
       customer_authorization_required: !args.customerDeliverables,
       customer_approval_reference_present: Boolean(args.customerDeliverables && args.customerApprovalId),
+      customer_retention_policy_reference_present: Boolean(args.customerDeliverables && args.customerRetentionPolicy),
       synthetic_deliverables_reviewed: Boolean(args.syntheticDeliverables),
       public_course_deliverables_reviewed: Boolean(args.publicCourseDeliverables),
       customer_authorized_deliverables_reviewed: Boolean(args.customerDeliverables),
@@ -832,6 +864,7 @@ function buildDeliverablesReportFromArgs(args) {
       public_course_deliverables_input_redacted: Boolean(args.publicCourseDeliverables),
       customer_authorized_deliverables_input_redacted: Boolean(args.customerDeliverables),
       customer_approval_reference_redacted: Boolean(args.customerDeliverables && args.customerApprovalId),
+      customer_retention_policy_reference_redacted: Boolean(args.customerDeliverables && args.customerRetentionPolicy),
     },
     nextActions: nextActionsForDeliverablesInputs(args),
   });
@@ -1035,6 +1068,7 @@ function validateSelfTestReport(report) {
     || report.gates.review_failure_class_summary_needs_manual_review_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !hasExpectedReviewFailureClassCounts(report.gates.review_failure_class_summary_counts)
     || report.gates.customer_authorization_argument_gate_supported !== true
+    || report.gates.customer_retention_policy_argument_gate_supported !== true
   ) {
     throw new Error('self-test report must expose the review-required risk flag gate');
   }

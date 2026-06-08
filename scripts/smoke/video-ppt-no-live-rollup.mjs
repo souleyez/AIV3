@@ -695,6 +695,8 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
       report.gates?.deliverables_mode_failure_class_gate_defaults_supported,
     customer_authorization_argument_gate_supported:
       report.gates?.customer_authorization_argument_gate_supported,
+    customer_retention_policy_argument_gate_supported:
+      report.gates?.customer_retention_policy_argument_gate_supported,
     review_failure_class_summary_supported: report.gates?.review_failure_class_summary_supported,
     review_failure_class_summary_needs_manual_review_count:
       report.gates?.review_failure_class_summary_needs_manual_review_count,
@@ -1704,6 +1706,7 @@ function validateQualityMatrixEvidence(report) {
     || evidence.review_required_risk_flag_object_shape_case_count !== 8
     || evidence.deliverables_mode_failure_class_gate_defaults_supported !== true
     || evidence.customer_authorization_argument_gate_supported !== true
+    || evidence.customer_retention_policy_argument_gate_supported !== true
     || evidence.review_failure_class_summary_supported !== true
     || evidence.review_failure_class_summary_needs_manual_review_count !== 8
     || !hasExpectedReviewFailureClassCounts(evidence.review_failure_class_summary_counts)

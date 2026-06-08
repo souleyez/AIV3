@@ -1537,6 +1537,81 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, raw approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Customer Retention Policy Argument Gate
+
+Task source: P6 customer quality matrix still requires a customer/operator authorized sample and retention policy. M6AV required a customer approval id; this slice also requires an explicit customer retention policy reference before any customer deliverables package can be reviewed.
+
+Scope:
+
+- code slice only in `scripts/smoke/video-ppt-quality-matrix.mjs` and `scripts/smoke/video-ppt-no-live-rollup.mjs`;
+- plan and validation-ledger update for the new required argument;
+- no main-site live upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- quality matrix accepts `--customer-retention-policy` and `VIDEO_PPT_QUALITY_MATRIX_CUSTOMER_RETENTION_POLICY`;
+- `--customer-deliverables` now requires both `--customer-approval-id` and `--customer-retention-policy`;
+- isolated `--customer-retention-policy` without `--customer-deliverables` is rejected;
+- self-test with customer deliverables flags remains rejected;
+- valid customer argument shape now includes both approval id and retention policy references;
+- reports record only `customer_retention_policy_reference_present=true` and `customer_retention_policy_reference_redacted=true`;
+- self-test exposes `customer_retention_policy_argument_gate_supported=true`;
+- no-live rollup copies and validates that support bit in the quality matrix child evidence.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir target/video-ppt-quality-matrix-retention-policy-m6aw
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/video-ppt-no-live-rollup-retention-policy-m6aw
+node scripts/smoke/video-ppt-quality-matrix.mjs --customer-deliverables customer-deliverables-redacted --customer-approval-id customer-approval-redacted
+node scripts/smoke/video-ppt-quality-matrix.mjs --customer-retention-policy customer-retention-redacted
+node -e "<redacted latest quality-matrix retention gate readback>"
+rg -n "customer_retention_policy_argument_gate_supported|customer_authorization_argument_gate_supported" <latest-no-live-rollup-report>
+rg -n "<local-path-url-token-raw-approval-retention-patterns>" target/video-ppt-quality-matrix-retention-policy-m6aw target/video-ppt-no-live-rollup-retention-policy-m6aw
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- no-live rollup syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- direct CLI negative check for customer deliverables without retention policy failed with `--customer-retention-policy is required with --customer-deliverables`;
+- direct CLI negative check for isolated retention policy failed with `--customer-retention-policy requires --customer-deliverables`;
+- latest quality matrix report exposed `customer_authorization_argument_gate_supported=true`;
+- latest quality matrix report exposed `customer_retention_policy_argument_gate_supported=true`;
+- latest no-live rollup report copied both support bits in the quality matrix child evidence;
+- sensitive-shape scan found no local absolute paths, raw URLs, bearer values, token query strings, provider keys, password-like values, raw approval ids, raw retention policy values, raw operator names, or generated-artifacts paths;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this gate does not execute or replace a real customer-authorized quality matrix;
+- P6 customer quality matrix still requires customer/operator authorization, input source, approval reference, retention policy, and retention cleanup expectations;
+- P2/P3/P4/P5/P7/P8 remain pending their live/customer/deployment gates.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, raw approval ids, raw retention policy values, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Slide Sharpness Quality Signal Local Slice
 
 Task source: P2-2F from `docs/plans/datamax-active-execution-plan.md`.
