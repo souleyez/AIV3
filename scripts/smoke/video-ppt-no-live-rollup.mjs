@@ -390,6 +390,7 @@ function extractUploadMainSelfTestEvidence(stdout) {
   }
   const trigger = report.contract?.triggerClassifier || {};
   const approvalGate = report.contract?.liveWriteApprovalGate || {};
+  const commandTemplate = report.contract?.liveCommandTemplateContract || {};
   return {
     schema: 'v3.video_ppt_upload_main_rollup_evidence.v1',
     selected_scope_intent: report.contract?.selectedScopeIntent,
@@ -418,6 +419,17 @@ function extractUploadMainSelfTestEvidence(stdout) {
     live_write_approval_accepts_complete_live_approval_shape:
       approvalGate.acceptsCompleteLiveApprovalShape,
     live_write_approval_values_included: approvalGate.approvalValuesIncluded,
+    live_command_template_contract_schema: commandTemplate.schema,
+    live_command_template_contract_case_count: commandTemplate.caseCount,
+    live_command_template_url_fixture_ready: commandTemplate.urlFixtureTemplateReady,
+    live_command_template_local_file_ready: commandTemplate.localFileTemplateReady,
+    live_command_template_all_include_ack_live_write:
+      commandTemplate.allTemplatesIncludeAckLiveWrite,
+    live_command_template_all_include_redacted_approval_id:
+      commandTemplate.allTemplatesIncludeRedactedApprovalId,
+    live_command_template_all_include_redacted_bearer:
+      commandTemplate.allTemplatesIncludeRedactedBearer,
+    live_command_template_raw_values_included: commandTemplate.rawValuesIncluded,
     source_summary_redacted: report.contract?.sourceSummaryRedacted,
     download_validation_ok: report.contract?.downloadValidation?.ok,
     pptx_slide_count: report.contract?.downloadValidation?.pptxSlideCount,
@@ -491,6 +503,7 @@ function extractExternalVideoPptSelfTestEvidence(stdout) {
   }
   const trigger = report.contract?.triggerClassifier || {};
   const approvalGate = report.contract?.liveWriteApprovalGate || {};
+  const commandTemplate = report.contract?.liveCommandTemplateContract || {};
   return {
     schema: 'v3.external_video_ppt_rollup_evidence.v1',
     trigger_text_requests_video_ppt: report.contract?.triggerTextRequestsVideoPpt,
@@ -526,6 +539,17 @@ function extractExternalVideoPptSelfTestEvidence(stdout) {
     live_write_approval_accepts_complete_live_approval_shape:
       approvalGate.acceptsCompleteLiveApprovalShape,
     live_write_approval_values_included: approvalGate.approvalValuesIncluded,
+    live_command_template_contract_schema: commandTemplate.schema,
+    live_command_template_contract_case_count: commandTemplate.caseCount,
+    live_command_template_url_fixture_ready: commandTemplate.urlFixtureTemplateReady,
+    live_command_template_local_file_ready: commandTemplate.localFileTemplateReady,
+    live_command_template_all_include_ack_live_write:
+      commandTemplate.allTemplatesIncludeAckLiveWrite,
+    live_command_template_all_include_redacted_approval_id:
+      commandTemplate.allTemplatesIncludeRedactedApprovalId,
+    live_command_template_all_include_redacted_bearer:
+      commandTemplate.allTemplatesIncludeRedactedBearer,
+    live_command_template_raw_values_included: commandTemplate.rawValuesIncluded,
     surface_ok: report.surface?.ok,
     surface_export_count: report.surface?.exportCount,
     surface_export_kind_count: report.surface?.exportKinds?.length,
@@ -1360,6 +1384,14 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       && externalEvidence.live_write_approval_rejects_missing_ack === true
       && externalEvidence.live_write_approval_accepts_complete_live_approval_shape === true
       && externalEvidence.live_write_approval_values_included === false,
+    live_approval_command_template_self_test_surface_count: [
+      hasCompleteLiveCommandTemplateSelfTestContract(uploadEvidence),
+      hasCompleteLiveCommandTemplateSelfTestContract(externalEvidence, true),
+    ].filter(Boolean).length,
+    upload_main_live_approval_command_template_self_test_supported:
+      hasCompleteLiveCommandTemplateSelfTestContract(uploadEvidence),
+    external_live_approval_command_template_self_test_supported:
+      hasCompleteLiveCommandTemplateSelfTestContract(externalEvidence, true),
     live_approval_command_template_surface_count: [
       uploadPreflight,
       externalPreflight,
@@ -1680,6 +1712,9 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.live_approval_self_test_gate_surface_count !== 2
     || evidence.upload_main_live_approval_self_test_gate_supported !== true
     || evidence.external_live_approval_self_test_gate_supported !== true
+    || evidence.live_approval_command_template_self_test_surface_count !== 2
+    || evidence.upload_main_live_approval_command_template_self_test_supported !== true
+    || evidence.external_live_approval_command_template_self_test_supported !== true
     || evidence.live_approval_command_template_surface_count !== 2
     || evidence.upload_main_live_approval_command_template_ready !== true
     || evidence.external_live_approval_command_template_ready !== true
@@ -1905,6 +1940,20 @@ function hasCompleteLiveApprovalSelfTestGate(evidence) {
     && evidence.live_write_approval_values_included === false;
 }
 
+function hasCompleteLiveCommandTemplateSelfTestContract(evidence, requiresBearer = false) {
+  return evidence.live_command_template_contract_schema
+    === 'v3.video_ppt_live_command_template_redaction_contract.v1'
+    && evidence.live_command_template_contract_case_count >= 2
+    && evidence.live_command_template_url_fixture_ready === true
+    && evidence.live_command_template_local_file_ready === true
+    && evidence.live_command_template_all_include_ack_live_write === true
+    && evidence.live_command_template_all_include_redacted_approval_id === true
+    && (requiresBearer
+      ? evidence.live_command_template_all_include_redacted_bearer === true
+      : evidence.live_command_template_all_include_redacted_bearer !== true)
+    && evidence.live_command_template_raw_values_included === false;
+}
+
 function validateVideoPptHandoffPreflightEvidence(report) {
   const command = report.commands.find((result) => result.id === 'video_ppt_handoff_preflight');
   if (!command || command.status !== 'passed') {
@@ -2117,6 +2166,7 @@ function validateUploadMainEvidence(report) {
     || evidence.positive_prompt_count < 6
     || evidence.negative_prompt_count < 6
     || !hasCompleteLiveApprovalSelfTestGate(evidence)
+    || !hasCompleteLiveCommandTemplateSelfTestContract(evidence)
     || evidence.source_summary_redacted !== true
     || evidence.download_validation_ok !== true
     || evidence.pptx_slide_count < 1
@@ -2160,6 +2210,7 @@ function validateExternalVideoPptEvidence(report) {
     || evidence.positive_prompt_count < 6
     || evidence.negative_prompt_count < 6
     || !hasCompleteLiveApprovalSelfTestGate(evidence)
+    || !hasCompleteLiveCommandTemplateSelfTestContract(evidence, true)
     || evidence.surface_ok !== true
     || evidence.surface_export_count < 6
     || evidence.surface_export_kind_count < 6

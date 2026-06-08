@@ -463,6 +463,87 @@ function redactedLiveCommand(args, fixtureName) {
   ].filter(Boolean).join(' ');
 }
 
+function assertLiveCommandTemplateRedactionContract(args) {
+  const cases = [
+    {
+      id: 'url_fixture_template',
+      args: {
+        ...args,
+        baseUrl: redactionProbeVideoUrl(),
+        bearer: 'raw-inbound-bearer',
+        fixtureUrl: redactionProbeVideoUrl(),
+        fixtureFile: '',
+        approvalId: 'dry-run-approval',
+      },
+      fixtureName: 'redaction-probe.mp4',
+      expectedFixturePlaceholder: '--fixture-url <redacted-public-video-url>',
+    },
+    {
+      id: 'local_file_template',
+      args: {
+        ...args,
+        baseUrl: redactionProbeVideoUrl(),
+        bearer: 'raw-inbound-bearer',
+        fixtureUrl: '',
+        fixtureFile: '/Users/redaction_probe/private/local-video.mp4',
+        approvalId: 'dry-run-approval',
+      },
+      fixtureName: 'local-video.mp4',
+      expectedFixturePlaceholder: '--fixture-file <redacted-local-video-file>',
+    },
+  ];
+  const results = cases.map((testCase) => {
+    const command = redactedLiveCommand(testCase.args, testCase.fixtureName);
+    const ok = command.includes('--ack-live-write')
+      && command.includes('--approval-id <redacted-approval-id>')
+      && command.includes('--bearer <redacted-inbound-bearer>')
+      && command.includes(testCase.expectedFixturePlaceholder)
+      && !hasUnsafeLiveCommandTemplateValue(command);
+    if (!ok) {
+      throw new Error(`live command template redaction contract failed: ${testCase.id}`);
+    }
+    return {
+      id: testCase.id,
+      includesAckLiveWrite: command.includes('--ack-live-write'),
+      includesRedactedApprovalId: command.includes('--approval-id <redacted-approval-id>'),
+      includesRedactedBearer: command.includes('--bearer <redacted-inbound-bearer>'),
+      includesExpectedFixturePlaceholder:
+        command.includes(testCase.expectedFixturePlaceholder),
+      rawValuesIncluded: hasUnsafeLiveCommandTemplateValue(command),
+    };
+  });
+  return {
+    schema: 'v3.video_ppt_live_command_template_redaction_contract.v1',
+    caseCount: cases.length,
+    urlFixtureTemplateReady: results.some((result) =>
+      result.id === 'url_fixture_template'
+      && result.includesAckLiveWrite
+      && result.includesRedactedApprovalId
+      && result.includesRedactedBearer
+      && result.includesExpectedFixturePlaceholder
+      && result.rawValuesIncluded === false),
+    localFileTemplateReady: results.some((result) =>
+      result.id === 'local_file_template'
+      && result.includesAckLiveWrite
+      && result.includesRedactedApprovalId
+      && result.includesRedactedBearer
+      && result.includesExpectedFixturePlaceholder
+      && result.rawValuesIncluded === false),
+    allTemplatesIncludeAckLiveWrite:
+      results.every((result) => result.includesAckLiveWrite === true),
+    allTemplatesIncludeRedactedApprovalId:
+      results.every((result) => result.includesRedactedApprovalId === true),
+    allTemplatesIncludeRedactedBearer:
+      results.every((result) => result.includesRedactedBearer === true),
+    rawValuesIncluded: results.some((result) => result.rawValuesIncluded === true),
+  };
+}
+
+function hasUnsafeLiveCommandTemplateValue(command) {
+  return /https?:\/\/|token=|redaction_probe|\/Users\/|\/home\/|[A-Za-z]:\\|dry-run-approval|redacted-approval-ref|raw-inbound-bearer|bearer=/i
+    .test(command);
+}
+
 async function localFixturePreflight(args) {
   const fixtureStat = await stat(args.fixtureFile);
   if (!fixtureStat.isFile()) {
@@ -878,6 +959,7 @@ function assertSelfTestExternalContract(args, runId) {
     throw new Error('self-test redacted URL summary leaked path or query data');
   }
   const liveWriteApprovalGate = assertLiveWriteApprovalGateContract();
+  const liveCommandTemplateContract = assertLiveCommandTemplateRedactionContract(args);
 
   return {
     triggerTextRequestsVideoPpt: true,
@@ -891,6 +973,7 @@ function assertSelfTestExternalContract(args, runId) {
     supportedVideoExtensions: SUPPORTED_VIDEO_EXTENSIONS,
     unsupportedNonVideoExtensionsRejected: true,
     liveWriteApprovalGate,
+    liveCommandTemplateContract,
     sourceSummaryRedacted: true,
   };
 }

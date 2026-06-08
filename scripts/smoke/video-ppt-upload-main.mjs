@@ -691,6 +691,79 @@ function redactedLiveCommand(args, fixtureName) {
   ].filter(Boolean).join(' ');
 }
 
+function assertLiveCommandTemplateRedactionContract(args) {
+  const cases = [
+    {
+      id: 'url_fixture_template',
+      args: {
+        ...args,
+        baseUrl: redactionProbeVideoUrl(),
+        fixtureUrl: redactionProbeVideoUrl(),
+        fixtureFile: '',
+        approvalId: 'dry-run-approval',
+      },
+      fixtureName: 'redaction-probe.mp4',
+      expectedFixturePlaceholder: '--fixture-url <redacted-public-video-url>',
+    },
+    {
+      id: 'local_file_template',
+      args: {
+        ...args,
+        baseUrl: redactionProbeVideoUrl(),
+        fixtureUrl: '',
+        fixtureFile: '/Users/redaction_probe/private/local-video.mp4',
+        approvalId: 'dry-run-approval',
+      },
+      fixtureName: 'local-video.mp4',
+      expectedFixturePlaceholder: '--fixture-file <redacted-local-video-file>',
+    },
+  ];
+  const results = cases.map((testCase) => {
+    const command = redactedLiveCommand(testCase.args, testCase.fixtureName);
+    const ok = command.includes('--ack-live-write')
+      && command.includes('--approval-id <redacted-approval-id>')
+      && command.includes(testCase.expectedFixturePlaceholder)
+      && !hasUnsafeLiveCommandTemplateValue(command);
+    if (!ok) {
+      throw new Error(`live command template redaction contract failed: ${testCase.id}`);
+    }
+    return {
+      id: testCase.id,
+      includesAckLiveWrite: command.includes('--ack-live-write'),
+      includesRedactedApprovalId: command.includes('--approval-id <redacted-approval-id>'),
+      includesExpectedFixturePlaceholder:
+        command.includes(testCase.expectedFixturePlaceholder),
+      rawValuesIncluded: hasUnsafeLiveCommandTemplateValue(command),
+    };
+  });
+  return {
+    schema: 'v3.video_ppt_live_command_template_redaction_contract.v1',
+    caseCount: cases.length,
+    urlFixtureTemplateReady: results.some((result) =>
+      result.id === 'url_fixture_template'
+      && result.includesAckLiveWrite
+      && result.includesRedactedApprovalId
+      && result.includesExpectedFixturePlaceholder
+      && result.rawValuesIncluded === false),
+    localFileTemplateReady: results.some((result) =>
+      result.id === 'local_file_template'
+      && result.includesAckLiveWrite
+      && result.includesRedactedApprovalId
+      && result.includesExpectedFixturePlaceholder
+      && result.rawValuesIncluded === false),
+    allTemplatesIncludeAckLiveWrite:
+      results.every((result) => result.includesAckLiveWrite === true),
+    allTemplatesIncludeRedactedApprovalId:
+      results.every((result) => result.includesRedactedApprovalId === true),
+    rawValuesIncluded: results.some((result) => result.rawValuesIncluded === true),
+  };
+}
+
+function hasUnsafeLiveCommandTemplateValue(command) {
+  return /https?:\/\/|token=|redaction_probe|\/Users\/|\/home\/|[A-Za-z]:\\|dry-run-approval|redacted-approval-ref|Bearer\s|bearer=/i
+    .test(command);
+}
+
 async function fixturePreflight(args) {
   const sourceKind = args.fixtureFile ? 'file' : 'url';
   const fileName = safeFixtureName(args);
@@ -1354,6 +1427,7 @@ async function assertSelfTestUploadContract(args, runId) {
   }
   const triggerClassifier = assertVideoPptTriggerClassifier();
   const liveWriteApprovalGate = assertLiveWriteApprovalGateContract();
+  const liveCommandTemplateContract = assertLiveCommandTemplateRedactionContract(args);
 
   const source = redactedUrlSummary(redactionProbeVideoUrl());
   if (
@@ -1377,6 +1451,7 @@ async function assertSelfTestUploadContract(args, runId) {
     supportedVideoExtensions: SUPPORTED_VIDEO_EXTENSIONS,
     triggerClassifier,
     liveWriteApprovalGate,
+    liveCommandTemplateContract,
     sourceSummaryRedacted: true,
     downloadValidation: {
       ok: downloadValidation.ok,

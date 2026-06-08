@@ -4302,6 +4302,76 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Command Template Self-Test Contract
+
+Task source: M6BH P1/no-live follow-up. M6BF/M6BG made command-template readiness visible in preflight evidence, no-live evidence summary, and live gate readiness summary. This slice adds script-level self-test contracts so upload-main and external-video-ppt self-tests directly validate redacted live command templates instead of relying only on preflight extraction.
+
+Scope:
+
+- local self-test and no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- upload-main self-test now validates URL fixture and local-file fixture command templates;
+- external-video-ppt self-test now validates URL fixture and local-file fixture command templates;
+- both self-tests require `--ack-live-write` and `--approval-id <redacted-approval-id>`;
+- external self-test additionally requires `--bearer <redacted-inbound-bearer>`;
+- both self-tests reject raw URLs, token probes, local paths, raw approval references, and raw bearer values;
+- no-live rollup extracts the self-test command-template contract from both self-test reports;
+- `acceptance_status.no_live_evidence_summary` now records self-test contract readiness for both surfaces.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>
+npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted command-template self-test readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- upload-main self-test passed and wrote a report under `<target-redacted>`;
+- external-video-ppt self-test passed and wrote a report under `<target-redacted>`;
+- no-live rollup passed with `command_count=24`, `passed_count=24`, and `failed_count=0`;
+- upload-main self-test readback showed `live_command_template_contract_schema=v3.video_ppt_live_command_template_redaction_contract.v1`;
+- upload-main self-test readback showed `case_count=2`, URL fixture ready, local-file fixture ready, `ack=true`, `redacted_approval=true`, and `raw_values_included=false`;
+- external self-test readback showed `live_command_template_contract_schema=v3.video_ppt_live_command_template_redaction_contract.v1`;
+- external self-test readback showed `case_count=2`, URL fixture ready, local-file fixture ready, `ack=true`, `redacted_approval=true`, `redacted_bearer=true`, and `raw_values_included=false`;
+- `acceptance_status.no_live_evidence_summary.live_approval_command_template_self_test_surface_count=2`;
+- `acceptance_status.no_live_evidence_summary.upload_main_live_approval_command_template_self_test_supported=true`;
+- `acceptance_status.no_live_evidence_summary.external_live_approval_command_template_self_test_supported=true`;
+- `acceptance_status.full_acceptance_ready=false` remained unchanged.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- P2 live still needs explicit write approval, safe video input, and controlled live execution;
+- P3 live still needs third-party credentials/context, safe input, and explicit third-party live write approval.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Live Readiness Command Template Evidence
 
 Task source: M6BG P1/no-live follow-up. M6BF exposed live approval command-template evidence in `acceptance_status.no_live_evidence_summary`; this slice mirrors the same readiness into `acceptance_status.live_gate_readiness_summary` so operators can inspect live gate readiness from one top-level readiness object.
