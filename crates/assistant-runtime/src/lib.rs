@@ -27,26 +27,83 @@ const VIDEO_PPT_SOURCE_HINTS: &[&str] = &[
     "mov",
     "m4v",
     "webm",
+    "mkv",
+    "avi",
     "公开视频",
     "视频地址",
     "视频链接",
     "url",
     "URL",
     "上传",
+    "video",
 ];
 
-const VIDEO_PPT_OUTPUT_HINTS: &[&str] = &[
+const VIDEO_PPT_SLIDE_OUTPUT_HINTS: &[&str] = &[
     "ppt",
     "PPT",
     "powerpoint",
     "PowerPoint",
+    "slides",
+    "Slides",
     "幻灯片",
     "课件",
-    "原文",
-    "字幕",
-    "转写",
-    "讲稿",
+];
+
+const VIDEO_PPT_EXTRACTION_INTENT_HINTS: &[&str] = &[
     "提取",
+    "抽取",
+    "抓取",
+    "导出",
+    "识别",
+    "视频里",
+    "视频中",
+    "视频里的",
+    "视频中的",
+    "extract",
+    "pull",
+    "capture",
+    "export",
+    "from video",
+    "from the video",
+    "shown in video",
+    "shown in the video",
+];
+
+const VIDEO_PPT_EXTRACT_VERB_HINTS: &[&str] = &[
+    "提取", "抽取", "抓取", "导出", "识别", "extract", "pull", "capture", "export",
+];
+
+const VIDEO_PPT_EXISTING_SLIDES_CONTEXT_HINTS: &[&str] = &[
+    "视频里",
+    "视频中",
+    "视频里的",
+    "视频中的",
+    "from video",
+    "from this video",
+    "from the video",
+    "shown in video",
+    "shown in this video",
+    "shown in the video",
+    "already shown",
+];
+
+const ORDINARY_VIDEO_TO_PPT_GENERATION_HINTS: &[&str] = &[
+    "普通视频",
+    "任意视频",
+    "ordinary video",
+    "生成",
+    "做成",
+    "制作",
+    "创作",
+    "转成",
+    "变成",
+    "介绍",
+    "make",
+    "create",
+    "generate",
+    "turn",
+    "video-to-ppt",
+    "video to ppt",
 ];
 
 const BUSINESS_HINTS: &[(&str, &[&str])] = &[
@@ -2216,8 +2273,51 @@ fn prompt_has_media_detail(prompt: &str) -> bool {
 
 fn prompt_wants_video_ppt_extraction(prompt: &str) -> bool {
     let lower_prompt = prompt.to_ascii_lowercase();
-    prompt_has_any(prompt, &lower_prompt, VIDEO_PPT_SOURCE_HINTS)
-        && prompt_has_any(prompt, &lower_prompt, VIDEO_PPT_OUTPUT_HINTS)
+    if !prompt_has_any(prompt, &lower_prompt, VIDEO_PPT_SOURCE_HINTS)
+        || !prompt_has_any(prompt, &lower_prompt, VIDEO_PPT_SLIDE_OUTPUT_HINTS)
+        || !prompt_has_any(prompt, &lower_prompt, VIDEO_PPT_EXTRACTION_INTENT_HINTS)
+    {
+        return false;
+    }
+    if prompt_looks_like_ordinary_video_to_ppt(prompt, &lower_prompt)
+        && !prompt_extracts_existing_video_slides(prompt, &lower_prompt)
+    {
+        return false;
+    }
+    true
+}
+
+fn prompt_looks_like_ordinary_video_to_ppt(prompt: &str, lower_prompt: &str) -> bool {
+    let has_generation_hint =
+        prompt_has_any(prompt, lower_prompt, ORDINARY_VIDEO_TO_PPT_GENERATION_HINTS);
+    if !has_generation_hint {
+        return false;
+    }
+    prompt_has_any(prompt, lower_prompt, VIDEO_PPT_SOURCE_HINTS)
+        && prompt_has_any(prompt, lower_prompt, VIDEO_PPT_SLIDE_OUTPUT_HINTS)
+}
+
+fn prompt_extracts_existing_video_slides(prompt: &str, lower_prompt: &str) -> bool {
+    prompt_has_any(prompt, lower_prompt, VIDEO_PPT_EXTRACT_VERB_HINTS)
+        && prompt_has_any(
+            prompt,
+            lower_prompt,
+            VIDEO_PPT_EXISTING_SLIDES_CONTEXT_HINTS,
+        )
+        && prompt_has_any(prompt, lower_prompt, VIDEO_PPT_SLIDE_OUTPUT_HINTS)
+        && !prompt_has_any(
+            prompt,
+            lower_prompt,
+            &[
+                "生成一个",
+                "介绍这段视频",
+                "create a powerpoint",
+                "generate a powerpoint",
+                "make a powerpoint",
+                "video-to-ppt",
+                "video to ppt",
+            ],
+        )
 }
 
 fn prompt_has_direct_video_source(prompt: &str) -> bool {
@@ -2228,6 +2328,8 @@ fn prompt_has_direct_video_source(prompt: &str) -> bool {
         || lower_prompt.contains(".mov")
         || lower_prompt.contains(".m4v")
         || lower_prompt.contains(".webm")
+        || lower_prompt.contains(".mkv")
+        || lower_prompt.contains(".avi")
         || prompt.contains("公开视频")
         || prompt.contains("视频地址")
         || prompt.contains("视频链接")
@@ -3680,6 +3782,65 @@ mod tests {
             plan.selected_scope["supply_policy"]["recommendedActions"],
             json!(["media.resolve_video_url", "media.extract_ppt_transcript"])
         );
+    }
+
+    #[test]
+    fn video_ppt_scope_rejects_ordinary_video_to_ppt_generation() {
+        for prompt in [
+            "请把普通视频变成PPT。",
+            "Create a PowerPoint from this ordinary video.",
+            "生成一个PPT介绍这段视频。",
+            "生成PPT介绍这段视频，并提取字幕。",
+        ] {
+            let plan = plan_scope(ScopePlannerInput {
+                prompt,
+                visible_datasets: &[dataset("订单", "orders"), dataset("客服", "support")],
+                selected_dataset_id: None,
+                conversation_memory_available: false,
+            });
+
+            let actions = plan.selected_scope["supply_policy"]["recommendedActions"]
+                .as_array()
+                .expect("recommended actions should be an array");
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action == "media.extract_ppt_transcript"),
+                "{prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn video_ppt_scope_keeps_existing_slide_extraction_positive() {
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "Extract slides from this video: talk.mkv",
+            visible_datasets: &[dataset("订单", "orders"), dataset("客服", "support")],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        assert_eq!(
+            plan.selected_scope["supply_policy"]["recommendedActions"],
+            json!(["media.resolve_video_url", "media.extract_ppt_transcript"])
+        );
+    }
+
+    #[test]
+    fn transcript_only_video_request_does_not_trigger_video_ppt_scope() {
+        let plan = plan_scope(ScopePlannerInput {
+            prompt: "我刚上传了一个视频，帮我提取字幕和转写原文",
+            visible_datasets: &[dataset("订单", "orders"), dataset("客服", "support")],
+            selected_dataset_id: None,
+            conversation_memory_available: false,
+        });
+
+        let actions = plan.selected_scope["supply_policy"]["recommendedActions"]
+            .as_array()
+            .expect("recommended actions should be an array");
+        assert!(!actions
+            .iter()
+            .any(|action| action == "media.extract_ppt_transcript"));
     }
 
     #[test]

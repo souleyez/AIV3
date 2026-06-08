@@ -234,6 +234,31 @@ test('scope planner does not use PPT extraction for transcript-only video reques
   assert.equal(plan.supplyStrategy.recommendedActions.includes('media.extract_ppt_transcript'), false);
 });
 
+test('scope planner rejects ordinary video-to-PPT generation as extraction trigger', () => {
+  for (const prompt of [
+    '请把普通视频变成PPT。',
+    'Create a PowerPoint from this ordinary video.',
+    '生成一个PPT介绍这段视频。',
+    '生成PPT介绍这段视频，并提取字幕。',
+  ]) {
+    const plan = planAssistantScope({ prompt, datasets });
+    assert.equal(
+      plan.supplyStrategy.recommendedActions.includes('media.extract_ppt_transcript'),
+      false,
+      prompt,
+    );
+  }
+});
+
+test('scope planner keeps existing video slide extraction prompts positive', () => {
+  const plan = planAssistantScope({
+    prompt: 'Extract slides from this video: talk.mp4',
+    datasets,
+  });
+
+  assert.deepEqual(plan.supplyStrategy.recommendedActions, ['media.resolve_video_url', 'media.extract_ppt_transcript']);
+});
+
 test('scope planner auto-selects media dataset for audio and video prompts', () => {
   const plan = planAssistantScope({
     prompt: '这段录音讲了什么，帮我提炼重点',

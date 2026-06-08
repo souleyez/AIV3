@@ -3,7 +3,12 @@ import { attachVisibleDocumentsToDatasets, datasetDocumentTitleHints } from './d
 const MEDIA_DATASET_PATTERN = /音视频|音频|视频|录音|转写|字幕|会议|访谈|关键帧|ocr/i;
 const RESUME_DATASET_PATTERN = /简历|履历|候选人|求职|招聘|人才|面试|任职|工作经历|教育经历|项目经历|雇主|公司名|就职公司|resume|cv|candidate|recruit/i;
 const RESUME_ENTITY_SCAN_PATTERN = /(?=.*(简历|履历|候选人|求职|招聘|人才|resume|cv|candidate))(?=.*(公司名|公司|企业|雇主|任职|就职|工作经历|经历|company|employer))(?=.*(多少|几个|哪些|列出|统计|汇总|分布|全部|所有|提到|公司名|count|list|all))/i;
-const VIDEO_PPT_EXTRACTION_PATTERN = /((视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传).*(ppt|PPT|幻灯片|课件))|((ppt|PPT|幻灯片|课件).*(视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传))/i;
+const VIDEO_PPT_SOURCE_PATTERN = /视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传/i;
+const VIDEO_PPT_SLIDE_OUTPUT_PATTERN = /ppt|powerpoint|slides?|幻灯片|课件/i;
+const VIDEO_PPT_EXTRACTION_INTENT_PATTERN = /提取|抽取|抓取|导出|识别|extract|pull|capture|export|视频(?:里|中|里的|中的)|from (?:the )?video|shown in (?:the )?video/i;
+const ORDINARY_VIDEO_TO_PPT_PATTERN = /普通视频|任意视频|ordinary video|把.*视频.*(?:生成|做成|制作|创作|转成|变成).*ppt|(?:make|create|generate|turn).{0,40}(?:ppt|powerpoint|slides).{0,40}(?:from|out of).{0,20}(?:the )?video|video[- ]to[- ]ppt/i;
+const VIDEO_PPT_EXISTING_SLIDES_CONTEXT_PATTERN = /视频(?:里|中|里的|中的)|from (?:this |the )?video|shown in (?:this |the )?video|already shown/i;
+const VIDEO_PPT_EXTRACT_VERB_PATTERN = /提取|抽取|抓取|导出|识别|extract|pull|capture|export/i;
 const DIRECT_VIDEO_SOURCE_PATTERN = /https?:\/\/\S+|\.(mp4|mov|m4v|webm|mkv|avi)(\b|$)|公开视频|视频地址|视频链接|url|URL/i;
 
 const DATASET_HINTS = [
@@ -352,7 +357,7 @@ function inferAssistantIntent(prompt, options = {}) {
   if (STATIC_PAGE_HINT.test(prompt)) return 'static_page';
   if (REPORT_HINT.test(prompt)) return 'report';
   if (options.hasActiveStaticPageDraft && options.promptTouchesActiveStaticDraft) return 'static_page';
-  if (VIDEO_PPT_EXTRACTION_PATTERN.test(prompt)) return 'data_question';
+  if (promptWantsVideoPptExtraction(prompt)) return 'data_question';
   if (DATA_QUESTION_HINT.test(prompt) || DATASET_HINTS.some((hint) => hint.pattern.test(prompt))) {
     return 'data_question';
   }
@@ -369,7 +374,7 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
   const staticPageMissingBindingSnapshot = candidates.some((candidate) => (
     candidate.type === 'static_page_draft' && candidate.dataQualityStatus === 'unknown'
   ));
-  const wantsVideoPptExtraction = VIDEO_PPT_EXTRACTION_PATTERN.test(prompt);
+  const wantsVideoPptExtraction = promptWantsVideoPptExtraction(prompt);
   const wantsResumeEntityScan = RESUME_ENTITY_SCAN_PATTERN.test(prompt);
   const needsDetail = hasDataset && (
     ['static_page', 'report'].includes(intent)
@@ -412,6 +417,30 @@ function buildSupplyStrategy(intent, candidates, prompt = '') {
     }),
     noFakeData: true,
   };
+}
+
+function promptWantsVideoPptExtraction(prompt = '') {
+  const text = String(prompt || '');
+  if (!VIDEO_PPT_SOURCE_PATTERN.test(text) || !VIDEO_PPT_SLIDE_OUTPUT_PATTERN.test(text)) {
+    return false;
+  }
+  if (!VIDEO_PPT_EXTRACTION_INTENT_PATTERN.test(text)) {
+    return false;
+  }
+  const ordinaryVideoToPpt = ORDINARY_VIDEO_TO_PPT_PATTERN.test(text)
+    || (
+      /(?:生成|做成|制作|创作|转成|变成|make|create|generate|turn|介绍)/i.test(text)
+      && VIDEO_PPT_SOURCE_PATTERN.test(text)
+      && VIDEO_PPT_SLIDE_OUTPUT_PATTERN.test(text)
+      && !promptExtractsExistingVideoSlides(text)
+    );
+  return !ordinaryVideoToPpt || promptExtractsExistingVideoSlides(text);
+}
+
+function promptExtractsExistingVideoSlides(text) {
+  return VIDEO_PPT_EXISTING_SLIDES_CONTEXT_PATTERN.test(text)
+    && VIDEO_PPT_SLIDE_OUTPUT_PATTERN.test(text)
+    && VIDEO_PPT_EXTRACT_VERB_PATTERN.test(text);
 }
 
 function buildRecommendedActions(intent, { hasDataset, hasStaticPageDraft, staticPageNeedsDataRepair, wantsVideoPptExtraction, wantsResumeEntityScan, prompt }) {

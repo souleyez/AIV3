@@ -4235,3 +4235,59 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Production Scope Video PPT Trigger Guard
+
+Task source: after the smoke trigger classifier was tightened, production scope planning still had broader video PPT intent checks. This slice moves the same product boundary into the front-end scope planner and Rust assistant-runtime recommendation path so `media.extract_ppt_transcript` is not recommended for ordinary video-to-PPT generation or transcript-only video requests.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, or server deployment;
+- tighten `apps/web/app/lib/scope-planner.js` video PPT intent detection;
+- tighten `crates/assistant-runtime/src/lib.rs` video PPT recommendation detection;
+- preserve supported positive triggers for direct video URL, uploaded video, `.mkv`/`.avi`, and English `Extract slides from this video` prompts.
+
+Implemented behavior:
+
+- video PPT extraction now requires video/source context, PPT/slides/courseware output, and extraction/from-video intent;
+- ordinary video-to-PPT generation wording is rejected in the scope planner and assistant-runtime recommendation path;
+- transcript-only video requests no longer recommend `media.extract_ppt_transcript`;
+- direct URL and uploaded-video prompts that explicitly ask to extract existing slides/courseware still recommend `media.extract_ppt_transcript`.
+
+Validation:
+
+```text
+cargo fmt
+node --check apps/web/app/lib/scope-planner.js
+node --test apps/web/app/lib/scope-planner.test.mjs
+cargo test -p assistant-runtime video_ppt_scope --lib
+cargo test -p assistant-runtime transcript_only_video_request --lib
+cargo fmt --check
+cargo test -p assistant-runtime --lib
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- front-end scope planner tests passed, 21 tests;
+- Rust assistant-runtime video PPT scope tests passed, 3 tests;
+- Rust transcript-only targeted test passed;
+- Rust formatting check passed.
+- full Rust assistant-runtime library tests passed, 34 tests;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- smoke scripts and production scope planner now share the same local trigger boundary, but live gates still require the approvals documented in the active plan.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
