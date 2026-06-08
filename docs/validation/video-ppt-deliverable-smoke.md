@@ -4302,6 +4302,64 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Current HEAD No-Live Acceptance Baseline After M6BU
+
+Task source: post-M6BU current-head verification. After `a6656e8` added the quality count support gate and `1b6a5ec` refreshed the active plan, this check reran the no-live acceptance baseline at current HEAD to verify that the support gate remains visible and that full acceptance still correctly stays open until live/customer/deployment gates are completed.
+
+Scope:
+
+- current HEAD no-live acceptance baseline only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted current-head no-live acceptance readback>"
+rg -n "<local-path-url-token-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- current HEAD was `1b6a5ec`;
+- four smoke script syntax checks passed;
+- no-live rollup passed with `command_count=28`, `passed_count=28`, and `failed_count=0`;
+- quality matrix child evidence still recorded `deliverables_summary_count_fields_supported=true`;
+- `acceptance_status.no_live_evidence_summary` still recorded `quality_deliverables_summary_count_fields_supported=true`;
+- `acceptance_status.full_acceptance_ready=false`, `gate_count=8`, and `completed_gate_count=1`;
+- pending gate count remained 7: main-site upload live smoke, third-party live smoke, login-gated handoff live pass, authorized capture live sample, customer-authorized quality matrix, server deployment gate, and full acceptance close;
+- approval request count remained 6;
+- server policy still recorded `server_8_touched=false` and `deployment_action_run=false`;
+- path/credential scan found no raw URL, token query string, bearer value, cookie, authorization value, local absolute path, `target/.../generated_artifacts` path, or `video-extraction-*` identifier in generated reports;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, customer-authorized quality matrix, or P8 full acceptance closeout;
+- it only proves the current pushed HEAD still has a safe no-live baseline and still blocks full acceptance until the required live/customer/deployment evidence exists.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Assistant Startup Briefing Evidence in No-Live Rollup
 
 Task source: M6BK P1/no-live follow-up. The front-end scope planner, Rust assistant-runtime, and platform resolver gates already cover video PPT routing mechanics. This slice adds an explicit assistant startup briefing regression and promotes it into the no-live rollup so model-facing startup context also preserves the source boundary: uploaded video, direct video URL, public resolvable page, and login-gated handoff.
