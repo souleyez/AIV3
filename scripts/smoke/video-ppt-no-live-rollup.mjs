@@ -264,11 +264,20 @@ function extractCommandEvidence(commandId, stdout) {
   if (commandId === 'upload_main_self_test') {
     return extractUploadMainSelfTestEvidence(stdout);
   }
+  if (commandId === 'upload_main_preflight') {
+    return extractUploadMainPreflightEvidence(stdout);
+  }
   if (commandId === 'external_video_ppt_self_test') {
     return extractExternalVideoPptSelfTestEvidence(stdout);
   }
+  if (commandId === 'external_video_ppt_preflight') {
+    return extractExternalVideoPptPreflightEvidence(stdout);
+  }
   if (commandId === 'video_ppt_handoff_self_test') {
     return extractVideoPptHandoffSelfTestEvidence(stdout);
+  }
+  if (commandId === 'video_ppt_handoff_preflight') {
+    return extractVideoPptHandoffPreflightEvidence(stdout);
   }
   if (commandId === 'authorized_capture_self_test') {
     return extractAuthorizedCaptureSelfTestEvidence(stdout);
@@ -321,6 +330,42 @@ function extractUploadMainSelfTestEvidence(stdout) {
   };
 }
 
+function extractUploadMainPreflightEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  return {
+    schema: 'v3.video_ppt_upload_main_preflight_rollup_evidence.v1',
+    report_schema: report.schema,
+    ok: report.summary?.ok,
+    preflight: report.summary?.preflight,
+    network_calls_run: report.summary?.networkCallsRun,
+    production_write_allowed: report.summary?.productionWriteAllowed,
+    live_write_approval_required: report.summary?.liveWriteApprovalRequired,
+    fixture_downloaded: report.summary?.fixtureDownloaded,
+    upload_attempted: report.summary?.uploadAttempted,
+    dataset_created: report.summary?.datasetCreated,
+    document_registered: report.summary?.documentRegistered,
+    assistant_run_created: report.summary?.assistantRunCreated,
+    failure_count: report.summary?.failures?.length,
+    fixture_source_kind: report.fixture?.sourceKind,
+    fixture_media_kind: report.fixture?.mediaKind,
+    fixture_supported_extension: report.fixture?.supportedExtension,
+    fixture_prompt_requests_video_ppt: report.fixture?.promptRequestsVideoPpt,
+    trigger_prompt_requests_video_ppt: report.trigger?.promptRequestsVideoPpt,
+    planned_step_count: report.liveWriteScope?.plannedSteps?.length,
+    writes_smoke_records: report.liveWriteScope?.writesSmokeRecords,
+    deploys_services: report.liveWriteScope?.deploysServices,
+    raw_fixture_url_included: report.redaction?.rawFixtureUrlIncluded,
+    local_fixture_path_included: report.redaction?.localFixturePathIncluded,
+    cookies_included: report.redaction?.cookiesIncluded,
+    bearer_included: report.redaction?.bearerIncluded,
+    object_keys_included: report.redaction?.objectKeysIncluded,
+    provider_payloads_included: report.redaction?.providerPayloadsIncluded,
+  };
+}
+
 function extractExternalVideoPptSelfTestEvidence(stdout) {
   const report = readJsonReportFromStdout(stdout);
   if (!report) {
@@ -355,6 +400,57 @@ function extractExternalVideoPptSelfTestEvidence(stdout) {
     fixture_registered: report.summary?.fixtureRegistered,
     event_sent: report.summary?.eventSent,
     deliverables_downloaded_from_network: report.summary?.deliverablesDownloadedFromNetwork,
+  };
+}
+
+function extractExternalVideoPptPreflightEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  return {
+    schema: 'v3.external_video_ppt_preflight_rollup_evidence.v1',
+    report_schema: report.schema,
+    ok: report.summary?.ok,
+    preflight: report.summary?.preflight,
+    network_calls_run: report.summary?.networkCallsRun,
+    production_write_allowed: report.summary?.productionWriteAllowed,
+    live_write_approval_required: report.summary?.liveWriteApprovalRequired,
+    credential_gate_satisfied: report.summary?.credentialGateSatisfied,
+    live_credential_ready: report.summary?.liveCredentialReady,
+    allow_missing_bearer: report.summary?.allowMissingBearer,
+    fixture_downloaded: report.summary?.fixtureDownloaded,
+    fixture_registered: report.summary?.fixtureRegistered,
+    event_sent: report.summary?.eventSent,
+    reply_polled: report.summary?.replyPolled,
+    deliverables_downloaded_from_network: report.summary?.deliverablesDownloadedFromNetwork,
+    failure_count: report.summary?.failures?.length,
+    connection_id_present: report.target?.connectionIdPresent,
+    source_id_present: report.target?.sourceIdPresent,
+    tenant_external_id_present: report.target?.tenantExternalIdPresent,
+    bot_external_id_present: report.target?.botExternalIdPresent,
+    sender_external_id_present: report.target?.senderExternalIdPresent,
+    fixture_source_kind: report.fixture?.sourceKind,
+    fixture_media_kind: report.fixture?.mediaKind,
+    fixture_supported_extension: report.fixture?.supportedExtension,
+    trigger_text_requests_video_ppt: report.trigger?.textRequestsVideoPpt,
+    default_prompt_guards_ordinary_video_to_ppt:
+      report.trigger?.defaultPromptGuardsAgainstOrdinaryVideoToPpt,
+    requested_video_ppt_skill: Array.isArray(report.trigger?.requestedSkillIds)
+      ? report.trigger.requestedSkillIds.includes('video_ppt_extraction')
+      : false,
+    expected_action: report.trigger?.expectedAction,
+    available_document_source_present: report.trigger?.availableDocumentSourcePresent,
+    available_document_external_ids_count: report.trigger?.availableDocumentExternalIdsCount,
+    dataset_external_ids_count: report.trigger?.datasetExternalIdsCount,
+    planned_step_count: report.liveWriteScope?.plannedSteps?.length,
+    writes_smoke_records: report.liveWriteScope?.writesSmokeRecords,
+    deploys_services: report.liveWriteScope?.deploysServices,
+    raw_fixture_url_included: report.redaction?.rawFixtureUrlIncluded,
+    local_fixture_path_included: report.redaction?.localFixturePathIncluded,
+    bearer_included: report.redaction?.bearerIncluded,
+    object_keys_included: report.redaction?.objectKeysIncluded,
+    provider_payloads_included: report.redaction?.providerPayloadsIncluded,
   };
 }
 
@@ -400,6 +496,49 @@ function extractVideoPptHandoffSelfTestEvidence(stdout) {
     external_unsafe_artifact_link_signal: report.external?.unsafeArtifactLinkSignal,
     external_unsafe_credential_request: report.external?.unsafeCredentialRequest,
     external_raw_source_leaked: report.external?.rawSourceLeaked,
+  };
+}
+
+function extractVideoPptHandoffPreflightEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  return {
+    schema: 'v3.video_ppt_handoff_preflight_rollup_evidence.v1',
+    report_schema: report.schema,
+    ok: report.summary?.ok,
+    preflight: report.summary?.preflight,
+    mode: report.summary?.mode,
+    target_mode_count: report.summary?.targetModes?.length,
+    network_calls_run: report.summary?.networkCallsRun,
+    source_page_fetched: report.summary?.sourcePageFetched,
+    video_downloaded: report.summary?.videoDownloaded,
+    frames_extracted: report.summary?.framesExtracted,
+    ocr_run: report.summary?.ocrRun,
+    ppt_generated: report.summary?.pptGenerated,
+    provider_called: report.summary?.providerCalled,
+    lightweight_smoke_writes_planned: report.summary?.lightweightSmokeWritesPlanned,
+    deployment_approval_required: report.summary?.deploymentApprovalRequired,
+    live_credential_ready: report.summary?.liveCredentialReady,
+    credential_gate_satisfied: report.summary?.credentialGateSatisfied,
+    allow_missing_bearer: report.summary?.allowMissingBearer,
+    failure_count: report.summary?.failures?.length,
+    main_planned_step_count: report.target?.main?.plannedSteps?.length,
+    external_planned_step_count: report.target?.external?.plannedSteps?.length,
+    external_connection_id_present: report.target?.external?.connectionIdPresent,
+    external_source_id_present: report.target?.external?.sourceIdPresent,
+    failure_reason: report.expectedSurface?.failureReason,
+    supported_next_step_count: report.expectedSurface?.supportedNextSteps?.length,
+    success_signal_rejected_count: report.expectedSurface?.successSignalsRejected?.length,
+    prompt_mentions_wechat_video: report.prompt?.mentionsWeChatVideo,
+    prompt_wants_slide_output: report.prompt?.wantsSlideOutput,
+    prompt_mentions_login_gate: report.prompt?.mentionsLoginGate,
+    raw_source_url_included: report.redaction?.rawSourceUrlIncluded,
+    cookie_included: report.redaction?.cookieIncluded,
+    bearer_included: report.redaction?.bearerIncluded,
+    provider_payloads_included: report.redaction?.providerPayloadsIncluded,
+    local_paths_included: report.redaction?.localPathsIncluded,
   };
 }
 
@@ -651,8 +790,11 @@ function validateReport(report) {
   }
   validateQualityMatrixEvidence(report);
   validateUploadMainEvidence(report);
+  validateUploadMainPreflightEvidence(report);
   validateExternalVideoPptEvidence(report);
+  validateExternalVideoPptPreflightEvidence(report);
   validateVideoPptHandoffEvidence(report);
+  validateVideoPptHandoffPreflightEvidence(report);
   validateAuthorizedCaptureEvidence(report);
   validateProductionTriggerEvidence(report);
   const serialized = JSON.stringify(report);
@@ -701,6 +843,145 @@ function validateProductionTriggerEvidence(report) {
     ) {
       throw new Error('no-live rollup assistant-runtime production trigger evidence is incomplete');
     }
+  }
+}
+
+function validateUploadMainPreflightEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'upload_main_preflight');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.video_ppt_upload_main_preflight_rollup_evidence.v1'
+    || evidence.report_schema !== 'v3.video_ppt_upload_main_smoke_preflight.v1'
+    || evidence.ok !== true
+    || evidence.preflight !== true
+    || evidence.network_calls_run !== false
+    || evidence.production_write_allowed !== false
+    || evidence.live_write_approval_required !== true
+    || evidence.fixture_downloaded !== false
+    || evidence.upload_attempted !== false
+    || evidence.dataset_created !== false
+    || evidence.document_registered !== false
+    || evidence.assistant_run_created !== false
+    || evidence.failure_count !== 0
+    || evidence.fixture_source_kind !== 'url'
+    || evidence.fixture_media_kind !== 'video'
+    || evidence.fixture_supported_extension !== true
+    || evidence.fixture_prompt_requests_video_ppt !== true
+    || evidence.trigger_prompt_requests_video_ppt !== true
+    || evidence.planned_step_count < 7
+    || evidence.writes_smoke_records !== true
+    || evidence.deploys_services !== false
+    || evidence.raw_fixture_url_included !== false
+    || evidence.local_fixture_path_included !== false
+    || evidence.cookies_included !== false
+    || evidence.bearer_included !== false
+    || evidence.object_keys_included !== false
+    || evidence.provider_payloads_included !== false
+  ) {
+    throw new Error('no-live rollup upload-main preflight evidence is incomplete');
+  }
+}
+
+function validateExternalVideoPptPreflightEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'external_video_ppt_preflight');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.external_video_ppt_preflight_rollup_evidence.v1'
+    || evidence.report_schema !== 'v3.external_video_ppt_smoke_preflight.v1'
+    || evidence.ok !== true
+    || evidence.preflight !== true
+    || evidence.network_calls_run !== false
+    || evidence.production_write_allowed !== false
+    || evidence.live_write_approval_required !== true
+    || evidence.credential_gate_satisfied !== true
+    || evidence.live_credential_ready !== false
+    || evidence.allow_missing_bearer !== true
+    || evidence.fixture_downloaded !== false
+    || evidence.fixture_registered !== false
+    || evidence.event_sent !== false
+    || evidence.reply_polled !== false
+    || evidence.deliverables_downloaded_from_network !== false
+    || evidence.failure_count !== 0
+    || evidence.connection_id_present !== true
+    || evidence.source_id_present !== true
+    || evidence.tenant_external_id_present !== true
+    || evidence.bot_external_id_present !== true
+    || evidence.sender_external_id_present !== true
+    || evidence.fixture_source_kind !== 'url'
+    || evidence.fixture_media_kind !== 'video'
+    || evidence.fixture_supported_extension !== true
+    || evidence.trigger_text_requests_video_ppt !== true
+    || evidence.default_prompt_guards_ordinary_video_to_ppt !== true
+    || evidence.requested_video_ppt_skill !== true
+    || evidence.expected_action !== 'extract_video_ppt_transcript'
+    || evidence.available_document_source_present !== true
+    || evidence.available_document_external_ids_count < 1
+    || evidence.dataset_external_ids_count < 1
+    || evidence.planned_step_count < 5
+    || evidence.writes_smoke_records !== true
+    || evidence.deploys_services !== false
+    || evidence.raw_fixture_url_included !== false
+    || evidence.local_fixture_path_included !== false
+    || evidence.bearer_included !== false
+    || evidence.object_keys_included !== false
+    || evidence.provider_payloads_included !== false
+  ) {
+    throw new Error('no-live rollup external preflight evidence is incomplete');
+  }
+}
+
+function validateVideoPptHandoffPreflightEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'video_ppt_handoff_preflight');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.video_ppt_handoff_preflight_rollup_evidence.v1'
+    || evidence.report_schema !== 'v3.video_ppt_handoff_smoke_preflight.v1'
+    || evidence.ok !== true
+    || evidence.preflight !== true
+    || evidence.mode !== 'both'
+    || evidence.target_mode_count !== 2
+    || evidence.network_calls_run !== false
+    || evidence.source_page_fetched !== false
+    || evidence.video_downloaded !== false
+    || evidence.frames_extracted !== false
+    || evidence.ocr_run !== false
+    || evidence.ppt_generated !== false
+    || evidence.provider_called !== false
+    || evidence.lightweight_smoke_writes_planned !== true
+    || evidence.deployment_approval_required !== true
+    || evidence.live_credential_ready !== false
+    || evidence.credential_gate_satisfied !== true
+    || evidence.allow_missing_bearer !== true
+    || evidence.failure_count !== 0
+    || evidence.main_planned_step_count < 2
+    || evidence.external_planned_step_count < 2
+    || evidence.external_connection_id_present !== true
+    || evidence.external_source_id_present !== true
+    || evidence.failure_reason !== 'login_gated_video_source_not_supported'
+    || evidence.supported_next_step_count !== 3
+    || evidence.success_signal_rejected_count < 4
+    || evidence.prompt_mentions_wechat_video !== true
+    || evidence.prompt_wants_slide_output !== true
+    || evidence.prompt_mentions_login_gate !== false
+    || evidence.raw_source_url_included !== false
+    || evidence.cookie_included !== false
+    || evidence.bearer_included !== false
+    || evidence.provider_payloads_included !== false
+    || evidence.local_paths_included !== false
+  ) {
+    throw new Error('no-live rollup handoff preflight evidence is incomplete');
   }
 }
 

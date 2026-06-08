@@ -4872,3 +4872,65 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 No-Live Rollup Live Preflight Evidence
+
+Task source: M6AJ follow-up after the no-live rollup had self-test evidence and production trigger evidence. The upload-main, external-video-ppt, and handoff preflight commands already produced local JSON reports, but the top-level no-live rollup only recorded command status. This slice copies narrow, redacted live-gate evidence into the rollup so reviewers can verify live authorization boundaries without opening child reports.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, service deployment, or 8/120 server access;
+- read only local preflight reports emitted under `target/`;
+- copy only counts, booleans, status codes, and redaction flags into the no-live report;
+- do not store raw URLs, bearer values, cookies, local paths, object keys, provider payloads, generated artifacts, or customer data in the shared report.
+
+Implemented behavior:
+
+- no-live rollup extracts `v3.video_ppt_upload_main_preflight_rollup_evidence.v1`;
+- upload-main preflight evidence proves live write approval is required, no network/upload/dataset/document/assistant-run action occurred, fixture shape is video/PPT capable, planned write scope is smoke-only, no deploy is planned, and redaction flags are safe;
+- no-live rollup extracts `v3.external_video_ppt_preflight_rollup_evidence.v1`;
+- external preflight evidence proves bearer/context gating, no network/register/event/reply/download action occurred, requested skill/action and document/dataset scope are present, write scope is smoke-only, no deploy is planned, and redaction flags are safe;
+- no-live rollup extracts `v3.video_ppt_handoff_preflight_rollup_evidence.v1`;
+- handoff preflight evidence proves both main/external modes are represented, deployment approval is required, no source fetch/download/frame/OCR/PPT/provider action occurred, expected failure reason and three next steps are fixed, success signals are rejected, and redaction flags are safe;
+- rollup validation now fails if any of the three preflight evidence blocks is missing or incomplete.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted preflight evidence readback>"
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=21`, `passed_count=21`, and `failed_count=0`;
+- upload-main preflight evidence recorded `live_write_approval_required=true`, `network_calls_run=false`, `production_write_allowed=false`, `upload_attempted=false`, `dataset_created=false`, `document_registered=false`, `assistant_run_created=false`, `fixture_media_kind=video`, `fixture_supported_extension=true`, `trigger_prompt_requests_video_ppt=true`, `planned_step_count=7`, and `deploys_services=false`;
+- external preflight evidence recorded `live_write_approval_required=true`, `credential_gate_satisfied=true`, `live_credential_ready=false`, `allow_missing_bearer=true`, `network_calls_run=false`, `fixture_registered=false`, `event_sent=false`, `reply_polled=false`, `deliverables_downloaded_from_network=false`, `requested_video_ppt_skill=true`, `expected_action=extract_video_ppt_transcript`, `planned_step_count=5`, and `deploys_services=false`;
+- handoff preflight evidence recorded `mode=both`, `target_mode_count=2`, `deployment_approval_required=true`, `network_calls_run=false`, `source_page_fetched=false`, `video_downloaded=false`, `frames_extracted=false`, `ocr_run=false`, `ppt_generated=false`, `provider_called=false`, `failure_reason=login_gated_video_source_not_supported`, `supported_next_step_count=3`, and `success_signal_rejected_count=4`;
+- all preflight redaction flags for raw URLs, cookies, bearer values, local paths, object keys, and provider payloads remained false;
+- total top-level evidence schema count was 10;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval values, or raw self-test operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- M6AJ only makes live-gate preflight evidence copyable and self-validating before any authorized live run.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
