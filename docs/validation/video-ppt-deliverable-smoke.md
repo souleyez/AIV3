@@ -3782,3 +3782,70 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Full-Frame Content Slide Detector
+
+Task source: EP6 local crop-quality narrowing after the public-course sample still had one `full_frame_rectangle_fallback` page. Manual inspection showed that page was a full-screen dark title slide, where the whole frame is the courseware page rather than a missed inner rectangle.
+
+Scope:
+
+- add a conservative `full_frame_content_v1` detector after the existing border, edge, and bright-canvas detectors;
+- use it only when a frame has a uniform border/background, enough high-contrast content regions, broad grid span, and not too much foreground complexity;
+- keep sparse overlays, tiny watermarks, and low-information frames out of the full-frame-content path;
+- keep the behavior as local crop-quality work only, with no live upload, third-party event, browser capture, FFmpeg recording, service deployment, or 120-server action.
+
+Implemented behavior:
+
+- full-screen content slides now get `rectangle_extraction_status=promoted_detector_crop` and `rectangle_extraction_mode=full_frame_content_v1`;
+- the crop box remains full-frame because the whole frame is the slide page, but the quality report no longer treats it as a fallback detector miss;
+- `slide_quality_report.summary.full_frame_fallback_count` drops when this detector applies;
+- tiny overlays on otherwise dark frames still return no detector crop and remain fallback/review if selected.
+
+Validation:
+
+```text
+cargo fmt --check
+cargo test -p media-worker detects_full_frame_content_slides_without_marking_crop_fallback --lib
+cargo test -p media-worker does_not_treat_sparse_overlay_as_full_frame_content_slide --lib
+cargo test -p media-worker detects_slide_rectangle --lib
+cargo test -p media-worker --lib
+cargo check -p media-worker --bin video_ppt_offline_smoke
+node --check tools/validate-video-deliverables.mjs
+npm run test:video-deliverables
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input <local-public-course-mp4> --output-root <target-redacted> --ffmpeg-bin <ffmpeg-bin> --interval-seconds 15 --title <public-course-title> --json-output <target-redacted>
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts> --json
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- new full-frame-content fixture passed and produced `full_frame_content_v1`;
+- sparse-overlay negative fixture passed and did not produce a detector crop;
+- existing rectangle detector tests passed for noisy border, foreground component, edge projection, and bright canvas;
+- media-worker lib suite passed: 55 tests;
+- `video_ppt_offline_smoke` compiled successfully;
+- video deliverables validator passed 27 Node test cases;
+- quality matrix self-test passed with 3 cases, 1 deliverable case, and 2 pending cases;
+- public-course offline smoke completed locally with `deliverable_state=final_pptx_ready`, `frame_count=96`, `selected_count=7`, `has_pptx=true`, `has_video_slides_markdown=true`, `has_slide_quality_report=true`, and `has_subtitle_page_map=false`;
+- public-course validator shared JSON passed with redacted paths and aligned counts: `selected_count=7`, `requested_selected_count=9`, `pptx_slide_count=7`, `markdown_slide_count=7`, `slide_rectangle_count=7`, and `quality_slide_count=7`;
+- public-course quality report improved from one fallback page to `full_frame_fallback_count=0` and `detector_crop_count=7`; rectangle modes include one `full_frame_content_v1` page and six `border_background_contrast_v2` pages;
+- public-course quality score increased to 63, but quality matrix correctly remains `needs_manual_review` because transcript/OCR evidence is still missing and three selected pages still have high sharpness/readability risk.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- public-course quality still needs manual review for subtitle/OCR gaps, sharpness/readability, duplicate choices, and final customer usability;
+- future crop-quality work should target the remaining sharpness/fade/readability risks rather than relaxing validator or matrix gates.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no MP4 was captured or recorded; the only frame extraction was the local offline smoke from an existing public-course fixture under `target/`;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports and deliverables stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

@@ -62,6 +62,8 @@ const VIDEO_AUTO_SLIDE_FLAT_LOW_INFO_MAX_LUMA_RANGE: u8 = 3;
 const VIDEO_SLIDE_SHARPNESS_TARGET_SAMPLES: f64 = 40_000.0;
 const VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE: i64 = 70;
 const VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE: i64 = 40;
+const VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS: usize = 8;
+const VIDEO_FULL_FRAME_CONTENT_GRID_ROWS: usize = 6;
 const VIDEO_REMOTE_INPUT_DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
 const VIDEO_REMOTE_INPUT_DEFAULT_TIMEOUT_SECS: u64 = 60;
 const VIDEO_DELIVERABLE_PACKAGE_REQUIRED_KINDS: &[&str] = &[
@@ -3021,6 +3023,7 @@ fn video_detect_slide_rectangle(frame: &Path) -> Option<VideoSlideRectangleDetec
     video_detect_slide_rectangle_by_background_contrast(&image, width, height)
         .or_else(|| video_detect_slide_rectangle_by_edge_projection(&image, width, height))
         .or_else(|| video_detect_slide_rectangle_by_bright_canvas(&image, width, height))
+        .or_else(|| video_detect_slide_rectangle_by_full_frame_content(&image, width, height))
 }
 
 fn video_detect_slide_rectangle_by_background_contrast(
@@ -3374,6 +3377,95 @@ fn video_detect_slide_rectangle_by_bright_canvas(
     })
 }
 
+fn video_detect_slide_rectangle_by_full_frame_content(
+    image: &image::DynamicImage,
+    width: u32,
+    height: u32,
+) -> Option<VideoSlideRectangleDetection> {
+    if width < 64 || height < 64 {
+        return None;
+    }
+
+    let (background, background_sample_count) =
+        video_border_median_background_rgb(image, width, height)?;
+    let threshold = 48_u8;
+    let image_area = u64::from(width) * u64::from(height);
+    let mut foreground_pixel_count = 0_u64;
+    let mut grid_counts =
+        vec![0_u32; VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS * VIDEO_FULL_FRAME_CONTENT_GRID_ROWS];
+
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = image.get_pixel(x, y).to_rgb();
+            if !video_pixel_distance_exceeds_threshold(&pixel.0, &background, threshold) {
+                continue;
+            }
+            foreground_pixel_count += 1;
+            let grid_x = ((u64::from(x) * VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS as u64)
+                / u64::from(width))
+            .min((VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS - 1) as u64)
+                as usize;
+            let grid_y = ((u64::from(y) * VIDEO_FULL_FRAME_CONTENT_GRID_ROWS as u64)
+                / u64::from(height))
+            .min((VIDEO_FULL_FRAME_CONTENT_GRID_ROWS - 1) as u64) as usize;
+            grid_counts[grid_y * VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS + grid_x] += 1;
+        }
+    }
+
+    if foreground_pixel_count < image_area / 200 || foreground_pixel_count > image_area / 3 {
+        return None;
+    }
+
+    let cell_area = image_area
+        / (VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS * VIDEO_FULL_FRAME_CONTENT_GRID_ROWS) as u64;
+    let cell_signal_threshold = (cell_area / 500).max(8) as u32;
+    let mut content_cell_count = 0_usize;
+    let mut min_grid_x = VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS;
+    let mut max_grid_x = 0_usize;
+    let mut min_grid_y = VIDEO_FULL_FRAME_CONTENT_GRID_ROWS;
+    let mut max_grid_y = 0_usize;
+
+    for grid_y in 0..VIDEO_FULL_FRAME_CONTENT_GRID_ROWS {
+        for grid_x in 0..VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS {
+            let count = grid_counts[grid_y * VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS + grid_x];
+            if count < cell_signal_threshold {
+                continue;
+            }
+            content_cell_count += 1;
+            min_grid_x = min_grid_x.min(grid_x);
+            max_grid_x = max_grid_x.max(grid_x);
+            min_grid_y = min_grid_y.min(grid_y);
+            max_grid_y = max_grid_y.max(grid_y);
+        }
+    }
+
+    if content_cell_count < 6 {
+        return None;
+    }
+    if max_grid_x.saturating_sub(min_grid_x) + 1 < 4 {
+        return None;
+    }
+    if max_grid_y.saturating_sub(min_grid_y) + 1 < 2 {
+        return None;
+    }
+
+    Some(VideoSlideRectangleDetection {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+        image_width: width,
+        image_height: height,
+        signal_pixel_count: foreground_pixel_count,
+        sample_count: background_sample_count,
+        signal_source: "full_frame_content_grid",
+        detector_name: "full_frame_content_v1",
+        rectangle_source: "raw_frame_full_frame_content",
+        rectangle_extraction_mode: "full_frame_content_v1",
+        threshold,
+    })
+}
+
 fn video_image_index(x: u32, y: u32, width: u32) -> Option<usize> {
     usize::try_from(u64::from(y) * u64::from(width) + u64::from(x)).ok()
 }
@@ -3593,6 +3685,8 @@ fn video_slide_rectangle_aggregate_mode(selected_candidates: &[Value]) -> &'stat
                     "bright_canvas_v1"
                 } else if detector_modes.contains("edge_projection_v1") {
                     "edge_projection_v1"
+                } else if detector_modes.contains("full_frame_content_v1") {
+                    "full_frame_content_v1"
                 } else if detector_modes.contains("border_background_contrast_v2") {
                     "border_background_contrast_v2"
                 } else {
@@ -8139,6 +8233,37 @@ mod tests {
             .expect("test low contrast bright canvas png");
     }
 
+    fn write_test_full_frame_content_slide_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(120, 90, image::Rgb([14, 20, 18]));
+        for (x, y) in [
+            (18, 12),
+            (42, 17),
+            (66, 22),
+            (90, 27),
+            (14, 58),
+            (38, 64),
+            (70, 70),
+            (98, 76),
+        ] {
+            for yy in y..(y + 5) {
+                for xx in x..(x + 5) {
+                    image.put_pixel(xx, yy, image::Rgb([236, 238, 234]));
+                }
+            }
+        }
+        image.save(path).expect("test full frame content png");
+    }
+
+    fn write_test_sparse_overlay_not_slide_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(120, 90, image::Rgb([14, 20, 18]));
+        for y in 76..81 {
+            for x in 98..103 {
+                image.put_pixel(x, y, image::Rgb([236, 238, 234]));
+            }
+        }
+        image.save(path).expect("test sparse overlay png");
+    }
+
     fn write_test_visual_slide_png(
         path: &Path,
         background: [u8; 3],
@@ -12242,6 +12367,112 @@ mod tests {
             json!("bright_canvas_v1")
         );
         assert_eq!(rectangle["detector"]["name"], json!("bright_canvas_v1"));
+    }
+
+    #[test]
+    fn detects_full_frame_content_slides_without_marking_crop_fallback() {
+        let document = test_document();
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-full-frame-content-test-{}",
+            DocumentId::new()
+        ));
+        let session_dir = output_root.join(format!("video-extraction-{}", document.id));
+        let artifacts_dir = session_dir.join(DEFAULT_GENERATED_ARTIFACTS_DIR_NAME);
+        let raw_frames_dir = session_dir.join(DEFAULT_RAW_FRAMES_DIR_NAME);
+        fs::create_dir_all(&raw_frames_dir).expect("raw frames dir");
+        fs::create_dir_all(&artifacts_dir).expect("artifacts dir");
+        let frame_path = raw_frames_dir.join("frame_000001.png");
+        write_test_full_frame_content_slide_png(&frame_path);
+        fs::write(
+            artifacts_dir.join(DEFAULT_PPT_KEEP_LIST_TEMPLATE_FILE_NAME),
+            serde_json::to_vec_pretty(&json!({
+                "status": "selected",
+                "selected_candidate_indices": [1]
+            }))
+            .expect("keep list bytes"),
+        )
+        .expect("keep list");
+        let frame_extraction = json!({
+            "status": "completed",
+            "raw_frames_dir": raw_frames_dir.display().to_string(),
+            "frame_count": 1,
+            "manifest_file_name": DEFAULT_FRAME_MANIFEST_FILE_NAME
+        });
+
+        let detection =
+            video_detect_slide_rectangle(&frame_path).expect("full-frame content detector crop");
+        assert_eq!(detection.detector_name, "full_frame_content_v1");
+        assert_eq!(detection.rectangle_source, "raw_frame_full_frame_content");
+        assert_eq!(detection.rectangle_extraction_mode, "full_frame_content_v1");
+        assert_eq!(detection.x, 0.0);
+        assert_eq!(detection.y, 0.0);
+        assert_eq!(detection.width, 1.0);
+        assert_eq!(detection.height, 1.0);
+
+        let manifest =
+            write_video_extraction_text_artifacts(&document, &[], &frame_extraction, &output_root)
+                .expect("full-frame content artifacts");
+        let files = manifest["files"].as_array().expect("files");
+        let slide_rectangles_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_rectangles_manifest"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide rectangles manifest path");
+        let slide_rectangles: Value = serde_json::from_str(
+            &fs::read_to_string(slide_rectangles_path).expect("slide rectangles manifest"),
+        )
+        .expect("slide rectangles manifest json");
+        assert_eq!(
+            slide_rectangles["rectangle_extraction_status"],
+            json!("promoted_detector_crop")
+        );
+        assert_eq!(
+            slide_rectangles["rectangle_extraction_mode"],
+            json!("full_frame_content_v1")
+        );
+        assert_eq!(
+            slide_rectangles["rectangles"][0]["detector"]["name"],
+            json!("full_frame_content_v1")
+        );
+
+        let slide_quality_report_path = files
+            .iter()
+            .find(|file| file["artifact_kind"] == json!("slide_quality_report"))
+            .and_then(|file| file["path"].as_str())
+            .expect("slide quality report path");
+        let slide_quality_report: Value = serde_json::from_str(
+            &fs::read_to_string(slide_quality_report_path).expect("slide quality report"),
+        )
+        .expect("slide quality report json");
+        assert_eq!(
+            slide_quality_report["summary"]["detector_crop_count"],
+            json!(1)
+        );
+        assert_eq!(
+            slide_quality_report["summary"]["full_frame_fallback_count"],
+            json!(0)
+        );
+        assert!(!slide_quality_report["risk_flags"]
+            .as_array()
+            .expect("risk flags")
+            .iter()
+            .any(|risk| risk["code"] == json!("full_frame_rectangle_fallback")));
+    }
+
+    #[test]
+    fn does_not_treat_sparse_overlay_as_full_frame_content_slide() {
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-sparse-overlay-test-{}",
+            DocumentId::new()
+        ));
+        fs::create_dir_all(&output_root).expect("output root");
+        let frame_path = output_root.join("frame_000001.png");
+        write_test_sparse_overlay_not_slide_png(&frame_path);
+
+        assert!(
+            video_detect_slide_rectangle(&frame_path).is_none(),
+            "a tiny overlay on a dark frame must stay fallback/review, not full-frame content"
+        );
     }
 
     #[test]
