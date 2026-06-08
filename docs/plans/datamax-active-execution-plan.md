@@ -1,10 +1,10 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 13:13 CST
-**当前性质：** 开发执行版；当前已推送 GitHub 功能基线以 `git log -1` 为准，本地复核时 HEAD 为 `85222eb Expose quality matrix gates for deliverables`，即 M6AU deliverables-mode gate metadata 已推送。工作树中存在 M6AV customer authorization argument gate 的本地候选脚本/文档改动；在单独 stage、验证、commit、push 前，它只算候选切片，不算已推送功能基线。后续实际执行入口是第 0.7.20 节；第 0.7.18-0.7.19 节保留完整背景、命令和历史口径，但若与第 0.7.20 节冲突，以第 0.7.20 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 13:22 CST
+**当前性质：** 开发执行版；当前已推送 GitHub 功能基线以 `git log -1` 为准，本地复核时 HEAD 为 `21a0296 Gate customer quality matrix authorization args`，即 M6AV customer authorization argument gate 已推送。后续实际执行入口是第 0.7.20 节；第 0.7.18-0.7.19 节保留完整背景、命令和历史口径，但若与第 0.7.20 节冲突，以第 0.7.20 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
-- 本次继续的是 plan-only 收口，不新增业务代码、不跑 live、不发 8。当前可同步 GitHub 的默认路径是 doc-only；若要同步 M6AV 候选脚本，必须另起 P1/no-live 代码切片并单独 stage 脚本、复跑 gate、提交。
+- 本轮已先完成 plan-only 收口，并继续按 P1/no-live 代码切片收掉 M6AV；没有跑 live、没有上传视频、没有发第三方事件、没有录屏、没有部署或触碰 8/120 服务器。后续默认仍按 P1/no-live 推进；任何 P2/P3/P4/P5/P6/P7 都需要对应授权、凭据、样例或部署窗口。
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；self-test 已补授权负向用例和可复制的脱敏 `sharedReceipt`；没有执行 live capture，没有接入 8 服务器生产服务。
@@ -1818,8 +1818,8 @@ git push origin main
 
 | 项 | 当前状态 | 后续执行含义 |
 | --- | --- | --- |
-| 已推送 GitHub HEAD | `85222eb Expose quality matrix gates for deliverables` | 已推送基线到 M6AU；不要把未提交工作树内容说成已推送能力 |
-| 本地工作树 | 存在计划/验证台账文档改动，也存在 M6AV 候选脚本改动 | plan-only 路径只 stage 文档；脚本候选必须另走 P1/no-live 代码切片 |
+| 已推送 GitHub HEAD | `21a0296 Gate customer quality matrix authorization args` | 已推送基线到 M6AV；后续继续以 `git log -1` 和当前验证结果为准 |
+| 本地工作树 | M6AV 脚本候选已按 P1/no-live 收版；后续若出现新脚本/业务代码改动，必须重新隔离和验证 | plan-only 路径只 stage 文档；新代码候选必须另走 P1/no-live 或对应 live gate |
 | active plan | 仓库文件是 `docs/plans/datamax-active-execution-plan.md`，桌面副本是 `/Users/manslive01/Desktop/datamax-active-execution-plan.md` | 每次计划更新都先同步桌面副本并 `cmp` |
 | 8 服务器 | 本次不 pull、不 build、不 restart、不部署、不启用录屏 | 只有用户明确批准 P7 部署窗口后才能操作 |
 | 120 服务器 | 不在本阶段范围 | 不检查、不部署、不修改 |
@@ -1885,9 +1885,9 @@ git push origin main
 
 提交前必须确认 `git diff --cached --name-only` 不包含 `scripts/`、`apps/`、`crates/`、`target/`、原始视频、抽帧、PPTX、Markdown 产物、客户文件或私有路径。
 
-##### 0.7.20.6 M6AV 候选脚本处理
+##### 0.7.20.6 M6AV 已收版与后续脚本处理
 
-如果用户后续明确要求“收 M6AV 代码切片、发 GitHub”，再进入下面路径；否则本次只保留为本地候选，不混入 plan-only 提交。
+M6AV 已按下面路径验证并推送到 GitHub，提交为 `21a0296 Gate customer quality matrix authorization args`。如果后续出现新的 quality-matrix、rollup、trigger 或 live-gate 参数门禁脚本改动，继续复用同一隔离路径：先跑 no-live gate，再提交代码，仍不部署 8 服务器。
 
 ```bash
 node --check scripts/smoke/video-ppt-quality-matrix.mjs
@@ -1899,7 +1899,7 @@ git diff --check
 git ls-files target | wc -l
 ```
 
-该切片只能证明 customer deliverables 参数门禁，不替代客户授权样例执行；真实 customer quality matrix 仍必须等客户/operator 授权输入和保留策略。
+M6AV 只能证明 customer deliverables 参数门禁，不替代客户授权样例执行；真实 customer quality matrix 仍必须等客户/operator 授权输入和保留策略。
 
 ##### 0.7.20.7 抽取效果验收
 

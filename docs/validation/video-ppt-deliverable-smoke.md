@@ -1466,6 +1466,77 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Customer Authorization Argument Gate GitHub Sync
+
+Task source: continue developing against the active execution plan after the plan-only closeout. The M6AV candidate script slice was isolated earlier; this entry records the actual no-live validation and GitHub sync.
+
+Scope:
+
+- code slice only in `scripts/smoke/video-ppt-quality-matrix.mjs` and `scripts/smoke/video-ppt-no-live-rollup.mjs`;
+- no main-site live upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- customer deliverables argument validation is centralized in `validateInputModeArgs()`;
+- quality matrix self-test rejects `--customer-deliverables` without `--customer-approval-id`;
+- quality matrix self-test rejects isolated `--customer-approval-id` without `--customer-deliverables`;
+- quality matrix self-test rejects mixing `--self-test` with customer deliverables flags;
+- the valid customer argument shape is allowed through argument validation without reading a file;
+- self-test exposes `customer_authorization_argument_gate_supported=true`;
+- no-live rollup copies and validates that support bit from the quality matrix child report.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir target/video-ppt-quality-matrix-customer-args-m6av
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/video-ppt-no-live-rollup-customer-args-m6av
+node -e "<redacted latest quality-matrix gate readback>"
+node -e "<redacted latest no-live rollup status readback>"
+rg -n "<local-path-url-token-raw-approval-patterns>" target/video-ppt-quality-matrix-customer-args-m6av target/video-ppt-no-live-rollup-customer-args-m6av
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- no-live rollup syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- latest quality matrix report exposed `customer_authorization_argument_gate_supported=true`;
+- latest quality matrix report retained `deliverables_mode_failure_class_gate_defaults_supported=true`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- latest no-live rollup report retained `full_acceptance_ready=false` with `gate_count=8`;
+- latest no-live rollup report copied `customer_authorization_argument_gate_supported=true` in the quality matrix child evidence;
+- sensitive-shape scan found no local absolute paths, raw URLs, bearer values, token query strings, provider keys, password-like values, raw approval ids, raw operator names, or generated-artifacts paths;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`;
+- GitHub commit pushed: `21a0296 Gate customer quality matrix authorization args`.
+
+Remaining work:
+
+- this gate does not execute or replace a real customer-authorized quality matrix;
+- P6 customer quality matrix still requires customer/operator authorization, input source, approval reference, and retention policy;
+- P2/P3/P4/P5/P7/P8 remain pending their live/customer/deployment gates.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, raw approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Slide Sharpness Quality Signal Local Slice
 
 Task source: P2-2F from `docs/plans/datamax-active-execution-plan.md`.
