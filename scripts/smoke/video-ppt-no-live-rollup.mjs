@@ -899,6 +899,7 @@ function buildReport({ startedAt, results }) {
 function buildAcceptanceStatus({ summary, results }) {
   const noLivePassed = summary.failed_count === 0;
   const noLiveEvidenceSummary = buildNoLiveAcceptanceEvidenceSummary(results);
+  const liveGateReadinessSummary = buildLiveGateReadinessSummary(results);
   const gates = [
     {
       id: 'P1_no_live_baseline',
@@ -1001,6 +1002,7 @@ function buildAcceptanceStatus({ summary, results }) {
     pending_customer_gate_count: 1,
     pending_full_acceptance_gate_count: 1,
     no_live_evidence_summary: noLiveEvidenceSummary,
+    live_gate_readiness_summary: liveGateReadinessSummary,
     gates,
     next_authorized_paths: [
       'P2_main_upload_live_smoke',
@@ -1021,6 +1023,38 @@ function buildAcceptanceStatus({ summary, results }) {
       server_8_touched: false,
       server_120_touched: false,
     },
+  };
+}
+
+function buildLiveGateReadinessSummary(results = []) {
+  const commandById = new Map(results.map((result) => [result.id, result]));
+  const uploadPreflight = commandById.get('upload_main_preflight')?.evidence || {};
+  const externalPreflight = commandById.get('external_video_ppt_preflight')?.evidence || {};
+  const handoffPreflight = commandById.get('video_ppt_handoff_preflight')?.evidence || {};
+  const captureDryRun = commandById.get('authorized_capture_dry_run')?.evidence || {};
+  return {
+    schema: 'v3.video_ppt_live_gate_readiness_summary.v1',
+    main_upload_preflight_ready: uploadPreflight.ok === true && uploadPreflight.preflight === true,
+    main_upload_live_write_approval_required: uploadPreflight.live_write_approval_required === true,
+    main_upload_writes_smoke_records: uploadPreflight.writes_smoke_records === true,
+    external_preflight_ready: externalPreflight.ok === true && externalPreflight.preflight === true,
+    external_live_write_approval_required: externalPreflight.live_write_approval_required === true,
+    external_context_present: externalPreflight.connection_id_present === true
+      && externalPreflight.source_id_present === true,
+    external_live_credential_ready: externalPreflight.live_credential_ready === true,
+    handoff_preflight_ready: handoffPreflight.ok === true && handoffPreflight.preflight === true,
+    handoff_deployment_approval_required: handoffPreflight.deployment_approval_required === true,
+    handoff_live_credential_ready: handoffPreflight.live_credential_ready === true,
+    handoff_target_mode_count: handoffPreflight.target_mode_count ?? null,
+    authorized_capture_dry_run_ready: captureDryRun.ok === true && captureDryRun.dry_run === true,
+    authorized_capture_approval_reference_present: captureDryRun.approval_reference_present === true,
+    authorized_capture_no_capture_attempted: captureDryRun.capture_attempted === false,
+    pending_main_live_write_approval: uploadPreflight.live_write_approval_required === true,
+    pending_external_bearer: externalPreflight.live_credential_ready === false,
+    pending_server_8_deployment_approval: handoffPreflight.deployment_approval_required === true,
+    pending_authorized_capture_live_sample: true,
+    pending_customer_authorized_sample: true,
+    live_or_deploy_action_run: false,
   };
 }
 
@@ -1146,6 +1180,7 @@ function validateAcceptanceStatus(report) {
     throw new Error('no-live rollup acceptance status no-live gate is incomplete');
   }
   validateNoLiveAcceptanceEvidenceSummary(acceptance, report);
+  validateLiveGateReadinessSummary(acceptance, report);
   for (const gateId of [
     'P2_main_upload_live_smoke',
     'P3_external_video_ppt_live_smoke',
@@ -1165,6 +1200,43 @@ function validateAcceptanceStatus(report) {
     ) {
       throw new Error(`no-live rollup acceptance status gate is incomplete: ${gateId}`);
     }
+  }
+}
+
+function validateLiveGateReadinessSummary(acceptance, report) {
+  const readiness = acceptance.live_gate_readiness_summary;
+  if (
+    !readiness
+    || readiness.schema !== 'v3.video_ppt_live_gate_readiness_summary.v1'
+    || readiness.live_or_deploy_action_run !== false
+  ) {
+    throw new Error('no-live rollup live gate readiness summary is incomplete');
+  }
+  if (report.summary.failed_count !== 0) {
+    return;
+  }
+  if (
+    readiness.main_upload_preflight_ready !== true
+    || readiness.main_upload_live_write_approval_required !== true
+    || readiness.main_upload_writes_smoke_records !== true
+    || readiness.external_preflight_ready !== true
+    || readiness.external_live_write_approval_required !== true
+    || readiness.external_context_present !== true
+    || readiness.external_live_credential_ready !== false
+    || readiness.handoff_preflight_ready !== true
+    || readiness.handoff_deployment_approval_required !== true
+    || readiness.handoff_live_credential_ready !== false
+    || readiness.handoff_target_mode_count !== 2
+    || readiness.authorized_capture_dry_run_ready !== true
+    || readiness.authorized_capture_approval_reference_present !== true
+    || readiness.authorized_capture_no_capture_attempted !== true
+    || readiness.pending_main_live_write_approval !== true
+    || readiness.pending_external_bearer !== true
+    || readiness.pending_server_8_deployment_approval !== true
+    || readiness.pending_authorized_capture_live_sample !== true
+    || readiness.pending_customer_authorized_sample !== true
+  ) {
+    throw new Error('no-live rollup live gate readiness summary does not match pending live gates');
   }
 }
 

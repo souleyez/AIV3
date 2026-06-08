@@ -3968,6 +3968,78 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Acceptance Status Live Gate Readiness Summary
+
+Task source: M6AT no-live follow-up. M6AS made the no-live evidence coverage visible inside `acceptance_status`, but the live-gate blockers were still distributed across upload, external, handoff, and capture child evidence. This slice adds a compact readiness summary that states which live gates are preflight-ready and which authorization, credential, deployment, or customer inputs remain missing.
+
+Scope:
+
+- local no-live rollup evidence slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- no-live rollup now emits `acceptance_status.live_gate_readiness_summary` with schema `v3.video_ppt_live_gate_readiness_summary.v1`;
+- the summary records main-upload preflight readiness while preserving that live write approval is still required;
+- the summary records external video PPT preflight readiness while preserving that the live bearer is not ready;
+- the summary records login-gated handoff preflight readiness while preserving that 8-server deployment approval is still required;
+- the summary records authorized-capture dry-run readiness while preserving that no live capture was attempted;
+- the summary records pending flags for main live write approval, external bearer, 8-server deployment approval, authorized capture live sample, and customer-authorized sample;
+- no-live rollup validation now fails if a passed rollup does not include the expected live readiness and pending-gate flags.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted live gate readiness readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir> <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- quality matrix syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=0`, `not_deliverable_count=0`, and `pending_count=2`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- live gate readiness summary schema was `v3.video_ppt_live_gate_readiness_summary.v1`;
+- main upload preflight was ready and still required live write approval;
+- external video PPT preflight was ready, external context was present, and live credential readiness remained false;
+- login-gated handoff preflight was ready, target mode count was `2`, and deployment approval was still required;
+- authorized capture dry-run was ready, approval reference was present and redacted, and no capture was attempted;
+- pending flags were true for main live write approval, external bearer, 8-server deployment approval, authorized capture live sample, and customer-authorized sample;
+- `live_or_deploy_action_run=false`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, or raw approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this readiness summary does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- future live gates or deployment gates must update this readiness summary and no-live validation before they are treated as covered by P1.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Acceptance Status No-Live Evidence Summary
 
 Task source: M6AS no-live follow-up. The no-live rollup already copied child evidence into `commands[].evidence`, but `acceptance_status` only showed the P1-P8 gate matrix. This slice makes the acceptance status itself carry a compact, redacted no-live evidence summary so reviewers can see what the local baseline actually covered without opening every child command record.
