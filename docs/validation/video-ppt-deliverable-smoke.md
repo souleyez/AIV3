@@ -7409,3 +7409,65 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Current-Head No-Live Baseline Refresh
+
+Task source: M6BP validation-only follow-up. After the public candidate revalidation receipt was pushed, this slice reran the current-head P1/M8 no-live baseline to make sure local gates still pass and the acceptance matrix still refuses to claim full live/customer/deployment readiness.
+
+Scope:
+
+- validation-only no-live baseline refresh;
+- no code change required for this slice;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Commands:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+node --check scripts/smoke/video-ppt-handoff.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live rollup summary readback>"
+rg -n "<local-path-url-token-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- all four smoke script syntax checks passed;
+- no-live rollup returned `status=passed`;
+- no-live rollup command count was `28`;
+- no-live rollup passed count was `28`;
+- no-live rollup failed count was `0`;
+- acceptance status kept `full_acceptance_ready=false`;
+- acceptance status kept `gate_count=8`;
+- no-live evidence summary schema was `v3.video_ppt_no_live_acceptance_evidence_summary.v1`;
+- live gate readiness summary schema was `v3.video_ppt_live_gate_readiness_summary.v1`;
+- non-executable gate reason summary schema was `v3.video_ppt_non_executable_gate_reason_summary.v1`;
+- server deployment policy summary schema was `v3.video_ppt_server_deployment_policy_summary.v1`;
+- path/credential scan found no raw URL, token query string, bearer value, cookie, authorization value, local absolute path, `target/.../generated_artifacts` path, or `video-extraction-*` identifier in the generated no-live report directory;
+- `git diff --check` passed before this receipt was added;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- this only confirms the current no-live baseline remains healthy and still reports full acceptance as not ready.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
