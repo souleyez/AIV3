@@ -63,6 +63,8 @@ function parseArgs(argv) {
     botExternalId: process.env.EXTERNAL_VIDEO_PPT_SMOKE_BOT_EXTERNAL_ID || 'bot-v3',
     senderExternalId:
       process.env.EXTERNAL_VIDEO_PPT_SMOKE_SENDER_EXTERNAL_ID || 'user-video-ppt-smoke',
+    ackLiveWrite: parseBoolean(process.env.EXTERNAL_VIDEO_PPT_SMOKE_ACK_LIVE_WRITE),
+    approvalId: process.env.EXTERNAL_VIDEO_PPT_SMOKE_APPROVAL_ID || '',
     allowMissingBearer: parseBoolean(process.env.EXTERNAL_VIDEO_PPT_SMOKE_ALLOW_MISSING_BEARER),
     loopbackFixture: parseBoolean(process.env.EXTERNAL_VIDEO_PPT_SMOKE_LOOPBACK_FIXTURE),
     skipDeliverableDownloads: parseBoolean(
@@ -120,6 +122,11 @@ function parseArgs(argv) {
     } else if (arg === '--sender-external-id') {
       args.senderExternalId = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--ack-live-write') {
+      args.ackLiveWrite = true;
+    } else if (arg === '--approval-id') {
+      args.approvalId = requireValue(arg, next);
+      index += 1;
     } else if (arg === '--allow-missing-bearer') {
       args.allowMissingBearer = true;
     } else if (arg === '--loopback-fixture') {
@@ -142,6 +149,7 @@ function parseArgs(argv) {
   if (args.selfTest && args.preflight) {
     throw new Error('--self-test and --preflight cannot be combined');
   }
+  validateLiveWriteApproval(args);
   if (!args.selfTest && !args.preflight && !args.allowMissingBearer && !args.bearer) {
     throw new Error('--bearer is required unless --allow-missing-bearer or --self-test is set');
   }
@@ -157,6 +165,17 @@ function parseArgs(argv) {
   return args;
 }
 
+function validateLiveWriteApproval(args) {
+  if (args.selfTest || args.preflight) {
+    return;
+  }
+  if (!args.ackLiveWrite || !args.approvalId.trim()) {
+    throw new Error(
+      'live write approval required: pass --ack-live-write and --approval-id <approval_ref> before running third-party video PPT live smoke',
+    );
+  }
+}
+
 function printHelp() {
   console.log(`Usage:
   npm run smoke:external-video-ppt -- \\
@@ -164,7 +183,9 @@ function printHelp() {
     --connection-id generic-chat-main \\
     --source-id third-party-source-main \\
     --bearer <token> \\
-    --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4
+    --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \\
+    --ack-live-write \\
+    --approval-id <approval_ref>
 
   npm run smoke:external-video-ppt -- --self-test
 
@@ -180,7 +201,8 @@ Checks:
 Notes:
   - --self-test does not call the network
   - --preflight validates fixture/context/trigger shape and live write scope without network calls
-  - live mode requires bearer unless --allow-missing-bearer is set for local loopback
+  - live mode requires --ack-live-write and --approval-id before any network or write step
+  - live mode also requires bearer unless --allow-missing-bearer is set for local loopback
   - --skip-deliverable-downloads only verifies the reply surface, not PPTX/Markdown files
 `);
 }
@@ -369,6 +391,8 @@ function redactedLiveCommand(args, fixtureName) {
     '--bearer <redacted-inbound-bearer>',
     fixtureArg,
     fixtureNameArg.trim(),
+    '--ack-live-write',
+    '--approval-id <redacted-approval-id>',
     `--output-dir ${shellQuote(args.outputDir)}`,
   ].filter(Boolean).join(' ');
 }
@@ -436,6 +460,8 @@ async function runPreflight(args) {
       networkCallsRun: false,
       productionWriteAllowed: false,
       liveWriteApprovalRequired: true,
+      liveWriteApprovalGateEnforced: true,
+      liveWriteApprovalSatisfied: false,
       credentialGateSatisfied,
       liveCredentialReady,
       allowMissingBearer: args.allowMissingBearer,
@@ -475,6 +501,7 @@ async function runPreflight(args) {
     redaction: {
       rawFixtureUrlIncluded: false,
       localFixturePathIncluded: false,
+      approvalIdIncluded: false,
       bearerIncluded: false,
       objectKeysIncluded: false,
       providerPayloadsIncluded: false,
@@ -503,6 +530,7 @@ async function runPreflight(args) {
     credentialGateSatisfied,
     liveCredentialReady,
     liveWriteApprovalRequired: true,
+    liveWriteApprovalGateEnforced: true,
   }, null, 2));
   if (!report.summary.ok) {
     process.exitCode = 1;
@@ -1297,6 +1325,9 @@ async function runLive(args) {
     downloadedKinds: downloads.map((download) => download.kind),
     pptxSlideCount: validation?.pptx?.slideCount ?? null,
     markdownSlideHeadingCount: validation?.markdown?.slideHeadingCount ?? null,
+    liveWriteApprovalAcknowledged: true,
+    liveWriteApprovalIdPresent: true,
+    liveWriteApprovalIdRedacted: true,
     startedAt,
     finishedAt,
   };
@@ -1324,6 +1355,12 @@ async function runLive(args) {
       fileName: download.fileName,
     })),
     validation,
+    liveWriteApproval: {
+      acknowledged: true,
+      approvalIdPresent: true,
+      approvalIdRedacted: true,
+      approvalIdStored: false,
+    },
   };
   const reportPath = join(outputDir, 'report.json');
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');

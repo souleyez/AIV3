@@ -4302,6 +4302,87 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Live Write Approval Script Gate
+
+Task source: M6BD P1/no-live follow-up. Main-site upload and third-party video PPT live smoke already advertised live write approval in preflight, but the live command path also needs a script-level gate so accidental production writes cannot happen without explicit operator approval.
+
+Scope:
+
+- local script and no-live rollup gate only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `scripts/smoke/video-ppt-upload-main.mjs` now requires `--ack-live-write --approval-id <approval_ref>` for live mode before any network, upload, dataset/document registration, assistant run, artifact poll, or download step;
+- `scripts/smoke/external-video-ppt.mjs` now requires `--ack-live-write --approval-id <approval_ref>` for live mode before any network, fixture registration, third-party event, reply poll, or deliverable download step;
+- self-test and preflight remain no-network and do not require a live approval id;
+- preflight reports now include `liveWriteApprovalGateEnforced=true` and do not include raw approval ids;
+- live reports, when later run with authorization, will record only `liveWriteApprovalAcknowledged=true`, `liveWriteApprovalIdPresent=true`, and `liveWriteApprovalIdRedacted=true`;
+- no-live rollup now includes `upload_main_live_approval_gate_negative` and `external_video_ppt_live_approval_gate_negative`;
+- `acceptance_status.no_live_evidence_summary` now records `live_approval_negative_gate_count=2` and `live_without_approval_rejected_before_network=true`;
+- `acceptance_status.live_gate_readiness_summary` records both main upload and external approval gates as enforced, while full acceptance remains false.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+node scripts/smoke/video-ppt-upload-main.mjs
+node scripts/smoke/external-video-ppt.mjs --allow-missing-bearer
+node scripts/smoke/video-ppt-upload-main.mjs --preflight --output-dir <target-redacted>
+node scripts/smoke/external-video-ppt.mjs --preflight --allow-missing-bearer --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted live approval gate readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- syntax checks passed for upload-main, external-video-ppt, and no-live rollup scripts;
+- main upload live mode without approval failed before network with `live write approval required`;
+- external video PPT live mode without approval failed before network with `live write approval required`;
+- upload-main preflight passed and reported `liveWriteApprovalGateEnforced=true`;
+- external video PPT preflight passed and reported `liveWriteApprovalGateEnforced=true`;
+- no-live rollup passed with `command_count=24`, `passed_count=24`, and `failed_count=0`;
+- readback showed both negative gate evidence records using schema `v3.video_ppt_live_write_approval_negative_evidence.v1`;
+- readback showed both negative gates had `exit_code=1`, `approval_gate_enforced=true`, `network_calls_run=false`, and `production_write_allowed=false`;
+- readback showed `acceptance_status.live_gate_readiness_summary.main_upload_live_write_approval_gate_enforced=true`;
+- readback showed `acceptance_status.live_gate_readiness_summary.main_upload_live_without_approval_rejected_before_network=true`;
+- readback showed `acceptance_status.live_gate_readiness_summary.external_live_write_approval_gate_enforced=true`;
+- readback showed `acceptance_status.live_gate_readiness_summary.external_live_without_approval_rejected_before_network=true`;
+- readback showed `acceptance_status.no_live_evidence_summary.embedded_evidence_command_count=13`;
+- readback showed `acceptance_status.no_live_evidence_summary.live_approval_negative_gate_count=2`;
+- readback showed `acceptance_status.no_live_evidence_summary.live_without_approval_rejected_before_network=true`;
+- readback showed `acceptance_status.pending_gate_requirements_summary.external_video_ppt_requires_write_approval=true`;
+- strict redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw approval/operator values, or raw self-test approval values; only non-secret field names such as `approval_reference_present` remained;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- P2 live still needs explicit write approval, safe video input, and controlled live execution;
+- P3 live now needs both third-party credentials/context and explicit third-party live write approval.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 No-Live Rollup Supported Video Extension Summary
 
 Task source: M6AZ P1/no-live follow-up. Upload-main and third-party self-test child reports already proved supported video extension counts, but the top-level `acceptance_status.no_live_evidence_summary` did not directly expose whether both surfaces had extension readiness evidence. This slice makes the `.mp4/.mov/.m4v/.webm/.mkv/.avi` support evidence copyable from the top-level no-live report.

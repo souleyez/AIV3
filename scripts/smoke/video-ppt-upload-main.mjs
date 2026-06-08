@@ -61,6 +61,8 @@ function parseArgs(argv) {
     datasetTitle: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_DATASET_TITLE || DEFAULT_DATASET_TITLE,
     cookie: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_COOKIE || '',
     bearer: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_BEARER || '',
+    ackLiveWrite: parseBoolean(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_ACK_LIVE_WRITE),
+    approvalId: process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_APPROVAL_ID || '',
     selfTest: parseBoolean(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_SELF_TEST),
     preflight: parseBoolean(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_PREFLIGHT),
     timeoutMs: Number(process.env.VIDEO_PPT_UPLOAD_MAIN_SMOKE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
@@ -109,6 +111,11 @@ function parseArgs(argv) {
     } else if (arg === '--bearer') {
       args.bearer = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--ack-live-write') {
+      args.ackLiveWrite = true;
+    } else if (arg === '--approval-id') {
+      args.approvalId = requireValue(arg, next);
+      index += 1;
     } else if (arg === '--self-test') {
       args.selfTest = true;
     } else if (arg === '--preflight') {
@@ -136,6 +143,7 @@ function parseArgs(argv) {
   if (args.selfTest && args.preflight) {
     throw new Error('--self-test and --preflight cannot be combined');
   }
+  validateLiveWriteApproval(args);
   if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 10_000) {
     throw new Error('--timeout-ms must be at least 10000');
   }
@@ -143,6 +151,17 @@ function parseArgs(argv) {
     throw new Error('--poll-interval-ms must be at least 500');
   }
   return args;
+}
+
+function validateLiveWriteApproval(args) {
+  if (args.selfTest || args.preflight) {
+    return;
+  }
+  if (!args.ackLiveWrite || !args.approvalId.trim()) {
+    throw new Error(
+      'live write approval required: pass --ack-live-write and --approval-id <approval_ref> before running main-site upload live smoke',
+    );
+  }
 }
 
 function requireValue(name, value) {
@@ -161,7 +180,9 @@ function printHelp() {
   npm run smoke:video-ppt-upload-main -- \\
     --base-url https://v3.elepcloud.com \\
     --fixture-url https://v3.elepcloud.com/generated-artifacts/samples/react-in-5-minutes.mp4 \\
-    --local-thread-id video-ppt-upload-main-...
+    --local-thread-id video-ppt-upload-main-... \\
+    --ack-live-write \\
+    --approval-id <approval_ref>
 
 Checks:
   - creates or reuses a local-thread scoped smoke dataset
@@ -175,6 +196,7 @@ Checks:
 Notes:
   - --self-test does not call the network, upload files, create datasets, or create assistant runs
   - --preflight validates fixture/source shape and live write scope without downloading or uploading
+  - live mode requires --ack-live-write and --approval-id before any network or write step
 `);
 }
 
@@ -597,6 +619,8 @@ function redactedLiveCommand(args, fixtureName) {
     fixtureArg,
     fixtureNameArg.trim(),
     `--local-thread-id ${shellQuote(args.localThreadId)}`,
+    '--ack-live-write',
+    '--approval-id <redacted-approval-id>',
     `--output-dir ${shellQuote(args.outputDir)}`,
   ].filter(Boolean).join(' ');
 }
@@ -655,6 +679,8 @@ async function runPreflight(args) {
       networkCallsRun: false,
       productionWriteAllowed: false,
       liveWriteApprovalRequired: true,
+      liveWriteApprovalGateEnforced: true,
+      liveWriteApprovalSatisfied: false,
       fixtureDownloaded: false,
       uploadAttempted: false,
       datasetCreated: false,
@@ -683,6 +709,7 @@ async function runPreflight(args) {
     redaction: {
       rawFixtureUrlIncluded: false,
       localFixturePathIncluded: false,
+      approvalIdIncluded: false,
       cookiesIncluded: false,
       bearerIncluded: false,
       objectKeysIncluded: false,
@@ -709,6 +736,7 @@ async function runPreflight(args) {
       supportedExtension: fixture.supportedExtension,
     },
     liveWriteApprovalRequired: true,
+    liveWriteApprovalGateEnforced: true,
   }, null, 2));
   if (!report.summary.ok) {
     process.exitCode = 1;
@@ -1393,6 +1421,9 @@ async function main() {
     uploadedContentType: fixture.contentType,
     uploadObjectKeyPresent: uploadResult.summary.objectKeyPresent,
     fixtureSource: fixture.source,
+    liveWriteApprovalAcknowledged: true,
+    liveWriteApprovalIdPresent: true,
+    liveWriteApprovalIdRedacted: true,
     requiredFileKinds: REQUIRED_FILE_KINDS,
     downloadedKinds: downloads.map((download) => download.kind),
     pptxSlideCount: validation.pptx?.slideCount ?? null,
@@ -1433,6 +1464,12 @@ async function main() {
       fileName: download.fileName,
     })),
     validation,
+    liveWriteApproval: {
+      acknowledged: true,
+      approvalIdPresent: true,
+      approvalIdRedacted: true,
+      approvalIdStored: false,
+    },
   };
   const reportPath = join(outputDir, 'report.json');
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');

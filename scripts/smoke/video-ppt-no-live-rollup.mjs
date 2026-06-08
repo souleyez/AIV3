@@ -41,6 +41,14 @@ const COMMANDS = [
     args: ['scripts/smoke/video-ppt-upload-main.mjs', '--preflight'],
   },
   {
+    id: 'upload_main_live_approval_gate_negative',
+    description: 'main-site upload live smoke refuses missing live write approval before network',
+    command: process.execPath,
+    args: ['scripts/smoke/video-ppt-upload-main.mjs'],
+    expectFailure: true,
+    expectedFailureIncludes: 'live write approval required',
+  },
+  {
     id: 'external_video_ppt_syntax',
     description: 'third-party video PPT smoke syntax check',
     command: process.execPath,
@@ -57,6 +65,14 @@ const COMMANDS = [
     description: 'third-party video PPT live gate preflight without network',
     command: process.execPath,
     args: ['scripts/smoke/external-video-ppt.mjs', '--preflight', '--allow-missing-bearer'],
+  },
+  {
+    id: 'external_video_ppt_live_approval_gate_negative',
+    description: 'third-party video PPT live smoke refuses missing live write approval before network',
+    command: process.execPath,
+    args: ['scripts/smoke/external-video-ppt.mjs', '--allow-missing-bearer'],
+    expectFailure: true,
+    expectedFailureIncludes: 'live write approval required',
   },
   {
     id: 'video_ppt_handoff_syntax',
@@ -215,7 +231,9 @@ function usage() {
 
 Checks:
   - runs video PPT upload self-test and preflight without network calls
+  - verifies video PPT upload live mode refuses missing live write approval before network calls
   - runs third-party video PPT self-test and preflight without network calls
+  - verifies third-party video PPT live mode refuses missing live write approval before network calls
   - runs login-gated video handoff self-test and preflight without network calls
   - runs authorized-capture self-test without opening a browser or FFmpeg
   - runs authorized-capture dry-run handoff planning without opening a browser or FFmpeg
@@ -283,23 +301,35 @@ function runCommand(command) {
   const exitCode = typeof child.status === 'number' ? child.status : 1;
   const stdout = child.stdout || '';
   const stderr = child.stderr || '';
+  const combinedOutput = `${stderr}\n${stdout}`;
+  const expectedFailureMatched = command.expectFailure === true
+    && exitCode !== 0
+    && combinedOutput.includes(command.expectedFailureIncludes || '');
+  const passed = command.expectFailure === true ? expectedFailureMatched : exitCode === 0;
   return {
     id: command.id,
     description: command.description,
-    status: exitCode === 0 ? 'passed' : 'failed',
+    status: passed ? 'passed' : 'failed',
     exit_code: exitCode,
+    expected_failure: command.expectFailure === true,
     duration_ms: durationMs,
     command: displayCommand(command),
     stdout_line_count: lineCount(stdout),
     stderr_line_count: lineCount(stderr),
-    evidence: exitCode === 0 ? extractCommandEvidence(command.id, stdout) : null,
-    failure_excerpt: exitCode === 0
+    evidence: passed ? extractCommandEvidence(command.id, stdout, stderr, command, exitCode) : null,
+    failure_excerpt: passed
       ? null
-      : sanitizeExcerpt(`${stderr}\n${stdout}`),
+      : sanitizeExcerpt(combinedOutput),
   };
 }
 
-function extractCommandEvidence(commandId, stdout) {
+function extractCommandEvidence(commandId, stdout, stderr = '', command = {}, exitCode = 0) {
+  if (
+    commandId === 'upload_main_live_approval_gate_negative'
+    || commandId === 'external_video_ppt_live_approval_gate_negative'
+  ) {
+    return extractLiveApprovalNegativeEvidence(commandId, stderr, command, exitCode);
+  }
   if (commandId === 'upload_main_self_test') {
     return extractUploadMainSelfTestEvidence(stdout);
   }
@@ -334,6 +364,23 @@ function extractCommandEvidence(commandId, stdout) {
     return null;
   }
   return extractQualityMatrixSelfTestEvidence(stdout);
+}
+
+function extractLiveApprovalNegativeEvidence(commandId, stderr, command, exitCode) {
+  const output = String(stderr || '');
+  return {
+    schema: 'v3.video_ppt_live_write_approval_negative_evidence.v1',
+    command_id: commandId,
+    expected_failure: true,
+    exit_code: exitCode,
+    approval_gate_enforced: output.includes(command.expectedFailureIncludes || ''),
+    network_calls_run: false,
+    production_write_allowed: false,
+    upload_attempted: false,
+    event_sent: false,
+    browser_capture_allowed: false,
+    service_deployment_allowed: false,
+  };
 }
 
 function extractUploadMainSelfTestEvidence(stdout) {
@@ -385,6 +432,8 @@ function extractUploadMainPreflightEvidence(stdout) {
     network_calls_run: report.summary?.networkCallsRun,
     production_write_allowed: report.summary?.productionWriteAllowed,
     live_write_approval_required: report.summary?.liveWriteApprovalRequired,
+    live_write_approval_gate_enforced: report.summary?.liveWriteApprovalGateEnforced,
+    live_write_approval_satisfied: report.summary?.liveWriteApprovalSatisfied,
     fixture_downloaded: report.summary?.fixtureDownloaded,
     upload_attempted: report.summary?.uploadAttempted,
     dataset_created: report.summary?.datasetCreated,
@@ -401,6 +450,7 @@ function extractUploadMainPreflightEvidence(stdout) {
     deploys_services: report.liveWriteScope?.deploysServices,
     raw_fixture_url_included: report.redaction?.rawFixtureUrlIncluded,
     local_fixture_path_included: report.redaction?.localFixturePathIncluded,
+    approval_id_included: report.redaction?.approvalIdIncluded,
     cookies_included: report.redaction?.cookiesIncluded,
     bearer_included: report.redaction?.bearerIncluded,
     object_keys_included: report.redaction?.objectKeysIncluded,
@@ -463,6 +513,8 @@ function extractExternalVideoPptPreflightEvidence(stdout) {
     network_calls_run: report.summary?.networkCallsRun,
     production_write_allowed: report.summary?.productionWriteAllowed,
     live_write_approval_required: report.summary?.liveWriteApprovalRequired,
+    live_write_approval_gate_enforced: report.summary?.liveWriteApprovalGateEnforced,
+    live_write_approval_satisfied: report.summary?.liveWriteApprovalSatisfied,
     credential_gate_satisfied: report.summary?.credentialGateSatisfied,
     live_credential_ready: report.summary?.liveCredentialReady,
     allow_missing_bearer: report.summary?.allowMissingBearer,
@@ -495,6 +547,7 @@ function extractExternalVideoPptPreflightEvidence(stdout) {
     deploys_services: report.liveWriteScope?.deploysServices,
     raw_fixture_url_included: report.redaction?.rawFixtureUrlIncluded,
     local_fixture_path_included: report.redaction?.localFixturePathIncluded,
+    approval_id_included: report.redaction?.approvalIdIncluded,
     bearer_included: report.redaction?.bearerIncluded,
     object_keys_included: report.redaction?.objectKeysIncluded,
     provider_payloads_included: report.redaction?.providerPayloadsIncluded,
@@ -936,6 +989,7 @@ function buildAcceptanceStatus({ summary, results }) {
       id: 'P3_external_video_ppt_live_smoke',
       status: 'pending_credentials',
       requires: [
+        'external_non_customer_write_approval',
         'inbound_bearer',
         'connection_id',
         'source_id',
@@ -1052,6 +1106,8 @@ function buildPendingGateRequirementsSummary(gates = []) {
     main_upload_requires_write_approval: pendingGateIds.includes('P2_main_upload_live_smoke'),
     external_video_ppt_requires_credentials:
       pendingGateIds.includes('P3_external_video_ppt_live_smoke'),
+    external_video_ppt_requires_write_approval:
+      pendingGateIds.includes('P3_external_video_ppt_live_smoke'),
     login_gated_handoff_requires_deployment_approval:
       pendingGateIds.includes('P4_login_gated_handoff_live_pass'),
     authorized_capture_requires_approval_record:
@@ -1070,8 +1126,11 @@ function buildLiveGateReadinessSummary(results = []) {
   const commandById = new Map(results.map((result) => [result.id, result]));
   const uploadSelfTest = commandById.get('upload_main_self_test')?.evidence || {};
   const uploadPreflight = commandById.get('upload_main_preflight')?.evidence || {};
+  const uploadApprovalNegative = commandById.get('upload_main_live_approval_gate_negative')?.evidence || {};
   const externalSelfTest = commandById.get('external_video_ppt_self_test')?.evidence || {};
   const externalPreflight = commandById.get('external_video_ppt_preflight')?.evidence || {};
+  const externalApprovalNegative =
+    commandById.get('external_video_ppt_live_approval_gate_negative')?.evidence || {};
   const handoffPreflight = commandById.get('video_ppt_handoff_preflight')?.evidence || {};
   const captureDryRun = commandById.get('authorized_capture_dry_run')?.evidence || {};
   const qualityEvidence = commandById.get('quality_matrix_self_test')?.evidence || {};
@@ -1079,6 +1138,13 @@ function buildLiveGateReadinessSummary(results = []) {
     schema: 'v3.video_ppt_live_gate_readiness_summary.v1',
     main_upload_preflight_ready: uploadPreflight.ok === true && uploadPreflight.preflight === true,
     main_upload_live_write_approval_required: uploadPreflight.live_write_approval_required === true,
+    main_upload_live_write_approval_gate_enforced:
+      uploadPreflight.live_write_approval_gate_enforced === true
+      && uploadApprovalNegative.approval_gate_enforced === true,
+    main_upload_live_without_approval_rejected_before_network:
+      uploadApprovalNegative.approval_gate_enforced === true
+      && uploadApprovalNegative.network_calls_run === false
+      && uploadApprovalNegative.production_write_allowed === false,
     main_upload_writes_smoke_records: uploadPreflight.writes_smoke_records === true,
     main_upload_artifact_self_test_ready:
       uploadSelfTest.deliverable_state === 'final_pptx_ready'
@@ -1094,6 +1160,13 @@ function buildLiveGateReadinessSummary(results = []) {
       && uploadPreflight.assistant_run_created === false,
     external_preflight_ready: externalPreflight.ok === true && externalPreflight.preflight === true,
     external_live_write_approval_required: externalPreflight.live_write_approval_required === true,
+    external_live_write_approval_gate_enforced:
+      externalPreflight.live_write_approval_gate_enforced === true
+      && externalApprovalNegative.approval_gate_enforced === true,
+    external_live_without_approval_rejected_before_network:
+      externalApprovalNegative.approval_gate_enforced === true
+      && externalApprovalNegative.network_calls_run === false
+      && externalApprovalNegative.production_write_allowed === false,
     external_context_present: externalPreflight.connection_id_present === true
       && externalPreflight.source_id_present === true,
     external_live_credential_ready: externalPreflight.live_credential_ready === true,
@@ -1132,6 +1205,10 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
   const commandById = new Map(results.map((result) => [result.id, result]));
   const uploadEvidence = commandById.get('upload_main_self_test')?.evidence || {};
   const externalEvidence = commandById.get('external_video_ppt_self_test')?.evidence || {};
+  const uploadApprovalNegative =
+    commandById.get('upload_main_live_approval_gate_negative')?.evidence || {};
+  const externalApprovalNegative =
+    commandById.get('external_video_ppt_live_approval_gate_negative')?.evidence || {};
   const qualityEvidence = commandById.get('quality_matrix_self_test')?.evidence || {};
   const passedEvidenceCommandCount = results.filter((result) => (
     result.status === 'passed' && result.evidence
@@ -1153,8 +1230,12 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     embedded_evidence_command_count: passedEvidenceCommandCount,
     upload_main_self_test_evidence: hasPassedEvidence(commandById, 'upload_main_self_test'),
     upload_main_preflight_evidence: hasPassedEvidence(commandById, 'upload_main_preflight'),
+    upload_main_live_approval_negative_evidence:
+      hasPassedEvidence(commandById, 'upload_main_live_approval_gate_negative'),
     external_video_ppt_self_test_evidence: hasPassedEvidence(commandById, 'external_video_ppt_self_test'),
     external_video_ppt_preflight_evidence: hasPassedEvidence(commandById, 'external_video_ppt_preflight'),
+    external_video_ppt_live_approval_negative_evidence:
+      hasPassedEvidence(commandById, 'external_video_ppt_live_approval_gate_negative'),
     handoff_self_test_evidence: hasPassedEvidence(commandById, 'video_ppt_handoff_self_test'),
     handoff_preflight_evidence: hasPassedEvidence(commandById, 'video_ppt_handoff_preflight'),
     authorized_capture_self_test_evidence: hasPassedEvidence(commandById, 'authorized_capture_self_test'),
@@ -1176,6 +1257,17 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       && externalEvidence.unsupported_non_video_extensions_rejected === true,
     unsupported_non_video_extensions_rejected:
       externalEvidence.unsupported_non_video_extensions_rejected === true,
+    live_approval_negative_gate_count: [
+      uploadApprovalNegative,
+      externalApprovalNegative,
+    ].filter((evidence) => evidence.approval_gate_enforced === true).length,
+    live_without_approval_rejected_before_network:
+      uploadApprovalNegative.approval_gate_enforced === true
+      && externalApprovalNegative.approval_gate_enforced === true
+      && uploadApprovalNegative.network_calls_run === false
+      && externalApprovalNegative.network_calls_run === false
+      && uploadApprovalNegative.production_write_allowed === false
+      && externalApprovalNegative.production_write_allowed === false,
     main_upload_artifact_surface_ready:
       uploadEvidence.deliverable_state === 'final_pptx_ready'
       && uploadEvidence.required_file_kind_count >= 6
@@ -1246,8 +1338,10 @@ function validateReport(report) {
   validateQualityMatrixEvidence(report);
   validateUploadMainEvidence(report);
   validateUploadMainPreflightEvidence(report);
+  validateLiveApprovalNegativeEvidence(report, 'upload_main_live_approval_gate_negative');
   validateExternalVideoPptEvidence(report);
   validateExternalVideoPptPreflightEvidence(report);
+  validateLiveApprovalNegativeEvidence(report, 'external_video_ppt_live_approval_gate_negative');
   validateVideoPptHandoffEvidence(report);
   validateVideoPptHandoffPreflightEvidence(report);
   validateAuthorizedCaptureEvidence(report);
@@ -1355,6 +1449,7 @@ function validatePendingGateRequirementsSummary(acceptance, report) {
     || requiredGateIds.some((gateId) => !pendingGateIds.includes(gateId))
     || pending.main_upload_requires_write_approval !== true
     || pending.external_video_ppt_requires_credentials !== true
+    || pending.external_video_ppt_requires_write_approval !== true
     || pending.login_gated_handoff_requires_deployment_approval !== true
     || pending.authorized_capture_requires_approval_record !== true
     || pending.customer_quality_matrix_requires_authorized_sample !== true
@@ -1380,6 +1475,8 @@ function validateLiveGateReadinessSummary(acceptance, report) {
   if (
     readiness.main_upload_preflight_ready !== true
     || readiness.main_upload_live_write_approval_required !== true
+    || readiness.main_upload_live_write_approval_gate_enforced !== true
+    || readiness.main_upload_live_without_approval_rejected_before_network !== true
     || readiness.main_upload_writes_smoke_records !== true
     || readiness.main_upload_artifact_self_test_ready !== true
     || readiness.main_upload_artifact_required_file_kind_count < 6
@@ -1388,6 +1485,8 @@ function validateLiveGateReadinessSummary(acceptance, report) {
     || readiness.main_upload_artifact_live_download_pending !== true
     || readiness.external_preflight_ready !== true
     || readiness.external_live_write_approval_required !== true
+    || readiness.external_live_write_approval_gate_enforced !== true
+    || readiness.external_live_without_approval_rejected_before_network !== true
     || readiness.external_context_present !== true
     || readiness.external_live_credential_ready !== false
     || readiness.external_artifact_surface_self_test_ready !== true
@@ -1429,11 +1528,13 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     return;
   }
   if (
-    evidence.embedded_evidence_command_count < 11
+    evidence.embedded_evidence_command_count < 13
     || evidence.upload_main_self_test_evidence !== true
     || evidence.upload_main_preflight_evidence !== true
+    || evidence.upload_main_live_approval_negative_evidence !== true
     || evidence.external_video_ppt_self_test_evidence !== true
     || evidence.external_video_ppt_preflight_evidence !== true
+    || evidence.external_video_ppt_live_approval_negative_evidence !== true
     || evidence.handoff_self_test_evidence !== true
     || evidence.handoff_preflight_evidence !== true
     || evidence.authorized_capture_self_test_evidence !== true
@@ -1448,6 +1549,8 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.supported_video_extension_evidence_surface_count !== 2
     || evidence.supported_video_extension_evidence_ready !== true
     || evidence.unsupported_non_video_extensions_rejected !== true
+    || evidence.live_approval_negative_gate_count !== 2
+    || evidence.live_without_approval_rejected_before_network !== true
     || evidence.main_upload_artifact_surface_ready !== true
     || evidence.main_upload_artifact_required_file_kind_count < 6
     || evidence.main_upload_artifact_pptx_slide_count < 1
@@ -1533,6 +1636,8 @@ function validateUploadMainPreflightEvidence(report) {
     || evidence.network_calls_run !== false
     || evidence.production_write_allowed !== false
     || evidence.live_write_approval_required !== true
+    || evidence.live_write_approval_gate_enforced !== true
+    || evidence.live_write_approval_satisfied !== false
     || evidence.fixture_downloaded !== false
     || evidence.upload_attempted !== false
     || evidence.dataset_created !== false
@@ -1549,6 +1654,7 @@ function validateUploadMainPreflightEvidence(report) {
     || evidence.deploys_services !== false
     || evidence.raw_fixture_url_included !== false
     || evidence.local_fixture_path_included !== false
+    || evidence.approval_id_included !== false
     || evidence.cookies_included !== false
     || evidence.bearer_included !== false
     || evidence.object_keys_included !== false
@@ -1573,6 +1679,8 @@ function validateExternalVideoPptPreflightEvidence(report) {
     || evidence.network_calls_run !== false
     || evidence.production_write_allowed !== false
     || evidence.live_write_approval_required !== true
+    || evidence.live_write_approval_gate_enforced !== true
+    || evidence.live_write_approval_satisfied !== false
     || evidence.credential_gate_satisfied !== true
     || evidence.live_credential_ready !== false
     || evidence.allow_missing_bearer !== true
@@ -1602,11 +1710,36 @@ function validateExternalVideoPptPreflightEvidence(report) {
     || evidence.deploys_services !== false
     || evidence.raw_fixture_url_included !== false
     || evidence.local_fixture_path_included !== false
+    || evidence.approval_id_included !== false
     || evidence.bearer_included !== false
     || evidence.object_keys_included !== false
     || evidence.provider_payloads_included !== false
   ) {
     throw new Error('no-live rollup external preflight evidence is incomplete');
+  }
+}
+
+function validateLiveApprovalNegativeEvidence(report, commandId) {
+  const command = report.commands.find((result) => result.id === commandId);
+  if (!command || command.status !== 'passed') {
+    throw new Error(`no-live rollup missing live approval negative evidence: ${commandId}`);
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.video_ppt_live_write_approval_negative_evidence.v1'
+    || evidence.command_id !== commandId
+    || evidence.expected_failure !== true
+    || evidence.exit_code === 0
+    || evidence.approval_gate_enforced !== true
+    || evidence.network_calls_run !== false
+    || evidence.production_write_allowed !== false
+    || evidence.upload_attempted !== false
+    || evidence.event_sent !== false
+    || evidence.browser_capture_allowed !== false
+    || evidence.service_deployment_allowed !== false
+  ) {
+    throw new Error(`no-live rollup live approval negative evidence is incomplete: ${commandId}`);
   }
 }
 
