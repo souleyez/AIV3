@@ -11,6 +11,9 @@ mode="smoke"
 base_url=""
 results_path=""
 require_metrics="false"
+fixture_policy="baseline"
+required_case_count="30"
+required_categories=$'deep_old_chunk\nselected_document_scope\nowner_scope\ncjk_phrase\ndatabase_topn\nrow_identity\nmixed_database_document'
 cargo_bin="${CARGO_BIN:-cargo}"
 
 while [[ $# -gt 0 ]]; do
@@ -39,9 +42,15 @@ while [[ $# -gt 0 ]]; do
       require_metrics="true"
       shift
       ;;
+    --live-subset)
+      fixture_policy="live_subset"
+      required_case_count="1"
+      required_categories=""
+      shift
+      ;;
     -h|--help)
       cat <<'EOF'
-Usage: bash scripts/run-retrieval-quality-smoke.sh [--baseline] [--base-url URL] [--cases PATH] [--report-dir PATH] [--results-jsonl PATH] [--require-metrics]
+Usage: bash scripts/run-retrieval-quality-smoke.sh [--baseline] [--base-url URL] [--cases PATH] [--report-dir PATH] [--results-jsonl PATH] [--require-metrics] [--live-subset]
 
 Validates retrieval-quality fixtures and writes JSON/Markdown receipts.
 By default it runs targeted cargo contract tests. Set
@@ -49,6 +58,8 @@ RETRIEVAL_QUALITY_SMOKE_SKIP_CARGO=true to generate a fixture-only receipt.
 Pass --results-jsonl to compute Recall/MRR/citation/answer/latency metrics from
 one live result row per fixture case. Pass --require-metrics to fail when live
 results are missing, malformed, incomplete, or contain permission leaks.
+Pass --live-subset for deployment-target live probes that intentionally use a
+small case file instead of the full 30+ case baseline coverage matrix.
 EOF
       exit 0
       ;;
@@ -134,6 +145,9 @@ SMOKE_MODE="${mode}" \
 SMOKE_BASE_URL="${base_url}" \
 SMOKE_RESULTS_JSONL="${results_path}" \
 SMOKE_REQUIRE_METRICS="${require_metrics}" \
+SMOKE_FIXTURE_POLICY="${fixture_policy}" \
+SMOKE_REQUIRED_CASE_COUNT="${required_case_count}" \
+SMOKE_REQUIRED_CATEGORIES="${required_categories}" \
 SMOKE_STARTED_AT="${started_at}" \
 SMOKE_FINISHED_AT="${finished_at}" \
 SMOKE_SKIP_CARGO="${skip_cargo}" \
@@ -161,14 +175,11 @@ with cases_path.open("r", encoding="utf-8") as handle:
         cases.append(case)
 
 required_categories = {
-    "deep_old_chunk",
-    "selected_document_scope",
-    "owner_scope",
-    "cjk_phrase",
-    "database_topn",
-    "row_identity",
-    "mixed_database_document",
+    category.strip()
+    for category in os.environ.get("SMOKE_REQUIRED_CATEGORIES", "").splitlines()
+    if category.strip()
 }
+required_case_count = int(os.environ.get("SMOKE_REQUIRED_CASE_COUNT", "30"))
 ids = [case.get("id") for case in cases]
 duplicate_ids = sorted({case_id for case_id in ids if ids.count(case_id) > 1})
 categories = Counter(case.get("category") for case in cases)
@@ -190,7 +201,7 @@ for case in cases:
             missing_required_fields.append({"id": case.get("id"), "line": case["line_no"], "field": field})
 
 fixture_ready = (
-    len(cases) >= 30
+    len(cases) >= required_case_count
     and not duplicate_ids
     and not missing_categories
     and not missing_required_fields
@@ -405,8 +416,9 @@ report = {
     "started_at": os.environ["SMOKE_STARTED_AT"],
     "finished_at": os.environ["SMOKE_FINISHED_AT"],
     "cases_path": str(cases_path),
+    "fixture_policy": os.environ.get("SMOKE_FIXTURE_POLICY", "baseline"),
     "case_count": len(cases),
-    "required_case_count": 30,
+    "required_case_count": required_case_count,
     "categories": dict(sorted(categories.items())),
     "missing_categories": missing_categories,
     "duplicate_ids": duplicate_ids,
