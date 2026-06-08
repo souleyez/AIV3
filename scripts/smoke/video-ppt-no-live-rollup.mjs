@@ -5,6 +5,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const DEFAULT_OUTPUT_DIR = 'target/video-ppt-no-live-rollup';
+const REQUIRED_NOT_DELIVERABLE_FAILURE_CLASSES = [
+  'source_access',
+  'video_has_no_ppt',
+  'frame_extraction',
+  'artifact_visibility',
+  'selection_quality',
+];
 
 const COMMANDS = [
   {
@@ -684,6 +691,14 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
     failure_class_counts: sanitizeCountMap(report.summary?.failure_class_counts),
     not_deliverable_failure_class_counts: sanitizeCountMap(report.summary?.not_deliverable_failure_class_counts),
     needs_manual_review_failure_class_counts: sanitizeCountMap(report.summary?.needs_manual_review_failure_class_counts),
+    failure_class_summary_regression_not_deliverable_count:
+      report.gates?.failure_class_summary_regression_not_deliverable_count,
+    failure_class_summary_regression_class_count:
+      report.gates?.failure_class_summary_regression_class_count,
+    failure_class_summary_regression_counts:
+      sanitizeCountMap(report.gates?.failure_class_summary_regression_counts),
+    failure_class_summary_regression_not_deliverable_counts:
+      sanitizeCountMap(report.gates?.failure_class_summary_regression_not_deliverable_counts),
     live_smoke_run: report.gates?.live_smoke_run,
     production_write_allowed: report.gates?.production_write_allowed,
     generated_artifacts_committable: report.gates?.generated_artifacts_committable,
@@ -1521,6 +1536,10 @@ function validateQualityMatrixEvidence(report) {
     || !isCountMap(evidence.failure_class_counts)
     || !isCountMap(evidence.not_deliverable_failure_class_counts)
     || !isCountMap(evidence.needs_manual_review_failure_class_counts)
+    || evidence.failure_class_summary_regression_not_deliverable_count !== 5
+    || evidence.failure_class_summary_regression_class_count !== 5
+    || !hasRequiredFailureClassCounts(evidence.failure_class_summary_regression_counts)
+    || !hasRequiredFailureClassCounts(evidence.failure_class_summary_regression_not_deliverable_counts)
     || evidence.live_smoke_run !== false
     || evidence.production_write_allowed !== false
     || evidence.generated_artifacts_committable !== false
@@ -1534,6 +1553,11 @@ function isCountMap(value) {
     && typeof value === 'object'
     && !Array.isArray(value)
     && Object.values(value).every((count) => Number.isInteger(count) && count >= 0);
+}
+
+function hasRequiredFailureClassCounts(counts) {
+  return isCountMap(counts)
+    && REQUIRED_NOT_DELIVERABLE_FAILURE_CLASSES.every((failureClass) => counts[failureClass] === 1);
 }
 
 function writeReport(outputDir, report, pretty) {

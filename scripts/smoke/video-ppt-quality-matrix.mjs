@@ -452,6 +452,7 @@ function failureClassForQualityReview(summary, riskFlags) {
 }
 
 function buildSelfTestReport() {
+  const failureClassSummaryRegression = buildFailureClassSummaryRegression();
   const report = buildQualityMatrixReport({
     status: 'partial_local_self_test_ready',
     selfTest: true,
@@ -468,6 +469,14 @@ function buildSelfTestReport() {
       not_deliverable_failure_classes: NOT_DELIVERABLE_FAILURE_CLASSES,
       not_deliverable_failure_class_count: NOT_DELIVERABLE_FAILURE_CLASSES.length,
       failure_class_summary_supported: true,
+      failure_class_summary_regression_not_deliverable_count:
+        failureClassSummaryRegression.not_deliverable_count,
+      failure_class_summary_regression_class_count:
+        Object.keys(failureClassSummaryRegression.failure_class_counts).length,
+      failure_class_summary_regression_counts:
+        failureClassSummaryRegression.failure_class_counts,
+      failure_class_summary_regression_not_deliverable_counts:
+        failureClassSummaryRegression.not_deliverable_failure_class_counts,
     },
     nextActions: [
       'run synthetic PPT playback extraction and attach real target/ report when available',
@@ -478,7 +487,7 @@ function buildSelfTestReport() {
   validateSelfTestReport(report);
   validateExplicitReviewRiskRegression();
   validateNotDeliverableFailureRegression();
-  validateFailureClassSummaryRegression();
+  validateFailureClassSummaryRegression(failureClassSummaryRegression);
   return report;
 }
 
@@ -637,7 +646,7 @@ function buildNotDeliverableRegressionCases() {
   ];
 }
 
-function validateFailureClassSummaryRegression() {
+function buildFailureClassSummaryRegression() {
   const cases = buildNotDeliverableRegressionCases().map((testCase) => {
     const evaluation = evaluateCase(testCase);
     return {
@@ -646,7 +655,10 @@ function validateFailureClassSummaryRegression() {
       expectation_matched: evaluation.verdict === testCase.expected_verdict,
     };
   });
-  const summary = summarizeCases(cases);
+  return summarizeCases(cases);
+}
+
+function validateFailureClassSummaryRegression(summary) {
   if (summary.not_deliverable_count !== NOT_DELIVERABLE_FAILURE_CLASSES.length) {
     throw new Error('quality matrix failure class summary not-deliverable count mismatch');
   }
@@ -890,9 +902,20 @@ function validateSelfTestReport(report) {
     || !report.gates.not_deliverable_failure_classes.includes('artifact_visibility')
     || !report.gates.not_deliverable_failure_classes.includes('selection_quality')
     || report.gates.failure_class_summary_supported !== true
+    || report.gates.failure_class_summary_regression_not_deliverable_count !== NOT_DELIVERABLE_FAILURE_CLASSES.length
+    || report.gates.failure_class_summary_regression_class_count !== NOT_DELIVERABLE_FAILURE_CLASSES.length
+    || !hasRequiredFailureClassCounts(report.gates.failure_class_summary_regression_counts)
+    || !hasRequiredFailureClassCounts(report.gates.failure_class_summary_regression_not_deliverable_counts)
   ) {
     throw new Error('self-test report must expose the not-deliverable failure taxonomy gate');
   }
+}
+
+function hasRequiredFailureClassCounts(counts) {
+  return counts
+    && typeof counts === 'object'
+    && !Array.isArray(counts)
+    && NOT_DELIVERABLE_FAILURE_CLASSES.every((failureClass) => counts[failureClass] === 1);
 }
 
 function validateQualityMatrixReport(report) {
