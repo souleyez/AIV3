@@ -273,6 +273,12 @@ function extractCommandEvidence(commandId, stdout) {
   if (commandId === 'authorized_capture_self_test') {
     return extractAuthorizedCaptureSelfTestEvidence(stdout);
   }
+  if (commandId === 'scope_planner_tests') {
+    return extractScopePlannerTestsEvidence(stdout);
+  }
+  if (commandId === 'assistant_runtime_video_ppt_scope_tests') {
+    return extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout);
+  }
   if (commandId !== 'quality_matrix_self_test') {
     return null;
   }
@@ -461,6 +467,58 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
   };
 }
 
+function extractScopePlannerTestsEvidence(stdout) {
+  return {
+    schema: 'v3.scope_planner_video_ppt_rollup_evidence.v1',
+    test_count: parseTapSummaryCount(stdout, 'tests'),
+    pass_count: parseTapSummaryCount(stdout, 'pass'),
+    fail_count: parseTapSummaryCount(stdout, 'fail'),
+    cancelled_count: parseTapSummaryCount(stdout, 'cancelled'),
+    skipped_count: parseTapSummaryCount(stdout, 'skipped'),
+    todo_count: parseTapSummaryCount(stdout, 'todo'),
+    direct_video_ppt_positive_covered:
+      stdout.includes('scope planner recommends direct video PPT extraction without forcing dataset retrieval'),
+    public_video_page_positive_covered:
+      stdout.includes('scope planner recommends public video page resolution before PPT extraction'),
+    uploaded_video_positive_covered:
+      stdout.includes('scope planner recommends uploaded video extraction without public URL resolution'),
+    mkv_avi_positive_covered:
+      stdout.includes('scope planner treats mkv and avi video names as PPT extraction triggers'),
+    transcript_only_negative_covered:
+      stdout.includes('scope planner does not use PPT extraction for transcript-only video requests'),
+    shared_negative_fixture_covered:
+      stdout.includes('scope planner rejects shared negative video PPT trigger fixture'),
+    shared_positive_fixture_covered:
+      stdout.includes('scope planner follows shared positive video PPT trigger fixture'),
+  };
+}
+
+function extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout) {
+  const runningMatch = stdout.match(/\brunning\s+(\d+)\s+tests?\b/);
+  const resultMatch = stdout.match(/\btest result:\s+ok\.\s+(\d+)\s+passed;\s+(\d+)\s+failed;\s+(\d+)\s+ignored;\s+(\d+)\s+measured;\s+(\d+)\s+filtered out\b/);
+  return {
+    schema: 'v3.assistant_runtime_video_ppt_scope_rollup_evidence.v1',
+    test_count: runningMatch ? Number.parseInt(runningMatch[1], 10) : null,
+    pass_count: resultMatch ? Number.parseInt(resultMatch[1], 10) : null,
+    fail_count: resultMatch ? Number.parseInt(resultMatch[2], 10) : null,
+    ignored_count: resultMatch ? Number.parseInt(resultMatch[3], 10) : null,
+    measured_count: resultMatch ? Number.parseInt(resultMatch[4], 10) : null,
+    filtered_out_count: resultMatch ? Number.parseInt(resultMatch[5], 10) : null,
+    transcript_only_negative_covered:
+      stdout.includes('transcript_only_video_request_does_not_trigger_video_ppt_scope'),
+    shared_negative_fixture_covered:
+      stdout.includes('video_ppt_scope_rejects_shared_negative_trigger_fixture'),
+    shared_positive_fixture_covered:
+      stdout.includes('video_ppt_scope_follows_shared_positive_trigger_fixture'),
+  };
+}
+
+function parseTapSummaryCount(stdout, key) {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = stdout.match(new RegExp(`^# ${escapedKey} (\\d+)`, 'm'));
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
 function readJsonReportFromStdout(stdout) {
   const reportPath = extractReportPathFromStdout(stdout);
   if (!reportPath) {
@@ -596,9 +654,53 @@ function validateReport(report) {
   validateExternalVideoPptEvidence(report);
   validateVideoPptHandoffEvidence(report);
   validateAuthorizedCaptureEvidence(report);
+  validateProductionTriggerEvidence(report);
   const serialized = JSON.stringify(report);
   if (serialized.match(/[A-Za-z]:[\\/]|[\\/]Users[\\/]|[\\/]home[\\/]|https?:\/\/|token=|cookie=|bearer=/i)) {
     throw new Error('no-live rollup report contains unredacted local path, URL, or token-like text');
+  }
+}
+
+function validateProductionTriggerEvidence(report) {
+  const scopePlannerCommand = report.commands.find((result) => result.id === 'scope_planner_tests');
+  if (scopePlannerCommand?.status === 'passed') {
+    const evidence = scopePlannerCommand.evidence;
+    if (
+      !evidence
+      || evidence.schema !== 'v3.scope_planner_video_ppt_rollup_evidence.v1'
+      || evidence.test_count < 21
+      || evidence.pass_count !== evidence.test_count
+      || evidence.fail_count !== 0
+      || evidence.cancelled_count !== 0
+      || evidence.direct_video_ppt_positive_covered !== true
+      || evidence.public_video_page_positive_covered !== true
+      || evidence.uploaded_video_positive_covered !== true
+      || evidence.mkv_avi_positive_covered !== true
+      || evidence.transcript_only_negative_covered !== true
+      || evidence.shared_negative_fixture_covered !== true
+      || evidence.shared_positive_fixture_covered !== true
+    ) {
+      throw new Error('no-live rollup scope planner production trigger evidence is incomplete');
+    }
+  }
+
+  const assistantRuntimeCommand = report.commands.find((result) => (
+    result.id === 'assistant_runtime_video_ppt_scope_tests'
+  ));
+  if (assistantRuntimeCommand?.status === 'passed') {
+    const evidence = assistantRuntimeCommand.evidence;
+    if (
+      !evidence
+      || evidence.schema !== 'v3.assistant_runtime_video_ppt_scope_rollup_evidence.v1'
+      || evidence.test_count < 3
+      || evidence.pass_count !== evidence.test_count
+      || evidence.fail_count !== 0
+      || evidence.transcript_only_negative_covered !== true
+      || evidence.shared_negative_fixture_covered !== true
+      || evidence.shared_positive_fixture_covered !== true
+    ) {
+      throw new Error('no-live rollup assistant-runtime production trigger evidence is incomplete');
+    }
   }
 }
 

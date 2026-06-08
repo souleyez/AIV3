@@ -4812,3 +4812,63 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 No-Live Rollup Production Trigger Evidence
+
+Task source: M6AI follow-up after M6AH added production trigger tests to the one-command no-live rollup. The rollup executed the front-end and Rust production trigger tests, but the top-level report still only showed command status. This slice copies a narrow, redacted summary of the test counts and critical positive/negative coverage points into the rollup evidence.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, service deployment, or 8/120 server access;
+- read only stdout from the local scope planner and assistant-runtime production trigger tests;
+- copy only counts and boolean coverage fields into the no-live report;
+- do not store raw test stdout, prompt text bodies, local paths, source URLs, credentials, provider payloads, generated artifacts, or customer data in the report.
+
+Implemented behavior:
+
+- no-live rollup extracts `v3.scope_planner_video_ppt_rollup_evidence.v1` from the front-end TAP output;
+- scope planner evidence records total/pass/fail/cancelled/skipped/todo counts and booleans for direct video, public page video, uploaded video, mkv/avi video, transcript-only negative, shared negative fixture, and shared positive fixture coverage;
+- no-live rollup extracts `v3.assistant_runtime_video_ppt_scope_rollup_evidence.v1` from the Rust test output;
+- assistant-runtime evidence records total/pass/fail/ignored/measured/filtered counts and booleans for transcript-only negative, shared negative fixture, and shared positive fixture coverage;
+- rollup validation now fails if either production trigger evidence block is missing or incomplete.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted production trigger evidence readback>"
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=21`, `passed_count=21`, and `failed_count=0`;
+- scope planner evidence recorded `test_count=21`, `pass_count=21`, `fail_count=0`, `cancelled_count=0`, `skipped_count=0`, and `todo_count=0`;
+- scope planner evidence recorded direct video, public video page, uploaded video, mkv/avi, transcript-only negative, shared negative fixture, and shared positive fixture coverage as `true`;
+- assistant-runtime evidence recorded `test_count=3`, `pass_count=3`, `fail_count=0`, `ignored_count=0`, `measured_count=0`, and `filtered_out_count=31`;
+- assistant-runtime evidence recorded transcript-only negative, shared negative fixture, and shared positive fixture coverage as `true`;
+- the existing upload-main, external-video-ppt, handoff, authorized-capture, and quality-matrix evidence schemas remained present in the same report;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval values, or raw self-test operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- M6AI only makes the no-live production trigger evidence copyable and self-validating.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
