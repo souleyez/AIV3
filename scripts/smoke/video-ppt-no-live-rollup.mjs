@@ -74,6 +74,28 @@ const COMMANDS = [
     args: ['scripts/capture-authorized-video.mjs', '--self-test'],
   },
   {
+    id: 'authorized_capture_dry_run',
+    description: 'authorized capture dry-run handoff planning without browser or FFmpeg',
+    command: process.execPath,
+    args: [
+      'scripts/capture-authorized-video.mjs',
+      '--dry-run',
+      '--ack-authorized',
+      '--duration-seconds',
+      '30',
+      '--handoff',
+      'upload-main',
+      '--output-dir',
+      'target/video-ppt-no-live-rollup-authorized-capture-dry-run',
+    ],
+    env: {
+      AUTHORIZED_CAPTURE_APPROVAL_ID: ['dry-run', 'approval', 'redacted'].join('-'),
+      AUTHORIZED_CAPTURE_APPROVED_BY: ['dry-run', 'operator', 'redacted'].join('-'),
+      AUTHORIZED_CAPTURE_URL: ['https:', '', 'example.com', 'authorized-video-page'].join('/'),
+      AUTHORIZED_CAPTURE_PURPOSE: 'video-ppt-authorized-capture-dry-run',
+    },
+  },
+  {
     id: 'quality_matrix_syntax',
     description: 'quality matrix syntax check',
     command: process.execPath,
@@ -181,6 +203,7 @@ Checks:
   - runs third-party video PPT self-test and preflight without network calls
   - runs login-gated video handoff self-test and preflight without network calls
   - runs authorized-capture self-test without opening a browser or FFmpeg
+  - runs authorized-capture dry-run handoff planning without opening a browser or FFmpeg
   - runs quality matrix self-test, including review-risk regression
   - runs front-end scope planner syntax/tests for video PPT trigger boundaries
   - runs Rust assistant-runtime video PPT scope tests
@@ -235,6 +258,7 @@ function runCommand(command) {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      ...(command.env || {}),
       NO_COLOR: '1',
     },
     encoding: 'utf8',
@@ -281,6 +305,9 @@ function extractCommandEvidence(commandId, stdout) {
   }
   if (commandId === 'authorized_capture_self_test') {
     return extractAuthorizedCaptureSelfTestEvidence(stdout);
+  }
+  if (commandId === 'authorized_capture_dry_run') {
+    return extractAuthorizedCaptureDryRunEvidence(stdout);
   }
   if (commandId === 'scope_planner_tests') {
     return extractScopePlannerTestsEvidence(stdout);
@@ -585,6 +612,55 @@ function extractAuthorizedCaptureSelfTestEvidence(stdout) {
   };
 }
 
+function extractAuthorizedCaptureDryRunEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  const receipt = report.sharedReceipt || {};
+  return {
+    schema: 'v3.authorized_capture_dry_run_rollup_evidence.v1',
+    ok: report.summary?.ok,
+    mode: report.summary?.mode,
+    source_scheme: report.summary?.source?.scheme,
+    source_host_present: typeof report.summary?.source?.host === 'string'
+      && report.summary.source.host.length > 0,
+    duration_seconds: report.summary?.durationSeconds,
+    retention_days: report.summary?.retentionDays,
+    capture_audio_allowed: report.summary?.captureAudioAllowed,
+    handoff: report.summary?.handoff,
+    approval_reference_present: receipt.approvalReferencePresent,
+    approval_id_redacted: receipt.approvalIdRedacted,
+    approved_by_reference_present: receipt.approvedByReferencePresent,
+    approved_by_redacted: receipt.approvedByRedacted,
+    purpose_present: receipt.purposePresent,
+    shared_receipt_source_scheme: receipt.source?.scheme,
+    shared_receipt_source_host_present: typeof receipt.source?.host === 'string'
+      && receipt.source.host.length > 0,
+    output_file_name: receipt.output?.fileName,
+    local_path_redacted: receipt.output?.localPathRedacted,
+    profile_path_redacted: receipt.output?.profilePathRedacted,
+    handoff_mode: receipt.output?.handoffMode,
+    capture_mode_present: typeof receipt.captureMode === 'string' && receipt.captureMode.length > 0,
+    capture_attempted: report.capture?.attempted,
+    dry_run: report.capture?.dryRun,
+    browser_would_run: report.capture?.browserWouldRun,
+    ffmpeg_would_run: report.capture?.ffmpegWouldRun,
+    ack_authorized: report.safety?.ackAuthorized,
+    isolated_browser_profile: report.safety?.isolatedBrowserProfile,
+    persistent_profile_disabled: report.safety?.persistentProfileDisabled,
+    raw_url_stored: report.safety?.rawUrlStored,
+    cookies_stored: report.safety?.cookiesStored,
+    har_stored: report.safety?.harStored,
+    qr_screenshot_stored: report.safety?.qrScreenshotStored,
+    approval_values_included: receipt.redactionFlags?.approvalValuesIncluded,
+    raw_source_url_included: receipt.redactionFlags?.rawSourceUrlIncluded,
+    local_paths_included: receipt.redactionFlags?.localPathsIncluded,
+    credentials_included: receipt.redactionFlags?.credentialsIncluded,
+    provider_payloads_included: receipt.redactionFlags?.providerPayloadsIncluded,
+  };
+}
+
 function extractQualityMatrixSelfTestEvidence(stdout) {
   const report = readJsonReportFromStdout(stdout);
   if (!report) {
@@ -796,6 +872,7 @@ function validateReport(report) {
   validateVideoPptHandoffEvidence(report);
   validateVideoPptHandoffPreflightEvidence(report);
   validateAuthorizedCaptureEvidence(report);
+  validateAuthorizedCaptureDryRunEvidence(report);
   validateProductionTriggerEvidence(report);
   const serialized = JSON.stringify(report);
   if (serialized.match(/[A-Za-z]:[\\/]|[\\/]Users[\\/]|[\\/]home[\\/]|https?:\/\/|token=|cookie=|bearer=/i)) {
@@ -1077,6 +1154,56 @@ function validateAuthorizedCaptureEvidence(report) {
     || evidence.provider_payloads_included !== false
   ) {
     throw new Error('no-live rollup authorized-capture evidence is incomplete');
+  }
+}
+
+function validateAuthorizedCaptureDryRunEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'authorized_capture_dry_run');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.authorized_capture_dry_run_rollup_evidence.v1'
+    || evidence.ok !== true
+    || evidence.mode !== 'dry-run'
+    || evidence.source_scheme !== 'https'
+    || evidence.source_host_present !== true
+    || evidence.duration_seconds !== 30
+    || evidence.retention_days !== 7
+    || evidence.capture_audio_allowed !== false
+    || evidence.handoff !== 'upload-main'
+    || evidence.approval_reference_present !== true
+    || evidence.approval_id_redacted !== true
+    || evidence.approved_by_reference_present !== true
+    || evidence.approved_by_redacted !== true
+    || evidence.purpose_present !== true
+    || evidence.shared_receipt_source_scheme !== 'https'
+    || evidence.shared_receipt_source_host_present !== true
+    || evidence.output_file_name !== 'authorized-capture.mp4'
+    || evidence.local_path_redacted !== true
+    || evidence.profile_path_redacted !== true
+    || evidence.handoff_mode !== 'upload-main'
+    || evidence.capture_mode_present !== true
+    || evidence.capture_attempted !== false
+    || evidence.dry_run !== true
+    || evidence.browser_would_run !== true
+    || evidence.ffmpeg_would_run !== true
+    || evidence.ack_authorized !== true
+    || evidence.isolated_browser_profile !== true
+    || evidence.persistent_profile_disabled !== true
+    || evidence.raw_url_stored !== false
+    || evidence.cookies_stored !== false
+    || evidence.har_stored !== false
+    || evidence.qr_screenshot_stored !== false
+    || evidence.approval_values_included !== false
+    || evidence.raw_source_url_included !== false
+    || evidence.local_paths_included !== false
+    || evidence.credentials_included !== false
+    || evidence.provider_payloads_included !== false
+  ) {
+    throw new Error('no-live rollup authorized-capture dry-run evidence is incomplete');
   }
 }
 

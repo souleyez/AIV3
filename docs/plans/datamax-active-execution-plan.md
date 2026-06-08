@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 14:28 CST
-**当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit 和 M6AJ 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准。入口是第 0.7 节，尤其是第 0.7.13-0.7.18 节的全量验收闭环、当前 HEAD 审计、下一轮任务卡、M6AB plan-only 收口、M6AJ no-live preflight evidence 和当前完整可执行方案；M6AC 把 quality matrix 的 review-required risk flag gate 扩展到真实 `slide_quality_report.risk_flags` 对象数组形态，M6AD-M6AJ 则把 quality matrix、主站上传、第三方登记、视频号/登录态 handoff、授权录屏 self-test、生产触发边界、生产触发 evidence 和三类 live preflight evidence 纳入 no-live rollup 总报告。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 11:27 CST
+**当前性质：** 开发执行版；当前功能基线以已推送 GitHub 的最新 commit 和 M6AK 切片共同标注，实际代码落点以 `git log -1`、`git status` 和推送记录为准。入口是第 0.7 节，尤其是第 0.7.13-0.7.18 节的全量验收闭环、当前 HEAD 审计、下一轮任务卡、M6AB plan-only 收口、M6AJ no-live preflight evidence、M6AK 授权录屏 dry-run evidence 和当前完整可执行方案；M6AC 把 quality matrix 的 review-required risk flag gate 扩展到真实 `slide_quality_report.risk_flags` 对象数组形态，M6AD-M6AK 则把 quality matrix、主站上传、第三方登记、视频号/登录态 handoff、授权录屏 self-test、授权录屏 dry-run handoff planning、生产触发边界、生产触发 evidence 和三类 live preflight evidence 纳入 no-live rollup 总报告。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
@@ -9,7 +9,7 @@
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；self-test 已补授权负向用例和可复制的脱敏 `sharedReceipt`；没有执行 live capture，没有接入 8 服务器生产服务。
 - P2-2A/B/C/D/F 的本地质量切片已完成：质量报告、bright-canvas detector、讲师小窗/外部前景 crop、全屏内容页 `full_frame_content_v1` detector、暗色/亮色/纯色低信息过滤、短动画转场过滤、OCR evidence 经 redaction 后进入 notes/Markdown/PPTX speaker notes、缺 OCR evidence 的低严重度风险提示、清晰度/可读性风险提示、readability-aware sparse-edge 标题页分流均有本地验证。
 - P2-2E 三样例质量矩阵 self-test scaffold、本地 `generated_artifacts/` 输入适配、public-course deliverables 分类入口、customer-authorized deliverables 输入入口和三输入组合矩阵已完成；quality matrix 可用 `--synthetic-deliverables <path>` 复核合成类本地产物，用 `--public-course-deliverables <path>` 把匿名公开视频样例归到 `public_course_video`，也可在获得明确授权后用 `--customer-deliverables <path> --customer-approval-id <approval_id>` 复核客户/operator 授权样例；三类输入同时提供时可生成 `matrix_complete=true` 的完整三类报告，approval id 不写入报告。
-- 当前无授权离线验收 rollup 已固化为 `npm run smoke:video-ppt-no-live-rollup -- --self-test`，并已包含 live 前置检查：主站上传 preflight/self-test、第三方视频 PPT preflight/self-test、视频号/登录态 handoff preflight/self-test、授权录屏 helper self-test、质量矩阵 self-test、前端 scope planner syntax/tests、Rust assistant-runtime video PPT scope tests、Rust format check、media-worker lib tests、offline smoke binary check 和 video deliverables validator 均通过；最新 rollup 为 21 个命令全部通过，并直接嵌入三类 live preflight evidence、scope planner 21/21 和 assistant-runtime 3/3 的生产触发 evidence；最新 media-worker lib suite 为 56 项，最新 validator 单测为 27 项，新增 PPTX speaker notes XML 脱敏、selected manifest schema/发布边界、PPTX/Markdown/selected_count 页数一致性、summary counts、shared JSON 脱敏和 readability 可选字段校验用例；这不替代 live smoke、8 服务器部署验收或客户授权样例。
+- 当前无授权离线验收 rollup 已固化为 `npm run smoke:video-ppt-no-live-rollup -- --self-test`，并已包含 live 前置检查：主站上传 preflight/self-test、第三方视频 PPT preflight/self-test、视频号/登录态 handoff preflight/self-test、授权录屏 helper self-test、授权录屏 dry-run handoff planning、质量矩阵 self-test、前端 scope planner syntax/tests、Rust assistant-runtime video PPT scope tests、Rust format check、media-worker lib tests、offline smoke binary check 和 video deliverables validator 均通过；最新 rollup 为 22 个命令全部通过，并直接嵌入三类 live preflight evidence、授权录屏 dry-run evidence、scope planner 21/21 和 assistant-runtime 3/3 的生产触发 evidence；最新 media-worker lib suite 为 56 项，最新 validator 单测为 27 项，新增 PPTX speaker notes XML 脱敏、selected manifest schema/发布边界、PPTX/Markdown/selected_count 页数一致性、summary counts、shared JSON 脱敏和 readability 可选字段校验用例；这不替代 live smoke、8 服务器部署验收或客户授权样例。
 - S1 公开视频 slides/presentation 候选访问和画面探测已完成；S2A 已完成 public manifest redaction 修复和复跑：公开视频候选生成 `final_pptx_ready`、96 帧、PPTX、`video_slides.md`、notes 和 `slide_quality_report.json`，`validate-video-deliverables` 已通过。S2B 已补 `--public-course-deliverables` 分类入口，quality matrix 现在把该样例归到 `public_course_video`；selected manifest 语义已修正为 `requested_selected_candidate_indices` 记录去重前请求，`selected_candidate_indices` 记录最终入选页；32x32 visual signature + changed-sample guard 已让 public candidate 从 5 页提升到 7 页，覆盖更多 build 内容；best-sharpness 代表帧选择把质量分提升到 61、sharpness high 页从 4 降到 3；visual-shape duplicate 已补保守去重路径和回归，shape-dedupe 复跑仍为 9 requested、7 selected、2 visual near duplicates、0 shape duplicates；`full_frame_content_v1` 和 readability-aware 分流后，当前 public candidate 为 7 页、quality score 70、sharpness/readability high 均为 0，但仍因缺 transcript/OCR 和 manual review risk 判 `needs_manual_review`。第二/第三 public probe 证明额外匿名 slides 视频可跑通交付契约，其中 `Layered Nix Stores` 暴露并修复了白底模板 build 被 shape duplicate 误删的问题，修复后为 4 requested、3 selected、0 shape duplicates、quality score 68。当前 public 类样例可作为真实公开视频回执，但质量结论仍是需人工复核，不是无条件可交付。
 - EP6 单页输出风险提示已完成：弱 public probe `Nix in Space` 复跑仍是 20 帧、1 页、`final_pptx_ready`，validator 通过；质量报告新增 `single_slide_output=true` 和 `single_slide_output_review_required`，public-course matrix 仍判 `needs_manual_review`。
 - deliverables validator 已补 `slide_quality_report.risk_flags` 结构校验：risk flag 必须有有效 `code`、`severity`、`count` 和 `review_action`；`single_slide_output=true` 必须与 `single_slide_output_review_required` 风险一致。
@@ -35,6 +35,7 @@
 - M6AH 已完成本地切片：`smoke:video-ppt-no-live-rollup` 已从 18 命令扩展到 21 命令，新增前端 `scope-planner` syntax/test 和 Rust `assistant-runtime` video PPT scope tests，把生产触发边界也纳入一键无授权基线；普通视频转 PPT、介绍视频 PPT、transcript-only 和无视频上下文的 `Extract slides from the document` 继续被拒绝。
 - M6AI 已完成本地切片：no-live rollup 现在从前端 scope planner TAP 输出和 Rust assistant-runtime test 输出中提取生产触发 evidence，并强制校验 direct/public/uploaded/mkv/avi 正向覆盖、transcript-only 负向覆盖、shared positive/negative fixture 覆盖和 21/21、3/3 计数，避免只看命令通过而缺少可复制证据。
 - M6AJ 已完成本地切片：no-live rollup 现在从主站上传、第三方视频 PPT 和视频号/登录态 handoff 三个 preflight 子报告提取脱敏 evidence，并强制校验 live 写入/部署需要授权、没有网络/上传/事件/抽帧/OCR/PPT/下载动作、fixture/trigger/handoff 形态正确且 redaction flags 全为安全值。
+- M6AK 已完成本地切片：no-live rollup 新增 `authorized_capture_dry_run` 命令，从授权录屏 helper 的 dry-run 报告中只复制 `sharedReceipt` 和安全布尔值，强制校验 `handoff=upload-main`、30 秒、保留期 7 天、无音频、未打开浏览器、未运行 FFmpeg、未保存 cookie/HAR/QR、未复制 raw URL/本地路径/approval 原文/provider payload；总报告新增 `v3.authorized_capture_dry_run_rollup_evidence.v1`，no-live rollup 22/22 通过。
 - 当前收版隔离口径：GitHub 最新已推送 HEAD 仍以 `git log -1` 为准；若只执行 EP0/doc-only 计划同步，不得 stage `scripts/smoke/video-ppt-no-live-rollup.mjs` 等功能脚本改动。若要同步 no-live rollup 代码切片，必须按第 0.7.17 的代码路径单独跑 gate、单独提交，仍不部署 8 服务器。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
 - live 上传/第三方回执仍待授权或凭据，P1-3D live pass 待部署后复跑，P2-1 live 授权样例未执行，P2-2E customer 质量矩阵仍待授权。本轮未部署 8 服务器。
@@ -944,12 +945,12 @@ Safety:
 
 #### 0.7.14 2026-06-08 当前 HEAD 验收审计
 
-本节是截至已推送 GitHub 最新 commit 加本节新增 M6AI 切片的收口审计，实际代码落点以 `git log -1`、`git status` 和推送记录为准。后续若只有 doc-only commit，功能基线仍以最近一次已验证功能切片为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
+本节是截至已推送 GitHub 最新 commit 加本节新增 M6AK 切片的收口审计，实际代码落点以 `git log -1`、`git status` 和推送记录为准。后续若只有 doc-only commit，功能基线仍以最近一次已验证功能切片为准；若再改功能或脚本，必须重新跑对应 gate 并更新本节。
 
 | 审计项 | 当前证据 | 是否可宣称完成 | 下一步 |
 | --- | --- | --- | --- |
 | 计划整合 | 本文件是 `docs/plans/` 下唯一 active plan；第 0.7 节已把原计划、视频测试、抽取效果复核、微信视频号限制、授权录屏兜底、GitHub 同步和 8 服务器部署门槛收进 EP0-EP7 | 可宣称“计划已收口为可执行方案” | 同步桌面副本，doc-only 提交 GitHub |
-| 无授权本地准备度 | `No-Auth Live-Preflight Acceptance Rollup` 已通过；M6AD-M6AJ 后总报告会嵌入 upload-main、external-video-ppt、handoff、authorized-capture、quality matrix、scope planner、assistant-runtime 和三类 preflight 脱敏 evidence，并额外执行前端 scope planner 和 Rust assistant-runtime 生产触发边界测试；当前记录 21/21 命令、scope planner 21/21、assistant-runtime 3/3、三类 preflight evidence、触发语 shared fixture、视频扩展支持、最小 PPTX/Markdown 下载校验、8 类 review-required risk flags、对象形态 gate、登录态 handoff 三选项、授权录屏门禁、生产触发边界和 no-live safety gates；validator 已扩展到 27 项，覆盖 PPTX notes XML 脱敏、selected manifest、PPTX/Markdown/selected_count 页数一致性、summary counts 和 shared JSON 脱敏 | 可宣称“无授权本地 gate 已过，且总报告包含关键入口/触发/质量/handoff/capture/preflight/生产触发边界 gate 证据” | 作为 live 前基线保留；不替代 live/customer/deployment gates |
+| 无授权本地准备度 | `No-Auth Live-Preflight Acceptance Rollup` 已通过；M6AD-M6AK 后总报告会嵌入 upload-main、external-video-ppt、handoff、authorized-capture、authorized-capture dry-run、quality matrix、scope planner、assistant-runtime 和三类 preflight 脱敏 evidence，并额外执行前端 scope planner 和 Rust assistant-runtime 生产触发边界测试；当前记录 22/22 命令、scope planner 21/21、assistant-runtime 3/3、三类 preflight evidence、授权录屏 dry-run handoff evidence、触发语 shared fixture、视频扩展支持、最小 PPTX/Markdown 下载校验、8 类 review-required risk flags、对象形态 gate、登录态 handoff 三选项、授权录屏门禁、生产触发边界和 no-live safety gates；validator 已扩展到 27 项，覆盖 PPTX notes XML 脱敏、selected manifest、PPTX/Markdown/selected_count 页数一致性、summary counts 和 shared JSON 脱敏 | 可宣称“无授权本地 gate 已过，且总报告包含关键入口/触发/质量/handoff/capture/preflight/生产触发边界 gate 证据” | 作为 live 前基线保留；不替代 live/customer/deployment gates |
 | 主站上传入口 | preflight 和 self-test 证明脚本、素材类型、触发语、写入范围、artifact/download contract 已就绪 | 不可宣称 live 上传入口已验收 | 需要用户批准写一条非客户主站 smoke 记录，然后同 fixture preflight -> live |
 | 第三方登记入口 | preflight 和 self-test 证明第三方 context/fixture/trigger shape、reply surface、最小 PPTX/Markdown contract 已就绪 | 不可宣称第三方 live 已验收 | 需要 bearer、`connection_id`、`source_id`、安全输入，然后同 context preflight -> live |
 | 微信视频号/登录态 handoff | 本地 deterministic early return、third-party unsupported card、handoff self-test/preflight 均已就绪 | 不可宣称现网 handoff 已验收 | 需要批准 8 服务器部署窗口，部署后 main preflight -> live；external 还需 bearer/context |
@@ -1122,7 +1123,7 @@ M6AB 输入源对照：
 
 | 里程碑 | 前置条件 | 执行动作 | 关闭证据 | 停止条件 |
 | --- | --- | --- | --- | --- |
-| M7 无授权基线守护 | 没有 live/部署/客户授权 | 跑 no-live rollup、定向测试、public evidence 复核、文档台账 | 21/21 rollup 或对应定向 gate 通过；无 `target/` tracked | 需要 live 才能继续时立即停止并请求授权 |
+| M7 无授权基线守护 | 没有 live/部署/客户授权 | 跑 no-live rollup、定向测试、public evidence 复核、文档台账 | 22/22 rollup 或对应定向 gate 通过；无 `target/` tracked | 需要 live 才能继续时立即停止并请求授权 |
 | M8 主站上传入口验收 | 用户批准写一条非客户 smoke 记录 | EP2 同 fixture preflight -> live 上传 -> 下载/validator/quality matrix | 上传、document、ingest、assistant run、artifact、PPTX/Markdown/manifests 脱敏回执 | 上传或 artifact 失败时只记录分流，不扩大到客户数据 |
 | M9 第三方入口验收 | bearer、`connection_id`、`source_id`、安全输入齐全 | EP3 preflight -> live 登记视频 -> special-trigger 抽取 | 素材登记和“提取视频里的 PPT”触发分别有回执；surface/download 状态明确 | bearer/context 缺失或 surface 不可见时停止，不打印凭据 |
 | M10 视频号/登录态现网 handoff | 用户批准 8 服务器部署窗口 | EP7 部署已验证 commit -> EP4 main/external handoff live | `login_gated_video_source_not_supported` 三选项；服务 active；回滚点明确 | 未批准部署或现网版本未更新时不跑 live |
@@ -1261,8 +1262,8 @@ M6AF 提交前必须确认：
 
 | 项 | 当前结论 | 可对外说法 | 不能说的内容 |
 | --- | --- | --- | --- |
-| GitHub 基线 | 最新已推送 HEAD 以 `git log -1` 为准；当前记录到 M6AJ | 已有 no-live 基线和 live preflight evidence | 不能把 no-live/preflight 说成 live 通过 |
-| no-live rollup | `smoke:video-ppt-no-live-rollup -- --self-test` 已收敛为 21 个无授权命令 | 可证明上传、第三方、handoff、capture self-test、quality matrix、生产触发边界、preflight 门禁在本地一键回归 | 不能替代主站 live、第三方 live、8 部署、客户样例 |
+| GitHub 基线 | 最新已推送 HEAD 以 `git log -1` 为准；当前记录到 M6AK | 已有 no-live 基线、live preflight evidence 和授权录屏 dry-run handoff evidence | 不能把 no-live/preflight/dry-run 说成 live 通过 |
+| no-live rollup | `smoke:video-ppt-no-live-rollup -- --self-test` 已收敛为 22 个无授权命令 | 可证明上传、第三方、handoff、capture self-test、capture dry-run、quality matrix、生产触发边界、preflight 门禁在本地一键回归 | 不能替代主站 live、第三方 live、8 部署、客户样例 |
 | 触发边界 | 共享 fixture 覆盖“提取视频中的 PPT/幻灯片/课件”正向和“普通视频生成 PPT/介绍视频/只提字幕”负向 | 视频 PPT 是特殊触发，只抽取视频里已播放的课件画面 | 不能承诺把普通视频创作为可编辑 PPT |
 | 支持文件形态 | `.mp4`、`.mov`、`.m4v`、`.webm`、`.mkv`、`.avi` 可作为视频素材形态进入上传/登记/直链处理 | 支持用户上传视频或提供匿名直接视频 URL 后抽取截图型 PPTX/Markdown/notes/manifests | 不能承诺所有网页链接都能自动拿到视频文件 |
 | 公开视频样例 | public course 样例已能生成 deliverables 并通过 validator，质量矩阵判 `needs_manual_review` | 可作为真实公开视频回归样例 | 不能把 public 样例替代客户授权样例 |
@@ -1287,7 +1288,7 @@ M6AF 提交前必须确认：
 | 当前输入/授权 | 走哪条路径 | 第一条命令或动作 | 成功证据 | 停止条件 |
 | --- | --- | --- | --- | --- |
 | 只要继续整理计划 | P0 plan-only | 同步仓库计划和桌面副本 | `cmp` 一致、`git diff --check` 通过、doc-only commit 可选 | 发现脚本/业务代码混入 staged 时停止 |
-| 没有 live/客户/部署授权，但要继续本地推进 | P1 no-live baseline | `npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/<redacted>` | 21/21、evidence schema 完整、redaction scan 通过 | 需要 live 数据才能继续时停止 |
+| 没有 live/客户/部署授权，但要继续本地推进 | P1 no-live baseline | `npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/<redacted>` | 22/22、evidence schema 完整、redaction scan 通过 | 需要 live 数据才能继续时停止 |
 | 用户批准写一条非客户主站 smoke 记录 | P2 主站上传 live | 同 fixture 先跑 upload-main preflight | 上传/document/run/artifact/PPTX/Markdown/manifests 脱敏回执 | preflight 不通过、用户撤销写入授权、产物不可下载 |
 | operator 给 bearer/context/input | P3 第三方 live | 同 context 先跑 external preflight | 素材登记和“提取视频里的 PPT”触发分别有回执 | bearer/context 缺失、surface/download 不可见且无法分流 |
 | 输入是视频号/登录态链接 | P4 handoff | 先判断是否已部署；未部署只给 handoff 说明 | `login_gated_video_source_not_supported` 三选项 | 用户要求绕过登录、抓 cookie、私自录屏时停止 |
@@ -1356,15 +1357,16 @@ git ls-files target | wc -l
 - external-video-ppt self-test 和 preflight evidence。
 - handoff self-test 和 preflight evidence。
 - authorized-capture self-test evidence。
+- authorized-capture dry-run handoff planning evidence。
 - quality matrix self-test evidence。
 - scope planner production trigger evidence。
 - assistant-runtime video PPT trigger evidence。
 
-下一条无授权可做的增强切片：
+本轮已完成的无授权增强切片：
 
-- 新增 authorized-capture dry-run 子命令到 no-live rollup，用 `--dry-run --ack-authorized --handoff upload-main` 证明“operator 授权录屏申请 -> 脱敏 receipt -> 后续上传路径”的计划链路。
+- 已新增 authorized-capture dry-run 子命令到 no-live rollup，用 `--dry-run --ack-authorized --handoff upload-main` 证明“operator 授权录屏申请 -> 脱敏 receipt -> 后续上传路径”的计划链路。
 - 该切片只读本地 dry-run 报告，复制 `sharedReceipt` 和安全布尔值，不复制原始 URL、本地路径、approval 原文、profile 路径、handoff 命令原文。
-- 验收仍是 no-live 通过、redaction scan 通过、`target/` 不 tracked。
+- 验收结果是 no-live 22/22 通过、redaction scan 通过、`target/` 不 tracked。
 
 ##### 0.7.18.6 P2 主站上传视频 live controlled smoke
 
@@ -1606,8 +1608,8 @@ npm run smoke:video-ppt-quality-matrix -- \
 当前没有新增 live/客户/部署授权时：
 
 1. 走 P0：完成本节 plan-only 文档、桌面副本和 validation ledger 同步。
-2. 走 P1：下一轮可做 authorized-capture dry-run evidence 纳入 no-live rollup，仍不跑浏览器、不跑 FFmpeg、不部署。
-3. 继续本地 public/quality 窄修复，但不能把本地 fixture 当 live 验收。
+2. 走 P1：authorized-capture dry-run evidence 已纳入 no-live rollup，仍未跑浏览器、未跑 FFmpeg、未部署。
+3. 下一轮若仍无授权，可继续本地 public/quality 窄修复或补 no-live acceptance status summary，但不能把本地 fixture 当 live 验收。
 
 一旦用户给出授权：
 
@@ -3047,6 +3049,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M6AH | no-live rollup includes production trigger tests | 无 live 授权；只执行 no-live rollup self-test 和生产触发边界本地测试 | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`node --check apps/web/app/lib/scope-planner.js`、`node --test apps/web/app/lib/scope-planner.test.mjs`、`cargo test -p assistant-runtime video_ppt_scope --lib`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、report redaction scan、`git diff --check` | 已完成：no-live rollup 从 18 命令扩展到 21 命令，新增前端 scope planner syntax/tests 和 Rust assistant-runtime video PPT scope tests，生产与 smoke 触发边界同时纳入一键无授权基线 | 未部署 |
 | M6AI | no-live rollup embeds production trigger evidence | 无 live 授权；只执行 no-live rollup self-test 和生产触发 evidence 读回 | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、report evidence readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：no-live rollup 从前端 TAP 和 Rust test 输出提取 scope planner 21/21、assistant-runtime 3/3 以及 direct/public/uploaded/mkv/avi 正向、transcript-only 负向、shared positive/negative fixture 覆盖 evidence，并强制校验这些字段 | 未部署 |
 | M6AJ | no-live rollup embeds live preflight evidence | 无 live 授权；只执行 no-live rollup self-test 和 preflight evidence 读回 | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、preflight evidence readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：no-live rollup 从 upload-main、external-video-ppt 和 handoff preflight 子报告提取脱敏 evidence，并强制校验 live 写入/部署授权门禁、无网络/上传/事件/抽帧/OCR/PPT/下载动作、fixture/trigger/handoff 形态和 redaction flags | 未部署 |
+| M6AK | no-live rollup embeds authorized-capture dry-run evidence | 无 live 授权；只执行 no-live rollup self-test 和 dry-run evidence 读回 | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、dry-run evidence readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：no-live rollup 新增 `authorized_capture_dry_run` 命令并校验 `v3.authorized_capture_dry_run_rollup_evidence.v1`；总报告证明 dry-run 只生成脱敏 receipt/handoff 计划，未打开浏览器、未运行 FFmpeg、未保存 cookie/HAR/QR、未复制 raw URL/本地路径/approval 原文/provider payload | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |

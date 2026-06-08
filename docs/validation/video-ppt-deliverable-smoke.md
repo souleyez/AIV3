@@ -4989,3 +4989,66 @@ Safety result:
 - no browser was opened and no FFmpeg capture command was run;
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 No-Live Rollup Authorized Capture Dry-Run Evidence
+
+Task source: P1 no-live follow-up from section `0.7.18`, after the plan identified authorized-capture dry-run evidence as the next local slice available without live, customer, or deployment authorization.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, service deployment, or 8/120 server access;
+- add one no-live rollup command that runs `capture-authorized-video` in dry-run mode only;
+- pass the dry-run approval id, approved-by, source URL, and purpose through child-process environment so the top-level no-live report command field does not store raw URL or approval values;
+- copy only the helper report's redacted `sharedReceipt` fields and safety booleans into the no-live rollup report;
+- do not store raw source URLs, local report paths, browser profile paths, output MP4 paths, approval values, provider payloads, cookies, HAR files, QR screenshots, or handoff command text in shared rollup evidence.
+
+Implemented behavior:
+
+- no-live rollup now runs `authorized_capture_dry_run`;
+- the command uses `--dry-run --ack-authorized --duration-seconds 30 --handoff upload-main`;
+- the top-level report embeds `v3.authorized_capture_dry_run_rollup_evidence.v1`;
+- embedded dry-run evidence records `mode=dry-run`, `source_scheme=https`, source host presence, `duration_seconds=30`, `retention_days=7`, `capture_audio_allowed=false`, `handoff=upload-main`, approval/reference redaction booleans, output file name, local/profile path redaction booleans, and no-cookie/HAR/QR safety booleans;
+- rollup validation now fails if the dry-run evidence is missing, if browser/FFmpeg capture was attempted, if handoff is not `upload-main`, or if any raw URL/local path/approval/credential/provider redaction flag is unsafe.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted authorized-capture dry-run evidence readback>"
+rg -n "<local-path-url-token-approval-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- `authorized_capture_dry_run` passed;
+- dry-run evidence schema was `v3.authorized_capture_dry_run_rollup_evidence.v1`;
+- dry-run evidence recorded `mode=dry-run`, `duration_seconds=30`, `retention_days=7`, `capture_audio_allowed=false`, `handoff=upload-main`, `handoff_mode=upload-main`, and `output_file_name=authorized-capture.mp4`;
+- dry-run evidence recorded `capture_attempted=false`, `dry_run=true`, `browser_would_run=true`, and `ffmpeg_would_run=true`, meaning no browser or FFmpeg process was actually run by the dry-run;
+- dry-run evidence recorded approval and approved-by references as present and redacted;
+- dry-run evidence recorded `raw_url_stored=false`, `cookies_stored=false`, `har_stored=false`, `qr_screenshot_stored=false`, `approval_values_included=false`, `raw_source_url_included=false`, `local_paths_included=false`, `credentials_included=false`, and `provider_payloads_included=false`;
+- top-level evidence schema count increased to 11;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval/operator values, or raw dry-run approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- M6AK only proves the dry-run authorization receipt and upload-main handoff planning path can be represented safely in the no-live rollup.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
