@@ -3968,6 +3968,83 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Acceptance Status No-Live Evidence Summary
+
+Task source: M6AS no-live follow-up. The no-live rollup already copied child evidence into `commands[].evidence`, but `acceptance_status` only showed the P1-P8 gate matrix. This slice makes the acceptance status itself carry a compact, redacted no-live evidence summary so reviewers can see what the local baseline actually covered without opening every child command record.
+
+Scope:
+
+- local no-live rollup evidence slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- no-live rollup now emits `acceptance_status.no_live_evidence_summary` with schema `v3.video_ppt_no_live_acceptance_evidence_summary.v1`;
+- the summary records 11 passed commands with embedded child evidence;
+- the summary records the three live preflight evidence gates for main upload, third-party video PPT, and login-gated handoff;
+- the summary records quality matrix counts: `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- the summary records `quality_review_required_risk_flag_count=8`;
+- the summary records `not_deliverable_failure_class_count=5`;
+- the summary records `review_failure_class_summary_needs_manual_review_count=8`;
+- the summary copies the six-class needs-manual-review count map and five-class not-deliverable regression count map;
+- no-live rollup validation now fails if a passed rollup does not include the expected acceptance evidence summary.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted acceptance evidence summary readback>"
+rg -n "<local-path-url-token-approval-patterns>" <quality-matrix-report-dir> <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- quality matrix syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=0`, `not_deliverable_count=0`, and `pending_count=2`;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- acceptance evidence summary schema was `v3.video_ppt_no_live_acceptance_evidence_summary.v1`;
+- `embedded_evidence_command_count=11`;
+- upload-main self-test/preflight, external video PPT self-test/preflight, handoff self-test/preflight, authorized-capture self-test, authorized-capture dry-run, quality matrix, production scope-planner, and assistant-runtime evidence flags were all true;
+- `live_preflight_evidence_count=3`;
+- quality matrix counts in the acceptance summary were `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- review risk count was `8`;
+- not-deliverable failure class count was `5`;
+- review summary count was `8`;
+- review summary counts were `manual_review=1`, `subtitle_alignment=1`, `ocr_evidence=1`, `crop_quality=1`, `selection_quality=2`, and `readability_quality=2`;
+- not-deliverable regression counts were `source_access=1`, `video_has_no_ppt=1`, `frame_extraction=1`, `artifact_visibility=1`, and `selection_quality=1`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, or raw approval/operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this acceptance evidence summary does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- future no-live evidence gates that are required for P1 should be added to this acceptance summary before they are treated as part of the local baseline.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Quality Matrix Object Risk Flag Gate
 
 Task source: M7/EP6 no-auth hardening after M6AA centralized the review-required risk flag set. Real `slide_quality_report.risk_flags` entries are objects with `code`, `severity`, `count`, and `review_action`, while some internal quality-matrix regressions only used string risk codes. This slice makes the quality matrix verdict path normalize both shapes before deciding whether a sample must remain `needs_manual_review`.

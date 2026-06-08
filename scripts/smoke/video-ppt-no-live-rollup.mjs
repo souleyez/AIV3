@@ -885,7 +885,7 @@ function buildReport({ startedAt, results }) {
       credentials_included: false,
       provider_payloads_included: false,
     },
-    acceptance_status: buildAcceptanceStatus({ summary }),
+    acceptance_status: buildAcceptanceStatus({ summary, results }),
     next_actions: failed.length === 0
       ? [
         'keep this as the no-live regression rollup before live upload, third-party, handoff, capture, or deployment gates',
@@ -896,8 +896,9 @@ function buildReport({ startedAt, results }) {
   };
 }
 
-function buildAcceptanceStatus({ summary }) {
+function buildAcceptanceStatus({ summary, results }) {
   const noLivePassed = summary.failed_count === 0;
+  const noLiveEvidenceSummary = buildNoLiveAcceptanceEvidenceSummary(results);
   const gates = [
     {
       id: 'P1_no_live_baseline',
@@ -999,6 +1000,7 @@ function buildAcceptanceStatus({ summary }) {
     pending_deployment_gate_count: 2,
     pending_customer_gate_count: 1,
     pending_full_acceptance_gate_count: 1,
+    no_live_evidence_summary: noLiveEvidenceSummary,
     gates,
     next_authorized_paths: [
       'P2_main_upload_live_smoke',
@@ -1020,6 +1022,51 @@ function buildAcceptanceStatus({ summary }) {
       server_120_touched: false,
     },
   };
+}
+
+function buildNoLiveAcceptanceEvidenceSummary(results = []) {
+  const commandById = new Map(results.map((result) => [result.id, result]));
+  const qualityEvidence = commandById.get('quality_matrix_self_test')?.evidence || {};
+  const passedEvidenceCommandCount = results.filter((result) => (
+    result.status === 'passed' && result.evidence
+  )).length;
+  return {
+    schema: 'v3.video_ppt_no_live_acceptance_evidence_summary.v1',
+    embedded_evidence_command_count: passedEvidenceCommandCount,
+    upload_main_self_test_evidence: hasPassedEvidence(commandById, 'upload_main_self_test'),
+    upload_main_preflight_evidence: hasPassedEvidence(commandById, 'upload_main_preflight'),
+    external_video_ppt_self_test_evidence: hasPassedEvidence(commandById, 'external_video_ppt_self_test'),
+    external_video_ppt_preflight_evidence: hasPassedEvidence(commandById, 'external_video_ppt_preflight'),
+    handoff_self_test_evidence: hasPassedEvidence(commandById, 'video_ppt_handoff_self_test'),
+    handoff_preflight_evidence: hasPassedEvidence(commandById, 'video_ppt_handoff_preflight'),
+    authorized_capture_self_test_evidence: hasPassedEvidence(commandById, 'authorized_capture_self_test'),
+    authorized_capture_dry_run_evidence: hasPassedEvidence(commandById, 'authorized_capture_dry_run'),
+    quality_matrix_self_test_evidence: hasPassedEvidence(commandById, 'quality_matrix_self_test'),
+    production_scope_planner_evidence: hasPassedEvidence(commandById, 'scope_planner_tests'),
+    production_assistant_runtime_evidence:
+      hasPassedEvidence(commandById, 'assistant_runtime_video_ppt_scope_tests'),
+    live_preflight_evidence_count: [
+      'upload_main_preflight',
+      'external_video_ppt_preflight',
+      'video_ppt_handoff_preflight',
+    ].filter((commandId) => hasPassedEvidence(commandById, commandId)).length,
+    quality_matrix_case_count: qualityEvidence.case_count ?? null,
+    quality_matrix_deliverable_count: qualityEvidence.deliverable_count ?? null,
+    quality_matrix_pending_count: qualityEvidence.pending_count ?? null,
+    quality_review_required_risk_flag_count: qualityEvidence.review_required_risk_flag_count ?? null,
+    not_deliverable_failure_class_count: qualityEvidence.not_deliverable_failure_class_count ?? null,
+    review_failure_class_summary_needs_manual_review_count:
+      qualityEvidence.review_failure_class_summary_needs_manual_review_count ?? null,
+    review_failure_class_summary_counts:
+      sanitizeCountMap(qualityEvidence.review_failure_class_summary_counts),
+    not_deliverable_regression_counts:
+      sanitizeCountMap(qualityEvidence.failure_class_summary_regression_not_deliverable_counts),
+  };
+}
+
+function hasPassedEvidence(commandById, commandId) {
+  const result = commandById.get(commandId);
+  return Boolean(result && result.status === 'passed' && result.evidence);
 }
 
 function validateReport(report) {
@@ -1098,6 +1145,7 @@ function validateAcceptanceStatus(report) {
   ) {
     throw new Error('no-live rollup acceptance status no-live gate is incomplete');
   }
+  validateNoLiveAcceptanceEvidenceSummary(acceptance, report);
   for (const gateId of [
     'P2_main_upload_live_smoke',
     'P3_external_video_ppt_live_smoke',
@@ -1117,6 +1165,46 @@ function validateAcceptanceStatus(report) {
     ) {
       throw new Error(`no-live rollup acceptance status gate is incomplete: ${gateId}`);
     }
+  }
+}
+
+function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
+  const evidence = acceptance.no_live_evidence_summary;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.video_ppt_no_live_acceptance_evidence_summary.v1'
+    || !Number.isInteger(evidence.embedded_evidence_command_count)
+    || evidence.embedded_evidence_command_count < 0
+  ) {
+    throw new Error('no-live rollup acceptance evidence summary is incomplete');
+  }
+  if (report.summary.failed_count !== 0) {
+    return;
+  }
+  if (
+    evidence.embedded_evidence_command_count < 11
+    || evidence.upload_main_self_test_evidence !== true
+    || evidence.upload_main_preflight_evidence !== true
+    || evidence.external_video_ppt_self_test_evidence !== true
+    || evidence.external_video_ppt_preflight_evidence !== true
+    || evidence.handoff_self_test_evidence !== true
+    || evidence.handoff_preflight_evidence !== true
+    || evidence.authorized_capture_self_test_evidence !== true
+    || evidence.authorized_capture_dry_run_evidence !== true
+    || evidence.quality_matrix_self_test_evidence !== true
+    || evidence.production_scope_planner_evidence !== true
+    || evidence.production_assistant_runtime_evidence !== true
+    || evidence.live_preflight_evidence_count !== 3
+    || evidence.quality_matrix_case_count !== 3
+    || evidence.quality_matrix_deliverable_count !== 1
+    || evidence.quality_matrix_pending_count !== 2
+    || evidence.quality_review_required_risk_flag_count !== 8
+    || evidence.not_deliverable_failure_class_count !== 5
+    || evidence.review_failure_class_summary_needs_manual_review_count !== 8
+    || !hasExpectedReviewFailureClassCounts(evidence.review_failure_class_summary_counts)
+    || !hasRequiredFailureClassCounts(evidence.not_deliverable_regression_counts)
+  ) {
+    throw new Error('no-live rollup acceptance evidence summary does not cover all passed gates');
   }
 }
 
