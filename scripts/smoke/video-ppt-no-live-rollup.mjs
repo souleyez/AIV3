@@ -162,6 +162,20 @@ const COMMANDS = [
     args: ['test', '-p', 'assistant-runtime', 'video_ppt_scope', '--lib'],
   },
   {
+    id: 'platform_api_video_url_resolution_tests',
+    description: 'platform-api direct URL and login-gated video resolver tests',
+    command: 'cargo',
+    args: ['test', '-p', 'platform-api', 'video_url_resolution', '--lib'],
+    env: { CC: 'clang', CXX: 'clang++' },
+  },
+  {
+    id: 'platform_api_public_video_page_tests',
+    description: 'platform-api public page video resolver tests',
+    command: 'cargo',
+    args: ['test', '-p', 'platform-api', 'public_video_page', '--lib'],
+    env: { CC: 'clang', CXX: 'clang++' },
+  },
+  {
     id: 'rust_format_check',
     description: 'Rust workspace formatting check',
     command: 'cargo',
@@ -240,6 +254,7 @@ Checks:
   - runs quality matrix self-test, including review-risk regression
   - runs front-end scope planner syntax/tests for video PPT trigger boundaries
   - runs Rust assistant-runtime video PPT scope tests
+  - runs Rust platform-api video URL and public page resolver tests
   - runs Rust formatting check
   - runs media-worker video PPT library tests and offline smoke binary check
   - runs video deliverables validator tests
@@ -359,6 +374,12 @@ function extractCommandEvidence(commandId, stdout, stderr = '', command = {}, ex
   }
   if (commandId === 'assistant_runtime_video_ppt_scope_tests') {
     return extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout);
+  }
+  if (commandId === 'platform_api_video_url_resolution_tests') {
+    return extractPlatformApiVideoUrlResolutionTestsEvidence(stdout);
+  }
+  if (commandId === 'platform_api_public_video_page_tests') {
+    return extractPlatformApiPublicVideoPageTestsEvidence(stdout);
   }
   if (commandId !== 'quality_matrix_self_test') {
     return null;
@@ -900,22 +921,65 @@ function extractScopePlannerTestsEvidence(stdout) {
 }
 
 function extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout) {
-  const runningMatch = stdout.match(/\brunning\s+(\d+)\s+tests?\b/);
-  const resultMatch = stdout.match(/\btest result:\s+ok\.\s+(\d+)\s+passed;\s+(\d+)\s+failed;\s+(\d+)\s+ignored;\s+(\d+)\s+measured;\s+(\d+)\s+filtered out\b/);
+  const summary = parseRustTestSummary(stdout);
   return {
     schema: 'v3.assistant_runtime_video_ppt_scope_rollup_evidence.v1',
-    test_count: runningMatch ? Number.parseInt(runningMatch[1], 10) : null,
-    pass_count: resultMatch ? Number.parseInt(resultMatch[1], 10) : null,
-    fail_count: resultMatch ? Number.parseInt(resultMatch[2], 10) : null,
-    ignored_count: resultMatch ? Number.parseInt(resultMatch[3], 10) : null,
-    measured_count: resultMatch ? Number.parseInt(resultMatch[4], 10) : null,
-    filtered_out_count: resultMatch ? Number.parseInt(resultMatch[5], 10) : null,
+    ...summary,
     transcript_only_negative_covered:
       stdout.includes('transcript_only_video_request_does_not_trigger_video_ppt_scope'),
     shared_negative_fixture_covered:
       stdout.includes('video_ppt_scope_rejects_shared_negative_trigger_fixture'),
     shared_positive_fixture_covered:
       stdout.includes('video_ppt_scope_follows_shared_positive_trigger_fixture'),
+  };
+}
+
+function extractPlatformApiVideoUrlResolutionTestsEvidence(stdout) {
+  return {
+    schema: 'v3.platform_api_video_url_resolution_rollup_evidence.v1',
+    ...parseRustTestSummary(stdout),
+    requires_direct_source_covered:
+      stdout.includes('video_url_resolution_placeholder_requires_direct_source'),
+    accepts_direct_video_url_covered:
+      stdout.includes('video_url_resolution_accepts_direct_video_urls'),
+    chinese_punctuation_direct_url_covered:
+      stdout.includes('video_url_resolution_finds_direct_url_after_chinese_punctuation'),
+    login_gated_source_blocked_covered:
+      stdout.includes('video_url_resolution_placeholder_blocks_login_gated_sources'),
+    dataset_title_helpers_covered:
+      stdout.includes('video_url_resolution_helpers_select_dataset_and_title'),
+  };
+}
+
+function extractPlatformApiPublicVideoPageTestsEvidence(stdout) {
+  return {
+    schema: 'v3.platform_api_public_video_page_rollup_evidence.v1',
+    ...parseRustTestSummary(stdout),
+    public_page_extracts_video_sources_covered:
+      stdout.includes('public_video_page_extracts_video_sources_from_html'),
+    public_page_blocks_private_or_login_gated_sources_covered:
+      stdout.includes('public_video_page_blocks_private_or_login_gated_sources'),
+    public_page_no_video_asset_covered:
+      stdout.includes('public_video_page_handles_no_video_asset_fixture'),
+    public_page_failure_result_structured_covered:
+      stdout.includes('public_video_page_failure_result_is_structured'),
+    public_page_failure_result_classification_covered:
+      stdout.includes('public_video_page_failure_result_classifies_resolver_blocks'),
+    public_page_unregistered_result_keeps_resolved_video_covered:
+      stdout.includes('public_video_page_unregistered_result_keeps_resolved_video'),
+  };
+}
+
+function parseRustTestSummary(stdout) {
+  const runningMatch = stdout.match(/\brunning\s+(\d+)\s+tests?\b/);
+  const resultMatch = stdout.match(/\btest result:\s+ok\.\s+(\d+)\s+passed;\s+(\d+)\s+failed;\s+(\d+)\s+ignored;\s+(\d+)\s+measured;\s+(\d+)\s+filtered out\b/);
+  return {
+    test_count: runningMatch ? Number.parseInt(runningMatch[1], 10) : null,
+    pass_count: resultMatch ? Number.parseInt(resultMatch[1], 10) : null,
+    fail_count: resultMatch ? Number.parseInt(resultMatch[2], 10) : null,
+    ignored_count: resultMatch ? Number.parseInt(resultMatch[3], 10) : null,
+    measured_count: resultMatch ? Number.parseInt(resultMatch[4], 10) : null,
+    filtered_out_count: resultMatch ? Number.parseInt(resultMatch[5], 10) : null,
   };
 }
 
@@ -1358,6 +1422,10 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
   const externalApprovalNegative =
     commandById.get('external_video_ppt_live_approval_gate_negative')?.evidence || {};
   const qualityEvidence = commandById.get('quality_matrix_self_test')?.evidence || {};
+  const videoUrlResolutionEvidence =
+    commandById.get('platform_api_video_url_resolution_tests')?.evidence || {};
+  const publicVideoPageEvidence =
+    commandById.get('platform_api_public_video_page_tests')?.evidence || {};
   const passedEvidenceCommandCount = results.filter((result) => (
     result.status === 'passed' && result.evidence
   )).length;
@@ -1392,6 +1460,32 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     production_scope_planner_evidence: hasPassedEvidence(commandById, 'scope_planner_tests'),
     production_assistant_runtime_evidence:
       hasPassedEvidence(commandById, 'assistant_runtime_video_ppt_scope_tests'),
+    platform_api_video_url_resolution_evidence:
+      hasPassedEvidence(commandById, 'platform_api_video_url_resolution_tests'),
+    platform_api_public_video_page_evidence:
+      hasPassedEvidence(commandById, 'platform_api_public_video_page_tests'),
+    platform_api_video_url_resolution_test_count:
+      videoUrlResolutionEvidence.test_count ?? null,
+    platform_api_video_url_resolution_pass_count:
+      videoUrlResolutionEvidence.pass_count ?? null,
+    platform_api_public_video_page_test_count:
+      publicVideoPageEvidence.test_count ?? null,
+    platform_api_public_video_page_pass_count:
+      publicVideoPageEvidence.pass_count ?? null,
+    direct_video_url_resolution_covered:
+      videoUrlResolutionEvidence.accepts_direct_video_url_covered === true
+      && videoUrlResolutionEvidence.chinese_punctuation_direct_url_covered === true,
+    login_gated_video_source_rejection_covered:
+      videoUrlResolutionEvidence.login_gated_source_blocked_covered === true
+      && publicVideoPageEvidence.public_page_blocks_private_or_login_gated_sources_covered === true,
+    public_page_video_source_extraction_covered:
+      publicVideoPageEvidence.public_page_extracts_video_sources_covered === true
+      && publicVideoPageEvidence.public_page_unregistered_result_keeps_resolved_video_covered === true,
+    public_page_no_video_asset_failure_covered:
+      publicVideoPageEvidence.public_page_no_video_asset_covered === true,
+    public_page_resolver_failure_classification_covered:
+      publicVideoPageEvidence.public_page_failure_result_structured_covered === true
+      && publicVideoPageEvidence.public_page_failure_result_classification_covered === true,
     required_video_extension_count: 6,
     upload_main_supported_video_extension_count: uploadSupportedVideoExtensionCount,
     external_supported_video_extension_count: externalSupportedVideoExtensionCount,
@@ -1550,6 +1644,7 @@ function validateReport(report) {
   validateAuthorizedCaptureEvidence(report);
   validateAuthorizedCaptureDryRunEvidence(report);
   validateProductionTriggerEvidence(report);
+  validatePlatformApiResolverEvidence(report);
   validateAcceptanceStatus(report);
   const serialized = JSON.stringify(report);
   if (serialized.match(/[A-Za-z]:[\\/]|[\\/]Users[\\/]|[\\/]home[\\/]|https?:\/\/|token=|cookie=|bearer=/i)) {
@@ -1803,6 +1898,19 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.quality_matrix_self_test_evidence !== true
     || evidence.production_scope_planner_evidence !== true
     || evidence.production_assistant_runtime_evidence !== true
+    || evidence.platform_api_video_url_resolution_evidence !== true
+    || evidence.platform_api_public_video_page_evidence !== true
+    || evidence.platform_api_video_url_resolution_test_count < 5
+    || evidence.platform_api_video_url_resolution_pass_count
+      !== evidence.platform_api_video_url_resolution_test_count
+    || evidence.platform_api_public_video_page_test_count < 6
+    || evidence.platform_api_public_video_page_pass_count
+      !== evidence.platform_api_public_video_page_test_count
+    || evidence.direct_video_url_resolution_covered !== true
+    || evidence.login_gated_video_source_rejection_covered !== true
+    || evidence.public_page_video_source_extraction_covered !== true
+    || evidence.public_page_no_video_asset_failure_covered !== true
+    || evidence.public_page_resolver_failure_classification_covered !== true
     || evidence.required_video_extension_count !== 6
     || evidence.upload_main_supported_video_extension_count < 6
     || evidence.external_supported_video_extension_count < 6
@@ -1888,6 +1996,53 @@ function validateProductionTriggerEvidence(report) {
     ) {
       throw new Error('no-live rollup assistant-runtime production trigger evidence is incomplete');
     }
+  }
+}
+
+function validatePlatformApiResolverEvidence(report) {
+  const videoUrlCommand = report.commands.find((result) => (
+    result.id === 'platform_api_video_url_resolution_tests'
+  ));
+  if (!videoUrlCommand || videoUrlCommand.status !== 'passed') {
+    throw new Error('no-live rollup missing platform-api video URL resolution evidence');
+  }
+  const videoUrlEvidence = videoUrlCommand.evidence;
+  if (
+    !videoUrlEvidence
+    || videoUrlEvidence.schema !== 'v3.platform_api_video_url_resolution_rollup_evidence.v1'
+    || videoUrlEvidence.test_count < 5
+    || videoUrlEvidence.pass_count !== videoUrlEvidence.test_count
+    || videoUrlEvidence.fail_count !== 0
+    || videoUrlEvidence.requires_direct_source_covered !== true
+    || videoUrlEvidence.accepts_direct_video_url_covered !== true
+    || videoUrlEvidence.chinese_punctuation_direct_url_covered !== true
+    || videoUrlEvidence.login_gated_source_blocked_covered !== true
+    || videoUrlEvidence.dataset_title_helpers_covered !== true
+  ) {
+    throw new Error('no-live rollup platform-api video URL resolution evidence is incomplete');
+  }
+
+  const publicPageCommand = report.commands.find((result) => (
+    result.id === 'platform_api_public_video_page_tests'
+  ));
+  if (!publicPageCommand || publicPageCommand.status !== 'passed') {
+    throw new Error('no-live rollup missing platform-api public video page evidence');
+  }
+  const publicPageEvidence = publicPageCommand.evidence;
+  if (
+    !publicPageEvidence
+    || publicPageEvidence.schema !== 'v3.platform_api_public_video_page_rollup_evidence.v1'
+    || publicPageEvidence.test_count < 6
+    || publicPageEvidence.pass_count !== publicPageEvidence.test_count
+    || publicPageEvidence.fail_count !== 0
+    || publicPageEvidence.public_page_extracts_video_sources_covered !== true
+    || publicPageEvidence.public_page_blocks_private_or_login_gated_sources_covered !== true
+    || publicPageEvidence.public_page_no_video_asset_covered !== true
+    || publicPageEvidence.public_page_failure_result_structured_covered !== true
+    || publicPageEvidence.public_page_failure_result_classification_covered !== true
+    || publicPageEvidence.public_page_unregistered_result_keeps_resolved_video_covered !== true
+  ) {
+    throw new Error('no-live rollup platform-api public video page evidence is incomplete');
   }
 }
 

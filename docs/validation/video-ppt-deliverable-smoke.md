@@ -4302,6 +4302,79 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Platform Resolver Evidence in No-Live Rollup
+
+Task source: M6BJ P1/no-live follow-up. Public page resolver and direct URL resolver tests already existed, but the one-command no-live acceptance rollup did not directly prove that customer link routing covers direct videos, public pages with anonymous video assets, no-video public pages, and login-gated rejection. This slice adds those platform-api tests to the no-live rollup and promotes their safe evidence into `acceptance_status.no_live_evidence_summary`.
+
+Scope:
+
+- local no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no public page network fetch;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- no-live rollup now runs `cargo test -p platform-api video_url_resolution --lib`;
+- no-live rollup now runs `cargo test -p platform-api public_video_page --lib`;
+- rollup evidence records platform video URL resolver test count and pass count;
+- rollup evidence records public page resolver test count and pass count;
+- top-level no-live evidence records direct video URL resolution coverage;
+- top-level no-live evidence records login-gated video source rejection coverage;
+- top-level no-live evidence records public page video source extraction coverage;
+- top-level no-live evidence records public page no-video-asset failure coverage;
+- top-level no-live evidence records public page resolver failure classification coverage.
+
+Validation:
+
+```text
+CC=clang CXX=clang++ cargo test -p platform-api video_url_resolution --lib
+CC=clang CXX=clang++ cargo test -p platform-api public_video_page --lib
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted resolver evidence readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- platform-api `video_url_resolution` filter passed with 5 tests;
+- platform-api `public_video_page` filter passed with 6 tests;
+- no-live rollup passed with `command_count=26`, `passed_count=26`, and `failed_count=0`;
+- readback showed `platform_api_video_url_resolution_evidence=true`;
+- readback showed `platform_api_video_url_resolution_test_count=5` and pass count 5;
+- readback showed `platform_api_public_video_page_evidence=true`;
+- readback showed `platform_api_public_video_page_test_count=6` and pass count 6;
+- readback showed direct video URL resolution coverage;
+- readback showed login-gated video source rejection coverage;
+- readback showed public page video source extraction coverage;
+- readback showed public page no-video-asset failure coverage;
+- readback showed public page resolver failure classification coverage;
+- `acceptance_status.full_acceptance_ready=false` remained unchanged.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live event, video号 handoff live pass, authorized capture live sample, customer-authorized quality matrix, or 8-server deployment validation;
+- this proves local routing/contract coverage only, not that an arbitrary third-party page can always expose an anonymous video file;
+- pages that do not expose an anonymous direct video asset still must return handoff or an explicit source-access failure.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no public page was fetched from the network;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Approval Request Summary Evidence
 
 Task source: M6BI P1/no-live follow-up. The no-live rollup already records pending gates and readiness evidence; this slice adds a machine-readable `approval_request_summary` so the remaining live/customer/deployment requests can be inspected without reading prose or exposing raw values.
