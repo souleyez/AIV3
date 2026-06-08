@@ -720,6 +720,7 @@ function validateSlideQualityReport(report, errors) {
   }
   validateSlideQualityRiskFlags(report, summary, riskFlags, errors);
   validateOptionalSlideQualitySharpness(report, slides, summary, errors);
+  validateOptionalSlideQualityReadability(report, slides, summary, errors);
 }
 
 function validateSlideQualityRiskFlags(report, summary, riskFlags, errors) {
@@ -775,6 +776,7 @@ function isValidSlideQualityRow(slide) {
     && Number.isInteger(slide.ocr_snippet_count)
     && slide.ocr_snippet_count >= 0
     && isValidOptionalSlideSharpnessRow(slide)
+    && isValidOptionalSlideReadabilityRow(slide)
     && typeof slide.review_required === "boolean"
     && isScore(slide.quality_score);
 }
@@ -843,6 +845,72 @@ function hasValidCompleteSlideSharpness(slide) {
     return isScore(slide.sharpness_score) && slide.sharpness_risk !== "unknown";
   }
   return slide.sharpness_score === null && slide.sharpness_risk === "unknown";
+}
+
+function validateOptionalSlideQualityReadability(report, slides, summary, errors) {
+  const summaryKeys = [
+    "readability_low_count",
+    "readability_medium_count",
+    "readability_high_count",
+    "readability_unknown_count",
+  ];
+  const hasReadabilitySummary = summaryKeys.some((key) => Object.hasOwn(summary, key));
+  const hasReadabilityRows = slides.some((slide) => (
+    Object.hasOwn(slide ?? {}, "readability_status")
+      || Object.hasOwn(slide ?? {}, "readability_score")
+      || Object.hasOwn(slide ?? {}, "readability_risk")
+  ));
+  if (!hasReadabilitySummary && !hasReadabilityRows) {
+    return;
+  }
+  if (!summaryKeys.every((key) => Number.isInteger(summary[key]) && summary[key] >= 0)) {
+    errors.push(issue("slide_quality_report_readability_invalid", "slide quality report readability summary is invalid", "slide_quality_report"));
+    return;
+  }
+  if (!slides.every(hasValidCompleteSlideReadability)) {
+    errors.push(issue("slide_quality_report_readability_invalid", "slide quality report readability rows are invalid", "slide_quality_report"));
+    return;
+  }
+  const counts = {
+    low: 0,
+    medium: 0,
+    high: 0,
+    unknown: 0,
+  };
+  for (const slide of slides) {
+    counts[slide.readability_risk] += 1;
+  }
+  if (
+    counts.low !== summary.readability_low_count
+    || counts.medium !== summary.readability_medium_count
+    || counts.high !== summary.readability_high_count
+    || counts.unknown !== summary.readability_unknown_count
+  ) {
+    errors.push(issue("slide_quality_report_readability_invalid", "slide quality report readability counts do not match slide rows", "slide_quality_report"));
+  }
+}
+
+function isValidOptionalSlideReadabilityRow(slide) {
+  const hasAnyReadabilityField = Object.hasOwn(slide ?? {}, "readability_status")
+    || Object.hasOwn(slide ?? {}, "readability_score")
+    || Object.hasOwn(slide ?? {}, "readability_risk");
+  if (!hasAnyReadabilityField) {
+    return true;
+  }
+  return hasValidCompleteSlideReadability(slide);
+}
+
+function hasValidCompleteSlideReadability(slide) {
+  if (!["measured", "unavailable"].includes(slide?.readability_status)) {
+    return false;
+  }
+  if (!["low", "medium", "high", "unknown"].includes(slide?.readability_risk)) {
+    return false;
+  }
+  if (slide.readability_status === "measured") {
+    return isScore(slide.readability_score) && slide.readability_risk !== "unknown";
+  }
+  return slide.readability_score === null && slide.readability_risk === "unknown";
 }
 
 function isScore(value) {

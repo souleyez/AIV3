@@ -111,6 +111,8 @@ function buildSelfTestSyntheticCase() {
         ocr_missing_count: 0,
         sharpness_high_count: 0,
         sharpness_unknown_count: 0,
+        readability_high_count: 0,
+        readability_unknown_count: 0,
       },
     },
     expected_verdict: 'deliverable',
@@ -231,6 +233,8 @@ function buildCaseFromDeliverables(inputPath, {
         ocr_missing_count: qualitySummary.ocr_missing_count || 0,
         sharpness_high_count: qualitySummary.sharpness_high_count || 0,
         sharpness_unknown_count: qualitySummary.sharpness_unknown_count || 0,
+        readability_high_count: qualitySummary.readability_high_count || 0,
+        readability_unknown_count: qualitySummary.readability_unknown_count || 0,
         single_slide_output: qualitySummary.single_slide_output === true,
       },
     } : null,
@@ -312,10 +316,17 @@ function evaluateCase(testCase) {
   }
   const quality = testCase.quality_report;
   const summary = quality.summary || {};
+  const riskFlags = new Set(Array.isArray(quality.risk_flags) ? quality.risk_flags : []);
   const hasHighRiskFrames = (summary.full_frame_fallback_count || 0) > 0
     || (summary.sharpness_high_count || 0) > 0
     || (summary.sharpness_unknown_count || 0) > 0
-    || summary.single_slide_output === true;
+    || (summary.readability_high_count || 0) > 0
+    || (summary.readability_unknown_count || 0) > 0
+    || summary.single_slide_output === true
+    || riskFlags.has('manual_review_required')
+    || riskFlags.has('missing_transcript_alignment')
+    || riskFlags.has('frame_sharpness_review_required')
+    || riskFlags.has('slide_readability_review_required');
   if (quality.quality_score < 70 || hasHighRiskFrames) {
     return {
       verdict: 'needs_manual_review',

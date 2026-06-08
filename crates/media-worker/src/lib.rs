@@ -62,6 +62,12 @@ const VIDEO_AUTO_SLIDE_FLAT_LOW_INFO_MAX_LUMA_RANGE: u8 = 3;
 const VIDEO_SLIDE_SHARPNESS_TARGET_SAMPLES: f64 = 40_000.0;
 const VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE: i64 = 70;
 const VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE: i64 = 40;
+const VIDEO_SLIDE_READABILITY_TARGET_SAMPLES: f64 = 40_000.0;
+const VIDEO_SLIDE_READABILITY_FOREGROUND_MIN_CONTRAST: u8 = 56;
+const VIDEO_SLIDE_READABILITY_LOW_RISK_MIN_SCORE: i64 = 70;
+const VIDEO_SLIDE_READABILITY_MEDIUM_RISK_MIN_SCORE: i64 = 45;
+const VIDEO_SLIDE_READABILITY_GRID_COLUMNS: usize = 16;
+const VIDEO_SLIDE_READABILITY_GRID_ROWS: usize = 9;
 const VIDEO_FULL_FRAME_CONTENT_GRID_COLUMNS: usize = 8;
 const VIDEO_FULL_FRAME_CONTENT_GRID_ROWS: usize = 6;
 const VIDEO_REMOTE_INPUT_DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
@@ -2520,6 +2526,10 @@ fn video_slide_quality_report_from_manifests(
     let mut sharpness_medium_count = 0_u64;
     let mut sharpness_high_count = 0_u64;
     let mut sharpness_unknown_count = 0_u64;
+    let mut readability_low_count = 0_u64;
+    let mut readability_medium_count = 0_u64;
+    let mut readability_high_count = 0_u64;
+    let mut readability_unknown_count = 0_u64;
     let mut slide_scores = Vec::<i64>::new();
     let slides = selected_candidates
         .iter()
@@ -2636,6 +2646,12 @@ fn video_slide_quality_report_from_manifests(
                 "high" => sharpness_high_count += 1,
                 _ => sharpness_unknown_count += 1,
             }
+            match sharpness.readability_risk {
+                "low" => readability_low_count += 1,
+                "medium" => readability_medium_count += 1,
+                "high" => readability_high_count += 1,
+                _ => readability_unknown_count += 1,
+            }
             let mut score = 100_i64;
             if crop_risk == "high" {
                 score -= 25;
@@ -2679,6 +2695,9 @@ fn video_slide_quality_report_from_manifests(
                 "sharpness_status": sharpness.status,
                 "sharpness_score": sharpness.score,
                 "sharpness_risk": sharpness.risk,
+                "readability_status": sharpness.readability_status,
+                "readability_score": sharpness.readability_score,
+                "readability_risk": sharpness.readability_risk,
                 "review_required": review_required,
                 "quality_score": score,
             })
@@ -2736,6 +2755,16 @@ fn video_slide_quality_report_from_manifests(
             "review_action": "review_blurry_or_unmeasured_slide_frames",
         }));
     }
+    if readability_high_count > 0 || readability_unknown_count > 0 {
+        risk_flags.push(json!({
+            "code": "slide_readability_review_required",
+            "severity": "medium",
+            "count": readability_high_count + readability_unknown_count,
+            "high_count": readability_high_count,
+            "unknown_count": readability_unknown_count,
+            "review_action": "review_low_contrast_or_low_content_slide_frames",
+        }));
+    }
     if slide_count == 1 {
         risk_flags.push(json!({
             "code": "single_slide_output_review_required",
@@ -2775,6 +2804,10 @@ fn video_slide_quality_report_from_manifests(
             "sharpness_medium_count": sharpness_medium_count,
             "sharpness_high_count": sharpness_high_count,
             "sharpness_unknown_count": sharpness_unknown_count,
+            "readability_low_count": readability_low_count,
+            "readability_medium_count": readability_medium_count,
+            "readability_high_count": readability_high_count,
+            "readability_unknown_count": readability_unknown_count,
             "deduped_candidate_count": deduped_candidate_count,
             "exact_duplicate_count": exact_duplicate_count,
             "visual_duplicate_count": visual_duplicate_count,
@@ -2800,9 +2833,32 @@ struct VideoSlideSharpnessAssessment {
     status: &'static str,
     score: Option<i64>,
     risk: &'static str,
+    readability_status: &'static str,
+    readability_score: Option<i64>,
+    readability_risk: &'static str,
 }
 
 impl VideoSlideSharpnessAssessment {
+    fn unavailable() -> Self {
+        Self {
+            status: "unavailable",
+            score: None,
+            risk: "unknown",
+            readability_status: "unavailable",
+            readability_score: None,
+            readability_risk: "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct VideoSlideReadabilityAssessment {
+    status: &'static str,
+    score: Option<i64>,
+    risk: &'static str,
+}
+
+impl VideoSlideReadabilityAssessment {
     fn unavailable() -> Self {
         Self {
             status: "unavailable",
@@ -2825,17 +2881,27 @@ fn video_slide_sharpness_assessment(frame: &Path) -> VideoSlideSharpnessAssessme
     let Some(score) = video_slide_sharpness_score(frame) else {
         return VideoSlideSharpnessAssessment::unavailable();
     };
-    let risk = if score >= VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE {
+    let raw_risk = if score >= VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE {
         "low"
     } else if score >= VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE {
         "medium"
     } else {
         "high"
     };
+    let readability = video_slide_readability_assessment(frame);
+    let risk = match (raw_risk, readability.risk) {
+        ("high", "low") => "low",
+        ("high", "medium") => "medium",
+        ("medium", "low") => "low",
+        _ => raw_risk,
+    };
     VideoSlideSharpnessAssessment {
         status: "measured",
         score: Some(score),
         risk,
+        readability_status: readability.status,
+        readability_score: readability.score,
+        readability_risk: readability.risk,
     }
 }
 
@@ -2904,6 +2970,118 @@ fn video_slide_sharpness_score(frame: &Path) -> Option<i64> {
         Some(score.min(25))
     } else {
         Some(score)
+    }
+}
+
+fn video_slide_readability_assessment(frame: &Path) -> VideoSlideReadabilityAssessment {
+    let image = ImageReader::open(frame)
+        .ok()
+        .and_then(|reader| reader.with_guessed_format().ok())
+        .and_then(|reader| reader.decode().ok())
+        .map(|image| image.to_luma8());
+    let Some(image) = image else {
+        return VideoSlideReadabilityAssessment::unavailable();
+    };
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return VideoSlideReadabilityAssessment::unavailable();
+    }
+    let pixel_count = width as f64 * height as f64;
+    let sample_step = ((pixel_count / VIDEO_SLIDE_READABILITY_TARGET_SAMPLES)
+        .sqrt()
+        .ceil() as u32)
+        .max(1);
+    let mut samples = Vec::<(u32, u32, u8)>::new();
+    let mut histogram = [0_u64; 256];
+    let mut min_luma = u8::MAX;
+    let mut max_luma = u8::MIN;
+    for y in (0..height).step_by(sample_step as usize) {
+        for x in (0..width).step_by(sample_step as usize) {
+            let luma = image.get_pixel(x, y).0[0];
+            histogram[luma as usize] += 1;
+            min_luma = min_luma.min(luma);
+            max_luma = max_luma.max(luma);
+            samples.push((x, y, luma));
+        }
+    }
+    if samples.len() < 16 {
+        return VideoSlideReadabilityAssessment::unavailable();
+    }
+    let luma_range = max_luma.saturating_sub(min_luma);
+    if luma_range < VIDEO_SLIDE_READABILITY_FOREGROUND_MIN_CONTRAST {
+        return VideoSlideReadabilityAssessment {
+            status: "measured",
+            score: Some(0),
+            risk: "high",
+        };
+    }
+    let dominant_luma = histogram
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, count)| *count)
+        .map(|(luma, _)| luma as u8)
+        .unwrap_or(0);
+    let mut foreground_count = 0_usize;
+    let mut foreground_contrast_sum = 0_u64;
+    let mut active_grid =
+        [false; VIDEO_SLIDE_READABILITY_GRID_COLUMNS * VIDEO_SLIDE_READABILITY_GRID_ROWS];
+    let mut min_grid_x = VIDEO_SLIDE_READABILITY_GRID_COLUMNS;
+    let mut max_grid_x = 0_usize;
+    let mut min_grid_y = VIDEO_SLIDE_READABILITY_GRID_ROWS;
+    let mut max_grid_y = 0_usize;
+    for (x, y, luma) in &samples {
+        let contrast = luma.abs_diff(dominant_luma);
+        if contrast < VIDEO_SLIDE_READABILITY_FOREGROUND_MIN_CONTRAST {
+            continue;
+        }
+        foreground_count += 1;
+        foreground_contrast_sum += u64::from(contrast);
+        let grid_x = ((*x as usize * VIDEO_SLIDE_READABILITY_GRID_COLUMNS) / width as usize)
+            .min(VIDEO_SLIDE_READABILITY_GRID_COLUMNS - 1);
+        let grid_y = ((*y as usize * VIDEO_SLIDE_READABILITY_GRID_ROWS) / height as usize)
+            .min(VIDEO_SLIDE_READABILITY_GRID_ROWS - 1);
+        active_grid[grid_y * VIDEO_SLIDE_READABILITY_GRID_COLUMNS + grid_x] = true;
+        min_grid_x = min_grid_x.min(grid_x);
+        max_grid_x = max_grid_x.max(grid_x);
+        min_grid_y = min_grid_y.min(grid_y);
+        max_grid_y = max_grid_y.max(grid_y);
+    }
+    if foreground_count == 0 {
+        return VideoSlideReadabilityAssessment {
+            status: "measured",
+            score: Some(0),
+            risk: "high",
+        };
+    }
+    let sample_count = samples.len() as f64;
+    let foreground_ratio = foreground_count as f64 / sample_count;
+    let active_cell_count = active_grid.iter().filter(|active| **active).count();
+    let grid_column_span = max_grid_x.saturating_sub(min_grid_x) + 1;
+    let grid_row_span = max_grid_y.saturating_sub(min_grid_y) + 1;
+    let average_contrast = foreground_contrast_sum as f64 / foreground_count as f64;
+    let contrast_score = (average_contrast.min(128.0) / 128.0) * 40.0;
+    let coverage_score = (foreground_ratio.min(0.08) / 0.08) * 25.0;
+    let active_cell_score = (active_cell_count.min(18) as f64 / 18.0) * 20.0;
+    let column_span_score = (grid_column_span.min(10) as f64 / 10.0) * 8.0;
+    let row_span_score = (grid_row_span.min(4) as f64 / 4.0) * 7.0;
+    let mut score =
+        (contrast_score + coverage_score + active_cell_score + column_span_score + row_span_score)
+            .round()
+            .clamp(0.0, 100.0) as i64;
+    if foreground_ratio > 0.45 {
+        score = score.min(VIDEO_SLIDE_READABILITY_MEDIUM_RISK_MIN_SCORE);
+    }
+    let risk = if score >= VIDEO_SLIDE_READABILITY_LOW_RISK_MIN_SCORE {
+        "low"
+    } else if score >= VIDEO_SLIDE_READABILITY_MEDIUM_RISK_MIN_SCORE {
+        "medium"
+    } else {
+        "high"
+    };
+    VideoSlideReadabilityAssessment {
+        status: "measured",
+        score: Some(score),
+        risk,
     }
 }
 
@@ -8388,6 +8566,33 @@ mod tests {
         image.save(path).expect("test sharp text slide png");
     }
 
+    fn write_test_dark_readable_title_slide_png(path: &Path) {
+        let mut image = image::RgbImage::from_pixel(640, 360, image::Rgb([16, 20, 18]));
+        for y in 118..164 {
+            for x in 70..560 {
+                image.put_pixel(x, y, image::Rgb([242, 244, 240]));
+            }
+        }
+        for y in 198..232 {
+            for x in 150..500 {
+                image.put_pixel(x, y, image::Rgb([236, 238, 234]));
+            }
+        }
+        for y in 300..318 {
+            for x in 44..128 {
+                image.put_pixel(x, y, image::Rgb([240, 118, 78]));
+            }
+        }
+        for y in 306..322 {
+            for x in 452..594 {
+                image.put_pixel(x, y, image::Rgb([230, 232, 228]));
+            }
+        }
+        image
+            .save(path)
+            .expect("test dark readable title slide png");
+    }
+
     fn write_test_low_contrast_text_slide_png(path: &Path) {
         let mut image = image::RgbImage::from_pixel(160, 90, image::Rgb([236, 236, 236]));
         for x in 28..132 {
@@ -8439,17 +8644,51 @@ mod tests {
         let sharp = video_slide_sharpness_assessment(&sharp_path);
         assert_eq!(sharp.status, "measured");
         assert_eq!(sharp.risk, "low");
+        assert_eq!(sharp.readability_status, "measured");
+        assert_eq!(sharp.readability_risk, "low");
         assert!(sharp.score.unwrap_or_default() >= VIDEO_SLIDE_SHARPNESS_LOW_RISK_MIN_SCORE);
 
         let solid = video_slide_sharpness_assessment(&solid_path);
         assert_eq!(solid.status, "measured");
         assert_eq!(solid.risk, "high");
+        assert_eq!(solid.readability_status, "measured");
+        assert_eq!(solid.readability_risk, "high");
         assert!(solid.score.unwrap_or(100) < VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE);
 
         let missing = video_slide_sharpness_assessment(&missing_path);
         assert_eq!(missing.status, "unavailable");
         assert_eq!(missing.risk, "unknown");
         assert_eq!(missing.score, None);
+        assert_eq!(missing.readability_status, "unavailable");
+        assert_eq!(missing.readability_risk, "unknown");
+        assert_eq!(missing.readability_score, None);
+    }
+
+    #[test]
+    fn treats_high_contrast_title_slides_as_readable_even_with_sparse_edges() {
+        let output_root = std::env::temp_dir().join(format!(
+            "aidp-v3-video-readable-title-test-{}",
+            DocumentId::new()
+        ));
+        fs::create_dir_all(&output_root).expect("readable title test dir");
+        let title_path = output_root.join("dark-readable-title.png");
+        write_test_dark_readable_title_slide_png(&title_path);
+
+        let readable_title = video_slide_sharpness_assessment(&title_path);
+
+        assert_eq!(readable_title.status, "measured");
+        assert_eq!(readable_title.readability_status, "measured");
+        assert_eq!(readable_title.readability_risk, "low");
+        assert!(
+            readable_title.readability_score.expect("readability score")
+                >= VIDEO_SLIDE_READABILITY_LOW_RISK_MIN_SCORE
+        );
+        assert!(
+            readable_title.score.expect("sharpness score")
+                < VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE,
+            "fixture should exercise sparse-edge title pages that were previously high-risk"
+        );
+        assert_eq!(readable_title.risk, "low");
     }
 
     #[test]
@@ -8506,6 +8745,14 @@ mod tests {
             json!(0)
         );
         assert_eq!(
+            slide_quality_report_json["summary"]["readability_high_count"],
+            json!(1)
+        );
+        assert_eq!(
+            slide_quality_report_json["summary"]["readability_unknown_count"],
+            json!(0)
+        );
+        assert_eq!(
             slide_quality_report_json["slides"][0]["sharpness_status"],
             json!("measured")
         );
@@ -8519,6 +8766,20 @@ mod tests {
                 .expect("sharpness score")
                 < VIDEO_SLIDE_SHARPNESS_MEDIUM_RISK_MIN_SCORE
         );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["readability_status"],
+            json!("measured")
+        );
+        assert_eq!(
+            slide_quality_report_json["slides"][0]["readability_risk"],
+            json!("high")
+        );
+        assert!(
+            slide_quality_report_json["slides"][0]["readability_score"]
+                .as_i64()
+                .expect("readability score")
+                < VIDEO_SLIDE_READABILITY_MEDIUM_RISK_MIN_SCORE
+        );
         let sharpness_risk = slide_quality_report_json["risk_flags"]
             .as_array()
             .expect("risk flags")
@@ -8530,6 +8791,18 @@ mod tests {
         assert_eq!(
             sharpness_risk["review_action"],
             json!("review_blurry_or_unmeasured_slide_frames")
+        );
+        let readability_risk = slide_quality_report_json["risk_flags"]
+            .as_array()
+            .expect("risk flags")
+            .iter()
+            .find(|risk| risk["code"] == json!("slide_readability_review_required"))
+            .expect("readability risk flag");
+        assert_eq!(readability_risk["high_count"], json!(1));
+        assert_eq!(readability_risk["unknown_count"], json!(0));
+        assert_eq!(
+            readability_risk["review_action"],
+            json!("review_low_contrast_or_low_content_slide_frames")
         );
     }
 

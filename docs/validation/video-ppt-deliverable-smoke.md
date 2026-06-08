@@ -3783,6 +3783,75 @@ Safety result:
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Readability-Aware Sharpness Review
+
+Task source: EP6 local quality narrowing after the public-course sample still had three high sharpness/readability review pages. Manual inspection showed those pages were readable high-contrast title or closing slides where the sparse-edge sharpness metric was too conservative.
+
+Scope:
+
+- add a conservative readability assessment to `slide_quality_report.json` with `readability_status`, `readability_score`, `readability_risk`, and matching summary counts;
+- use high-contrast foreground coverage and spatial distribution to distinguish readable large-title slides from low-information or low-contrast frames;
+- keep low-contrast text slides as high-risk review cases and emit `slide_readability_review_required`;
+- extend `validate-video-deliverables` so optional readability fields are schema- and count-checked when present;
+- tighten quality matrix verdicts so explicit review risks such as `manual_review_required` and `missing_transcript_alignment` keep public-course samples in `needs_manual_review`;
+- keep the work local-only with no upload, third-party event, browser capture, FFmpeg recording, service deployment, or 120-server action.
+
+Implemented behavior:
+
+- high-contrast large-title frames with low raw sparse-edge sharpness can now report `sharpness_risk=low` when readability evidence is strong;
+- unreadable or low-contrast text still reports `readability_risk=high` and remains a review risk;
+- quality matrix no longer treats a public sample as clean merely because `quality_score` reaches 70; explicit review risk flags still force `needs_manual_review`;
+- legacy deliverables without readability fields remain compatible.
+
+Validation:
+
+```text
+cargo fmt --check
+cargo test -p media-worker treats_high_contrast_title_slides_as_readable_even_with_sparse_edges --lib
+cargo test -p media-worker flags_low_contrast_slide_text_in_quality_report --lib
+cargo test -p media-worker measures_slide_frame_sharpness_for_quality_report --lib
+cargo test -p media-worker --lib
+cargo check -p media-worker --bin video_ppt_offline_smoke
+node --check tools/validate-video-deliverables.mjs
+npm run test:video-deliverables
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+cargo run -p media-worker --bin video_ppt_offline_smoke -- --input <local-public-course-mp4> --output-root <target-redacted> --ffmpeg-bin <ffmpeg-bin> --interval-seconds 15 --title <public-course-title> --json-output <target-redacted>
+node tools/validate-video-deliverables.mjs <public-candidate-generated_artifacts> --json
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-candidate-generated_artifacts> --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- readable-title fixture passed and proved sparse-edge title pages can be low risk when readability evidence is strong;
+- low-contrast text fixture passed and still emits high readability/sharpness review risk;
+- sharpness helper fixture passed with measured readable, solid high-risk, and unavailable unknown cases;
+- media-worker lib suite passed: 56 tests;
+- `video_ppt_offline_smoke` compiled successfully;
+- video deliverables validator passed 27 Node test cases, including readability optional-field validation;
+- quality matrix self-test passed with 3 cases, 1 deliverable case, and 2 pending cases;
+- public-course offline smoke completed locally with `deliverable_state=final_pptx_ready`, `frame_count=96`, `selected_count=7`, `has_pptx=true`, `has_video_slides_markdown=true`, `has_slide_quality_report=true`, and `has_subtitle_page_map=false`;
+- public-course validator shared JSON passed with redacted paths and aligned counts: `selected_count=7`, `requested_selected_count=9`, `pptx_slide_count=7`, `markdown_slide_count=7`, `slide_rectangle_count=7`, and `quality_slide_count=7`;
+- public-course quality report now has `full_frame_fallback_count=0`, `detector_crop_count=7`, `sharpness_high_count=0`, `sharpness_unknown_count=0`, `readability_high_count=0`, `readability_unknown_count=0`, `subtitle_missing_count=7`, and `ocr_missing_count=7`;
+- public-course quality score increased to 70, but quality matrix correctly remains `needs_manual_review` because transcript/OCR evidence and manual review risk are still present.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- public-course quality still needs manual review for missing transcript/OCR evidence, duplicate choices, and final customer usability;
+- true customer-facing quality still requires an authorized customer/operator sample and a live artifact visibility pass.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no MP4 was captured or recorded; the only frame extraction was the local offline smoke from an existing public-course fixture under `target/`;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports and deliverables stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Full-Frame Content Slide Detector
 
 Task source: EP6 local crop-quality narrowing after the public-course sample still had one `full_frame_rectangle_fallback` page. Manual inspection showed that page was a full-screen dark title slide, where the whole frame is the courseware page rather than a missed inner rectangle.

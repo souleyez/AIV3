@@ -448,10 +448,12 @@ test("rejects malformed slide quality reports", () => {
   qualityReport.summary.single_slide_output = true;
   qualityReport.slides[0].crop_risk = "unknown";
   qualityReport.slides[0].sharpness_status = "broken";
+  qualityReport.slides[0].readability_status = "broken";
   qualityReport.risk_flags[0].severity = "critical";
   qualityReport.risk_flags[0].count = 0;
   delete qualityReport.risk_flags[0].review_action;
   qualityReport.summary.sharpness_low_count = -1;
+  qualityReport.summary.readability_low_count = -1;
   qualityReport.summary.full_frame_fallback_count = -1;
   fs.writeFileSync(qualityReportPath, JSON.stringify(qualityReport, null, 2));
 
@@ -466,6 +468,7 @@ test("rejects malformed slide quality reports", () => {
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_summary_invalid"));
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_risk_flags_invalid"));
   assert.ok(result.errors.some((error) => error.code === "slide_quality_report_sharpness_invalid"));
+  assert.ok(result.errors.some((error) => error.code === "slide_quality_report_readability_invalid"));
 });
 
 test("rejects unredacted local paths in slide notes", () => {
@@ -674,6 +677,10 @@ function createCompleteDeliverables() {
           sharpness_medium_count: 0,
           sharpness_high_count: 0,
           sharpness_unknown_count: 0,
+          readability_low_count: 1,
+          readability_medium_count: 0,
+          readability_high_count: 0,
+          readability_unknown_count: 0,
           deduped_candidate_count: 0,
           exact_duplicate_count: 0,
           visual_duplicate_count: 0,
@@ -717,6 +724,9 @@ function createCompleteDeliverables() {
             sharpness_status: "measured",
             sharpness_score: 82,
             sharpness_risk: "low",
+            readability_status: "measured",
+            readability_score: 91,
+            readability_risk: "low",
             review_required: true,
             quality_score: 55,
           },
