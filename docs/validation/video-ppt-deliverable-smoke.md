@@ -3967,3 +3967,60 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Video PPT No-Live Rollup Gate
+
+Task source: after the video PPT surface accumulated several independent no-live gates, the active plan needed a repeatable one-command rollup that proves the current local baseline without running live upload, third-party, handoff, capture, deployment, or customer-authorized actions.
+
+Scope:
+
+- add a consolidated no-live rollup script for video PPT extraction readiness;
+- include syntax checks, self-tests, preflights, quality matrix review-risk regression, and deliverables validator tests;
+- write a redacted local report with explicit safety gates;
+- keep the rollup strictly local: no live DataMax calls, no video downloads, no uploads, no browser capture, no FFmpeg capture, no service deployment, and no 8/120 server access.
+
+Implemented behavior:
+
+- new npm entrypoint: `smoke:video-ppt-no-live-rollup`;
+- new script: `scripts/smoke/video-ppt-no-live-rollup.mjs`;
+- the rollup runs 15 commands covering:
+  - main-site upload smoke syntax, self-test, and preflight;
+  - third-party video PPT smoke syntax, self-test, and preflight;
+  - login-gated video handoff syntax, self-test, and preflight;
+  - authorized capture helper syntax and self-test;
+  - quality matrix syntax and self-test;
+  - deliverables validator syntax and tests.
+- the report schema is `v3.video_ppt_no_live_rollup.v1`;
+- report gates set `live_smoke_run=false`, `production_write_allowed=false`, `network_download_allowed=false`, `file_upload_allowed=false`, `browser_capture_allowed=false`, `service_deployment_allowed=false`, `server_8_touched=false`, and `server_120_touched=false`;
+- the report refuses unredacted local paths, URLs, or token-like text.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report>
+```
+
+Result:
+
+- script syntax check passed;
+- no-live rollup passed with `command_count=15`, `passed_count=15`, and `failed_count=0`;
+- generated report summary contained all 15 command ids and all safety gates set to the no-live values;
+- report redaction scan found no local paths, URLs, token/cookie/bearer-like text, or session directories.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- use this rollup as the local precondition before any approved live smoke or deployment window.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no MP4 was captured or recorded;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
