@@ -681,10 +681,26 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
       ? report.gates.not_deliverable_failure_classes
       : [],
     failure_class_summary_supported: report.gates?.failure_class_summary_supported,
+    failure_class_counts: sanitizeCountMap(report.summary?.failure_class_counts),
+    not_deliverable_failure_class_counts: sanitizeCountMap(report.summary?.not_deliverable_failure_class_counts),
+    needs_manual_review_failure_class_counts: sanitizeCountMap(report.summary?.needs_manual_review_failure_class_counts),
     live_smoke_run: report.gates?.live_smoke_run,
     production_write_allowed: report.gates?.production_write_allowed,
     generated_artifacts_committable: report.gates?.generated_artifacts_committable,
   };
+}
+
+function sanitizeCountMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const result = {};
+  for (const [key, count] of Object.entries(value)) {
+    if (typeof key === 'string' && Number.isInteger(count) && count >= 0) {
+      result[key] = count;
+    }
+  }
+  return result;
 }
 
 function extractScopePlannerTestsEvidence(stdout) {
@@ -1502,12 +1518,22 @@ function validateQualityMatrixEvidence(report) {
     || !evidence.not_deliverable_failure_classes.includes('artifact_visibility')
     || !evidence.not_deliverable_failure_classes.includes('selection_quality')
     || evidence.failure_class_summary_supported !== true
+    || !isCountMap(evidence.failure_class_counts)
+    || !isCountMap(evidence.not_deliverable_failure_class_counts)
+    || !isCountMap(evidence.needs_manual_review_failure_class_counts)
     || evidence.live_smoke_run !== false
     || evidence.production_write_allowed !== false
     || evidence.generated_artifacts_committable !== false
   ) {
     throw new Error('no-live rollup quality matrix evidence is incomplete');
   }
+}
+
+function isCountMap(value) {
+  return Boolean(value)
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.values(value).every((count) => Number.isInteger(count) && count >= 0);
 }
 
 function writeReport(outputDir, report, pretty) {
