@@ -10843,22 +10843,27 @@ fn external_channel_static_page_default_modules_for_focus(focus: &str) -> Vec<St
             "月度销售趋势".to_string(),
             "机会/风险品类占比".to_string(),
         ],
+        "经营健康度" => vec![
+            "经营健康度".to_string(),
+            "月度销售趋势".to_string(),
+            "机会/风险品类占比".to_string(),
+        ],
         "风险店铺" => vec![
             "持续低活跃品牌".to_string(),
             "最新低活跃品牌".to_string(),
             "客流降低预警".to_string(),
         ],
-        "低活跃" => vec![
-            "低活跃门店".to_string(),
-            "门店/品牌占比".to_string(),
-            "客流降低预警".to_string(),
+        "低活跃" | "低活跃风险" => vec![
+            "最新低活跃品牌".to_string(),
+            "持续低活跃品牌".to_string(),
+            "风险品类占比".to_string(),
         ],
         "品牌明细" => vec![
             "品牌/门店明细".to_string(),
             "合同与租金字段".to_string(),
             "可筛选明细表".to_string(),
         ],
-        "品类业态" => vec![
+        "品类业态" | "品类分析" => vec![
             "品类业态分布".to_string(),
             "区域/门店对比".to_string(),
             "结构变化分析".to_string(),
@@ -36696,9 +36701,10 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
             "客流预警",
             "异常",
             "inactive",
+            "低活跃品牌",
         ],
     ) {
-        return Some("低活跃");
+        return Some("低活跃风险");
     }
     if static_page_template_text_contains_any(
         &compact,
@@ -36708,6 +36714,8 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
             "风险门店",
             "风险品牌",
             "风险提示",
+            "风险识别",
+            "风险识别系统",
             "风险",
             "预警",
             "高风险",
@@ -36762,7 +36770,15 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
     if static_page_template_text_contains_any(
         &compact,
         &lower,
-        &["品类", "业态", "类别", "结构", "占比", "category"],
+        &[
+            "品类",
+            "品类分析",
+            "业态",
+            "类别",
+            "结构",
+            "占比",
+            "category",
+        ],
     ) {
         return Some("品类业态");
     }
@@ -36777,6 +36793,7 @@ fn static_page_prompt_focus_query_value(prompt: &str) -> Option<&'static str> {
             "总览",
             "overview",
             "health",
+            "经营健康度",
         ],
     ) {
         return Some("经营总览");
@@ -88106,6 +88123,49 @@ fn static_page_template_adaptation_focus(prompt: Option<&str>) -> Vec<Value> {
     if static_page_template_prompt_contains_any(
         prompt,
         &[
+            "低活跃",
+            "不活跃",
+            "零销售",
+            "无销售",
+            "连续无销售",
+            "低销售",
+            "风险品牌",
+            "风险门店",
+            "客流下降",
+            "客流降低",
+            "客流预警",
+            "inactive",
+        ],
+    ) {
+        focus.push(json!({
+            "code": "low_activity_risk_modules",
+            "label": "低活跃风险模块",
+            "instruction": "模板需要前置风险品类占比、最新低活跃品牌、持续低活跃品牌和客流降低预警。"
+        }));
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
+            "风险识别",
+            "风险识别系统",
+            "风险店铺",
+            "风险门店",
+            "风险品牌",
+            "风险提示",
+            "高风险",
+            "风险预警",
+            "risk",
+        ],
+    ) {
+        focus.push(json!({
+            "code": "low_activity_risk_modules",
+            "label": "低活跃风险模块",
+            "instruction": "模板需要优先突出风险相关店铺清单与风险占比指标。"
+        }));
+    }
+    if static_page_template_prompt_contains_any(
+        prompt,
+        &[
             "近7日",
             "近七日",
             "月",
@@ -94627,6 +94687,18 @@ mod tests {
     }
 
     #[test]
+    fn static_page_template_adaptation_focus_prioritizes_low_activity_modules() {
+        let focus = static_page_template_adaptation_focus(Some("生成低活跃品牌报表"));
+
+        assert!(focus
+            .iter()
+            .any(|item| item["code"] == json!("low_activity_risk_modules")));
+        assert!(focus
+            .iter()
+            .any(|item| item["label"] == json!("低活跃风险模块")));
+    }
+
+    #[test]
     fn static_page_template_reference_rejects_paused_tracks() {
         let error = resolve_static_page_template_reference(Some("video-hyperframes"))
             .expect_err("paused video reference should be rejected");
@@ -96061,11 +96133,11 @@ mod tests {
             public_url
         );
         for (prompt, expected_focus) in [
-            ("低活跃品牌有哪些", "低活跃"),
+            ("低活跃品牌有哪些", "低活跃风险"),
             ("展示品牌店铺客户明细", "品牌明细"),
             ("按品类业态看一下销售结构", "品类业态"),
             ("取高预警门店有哪些", "取高机会"),
-            ("客流下降风险门店", "低活跃"),
+            ("客流下降风险门店", "低活跃风险"),
             ("经营健康度评分表", "经营总览"),
             ("经营状况", "经营总览"),
             ("经营健康度", "经营总览"),
@@ -96075,7 +96147,7 @@ mod tests {
             ("哪些需要助推的门店", "取高机会"),
             ("销售缺口统计一下，哪些门店需要助推", "取高机会"),
             ("看月度销售趋势", "经营总览"),
-            ("客流降低预警", "低活跃"),
+            ("客流降低预警", "低活跃风险"),
             (
                 "按这个模板把新百经营月报做出来，重点放取高机会和风险门店。",
                 "取高机会",
@@ -96085,6 +96157,9 @@ mod tests {
                 "经营总览",
             ),
             ("上传了客流统计，帮经营健康度报表增加客流同比。", "经营总览"),
+            ("给我一份品类分析报表", "品类业态"),
+            ("请看一下经营健康度和门店评分", "经营总览"),
+            ("风险识别系统有哪些门店需要关注？", "风险店铺"),
         ] {
             let focused = static_page_public_url_with_prompt_focus(public_url, prompt);
             let url = reqwest::Url::parse(&focused).expect("focused artifact URL should parse");
@@ -96112,6 +96187,20 @@ mod tests {
 
         assert!(text.contains("系统识别到本轮关注焦点：经营总览"));
         assert!(text.contains("报表会优先呈现：经营健康度、月度销售趋势、机会/风险品类占比"));
+
+        let low_activity_text = external_channel_static_page_customer_ready_text_for_payload(
+            external_channel_static_page_customer_ready_text(),
+            Some(&json!({
+                "template_adaptation": {
+                    "userIntent": "生成低活跃品牌报表"
+                }
+            })),
+            public_url,
+        );
+
+        assert!(low_activity_text.contains("系统识别到本轮关注焦点：低活跃风险"));
+        assert!(low_activity_text
+            .contains("报表会优先呈现：最新低活跃品牌、持续低活跃品牌、风险品类占比"));
     }
 
     #[test]

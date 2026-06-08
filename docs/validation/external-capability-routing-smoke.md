@@ -68,7 +68,7 @@ Strict focused-report SSE smoke passed for 12 selected cases after rollout:
 | Group | Result |
 | --- | --- |
 | Xinbai report triggers | 9/9 returned exactly one generated-artifact link and matched expected `?focus=` |
-| Focuses covered | `取高机会`, `经营总览`, `风险店铺`, `低活跃` |
+| Focuses covered | `取高机会`, `经营总览`, `风险店铺`, `低活跃风险` |
 | Ordinary-Q&A guards | `取高是什么意思？`, `风险识别系统有哪些项目经历？`, `经营风险是什么意思？` completed with 0 artifact links |
 
 Export smoke also passed:
@@ -199,6 +199,16 @@ Local checks passed before rollout:
 | dark mobile report redesign | Passed for routing/progress; returned `v3_static_page_pipeline`, preview ready and `static_page_publish_running`; final generated page was still queued/running in Cloudflare Codex at validation time |
 
 The local fixture now also covers the high-frequency Xinbai report prompts `取高`, `经营状况`, `经营健康度`, `看看整体经营情况`, `风险识别`, `看看新街口店经营风险`, `销售缺口统计一下，哪些门店需要助推？`, `看月度销售趋势`, and `客流降低预警`, including expected `?focus=` values for the accepted default template. The live smoke script collects report links from both `artifact_links[]` and report-card URL fields; when a selected fixture has `expected_focus`, the script requires an immediate report link and verifies that the returned URL carries the expected focus. These cases should be selected for live 8-server smoke when report routing or static-page template reuse changes.
+
+## 2026-06-08 Low-Activity Brand Report Focus Fix
+
+Customer wording such as `低活跃品牌报表` now maps to the accepted Xinbai template focus `低活跃风险`, not the older loose label `低活跃`. The customer-ready report text now lists low-activity brand modules first: `最新低活跃品牌`、`持续低活跃品牌`、`风险品类占比`. Template adaptation also emits `low_activity_risk_modules`, so generation/reuse workflows can explicitly prioritize the low-activity risk section instead of falling back to generic current-intent ordering.
+
+Local targeted checks:
+
+- `cargo test -p platform-api static_page_public_url_with_prompt_focus_adds_module_query --lib`
+- `cargo test -p platform-api external_channel_static_page_ready_text_uses_default_modules_for_prompt_focus --lib`
+- `cargo test -p platform-api static_page_template_adaptation_focus_prioritizes_low_activity_modules --lib`
 
 Event inspection:
 
