@@ -222,6 +222,8 @@ function runCommand(command) {
   });
   const durationMs = Date.now() - started;
   const exitCode = typeof child.status === 'number' ? child.status : 1;
+  const stdout = child.stdout || '';
+  const stderr = child.stderr || '';
   return {
     id: command.id,
     description: command.description,
@@ -229,12 +231,62 @@ function runCommand(command) {
     exit_code: exitCode,
     duration_ms: durationMs,
     command: displayCommand(command),
-    stdout_line_count: lineCount(child.stdout),
-    stderr_line_count: lineCount(child.stderr),
+    stdout_line_count: lineCount(stdout),
+    stderr_line_count: lineCount(stderr),
+    evidence: exitCode === 0 ? extractCommandEvidence(command.id, stdout) : null,
     failure_excerpt: exitCode === 0
       ? null
-      : sanitizeExcerpt(`${child.stderr || ''}\n${child.stdout || ''}`),
+      : sanitizeExcerpt(`${stderr}\n${stdout}`),
   };
+}
+
+function extractCommandEvidence(commandId, stdout) {
+  if (commandId !== 'quality_matrix_self_test') {
+    return null;
+  }
+  return extractQualityMatrixSelfTestEvidence(stdout);
+}
+
+function extractQualityMatrixSelfTestEvidence(stdout) {
+  const report = readJsonReportFromStdout(stdout);
+  if (!report) {
+    return null;
+  }
+  return {
+    schema: 'v3.video_ppt_quality_matrix_rollup_evidence.v1',
+    input_mode: report.input_mode,
+    case_count: report.summary?.case_count,
+    deliverable_count: report.summary?.deliverable_count,
+    pending_count: report.summary?.pending_count,
+    expectation_mismatch_count: report.summary?.expectation_mismatch_count,
+    review_required_risk_flag_count: report.gates?.review_required_risk_flag_count,
+    review_required_risk_flag_object_shape_supported: report.gates?.review_required_risk_flag_object_shape_supported,
+    review_required_risk_flag_object_shape_case_count: report.gates?.review_required_risk_flag_object_shape_case_count,
+    live_smoke_run: report.gates?.live_smoke_run,
+    production_write_allowed: report.gates?.production_write_allowed,
+    generated_artifacts_committable: report.gates?.generated_artifacts_committable,
+  };
+}
+
+function readJsonReportFromStdout(stdout) {
+  const match = stdout.match(/\breport=([^\s]+)/);
+  if (!match) {
+    return null;
+  }
+  const reportPath = match[1];
+  const normalized = path.normalize(reportPath);
+  if (
+    path.isAbsolute(normalized)
+    || normalized.startsWith('..')
+    || !normalized.startsWith(`target${path.sep}`)
+  ) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(normalized, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function displayCommand(command) {
@@ -325,9 +377,35 @@ function validateReport(report) {
   ) {
     throw new Error('no-live rollup safety gates are invalid');
   }
+  validateQualityMatrixEvidence(report);
   const serialized = JSON.stringify(report);
   if (serialized.match(/[A-Za-z]:[\\/]|[\\/]Users[\\/]|[\\/]home[\\/]|https?:\/\/|token=|cookie=|bearer=/i)) {
     throw new Error('no-live rollup report contains unredacted local path, URL, or token-like text');
+  }
+}
+
+function validateQualityMatrixEvidence(report) {
+  const command = report.commands.find((result) => result.id === 'quality_matrix_self_test');
+  if (!command || command.status !== 'passed') {
+    return;
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.video_ppt_quality_matrix_rollup_evidence.v1'
+    || evidence.input_mode !== 'self_test'
+    || evidence.case_count !== 3
+    || evidence.deliverable_count !== 1
+    || evidence.pending_count !== 2
+    || evidence.expectation_mismatch_count !== 0
+    || evidence.review_required_risk_flag_count !== 8
+    || evidence.review_required_risk_flag_object_shape_supported !== true
+    || evidence.review_required_risk_flag_object_shape_case_count !== 8
+    || evidence.live_smoke_run !== false
+    || evidence.production_write_allowed !== false
+    || evidence.generated_artifacts_committable !== false
+  ) {
+    throw new Error('no-live rollup quality matrix evidence is incomplete');
   }
 }
 

@@ -4022,6 +4022,61 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 No-Live Rollup Quality Matrix Evidence
+
+Task source: M6AD follow-up after M6AC made quality matrix object-shaped risk flags explicit. The no-live rollup previously proved that the quality matrix self-test command passed, but the rollup report did not carry the child report's key gate evidence. This slice lets the rollup read the local quality-matrix child report and embed a narrow, redacted evidence summary in the top-level no-live report.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
+- read only the report path printed by the local `quality_matrix_self_test` command;
+- accept only relative `target/` report paths;
+- copy only counts and boolean gate fields into the rollup report, not the child report path or raw JSON body.
+
+Implemented behavior:
+
+- `scripts/smoke/video-ppt-no-live-rollup.mjs` extracts quality matrix evidence from the child self-test report;
+- the top-level rollup command entry now has `evidence.schema=v3.video_ppt_quality_matrix_rollup_evidence.v1`;
+- the evidence includes `case_count=3`, `deliverable_count=1`, `pending_count=2`, `expectation_mismatch_count=0`;
+- the evidence includes `review_required_risk_flag_count=8`, `review_required_risk_flag_object_shape_supported=true`, and `review_required_risk_flag_object_shape_case_count=8`;
+- the rollup validator now fails if the quality matrix evidence is missing or incomplete.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live report summary readback>"
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report>
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`;
+- top-level safety gates remained `live_smoke_run=false`, `production_write_allowed=false`, `network_download_allowed=false`, `file_upload_allowed=false`, `browser_capture_allowed=false`, `service_deployment_allowed=false`, `server_8_touched=false`, and `server_120_touched=false`;
+- embedded quality matrix evidence recorded `review_required_risk_flag_count=8`;
+- embedded quality matrix evidence recorded `review_required_risk_flag_object_shape_supported=true`;
+- embedded quality matrix evidence recorded `review_required_risk_flag_object_shape_case_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, or password-like values.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- future no-live child reports that become acceptance-critical should expose similarly narrow evidence in the top-level rollup instead of requiring operators to inspect raw child JSON.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Video PPT No-Live Rollup Gate
 
 Task source: after the video PPT surface accumulated several independent no-live gates, the active plan needed a repeatable one-command rollup that proves the current local baseline without running live upload, third-party, handoff, capture, deployment, or customer-authorized actions.
