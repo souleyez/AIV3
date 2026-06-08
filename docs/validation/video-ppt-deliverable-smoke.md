@@ -4747,3 +4747,68 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 No-Live Rollup Production Trigger Tests
+
+Task source: M6AH follow-up after M6AF embedded handoff and authorized-capture evidence. The one-command no-live baseline still did not execute the production trigger boundary tests from the front-end scope planner and Rust assistant-runtime, so a green no-live rollup did not itself prove that ordinary video-to-PPT generation and transcript-only video prompts remain rejected in production recommendation paths.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, service deployment, or 8/120 server access;
+- extend only `scripts/smoke/video-ppt-no-live-rollup.mjs`;
+- add production trigger boundary checks to the same no-live rollup command;
+- keep existing upload, external, handoff, authorized-capture, quality-matrix, media-worker, and deliverables-validator gates unchanged.
+
+Implemented behavior:
+
+- no-live rollup now runs `node --check apps/web/app/lib/scope-planner.js`;
+- no-live rollup now runs `node --test apps/web/app/lib/scope-planner.test.mjs`;
+- no-live rollup now runs `cargo test -p assistant-runtime video_ppt_scope --lib`;
+- no-live rollup command count increased from 18 to 21;
+- the existing five embedded evidence schemas remain present for upload-main, external-video-ppt, handoff, authorized-capture, and quality-matrix self-tests.
+
+Validation:
+
+```text
+node --check apps/web/app/lib/scope-planner.js
+node --test apps/web/app/lib/scope-planner.test.mjs
+cargo test -p assistant-runtime video_ppt_scope --lib
+cargo test -p assistant-runtime transcript_only_video_request --lib
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live report summary readback>"
+rg -n "<local-path-url-token-patterns>" <no-live-rollup-report-dir>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- front-end scope planner syntax check passed;
+- front-end scope planner tests passed with 21 tests;
+- Rust assistant-runtime video PPT scope tests passed with 3 tests;
+- Rust transcript-only targeted test passed with 1 test;
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=21`, `passed_count=21`, and `failed_count=0`;
+- no-live report recorded `scope_planner_syntax=passed`, `scope_planner_tests=passed`, and `assistant_runtime_video_ppt_scope_tests=passed`;
+- embedded evidence schemas remained present: `v3.video_ppt_upload_main_rollup_evidence.v1`, `v3.external_video_ppt_rollup_evidence.v1`, `v3.video_ppt_handoff_rollup_evidence.v1`, `v3.authorized_capture_rollup_evidence.v1`, and `v3.video_ppt_quality_matrix_rollup_evidence.v1`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, raw self-test approval values, or raw self-test operator values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- M6AH only strengthens the no-live baseline so production trigger boundaries are checked together with smoke trigger boundaries.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

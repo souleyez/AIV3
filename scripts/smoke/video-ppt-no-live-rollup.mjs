@@ -91,6 +91,24 @@ const COMMANDS = [
     ],
   },
   {
+    id: 'scope_planner_syntax',
+    description: 'front-end production scope planner syntax check',
+    command: process.execPath,
+    args: ['--check', 'apps/web/app/lib/scope-planner.js'],
+  },
+  {
+    id: 'scope_planner_tests',
+    description: 'front-end production scope planner video PPT trigger tests',
+    command: process.execPath,
+    args: ['--test', 'apps/web/app/lib/scope-planner.test.mjs'],
+  },
+  {
+    id: 'assistant_runtime_video_ppt_scope_tests',
+    description: 'Rust assistant-runtime production video PPT scope tests',
+    command: 'cargo',
+    args: ['test', '-p', 'assistant-runtime', 'video_ppt_scope', '--lib'],
+  },
+  {
     id: 'rust_format_check',
     description: 'Rust workspace formatting check',
     command: 'cargo',
@@ -164,6 +182,8 @@ Checks:
   - runs login-gated video handoff self-test and preflight without network calls
   - runs authorized-capture self-test without opening a browser or FFmpeg
   - runs quality matrix self-test, including review-risk regression
+  - runs front-end scope planner syntax/tests for video PPT trigger boundaries
+  - runs Rust assistant-runtime video PPT scope tests
   - runs Rust formatting check
   - runs media-worker video PPT library tests and offline smoke binary check
   - runs video deliverables validator tests
