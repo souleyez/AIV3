@@ -103,6 +103,27 @@ Safety:
   - generated reports stay under target/ and must not include source URLs, object paths, cookies, tokens, or provider payloads`;
 }
 
+function validateInputModeArgs(args) {
+  const deliverableInputs = [
+    args.syntheticDeliverables,
+    args.publicCourseDeliverables,
+    args.customerDeliverables,
+  ].filter(Boolean);
+  if (args.selfTest && deliverableInputs.length > 0) {
+    throw new Error('use either --self-test or deliverables input flags, not both');
+  }
+  if (args.customerDeliverables && !args.customerApprovalId) {
+    throw new Error('--customer-approval-id is required with --customer-deliverables');
+  }
+  if (args.customerApprovalId && !args.customerDeliverables) {
+    throw new Error('--customer-approval-id requires --customer-deliverables');
+  }
+  if (!args.selfTest && deliverableInputs.length === 0) {
+    throw new Error('--self-test, --synthetic-deliverables, --public-course-deliverables, or --customer-deliverables is required');
+  }
+  return deliverableInputs;
+}
+
 function buildSelfTestCases() {
   return [
     buildSelfTestSyntheticCase(),
@@ -472,6 +493,7 @@ function buildSelfTestReport() {
       customer_authorization_required: true,
       local_deliverables_input_reviewed: false,
       deliverables_mode_failure_class_gate_defaults_supported: true,
+      customer_authorization_argument_gate_supported: true,
       review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       review_required_risk_flag_object_shape_supported: true,
@@ -505,6 +527,7 @@ function buildSelfTestReport() {
   validateNotDeliverableFailureRegression();
   validateFailureClassSummaryRegression(failureClassSummaryRegression);
   validateDeliverablesModeGateMetadata();
+  validateCustomerAuthorizationArgumentRegression();
   return report;
 }
 
@@ -735,6 +758,54 @@ function validateDeliverablesModeGateMetadata() {
   }
 }
 
+function validateCustomerAuthorizationArgumentRegression() {
+  const baseArgs = {
+    selfTest: false,
+    syntheticDeliverables: '',
+    publicCourseDeliverables: '',
+    customerDeliverables: '',
+    customerApprovalId: '',
+  };
+  const invalidCases = [
+    {
+      name: 'missing_customer_approval_id',
+      args: { ...baseArgs, customerDeliverables: 'customer-deliverables-redacted' },
+      expected: /--customer-approval-id is required/,
+    },
+    {
+      name: 'customer_approval_without_deliverables',
+      args: { ...baseArgs, customerApprovalId: 'customer-approval-redacted' },
+      expected: /--customer-approval-id requires --customer-deliverables/,
+    },
+    {
+      name: 'self_test_with_customer_deliverables',
+      args: {
+        ...baseArgs,
+        selfTest: true,
+        customerDeliverables: 'customer-deliverables-redacted',
+        customerApprovalId: 'customer-approval-redacted',
+      },
+      expected: /use either --self-test or deliverables input flags/,
+    },
+  ];
+  for (const invalidCase of invalidCases) {
+    let rejected = false;
+    try {
+      validateInputModeArgs(invalidCase.args);
+    } catch (error) {
+      rejected = invalidCase.expected.test(error.message);
+    }
+    if (!rejected) {
+      throw new Error(`quality matrix customer authorization argument gate failed: ${invalidCase.name}`);
+    }
+  }
+  validateInputModeArgs({
+    ...baseArgs,
+    customerDeliverables: 'customer-deliverables-redacted',
+    customerApprovalId: 'customer-approval-redacted',
+  });
+}
+
 function buildDeliverablesReportFromArgs(args) {
   const inputKinds = deliverablesInputKinds(args);
   const allDeliverablesInputsReviewed = inputKinds.length === REQUIRED_CATEGORIES.length;
@@ -963,6 +1034,7 @@ function validateSelfTestReport(report) {
     || report.gates.review_failure_class_summary_supported !== true
     || report.gates.review_failure_class_summary_needs_manual_review_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !hasExpectedReviewFailureClassCounts(report.gates.review_failure_class_summary_counts)
+    || report.gates.customer_authorization_argument_gate_supported !== true
   ) {
     throw new Error('self-test report must expose the review-required risk flag gate');
   }
@@ -1088,23 +1160,7 @@ function main() {
     console.log(usage());
     return;
   }
-  const deliverableInputs = [
-    args.syntheticDeliverables,
-    args.publicCourseDeliverables,
-    args.customerDeliverables,
-  ].filter(Boolean);
-  if (args.selfTest && deliverableInputs.length > 0) {
-    throw new Error('use either --self-test or deliverables input flags, not both');
-  }
-  if (args.customerDeliverables && !args.customerApprovalId) {
-    throw new Error('--customer-approval-id is required with --customer-deliverables');
-  }
-  if (args.customerApprovalId && !args.customerDeliverables) {
-    throw new Error('--customer-approval-id requires --customer-deliverables');
-  }
-  if (!args.selfTest && deliverableInputs.length === 0) {
-    throw new Error('--self-test, --synthetic-deliverables, --public-course-deliverables, or --customer-deliverables is required');
-  }
+  const deliverableInputs = validateInputModeArgs(args);
   let report;
   if (deliverableInputs.length > 0) {
     report = buildDeliverablesReportFromArgs(args);
