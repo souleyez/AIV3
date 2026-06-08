@@ -434,6 +434,11 @@ function extractExternalVideoPptSelfTestEvidence(stdout) {
     trigger_script_specific_case_count: trigger.scriptSpecificCaseCount,
     positive_prompt_count: trigger.positivePromptCount,
     negative_prompt_count: trigger.negativePromptCount,
+    surface_ok: report.surface?.ok,
+    surface_export_count: report.surface?.exportCount,
+    surface_export_kind_count: report.surface?.exportKinds?.length,
+    surface_missing_export_kind_count: report.surface?.missingExportKinds?.length,
+    surface_artifact_link_count: report.surface?.artifactLinkCount,
     source_summary_redacted: report.contract?.sourceSummaryRedacted,
     download_validation_ok: report.downloadValidation?.ok,
     pptx_slide_count: report.downloadValidation?.pptxSlideCount,
@@ -1035,6 +1040,7 @@ function buildAcceptanceStatus({ summary, results }) {
 function buildLiveGateReadinessSummary(results = []) {
   const commandById = new Map(results.map((result) => [result.id, result]));
   const uploadPreflight = commandById.get('upload_main_preflight')?.evidence || {};
+  const externalSelfTest = commandById.get('external_video_ppt_self_test')?.evidence || {};
   const externalPreflight = commandById.get('external_video_ppt_preflight')?.evidence || {};
   const handoffPreflight = commandById.get('video_ppt_handoff_preflight')?.evidence || {};
   const captureDryRun = commandById.get('authorized_capture_dry_run')?.evidence || {};
@@ -1049,6 +1055,16 @@ function buildLiveGateReadinessSummary(results = []) {
     external_context_present: externalPreflight.connection_id_present === true
       && externalPreflight.source_id_present === true,
     external_live_credential_ready: externalPreflight.live_credential_ready === true,
+    external_artifact_surface_self_test_ready:
+      externalSelfTest.surface_ok === true
+      && externalSelfTest.surface_missing_export_kind_count === 0
+      && externalSelfTest.download_validation_ok === true,
+    external_artifact_required_export_kind_count: 6,
+    external_artifact_export_kind_count: externalSelfTest.surface_export_kind_count ?? null,
+    external_artifact_link_count: externalSelfTest.surface_artifact_link_count ?? null,
+    external_artifact_live_download_pending:
+      externalPreflight.deliverables_downloaded_from_network === false
+      && externalPreflight.live_credential_ready === false,
     handoff_preflight_ready: handoffPreflight.ok === true && handoffPreflight.preflight === true,
     handoff_deployment_approval_required: handoffPreflight.deployment_approval_required === true,
     handoff_live_credential_ready: handoffPreflight.live_credential_ready === true,
@@ -1118,6 +1134,16 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
       && externalEvidence.unsupported_non_video_extensions_rejected === true,
     unsupported_non_video_extensions_rejected:
       externalEvidence.unsupported_non_video_extensions_rejected === true,
+    external_artifact_surface_ready:
+      externalEvidence.surface_ok === true
+      && externalEvidence.surface_missing_export_kind_count === 0
+      && externalEvidence.download_validation_ok === true,
+    external_artifact_required_export_kind_count: 6,
+    external_artifact_export_kind_count: externalEvidence.surface_export_kind_count ?? null,
+    external_artifact_missing_export_kind_count:
+      externalEvidence.surface_missing_export_kind_count ?? null,
+    external_artifact_link_count: externalEvidence.surface_artifact_link_count ?? null,
+    external_artifact_download_validation_ok: externalEvidence.download_validation_ok === true,
     live_preflight_evidence_count: [
       'upload_main_preflight',
       'external_video_ppt_preflight',
@@ -1266,6 +1292,11 @@ function validateLiveGateReadinessSummary(acceptance, report) {
     || readiness.external_live_write_approval_required !== true
     || readiness.external_context_present !== true
     || readiness.external_live_credential_ready !== false
+    || readiness.external_artifact_surface_self_test_ready !== true
+    || readiness.external_artifact_required_export_kind_count !== 6
+    || readiness.external_artifact_export_kind_count < 6
+    || readiness.external_artifact_link_count < 1
+    || readiness.external_artifact_live_download_pending !== true
     || readiness.handoff_preflight_ready !== true
     || readiness.handoff_deployment_approval_required !== true
     || readiness.handoff_live_credential_ready !== false
@@ -1319,6 +1350,12 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.supported_video_extension_evidence_surface_count !== 2
     || evidence.supported_video_extension_evidence_ready !== true
     || evidence.unsupported_non_video_extensions_rejected !== true
+    || evidence.external_artifact_surface_ready !== true
+    || evidence.external_artifact_required_export_kind_count !== 6
+    || evidence.external_artifact_export_kind_count < 6
+    || evidence.external_artifact_missing_export_kind_count !== 0
+    || evidence.external_artifact_link_count < 1
+    || evidence.external_artifact_download_validation_ok !== true
     || evidence.live_preflight_evidence_count !== 3
     || evidence.quality_matrix_case_count !== 3
     || evidence.quality_matrix_deliverable_count !== 1
@@ -1723,6 +1760,11 @@ function validateExternalVideoPptEvidence(report) {
     || evidence.trigger_script_specific_case_count !== 0
     || evidence.positive_prompt_count < 6
     || evidence.negative_prompt_count < 6
+    || evidence.surface_ok !== true
+    || evidence.surface_export_count < 6
+    || evidence.surface_export_kind_count < 6
+    || evidence.surface_missing_export_kind_count !== 0
+    || evidence.surface_artifact_link_count < 1
     || evidence.source_summary_redacted !== true
     || evidence.download_validation_ok !== true
     || evidence.pptx_slide_count < 1

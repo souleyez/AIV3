@@ -4367,6 +4367,78 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, local artifact paths, or customer retention values were recorded in this shared receipt.
 
+## 2026-06-08 No-Live Rollup Third-Party Artifact Surface Summary
+
+Task source: M6BA P1/no-live follow-up. The third-party video PPT self-test already validates a reply surface with `download_exports`, artifact links, and local self-test download validation, but the top-level acceptance status did not directly state whether artifact surface visibility was represented. This slice makes the third-party artifact surface evidence copyable from the no-live rollup while keeping live artifact downloads pending.
+
+Scope:
+
+- local no-live rollup code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, upload, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- external video PPT self-test evidence now copies reply surface counts: `surface_ok`, `surface_export_count`, `surface_export_kind_count`, `surface_missing_export_kind_count`, and `surface_artifact_link_count`;
+- `acceptance_status.no_live_evidence_summary` now records `external_artifact_surface_ready`, required/export/missing kind counts, artifact link count, and download validation state;
+- `acceptance_status.live_gate_readiness_summary` now records `external_artifact_surface_self_test_ready` and keeps `external_artifact_live_download_pending=true`;
+- no-live rollup validation now fails unless the third-party self-test surface exposes all required export kinds, has no missing export kinds, includes at least one artifact link, and validates PPTX/Markdown downloads locally.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/video-ppt-no-live-rollup-artifact-surface-m6ba
+node -e "<redacted artifact surface readback>"
+rg -n "<local-path-url-token-approval-patterns>" target/video-ppt-no-live-rollup-artifact-surface-m6ba
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- first rollup attempt failed locally because the new third-party surface assertions were accidentally placed in the upload-main evidence validator;
+- the assertions were moved to `validateExternalVideoPptEvidence()` and the full no-live rollup was rerun;
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- report readback showed `external_surface_ok=true`;
+- report readback showed `external_surface_export_count=6`;
+- report readback showed `external_surface_export_kind_count=6`;
+- report readback showed `external_surface_missing_export_kind_count=0`;
+- report readback showed `external_surface_artifact_link_count=1`;
+- top-level evidence readback showed `external_artifact_surface_ready=true`;
+- top-level evidence readback showed `external_artifact_required_export_kind_count=6`;
+- top-level evidence readback showed `external_artifact_export_kind_count=6`;
+- top-level evidence readback showed `external_artifact_missing_export_kind_count=0`;
+- top-level evidence readback showed `external_artifact_link_count=1`;
+- top-level evidence readback showed `external_artifact_download_validation_ok=true`;
+- live readiness readback showed `external_artifact_surface_self_test_ready=true`;
+- live readiness readback showed `external_artifact_live_download_pending=true`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, raw approval/operator values, or customer retention values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this top-level artifact surface evidence does not replace third-party live smoke or live artifact downloads; bearer, connection id, source id, safe input, and live authorization are still required;
+- this does not replace main-site upload live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, local artifact paths, or customer retention values were recorded in this shared receipt.
+
 ## 2026-06-08 Final Executable Plan Doc-Only Closeout
 
 Task source: user asked to continue the previous step and finish the complete executable plan, with the explicit scope that this is a plan-only pass and code should not be changed.
