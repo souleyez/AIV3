@@ -4934,3 +4934,58 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Complete Executable Plan Plan-Only Rollup
+
+Task source: user requested the previous planning step be completed as a full executable plan, with the explicit boundary that this is a plan and code should not be changed.
+
+Scope:
+
+- plan-only documentation update;
+- no business code, smoke script, validator, worker, API, web app, or deployment change;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented documentation behavior:
+
+- `docs/plans/datamax-active-execution-plan.md` now adds section `0.7.18 2026-06-08 完整可执行计划收口版`;
+- the new section is the current short execution entry and separates P0 plan-only, P1 no-live baseline, P2 main upload live smoke, P3 third-party live smoke, P4 video号/login-gated handoff, P5 authorized capture fallback, P6 quality matrix, P7 8-server deployment, and P8 full acceptance close;
+- the plan restates that video PPT means extracting already-playing slides/courseware from a video, not creating an authored PPT from ordinary video;
+- the plan explicitly keeps WeChat Video Channels/login-gated/private playback sources on the handoff path unless a direct anonymous video file or authorized recording exists;
+- the plan includes an 8-server internal recording research path, but keeps it disabled by default and gated behind separate approval, read-only audit, isolation, retention, cleanup, and redaction requirements;
+- the plan keeps GitHub sync separate from 8-server deployment.
+
+Validation to run for this plan-only slice:
+
+```text
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --name-only
+git diff --cached --name-only
+```
+
+Expected result:
+
+- repository plan and desktop plan copy match;
+- whitespace check passes;
+- changed/staged files are documentation only;
+- no generated `target/` files are tracked.
+
+Remaining work:
+
+- this plan-only rollup does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- next implementation work should follow the P0-P8 path selector in section `0.7.18`, starting with P1 no-live work if no new authorization is available.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
