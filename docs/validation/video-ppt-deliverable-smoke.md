@@ -4302,6 +4302,71 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 No-Live Rollup Supported Video Extension Summary
+
+Task source: M6AZ P1/no-live follow-up. Upload-main and third-party self-test child reports already proved supported video extension counts, but the top-level `acceptance_status.no_live_evidence_summary` did not directly expose whether both surfaces had extension readiness evidence. This slice makes the `.mp4/.mov/.m4v/.webm/.mkv/.avi` support evidence copyable from the top-level no-live report.
+
+Scope:
+
+- local no-live rollup code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, upload, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `acceptance_status.no_live_evidence_summary` now records `required_video_extension_count=6`;
+- the summary copies `upload_main_supported_video_extension_count` and `external_supported_video_extension_count`;
+- the summary records `supported_video_extension_min_count`, `supported_video_extension_evidence_surface_count`, `supported_video_extension_evidence_ready`, and `unsupported_non_video_extensions_rejected`;
+- no-live rollup validation now fails unless upload-main and third-party evidence each expose at least 6 supported video extensions, both surfaces are counted, and unsupported non-video extensions are rejected.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/video-ppt-no-live-rollup-extension-summary-m6az
+node -e "<redacted extension summary readback>"
+rg -n "<local-path-url-token-approval-patterns>" target/video-ppt-no-live-rollup-extension-summary-m6az
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- report readback showed `required_video_extension_count=6`;
+- report readback showed `upload_main_supported_video_extension_count=6`;
+- report readback showed `external_supported_video_extension_count=6`;
+- report readback showed `supported_video_extension_min_count=6`;
+- report readback showed `supported_video_extension_evidence_surface_count=2`;
+- report readback showed `supported_video_extension_evidence_ready=true`;
+- report readback showed `unsupported_non_video_extensions_rejected=true`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- main upload and external preflights stayed ready, while external bearer remained pending;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, raw approval/operator values, or customer retention values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this top-level extension readiness evidence does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- full acceptance remains blocked on live/customer/deployment evidence or explicit non-executable reasons.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, local artifact paths, or customer retention values were recorded in this shared receipt.
+
 ## 2026-06-08 Final Executable Plan Doc-Only Closeout
 
 Task source: user asked to continue the previous step and finish the complete executable plan, with the explicit scope that this is a plan-only pass and code should not be changed.

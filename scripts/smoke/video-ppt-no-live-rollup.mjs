@@ -1072,10 +1072,24 @@ function buildLiveGateReadinessSummary(results = []) {
 
 function buildNoLiveAcceptanceEvidenceSummary(results = []) {
   const commandById = new Map(results.map((result) => [result.id, result]));
+  const uploadEvidence = commandById.get('upload_main_self_test')?.evidence || {};
+  const externalEvidence = commandById.get('external_video_ppt_self_test')?.evidence || {};
   const qualityEvidence = commandById.get('quality_matrix_self_test')?.evidence || {};
   const passedEvidenceCommandCount = results.filter((result) => (
     result.status === 'passed' && result.evidence
   )).length;
+  const uploadSupportedVideoExtensionCount = Number.isInteger(
+    uploadEvidence.supported_video_extension_count,
+  ) ? uploadEvidence.supported_video_extension_count : null;
+  const externalSupportedVideoExtensionCount = Number.isInteger(
+    externalEvidence.supported_video_extension_count,
+  ) ? externalEvidence.supported_video_extension_count : null;
+  const supportedVideoExtensionCounts = [
+    uploadSupportedVideoExtensionCount,
+    externalSupportedVideoExtensionCount,
+  ].filter((count) => Number.isInteger(count));
+  const supportedVideoExtensionEvidenceSurfaceCount = supportedVideoExtensionCounts
+    .filter((count) => count >= 6).length;
   return {
     schema: 'v3.video_ppt_no_live_acceptance_evidence_summary.v1',
     embedded_evidence_command_count: passedEvidenceCommandCount,
@@ -1091,6 +1105,19 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     production_scope_planner_evidence: hasPassedEvidence(commandById, 'scope_planner_tests'),
     production_assistant_runtime_evidence:
       hasPassedEvidence(commandById, 'assistant_runtime_video_ppt_scope_tests'),
+    required_video_extension_count: 6,
+    upload_main_supported_video_extension_count: uploadSupportedVideoExtensionCount,
+    external_supported_video_extension_count: externalSupportedVideoExtensionCount,
+    supported_video_extension_min_count: supportedVideoExtensionCounts.length > 0
+      ? Math.min(...supportedVideoExtensionCounts)
+      : null,
+    supported_video_extension_evidence_surface_count:
+      supportedVideoExtensionEvidenceSurfaceCount,
+    supported_video_extension_evidence_ready:
+      supportedVideoExtensionEvidenceSurfaceCount === 2
+      && externalEvidence.unsupported_non_video_extensions_rejected === true,
+    unsupported_non_video_extensions_rejected:
+      externalEvidence.unsupported_non_video_extensions_rejected === true,
     live_preflight_evidence_count: [
       'upload_main_preflight',
       'external_video_ppt_preflight',
@@ -1285,6 +1312,13 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.quality_matrix_self_test_evidence !== true
     || evidence.production_scope_planner_evidence !== true
     || evidence.production_assistant_runtime_evidence !== true
+    || evidence.required_video_extension_count !== 6
+    || evidence.upload_main_supported_video_extension_count < 6
+    || evidence.external_supported_video_extension_count < 6
+    || evidence.supported_video_extension_min_count < 6
+    || evidence.supported_video_extension_evidence_surface_count !== 2
+    || evidence.supported_video_extension_evidence_ready !== true
+    || evidence.unsupported_non_video_extensions_rejected !== true
     || evidence.live_preflight_evidence_count !== 3
     || evidence.quality_matrix_case_count !== 3
     || evidence.quality_matrix_deliverable_count !== 1
