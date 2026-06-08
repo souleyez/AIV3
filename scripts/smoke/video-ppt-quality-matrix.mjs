@@ -65,6 +65,7 @@ function usage() {
 Checks:
   - deterministic P2-2E quality matrix shape for video/PPT extraction
   - synthetic PPT-playback sample can be marked deliverable from local evidence
+  - explicit review-risk flags keep otherwise aligned packages in needs_manual_review
   - local synthetic deliverables can be validated and classified through the same matrix
   - local public-course deliverables can be validated and classified through the same matrix
   - local customer-authorized deliverables can be validated only after explicit approval/input exists
@@ -359,7 +360,56 @@ function buildSelfTestReport() {
     ],
   });
   validateSelfTestReport(report);
+  validateExplicitReviewRiskRegression();
   return report;
+}
+
+function validateExplicitReviewRiskRegression() {
+  for (const riskFlag of [
+    'manual_review_required',
+    'missing_transcript_alignment',
+    'frame_sharpness_review_required',
+    'slide_readability_review_required',
+  ]) {
+    const evaluation = evaluateCase(buildReviewRiskRegressionCase(riskFlag));
+    if (evaluation.verdict !== 'needs_manual_review') {
+      throw new Error(`quality matrix review-risk regression failed for ${riskFlag}`);
+    }
+  }
+}
+
+function buildReviewRiskRegressionCase(riskFlag) {
+  return {
+    case_id: `quality-matrix-review-risk-${riskFlag}`,
+    category: 'public_course_video',
+    input_type: 'deterministic_local_fixture',
+    source_access_status: 'anonymous_public_video_fixture',
+    approval_status: 'not_required',
+    trigger: 'extract_ppt_slides_courseware_already_shown_in_video',
+    deliverable_status: {
+      state: 'final_pptx_ready',
+      frame_count: 96,
+      selected_count: 7,
+      pptx_slide_count: 7,
+      markdown_slide_count: 7,
+      has_quality_report: true,
+    },
+    quality_report: {
+      quality_score: 70,
+      risk_flags: [riskFlag],
+      summary: {
+        full_frame_fallback_count: 0,
+        detector_crop_count: 7,
+        subtitle_missing_count: riskFlag === 'missing_transcript_alignment' ? 7 : 0,
+        ocr_missing_count: 0,
+        sharpness_high_count: riskFlag === 'frame_sharpness_review_required' ? 1 : 0,
+        sharpness_unknown_count: 0,
+        readability_high_count: riskFlag === 'slide_readability_review_required' ? 1 : 0,
+        readability_unknown_count: 0,
+        single_slide_output: false,
+      },
+    },
+  };
 }
 
 function buildDeliverablesReportFromArgs(args) {

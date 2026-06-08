@@ -3918,3 +3918,52 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports and deliverables stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Quality Matrix Review-Risk Regression Gate
+
+Task source: M6Q exposed an important matrix edge case: once readability-aware scoring raised a public-course package to `quality_score=70` with no sharpness/readability high counts, the matrix still had to respect explicit review-risk flags such as missing transcript alignment and manual review requirements.
+
+Scope:
+
+- keep the quality matrix verdict conservative when a package is otherwise aligned and exactly at the quality-score threshold;
+- add deterministic `--self-test` regression coverage without changing the three-category self-test report shape;
+- do not create, upload, download, register, capture, deploy, or expose any real deliverable artifacts.
+
+Implemented behavior:
+
+- `smoke:video-ppt-quality-matrix -- --self-test` now internally constructs 70-point, page-count-aligned regression cases for:
+  - `manual_review_required`;
+  - `missing_transcript_alignment`;
+  - `frame_sharpness_review_required`;
+  - `slide_readability_review_required`.
+- each internal regression case must evaluate to `needs_manual_review`;
+- the visible self-test report still contains only the three required matrix categories, preserving the existing report contract.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- script syntax check passed;
+- quality matrix self-test passed with 3 visible cases, 1 deliverable case, and 2 pending cases;
+- the new internal review-risk assertions passed for all four explicit risk flags.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live, deployed handoff, authorized capture, or customer-authorized quality matrix gates;
+- full customer-facing quality still depends on authorized customer/operator samples and live artifact visibility evidence.
+
+Safety result:
+
+- no live smoke was run;
+- no network source was fetched;
+- no file was uploaded or registered in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no MP4 was captured or recorded;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
