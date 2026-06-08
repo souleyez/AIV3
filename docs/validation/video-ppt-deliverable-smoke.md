@@ -4022,6 +4022,55 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Executable Plan Final Lock And Change Isolation
+
+Task source: plan-only continuation to finish the consolidated executable plan, while the local working tree also contains an uncommitted M6AF no-live rollup script slice. This receipt records the plan/documentation boundary so doc-only synchronization does not accidentally include unconfirmed code changes or imply 8-server deployment.
+
+Scope:
+
+- update the active plan with a current final-lock section that separates EP0/doc-only synchronization from the M6AF code path and from live/customer/deployment gates;
+- keep `docs/plans/datamax-active-execution-plan.md` as the only active plan under `docs/plans/`;
+- update this validation ledger with the same boundary and fix the no-live rollup child-report path wording;
+- synchronize the desktop plan copy after the document edits;
+- do not change business code, smoke runner code, validator code, worker code, API code, UI code, or deployment scripts in this plan-only pass.
+
+Plan result:
+
+- active plan section `0.7.17` now lists the current executable paths: EP0/doc-only, M6AF code-slice closeout, M7 no-auth baseline, M8 main-site upload smoke, M9 third-party smoke, M10 deployed handoff, M11 authorized capture sample, and M12 customer quality matrix;
+- EP0/doc-only now explicitly requires staged-file isolation so `scripts/smoke/video-ppt-no-live-rollup.mjs` is not included unless the user intentionally chooses the M6AF code path;
+- M6AF code-slice closeout now has its own validation command list, redaction scan, evidence requirements, and `target/` tracking check;
+- customer/operator input routing now explicitly distinguishes uploaded/direct video, public web page resolver, WeChat/login-gated handoff, authorized capture fallback, customer quality review, and ordinary video generation requests;
+- extraction quality review now keeps the same three verdicts: deliverable, needs manual review, and not deliverable;
+- 8-server internal capture remains a separate research path and is not enabled by this plan.
+
+Validation:
+
+```text
+cp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --name-only
+git status --short --branch
+```
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- if the user chooses doc-only GitHub sync, only plan/validation documents should be staged and pushed;
+- if the user chooses to sync M6AF code, the script change must be validated and committed as a separate code slice with its own no-live rollup evidence;
+- 8-server deployment still requires a separate explicit EP7 approval window.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 No-Live Rollup Quality Matrix Evidence
 
 Task source: M6AD follow-up after M6AC made quality matrix object-shaped risk flags explicit. The no-live rollup previously proved that the quality matrix self-test command passed, but the rollup report did not carry the child report's key gate evidence. This slice lets the rollup read the local quality-matrix child report and embed a narrow, redacted evidence summary in the top-level no-live report.
@@ -4030,7 +4079,7 @@ Scope:
 
 - no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
 - read only the report path printed by the local `quality_matrix_self_test` command;
-- accept only relative `target/` report paths;
+- accept relative `target/` report paths, or absolute report paths only when they resolve under the current repo `target/` directory;
 - copy only counts and boolean gate fields into the rollup report, not the child report path or raw JSON body.
 
 Implemented behavior:
@@ -4085,7 +4134,7 @@ Scope:
 
 - no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
 - read only local child reports printed by upload-main and external-video-ppt self-tests;
-- accept only relative `target/` report paths;
+- accept relative `target/` report paths, or absolute report paths only when they resolve under the current repo `target/` directory;
 - copy only counts, booleans, action ids, and file-kind counts into the no-live report, not child report paths or raw JSON bodies.
 
 Implemented behavior:
