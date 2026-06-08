@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 13:40 CST
-**当前性质：** 开发执行版；当前已推送 GitHub 功能基线以 `git log -1` 为准，M6AV customer authorization argument gate、M6AW customer retention policy argument gate、M6AX top-level no-live evidence summary customer gate bits 已完成，本切片继续把 P6 customer quality matrix readiness 汇总到 M6AY `acceptance_status.live_gate_readiness_summary`。后续实际执行入口是第 0.7.20 节；第 0.7.18-0.7.19 节保留完整背景、命令和历史口径，但若与第 0.7.20 节冲突，以第 0.7.20 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 13:46 CST
+**当前性质：** plan-only 收口执行版；当前已推送 GitHub 功能基线以 `git log -1` 为准，M6AV/M6AW/M6AX/M6AY 均已完成并推送，本次只整理完整可执行计划，不改业务代码。后续实际执行入口是第 0.7.21 节；第 0.7.18-0.7.20 节保留完整背景、命令和历史口径，但若与第 0.7.21 节冲突，以第 0.7.21 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - 本轮已先完成 plan-only 收口，并继续按 P1/no-live 代码切片收掉 M6AV/M6AW/M6AX/M6AY；没有跑 live、没有上传视频、没有发第三方事件、没有录屏、没有部署或触碰 8/120 服务器。后续默认仍按 P1/no-live 推进；任何 P2/P3/P4/P5/P6/P7 都需要对应授权、凭据、样例或部署窗口。
@@ -1928,6 +1928,72 @@ M6AV/M6AW 只能证明 customer deliverables 的授权和保留策略参数门�
 5. 再 P7 -> P4：批准 8 部署后只验证视频号/登录态 handoff，不抽视频。
 6. 再 P5：operator 授权录屏样例，录屏 MP4 回到 P2/P3。
 7. 再 P6/P8：客户授权样例质量矩阵和全量验收收口。
+
+#### 0.7.21 2026-06-08 最新完整可执行方案
+
+本节是当前最新入口，用来执行用户要求的“先不要改代码，完成完整可执行计划编写”。本节不新增业务能力，不替代 no-live、live、客户样例或 8 服务器部署验收；它只把后续开发、测试、授权和部署选择压成可直接执行的路线。
+
+##### 0.7.21.1 本次计划收口范围
+
+| 范围 | 收口结果 | 执行要求 |
+| --- | --- | --- |
+| 原 active plan | 继续保留一份唯一计划：`docs/plans/datamax-active-execution-plan.md`；桌面副本同步到 `/Users/manslive01/Desktop/datamax-active-execution-plan.md` | 后续计划更新先改仓库文件，再同步桌面副本并 `cmp` |
+| 已完成开发基线 | GitHub HEAD 已包含 M6AV/M6AW/M6AX/M6AY；客户 quality matrix 参数门禁、保留策略门禁和 readiness summary 已可审计 | 继续以 `git log -1` 和当次验证为准；不把历史记忆当 live 状态 |
+| 公开视频测试 | public course 视频样例可生成截图型 PPTX、Markdown、notes、manifest 和质量报告；当前结论仍是 `needs_manual_review` | 可作为公开视频真实样例回归，不得替代客户授权样例 |
+| 视频号/登录态链接 | `weixin.qq.com/sph/...`、二维码页、登录态页和私有播放页默认 handoff | 不自动抓取、不绕过登录、不要求 cookie/HAR/storage、不声称已抽帧或生成 PPT |
+| 授权录屏 | 只作为 operator 合法播放但拿不到文件时的兜底；录屏 MP4 后续仍作为普通视频输入 | 需要 approval record、dry-run、短时录屏、人工确认和保留/清理策略 |
+| GitHub 同步 | 允许同步 doc-only 或已验证代码切片 | doc-only 提交只 stage 文档；代码切片必须另跑 gate |
+| 8 服务器 | 本轮不部署、不 pull、不 build、不 restart、不启用录屏 | 只有用户明确批准 P7 部署窗口后执行 |
+
+##### 0.7.21.2 后续执行选择器
+
+| 当前条件 | 选择路径 | 立刻做什么 | 验收证据 | 不能做什么 |
+| --- | --- | --- | --- | --- |
+| 只有计划整理需求 | P0 plan-only | 更新本计划、validation ledger、桌面副本；可 doc-only push | `cmp`、`git diff --check`、staged 只含文档 | 不改代码、不跑 live、不部署 |
+| 没有 live/客户/部署授权，但要继续本地推进 | P1 no-live baseline | 跑 no-live rollup、quality matrix self-test、validator、本地 fixture/public 复核 | 22/22 或新增 gate 通过、redaction scan、`target/` tracked 为 0 | 不上传、不发第三方事件、不录屏、不下载客户视频 |
+| 用户批准写一条非客户主站 smoke | P2 main upload live | 同一安全视频先 preflight，再主站上传、触发“提取视频中的 PPT”、下载复核 | document/run/artifact/PPTX/Markdown/manifests 脱敏回执 | 不顺手部署；失败不扩大到客户数据 |
+| operator 给 bearer/context/input | P3 third-party live | 先 preflight，再登记视频素材并发 `video_ppt_extraction` special trigger | 素材登记和 PPT 抽取触发分别有回执 | 不打印 bearer，不记录 raw payload/source URL |
+| 输入是视频号、二维码或登录态链接 | P4 handoff | 返回上传文件、匿名 direct URL、授权录屏三选项；部署后只验 surface | `login_gated_video_source_not_supported`，无 provider/download/frame/OCR/PPT 成功信号 | 不抓视频号、不绕过登录、不伪造成功 |
+| operator 合法播放但拿不到视频文件 | P5 authorized capture | 收 approval record -> dry-run -> 短时录屏 -> 人工确认 MP4 -> 回 P2/P3 | `sharedReceipt`、MP4 摘要、普通视频抽取回执 | 无 approval 不录屏；8 内部录屏不默认启用 |
+| 客户/operator 给授权样例和保留策略 | P6 quality matrix | validator + synthetic/public/customer 三输入矩阵 + 人工复核 | `matrix_complete=true` 或明确 pending/failure 归因 | public/synthetic 不冒充客户样例 |
+| 用户批准发 8 服务器 | P7 deployment | 只部署已推送且验证过的 commit，部署后跑目标 smoke | 服务 active、部署 HEAD、回滚点、目标 smoke 回执 | 不触碰 120；不处理无关文件；不启用录屏开关 |
+| P2-P7 都有回执或不可执行原因 | P8 closeout | 汇总 validation ledger、GitHub/部署状态、质量结论和剩余阻断 | 通过、需复核、不可交付、阻断均明确 | 任一 live/customer/deploy gate 缺证据时不称全量完成 |
+
+##### 0.7.21.3 视频 PPT 产品判定
+
+触发条件必须同时满足：
+
+1. 输入确实是视频素材或可解析为匿名视频 asset 的公开网页。
+2. 用户意图是提取视频里已经播放的 PPT、幻灯片、课件或课程页面。
+3. 输出目标是截图型 PPTX、`video_slides.md`、notes、manifest、质量报告或对应复核清单。
+
+明确不触发：
+
+- 普通视频生成 PPT、视频内容总结成 PPT、介绍这段视频、只提字幕、从文档抽 slide。
+- 需要登录、二维码、cookie、HAR、storage、账号密码或平台内部接口才能访问的视频链接。
+- 视频可播放但没有 PPT/幻灯片/课件画面的内容。
+
+##### 0.7.21.4 样例复核和失败归因
+
+每条真实样例只允许落到三类结果：
+
+| 结果 | 判定 | 下一步 |
+| --- | --- | --- |
+| `deliverable` | PPTX、Markdown、notes、selected manifest、rectangle manifest、final/published/version/extraction manifests 和 quality report 都有效，主要课件页完整可读 | 记录脱敏回执；可进入 P8 汇总 |
+| `needs_manual_review` | 已生成产物，但有缺字幕/OCR、重复页、单页输出、full-frame fallback、清晰度/可读性、crop 或人工复核风险 | 不包装成 clean deliverable；必要时回 P1/P6 做窄修复 |
+| `not_deliverable` | 拿不到视频、视频没有 PPT、抽帧失败、关键页缺失、PPTX 无效、artifact 不可见或授权不成立 | 归因后停止该样例或请求新输入 |
+
+固定 failure class：`source_access`、`video_has_no_ppt`、`frame_extraction`、`artifact_visibility`、`selection_quality`。若 live/customer 样例出现新 failure class，先补 quality matrix/no-live evidence，再写入共享回执。
+
+##### 0.7.21.5 当前最建议下一步
+
+1. 先完成本次 P0：同步桌面计划副本，跑 doc-only 检查，必要时提交并 push 文档。
+2. 如果暂时没有新增授权，只继续 P1 本地 no-live/public/quality 窄修复。
+3. 如果用户允许 live，优先 P2 主站上传视频 controlled smoke，因为这是客户最自然入口。
+4. 再做 P3 第三方登记 special trigger。
+5. 视频号/登录态链接只在 P7 部署批准后验 P4 handoff surface，不抽视频。
+6. operator 授权录屏走 P5，录屏 MP4 回到 P2/P3。
+7. 客户授权样例齐全后再 P6/P8 收口，不能用 public 样例替代。
 
 ## 1. 计划原则
 

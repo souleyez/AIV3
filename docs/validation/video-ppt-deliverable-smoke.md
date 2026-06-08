@@ -4302,6 +4302,64 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Final Executable Plan Doc-Only Closeout
+
+Task source: user asked to continue the previous step and finish the complete executable plan, with the explicit scope that this is a plan-only pass and code should not be changed.
+
+Scope:
+
+- documentation-only plan closeout;
+- no business code, smoke script, validator, worker, API, web app, or deployment change;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no video download, upload, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented documentation behavior:
+
+- `docs/plans/datamax-active-execution-plan.md` now marks section `0.7.21 2026-06-08 最新完整可执行方案` as the latest execution entry;
+- the plan top matter now says M6AV/M6AW/M6AX/M6AY are complete and pushed, and that this slice is plan-only;
+- section `0.7.21` consolidates the path selector for P0 plan-only, P1 no-live baseline, P2 main upload live, P3 third-party live, P4 WeChat/login-gated handoff, P5 authorized capture, P6 customer quality matrix, P7 deployment, and P8 closeout;
+- the plan restates the product boundary: extract PPT/slides/courseware already shown in a video, not create an authored PPT from an ordinary video;
+- the plan keeps WeChat Video Channels and login-gated/private playback links on handoff unless an anonymous video file or authorized recording exists;
+- the plan keeps GitHub sync separate from 8-server deployment, and keeps server memory as historical context that must be live-verified before deployment claims.
+
+Validation for this plan-only slice:
+
+```text
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git diff --cached --name-only
+git diff --cached --stat
+git ls-files target | wc -l
+```
+
+Result:
+
+- repository plan and desktop plan copy match;
+- whitespace check passes;
+- staged files are documentation only: `docs/plans/datamax-active-execution-plan.md` and `docs/validation/video-ppt-deliverable-smoke.md`;
+- cached diff was two Markdown files, 125 insertions and 2 deletions;
+- no generated `target/` files are tracked.
+
+Remaining work:
+
+- this plan-only closeout does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- full acceptance remains blocked on live/customer/deployment evidence or explicit non-executable reasons.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Customer Quality Matrix Authorization Argument Gate
 
 Task source: M6AV no-live follow-up. Customer-authorized deliverables are allowed only with explicit authorization metadata. The script already rejected missing approval ids at runtime; this slice turns that behavior into a self-test and no-live rollup gate.
