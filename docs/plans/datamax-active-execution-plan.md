@@ -1,7 +1,7 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 14:03 CST
-**当前性质：** 开发执行版；当前 GitHub 功能基线以 `git log -1` 为准，本文件记录到 M6BB main upload artifact readiness summary。后续实际执行入口是第 0.7.21 节；第 0.7.18-0.7.20 节保留完整背景、命令和历史口径，但若与第 0.7.21 节冲突，以第 0.7.21 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 14:08 CST
+**当前性质：** 开发执行版；当前 GitHub 功能基线以 `git log -1` 为准，本文件记录到 M6BC pending gate requirements summary。后续实际执行入口是第 0.7.21 节；第 0.7.18-0.7.20 节保留完整背景、命令和历史口径，但若与第 0.7.21 节冲突，以第 0.7.21 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
 - 本轮已先完成 plan-only 收口，并继续按 P1/no-live 代码切片收掉 M6AV/M6AW/M6AX/M6AY；没有跑 live、没有上传视频、没有发第三方事件、没有录屏、没有部署或触碰 8/120 服务器。后续默认仍按 P1/no-live 推进；任何 P2/P3/P4/P5/P6/P7 都需要对应授权、凭据、样例或部署窗口。
@@ -54,6 +54,7 @@
 - M6AZ 已完成本地切片：no-live rollup 的 `acceptance_status.no_live_evidence_summary` 现在直接记录 upload-main 和 third-party 两个 surface 的 supported video extension readiness；`required_video_extension_count=6`，upload/external 支持计数均为 6，`supported_video_extension_evidence_surface_count=2`，`supported_video_extension_evidence_ready=true`，且非视频扩展拒绝为 true；最新 no-live rollup 22/22 通过，敏感扫描无输出，`target/` tracked 为 0。
 - M6BA 已完成本地切片：no-live rollup 现在把第三方 reply surface 的 artifact visibility 证据提升到 `acceptance_status.no_live_evidence_summary` 和 `acceptance_status.live_gate_readiness_summary`；self-test surface ok、6 类 export kind 全覆盖、missing export count 为 0、artifact link count 为 1、download validation ok，同时 live readiness 明确 `external_artifact_live_download_pending=true`，不把 self-test 当成第三方 live 下载验收；最新 no-live rollup 22/22 通过，敏感扫描无输出，`target/` tracked 为 0。
 - M6BB 已完成本地切片：no-live rollup 现在把主站上传 self-test 的 artifact/download contract 证据提升到 `acceptance_status.no_live_evidence_summary` 和 `acceptance_status.live_gate_readiness_summary`；`final_pptx_ready`、6 类 required file kinds、PPTX/Markdown 页数均大于 0、download validation ok，同时 live readiness 明确 `main_upload_artifact_live_download_pending=true`，不把 self-test 当成主站 live 下载验收；最新 no-live rollup 22/22 通过，敏感扫描无输出，`target/` tracked 为 0。
+- M6BC 已完成本地切片：`acceptance_status.pending_gate_requirements_summary` 现在直接列出 7 个 pending live/customer/deployment gate，并用布尔字段记录主站写入授权、第三方凭据、视频号 handoff 部署窗口、授权录屏 approval record、客户授权样例、8 服务器部署窗口和 P8 全量收口等待 live/customer/deployment 的要求；`no_live_substitute_available_for_pending_gates=false` 防止把 P1/no-live 误读成全量验收；最新 no-live rollup 22/22 通过，敏感扫描无输出，`target/` tracked 为 0。
 - 当前工作树隔离口径：如果后续本地 `scripts/smoke/video-ppt-quality-matrix.mjs` 或 `scripts/smoke/video-ppt-no-live-rollup.mjs` 再出现未提交改动，必须视为新的代码切片，未完成 gate 前不属于当前功能基线，不得混入 doc-only 提交。
 - 当前收版隔离口径：GitHub 最新已推送 HEAD 仍以 `git log -1` 为准；若只执行 EP0/doc-only 计划同步，不得 stage `scripts/smoke/video-ppt-no-live-rollup.mjs` 等功能脚本改动。若要同步 no-live rollup 代码切片，必须按第 0.7.17 的代码路径单独跑 gate、单独提交，仍不部署 8 服务器。
 - P0-3 字幕页映射契约本地切片已完成：无 transcript/subtitle evidence 的包不再硬性要求 `subtitle_page_map.json`，但文件存在或 manifest 声明存在时仍严格校验 mapped schema/redaction。
@@ -1941,7 +1942,7 @@ M6AV/M6AW 只能证明 customer deliverables 的授权和保留策略参数门�
 | 范围 | 收口结果 | 执行要求 |
 | --- | --- | --- |
 | 原 active plan | 继续保留一份唯一计划：`docs/plans/datamax-active-execution-plan.md`；桌面副本同步到 `/Users/manslive01/Desktop/datamax-active-execution-plan.md` | 后续计划更新先改仓库文件，再同步桌面副本并 `cmp` |
-| 已完成开发基线 | 本文件记录到 M6BB；客户 quality matrix 参数门禁、保留策略门禁、readiness summary、supported extension evidence、main upload artifact evidence 和 third-party artifact surface evidence 均可审计 | 继续以 `git log -1` 和当次验证为准；不把历史记忆当 live 状态 |
+| 已完成开发基线 | 本文件记录到 M6BC；客户 quality matrix 参数门禁、保留策略门禁、readiness summary、supported extension evidence、main/external artifact evidence 和 pending gate requirements 均可审计 | 继续以 `git log -1` 和当次验证为准；不把历史记忆当 live 状态 |
 | 公开视频测试 | public course 视频样例可生成截图型 PPTX、Markdown、notes、manifest 和质量报告；当前结论仍是 `needs_manual_review` | 可作为公开视频真实样例回归，不得替代客户授权样例 |
 | 视频号/登录态链接 | `weixin.qq.com/sph/...`、二维码页、登录态页和私有播放页默认 handoff | 不自动抓取、不绕过登录、不要求 cookie/HAR/storage、不声称已抽帧或生成 PPT |
 | 授权录屏 | 只作为 operator 合法播放但拿不到文件时的兜底；录屏 MP4 后续仍作为普通视频输入 | 需要 approval record、dry-run、短时录屏、人工确认和保留/清理策略 |
@@ -1953,7 +1954,7 @@ M6AV/M6AW 只能证明 customer deliverables 的授权和保留策略参数门�
 | 当前条件 | 选择路径 | 立刻做什么 | 验收证据 | 不能做什么 |
 | --- | --- | --- | --- | --- |
 | 只有计划整理需求 | P0 plan-only | 更新本计划、validation ledger、桌面副本；可 doc-only push | `cmp`、`git diff --check`、staged 只含文档 | 不改代码、不跑 live、不部署 |
-| 没有 live/客户/部署授权，但要继续本地推进 | P1 no-live baseline | 跑 no-live rollup、quality matrix self-test、validator、本地 fixture/public 复核 | 22/22 或新增 gate 通过、extension readiness / main+external artifact surface / acceptance status evidence、redaction scan、`target/` tracked 为 0 | 不上传、不发第三方事件、不录屏、不下载客户视频 |
+| 没有 live/客户/部署授权，但要继续本地推进 | P1 no-live baseline | 跑 no-live rollup、quality matrix self-test、validator、本地 fixture/public 复核 | 22/22 或新增 gate 通过、extension readiness / main+external artifact surface / pending gate requirements / acceptance status evidence、redaction scan、`target/` tracked 为 0 | 不上传、不发第三方事件、不录屏、不下载客户视频 |
 | 用户批准写一条非客户主站 smoke | P2 main upload live | 同一安全视频先 preflight，再主站上传、触发“提取视频中的 PPT”、下载复核 | document/run/artifact/PPTX/Markdown/manifests 脱敏回执 | 不顺手部署；失败不扩大到客户数据 |
 | operator 给 bearer/context/input | P3 third-party live | 先 preflight，再登记视频素材并发 `video_ppt_extraction` special trigger | 素材登记和 PPT 抽取触发分别有回执 | 不打印 bearer，不记录 raw payload/source URL |
 | 输入是视频号、二维码或登录态链接 | P4 handoff | 返回上传文件、匿名 direct URL、授权录屏三选项；部署后只验 surface | `login_gated_video_source_not_supported`，无 provider/download/frame/OCR/PPT 成功信号 | 不抓视频号、不绕过登录、不伪造成功 |
@@ -3446,6 +3447,7 @@ ssh <8-server-host> 'cd /srv/aiv3/repo && git status --short --branch && git rev
 | M6AZ | no-live evidence summary supported video extensions | 无 live 授权；只执行 no-live rollup self-test | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、extension summary readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：`acceptance_status.no_live_evidence_summary` 直接记录 required extension count、upload-main/external supported count、surface count、ready flag 和 unsupported non-video rejection，证明 `.mp4/.mov/.m4v/.webm/.mkv/.avi` 支持证据在顶层可审计 | 未部署 |
 | M6BA | third-party artifact surface readiness summary | 无 live 授权；只执行 no-live rollup self-test | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、artifact surface readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：`acceptance_status.no_live_evidence_summary` 和 `live_gate_readiness_summary` 直接记录第三方 surface ok、6 类 export kind 全覆盖、missing export 为 0、artifact link 存在、download validation ok，并保留 live artifact download pending | 未部署 |
 | M6BB | main upload artifact readiness summary | 无 live 授权；只执行 no-live rollup self-test | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、main artifact readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：`acceptance_status.no_live_evidence_summary` 和 `live_gate_readiness_summary` 直接记录主站上传 self-test `final_pptx_ready`、6 类 required file kinds、PPTX/Markdown 页数、download validation ok，并保留 live artifact download pending | 未部署 |
+| M6BC | pending gate requirements summary | 无 live 授权；只执行 no-live rollup self-test | 已通过 `node --check scripts/smoke/video-ppt-no-live-rollup.mjs`、`npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>`、pending summary readback、report redaction scan、`git diff --check`、`git ls-files target` | 已完成：`acceptance_status.pending_gate_requirements_summary` 直接记录 7 个 pending gate 和对应授权/凭据/部署/客户输入要求，且固定 `no_live_substitute_available_for_pending_gates=false` | 未部署 |
 | M7 | P2-2C 低信息/短转场过滤与深色主题防误伤 | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker auto_selects --lib`、动画转场/深色主题/暗色/亮色/纯色定向测试、selected slides、controlled sample、slide rectangle、video deliverables validator、`git diff --check` | 已完成：稳定黑屏、白屏、灰屏/纯色 loading 和短动画转场分别写入 rejection，不会被自动选为 PPT 页；深色有内容课件页不会被误拒 | 未部署 |
 | M8 | P2-2B 讲师小窗/外部前景 crop 端到端 fixture | 无 live 授权；本地 fixture 即可 | 已通过 `cargo fmt --check`、`cargo test -p media-worker writes_foreground_component_crop_for_speaker_window_obstruction --lib`、slide rectangle、selected slides、controlled sample、video deliverables validator、`git diff --check` | 已完成：`foreground_component_v1` crop 写入 manifest/quality report/PPTX，不退回 full-frame fallback | 未部署 |
 | M9 | P2-2E-2/3 真实三样例质量复核 | 合成 PPT 视频、公开视频课程、客户授权视频 | 完整验收还需 media-worker quality tests、deliverable validator、逐样例人工复核 | 每个真实样例给出可交付/需人工复核/不可交付结论；失败能归因 | 不部署，除非质量切片已通过并获批 |

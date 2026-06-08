@@ -997,6 +997,7 @@ function buildAcceptanceStatus({ summary, results }) {
       no_live_substitute_available: false,
     },
   ];
+  const pendingGateRequirementsSummary = buildPendingGateRequirementsSummary(gates);
   return {
     schema: 'v3.video_ppt_acceptance_status_rollup.v1',
     full_acceptance_ready: false,
@@ -1014,6 +1015,7 @@ function buildAcceptanceStatus({ summary, results }) {
     pending_full_acceptance_gate_count: 1,
     no_live_evidence_summary: noLiveEvidenceSummary,
     live_gate_readiness_summary: liveGateReadinessSummary,
+    pending_gate_requirements_summary: pendingGateRequirementsSummary,
     gates,
     next_authorized_paths: [
       'P2_main_upload_live_smoke',
@@ -1034,6 +1036,33 @@ function buildAcceptanceStatus({ summary, results }) {
       server_8_touched: false,
       server_120_touched: false,
     },
+  };
+}
+
+function buildPendingGateRequirementsSummary(gates = []) {
+  const pendingGates = gates.filter((gate) => (
+    gate.no_live_substitute_available === false
+    && String(gate.status || '').startsWith('pending')
+  ));
+  const pendingGateIds = pendingGates.map((gate) => gate.id);
+  return {
+    schema: 'v3.video_ppt_pending_gate_requirements_summary.v1',
+    pending_gate_count: pendingGates.length,
+    pending_gate_ids: pendingGateIds,
+    main_upload_requires_write_approval: pendingGateIds.includes('P2_main_upload_live_smoke'),
+    external_video_ppt_requires_credentials:
+      pendingGateIds.includes('P3_external_video_ppt_live_smoke'),
+    login_gated_handoff_requires_deployment_approval:
+      pendingGateIds.includes('P4_login_gated_handoff_live_pass'),
+    authorized_capture_requires_approval_record:
+      pendingGateIds.includes('P5_authorized_capture_live_sample'),
+    customer_quality_matrix_requires_authorized_sample:
+      pendingGateIds.includes('P6_customer_authorized_quality_matrix'),
+    server_deployment_requires_explicit_window:
+      pendingGateIds.includes('P7_server_deployment_gate'),
+    full_acceptance_waits_on_live_customer_deployment:
+      pendingGateIds.includes('P8_full_acceptance_close'),
+    no_live_substitute_available_for_pending_gates: false,
   };
 }
 
@@ -1273,6 +1302,7 @@ function validateAcceptanceStatus(report) {
   }
   validateNoLiveAcceptanceEvidenceSummary(acceptance, report);
   validateLiveGateReadinessSummary(acceptance, report);
+  validatePendingGateRequirementsSummary(acceptance, report);
   for (const gateId of [
     'P2_main_upload_live_smoke',
     'P3_external_video_ppt_live_smoke',
@@ -1292,6 +1322,46 @@ function validateAcceptanceStatus(report) {
     ) {
       throw new Error(`no-live rollup acceptance status gate is incomplete: ${gateId}`);
     }
+  }
+}
+
+function validatePendingGateRequirementsSummary(acceptance, report) {
+  const pending = acceptance.pending_gate_requirements_summary;
+  if (
+    !pending
+    || pending.schema !== 'v3.video_ppt_pending_gate_requirements_summary.v1'
+    || pending.no_live_substitute_available_for_pending_gates !== false
+  ) {
+    throw new Error('no-live rollup pending gate requirements summary is incomplete');
+  }
+  if (report.summary.failed_count !== 0) {
+    return;
+  }
+  const requiredGateIds = [
+    'P2_main_upload_live_smoke',
+    'P3_external_video_ppt_live_smoke',
+    'P4_login_gated_handoff_live_pass',
+    'P5_authorized_capture_live_sample',
+    'P6_customer_authorized_quality_matrix',
+    'P7_server_deployment_gate',
+    'P8_full_acceptance_close',
+  ];
+  const pendingGateIds = Array.isArray(pending.pending_gate_ids)
+    ? pending.pending_gate_ids
+    : [];
+  if (
+    pending.pending_gate_count !== requiredGateIds.length
+    || pendingGateIds.length !== requiredGateIds.length
+    || requiredGateIds.some((gateId) => !pendingGateIds.includes(gateId))
+    || pending.main_upload_requires_write_approval !== true
+    || pending.external_video_ppt_requires_credentials !== true
+    || pending.login_gated_handoff_requires_deployment_approval !== true
+    || pending.authorized_capture_requires_approval_record !== true
+    || pending.customer_quality_matrix_requires_authorized_sample !== true
+    || pending.server_deployment_requires_explicit_window !== true
+    || pending.full_acceptance_waits_on_live_customer_deployment !== true
+  ) {
+    throw new Error('no-live rollup pending gate requirements summary does not match pending gates');
   }
 }
 

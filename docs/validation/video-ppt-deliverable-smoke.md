@@ -4367,6 +4367,69 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, local artifact paths, or customer retention values were recorded in this shared receipt.
 
+## 2026-06-08 No-Live Rollup Pending Gate Requirements Summary
+
+Task source: M6BC P1/no-live follow-up. The acceptance status already listed each gate with `requires`, but reviewers still had to inspect the full gate array to see which live/customer/deployment inputs were blocking full acceptance. This slice adds a compact pending requirements summary while preserving `full_acceptance_ready=false`.
+
+Scope:
+
+- local no-live rollup code slice only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, upload, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `acceptance_status.pending_gate_requirements_summary` now uses schema `v3.video_ppt_pending_gate_requirements_summary.v1`;
+- the summary records `pending_gate_count=7` and the exact pending gate ids for P2/P3/P4/P5/P6/P7/P8;
+- the summary records booleans for main upload write approval, third-party credentials, login-gated handoff deployment approval, authorized capture approval record, customer authorized sample, server deployment window, and P8 live/customer/deployment closeout;
+- the summary records `no_live_substitute_available_for_pending_gates=false`;
+- no-live rollup validation fails if any required pending gate id or blocking requirement bit is missing.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/video-ppt-no-live-rollup-pending-summary-m6bc
+node -e "<redacted pending summary readback>"
+rg -n "<local-path-url-token-approval-patterns>" target/video-ppt-no-live-rollup-pending-summary-m6bc
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- report readback showed schema `v3.video_ppt_pending_gate_requirements_summary.v1`;
+- report readback showed `pending_gate_count=7`;
+- report readback listed `P2_main_upload_live_smoke`, `P3_external_video_ppt_live_smoke`, `P4_login_gated_handoff_live_pass`, `P5_authorized_capture_live_sample`, `P6_customer_authorized_quality_matrix`, `P7_server_deployment_gate`, and `P8_full_acceptance_close`;
+- report readback showed all blocking requirement bits true: main upload write approval, external credentials, login-gated handoff deployment approval, authorized capture approval record, customer authorized sample, server deployment window, and full acceptance live/customer/deployment closeout;
+- report readback showed `no_live_substitute_available_for_pending_gates=false`;
+- acceptance status stayed `full_acceptance_ready=false` with `gate_count=8`;
+- report redaction scan found no raw URLs, token query strings, bearer values, local absolute paths, generated-artifacts paths, provider keys, password-like values, approval ids, raw approval/operator values, or customer retention values;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this top-level requirements summary does not replace any live gate; P2/P3/P4/P5/P6/P7/P8 still require their corresponding authorization, credentials, customer input, or deployment window;
+- full acceptance remains blocked on live/customer/deployment evidence or explicit non-executable reasons.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, local artifact paths, or customer retention values were recorded in this shared receipt.
+
 ## 2026-06-08 No-Live Rollup Main Upload Artifact Summary
 
 Task source: M6BB P1/no-live follow-up. After M6BA elevated third-party artifact surface evidence to the top-level no-live acceptance status, the main upload self-test still exposed artifact/download readiness only inside the upload child evidence. This slice makes the main upload artifact contract copyable from the top-level no-live report while keeping live main-site artifact downloads pending.
