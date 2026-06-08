@@ -1195,6 +1195,12 @@ function buildLiveGateReadinessSummary(results = []) {
     main_upload_live_write_approval_gate_enforced:
       uploadPreflight.live_write_approval_gate_enforced === true
       && uploadApprovalNegative.approval_gate_enforced === true,
+    main_upload_live_approval_command_template_ready:
+      uploadPreflight.command_template_has_ack_live_write === true
+      && uploadPreflight.command_template_has_redacted_approval_id === true
+      && uploadPreflight.command_template_approval_values_included === false
+      && uploadPreflight.command_template_raw_url_included === false
+      && uploadPreflight.command_template_local_path_included === false,
     main_upload_live_without_approval_rejected_before_network:
       uploadApprovalNegative.approval_gate_enforced === true
       && uploadApprovalNegative.network_calls_run === false
@@ -1217,6 +1223,13 @@ function buildLiveGateReadinessSummary(results = []) {
     external_live_write_approval_gate_enforced:
       externalPreflight.live_write_approval_gate_enforced === true
       && externalApprovalNegative.approval_gate_enforced === true,
+    external_live_approval_command_template_ready:
+      externalPreflight.command_template_has_ack_live_write === true
+      && externalPreflight.command_template_has_redacted_approval_id === true
+      && externalPreflight.command_template_has_redacted_bearer === true
+      && externalPreflight.command_template_approval_values_included === false
+      && externalPreflight.command_template_raw_url_included === false
+      && externalPreflight.command_template_local_path_included === false,
     external_live_without_approval_rejected_before_network:
       externalApprovalNegative.approval_gate_enforced === true
       && externalApprovalNegative.network_calls_run === false
@@ -1246,6 +1259,15 @@ function buildLiveGateReadinessSummary(results = []) {
       && qualityEvidence.customer_retention_policy_argument_gate_supported === true,
     customer_quality_matrix_retention_policy_required: true,
     customer_quality_matrix_customer_sample_pending: true,
+    live_approval_command_template_surface_count: [
+      uploadPreflight,
+      externalPreflight,
+    ].filter((evidence) =>
+      evidence.command_template_has_ack_live_write === true
+      && evidence.command_template_has_redacted_approval_id === true
+      && evidence.command_template_approval_values_included === false
+      && evidence.command_template_raw_url_included === false
+      && evidence.command_template_local_path_included === false).length,
     pending_main_live_write_approval: uploadPreflight.live_write_approval_required === true,
     pending_external_bearer: externalPreflight.live_credential_ready === false,
     pending_server_8_deployment_approval: handoffPreflight.deployment_approval_required === true,
@@ -1579,6 +1601,7 @@ function validateLiveGateReadinessSummary(acceptance, report) {
     readiness.main_upload_preflight_ready !== true
     || readiness.main_upload_live_write_approval_required !== true
     || readiness.main_upload_live_write_approval_gate_enforced !== true
+    || readiness.main_upload_live_approval_command_template_ready !== true
     || readiness.main_upload_live_without_approval_rejected_before_network !== true
     || readiness.main_upload_writes_smoke_records !== true
     || readiness.main_upload_artifact_self_test_ready !== true
@@ -1589,6 +1612,7 @@ function validateLiveGateReadinessSummary(acceptance, report) {
     || readiness.external_preflight_ready !== true
     || readiness.external_live_write_approval_required !== true
     || readiness.external_live_write_approval_gate_enforced !== true
+    || readiness.external_live_approval_command_template_ready !== true
     || readiness.external_live_without_approval_rejected_before_network !== true
     || readiness.external_context_present !== true
     || readiness.external_live_credential_ready !== false
@@ -1607,6 +1631,7 @@ function validateLiveGateReadinessSummary(acceptance, report) {
     || readiness.customer_quality_matrix_argument_gates_ready !== true
     || readiness.customer_quality_matrix_retention_policy_required !== true
     || readiness.customer_quality_matrix_customer_sample_pending !== true
+    || readiness.live_approval_command_template_surface_count !== 2
     || readiness.pending_main_live_write_approval !== true
     || readiness.pending_external_bearer !== true
     || readiness.pending_server_8_deployment_approval !== true

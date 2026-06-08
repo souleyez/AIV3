@@ -4302,6 +4302,64 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Live Readiness Command Template Evidence
+
+Task source: M6BG P1/no-live follow-up. M6BF exposed live approval command-template evidence in `acceptance_status.no_live_evidence_summary`; this slice mirrors the same readiness into `acceptance_status.live_gate_readiness_summary` so operators can inspect live gate readiness from one top-level readiness object.
+
+Scope:
+
+- local no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `acceptance_status.live_gate_readiness_summary.main_upload_live_approval_command_template_ready=true` when upload-main preflight command template contains `--ack-live-write` and `--approval-id <redacted-approval-id>` and contains no raw approval value, raw URL, or local path;
+- `acceptance_status.live_gate_readiness_summary.external_live_approval_command_template_ready=true` when external-video-ppt preflight command template contains `--ack-live-write`, `--approval-id <redacted-approval-id>`, and `--bearer <redacted-inbound-bearer>` and contains no raw approval value, raw URL, or local path;
+- `acceptance_status.live_gate_readiness_summary.live_approval_command_template_surface_count=2`;
+- no-live rollup validation now fails if any of these readiness fields are missing or false.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted live readiness command-template readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup passed with `command_count=24`, `passed_count=24`, and `failed_count=0`;
+- readback showed `acceptance_status.live_gate_readiness_summary.main_upload_live_approval_command_template_ready=true`;
+- readback showed `acceptance_status.live_gate_readiness_summary.external_live_approval_command_template_ready=true`;
+- readback showed `acceptance_status.live_gate_readiness_summary.live_approval_command_template_surface_count=2`;
+- readback showed `acceptance_status.live_gate_readiness_summary.live_or_deploy_action_run=false`;
+- readback kept `acceptance_status.full_acceptance_ready=false`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- P2 live still needs explicit write approval, safe video input, and controlled live execution;
+- P3 live still needs third-party credentials/context, safe input, and explicit third-party live write approval.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Live Approval Command Template Evidence
 
 Task source: M6BF P1/no-live follow-up. M6BD/M6BE prove the live write approval gate itself, but operators also need copyable preflight command templates that visibly include the required approval flags without leaking approval ids, raw video URLs, local paths, or bearer values.
