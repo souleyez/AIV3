@@ -1,10 +1,10 @@
 # DataMax 当前唯一执行计划
 
-**更新时间：** 2026-06-08 14:08 CST
-**当前性质：** 开发执行版；当前 GitHub 功能基线以 `git log -1` 为准，本文件记录到 M6BC pending gate requirements summary。后续实际执行入口是第 0.7.21 节；第 0.7.18-0.7.20 节保留完整背景、命令和历史口径，但若与第 0.7.21 节冲突，以第 0.7.21 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
+**更新时间：** 2026-06-08 14:14 CST
+**当前性质：** 开发执行版；当前 GitHub 功能基线以 `git log -1` 为准，本文件记录到 M6BC pending gate requirements summary，并已在第 0.7.21 节完成当前完整可执行方案收口。后续实际执行入口是第 0.7.21 节；第 0.7.18-0.7.20 节保留完整背景、命令和历史口径，但若与第 0.7.21 节冲突，以第 0.7.21 节为准。当前公开视频样例仍应作为 `needs_manual_review` 真实样例，不强行标为 clean deliverable；本轮仍不部署 8 服务器。
 **状态摘要：**
 
-- 本轮已先完成 plan-only 收口，并继续按 P1/no-live 代码切片收掉 M6AV/M6AW/M6AX/M6AY；没有跑 live、没有上传视频、没有发第三方事件、没有录屏、没有部署或触碰 8/120 服务器。后续默认仍按 P1/no-live 推进；任何 P2/P3/P4/P5/P6/P7 都需要对应授权、凭据、样例或部署窗口。
+- 本轮已先完成 plan-only 收口，并继续按 P1/no-live 代码切片收掉 M6AV/M6AW/M6AX/M6AY/M6AZ/M6BA/M6BB/M6BC；第 0.7.21 节已把原计划、视频测试提取、提取效果复核、视频号/登录态 handoff、授权录屏兜底、GitHub 同步和 8 服务器部署门槛压成 P0-P8 可执行路径。没有跑 live、没有上传视频、没有发第三方事件、没有录屏、没有部署或触碰 8/120 服务器。后续默认仍按 P1/no-live 推进；任何 P2/P3/P4/P5/P6/P7 都需要对应授权、凭据、样例或部署窗口。
 - P0 主站可见视频/PPT smoke、P1-1 公开页面 resolver、P1-2 视频号 handoff、P1-3 direct URL release gate 已有证据；P1-3 主站上传视频 smoke 已补离线 self-test 下载校验和 live 前置 preflight，第三方视频登记 special-trigger smoke 已补离线 self-test 下载校验和 live 前置 preflight，视频号/登录态 handoff smoke 脚本已实现，并已补离线负向 fixture gate 与 live 前置 preflight，证明不会把登录态来源误报为已提取成功、不会暴露下载或 artifact link。
 - P1-3D 主站 handoff 已改为 deterministic early return，handler 级测试证明不会走 provider 且 html-artifacts 可列出 handoff；第三方 `/events` 入口也已补 deterministic unsupported-source card，endpoint 级测试证明首次投递、幂等重复和 reply 查询都不会走 provider。
 - P2-1 授权录屏兜底 runbook 和 isolated script 已实现，self-test/dry-run/授权门禁通过；self-test 已补授权负向用例和可复制的脱敏 `sharedReceipt`；没有执行 live capture，没有接入 8 服务器生产服务。

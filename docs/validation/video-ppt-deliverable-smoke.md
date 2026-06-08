@@ -4623,6 +4623,64 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Complete Executable Plan Closeout
+
+Task source: user asked to continue the prior planning-only work and complete the full executable plan, while preserving the boundary that this step is a plan and should not change code.
+
+Scope:
+
+- plan/documentation closeout only;
+- update the active plan's current-status header so it points to section `0.7.21` as the latest execution entry;
+- keep the repository plan and desktop copy synchronized;
+- no business code, smoke script, validator, worker, API, web app, deployment, server, browser, FFmpeg, live upload, third-party event, or customer-sample action.
+
+Implemented planning result:
+
+- `docs/plans/datamax-active-execution-plan.md` remains the single active DataMax plan;
+- section `0.7.21` remains the latest executable route selector for P0-P8;
+- the plan now explicitly says the latest recorded baseline is M6BC and that the complete executable route has been closed out in section `0.7.21`;
+- the plan keeps the product boundary that video PPT extraction means extracting slides/courseware already shown in a video, not generating a new authored PPT from ordinary video;
+- the plan keeps WeChat Video Channels, login-gated pages, QR-code pages, and private playback pages on handoff or operator-authorized capture only;
+- the plan keeps main-site upload live, third-party live, handoff live, authorized capture live, customer quality matrix, and 8-server deployment as separate pending gates.
+
+Validation for this plan-only closeout:
+
+```text
+cmp docs/plans/datamax-active-execution-plan.md /Users/manslive01/Desktop/datamax-active-execution-plan.md
+git diff --check
+git status --short --branch
+git ls-files target | wc -l
+```
+
+Expected result:
+
+- repository plan and desktop plan copy match;
+- whitespace check passes;
+- only documentation files are changed;
+- no generated `target/` files are tracked;
+- `full_acceptance_ready` remains false until live/customer/deployment gates have evidence or explicit non-executable reasons.
+
+Remaining work:
+
+- P2 main-site upload controlled smoke still needs explicit approval to write one non-customer smoke record and a safe video input;
+- P3 third-party video PPT smoke still needs bearer/context/source information and safe input;
+- P4 video号/login-gated handoff live pass still needs an approved 8-server deployment window;
+- P5 authorized capture still needs a complete approval record and playable source;
+- P6 customer quality matrix still needs customer/operator-authorized sample input and retention policy;
+- P7 8-server deployment still needs explicit deployment approval;
+- P8 full acceptance cannot close until the live, customer, and deployment gates have real evidence or explicit non-executable reasons.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Customer Quality Matrix Authorization Argument Gate
 
 Task source: M6AV no-live follow-up. Customer-authorized deliverables are allowed only with explicit authorization metadata. The script already rejected missing approval ids at runtime; this slice turns that behavior into a self-test and no-live rollup gate.
