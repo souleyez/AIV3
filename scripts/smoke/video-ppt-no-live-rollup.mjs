@@ -1038,6 +1038,7 @@ function buildLiveGateReadinessSummary(results = []) {
   const externalPreflight = commandById.get('external_video_ppt_preflight')?.evidence || {};
   const handoffPreflight = commandById.get('video_ppt_handoff_preflight')?.evidence || {};
   const captureDryRun = commandById.get('authorized_capture_dry_run')?.evidence || {};
+  const qualityEvidence = commandById.get('quality_matrix_self_test')?.evidence || {};
   return {
     schema: 'v3.video_ppt_live_gate_readiness_summary.v1',
     main_upload_preflight_ready: uploadPreflight.ok === true && uploadPreflight.preflight === true,
@@ -1055,6 +1056,11 @@ function buildLiveGateReadinessSummary(results = []) {
     authorized_capture_dry_run_ready: captureDryRun.ok === true && captureDryRun.dry_run === true,
     authorized_capture_approval_reference_present: captureDryRun.approval_reference_present === true,
     authorized_capture_no_capture_attempted: captureDryRun.capture_attempted === false,
+    customer_quality_matrix_argument_gates_ready:
+      qualityEvidence.customer_authorization_argument_gate_supported === true
+      && qualityEvidence.customer_retention_policy_argument_gate_supported === true,
+    customer_quality_matrix_retention_policy_required: true,
+    customer_quality_matrix_customer_sample_pending: true,
     pending_main_live_write_approval: uploadPreflight.live_write_approval_required === true,
     pending_external_bearer: externalPreflight.live_credential_ready === false,
     pending_server_8_deployment_approval: handoffPreflight.deployment_approval_required === true,
@@ -1240,6 +1246,9 @@ function validateLiveGateReadinessSummary(acceptance, report) {
     || readiness.authorized_capture_dry_run_ready !== true
     || readiness.authorized_capture_approval_reference_present !== true
     || readiness.authorized_capture_no_capture_attempted !== true
+    || readiness.customer_quality_matrix_argument_gates_ready !== true
+    || readiness.customer_quality_matrix_retention_policy_required !== true
+    || readiness.customer_quality_matrix_customer_sample_pending !== true
     || readiness.pending_main_live_write_approval !== true
     || readiness.pending_external_bearer !== true
     || readiness.pending_server_8_deployment_approval !== true

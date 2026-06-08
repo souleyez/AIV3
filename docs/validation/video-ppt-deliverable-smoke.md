@@ -1672,6 +1672,68 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, raw approval ids, raw retention policy values, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Customer Quality Matrix Readiness Summary
+
+Task source: M6AY no-live follow-up. M6AX made the customer authorization and retention policy gates visible in no-live evidence; this slice adds the matching P6 readiness fields to `acceptance_status.live_gate_readiness_summary`.
+
+Scope:
+
+- local no-live rollup readiness-summary code slice only;
+- no main-site live upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no customer sample processing;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `acceptance_status.live_gate_readiness_summary.customer_quality_matrix_argument_gates_ready=true` when both customer approval and retention policy gates are present in quality matrix evidence;
+- `acceptance_status.live_gate_readiness_summary.customer_quality_matrix_retention_policy_required=true`;
+- `acceptance_status.live_gate_readiness_summary.customer_quality_matrix_customer_sample_pending=true`;
+- no-live rollup self-validation fails if these readiness fields are missing or false after a passing quality matrix self-test.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir target/video-ppt-no-live-rollup-customer-readiness-m6ay
+node -e "<redacted latest live gate readiness summary readback>"
+rg -n "<local-path-url-token-raw-approval-retention-patterns>" target/video-ppt-no-live-rollup-customer-readiness-m6ay
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- no-live rollup syntax check passed;
+- no-live rollup passed with `command_count=22`, `passed_count=22`, and `failed_count=0`;
+- readiness summary exposed `customer_quality_matrix_argument_gates_ready=true`;
+- readiness summary exposed `customer_quality_matrix_retention_policy_required=true`;
+- readiness summary exposed `customer_quality_matrix_customer_sample_pending=true`;
+- acceptance status stayed `full_acceptance_ready=false`;
+- sensitive-shape scan found no local absolute paths, raw URLs, bearer values, token query strings, provider keys, password-like values, raw approval ids, raw retention policy values, raw operator names, or generated-artifacts paths;
+- `git diff --check` passed;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this readiness summary does not execute or replace a real customer-authorized quality matrix;
+- P6 customer quality matrix still requires customer/operator authorization, input source, approval reference, retention policy, and retention cleanup expectations;
+- P2/P3/P4/P5/P7/P8 remain pending their live/customer/deployment gates.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, raw approval ids, raw retention policy values, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Slide Sharpness Quality Signal Local Slice
 
 Task source: P2-2F from `docs/plans/datamax-active-execution-plan.md`.
