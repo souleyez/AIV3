@@ -652,6 +652,85 @@ function buildMessagePayload(args, ids, runId) {
   };
 }
 
+function assertSelfTestExternalContract(args, runId) {
+  const ids = buildFixtureIds(runId);
+  const payload = buildMessagePayload(args, ids, runId);
+  if (!promptRequestsVideoPpt(payload.text)) {
+    throw new Error('self-test event text did not request video PPT extraction');
+  }
+  if (!/不要把普通视频创作成 PPT/.test(payload.default_prompt)) {
+    throw new Error('self-test default prompt did not guard against ordinary video-to-PPT generation');
+  }
+  const requestedSkillIds = payload.requested_skills.map((skill) => skill.skill_id);
+  if (!requestedSkillIds.includes('video_ppt_extraction')) {
+    throw new Error('self-test payload did not request video_ppt_extraction skill');
+  }
+  const expectedAction = payload.requested_skills[0]?.arguments?.expected_action || '';
+  if (expectedAction !== 'extract_video_ppt_transcript') {
+    throw new Error('self-test payload did not preserve extract_video_ppt_transcript action');
+  }
+  if (
+    payload.available_document_source_id !== args.sourceId
+    || payload.available_document_external_ids.length !== 1
+    || payload.available_document_external_ids[0] !== ids.documentExternalId
+    || payload.dataset_external_ids.length !== 1
+    || payload.dataset_external_ids[0] !== ids.datasetExternalId
+  ) {
+    throw new Error('self-test payload did not scope the PPT trigger to the registered video document');
+  }
+
+  const supported = SUPPORTED_VIDEO_EXTENSIONS.map((extension) => `sample${extension}`);
+  const missedSupportedVideos = supported.filter((fileName) => {
+    const contentType = inferContentType(fileName, '');
+    return inferUploadMediaKind(fileName, contentType) !== 'video'
+      || !SUPPORTED_VIDEO_EXTENSIONS.includes(extname(fileName).toLowerCase());
+  });
+  if (missedSupportedVideos.length > 0) {
+    throw new Error(`self-test external classifier missed supported videos: ${missedSupportedVideos.join(', ')}`);
+  }
+
+  const unsupportedNonVideos = ['sample.pdf', 'sample.txt', 'sample.jpg'];
+  const falsePositiveNonVideos = unsupportedNonVideos.filter((fileName) =>
+    inferUploadMediaKind(fileName, inferContentType(fileName, '')) === 'video',
+  );
+  if (falsePositiveNonVideos.length > 0) {
+    throw new Error(`self-test external classifier misclassified non-video files: ${falsePositiveNonVideos.join(', ')}`);
+  }
+
+  const source = redactedUrlSummary(redactionProbeVideoUrl());
+  if (
+    JSON.stringify(source).includes('redaction_probe')
+    || JSON.stringify(source).includes('/private/path')
+  ) {
+    throw new Error('self-test redacted URL summary leaked path or query data');
+  }
+
+  return {
+    triggerTextRequestsVideoPpt: true,
+    defaultPromptGuardsAgainstOrdinaryVideoToPpt: true,
+    requestedSkillIds,
+    expectedAction,
+    availableDocumentSourcePresent: true,
+    availableDocumentExternalIdsCount: payload.available_document_external_ids.length,
+    datasetExternalIdsCount: payload.dataset_external_ids.length,
+    supportedVideoExtensions: SUPPORTED_VIDEO_EXTENSIONS,
+    unsupportedNonVideoExtensionsRejected: true,
+    sourceSummaryRedacted: true,
+  };
+}
+
+function redactionProbeVideoUrl() {
+  return [
+    'https',
+    '://',
+    'example.com',
+    '/private/path/video.mp4',
+    '?',
+    'redaction_probe',
+    '=secret',
+  ].join('');
+}
+
 async function postEvent(args, payload) {
   const url = new URL(
     `/v1/external/channels/${encodeURIComponent(args.connectionId)}/events`,
@@ -1030,6 +1109,7 @@ async function buildSelfTestDownloads(args, runId) {
 
 async function runSelfTest(args) {
   const runId = makeRunId();
+  const contract = assertSelfTestExternalContract(args, runId);
   const response = {
     assistant_run_id: `self-test-${runId}`,
     reply: {
@@ -1067,6 +1147,7 @@ async function runSelfTest(args) {
       deliverablesDownloadedFromNetwork: false,
     },
     surface,
+    contract,
     downloadValidation: {
       ok: downloadValidation.ok,
       pptxSlideCount: downloadValidation.pptx?.slideCount || 0,

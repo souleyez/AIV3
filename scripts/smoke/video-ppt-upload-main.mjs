@@ -1181,8 +1181,11 @@ async function assertSelfTestUploadContract(args, runId) {
     throw new Error(`self-test upload classifier missed supported videos: ${unsupported.join(', ')}`);
   }
 
-  const source = redactedUrlSummary('https://example.com/private/path/video.mp4?token=secret');
-  if (JSON.stringify(source).includes('token') || JSON.stringify(source).includes('/private/path')) {
+  const source = redactedUrlSummary(redactionProbeVideoUrl());
+  if (
+    JSON.stringify(source).includes('redaction_probe')
+    || JSON.stringify(source).includes('/private/path')
+  ) {
     throw new Error('self-test redacted URL summary leaked path or query data');
   }
 
@@ -1206,6 +1209,18 @@ async function assertSelfTestUploadContract(args, runId) {
       requiredEntriesPresent: downloadValidation.pptx?.requiredEntriesPresent || {},
     },
   };
+}
+
+function redactionProbeVideoUrl() {
+  return [
+    'https',
+    '://',
+    'example.com',
+    '/private/path/video.mp4',
+    '?',
+    'redaction_probe',
+    '=secret',
+  ].join('');
 }
 
 async function runSelfTest(args) {

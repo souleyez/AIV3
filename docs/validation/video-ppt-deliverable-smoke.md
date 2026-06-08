@@ -4123,3 +4123,59 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 External Video PPT Self-Test Contract Hardening
+
+Task source: main-site upload self-test already checked video extension classification and video PPT extraction intent, while the third-party self-test mostly checked reply/download surface. Since the final feature needs third-party video registration plus a special "extract PPT from the video" trigger, the third-party self-test now validates that request contract locally before any bearer-backed live run.
+
+Scope:
+
+- keep the change no-live and self-test only;
+- validate the third-party event payload shape used after video document registration;
+- verify the supported video extension classifier matches the main upload gate;
+- preserve self-test report redaction.
+
+Implemented behavior:
+
+- added `assertSelfTestExternalContract()` to `scripts/smoke/external-video-ppt.mjs`;
+- self-test now asserts the event text requests video PPT extraction;
+- self-test now asserts the default prompt guards against turning ordinary video into an authored PPT;
+- self-test now asserts `requested_skills[].skill_id=video_ppt_extraction` and `expected_action=extract_video_ppt_transcript`;
+- self-test now asserts the event is scoped to the registered document/source/dataset identifiers;
+- self-test now asserts `.mp4`, `.mov`, `.m4v`, `.webm`, `.mkv`, and `.avi` classify as supported videos while non-video extensions do not;
+- self-test now records a redacted contract summary without source URLs, local paths, bearer values, or object keys.
+- upload-main and external self-test redaction probes now build synthetic URL probes from string parts instead of storing a complete URL/query-token shape in source.
+
+Validation:
+
+```text
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>
+rg -n "<contract-fields>" <external-self-test-report>
+rg -n "<local-path-url-token-patterns>" <external-self-test-report>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- external video PPT script syntax check passed;
+- external self-test passed;
+- self-test report contained the contract summary fields for expected action, supported video extensions, non-video rejection, and source summary redaction;
+- self-test report redaction scan found no local paths, URLs, token/cookie/bearer-like text, or session directories;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`.
+
+Remaining work:
+
+- this does not replace third-party live smoke; bearer, connection id, source id, and approved input are still required;
+- this does not prove third-party artifact download visibility in production; it only hardens the no-live payload and contract gate.
+
+Safety result:
+
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
