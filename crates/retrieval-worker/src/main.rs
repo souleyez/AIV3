@@ -3,7 +3,8 @@ use chrono::Utc;
 use domain_model::{Document, DocumentChunk, DocumentLifecycle, WorkflowTask};
 use event_bus::{workflow_task_enqueued_subject, EventBus, EventSubscription};
 use retrieval_worker::{
-    LocalLexicalRetrievalIndexer, RetrievalChunkInput, RetrievalIndexJob, RetrievalIndexer,
+    lexical_content_hash, lexical_search_terms, LocalLexicalRetrievalIndexer, RetrievalChunkInput,
+    RetrievalIndexJob, RetrievalIndexer,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -188,6 +189,9 @@ async fn process_task(
             let source_locator = retrieval_source_locator(document_id, chunk);
             let section_title_hints = document_chunk_section_title_hints(chunk);
             let noun_terms = document_chunk_noun_terms(chunk);
+            let lexical_search_text = retrieval_index_text(&document, chunk);
+            let search_terms = lexical_search_terms(&lexical_search_text);
+            let indexed_content_hash = lexical_content_hash(&lexical_search_text);
             let mut evidence_manifest = json!({
                 "schema_version": "0.4.0",
                 "generator": "retrieval-worker",
@@ -209,6 +213,15 @@ async fn process_task(
                     "status": "ready",
                     "score": profile.recall_score,
                     "rank_hint": profile.rank_hint,
+                },
+                "lexical": {
+                    "status": "indexed",
+                    "language": "simple",
+                    "search_text": lexical_search_text,
+                    "search_terms": search_terms,
+                    "indexed_content_hash": indexed_content_hash,
+                    "indexed_at": indexed_at,
+                    "source": "retrieval_index_text",
                 },
                 "evidence": {
                     "document_chunk_id": chunk.id,
@@ -840,6 +853,9 @@ async fn index_external_document(
         let source_locator = retrieval_source_locator(document_id, chunk);
         let section_title_hints = document_chunk_section_title_hints(chunk);
         let noun_terms = document_chunk_noun_terms(chunk);
+        let lexical_search_text = retrieval_index_text(&document, chunk);
+        let search_terms = lexical_search_terms(&lexical_search_text);
+        let indexed_content_hash = lexical_content_hash(&lexical_search_text);
         let mut evidence_manifest = json!({
             "schema_version": "0.4.0",
             "generator": "retrieval-worker",
@@ -861,6 +877,15 @@ async fn index_external_document(
                 "status": "ready",
                 "score": profile.recall_score,
                 "rank_hint": profile.rank_hint,
+            },
+            "lexical": {
+                "status": "indexed",
+                "language": "simple",
+                "search_text": lexical_search_text,
+                "search_terms": search_terms,
+                "indexed_content_hash": indexed_content_hash,
+                "indexed_at": indexed_at,
+                "source": "retrieval_index_text",
             },
             "evidence": {
                 "document_chunk_id": chunk.id,

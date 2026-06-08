@@ -1,4 +1,5 @@
 use domain_model::{DatasetId, DocumentId};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SIGNATURE_TERM_LIMIT: usize = 12;
@@ -232,6 +233,19 @@ fn tokenize(content: &str) -> Vec<String> {
     tokens
 }
 
+pub fn lexical_search_terms(content: &str) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    tokenize(content)
+        .into_iter()
+        .filter(|term| seen.insert(term.clone()))
+        .collect()
+}
+
+pub fn lexical_content_hash(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn flush_ascii_token(tokens: &mut Vec<String>, ascii_token: &mut String) {
     if let Some(token) = normalize_token(ascii_token) {
         tokens.push(token);
@@ -395,6 +409,25 @@ mod tests {
         assert!(tokens.contains(&"金额增".to_string()));
         assert!(tokens.contains(&"订单金额增长".to_string()));
         assert!(tokens.contains(&"revenue".to_string()));
+    }
+
+    #[test]
+    fn lexical_search_terms_are_unique_and_hash_is_stable() {
+        let terms = lexical_search_terms("订单延期风险 订单延期风险 revenue");
+
+        assert_eq!(
+            terms.iter().filter(|term| *term == "订单延期风险").count(),
+            1
+        );
+        assert!(terms.contains(&"revenue".to_string()));
+        assert_eq!(
+            lexical_content_hash("订单延期风险"),
+            lexical_content_hash("订单延期风险")
+        );
+        assert_ne!(
+            lexical_content_hash("订单延期风险"),
+            lexical_content_hash("订单延期")
+        );
     }
 
     #[test]

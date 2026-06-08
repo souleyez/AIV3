@@ -2280,6 +2280,7 @@ dependencies = [
  "observability",
  "platform-api",
  "serde_json",
+ "sha2",
  "sqlx",
  "storage",
  "tokio",

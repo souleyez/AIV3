@@ -157,9 +157,9 @@ use std::{
     time::{Duration as StdDuration, Instant},
 };
 use storage::{
-    configured_database_max_connections, DocumentEnrichmentRun, ModelGatewayProfile,
-    ModelGatewayProfileUpdate, ModelGatewayProfileUsageSummary, NewAssistantRun,
-    NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
+    configured_database_max_connections, DocumentEnrichmentRun, LexicalRetrievalQuery,
+    ModelGatewayProfile, ModelGatewayProfileUpdate, ModelGatewayProfileUsageSummary,
+    NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
     NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
     NewHtmlArtifact, NewModelGatewayProfile, NewModelGatewayProfileEvent, NewPublishedReport,
     NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
@@ -193,6 +193,7 @@ use react_agent_tools::{
 };
 
 const DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT: i64 = 512;
+const RETRIEVAL_SEARCH_BACKEND_ENV: &str = "RETRIEVAL_SEARCH_BACKEND";
 const DATASET_OUTPUT_RETRIEVAL_BIND_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_DEFAULT_LIMIT: usize = 8;
 const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
@@ -8712,16 +8713,32 @@ async fn search_dataset_retrieval_with_state(
     .await?;
 
     let limit = normalize_retrieval_search_limit(limit);
-    let evidences = state
-        .storage
-        .retrieval_evidences()
-        .list_latest_by_dataset_scope(
-            state.tenant_id,
-            dataset_id,
-            retrieval_search_scan_limit(limit),
-        )
-        .await
-        .map_err(ApiError::from_storage)?;
+    let evidences = match retrieval_search_backend() {
+        RetrievalSearchBackend::PostgresLexical => state
+            .storage
+            .retrieval_evidences()
+            .search_lexical_retrieval_evidences(LexicalRetrievalQuery {
+                tenant_id: state.tenant_id,
+                dataset_id,
+                query: query.to_string(),
+                document_ids: Vec::new(),
+                owner_user_id: current_user_id,
+                limit,
+                candidate_limit: retrieval_search_candidate_limit(limit),
+            })
+            .await
+            .map_err(ApiError::from_storage)?,
+        RetrievalSearchBackend::LegacyScan => state
+            .storage
+            .retrieval_evidences()
+            .list_latest_by_dataset_scope(
+                state.tenant_id,
+                dataset_id,
+                retrieval_search_scan_limit(limit),
+            )
+            .await
+            .map_err(ApiError::from_storage)?,
+    };
     let evidences = filter_retrieval_evidences_for_visible_documents(
         state,
         dataset_id,
@@ -63728,16 +63745,35 @@ async fn build_assistant_run_evidence_state(
         .await?;
         supplied_items.extend(spreadsheet_row_analysis_items);
 
-        let evidences = state
-            .storage
-            .retrieval_evidences()
-            .list_latest_by_dataset_scope(
-                state.tenant_id,
-                dataset.id,
-                retrieval_search_scan_limit(limit),
-            )
-            .await
-            .map_err(ApiError::from_storage)?;
+        let evidences = if retrieval_search_backend() == RetrievalSearchBackend::PostgresLexical
+            && !allow_selected_documents_without_acl_snapshot
+        {
+            state
+                .storage
+                .retrieval_evidences()
+                .search_lexical_retrieval_evidences(LexicalRetrievalQuery {
+                    tenant_id: state.tenant_id,
+                    dataset_id: dataset.id,
+                    query: prompt.to_string(),
+                    document_ids: evidence_document_ids.clone(),
+                    owner_user_id: current_user_id,
+                    limit,
+                    candidate_limit: retrieval_search_candidate_limit(limit),
+                })
+                .await
+                .map_err(ApiError::from_storage)?
+        } else {
+            state
+                .storage
+                .retrieval_evidences()
+                .list_latest_by_dataset_scope(
+                    state.tenant_id,
+                    dataset.id,
+                    retrieval_search_scan_limit(limit),
+                )
+                .await
+                .map_err(ApiError::from_storage)?
+        };
         let evidences = filter_retrieval_evidences_for_assistant_evidence_scope(
             state,
             dataset.id,
@@ -79486,6 +79522,30 @@ fn normalize_retrieval_search_limit(limit: Option<usize>) -> usize {
 fn retrieval_search_scan_limit(limit: usize) -> i64 {
     let _ = limit;
     DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RetrievalSearchBackend {
+    LegacyScan,
+    PostgresLexical,
+}
+
+fn retrieval_search_backend() -> RetrievalSearchBackend {
+    parse_retrieval_search_backend(
+        &std::env::var(RETRIEVAL_SEARCH_BACKEND_ENV).unwrap_or_else(|_| "legacy_scan".to_string()),
+    )
+}
+
+fn parse_retrieval_search_backend(value: &str) -> RetrievalSearchBackend {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "postgres_lexical" => RetrievalSearchBackend::PostgresLexical,
+        "legacy_scan" | "" => RetrievalSearchBackend::LegacyScan,
+        _ => RetrievalSearchBackend::LegacyScan,
+    }
+}
+
+fn retrieval_search_candidate_limit(limit: usize) -> usize {
+    limit.saturating_mul(16).clamp(32, 256)
 }
 
 fn normalize_static_page_draft_list_limit(limit: Option<i64>) -> i64 {
@@ -142366,6 +142426,526 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn postgres_lexical_retrieval_search_prefers_cjk_phrase_match() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping postgres lexical retrieval search test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("postgres-lexical-test-{}", Uuid::new_v4()),
+                "Postgres Lexical Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let current_user = storage
+            .users()
+            .ensure_by_email(
+                tenant.id,
+                &format!("current-{}@example.test", Uuid::new_v4()),
+                Some("Current User"),
+            )
+            .await
+            .expect("current user should be created");
+        let other_user = storage
+            .users()
+            .ensure_by_email(
+                tenant.id,
+                &format!("other-{}@example.test", Uuid::new_v4()),
+                Some("Other User"),
+            )
+            .await
+            .expect("other user should be created");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("lexical-dataset-{}", Uuid::new_v4()),
+                    title: "Lexical Retrieval Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let phrase_document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "新百取高机会分析".to_string(),
+                    object_key: "documents/xinbai-take-high.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("phrase document should be created");
+        let noise_document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "普通零售活动".to_string(),
+                    object_key: "documents/retail-noise.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("noise document should be created");
+        let private_document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "其他用户取高机会预测".to_string(),
+                    object_key: "documents/private-take-high.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: Some(other_user.id),
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("private document should be created");
+        let now = Utc::now();
+        let execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let phrase_chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                phrase_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: phrase_document.id,
+                    chunk_index: 0,
+                    content: "取高机会集中在销售缺口扩大但客流仍稳定的门店。".to_string(),
+                    token_count: 20,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("phrase chunks should be created");
+        let noise_chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                noise_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: noise_document.id,
+                    chunk_index: 0,
+                    content: "普通零售活动总结，包含客流和销售额描述。".to_string(),
+                    token_count: 18,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("noise chunks should be created");
+        let private_chunks = storage
+            .document_chunks()
+            .replace_for_document(
+                tenant.id,
+                private_document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: private_document.id,
+                    chunk_index: 0,
+                    content: "取高机会私人预测包含未授权门店名单。".to_string(),
+                    token_count: 18,
+                    metadata: json!({}),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("private chunks should be created");
+
+        storage
+            .retrieval_evidences()
+            .create_many(
+                tenant.id,
+                &[
+                    storage::NewRetrievalEvidence {
+                        execution_id: execution.id,
+                        dataset_id: dataset.id,
+                        document_id: noise_document.id,
+                        document_chunk_id: noise_chunks[0].id,
+                        chunk_index: noise_chunks[0].chunk_index,
+                        source_locator: "documents/retail-noise.md#chunk=0".to_string(),
+                        content_excerpt: "普通零售活动总结，包含客流和销售额描述。".to_string(),
+                        summary: "普通零售活动".to_string(),
+                        payload_filter_key: "dataset/lexical".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.99,
+                        evidence_manifest: json!({
+                            "lexical": {
+                                "language": "simple",
+                                "search_terms": ["普通", "零售", "客流", "销售额"],
+                                "indexed_content_hash": "noise-hash",
+                                "indexed_at": now
+                            },
+                            "recall": { "rank_hint": 1 }
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: execution.id,
+                        dataset_id: dataset.id,
+                        document_id: phrase_document.id,
+                        document_chunk_id: phrase_chunks[0].id,
+                        chunk_index: phrase_chunks[0].chunk_index,
+                        source_locator: "documents/xinbai-take-high.md#chunk=0".to_string(),
+                        content_excerpt: "取高机会集中在销售缺口扩大但客流仍稳定的门店。".to_string(),
+                        summary: "新百取高机会".to_string(),
+                        payload_filter_key: "dataset/lexical".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.30,
+                        evidence_manifest: json!({
+                            "lexical": {
+                                "language": "simple",
+                                "search_terms": ["取", "高", "取高", "机会", "取高机会", "销售缺口"],
+                                "indexed_content_hash": "phrase-hash",
+                                "indexed_at": now
+                            },
+                            "recall": { "rank_hint": 2 }
+                        }),
+                        created_at: now,
+                    },
+                    storage::NewRetrievalEvidence {
+                        execution_id: execution.id,
+                        dataset_id: dataset.id,
+                        document_id: private_document.id,
+                        document_chunk_id: private_chunks[0].id,
+                        chunk_index: private_chunks[0].chunk_index,
+                        source_locator: "documents/private-take-high.md#chunk=0".to_string(),
+                        content_excerpt: "取高机会私人预测包含未授权门店名单。".to_string(),
+                        summary: "其他用户私有取高机会预测".to_string(),
+                        payload_filter_key: "dataset/lexical".to_string(),
+                        embedding_model: "local-lexical-v1".to_string(),
+                        recall_score: 0.95,
+                        evidence_manifest: json!({
+                            "lexical": {
+                                "language": "simple",
+                                "search_terms": ["取", "高", "取高", "机会", "取高机会", "私人预测"],
+                                "indexed_content_hash": "private-hash",
+                                "indexed_at": now
+                            },
+                            "recall": { "rank_hint": 0 }
+                        }),
+                        created_at: now,
+                    },
+                ],
+            )
+            .await
+            .expect("retrieval evidences should be created");
+
+        let hits = storage
+            .retrieval_evidences()
+            .search_lexical_retrieval_evidences(LexicalRetrievalQuery {
+                tenant_id: tenant.id,
+                dataset_id: dataset.id,
+                query: "取高机会".to_string(),
+                document_ids: Vec::new(),
+                owner_user_id: None,
+                limit: 1,
+                candidate_limit: 16,
+            })
+            .await
+            .expect("postgres lexical search should load hits");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].document_id, phrase_document.id);
+        assert_eq!(hits[0].document_chunk_id, phrase_chunks[0].id);
+
+        let scoped_hits = storage
+            .retrieval_evidences()
+            .search_lexical_retrieval_evidences(LexicalRetrievalQuery {
+                tenant_id: tenant.id,
+                dataset_id: dataset.id,
+                query: "取高机会".to_string(),
+                document_ids: vec![noise_document.id],
+                owner_user_id: None,
+                limit: 1,
+                candidate_limit: 16,
+            })
+            .await
+            .expect("selected-document lexical search should load hits");
+        assert!(
+            scoped_hits.is_empty(),
+            "selected-document scope must apply before lexical ranking"
+        );
+
+        let current_user_hits = storage
+            .retrieval_evidences()
+            .search_lexical_retrieval_evidences(LexicalRetrievalQuery {
+                tenant_id: tenant.id,
+                dataset_id: dataset.id,
+                query: "取高机会".to_string(),
+                document_ids: Vec::new(),
+                owner_user_id: Some(current_user.id),
+                limit: 1,
+                candidate_limit: 16,
+            })
+            .await
+            .expect("current-user lexical search should load hits");
+        assert_eq!(current_user_hits.len(), 1);
+        assert_ne!(current_user_hits[0].document_id, private_document.id);
+
+        let other_user_hits = storage
+            .retrieval_evidences()
+            .search_lexical_retrieval_evidences(LexicalRetrievalQuery {
+                tenant_id: tenant.id,
+                dataset_id: dataset.id,
+                query: "取高机会".to_string(),
+                document_ids: Vec::new(),
+                owner_user_id: Some(other_user.id),
+                limit: 1,
+                candidate_limit: 16,
+            })
+            .await
+            .expect("other-user lexical search should load hits");
+        assert_eq!(other_user_hits.len(), 1);
+        assert_eq!(other_user_hits[0].document_id, private_document.id);
+    }
+
+    #[tokio::test]
+    async fn postgres_lexical_retrieval_search_recalls_deep_old_chunk_beyond_latest_window() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping postgres lexical deep-old retrieval search test: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("postgres-lexical-deep-old-test-{}", Uuid::new_v4()),
+                "Postgres Lexical Deep Old Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let dataset = storage
+            .datasets()
+            .create(
+                tenant.id,
+                NewDataset {
+                    key: format!("deep-old-{}", Uuid::new_v4()),
+                    title: "Deep Old Lexical Dataset".to_string(),
+                    description: None,
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let document = storage
+            .documents()
+            .create(
+                tenant.id,
+                NewDocument {
+                    dataset_id: dataset.id,
+                    title: "Deep Old Manual".to_string(),
+                    object_key: "documents/deep-old-manual.md".to_string(),
+                    content_type: "text/markdown".to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("document should be created");
+
+        let now = Utc::now();
+        let chunk_count = DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT as usize + 1;
+        let new_chunks = (0..chunk_count)
+            .map(|index| {
+                let content = if index == 0 {
+                    "深层召回目标条款：旧合同延期风险需要财务复核。".to_string()
+                } else {
+                    format!("普通噪声条款 {index}：常规运营记录和巡检摘要。")
+                };
+                storage::NewDocumentChunk {
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    chunk_index: index as i32,
+                    content,
+                    token_count: 18,
+                    metadata: json!({}),
+                    created_at: now - Duration::seconds((chunk_count - index) as i64),
+                }
+            })
+            .collect::<Vec<_>>();
+        let chunks = storage
+            .document_chunks()
+            .replace_for_document(tenant.id, document.id, &new_chunks)
+            .await
+            .expect("chunks should be created");
+        let target_chunk = chunks
+            .iter()
+            .find(|chunk| chunk.chunk_index == 0)
+            .expect("target chunk should exist");
+        let execution = create_test_workflow_execution(
+            &storage,
+            tenant.id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let evidences = chunks
+            .iter()
+            .map(|chunk| {
+                let is_target = chunk.id == target_chunk.id;
+                let search_terms = if is_target {
+                    json!([
+                        "深",
+                        "层",
+                        "深层",
+                        "召回",
+                        "深层召回",
+                        "目标条款",
+                        "延期风险"
+                    ])
+                } else {
+                    json!(["普通", "噪声", "条款", "运营", "巡检"])
+                };
+                storage::NewRetrievalEvidence {
+                    execution_id: execution.id,
+                    dataset_id: dataset.id,
+                    document_id: document.id,
+                    document_chunk_id: chunk.id,
+                    chunk_index: chunk.chunk_index,
+                    source_locator: format!(
+                        "documents/deep-old-manual.md#chunk={}",
+                        chunk.chunk_index
+                    ),
+                    content_excerpt: chunk.content.clone(),
+                    summary: if is_target {
+                        "深层召回目标条款".to_string()
+                    } else {
+                        format!("普通噪声条款 {}", chunk.chunk_index)
+                    },
+                    payload_filter_key: "dataset/deep-old".to_string(),
+                    embedding_model: "local-lexical-v1".to_string(),
+                    recall_score: if is_target { 0.05 } else { 0.99 },
+                    evidence_manifest: json!({
+                        "lexical": {
+                            "language": "simple",
+                            "search_terms": search_terms,
+                            "indexed_content_hash": format!("deep-old-hash-{}", chunk.chunk_index),
+                            "indexed_at": chunk.created_at
+                        },
+                        "recall": {
+                            "rank_hint": if is_target { chunk_count } else { 1 }
+                        }
+                    }),
+                    created_at: chunk.created_at,
+                }
+            })
+            .collect::<Vec<_>>();
+        storage
+            .retrieval_evidences()
+            .create_many(tenant.id, &evidences)
+            .await
+            .expect("retrieval evidences should be created");
+
+        let mut connection = storage
+            .pool()
+            .acquire()
+            .await
+            .expect("postgres connection should be acquired");
+        sqlx::query("set enable_seqscan = off")
+            .execute(&mut *connection)
+            .await
+            .expect("seqscan should be disabled for explain check");
+        let explain_plan: Value = sqlx::query_scalar(
+            r#"
+            explain (format json)
+            select id
+            from retrieval_evidences
+            where tenant_id = $1
+              and search_terms ?| $2::text[]
+            limit 1
+            "#,
+        )
+        .bind(tenant.id.0)
+        .bind(vec![
+            "深层召回".to_string(),
+            "目标条款".to_string(),
+            "延期风险".to_string(),
+        ])
+        .fetch_one(&mut *connection)
+        .await
+        .expect("lexical search_terms explain should run");
+        let explain_text = explain_plan.to_string();
+        assert!(
+            explain_text.contains("retrieval_evidences_search_terms_gin_idx"),
+            "lexical search_terms query should use the GIN index, got plan: {explain_text}"
+        );
+
+        let legacy_window = storage
+            .retrieval_evidences()
+            .list_latest_by_dataset_scope(
+                tenant.id,
+                dataset.id,
+                DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT,
+            )
+            .await
+            .expect("legacy latest window should load");
+        assert_eq!(
+            legacy_window.len(),
+            DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT as usize
+        );
+        assert!(
+            legacy_window
+                .iter()
+                .all(|evidence| evidence.document_chunk_id != target_chunk.id),
+            "target chunk must be older than the legacy latest-window candidate set"
+        );
+
+        let lexical_hits = storage
+            .retrieval_evidences()
+            .search_lexical_retrieval_evidences(LexicalRetrievalQuery {
+                tenant_id: tenant.id,
+                dataset_id: dataset.id,
+                query: "深层召回目标条款".to_string(),
+                document_ids: Vec::new(),
+                owner_user_id: None,
+                limit: 1,
+                candidate_limit: 16,
+            })
+            .await
+            .expect("postgres lexical search should load hits");
+
+        assert_eq!(lexical_hits.len(), 1);
+        assert_eq!(lexical_hits[0].document_chunk_id, target_chunk.id);
+    }
+
+    #[tokio::test]
     async fn dataset_document_memberships_allow_document_in_multiple_dataset_scopes() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
@@ -144066,6 +144646,24 @@ retrieve_evidence:
             DATASET_OUTPUT_RETRIEVAL_SCAN_LIMIT
         );
         assert!(retrieval_search_scan_limit(4) >= 160);
+    }
+
+    #[test]
+    fn retrieval_search_backend_parser_defaults_to_legacy_scan() {
+        assert_eq!(
+            parse_retrieval_search_backend("postgres_lexical"),
+            RetrievalSearchBackend::PostgresLexical
+        );
+        assert_eq!(
+            parse_retrieval_search_backend("legacy_scan"),
+            RetrievalSearchBackend::LegacyScan
+        );
+        assert_eq!(
+            parse_retrieval_search_backend("unknown"),
+            RetrievalSearchBackend::LegacyScan
+        );
+        assert_eq!(retrieval_search_candidate_limit(1), 32);
+        assert_eq!(retrieval_search_candidate_limit(40), 256);
     }
 
     #[test]

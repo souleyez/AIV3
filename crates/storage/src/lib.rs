@@ -23,7 +23,7 @@ use domain_model::{
 };
 use serde_json::{Map, Value};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use uuid::Uuid;
 use workflow_engine::WorkflowDefinitionSummary;
@@ -107,6 +107,12 @@ pub const DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA: Migration = Migration {
     sql: include_str!("../migrations/0013_document_canonical_enrichment.sql"),
 };
 
+pub const RETRIEVAL_LEXICAL_INDEX_SCHEMA: Migration = Migration {
+    version: "0014",
+    description: "retrieval evidence lexical search index",
+    sql: include_str!("../migrations/0014_retrieval_lexical_index.sql"),
+};
+
 pub const MIGRATIONS: &[Migration] = &[
     INITIAL_SCHEMA,
     WORKFLOW_RUNTIME_RECORDS_SCHEMA,
@@ -120,6 +126,7 @@ pub const MIGRATIONS: &[Migration] = &[
     MODEL_GATEWAY_PROFILES_SCHEMA,
     DOCUMENT_FACT_INDEX_SCHEMA,
     DOCUMENT_CANONICAL_ENRICHMENT_SCHEMA,
+    RETRIEVAL_LEXICAL_INDEX_SCHEMA,
 ];
 
 pub const TABLES: &[&str] = &[
@@ -682,6 +689,17 @@ pub struct NewRetrievalEvidence {
     pub recall_score: f64,
     pub evidence_manifest: Value,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LexicalRetrievalQuery {
+    pub tenant_id: TenantId,
+    pub dataset_id: DatasetId,
+    pub query: String,
+    pub document_ids: Vec<DocumentId>,
+    pub owner_user_id: Option<UserId>,
+    pub limit: usize,
+    pub candidate_limit: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -4126,9 +4144,31 @@ insert into retrieval_evidences (
     embedding_model,
     recall_score,
     evidence_manifest,
+    search_text,
+    search_terms,
+    search_tsv,
+    search_language,
+    indexed_content_hash,
+    indexed_at,
     created_at
 )
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+values (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+    coalesce(nullif($14 #>> '{lexical,search_text}', ''), concat_ws(E'\n', $10, $9, $8, $11)),
+    case
+        when jsonb_typeof($14 #> '{lexical,search_terms}') = 'array'
+            then $14 #> '{lexical,search_terms}'
+        else '[]'::jsonb
+    end,
+    to_tsvector(
+        'simple',
+        coalesce(nullif($14 #>> '{lexical,search_text}', ''), concat_ws(E'\n', $10, $9, $8, $11))
+    ),
+    coalesce(nullif($14 #>> '{lexical,language}', ''), 'simple'),
+    coalesce(nullif($14 #>> '{lexical,indexed_content_hash}', ''), md5(concat_ws(E'\n', $10, $9, $8, $11))),
+    coalesce((nullif($14 #>> '{lexical,indexed_at}', ''))::timestamptz, $15),
+    $15
+)
 on conflict (execution_id, document_chunk_id) do update
 set dataset_id = excluded.dataset_id,
     document_id = excluded.document_id,
@@ -4140,6 +4180,12 @@ set dataset_id = excluded.dataset_id,
     embedding_model = excluded.embedding_model,
     recall_score = excluded.recall_score,
     evidence_manifest = excluded.evidence_manifest,
+    search_text = excluded.search_text,
+    search_terms = excluded.search_terms,
+    search_tsv = excluded.search_tsv,
+    search_language = excluded.search_language,
+    indexed_content_hash = excluded.indexed_content_hash,
+    indexed_at = excluded.indexed_at,
     created_at = excluded.created_at
 where retrieval_evidences.tenant_id = excluded.tenant_id
 returning id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
@@ -4297,6 +4343,116 @@ impl PgRetrievalEvidenceRepository {
         .bind(tenant_id.0)
         .bind(dataset_id.0)
         .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_retrieval_evidence_row).collect()
+    }
+
+    pub async fn search_lexical_retrieval_evidences(
+        &self,
+        query: LexicalRetrievalQuery,
+    ) -> Result<Vec<RetrievalEvidence>> {
+        let terms = retrieval_lexical_query_terms(&query.query);
+        let document_ids = document_ids_to_uuid_array(&query.document_ids);
+        let owner_user_id = query.owner_user_id.map(|id| id.0);
+        let candidate_limit = query.candidate_limit.max(query.limit).max(1) as i64;
+        let query_text = query.query.trim();
+        if query_text.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            with scoped_documents as (
+                select coalesce(d.canonical_document_id, d.id) as document_id
+                from documents d
+                where d.tenant_id = $1
+                  and (
+                    d.dataset_id = $2
+                    or d.id in (
+                        select document_id
+                        from dataset_document_memberships
+                        where tenant_id = $1
+                          and dataset_id = $2
+                          and (expires_at is null or expires_at > now())
+                    )
+                  )
+                  and (
+                    cardinality($3::uuid[]) = 0
+                    or d.id = any($3::uuid[])
+                    or coalesce(d.canonical_document_id, d.id) = any($3::uuid[])
+                  )
+                  and (d.owner_user_id is null or d.owner_user_id = $4)
+            ),
+            candidates as (
+                select ev.id, ev.tenant_id, ev.dataset_id, ev.execution_id, ev.document_id,
+                       ev.document_chunk_id, ev.chunk_index, ev.source_locator,
+                       ev.content_excerpt, ev.summary, ev.payload_filter_key,
+                       ev.embedding_model, ev.recall_score, ev.evidence_manifest,
+                       ev.created_at,
+                       coalesce(
+                           ev.search_text,
+                           concat_ws(E'\n', ev.summary, ev.content_excerpt, ev.source_locator, ev.payload_filter_key)
+                       ) as lexical_text,
+                       case
+                         when jsonb_typeof(coalesce(ev.search_terms, '[]'::jsonb)) = 'array'
+                           then coalesce(ev.search_terms, '[]'::jsonb)
+                         else '[]'::jsonb
+                       end as lexical_terms,
+                       coalesce(
+                           ev.search_tsv,
+                           to_tsvector(
+                               'simple',
+                               concat_ws(E'\n', ev.summary, ev.content_excerpt, ev.source_locator, ev.payload_filter_key)
+                           )
+                       ) as lexical_tsv
+                from retrieval_evidences ev
+                join scoped_documents sd on sd.document_id = ev.document_id
+                where ev.tenant_id = $1
+            ),
+            ranked as (
+                select candidates.*,
+                       ts_rank_cd(candidates.lexical_tsv, plainto_tsquery('simple', $5)) as tsv_score,
+                       (
+                         select count(*)::int
+                         from jsonb_array_elements_text(candidates.lexical_terms) as term(value)
+                         where term.value = any($6::text[])
+                       ) as term_hits,
+                       case
+                         when position(lower($5) in lower(candidates.lexical_text)) > 0 then 1
+                         else 0
+                       end as phrase_hit
+                from candidates
+                where candidates.lexical_tsv @@ plainto_tsquery('simple', $5)
+                   or candidates.lexical_terms ?| $6::text[]
+                   or position(lower($5) in lower(candidates.lexical_text)) > 0
+            ),
+            deduped as (
+                select distinct on (document_chunk_id)
+                       id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
+                       chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
+                       embedding_model, recall_score, evidence_manifest, created_at,
+                       phrase_hit, term_hits, tsv_score
+                from ranked
+                order by document_chunk_id, phrase_hit desc, term_hits desc, tsv_score desc, created_at desc
+            )
+            select id, tenant_id, dataset_id, execution_id, document_id, document_chunk_id,
+                   chunk_index, source_locator, content_excerpt, summary, payload_filter_key,
+                   embedding_model, recall_score, evidence_manifest, created_at
+            from deduped
+            order by phrase_hit desc, term_hits desc, tsv_score desc,
+                     recall_score desc, created_at desc, document_id asc, chunk_index asc
+            limit $7
+            "#,
+        )
+        .bind(query.tenant_id.0)
+        .bind(query.dataset_id.0)
+        .bind(document_ids)
+        .bind(owner_user_id)
+        .bind(query_text)
+        .bind(terms)
+        .bind(candidate_limit)
         .fetch_all(&self.pool)
         .await?;
 
@@ -7981,6 +8137,60 @@ fn document_ids_to_uuid_array(ids: &[DocumentId]) -> Vec<Uuid> {
     ids.iter().map(|id| id.0).collect()
 }
 
+fn retrieval_lexical_query_terms(query: &str) -> Vec<String> {
+    const CJK_NGRAM_MAX: usize = 6;
+
+    fn is_cjk(value: char) -> bool {
+        matches!(
+            value as u32,
+            0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF
+        )
+    }
+
+    fn flush_ascii(terms: &mut BTreeSet<String>, ascii: &mut String) {
+        if ascii.len() >= 2 {
+            terms.insert(ascii.to_ascii_lowercase());
+        }
+        ascii.clear();
+    }
+
+    fn flush_cjk(terms: &mut BTreeSet<String>, cjk: &mut Vec<char>) {
+        if cjk.is_empty() {
+            return;
+        }
+        for value in cjk.iter() {
+            terms.insert(value.to_string());
+        }
+        for ngram_size in 2..=CJK_NGRAM_MAX.min(cjk.len()) {
+            for window in cjk.windows(ngram_size) {
+                terms.insert(window.iter().collect::<String>());
+            }
+        }
+        cjk.clear();
+    }
+
+    let mut terms = BTreeSet::new();
+    let mut ascii = String::new();
+    let mut cjk = Vec::new();
+
+    for value in query.chars() {
+        if value.is_ascii_alphanumeric() {
+            flush_cjk(&mut terms, &mut cjk);
+            ascii.push(value);
+        } else if is_cjk(value) {
+            flush_ascii(&mut terms, &mut ascii);
+            cjk.push(value);
+        } else {
+            flush_ascii(&mut terms, &mut ascii);
+            flush_cjk(&mut terms, &mut cjk);
+        }
+    }
+    flush_ascii(&mut terms, &mut ascii);
+    flush_cjk(&mut terms, &mut cjk);
+
+    terms.into_iter().collect()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum LlmInvocationReplaceTarget {
     DatasetOutput(DatasetOutputId),
@@ -8393,6 +8603,39 @@ mod tests {
     }
 
     #[test]
+    fn migrations_include_retrieval_lexical_index_schema() {
+        assert!(MIGRATIONS
+            .iter()
+            .any(|migration| migration.version == "0014"
+                && migration.description == "retrieval evidence lexical search index"));
+        assert!(RETRIEVAL_LEXICAL_INDEX_SCHEMA
+            .sql
+            .contains("retrieval_evidences_search_terms_gin_idx"));
+        assert!(RETRIEVAL_LEXICAL_INDEX_SCHEMA
+            .sql
+            .contains("indexed_content_hash"));
+    }
+
+    #[test]
+    fn retrieval_evidence_upsert_populates_lexical_columns() {
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("search_terms"));
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("search_tsv"));
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("indexed_content_hash"));
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("'{lexical,search_text}'"));
+        assert!(RETRIEVAL_EVIDENCE_UPSERT_SQL.contains("'{lexical,search_terms}'"));
+    }
+
+    #[test]
+    fn retrieval_lexical_query_terms_include_cjk_ngrams_and_ascii() {
+        let terms = retrieval_lexical_query_terms("订单AI延期 风险 up 最大");
+
+        for expected in ["订", "订单", "ai", "延", "延期", "风险", "up", "最大"] {
+            assert!(terms.contains(&expected.to_string()), "missing {expected}");
+        }
+        assert!(terms.contains(&"订单ai".to_string()) == false);
+    }
+
+    #[test]
     fn auth_migrations_are_registered_in_order() {
         assert_eq!(
             MIGRATIONS
@@ -8401,7 +8644,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "0001", "0002", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011",
-                "0012", "0013"
+                "0012", "0013", "0014"
             ]
         );
         assert!(MIGRATIONS
