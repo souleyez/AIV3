@@ -722,9 +722,11 @@ p95 retrieval latency <= 1500ms for 10k evidence local dataset
 - [x] 补 Phase 0B live/result evaluator，默认不传结果文件时不伪造指标。
 - [ ] 用真实受控结果文件记录 authenticated live dataset metrics。
 - [x] 完成 8 服务器只读 preflight，记录当前服务、schema、表规模和默认 legacy runtime 状态。
-- [ ] 记录 PostgreSQL lexical 查询的生产/8 服务器 `EXPLAIN` 证据。
+- [x] 完成 8 服务器 schema/code 部署，保持 `RETRIEVAL_SEARCH_BACKEND=legacy_scan` 默认行为。
+- [x] 记录 PostgreSQL lexical 查询的生产/8 服务器 `EXPLAIN` 证据。
+- [ ] 8 服务器启用 `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` 灰度。
 - [x] 针对新百报表/数据库混合文档样例补至少 3 条 retrieval-quality case。
-- [ ] 代码审查确认 selected documents、owner scope、external temporary document scope 没有回退。
+- [x] 代码审查确认 selected documents、owner scope、external temporary document scope 没有回退。
 
 最小版不做：
 

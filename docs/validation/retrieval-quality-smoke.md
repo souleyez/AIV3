@@ -193,10 +193,101 @@ Preflight interpretation:
   expose a simple `retrieval.search` HTTP route. Metrics should be collected via
   assistant-run responses or a controlled JSONL generator.
 
+## 2026-06-09 8 Server Schema-Off Deployment
+
+- Scope: GitHub main deployment to 8 server with lexical schema/code present and
+  retrieval feature flag still off.
+- GitHub commit: `5fdb27b78d71348214a3773c8944ca80a1b6851f`
+- Server update:
+  - `/srv/aiv3/repo` fast-forwarded from `6939a43ab` to `5fdb27b78`
+  - release build: `CC=clang CXX=clang++ cargo build --release -p platform-api -p retrieval-worker`
+  - build duration: `4m 13s`
+  - restarted only:
+    - `aiv3-platform-api.service`
+    - `aiv3-retrieval-worker.service`
+- Runtime flag status:
+  - `/etc/aiv3/aiv3.env`: no `RETRIEVAL_SEARCH_BACKEND`
+  - platform process env: no `RETRIEVAL_SEARCH_BACKEND`
+  - effective retrieval backend remains default `legacy_scan`
+- Service status after restart:
+  - `aiv3-platform-api.service`: active
+  - `aiv3-retrieval-worker.service`: active
+  - `http://127.0.0.1:3000/healthz`: ok
+  - `http://127.0.0.1:3000/readyz`: ready
+  - `https://v3.elepcloud.com/`: `200`
+  - `https://v3.elepcloud.com/v1/datasets`: `200`
+  - `https://doc.elepcloud.com/`: `200`
+- Logs:
+  - no warning-or-higher entries for `aiv3-platform-api.service` in the checked
+    deployment window
+  - no warning-or-higher entries for `aiv3-retrieval-worker.service` in the
+    checked deployment window
+
+Schema verification after restart:
+
+- `retrieval_evidences` lexical columns present:
+  - `search_text`
+  - `search_terms`
+  - `search_tsv`
+  - `search_language`
+  - `indexed_content_hash`
+  - `indexed_at`
+- Lexical indexes present:
+  - `retrieval_evidences_indexed_content_hash_idx`
+  - `retrieval_evidences_scope_chunk_idx`
+  - `retrieval_evidences_search_terms_gin_idx`
+  - `retrieval_evidences_search_tsv_gin_idx`
+- Backfill coverage:
+  - total retrieval evidences: `2146`
+  - `search_text`: `2146`
+  - `search_tsv`: `2146`
+  - `indexed_content_hash`: `2146`
+  - `indexed_at`: `2146`
+- `retrieval_evidences` size after migration: `15 MB`
+
+Production EXPLAIN notes:
+
+- Dataset used: `xinbai-project-materials`
+  (`d4923d83-6053-4feb-8005-b22ee51e0227`)
+- Full lexical-style query for `取高机会`, normal planner:
+  - execution time: `19.423 ms`
+  - plan used `retrieval_evidences_scope_chunk_idx`
+  - planner did not choose GIN term/tsv indexes for the full query because the
+    table is small and the scoped tenant scan is cheap
+- GIN index proof:
+  - `search_terms ?| ...` with `enable_seqscan=off` used
+    `retrieval_evidences_search_terms_gin_idx`
+  - `search_tsv @@ plainto_tsquery('simple', 'retrieval')` with
+    `enable_seqscan=off` used `retrieval_evidences_search_tsv_gin_idx`
+- Important limitation:
+  - existing pre-migration rows have lexical columns backfilled, but historical
+    manifests often do not contain `lexical.search_terms`, so Chinese business
+    term recall on old evidence can still rely on `search_text` phrase matching
+    and scoped scanning
+  - new retrieval-worker output writes `lexical.search_text`,
+    `lexical.search_terms`, and `indexed_content_hash`, so new/reindexed
+    evidence will have stronger term-index coverage
+
+8 server fixture smoke:
+
+- Command: `RETRIEVAL_QUALITY_SMOKE_SKIP_CARGO=true bash scripts/run-retrieval-quality-smoke.sh --baseline`
+- Result: passed
+- JSON report: `/srv/aiv3/repo/target/retrieval-quality-smoke/retrieval-quality-smoke-20260608T232252Z.json`
+- Fixture count: `35`
+- Permission leak count: `0`
+- Metrics recorded: `false`
+
+Deployment interpretation:
+
+- Schema/code deployment with feature flag off is complete.
+- Mainline runtime remains on `legacy_scan`.
+- Production EXPLAIN evidence is sufficient to prove new indexes exist and are
+  usable, but not sufficient to enable `postgres_lexical` by default.
+- Remaining gate before flag-on: real live metrics from assistant-run or a
+  controlled JSONL generator.
+
 ## Remaining Gaps
 
 - Real authenticated Recall@20, MRR@20, citation accuracy, and p95 latency are
   not yet recorded.
-- Production `EXPLAIN` evidence for index usage is not recorded; only local
-  Postgres index usage is covered.
-- No GitHub sync or server deployment has been run from this smoke.
+- `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` has not been enabled on 8 server.
