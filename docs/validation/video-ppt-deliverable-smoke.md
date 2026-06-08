@@ -4291,3 +4291,59 @@ Safety result:
 - no browser was opened and no FFmpeg capture command was run;
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Smoke Classifier Parity With Production Trigger Guard
+
+Task source: after M6X tightened production scope planning, the upload-main and third-party smoke classifiers still had a weaker local classifier. In particular, a prompt with generation wording plus unrelated subtitle extraction could still pass the smoke classifier, and `extract slides` without video context was not explicitly rejected. This slice aligns smoke self-tests with the production trigger boundary.
+
+Scope:
+
+- no live upload, third-party event, video download, browser capture, FFmpeg capture, server deployment, or 8/120 server access;
+- require video/source context in both smoke classifiers;
+- keep PPT/slides/courseware output and extraction/from-video intent required;
+- add negative prompts for generic generation plus subtitle extraction, and extraction wording without video context.
+
+Implemented behavior:
+
+- `promptRequestsVideoPpt()` in upload-main and external smokes now requires video context, slide output, and extraction intent;
+- ordinary video-to-PPT generation also rejects generic generation wording when it is not extracting already-shown slides;
+- `生成PPT介绍这段视频，并提取字幕。` is rejected because the extraction term applies to subtitles, not already-shown PPT pages;
+- `Extract slides from the document.` is rejected because it has no video context;
+- positive prompts for uploaded/direct video PPT extraction still pass.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-upload-main.mjs
+node --check scripts/smoke/external-video-ppt.mjs
+npm run smoke:video-ppt-upload-main -- --self-test --output-dir <target-redacted>
+npm run smoke:external-video-ppt -- --self-test --output-dir <target-redacted>
+rg -n "triggerClassifier|positivePromptCount|negativePromptCount" <upload-and-external-self-test-reports>
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+```
+
+Result:
+
+- upload-main and external script syntax checks passed;
+- an initial self-test run correctly exposed that `生成PPT介绍这段视频，并提取字幕。` was still accepted;
+- after the generic generation guard fix, upload-main self-test passed;
+- after the generic generation guard fix, external self-test passed;
+- both final self-test reports recorded `positivePromptCount=4` and `negativePromptCount=6`;
+- no-live rollup passed with `command_count=18`, `passed_count=18`, and `failed_count=0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, or customer-authorized quality matrix;
+- live gates still require the approvals documented in the active plan.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, or parsed in DataMax;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

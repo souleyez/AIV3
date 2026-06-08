@@ -502,6 +502,10 @@ function safeFixtureName(args, urlContentType = '') {
 
 function promptRequestsVideoPpt(prompt) {
   const text = String(prompt || '');
+  const mentionsVideo = /视频|mp4|mov|m4v|webm|mkv|avi|公开视频|视频地址|视频链接|url|URL|上传|video/i.test(text);
+  if (!mentionsVideo) {
+    return false;
+  }
   const mentionsSlides = /ppt|powerpoint|slides?|幻灯片|课件/i.test(text);
   if (!mentionsSlides) {
     return false;
@@ -511,10 +515,18 @@ function promptRequestsVideoPpt(prompt) {
   if (!extractionIntent) {
     return false;
   }
+  const extractionFromExistingSlides = /视频(?:里|中|里的|中的)|from (?:this |the )?video|shown in (?:this |the )?video|already shown/i
+    .test(text)
+    && /ppt|powerpoint|slides?|幻灯片|课件/i.test(text)
+    && /提取|抽取|抓取|导出|识别|extract|pull|capture|export/i.test(text);
   const ordinaryVideoToPpt = /普通视频|任意视频|把.*视频.*(?:生成|做成|制作|创作|转成|变成).*ppt|(?:make|create|generate|turn).{0,40}(?:ppt|powerpoint|slides).{0,40}(?:from|out of).{0,20}(?:the )?video|video[- ]to[- ]ppt/i
-    .test(text);
-  const extractionFromExistingSlides = /提取|抽取|抓取|extract|pull|capture|视频(?:里|中|里的|中的).*(?:ppt|powerpoint|slides?|幻灯片|课件)|(?:ppt|powerpoint|slides?|幻灯片|课件).*(?:视频里|视频中|already shown)/i
-    .test(text);
+    .test(text)
+    || (
+      /生成|做成|制作|创作|转成|变成|介绍|make|create|generate|turn/i.test(text)
+      && mentionsVideo
+      && mentionsSlides
+      && !extractionFromExistingSlides
+    );
   return !ordinaryVideoToPpt || extractionFromExistingSlides;
 }
 
@@ -530,6 +542,8 @@ function assertVideoPptTriggerClassifier() {
     '请把普通视频变成PPT。',
     'Create a PowerPoint from this ordinary video.',
     '生成一个PPT介绍这段视频。',
+    '生成PPT介绍这段视频，并提取字幕。',
+    'Extract slides from the document.',
   ];
   const missedPositives = positivePrompts.filter((prompt) => !promptRequestsVideoPpt(prompt));
   if (missedPositives.length > 0) {
