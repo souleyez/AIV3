@@ -7690,3 +7690,71 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Quality Matrix Validator Summary Count Exposure
+
+Task source: M6BT P1/no-live follow-up. M6BO/M6BQ/M6BR had to read validator JSON separately to record requested selected counts, rectangle counts, quality counts, and subtitle page counts. This slice carries those validator summary counts directly into quality matrix deliverables cases so future live/customer receipts can be audited from one quality matrix report.
+
+Scope:
+
+- local quality matrix report-shape improvement only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- deliverables-mode `deliverable_status` now includes `requested_selected_count`;
+- deliverables-mode `deliverable_status` now includes `slide_rectangle_count`;
+- deliverables-mode `deliverable_status` now includes `quality_slide_count`;
+- deliverables-mode `deliverable_status` now includes `subtitle_page_count`;
+- values are read from `validateVideoDeliverables().summary`, so shared reports keep path/redaction behavior unchanged.
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+npm run smoke:video-ppt-quality-matrix -- --public-course-deliverables <public-generated-artifacts> --pretty --output-dir <target-redacted>
+node -e "<redacted public quality matrix count readback>"
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live summary readback>"
+rg -n "<local-path-url-token-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- quality matrix syntax check passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- public deliverables quality matrix passed with `case_count=3`, `deliverable_count=1`, `needs_manual_review_count=1`, `not_deliverable_count=0`, and `pending_count=1`;
+- public deliverables case remained `final_pptx_ready`;
+- public deliverables validator status remained ok;
+- public deliverables selected/requested/PPTX/Markdown/rectangle/quality counts were `7/9/7/7/7/7`;
+- public deliverables subtitle page count was `null`, which is valid for this no-subtitle/no-transcript sample;
+- public deliverables verdict remained `needs_manual_review`;
+- public deliverables failure class remained `selection_quality`;
+- no-live rollup passed with `command_count=28`, `passed_count=28`, and `failed_count=0`;
+- `acceptance_status.full_acceptance_ready=false` and `gate_count=8` remained unchanged;
+- path/credential scan found no raw URL, token query string, bearer value, cookie, authorization value, local absolute path, `target/.../generated_artifacts` path, or `video-extraction-*` identifier in generated reports;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- this only improves quality matrix report completeness for future live/customer receipts.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

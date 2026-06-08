@@ -263,8 +263,12 @@ function buildCaseFromDeliverables(inputPath, {
   const validationSummary = validation.summary || {};
   const qualitySlideCount = Number.isInteger(qualityReport?.slide_count) ? qualityReport.slide_count : 0;
   const selectedCount = numberOrNull(validationSummary.selected_count) ?? qualitySlideCount;
+  const requestedSelectedCount = numberOrNull(validationSummary.requested_selected_count);
   const pptxSlideCount = numberOrNull(validationSummary.pptx_slide_count) ?? selectedCount;
   const markdownSlideCount = numberOrNull(validationSummary.markdown_slide_count) ?? selectedCount;
+  const slideRectangleCount = numberOrNull(validationSummary.slide_rectangle_count);
+  const validatorQualitySlideCount = numberOrNull(validationSummary.quality_slide_count) ?? qualitySlideCount;
+  const subtitlePageCount = numberOrNull(validationSummary.subtitle_page_count);
   const deliverableState = validation.ok
     ? finalManifest?.deliverable_status?.state || finalManifest?.status || 'final_pptx_ready'
     : 'deliverable_contract_invalid';
@@ -289,8 +293,12 @@ function buildCaseFromDeliverables(inputPath, {
       checked_file_kinds: validation.files.filter((file) => file.exists).map((file) => file.kind),
       frame_count: numberOrNull(validationSummary.frame_count) ?? numberOrNull(finalManifest?.frame_extraction?.frame_count),
       selected_count: selectedCount,
+      requested_selected_count: requestedSelectedCount,
       pptx_slide_count: pptxSlideCount,
       markdown_slide_count: markdownSlideCount,
+      slide_rectangle_count: slideRectangleCount,
+      quality_slide_count: validatorQualitySlideCount,
+      subtitle_page_count: subtitlePageCount,
       has_quality_report: Boolean(qualityReport),
     },
     quality_report: qualityReport ? {
