@@ -4302,6 +4302,73 @@ Safety result:
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
 
+## 2026-06-08 Assistant Startup Briefing Evidence in No-Live Rollup
+
+Task source: M6BK P1/no-live follow-up. The front-end scope planner, Rust assistant-runtime, and platform resolver gates already cover video PPT routing mechanics. This slice adds an explicit assistant startup briefing regression and promotes it into the no-live rollup so model-facing startup context also preserves the source boundary: uploaded video, direct video URL, public resolvable page, and login-gated handoff.
+
+Scope:
+
+- local no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no public page network fetch;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- `apps/web/app/lib/assistant-startup-briefing.test.mjs` now has a focused video PPT source routing boundary regression;
+- the regression asserts supported sources: uploaded video file, direct video URL, and public page with resolvable video URL;
+- the regression asserts unsupported sources: login-gated page, QR login, Cookie/Session reuse, screen-recording bypass, and private/paid content;
+- the regression asserts model request actions stay `media.resolve_video_url` and `media.extract_ppt_transcript`;
+- the regression asserts controlled pipeline stays `media.resolve_video_url -> media.register_video_asset -> media.extract_ppt_transcript`;
+- the regression asserts startup briefing keeps the "do not claim video access before DataMax observation" rule;
+- no-live rollup now runs assistant startup briefing tests and records their evidence in `acceptance_status.no_live_evidence_summary`.
+
+Validation:
+
+```text
+node --check apps/web/app/lib/assistant-startup-briefing.js
+node --check apps/web/app/lib/assistant-startup-briefing.test.mjs
+node --test apps/web/app/lib/assistant-startup-briefing.test.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted startup briefing evidence readback>"
+rg -n "<raw-url-token-local-path-approval-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- assistant startup briefing tests passed with 9 tests and 9 passes;
+- no-live rollup passed with `command_count=27`, `passed_count=27`, and `failed_count=0`;
+- readback showed `assistant_startup_briefing_evidence=true`;
+- readback showed `assistant_startup_briefing_test_count=9` and pass count 9;
+- readback showed video PPT source routing boundary coverage;
+- readback showed startup system capability coverage;
+- readback showed no-dataset formatted boundary coverage;
+- `acceptance_status.full_acceptance_ready=false` remained unchanged.
+
+Remaining work:
+
+- this does not replace live main-site upload, third-party live event, video号 handoff live pass, authorized capture live sample, customer-authorized quality matrix, or 8-server deployment validation;
+- this proves model-facing startup context, not live endpoint behavior;
+- video号/login-gated links still require handoff or authorized capture, not automatic extraction.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no public page was fetched from the network;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
 ## 2026-06-08 Platform Resolver Evidence in No-Live Rollup
 
 Task source: M6BJ P1/no-live follow-up. Public page resolver and direct URL resolver tests already existed, but the one-command no-live acceptance rollup did not directly prove that customer link routing covers direct videos, public pages with anonymous video assets, no-video public pages, and login-gated rejection. This slice adds those platform-api tests to the no-live rollup and promotes their safe evidence into `acceptance_status.no_live_evidence_summary`.

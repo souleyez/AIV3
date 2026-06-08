@@ -132,6 +132,37 @@ test('formatted briefing tells model when no dataset is selected', () => {
   assert.match(formatted, /当前可见库为空/);
 });
 
+test('startup briefing preserves video PPT source routing and handoff boundaries', () => {
+  const briefing = buildAssistantStartupBriefing();
+  const policy = briefing.mediaExtractionPolicy;
+  const formatted = formatStartupBriefingForModel(briefing);
+
+  assert.ok(policy.supportedSources.includes('上传视频文件'));
+  assert.ok(policy.supportedSources.includes('直接视频 URL'));
+  assert.ok(policy.supportedSources.includes('可公开访问且可解析视频地址的页面'));
+  assert.ok(policy.unsupportedSources.includes('登录态页面'));
+  assert.ok(policy.unsupportedSources.includes('扫码登录'));
+  assert.ok(policy.unsupportedSources.includes('Cookie/Session 复用'));
+  assert.ok(policy.unsupportedSources.includes('录屏绕过'));
+  assert.ok(policy.unsupportedSources.includes('私有或付费内容'));
+  assert.deepEqual(policy.modelRequestActions, [
+    'media.resolve_video_url',
+    'media.extract_ppt_transcript',
+  ]);
+  assert.deepEqual(policy.controlledPipeline, [
+    'media.resolve_video_url',
+    'media.register_video_asset',
+    'media.extract_ppt_transcript',
+  ]);
+  assert.match(policy.accessRule, /不要声称已访问视频/);
+  assert.match(policy.evidenceRule, /保持 partial/);
+  assert.match(formatted, /可公开访问且可解析视频地址的页面/);
+  assert.match(formatted, /登录态页面、扫码登录、Cookie\/Session 复用、录屏绕过/);
+  assert.match(formatted, /模型请求入口：media\.resolve_video_url、media\.extract_ppt_transcript/);
+  assert.match(formatted, /后台受控链路：media\.resolve_video_url -> media\.register_video_asset -> media\.extract_ppt_transcript/);
+  assert.match(formatted, /不要声称已访问视频或看过视频内容/);
+});
+
 test('formatted briefing includes compact dataset material metadata without content', () => {
   const briefing = buildAssistantStartupBriefing({
     datasets: [{

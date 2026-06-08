@@ -156,6 +156,12 @@ const COMMANDS = [
     args: ['--test', 'apps/web/app/lib/scope-planner.test.mjs'],
   },
   {
+    id: 'assistant_startup_briefing_tests',
+    description: 'front-end assistant startup briefing video PPT boundary tests',
+    command: process.execPath,
+    args: ['--test', 'apps/web/app/lib/assistant-startup-briefing.test.mjs'],
+  },
+  {
     id: 'assistant_runtime_video_ppt_scope_tests',
     description: 'Rust assistant-runtime production video PPT scope tests',
     command: 'cargo',
@@ -253,6 +259,7 @@ Checks:
   - runs authorized-capture dry-run handoff planning without opening a browser or FFmpeg
   - runs quality matrix self-test, including review-risk regression
   - runs front-end scope planner syntax/tests for video PPT trigger boundaries
+  - runs front-end assistant startup briefing tests for video PPT source boundaries
   - runs Rust assistant-runtime video PPT scope tests
   - runs Rust platform-api video URL and public page resolver tests
   - runs Rust formatting check
@@ -371,6 +378,9 @@ function extractCommandEvidence(commandId, stdout, stderr = '', command = {}, ex
   }
   if (commandId === 'scope_planner_tests') {
     return extractScopePlannerTestsEvidence(stdout);
+  }
+  if (commandId === 'assistant_startup_briefing_tests') {
+    return extractAssistantStartupBriefingTestsEvidence(stdout);
   }
   if (commandId === 'assistant_runtime_video_ppt_scope_tests') {
     return extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout);
@@ -920,6 +930,24 @@ function extractScopePlannerTestsEvidence(stdout) {
   };
 }
 
+function extractAssistantStartupBriefingTestsEvidence(stdout) {
+  return {
+    schema: 'v3.assistant_startup_briefing_video_ppt_rollup_evidence.v1',
+    test_count: parseTapSummaryCount(stdout, 'tests'),
+    pass_count: parseTapSummaryCount(stdout, 'pass'),
+    fail_count: parseTapSummaryCount(stdout, 'fail'),
+    cancelled_count: parseTapSummaryCount(stdout, 'cancelled'),
+    skipped_count: parseTapSummaryCount(stdout, 'skipped'),
+    todo_count: parseTapSummaryCount(stdout, 'todo'),
+    system_capability_test_covered:
+      stdout.includes('startup briefing summarizes visible datasets and system capability'),
+    no_dataset_formatted_boundary_test_covered:
+      stdout.includes('formatted briefing tells model when no dataset is selected'),
+    video_ppt_source_routing_boundary_covered:
+      stdout.includes('startup briefing preserves video PPT source routing and handoff boundaries'),
+  };
+}
+
 function extractAssistantRuntimeVideoPptScopeTestsEvidence(stdout) {
   const summary = parseRustTestSummary(stdout);
   return {
@@ -1426,6 +1454,8 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     commandById.get('platform_api_video_url_resolution_tests')?.evidence || {};
   const publicVideoPageEvidence =
     commandById.get('platform_api_public_video_page_tests')?.evidence || {};
+  const startupBriefingEvidence =
+    commandById.get('assistant_startup_briefing_tests')?.evidence || {};
   const passedEvidenceCommandCount = results.filter((result) => (
     result.status === 'passed' && result.evidence
   )).length;
@@ -1458,6 +1488,18 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     authorized_capture_dry_run_evidence: hasPassedEvidence(commandById, 'authorized_capture_dry_run'),
     quality_matrix_self_test_evidence: hasPassedEvidence(commandById, 'quality_matrix_self_test'),
     production_scope_planner_evidence: hasPassedEvidence(commandById, 'scope_planner_tests'),
+    assistant_startup_briefing_evidence:
+      hasPassedEvidence(commandById, 'assistant_startup_briefing_tests'),
+    assistant_startup_briefing_test_count:
+      startupBriefingEvidence.test_count ?? null,
+    assistant_startup_briefing_pass_count:
+      startupBriefingEvidence.pass_count ?? null,
+    assistant_startup_briefing_video_ppt_boundary_covered:
+      startupBriefingEvidence.video_ppt_source_routing_boundary_covered === true,
+    assistant_startup_briefing_system_capability_covered:
+      startupBriefingEvidence.system_capability_test_covered === true,
+    assistant_startup_briefing_no_dataset_boundary_covered:
+      startupBriefingEvidence.no_dataset_formatted_boundary_test_covered === true,
     production_assistant_runtime_evidence:
       hasPassedEvidence(commandById, 'assistant_runtime_video_ppt_scope_tests'),
     platform_api_video_url_resolution_evidence:
@@ -1644,6 +1686,7 @@ function validateReport(report) {
   validateAuthorizedCaptureEvidence(report);
   validateAuthorizedCaptureDryRunEvidence(report);
   validateProductionTriggerEvidence(report);
+  validateAssistantStartupBriefingEvidence(report);
   validatePlatformApiResolverEvidence(report);
   validateAcceptanceStatus(report);
   const serialized = JSON.stringify(report);
@@ -1897,6 +1940,13 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.authorized_capture_dry_run_evidence !== true
     || evidence.quality_matrix_self_test_evidence !== true
     || evidence.production_scope_planner_evidence !== true
+    || evidence.assistant_startup_briefing_evidence !== true
+    || evidence.assistant_startup_briefing_test_count < 9
+    || evidence.assistant_startup_briefing_pass_count
+      !== evidence.assistant_startup_briefing_test_count
+    || evidence.assistant_startup_briefing_video_ppt_boundary_covered !== true
+    || evidence.assistant_startup_briefing_system_capability_covered !== true
+    || evidence.assistant_startup_briefing_no_dataset_boundary_covered !== true
     || evidence.production_assistant_runtime_evidence !== true
     || evidence.platform_api_video_url_resolution_evidence !== true
     || evidence.platform_api_public_video_page_evidence !== true
@@ -1996,6 +2046,29 @@ function validateProductionTriggerEvidence(report) {
     ) {
       throw new Error('no-live rollup assistant-runtime production trigger evidence is incomplete');
     }
+  }
+}
+
+function validateAssistantStartupBriefingEvidence(report) {
+  const command = report.commands.find((result) => (
+    result.id === 'assistant_startup_briefing_tests'
+  ));
+  if (!command || command.status !== 'passed') {
+    throw new Error('no-live rollup missing assistant startup briefing evidence');
+  }
+  const evidence = command.evidence;
+  if (
+    !evidence
+    || evidence.schema !== 'v3.assistant_startup_briefing_video_ppt_rollup_evidence.v1'
+    || evidence.test_count < 9
+    || evidence.pass_count !== evidence.test_count
+    || evidence.fail_count !== 0
+    || evidence.cancelled_count !== 0
+    || evidence.system_capability_test_covered !== true
+    || evidence.no_dataset_formatted_boundary_test_covered !== true
+    || evidence.video_ppt_source_routing_boundary_covered !== true
+  ) {
+    throw new Error('no-live rollup assistant startup briefing evidence is incomplete');
   }
 }
 
