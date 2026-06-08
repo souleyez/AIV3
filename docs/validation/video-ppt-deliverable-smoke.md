@@ -7611,3 +7611,82 @@ Safety result:
 - no service build, restart, 8-server deployment, or 120-server action was run;
 - generated reports stayed under `target/` and were not committed;
 - no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.
+
+## 2026-06-08 Review-Risk Failure-Class Map Evidence Gate
+
+Task source: M6BS P1/no-live follow-up. M6BQ and M6BR proved that real public samples can land in different needs-manual-review failure classes. This slice makes that mapping machine-readable so future customer/operator samples can explain why a risk flag becomes `selection_quality`, `crop_quality`, `subtitle_alignment`, `ocr_evidence`, `readability_quality`, or `manual_review`.
+
+Scope:
+
+- local quality matrix and no-live rollup evidence only;
+- no live main-site upload;
+- no third-party live event;
+- no bearer/context use;
+- no new video download, frame extraction, OCR, PPT generation, browser capture, or FFmpeg capture;
+- no 8-server pull/build/restart/deploy and no 120-server action.
+
+Implemented behavior:
+
+- quality matrix reports now include `gates.review_required_risk_failure_class_map_supported=true`;
+- quality matrix reports now include `gates.review_required_risk_failure_class_map_count=8`;
+- quality matrix reports now include a safe string map from each review-required risk flag to its isolated failure class;
+- no-live rollup extracts that map from the quality matrix self-test child report;
+- no-live rollup validates the map in both the child evidence and `acceptance_status.no_live_evidence_summary`.
+
+Map:
+
+```text
+manual_review_required -> manual_review
+missing_transcript_alignment -> subtitle_alignment
+missing_ocr_evidence -> ocr_evidence
+full_frame_rectangle_fallback -> crop_quality
+selected_slide_duplicates_removed -> selection_quality
+frame_sharpness_review_required -> readability_quality
+slide_readability_review_required -> readability_quality
+single_slide_output_review_required -> selection_quality
+```
+
+Validation:
+
+```text
+node --check scripts/smoke/video-ppt-quality-matrix.mjs
+node --check scripts/smoke/video-ppt-no-live-rollup.mjs
+npm run smoke:video-ppt-quality-matrix -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted quality matrix risk-map readback>"
+npm run smoke:video-ppt-no-live-rollup -- --self-test --pretty --output-dir <target-redacted>
+node -e "<redacted no-live risk-map readback>"
+rg -n "<local-path-url-token-patterns>" <target-redacted>
+git diff --check
+git ls-files target | wc -l
+```
+
+Result:
+
+- both script syntax checks passed;
+- quality matrix self-test passed with `case_count=3`, `deliverable_count=1`, and `pending_count=2`;
+- quality matrix risk map support was `true`;
+- quality matrix risk map count was `8`;
+- quality matrix review failure class counts remained `manual_review=1`, `subtitle_alignment=1`, `ocr_evidence=1`, `crop_quality=1`, `selection_quality=2`, and `readability_quality=2`;
+- no-live rollup passed with `command_count=28`, `passed_count=28`, and `failed_count=0`;
+- no-live quality-matrix child evidence exposed the same risk map with `map_supported=true` and `map_count=8`;
+- `acceptance_status.no_live_evidence_summary` exposed the same risk map with `map_supported=true` and `map_count=8`;
+- `acceptance_status.full_acceptance_ready=false` and `gate_count=8` remained unchanged;
+- path/credential scan found no raw URL, token query string, bearer value, cookie, authorization value, local absolute path, `target/.../generated_artifacts` path, or `video-extraction-*` identifier in the generated reports;
+- `git ls-files target | wc -l` returned `0`.
+
+Remaining work:
+
+- this does not replace main-site upload live smoke, third-party live smoke, video号 handoff live pass, authorized capture live sample, 8-server deployment validation, or customer-authorized quality matrix;
+- this only improves the local machine-readable review-risk explanation gate.
+
+Safety result:
+
+- no live upload was run;
+- no live third-party event was posted;
+- no bearer was used;
+- no network source was fetched;
+- no file was uploaded, registered, downloaded, OCRed, frame-extracted, or converted through a live workflow;
+- no browser was opened and no FFmpeg capture command was run;
+- no service build, restart, 8-server deployment, or 120-server action was run;
+- generated reports stayed under `target/` and were not committed;
+- no generated artifacts, raw videos, frames, PPTX files, customer files, raw source URLs, bearer values, cookies, provider payloads, database URLs, private object paths, approval ids, validator JSON body, report body, or local artifact paths were recorded in this shared receipt.

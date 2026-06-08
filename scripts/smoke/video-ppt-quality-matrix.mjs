@@ -35,6 +35,16 @@ const EXPECTED_REVIEW_FAILURE_CLASS_COUNTS = {
   selection_quality: 2,
   readability_quality: 2,
 };
+const REVIEW_REQUIRED_RISK_FAILURE_CLASS_MAP = Object.freeze({
+  manual_review_required: 'manual_review',
+  missing_transcript_alignment: 'subtitle_alignment',
+  missing_ocr_evidence: 'ocr_evidence',
+  full_frame_rectangle_fallback: 'crop_quality',
+  selected_slide_duplicates_removed: 'selection_quality',
+  frame_sharpness_review_required: 'readability_quality',
+  slide_readability_review_required: 'readability_quality',
+  single_slide_output_review_required: 'selection_quality',
+});
 
 function parseArgs(argv) {
   const args = {
@@ -512,6 +522,10 @@ function buildSelfTestReport() {
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       review_required_risk_flag_object_shape_supported: true,
       review_required_risk_flag_object_shape_case_count: REVIEW_REQUIRED_RISK_FLAGS.size,
+      review_required_risk_failure_class_map_supported: true,
+      review_required_risk_failure_class_map_count:
+        Object.keys(REVIEW_REQUIRED_RISK_FAILURE_CLASS_MAP).length,
+      review_required_risk_failure_class_map: REVIEW_REQUIRED_RISK_FAILURE_CLASS_MAP,
       not_deliverable_failure_classes: NOT_DELIVERABLE_FAILURE_CLASSES,
       not_deliverable_failure_class_count: NOT_DELIVERABLE_FAILURE_CLASSES.length,
       failure_class_summary_supported: true,
@@ -973,6 +987,10 @@ function buildQualityMatrixReport({
       review_required_risk_flags: [...REVIEW_REQUIRED_RISK_FLAGS],
       review_required_risk_flag_count: REVIEW_REQUIRED_RISK_FLAGS.size,
       review_required_risk_flag_object_shape_supported: true,
+      review_required_risk_failure_class_map_supported: true,
+      review_required_risk_failure_class_map_count:
+        Object.keys(REVIEW_REQUIRED_RISK_FAILURE_CLASS_MAP).length,
+      review_required_risk_failure_class_map: REVIEW_REQUIRED_RISK_FAILURE_CLASS_MAP,
       not_deliverable_failure_classes: NOT_DELIVERABLE_FAILURE_CLASSES,
       not_deliverable_failure_class_count: NOT_DELIVERABLE_FAILURE_CLASSES.length,
       failure_class_summary_supported: true,
@@ -1064,6 +1082,9 @@ function validateSelfTestReport(report) {
     || report.gates.review_required_risk_flag_object_shape_case_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !report.gates.review_required_risk_flags.includes('missing_ocr_evidence')
     || !report.gates.review_required_risk_flags.includes('single_slide_output_review_required')
+    || report.gates.review_required_risk_failure_class_map_supported !== true
+    || report.gates.review_required_risk_failure_class_map_count !== REVIEW_REQUIRED_RISK_FLAGS.size
+    || !hasExpectedReviewRiskFailureClassMap(report.gates.review_required_risk_failure_class_map)
     || report.gates.review_failure_class_summary_supported !== true
     || report.gates.review_failure_class_summary_needs_manual_review_count !== REVIEW_REQUIRED_RISK_FLAGS.size
     || !hasExpectedReviewFailureClassCounts(report.gates.review_failure_class_summary_counts)
@@ -1106,6 +1127,15 @@ function hasExpectedReviewFailureClassCounts(counts) {
     );
 }
 
+function hasExpectedReviewRiskFailureClassMap(mapping) {
+  return mapping
+    && typeof mapping === 'object'
+    && !Array.isArray(mapping)
+    && Object.entries(REVIEW_REQUIRED_RISK_FAILURE_CLASS_MAP).every(
+      ([riskFlag, failureClass]) => mapping[riskFlag] === failureClass,
+    );
+}
+
 function validateQualityMatrixReport(report) {
   if (report.schema !== 'v3.video_ppt_quality_matrix_smoke.v1') {
     throw new Error('invalid quality matrix report schema');
@@ -1138,6 +1168,9 @@ function validateQualityMatrixReport(report) {
     || report.gates.review_required_risk_flag_object_shape_supported !== true
     || !report.gates.review_required_risk_flags.includes('missing_ocr_evidence')
     || !report.gates.review_required_risk_flags.includes('single_slide_output_review_required')
+    || report.gates.review_required_risk_failure_class_map_supported !== true
+    || report.gates.review_required_risk_failure_class_map_count !== REVIEW_REQUIRED_RISK_FLAGS.size
+    || !hasExpectedReviewRiskFailureClassMap(report.gates.review_required_risk_failure_class_map)
   ) {
     throw new Error('quality matrix report must include review-required gate metadata');
   }

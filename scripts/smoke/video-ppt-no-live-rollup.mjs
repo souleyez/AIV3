@@ -20,6 +20,16 @@ const EXPECTED_REVIEW_FAILURE_CLASS_COUNTS = {
   selection_quality: 2,
   readability_quality: 2,
 };
+const EXPECTED_REVIEW_RISK_FAILURE_CLASS_MAP = {
+  manual_review_required: 'manual_review',
+  missing_transcript_alignment: 'subtitle_alignment',
+  missing_ocr_evidence: 'ocr_evidence',
+  full_frame_rectangle_fallback: 'crop_quality',
+  selected_slide_duplicates_removed: 'selection_quality',
+  frame_sharpness_review_required: 'readability_quality',
+  slide_readability_review_required: 'readability_quality',
+  single_slide_output_review_required: 'selection_quality',
+};
 
 const COMMANDS = [
   {
@@ -868,6 +878,12 @@ function extractQualityMatrixSelfTestEvidence(stdout) {
     review_required_risk_flag_count: report.gates?.review_required_risk_flag_count,
     review_required_risk_flag_object_shape_supported: report.gates?.review_required_risk_flag_object_shape_supported,
     review_required_risk_flag_object_shape_case_count: report.gates?.review_required_risk_flag_object_shape_case_count,
+    review_required_risk_failure_class_map_supported:
+      report.gates?.review_required_risk_failure_class_map_supported,
+    review_required_risk_failure_class_map_count:
+      report.gates?.review_required_risk_failure_class_map_count,
+    review_required_risk_failure_class_map:
+      sanitizeStringMap(report.gates?.review_required_risk_failure_class_map),
     deliverables_mode_failure_class_gate_defaults_supported:
       report.gates?.deliverables_mode_failure_class_gate_defaults_supported,
     customer_authorization_argument_gate_supported:
@@ -909,6 +925,19 @@ function sanitizeCountMap(value) {
   for (const [key, count] of Object.entries(value)) {
     if (typeof key === 'string' && Number.isInteger(count) && count >= 0) {
       result[key] = count;
+    }
+  }
+  return result;
+}
+
+function sanitizeStringMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const result = {};
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (typeof key === 'string' && typeof entryValue === 'string') {
+      result[key] = entryValue;
     }
   }
   return result;
@@ -1766,6 +1795,12 @@ function buildNoLiveAcceptanceEvidenceSummary(results = []) {
     quality_customer_retention_policy_argument_gate_supported:
       qualityEvidence.customer_retention_policy_argument_gate_supported === true,
     quality_review_required_risk_flag_count: qualityEvidence.review_required_risk_flag_count ?? null,
+    quality_review_required_risk_failure_class_map_supported:
+      qualityEvidence.review_required_risk_failure_class_map_supported === true,
+    quality_review_required_risk_failure_class_map_count:
+      qualityEvidence.review_required_risk_failure_class_map_count ?? null,
+    quality_review_required_risk_failure_class_map:
+      sanitizeStringMap(qualityEvidence.review_required_risk_failure_class_map),
     not_deliverable_failure_class_count: qualityEvidence.not_deliverable_failure_class_count ?? null,
     review_failure_class_summary_needs_manual_review_count:
       qualityEvidence.review_failure_class_summary_needs_manual_review_count ?? null,
@@ -2232,6 +2267,11 @@ function validateNoLiveAcceptanceEvidenceSummary(acceptance, report) {
     || evidence.quality_customer_authorization_argument_gate_supported !== true
     || evidence.quality_customer_retention_policy_argument_gate_supported !== true
     || evidence.quality_review_required_risk_flag_count !== 8
+    || evidence.quality_review_required_risk_failure_class_map_supported !== true
+    || evidence.quality_review_required_risk_failure_class_map_count !== 8
+    || !hasExpectedReviewRiskFailureClassMap(
+      evidence.quality_review_required_risk_failure_class_map,
+    )
     || evidence.not_deliverable_failure_class_count !== 5
     || evidence.review_failure_class_summary_needs_manual_review_count !== 8
     || !hasExpectedReviewFailureClassCounts(evidence.review_failure_class_summary_counts)
@@ -2833,6 +2873,9 @@ function validateQualityMatrixEvidence(report) {
     || evidence.review_required_risk_flag_count !== 8
     || evidence.review_required_risk_flag_object_shape_supported !== true
     || evidence.review_required_risk_flag_object_shape_case_count !== 8
+    || evidence.review_required_risk_failure_class_map_supported !== true
+    || evidence.review_required_risk_failure_class_map_count !== 8
+    || !hasExpectedReviewRiskFailureClassMap(evidence.review_required_risk_failure_class_map)
     || evidence.deliverables_mode_failure_class_gate_defaults_supported !== true
     || evidence.customer_authorization_argument_gate_supported !== true
     || evidence.customer_retention_policy_argument_gate_supported !== true
@@ -2878,6 +2921,15 @@ function hasExpectedReviewFailureClassCounts(counts) {
   return isCountMap(counts)
     && Object.entries(EXPECTED_REVIEW_FAILURE_CLASS_COUNTS).every(
       ([failureClass, expectedCount]) => counts[failureClass] === expectedCount,
+    );
+}
+
+function hasExpectedReviewRiskFailureClassMap(mapping) {
+  return Boolean(mapping)
+    && typeof mapping === 'object'
+    && !Array.isArray(mapping)
+    && Object.entries(EXPECTED_REVIEW_RISK_FAILURE_CLASS_MAP).every(
+      ([riskFlag, failureClass]) => mapping[riskFlag] === failureClass,
     );
 }
 
