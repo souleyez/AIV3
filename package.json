@@ -16,6 +16,8 @@
     "smoke:newbai-customer-answer": "node scripts/smoke/newbai-customer-answer.mjs",
     "smoke:newbai-customer-answer-live-capture": "node scripts/smoke/newbai-customer-answer-live-capture.mjs",
     "smoke:static-page-5way": "node scripts/smoke/static-page-5way.mjs",
+    "smoke:customer-web-codex-executor": "bash scripts/run-customer-web-codex-executor-smoke.sh",
+    "smoke:customer-web-codex-readiness": "bash scripts/run-customer-web-codex-readiness.sh",
     "smoke:video-ppt-handoff": "node scripts/smoke/video-ppt-handoff.mjs",
     "smoke:video-ppt-main-visible": "node scripts/smoke/video-ppt-main-visible.mjs",
     "smoke:video-ppt-no-live-rollup": "node scripts/smoke/video-ppt-no-live-rollup.mjs",

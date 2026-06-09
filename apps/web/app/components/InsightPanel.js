@@ -1138,6 +1138,163 @@ function GeneratedHtmlArtifactCard({
   );
 }
 
+function codexCustomerArtifactMeta(bundle) {
+  const files = Array.isArray(bundle?.files) ? bundle.files : [];
+  const fileCount = files.length;
+  const status = bundle?.published
+    ? '已发布'
+    : bundle?.requiresPublishValidation
+      ? '待发布'
+      : formatSnakeCaseLabel(bundle?.status || 'available');
+  return {
+    title: bundle?.title || 'Codex 产物',
+    summary: bundle?.summary || `${fileCount} 个文件`,
+    status,
+    fileCount,
+    createdAt: bundle?.createdAt || '',
+    workflowExecutionId: bundle?.workflowExecutionId || '',
+    manifestPath: bundle?.manifestPath || '',
+    primaryUrl: bundle?.published ? bundle?.primaryUrl || '' : '',
+    published: Boolean(bundle?.published),
+    files,
+    publicFiles: files.filter((file) => file?.publicUrl),
+  };
+}
+
+function GeneratedCodexCustomerArtifactCard({ bundle }) {
+  const meta = codexCustomerArtifactMeta(bundle);
+  const visibleFiles = meta.files.slice(0, 3);
+  const visiblePublicFiles = meta.publicFiles
+    .filter((file) => file.publicUrl !== meta.primaryUrl)
+    .slice(0, 3);
+  return (
+    <article className="generated-project-card codex-artifact-project-card">
+      <div className="generated-project-main codex-artifact-main" role="group" aria-label="Codex 产物">
+        <div className="generated-project-title-row">
+          <strong>{truncateText(meta.title, 38)}</strong>
+          <time dateTime={meta.createdAt || undefined}>{meta.createdAt ? formatRelativeTime(meta.createdAt) : '刚刚'}</time>
+        </div>
+        <div className="generated-project-brief-row">
+          <span>{truncateText(meta.summary, 58)}</span>
+          <em>{meta.status} · {meta.fileCount} 文件</em>
+        </div>
+        {visibleFiles.length ? (
+          <div className="codex-artifact-file-list">
+            {visibleFiles.map((file) => (
+              <span key={file.path} title={file.path}>
+                {truncateText(file.title || file.path, 24)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="generated-project-actions" aria-label="Codex 产物状态">
+        <button type="button" className="ghost-btn compact-action-btn" disabled>
+          {meta.status}
+        </button>
+        {meta.primaryUrl ? (
+          <a
+            className="primary-btn compact-action-btn artifact-download-link codex-artifact-link"
+            href={meta.primaryUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            打开产物
+          </a>
+        ) : null}
+        {visiblePublicFiles.map((file) => (
+          <a
+            key={`${file.path}:${file.publicUrl}`}
+            className="ghost-btn compact-action-btn artifact-download-link codex-artifact-link"
+            href={file.publicUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={file.path}
+          >
+            {truncateText(file.title || artifactKindLabel(file.kind), 16)}
+          </a>
+        ))}
+        {meta.manifestPath ? (
+          <button type="button" className="ghost-btn compact-action-btn" disabled>
+            清单就绪
+          </button>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function codexCustomerTaskMeta(task) {
+  const capability = task?.capability || '';
+  const route = task?.route || capability;
+  const status = task?.statusLabel || formatSnakeCaseLabel(task?.status || 'active');
+  const resultSummary = task?.resultSummary || null;
+  const resultItems = [
+    ...(Array.isArray(resultSummary?.findings) ? resultSummary.findings.map((text) => ({ label: '结论', text })) : []),
+    ...(Array.isArray(resultSummary?.recommendedNextActions) ? resultSummary.recommendedNextActions.map((text) => ({ label: '建议', text })) : []),
+    ...(Array.isArray(resultSummary?.warnings) ? resultSummary.warnings.map((text) => ({ label: '提示', text })) : []),
+  ].filter((item) => item?.text).slice(0, 3);
+  const permissionScope = task?.permissionScope
+    || (capability === 'customer_complex_request'
+      ? '只读分析'
+      : capability === 'customer_artifact_request'
+        ? '隔离工作区写入'
+        : capability === 'generated_static_page_edit'
+          ? '页面副本工作区写入'
+          : '受控执行');
+  return {
+    title: task?.title || 'Codex 执行',
+    summary: resultSummary?.summary || task?.summary || '客户 Codex 任务已进入受控执行链路。',
+    status,
+    route,
+    capability,
+    permissionScope,
+    resultItems,
+    createdAt: task?.createdAt || '',
+    workflowExecutionId: task?.workflowExecutionId || '',
+    nonBlocking: task?.nonBlocking !== false,
+    mainAnswerPathPreserved: task?.mainAnswerPathPreserved !== false,
+  };
+}
+
+function GeneratedCodexCustomerTaskCard({ task }) {
+  const meta = codexCustomerTaskMeta(task);
+  return (
+    <article className="generated-project-card codex-task-card">
+      <div className="generated-project-main codex-artifact-main" role="group" aria-label="Codex 执行">
+        <div className="generated-project-title-row">
+          <strong>{truncateText(meta.title, 38)}</strong>
+          <time dateTime={meta.createdAt || undefined}>{meta.createdAt ? formatRelativeTime(meta.createdAt) : '刚刚'}</time>
+        </div>
+        <div className="generated-project-brief-row">
+          <span>{truncateText(meta.summary, 64)}</span>
+          <em>{meta.status}</em>
+        </div>
+        <div className="codex-artifact-file-list">
+          <span title={meta.route}>{truncateText(formatSnakeCaseLabel(meta.route), 24)}</span>
+          <span>{truncateText(meta.permissionScope, 24)}</span>
+          {meta.resultItems.map((item, index) => (
+            <span key={`${item.label}-${index}`} title={`${item.label}: ${item.text}`}>
+              {truncateText(`${item.label}: ${item.text}`, 30)}
+            </span>
+          ))}
+          {meta.mainAnswerPathPreserved ? <span>主回答保留</span> : null}
+        </div>
+      </div>
+      <div className="generated-project-actions" aria-label="Codex 执行状态">
+        <button type="button" className="ghost-btn compact-action-btn" disabled>
+          {meta.status}
+        </button>
+        {meta.workflowExecutionId ? (
+          <button type="button" className="ghost-btn compact-action-btn codex-task-workflow" disabled title={meta.workflowExecutionId}>
+            {truncateText(meta.workflowExecutionId, 18)}
+          </button>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
 export default function InsightPanel({
   dataset,
   sessions,
@@ -1174,6 +1331,8 @@ export default function InsightPanel({
   staticPageEditorOpen = false,
   assistantRunProgress,
   showExecutionObservability = false,
+  codexCustomerTasks = [],
+  codexCustomerArtifacts = [],
   htmlArtifacts = [],
   activeHtmlArtifactId,
   onSelectHtmlArtifact,
@@ -1185,7 +1344,10 @@ export default function InsightPanel({
       && templateId !== 'static_page_published_preview'
       && templateId !== 'static_page_data_quality_report';
   });
-  const resultCount = staticPageDrafts.length + shelfHtmlArtifacts.length;
+  const resultCount = staticPageDrafts.length
+    + shelfHtmlArtifacts.length
+    + codexCustomerTasks.length
+    + codexCustomerArtifacts.length;
 
   async function copyProjectLink(draft) {
     const finalPageUrl = staticPageHtmlDownloadHref(staticPageFinalPageUrl(draft));
@@ -1211,10 +1373,16 @@ export default function InsightPanel({
 
       <section className="card insight-card right-results-card">
         <SectionHeader
-          title="生成项目"
-          subtitle={resultCount ? `${resultCount} 个项目，每个项目一张卡` : '从聊天或“页面”按钮创建项目'}
+          title="Codex 执行与产物"
+          subtitle={resultCount ? `${resultCount} 个任务或产物` : '从聊天发起 Codex 任务或生成项目'}
         />
         <div className="generated-project-list">
+          {codexCustomerTasks.map((task) => (
+            <GeneratedCodexCustomerTaskCard
+              key={task.id}
+              task={task}
+            />
+          ))}
           {staticPageDrafts.map((draft) => {
             const active = staticPageDraft?.id === draft.id;
             return (
@@ -1244,7 +1412,13 @@ export default function InsightPanel({
               />
             );
           })}
-          {!resultCount ? <EmptySection text="暂时还没有生成项目。通过对话发起后会出现在这里。" /> : null}
+          {codexCustomerArtifacts.map((bundle) => (
+            <GeneratedCodexCustomerArtifactCard
+              key={bundle.id}
+              bundle={bundle}
+            />
+          ))}
+          {!resultCount ? <EmptySection text="暂时还没有 Codex 任务或生成产物。通过对话发起后会出现在这里。" /> : null}
         </div>
         <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshStaticPageDrafts}>
           刷新项目

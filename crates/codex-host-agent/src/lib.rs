@@ -8,7 +8,7 @@ use domain_model::{AssistantRunId, WorkflowExecution, WorkflowKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
 const DEFAULT_PROFILE_ID: &str = "default-dry-run";
@@ -22,6 +22,12 @@ const ENV_STATIC_PAGE_REASONING_EFFORT: &str = "CODEX_HOST_AGENT_STATIC_PAGE_REA
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
 const ANSWER_QUALITY_AUTOFIX: &str = "answer_quality_autofix";
 const DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
+const PROPOSE_PATCH: &str = "propose_patch";
+const CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_request";
+const CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
+const GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
+const GENERATED_STATIC_PAGE_PUBLISH: &str = "generated_static_page_publish";
+const V3_PRODUCT_CHANGE_REQUEST: &str = "v3_product_change_request";
 const DEFAULT_TASK_TIMEOUT_MS: u64 = 1_800_000;
 const DEFAULT_HEARTBEAT_MS: u64 = 15_000;
 const DEFAULT_STDOUT_LIMIT_BYTES: usize = 200_000;
@@ -29,6 +35,10 @@ const DEFAULT_STDERR_LIMIT_BYTES: usize = 100_000;
 const DEFAULT_TASK_WORKSPACE_RETENTION_HOURS: u64 = 168;
 const DEFAULT_GENERATED_ARTIFACTS_ROOT: &str = "/srv/aiv3/shared/objects/generated-artifacts";
 const V3_GENERATED_ARTIFACTS_URL_PREFIX: &str = "https://v3.elepcloud.com/generated-artifacts/";
+const V3_SERVER_REPO_ROOT: &str = "/srv/aiv3/repo";
+const CUSTOMER_RESULT_OUTPUT_SCHEMA_PATH: &str = "schemas/customer-result-summary.schema.json";
+const ENV_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED: &str =
+    "CODEX_HOST_AGENT_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexHostTaskContext {
@@ -39,6 +49,7 @@ pub struct CodexHostTaskContext {
     pub task_memory_isolated: bool,
     pub task_memory_space_id: Option<String>,
     pub fixed_task: Option<CodexHostFixedTaskTemplateContextView>,
+    pub workspace_seed: Option<Value>,
 }
 
 impl CodexHostTaskContext {
@@ -88,6 +99,11 @@ impl CodexHostTaskContext {
             .map(serde_json::from_value)
             .transpose()
             .map_err(|error| anyhow!("fixed_task context is invalid: {error}"))?;
+        let workspace_seed = execution
+            .context
+            .get("workspace_seed")
+            .filter(|value| !value.is_null())
+            .cloned();
 
         Ok(Self {
             assistant_run_id,
@@ -97,6 +113,7 @@ impl CodexHostTaskContext {
             task_memory_isolated,
             task_memory_space_id,
             fixed_task,
+            workspace_seed,
         })
     }
 
@@ -540,6 +557,7 @@ impl CodexHostAgentPolicy {
                 self.profile.id
             ));
         }
+        self.validate_capability_execution_scope(context)?;
         self.validate_fixed_task_policy(context)?;
         let command_plan = match self.mode {
             CodexHostExecutionMode::DryRun | CodexHostExecutionMode::CloudflareOrchestrator => None,
@@ -564,6 +582,15 @@ impl CodexHostAgentPolicy {
             host_kind: self.host_kind.clone(),
             command_plan,
         })
+    }
+
+    fn validate_capability_execution_scope(&self, context: &CodexHostTaskContext) -> Result<()> {
+        if context.capability == V3_PRODUCT_CHANGE_REQUEST {
+            return Err(anyhow!(
+                "capability {V3_PRODUCT_CHANGE_REQUEST} is blocked for Codex Host execution; V3 product changes require operator review"
+            ));
+        }
+        Ok(())
     }
 
     fn validate_fixed_task_policy(&self, context: &CodexHostTaskContext) -> Result<()> {
@@ -650,14 +677,19 @@ impl CodexHostAgentPolicy {
                 ));
             }
         }
-        let workspace_configured = command_plan
-            .and_then(|plan| plan.workspace_path.as_ref())
-            .is_some();
-        if !workspace_configured {
-            return Err(anyhow!(
+        let task_workspace_root = self.task_workspace_root.as_ref().ok_or_else(|| {
+            anyhow!(
                 "codex_exec mode requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for an isolated task workspace"
-            ));
-        }
+            )
+        })?;
+        let workspace_path = command_plan
+            .and_then(|plan| plan.workspace_path.as_ref())
+            .ok_or_else(|| {
+                anyhow!(
+                    "codex_exec mode requires CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT for an isolated task workspace"
+                )
+            })?;
+        validate_task_workspace_scope(task_workspace_root, workspace_path)?;
         Ok(())
     }
 
@@ -687,6 +719,46 @@ fn approved_remote_host_kind(host_kind: &str) -> bool {
         host_kind,
         "windows_jump" | "mac_host" | "linux_host" | "aiv3_server" | "cloudflare_codex"
     )
+}
+
+fn validate_task_workspace_scope(task_workspace_root: &Path, workspace_path: &Path) -> Result<()> {
+    if path_contains_parent_component(task_workspace_root)
+        || path_contains_parent_component(workspace_path)
+    {
+        return Err(anyhow!(
+            "Codex Host task workspace paths must not contain parent-directory components"
+        ));
+    }
+    if path_is_under_v3_product_repo(task_workspace_root)
+        || path_is_under_v3_product_repo(workspace_path)
+    {
+        return Err(anyhow!(
+            "Codex Host task workspace must not point at the V3 product repository"
+        ));
+    }
+    if !workspace_path.starts_with(task_workspace_root) {
+        return Err(anyhow!(
+            "Codex Host task workspace must stay under CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT"
+        ));
+    }
+    Ok(())
+}
+
+fn path_contains_parent_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, Component::ParentDir))
+}
+
+fn path_is_under_v3_product_repo(path: &Path) -> bool {
+    let normalized = normalized_path_for_policy(path);
+    normalized == V3_SERVER_REPO_ROOT || normalized.starts_with(&format!("{V3_SERVER_REPO_ROOT}/"))
+}
+
+fn normalized_path_for_policy(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn validate_static_page_fixed_task(
@@ -1005,20 +1077,16 @@ fn build_codex_command_plan(
     let prompt = if context.fixed_task.is_some() {
         fixed_task_prompt(context.fixed_task.as_ref())?
     } else {
-        context
+        let task = context
             .task
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .ok_or_else(|| anyhow!("Codex Host task text is required for non-dry-run planning"))?
+            .ok_or_else(|| anyhow!("Codex Host task text is required for non-dry-run planning"))?;
+        customer_web_codex_prompt(context.capability.as_str(), &task)
     };
-    let sandbox = if context.capability == "propose_patch" || context.fixed_task.is_some() {
-        "workspace-write"
-    } else {
-        "read-only"
-    }
-    .to_string();
+    let sandbox = codex_sandbox_for_context(context).to_string();
     let mut args_without_prompt = vec![
         "-a".to_string(),
         "never".to_string(),
@@ -1030,6 +1098,12 @@ fn build_codex_command_plan(
     ];
     append_provider_config_args(&mut args_without_prompt, profile)?;
     append_reasoning_effort_config_args(&mut args_without_prompt, context)?;
+    if let Some(output_schema_path) =
+        customer_web_codex_output_schema_path(context.capability.as_str())
+    {
+        args_without_prompt.push("--output-schema".to_string());
+        args_without_prompt.push(output_schema_path.to_string());
+    }
     if let Some(model) = profile
         .model
         .as_deref()
@@ -1049,6 +1123,92 @@ fn build_codex_command_plan(
         workspace_path,
         workspace_label: Some(workspace_label),
     })
+}
+
+fn codex_sandbox_for_context(context: &CodexHostTaskContext) -> &'static str {
+    match context.capability.as_str() {
+        PROPOSE_PATCH
+        | CUSTOMER_ARTIFACT_REQUEST
+        | GENERATED_STATIC_PAGE_EDIT
+        | GENERATED_STATIC_PAGE_PUBLISH => "workspace-write",
+        CUSTOMER_COMPLEX_REQUEST | V3_PRODUCT_CHANGE_REQUEST => "read-only",
+        _ if context.fixed_task.is_some() => "workspace-write",
+        _ => "read-only",
+    }
+}
+
+fn customer_web_codex_capability(capability: &str) -> bool {
+    matches!(
+        capability,
+        CUSTOMER_COMPLEX_REQUEST
+            | CUSTOMER_ARTIFACT_REQUEST
+            | GENERATED_STATIC_PAGE_EDIT
+            | GENERATED_STATIC_PAGE_PUBLISH
+    )
+}
+
+fn customer_result_output_schema_enabled() -> bool {
+    std::env::var(ENV_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
+        })
+        .unwrap_or(true)
+}
+
+fn customer_web_codex_output_schema_path(capability: &str) -> Option<&'static str> {
+    if customer_web_codex_capability(capability) && customer_result_output_schema_enabled() {
+        Some(CUSTOMER_RESULT_OUTPUT_SCHEMA_PATH)
+    } else {
+        None
+    }
+}
+
+fn customer_web_codex_prompt(capability: &str, task: &str) -> String {
+    match capability {
+        CUSTOMER_COMPLEX_REQUEST => format!(
+            "Run this DataMax Web Codex customer task.\n\
+\n\
+Scope:\n\
+- Treat this as a customer using Codex from the V3 web UI.\n\
+- Use read-only analysis. Do not modify files, repositories, V3 product source, services, migrations, auth, public APIs, provider config, deployment state, commits, or system files.\n\
+- Do not expose credentials, raw customer documents, raw prompt text, provider logs, stdout, stderr, local absolute paths, database URLs, cookies, or tokens.\n\
+- Give a useful customer-facing result, not just an execution log.\n\
+\n\
+Final output contract:\n\
+- At the end, print exactly one JSON object containing `customer_result_summary`.\n\
+- Do not wrap the final JSON in Markdown fences.\n\
+- Keep every user-visible string concise and free of secrets or absolute paths.\n\
+- Shape: {{\"customer_result_summary\":{{\"schema\":\"v3.customer_codex_result_summary\",\"schema_version\":1,\"status\":\"completed|needs_human|failed\",\"title\":\"string\",\"summary\":\"string\",\"findings\":[\"string\"],\"recommended_next_actions\":[\"string\"],\"warnings\":[\"string\"],\"artifact_intent\":false,\"safety\":{{\"raw_logs_exposed\":false,\"credentials_exposed\":false,\"absolute_paths_exposed\":false,\"prompt_exposed\":false}}}}}}\n\
+\n\
+Customer request:\n\
+{task}"
+        ),
+        CUSTOMER_ARTIFACT_REQUEST | GENERATED_STATIC_PAGE_EDIT | GENERATED_STATIC_PAGE_PUBLISH => {
+            format!(
+                "Run this DataMax Web Codex customer artifact task.\n\
+\n\
+Scope:\n\
+- Treat this as a customer using Codex from the V3 web UI.\n\
+- Work only inside the current isolated task workspace.\n\
+- Do not modify V3 product source, services, migrations, auth, public APIs, provider config, deployment state, commits, system files, or stable generated-artifact URLs.\n\
+- Put customer-facing files under workspace-relative paths such as `artifacts/` or `generated-artifacts/final/`.\n\
+- Write `customer-artifact-manifest.json`, `artifacts/manifest.json`, or `generated-artifacts/manifest.json` with workspace-relative artifact paths.\n\
+- Manifest paths must not reference secrets, `.env`, `.git`, `node_modules`, absolute paths, or parent-directory escapes.\n\
+- Do not expose credentials, raw customer documents, raw prompt text, provider logs, stdout, stderr, local absolute paths, database URLs, cookies, or tokens.\n\
+\n\
+Final output contract:\n\
+- After writing files and the manifest, print exactly one JSON object containing `customer_result_summary`.\n\
+- Do not wrap the final JSON in Markdown fences.\n\
+- Shape: {{\"customer_result_summary\":{{\"schema\":\"v3.customer_codex_result_summary\",\"schema_version\":1,\"status\":\"completed|needs_human|failed\",\"title\":\"string\",\"summary\":\"string\",\"findings\":[\"string\"],\"recommended_next_actions\":[\"string\"],\"warnings\":[\"string\"],\"artifact_intent\":true,\"safety\":{{\"raw_logs_exposed\":false,\"credentials_exposed\":false,\"absolute_paths_exposed\":false,\"prompt_exposed\":false}}}}}}\n\
+\n\
+Customer request:\n\
+{task}"
+            )
+        }
+        _ => task.to_string(),
+    }
 }
 
 fn fixed_task_prompt(fixed_task: Option<&CodexHostFixedTaskTemplateContextView>) -> Result<String> {
@@ -1204,6 +1364,254 @@ pub fn materialize_fixed_task_bundle(
         )
     })?;
     Ok(())
+}
+
+pub fn materialize_customer_web_codex_output_schema(
+    workspace_path: &Path,
+    context: &CodexHostTaskContext,
+) -> Result<()> {
+    let Some(output_schema_path) =
+        customer_web_codex_output_schema_path(context.capability.as_str())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(workspace_path.join("schemas")).map_err(|error| {
+        anyhow!(
+            "failed to create Codex Host schema directory {}: {error}",
+            workspace_path.join("schemas").display()
+        )
+    })?;
+    write_json_file(
+        &workspace_path.join(output_schema_path),
+        &customer_web_codex_result_output_schema(context.capability.as_str()),
+    )
+}
+
+fn customer_web_codex_result_output_schema(capability: &str) -> Value {
+    let artifact_intent_default = capability != CUSTOMER_COMPLEX_REQUEST;
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DataMax Customer Web Codex Result",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["customer_result_summary"],
+        "properties": {
+            "customer_result_summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "schema",
+                    "schema_version",
+                    "status",
+                    "title",
+                    "summary",
+                    "findings",
+                    "recommended_next_actions",
+                    "warnings",
+                    "artifact_intent",
+                    "safety"
+                ],
+                "properties": {
+                    "schema": {
+                        "const": "v3.customer_codex_result_summary"
+                    },
+                    "schema_version": {
+                        "const": 1
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["completed", "needs_human", "failed"]
+                    },
+                    "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                    },
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 280
+                    },
+                    "findings": {
+                        "type": "array",
+                        "maxItems": 6,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 180
+                        }
+                    },
+                    "recommended_next_actions": {
+                        "type": "array",
+                        "maxItems": 5,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 180
+                        }
+                    },
+                    "warnings": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 160
+                        }
+                    },
+                    "artifact_intent": {
+                        "type": "boolean",
+                        "default": artifact_intent_default
+                    },
+                    "safety": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                            "raw_logs_exposed",
+                            "credentials_exposed",
+                            "absolute_paths_exposed",
+                            "prompt_exposed"
+                        ],
+                        "properties": {
+                            "raw_logs_exposed": { "const": false },
+                            "credentials_exposed": { "const": false },
+                            "absolute_paths_exposed": { "const": false },
+                            "prompt_exposed": { "const": false }
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+pub fn materialize_workspace_seed(
+    workspace_path: &Path,
+    context: &CodexHostTaskContext,
+    decision: &CodexHostExecutionDecision,
+    retention_policy: &CodexHostWorkspaceRetentionPolicy,
+) -> Result<()> {
+    let Some(seed) = context.workspace_seed.as_ref() else {
+        return Ok(());
+    };
+    if !matches!(
+        context.capability.as_str(),
+        CUSTOMER_ARTIFACT_REQUEST | GENERATED_STATIC_PAGE_EDIT | GENERATED_STATIC_PAGE_PUBLISH
+    ) {
+        return Ok(());
+    }
+    fs::create_dir_all(workspace_path).map_err(|error| {
+        anyhow!(
+            "failed to create Codex Host seeded workspace {}: {error}",
+            workspace_path.display()
+        )
+    })?;
+    write_json_file(&workspace_path.join("workspace-seed.json"), seed)?;
+    write_json_file(
+        &workspace_path.join("task.json"),
+        &json!({
+            "schema": "v3.customer_codex_workspace_task",
+            "version": 1,
+            "assistant_run_id": context.assistant_run_id.to_string(),
+            "capability": context.capability.clone(),
+            "local_thread_id": context.local_thread_id.clone(),
+            "task_memory_space_id": context.task_memory_space_id.clone(),
+            "workspace_seed": seed,
+            "output_manifest": {
+                "preferred_path": "customer-artifact-manifest.json",
+                "compatible_paths": ["artifacts/manifest.json", "generated-artifacts/manifest.json"],
+                "artifact_paths_must_be_workspace_relative": true
+            },
+            "safety": {
+                "v3_product_repo_write_allowed": false,
+                "deployment_change_allowed": false,
+                "stable_url_overwrite_allowed": false
+            }
+        }),
+    )?;
+    write_json_file(
+        &workspace_path.join("runtime.json"),
+        &json!({
+            "assistant_run_id": context.assistant_run_id.to_string(),
+            "capability": context.capability.clone(),
+            "local_thread_id": context.local_thread_id.clone(),
+            "task_memory_isolated": context.task_memory_isolated,
+            "task_memory_space_id": context.task_memory_space_id.clone(),
+            "host_kind": decision.host_kind.clone(),
+            "profile": decision.profile.safe_summary(),
+            "workspace_label": decision
+                .command_plan
+                .as_ref()
+                .and_then(|plan| plan.workspace_label.clone()),
+            "retention_policy": retention_policy,
+            "raw_prompt_exposed": false,
+            "secrets_exposed": false,
+        }),
+    )?;
+    fs::write(
+        workspace_path.join("README.md"),
+        customer_workspace_seed_readme(context.capability.as_str()),
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write Codex Host seeded workspace README {}: {error}",
+            workspace_path.join("README.md").display()
+        )
+    })?;
+
+    if context.capability == GENERATED_STATIC_PAGE_EDIT {
+        materialize_generated_static_page_edit_seed(workspace_path, seed)?;
+    }
+    Ok(())
+}
+
+fn materialize_generated_static_page_edit_seed(workspace_path: &Path, seed: &Value) -> Result<()> {
+    let Some(public_url) = generated_static_page_edit_seed_public_url(seed) else {
+        return Ok(());
+    };
+    let mut task_json = json!({
+        "template_id": STATIC_PAGE_IMAGE2_DATA_PUBLISH,
+        "requirements": {
+            "existing_artifact": {
+                "public_url": public_url,
+                "index_url": public_url,
+                "revision_requested": true,
+                "source": "assistant_run_workspace_seed"
+            }
+        }
+    });
+    materialize_static_page_existing_artifact(workspace_path, &mut task_json)?;
+    write_json_file(
+        &workspace_path.join("existing-artifact-seed.json"),
+        task_json
+            .pointer("/requirements/existing_artifact")
+            .unwrap_or(&Value::Null),
+    )?;
+    Ok(())
+}
+
+fn generated_static_page_edit_seed_public_url(seed: &Value) -> Option<&str> {
+    if seed.get("schema").and_then(Value::as_str) != Some("v3.codex_host_workspace_seed") {
+        return None;
+    }
+    if seed.get("version").and_then(Value::as_i64) != Some(1) {
+        return None;
+    }
+    if seed.get("kind").and_then(Value::as_str) != Some("generated_static_page_edit") {
+        return None;
+    }
+    seed.pointer("/existing_artifact/public_url")
+        .or_else(|| seed.pointer("/current_artifact/publicUrl"))
+        .or_else(|| seed.pointer("/current_artifact/public_url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.starts_with(V3_GENERATED_ARTIFACTS_URL_PREFIX))
+}
+
+fn customer_workspace_seed_readme(capability: &str) -> String {
+    format!(
+        "# DataMax Customer Codex Workspace\n\nCapability: `{capability}`\n\nRead `task.json` and `workspace-seed.json` before editing. For generated static page edits, the current page is copied under `existing-artifact/` when available.\n\nRules:\n\n- Work only inside this task workspace.\n- Do not modify V3 product source, services, migrations, auth, public APIs, provider config, deployment state, commits, or system files.\n- Do not overwrite a stable generated-artifact URL.\n- Put final customer files under a workspace-relative directory such as `generated-artifacts/final/` or `artifacts/`.\n- Write `customer-artifact-manifest.json` at the workspace root, or `artifacts/manifest.json`, or `generated-artifacts/manifest.json`.\n- Manifest file paths must be workspace-relative and must not reference secrets, `.env`, `.git`, `node_modules`, absolute paths, or parent-directory escapes.\n"
+    )
 }
 
 fn write_json_file(path: &Path, value: &Value) -> Result<()> {
@@ -1539,6 +1947,7 @@ fn append_provider_config_args(args: &mut Vec<String>, profile: &CodexHostProfil
         .env_key
         .as_deref()
         .unwrap_or(DEFAULT_COMPAT_PROVIDER_ENV_KEY);
+    validate_provider_env_key_name(env_key)?;
     let wire_api = profile
         .wire_api
         .as_deref()
@@ -1569,6 +1978,24 @@ fn append_provider_config_args(args: &mut Vec<String>, profile: &CodexHostProfil
     args.push(format!(
         "model_providers.{provider_id}.requires_openai_auth=false"
     ));
+    Ok(())
+}
+
+fn validate_provider_env_key_name(env_key: &str) -> Result<()> {
+    let trimmed = env_key.trim();
+    let mut chars = trimmed.chars();
+    let Some(first) = chars.next() else {
+        return Err(anyhow!(
+            "codex-compatible-shim profile env_key must name an environment variable"
+        ));
+    };
+    let valid_first = first.is_ascii_alphabetic() || first == '_';
+    let valid_rest = chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    if !valid_first || !valid_rest || trimmed.len() > 128 {
+        return Err(anyhow!(
+            "codex-compatible-shim profile env_key must be an environment variable name, not a secret value"
+        ));
+    }
     Ok(())
 }
 
@@ -1717,7 +2144,12 @@ mod tests {
                     "isolated": true,
                     "memory_space_id": "codex-host-task:run-a"
                 },
-                "task_memory_space_id": "codex-host-task:run-a"
+                "task_memory_space_id": "codex-host-task:run-a",
+                "workspace_seed": {
+                    "schema": "v3.codex_host_workspace_seed",
+                    "version": 1,
+                    "kind": "generated_static_page_edit"
+                }
             }),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -1731,6 +2163,13 @@ mod tests {
         assert_eq!(
             context.task_memory_space_id.as_deref(),
             Some("codex-host-task:run-a")
+        );
+        assert_eq!(
+            context
+                .workspace_seed
+                .as_ref()
+                .and_then(|seed| seed.get("kind")),
+            Some(&json!("generated_static_page_edit"))
         );
         let dry_run_output = context.dry_run_output();
         assert_eq!(dry_run_output["codex_invoked"], json!(false));
@@ -1859,6 +2298,127 @@ mod tests {
         let error = policy.prepare(&context).expect_err("should reject");
 
         assert!(error.to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn customer_complex_request_uses_read_only_sandbox() {
+        let context = test_context(
+            CUSTOMER_COMPLEX_REQUEST,
+            Some("Analyze this complex customer request and return an action plan."),
+        );
+        let policy = plan_only_policy_for_capability(CUSTOMER_COMPLEX_REQUEST);
+
+        let decision = policy.prepare(&context).expect("decision");
+        let plan = decision.command_plan.expect("command plan");
+
+        assert_eq!(plan.sandbox, "read-only");
+    }
+
+    #[test]
+    fn customer_complex_request_prompt_requires_safe_result_summary() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _schema_enabled =
+            TestEnvVarRestore::set(ENV_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED, "true");
+        let context = test_context(
+            CUSTOMER_COMPLEX_REQUEST,
+            Some("Analyze this complex customer request and return an action plan."),
+        );
+        let policy = plan_only_policy_for_capability(CUSTOMER_COMPLEX_REQUEST);
+
+        let decision = policy.prepare(&context).expect("decision");
+        let plan = decision.command_plan.expect("command plan");
+
+        assert!(plan.prompt.contains("DataMax Web Codex customer task"));
+        assert!(plan.prompt.contains("Use read-only analysis"));
+        assert!(plan.prompt.contains("customer_result_summary"));
+        assert!(plan.prompt.contains("raw_logs_exposed"));
+        assert!(plan
+            .prompt
+            .contains("Analyze this complex customer request"));
+        assert!(!plan.prompt.contains("propose_patch"));
+        assert!(plan
+            .args_without_prompt
+            .windows(2)
+            .any(|window| window[0] == "--output-schema"
+                && window[1] == CUSTOMER_RESULT_OUTPUT_SCHEMA_PATH));
+    }
+
+    #[test]
+    fn customer_artifact_request_uses_workspace_write_sandbox() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _schema_enabled =
+            TestEnvVarRestore::set(ENV_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED, "true");
+        let context = test_context(
+            CUSTOMER_ARTIFACT_REQUEST,
+            Some("Create customer-facing artifacts in the isolated task workspace."),
+        );
+        let policy = plan_only_policy_for_capability(CUSTOMER_ARTIFACT_REQUEST);
+
+        let decision = policy.prepare(&context).expect("decision");
+        let plan = decision.command_plan.expect("command plan");
+
+        assert_eq!(plan.sandbox, "workspace-write");
+        assert_eq!(
+            plan.workspace_path.as_deref(),
+            Some(Path::new("D:/codex-host/tasks/codex-host-task-test"))
+        );
+        assert!(plan
+            .prompt
+            .contains("DataMax Web Codex customer artifact task"));
+        assert!(plan.prompt.contains("customer-artifact-manifest.json"));
+        assert!(plan.prompt.contains("customer_result_summary"));
+        assert!(plan
+            .args_without_prompt
+            .windows(2)
+            .any(|window| window[0] == "--output-schema"
+                && window[1] == CUSTOMER_RESULT_OUTPUT_SCHEMA_PATH));
+    }
+
+    #[test]
+    fn generated_static_page_edit_uses_workspace_write_sandbox() {
+        let context = test_context(
+            GENERATED_STATIC_PAGE_EDIT,
+            Some("Edit the generated static page in the task workspace."),
+        );
+        let policy = plan_only_policy_for_capability(GENERATED_STATIC_PAGE_EDIT);
+
+        let decision = policy.prepare(&context).expect("decision");
+        let plan = decision.command_plan.expect("command plan");
+
+        assert_eq!(plan.sandbox, "workspace-write");
+        assert_eq!(
+            plan.workspace_path.as_deref(),
+            Some(Path::new("D:/codex-host/tasks/codex-host-task-test"))
+        );
+    }
+
+    #[test]
+    fn generated_static_page_publish_uses_workspace_write_sandbox() {
+        let context = test_context(
+            GENERATED_STATIC_PAGE_PUBLISH,
+            Some("Publish a new generated static page artifact from the workspace."),
+        );
+        let policy = plan_only_policy_for_capability(GENERATED_STATIC_PAGE_PUBLISH);
+
+        let decision = policy.prepare(&context).expect("decision");
+        let plan = decision.command_plan.expect("command plan");
+
+        assert_eq!(plan.sandbox, "workspace-write");
+    }
+
+    #[test]
+    fn v3_product_change_request_is_blocked_even_when_profile_allows_it() {
+        let context = test_context(
+            V3_PRODUCT_CHANGE_REQUEST,
+            Some("Change the V3 product login behavior."),
+        );
+        let policy = plan_only_policy_for_capability(V3_PRODUCT_CHANGE_REQUEST);
+
+        let error = policy
+            .prepare(&context)
+            .expect_err("should require operator review");
+
+        assert!(error.to_string().contains("operator review"));
     }
 
     #[test]
@@ -2295,6 +2855,42 @@ mod tests {
     }
 
     #[test]
+    fn codex_exec_rejects_v3_product_repo_workspace_root() {
+        let context = test_context(GENERATED_STATIC_PAGE_EDIT, Some("Edit generated page"));
+        let policy = CodexHostAgentPolicy {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: compatible_shim_test_profile(GENERATED_STATIC_PAGE_EDIT),
+            host_kind: "aiv3_server".to_string(),
+            allow_real_codex_exec: true,
+            task_workspace_root: Some(PathBuf::from(V3_SERVER_REPO_ROOT)),
+        };
+
+        let error = policy
+            .prepare(&context)
+            .expect_err("should reject product repo workspace");
+
+        assert!(error.to_string().contains("V3 product repository"));
+    }
+
+    #[test]
+    fn codex_exec_rejects_parent_directory_workspace_root() {
+        let context = test_context(GENERATED_STATIC_PAGE_EDIT, Some("Edit generated page"));
+        let policy = CodexHostAgentPolicy {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: compatible_shim_test_profile(GENERATED_STATIC_PAGE_EDIT),
+            host_kind: "aiv3_server".to_string(),
+            allow_real_codex_exec: true,
+            task_workspace_root: Some(PathBuf::from("/srv/aiv3/repo/../codex-workspaces")),
+        };
+
+        let error = policy
+            .prepare(&context)
+            .expect_err("should reject parent directory workspace");
+
+        assert!(error.to_string().contains("parent-directory"));
+    }
+
+    #[test]
     fn compatible_shim_builds_private_provider_overrides() {
         let context = test_context("inspect_project", Some("Read the repo"));
         let policy = CodexHostAgentPolicy {
@@ -2323,6 +2919,34 @@ mod tests {
         assert!(args.contains("model_providers.minimax.env_key=\"MINIMAX_API_KEY\""));
         assert!(args.contains("model_providers.minimax.wire_api=\"responses\""));
         assert!(args.contains("MiniMax-M2.7"));
+    }
+
+    #[test]
+    fn rightcode_shim_profile_uses_named_rightcode_env_key() {
+        let context = test_context("inspect_project", Some("Read the repo"));
+        let profile = compatible_shim_test_profile("inspect_project");
+
+        let plan =
+            build_codex_command_plan(&context, &profile, Some(Path::new("D:/codex-host/tasks")))
+                .expect("command plan");
+        let args = plan.args_without_prompt.join(" ");
+
+        assert!(args.contains("model_provider=\"rightcode\""));
+        assert!(args.contains("model_providers.rightcode.env_key=\"RIGHTCODE_API_KEY_MAIN\""));
+        assert!(!args.contains("OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn compatible_shim_rejects_secret_like_env_key() {
+        let context = test_context("inspect_project", Some("Read the repo"));
+        let mut profile = compatible_shim_test_profile("inspect_project");
+        profile.env_key = Some("sk-rightcode-secret-value".to_string());
+
+        let error =
+            build_codex_command_plan(&context, &profile, Some(Path::new("D:/codex-host/tasks")))
+                .expect_err("should reject secret-like env key");
+
+        assert!(error.to_string().contains("environment variable name"));
     }
 
     #[test]
@@ -2486,6 +3110,59 @@ summary text before final output
         .expect_err("missing output should fail");
 
         assert!(error.to_string().contains("fixed task output"));
+    }
+
+    #[test]
+    fn customer_web_codex_output_schema_materializes_for_customer_capabilities() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _schema_enabled =
+            TestEnvVarRestore::set(ENV_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED, "true");
+        let context = test_context(
+            CUSTOMER_COMPLEX_REQUEST,
+            Some("Analyze this complex customer request."),
+        );
+        let workspace = std::env::temp_dir().join(format!(
+            "v3-codex-host-customer-schema-test-{}",
+            Uuid::new_v4()
+        ));
+
+        materialize_customer_web_codex_output_schema(&workspace, &context)
+            .expect("schema should be materialized");
+
+        let schema_path = workspace.join(CUSTOMER_RESULT_OUTPUT_SCHEMA_PATH);
+        let schema_text = fs::read_to_string(&schema_path).expect("schema should be readable");
+        let schema: Value = serde_json::from_str(&schema_text).expect("schema should be json");
+
+        assert_eq!(
+            schema["properties"]["customer_result_summary"]["properties"]["schema"]["const"],
+            json!("v3.customer_codex_result_summary")
+        );
+        assert_eq!(
+            schema["properties"]["customer_result_summary"]["properties"]["safety"]["properties"]
+                ["raw_logs_exposed"]["const"],
+            json!(false)
+        );
+
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn customer_web_codex_output_schema_skips_non_customer_capabilities() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _schema_enabled =
+            TestEnvVarRestore::set(ENV_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED, "true");
+        let context = test_context("inspect_project", Some("Read the repo."));
+        let workspace = std::env::temp_dir().join(format!(
+            "v3-codex-host-non-customer-schema-test-{}",
+            Uuid::new_v4()
+        ));
+
+        materialize_customer_web_codex_output_schema(&workspace, &context)
+            .expect("non customer should skip schema");
+
+        assert!(!workspace.join(CUSTOMER_RESULT_OUTPUT_SCHEMA_PATH).exists());
+
+        let _ = fs::remove_dir_all(workspace);
     }
 
     #[test]
@@ -2665,6 +3342,96 @@ summary text before final output
     }
 
     #[test]
+    fn customer_workspace_seed_materializes_generated_static_page_edit_artifact() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let root = std::env::temp_dir().join(format!("v3-codex-host-artifacts-{}", Uuid::new_v4()));
+        let source_dir = root.join("database-static-pages/xinbai/current");
+        fs::create_dir_all(source_dir.join("assets")).expect("source dir");
+        fs::write(
+            source_dir.join("index.html"),
+            b"<html>current report</html>",
+        )
+        .expect("index");
+        fs::write(source_dir.join("data.json"), br#"{"kpi":2}"#).expect("data");
+        fs::write(source_dir.join("data-snapshot.json"), br#"{"snapshot":2}"#).expect("snapshot");
+        fs::write(source_dir.join("assets/chart.css"), b".chart{color:red}").expect("asset");
+        let _root = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_GENERATED_ARTIFACTS_ROOT",
+            root.to_str().expect("utf-8 temp root"),
+        );
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/current/index.html";
+        let mut context = test_context(
+            GENERATED_STATIC_PAGE_EDIT,
+            Some("Revise the current static page artifact."),
+        );
+        context.workspace_seed = Some(json!({
+            "schema": "v3.codex_host_workspace_seed",
+            "version": 1,
+            "kind": "generated_static_page_edit",
+            "existing_artifact": {
+                "public_url": public_url,
+                "revision_requested": true
+            },
+            "current_artifact": {
+                "type": "static_page_draft",
+                "publicUrl": public_url
+            }
+        }));
+        let policy =
+            fixed_task_policy(CodexHostExecutionMode::PlanOnly, GENERATED_STATIC_PAGE_EDIT);
+        let decision = policy.prepare(&context).expect("decision");
+        let workspace =
+            std::env::temp_dir().join(format!("v3-codex-host-seed-test-{}", Uuid::new_v4()));
+
+        materialize_workspace_seed(
+            &workspace,
+            &context,
+            &decision,
+            &CodexHostWorkspaceRetentionPolicy::new(168),
+        )
+        .expect("seed should materialize");
+
+        assert_eq!(
+            fs::read(workspace.join("existing-artifact/index.html")).expect("local index"),
+            b"<html>current report</html>"
+        );
+        assert_eq!(
+            fs::read(workspace.join("existing-artifact/data.json")).expect("local data"),
+            br#"{"kpi":2}"#
+        );
+        assert_eq!(
+            fs::read(workspace.join("existing-artifact/assets/chart.css")).expect("local asset"),
+            b".chart{color:red}"
+        );
+        let seed: Value = serde_json::from_str(
+            &fs::read_to_string(workspace.join("workspace-seed.json")).expect("seed json"),
+        )
+        .expect("seed parses");
+        assert_eq!(seed["kind"], json!("generated_static_page_edit"));
+        let task: Value = serde_json::from_str(
+            &fs::read_to_string(workspace.join("task.json")).expect("task json"),
+        )
+        .expect("task parses");
+        assert_eq!(
+            task["output_manifest"]["preferred_path"],
+            json!("customer-artifact-manifest.json")
+        );
+        let existing_seed: Value = serde_json::from_str(
+            &fs::read_to_string(workspace.join("existing-artifact-seed.json"))
+                .expect("existing artifact seed json"),
+        )
+        .expect("existing artifact seed parses");
+        assert_eq!(
+            existing_seed["local_index_path"],
+            json!("existing-artifact/index.html")
+        );
+        let readme = fs::read_to_string(workspace.join("README.md")).expect("readme");
+        assert!(readme.contains("existing-artifact/"));
+        assert!(readme.contains("customer-artifact-manifest.json"));
+        assert!(!readme.contains("DATABASE_URL"));
+    }
+
+    #[test]
     fn fixed_task_prompt_points_to_workspace_bundle() {
         let mut context = test_context(
             ANSWER_QUALITY_AUTOFIX,
@@ -2702,6 +3469,25 @@ summary text before final output
         }
     }
 
+    fn plan_only_policy_for_capability(capability: &str) -> CodexHostAgentPolicy {
+        CodexHostAgentPolicy {
+            mode: CodexHostExecutionMode::PlanOnly,
+            profile: CodexHostProfile {
+                id: "rightcode-plan-only".to_string(),
+                kind: "codex-compatible-shim".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                provider_id: Some("rightcode".to_string()),
+                base_url: Some("https://right.codes/codex/v1".to_string()),
+                env_key: Some("RIGHTCODE_API_KEY_MAIN".to_string()),
+                wire_api: Some("responses".to_string()),
+                allowed_capabilities: vec![capability.to_string()],
+            },
+            host_kind: "aiv3_server".to_string(),
+            allow_real_codex_exec: false,
+            task_workspace_root: Some(PathBuf::from("D:/codex-host/tasks")),
+        }
+    }
+
     fn compatible_shim_test_profile(capability: &str) -> CodexHostProfile {
         CodexHostProfile {
             id: "rightcode-gpt-5-5".to_string(),
@@ -2709,7 +3495,7 @@ summary text before final output
             model: Some("gpt-5.5".to_string()),
             provider_id: Some("rightcode".to_string()),
             base_url: Some("https://right.codes/codex/v1".to_string()),
-            env_key: Some("OPENAI_API_KEY".to_string()),
+            env_key: Some("RIGHTCODE_API_KEY_MAIN".to_string()),
             wire_api: Some("responses".to_string()),
             allowed_capabilities: vec![capability.to_string()],
         }
@@ -2724,6 +3510,7 @@ summary text before final output
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+            workspace_seed: None,
         }
     }
 

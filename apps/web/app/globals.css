@@ -2771,6 +2771,46 @@ textarea {
   text-decoration: none;
 }
 
+.codex-artifact-link {
+  max-width: 154px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-task-card {
+  border-color: rgba(125, 211, 252, 0.28);
+}
+
+.codex-task-workflow {
+  max-width: 154px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-artifact-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.codex-artifact-file-list span {
+  max-width: 100%;
+  padding: 3px 6px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.46);
+  color: #b7c8e5;
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .right-brief-links {
   display: grid;
   gap: 7px;

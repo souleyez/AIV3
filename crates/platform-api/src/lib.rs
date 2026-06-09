@@ -200,6 +200,11 @@ const RETRIEVAL_SEARCH_MAX_LIMIT: usize = 20;
 const DEFAULT_ASSISTANT_RUN_RUNTIME_MODEL: &str = "placeholder-assistant-run-v1";
 const DEFAULT_ASSISTANT_RUN_CODEX_RUNTIME_MODEL: &str = "codex-conversation-placeholder";
 const DEFAULT_STATIC_PAGE_INTENT_RUNTIME_MODEL: &str = "static-page-intent-v1";
+const CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_request";
+const CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
+const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
+const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH: &str = "generated_static_page_publish";
+const CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST: &str = "v3_product_change_request";
 const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
 const ASSISTANT_RUN_SELECTED_DOCUMENT_ROW_EVIDENCE_LIMIT: usize = RETRIEVAL_SEARCH_MAX_LIMIT;
@@ -245,6 +250,10 @@ const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_TEXT_LIMIT: usize = 2400;
 const EXTERNAL_CHANNEL_DOCUMENT_TEMPLATE_SECTION_LIMIT: usize = 16;
 const EXTERNAL_CHANNEL_PUBLIC_REPLY_TEXT_LIMIT: usize = 6000;
 const EXTERNAL_CHANNEL_PUBLIC_STREAM_TEXT_LIMIT: usize = 1200;
+const ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT: &str =
+    "assistant_run.customer_artifact_request_artifacts_ready";
+const ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT: &str =
+    "assistant_run.generated_static_page_edit_artifacts_ready";
 const ASSISTANT_RUN_DOCUMENT_PARSE_STATUS_ATTENTION_LIMIT: usize = 12;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_DEFAULT_LIMIT: i64 = 4;
 const ASSISTANT_RUN_CONVERSATION_MEMORY_MAX_LIMIT: i64 = 8;
@@ -12917,6 +12926,23 @@ async fn create_assistant_run_inner(
         )
         .await
         .map_err(ApiError::from_storage)?;
+
+    if let Err(error) = maybe_enqueue_assistant_run_customer_codex_sidecar(
+        &state,
+        &run,
+        &request,
+        &selected_scope,
+        &evidence_state,
+        now,
+    )
+    .await
+    {
+        tracing::warn!(
+            run_id = %run.id,
+            error = ?error,
+            "non-blocking Codex sidecar enqueue failed"
+        );
+    }
 
     if let Some(artifact) =
         wechat_video_login_handoff_artifact_from_prompt(run.id, &request.prompt, now)
@@ -37161,8 +37187,129 @@ fn static_page_prompt_requests_existing_artifact_delivery(prompt: &str) -> bool 
             || (has_view_signal && has_artifact_context))
 }
 
+fn static_page_prompt_requests_existing_artifact_change(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    prompt_contains_any(
+        &compact,
+        &[
+            "修复",
+            "修正",
+            "更正",
+            "修改",
+            "调整",
+            "改一下",
+            "改成",
+            "变更",
+            "小修",
+            "优化",
+            "补充",
+            "新增",
+            "增加",
+            "删除",
+            "去掉",
+            "替换",
+            "合并",
+            "拆分",
+            "绑定错误",
+            "绑定错",
+            "口径错",
+            "口径不对",
+            "单位错",
+            "小数点",
+            "必须联动",
+            "不能联动",
+            "不会联动",
+            "无法联动",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "fix", "revise", "change", "correct", "edit", "modify", "optimize", "remove", "add",
+        ],
+    )
+}
+
+fn static_page_prompt_allows_default_template_reuse(prompt: &str) -> bool {
+    if static_page_prompt_requests_explicit_redesign(prompt)
+        || static_page_prompt_requests_existing_artifact_change(prompt)
+    {
+        return false;
+    }
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    let has_artifact_context =
+        prompt_contains_any(
+            &compact,
+            &[
+                "报表",
+                "页面",
+                "静态页",
+                "看板",
+                "仪表盘",
+                "可视化",
+                "图表",
+                "报告",
+                "月报",
+                "经营分析",
+            ],
+        ) || ascii_prompt_contains_any(&lower, &["report", "page", "dashboard", "visualization"]);
+    let has_use_or_view_signal = prompt_contains_any(
+        &compact,
+        &[
+            "生成",
+            "输出",
+            "创建",
+            "制作",
+            "做个",
+            "做一个",
+            "做一下",
+            "刷新",
+            "更新",
+            "看看",
+            "看下",
+            "查看",
+            "打开",
+            "发我",
+            "发给",
+            "给我",
+            "分析",
+            "复盘",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "generate", "create", "make", "build", "refresh", "update", "view", "open", "send",
+            "analyze", "analyse",
+        ],
+    );
+
+    has_artifact_context && has_use_or_view_signal
+}
+
 fn static_page_prompt_allows_stable_artifact_reuse(prompt: &str) -> bool {
     static_page_prompt_requests_existing_artifact_delivery(prompt)
+        || static_page_prompt_allows_default_template_reuse(prompt)
+}
+
+fn static_page_stable_artifact_reuse_reason(prompt: &str) -> &'static str {
+    if static_page_prompt_requests_existing_artifact_delivery(prompt) {
+        "existing_artifact_delivery_request"
+    } else {
+        "default_dataset_template_reuse"
+    }
 }
 
 fn static_page_prompt_generated_artifact_urls(prompt: &str) -> Vec<String> {
@@ -40546,6 +40693,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                 if let Some(public_url) =
                     static_page_published_public_url_from_draft(&baseline_draft)
                 {
+                    let reuse_reason =
+                        static_page_stable_artifact_reuse_reason(&assistant_request.prompt);
                     let public_url = static_page_public_url_with_prompt_focus(
                         &public_url,
                         &assistant_request.prompt,
@@ -40603,6 +40752,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         "image2_skip_reason": "accepted_dataset_artifact_baseline",
                         "edit_mode": "incremental_existing_artifact",
                         "reuse_policy": "reuse_accepted_baseline_unless_explicit_redesign",
+                        "reuse_reason": reuse_reason,
+                        "default_template_reuse": reuse_reason == "default_dataset_template_reuse",
                         "template_reference_id": baseline_template_reference_id,
                         "template_reference": baseline_template_reference,
                         "template_adaptation": baseline_template_adaptation,
@@ -40658,6 +40809,8 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                                     "template_match_policy": "exact_dataset_artifact_key",
                                     "dataset_artifact_key_present": true,
                                     "default_prompt_match_policy": "included_in_dataset_artifact_key",
+                                    "reuse_reason": reuse_reason,
+                                    "default_template_reuse": reuse_reason == "default_dataset_template_reuse",
                                     "candidate_default_prompt_present": static_page_default_prompt_from_scope_or_refs(
                                         &selected_scope,
                                         &source_refs,
@@ -40755,8 +40908,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                     )
                     .await
                     .map_err(ApiError::from_storage)?;
-                if static_page_prompt_requests_existing_artifact_delivery(&assistant_request.prompt)
-                {
+                if static_page_prompt_allows_stable_artifact_reuse(&assistant_request.prompt) {
+                    let reuse_reason =
+                        static_page_stable_artifact_reuse_reason(&assistant_request.prompt);
                     let baseline_template_payload = json!({
                         "status": "static_page_stable_artifact_reused",
                         "source_refs": source_refs.clone(),
@@ -40806,7 +40960,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                         "image2_skipped": true,
                         "image2_skip_reason": "accepted_dataset_overlap_template_baseline",
                         "edit_mode": "incremental_existing_artifact",
-                        "reuse_policy": "deliver_existing_template_baseline_for_view_request",
+                        "reuse_policy": "reuse_accepted_baseline_unless_explicit_redesign",
+                        "reuse_reason": reuse_reason,
+                        "default_template_reuse": reuse_reason == "default_dataset_template_reuse",
                         "template_reference_id": template_reference_id.as_deref(),
                         "template_reference": baseline_template_reference,
                         "template_adaptation": baseline_template_adaptation,
@@ -40862,7 +41018,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
                                 payload: json!({
                                     "template_match_policy": "dataset_overlap",
                                     "dataset_artifact_key_present": dataset_artifact_key.is_some(),
-                                    "view_request_delivered_existing_artifact": true,
+                                    "view_request_delivered_existing_artifact": reuse_reason == "existing_artifact_delivery_request",
+                                    "default_template_reuse": reuse_reason == "default_dataset_template_reuse",
+                                    "reuse_reason": reuse_reason,
                                     "baseline_draft_id": template_draft.id,
                                     "baseline_assistant_run_id": template_draft.assistant_run_id,
                                 }),
@@ -45312,9 +45470,14 @@ async fn get_assistant_run(
         .await
         .map_err(ApiError::from_storage)?;
     let diagnostics = assistant_run_detail_diagnostics(&run, &events);
+    let mut run_view = to_assistant_run_view(run);
+    run_view.output_artifacts = assistant_run_append_deduped_output_artifacts(
+        run_view.output_artifacts,
+        assistant_run_customer_codex_output_artifacts_from_events(&events),
+    );
 
     Ok(Json(AssistantRunDetailView {
-        run: to_assistant_run_view(run),
+        run: run_view,
         events: events
             .into_iter()
             .map(to_assistant_run_event_view)
@@ -46664,6 +46827,7 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
                 if let Some(public_url) =
                     static_page_published_public_url_from_draft(&baseline_draft)
                 {
+                    let reuse_reason = static_page_stable_artifact_reuse_reason(prompt);
                     let public_url = static_page_public_url_with_prompt_focus(&public_url, prompt);
                     let mut event_payload = json!({
                         "type": "v3_static_page_stable_artifact",
@@ -46683,6 +46847,8 @@ pub(crate) async fn create_static_page_draft_for_assistant_run_id(
                         "image2_skip_reason": "accepted_dataset_artifact_baseline",
                         "edit_mode": "incremental_existing_artifact",
                         "reuse_policy": "reuse_accepted_baseline_unless_explicit_redesign",
+                        "reuse_reason": reuse_reason,
+                        "default_template_reuse": reuse_reason == "default_dataset_template_reuse",
                         "style_reuse_policy": "reuse_style_unless_explicit_redesign",
                         "data_refresh_policy": "refresh_data_files_from_dataset_sources",
                         "default_template_scope": "dataset_combination",
@@ -48439,6 +48605,12 @@ fn build_assistant_run_provider_input_with_evidence(
         sections.extend(external_channel_model_tool_capability_guidance_lines());
     }
     sections.extend(assistant_run_v3_awareness_lines());
+    if assistant_run_prompt_requests_v3_product_change(&request.prompt) {
+        sections.push(
+            "V3 产品变更边界：用户正在要求修改 V3 主站原功能、源码、服务、迁移、鉴权、公开 API、provider 配置、部署、提交或系统文件。这类请求不能由客户侧 Codex 或普通回答直接执行。请明确返回 needs_operator_review / 需要平台管理员或开发人员审核处理，不要承诺已经修改、已经部署、已经重启或已经提交代码。"
+                .to_string(),
+        );
+    }
     if let Some(answer_policy) = assistant_run_request_external_answer_policy(request) {
         let model_answer_policy = assistant_run_model_facing_answer_policy(answer_policy);
         sections.push(format!(
@@ -53539,6 +53711,1142 @@ fn assistant_run_answer_quality_autofix_allowed_write_scope() -> CodexHostFixedT
             "assistant_run_supply_quality_*".to_string(),
         ],
     }
+}
+
+async fn maybe_enqueue_assistant_run_customer_codex_sidecar(
+    state: &AppState,
+    run: &AssistantRun,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    evidence_state: &Value,
+    now: DateTime<Utc>,
+) -> std::result::Result<Option<WorkflowExecutionId>, ApiError> {
+    let prompt = request.prompt.trim();
+    if prompt.is_empty() {
+        return Ok(None);
+    }
+    if assistant_run_prompt_requests_v3_product_change(prompt) {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.codex_sidecar_scope_blocked".to_string(),
+                    payload: assistant_run_customer_codex_sidecar_scope_blocked_payload(
+                        CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST,
+                        "v3_product_change_not_customer_writable",
+                    ),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        return Ok(None);
+    }
+    let Some(capability) = assistant_run_customer_codex_sidecar_capability(request, selected_scope)
+    else {
+        return Ok(None);
+    };
+    if let Err(reason) = assistant_run_customer_codex_sidecar_preflight(capability) {
+        state
+            .storage
+            .assistant_runs()
+            .append_event(
+                state.tenant_id,
+                run.id,
+                &NewAssistantRunEvent {
+                    event_name: "assistant_run.codex_sidecar_preflight_rejected".to_string(),
+                    payload: json!({
+                        "capability": capability,
+                        "reason": reason,
+                        "non_blocking": true,
+                    }),
+                    created_at: now,
+                },
+            )
+            .await
+            .map_err(ApiError::from_storage)?;
+        return Ok(None);
+    }
+
+    let (execution, initial_event) = assistant_run_customer_codex_sidecar_execution(
+        state.tenant_id,
+        &state.workflow_catalog,
+        run.id,
+        run.local_thread_id.clone(),
+        capability,
+        request,
+        selected_scope,
+        evidence_state,
+    )?;
+    let execution_id = execution.id;
+    state
+        .storage
+        .workflow_executions()
+        .create_with_initial_event(&execution, &initial_event)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run.id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.codex_sidecar_queued".to_string(),
+                payload: json!({
+                    "capability": capability,
+                    "workflow_execution_id": execution_id.to_string(),
+                    "non_blocking": true,
+                    "main_answer_path_preserved": true,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    apply_workflow_signal(state, execution_id, WorkflowSignal::Start).await?;
+    Ok(Some(execution_id))
+}
+
+fn assistant_run_customer_codex_sidecar_scope_blocked_payload(
+    capability: &str,
+    reason: &str,
+) -> Value {
+    json!({
+        "capability": capability,
+        "route": capability,
+        "status": "needs_operator_review",
+        "reason": reason,
+        "allowed_next_step": "operator can review this as a product change request",
+        "non_blocking": true,
+        "main_answer_path_preserved": true,
+        "v3_product_repo_write_allowed": false,
+        "customer_writable": false,
+    })
+}
+
+fn assistant_run_customer_codex_sidecar_preflight(
+    capability: &str,
+) -> std::result::Result<(), &'static str> {
+    if !platform_env_flag("CODEX_HOST_TASK_ENABLED", false) {
+        return Err("codex_host_task_disabled");
+    }
+    if !env_csv_contains("CODEX_HOST_TASK_ALLOWLIST", capability) {
+        return Err("codex_host_task_not_allowlisted");
+    }
+    if !env_csv_contains("CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES", capability) {
+        return Err("codex_host_agent_capability_not_allowlisted");
+    }
+    Ok(())
+}
+
+fn assistant_run_customer_codex_sidecar_capability(
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+) -> Option<&'static str> {
+    let prompt = request.prompt.trim();
+    if prompt.is_empty() || assistant_run_prompt_requests_v3_product_change(prompt) {
+        return None;
+    }
+    if assistant_run_prompt_requests_generated_static_page_edit(
+        prompt,
+        request.current_artifact.as_ref(),
+    ) {
+        return Some(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT);
+    }
+    if assistant_run_prompt_requests_generated_static_page_publish(prompt, request, selected_scope)
+    {
+        return Some(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH);
+    }
+    if assistant_run_prompt_requests_customer_artifact_workspace(prompt, request, selected_scope) {
+        return Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST);
+    }
+    if assistant_run_prompt_requests_data_analysis_report_sidecar(prompt, request, selected_scope) {
+        return Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST);
+    }
+    assistant_run_prompt_requests_complex_analysis_or_report(prompt, selected_scope)
+        .then_some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+}
+
+fn assistant_run_prompt_requests_v3_product_change(prompt: &str) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let lower = prompt.to_ascii_lowercase();
+    let has_v3_signal =
+        prompt_contains_any(
+            prompt,
+            &[
+                "V3",
+                "主站",
+                "原功能",
+                "产品功能",
+                "登录",
+                "鉴权",
+                "接口",
+                "部署",
+                "发版",
+            ],
+        ) || ascii_prompt_contains_any(&lower, &["v3", "api", "auth", "deploy", "login"]);
+    let has_change_signal =
+        prompt_contains_any(
+            prompt,
+            &[
+                "修改", "改造", "调整", "删除", "新增", "重构", "发版", "部署", "重启",
+            ],
+        ) || ascii_prompt_contains_any(&lower, &["modify", "change", "patch", "deploy", "restart"]);
+    if !(has_v3_signal && has_change_signal) {
+        return false;
+    }
+    if assistant_run_prompt_mentions_customer_codex_artifact_surface(&compact, &lower)
+        && !assistant_run_prompt_mentions_v3_product_system_surface(&compact, &lower)
+    {
+        return false;
+    }
+    true
+}
+
+fn assistant_run_prompt_mentions_customer_codex_artifact_surface(
+    compact_prompt: &str,
+    lower_prompt: &str,
+) -> bool {
+    prompt_contains_any(
+        compact_prompt,
+        &[
+            "V3生成的静态页",
+            "V3生成静态页",
+            "V3生成的页面",
+            "V3生成页面",
+            "生成的静态页",
+            "生成静态页",
+            "生成的页面",
+            "当前生成静态页",
+            "当前静态页",
+            "当前报表页面",
+            "当前报表页",
+            "当前看板",
+            "客户产物",
+            "客户制品",
+            "生成产物",
+            "报表页面",
+            "报表页",
+            "静态页",
+            "generated-artifact",
+            "generatedartifact",
+        ],
+    ) || ascii_prompt_contains_any(
+        lower_prompt,
+        &[
+            "artifact",
+            "generatedartifact",
+            "generated_artifact",
+            "staticpage",
+            "static_page",
+        ],
+    )
+}
+
+fn assistant_run_prompt_mentions_v3_product_system_surface(
+    compact_prompt: &str,
+    lower_prompt: &str,
+) -> bool {
+    prompt_contains_any(
+        compact_prompt,
+        &[
+            "源码",
+            "源代码",
+            "产品源码",
+            "代码库",
+            "仓库",
+            "主站",
+            "原功能",
+            "产品功能",
+            "功能",
+            "服务",
+            "登录",
+            "鉴权",
+            "认证",
+            "权限",
+            "接口",
+            "公开接口",
+            "公开API",
+            "数据库迁移",
+            "迁移",
+            "表结构",
+            "模型配置",
+            "provider配置",
+            "环境变量",
+            "部署",
+            "发版",
+            "重启",
+            "提交",
+            "合并代码",
+            "systemd",
+            "nginx",
+        ],
+    ) || ascii_prompt_contains_any(
+        lower_prompt,
+        &[
+            "source",
+            "repo",
+            "service",
+            "api",
+            "auth",
+            "login",
+            "migration",
+            "schema",
+            "provider",
+            "env",
+            "deploy",
+            "restart",
+            "commit",
+            "systemd",
+            "nginx",
+        ],
+    )
+}
+
+fn assistant_run_prompt_requests_complex_analysis_or_report(
+    prompt: &str,
+    selected_scope: &Value,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let lower = compact.to_ascii_lowercase();
+    let explicit_codex_signal =
+        assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower);
+    let has_analysis_signal = prompt_contains_any(
+        &compact,
+        &[
+            "经营分析",
+            "数据分析",
+            "经营工作分析",
+            "经营复盘",
+            "管理层复盘",
+            "趋势分析",
+            "业务分析",
+            "分析报表",
+            "可视化",
+            "仪表盘",
+            "看板",
+            "静态页",
+            "报表页面",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "analysis",
+            "analytics",
+            "dashboard",
+            "visualization",
+            "report",
+            "business",
+        ],
+    ) || explicit_codex_signal;
+    if !has_analysis_signal {
+        return false;
+    }
+    let has_execution_signal = prompt_contains_any(
+        &compact,
+        &[
+            "做一下",
+            "做个",
+            "生成",
+            "输出",
+            "创建",
+            "制作",
+            "整理",
+            "给出",
+            "出一版",
+            "改成",
+            "优化",
+            "帮我",
+            "处理",
+            "分析",
+            "研究",
+            "检查",
+            "看下",
+            "梳理",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "create", "generate", "build", "make", "produce", "revise", "analyze", "analyse",
+            "inspect", "review", "handle",
+        ],
+    );
+    let has_data_scope = !selected_dataset_ids_from_scope(selected_scope).is_empty()
+        || !selected_document_ids_from_scope(selected_scope).is_empty()
+        || selected_scope.get("database_sources").is_some()
+        || selected_scope.get("databaseSources").is_some()
+        || selected_scope.get("type").and_then(Value::as_str) == Some("external_channel")
+        || request_like_prompt_mentions_data_context(&compact, &lower)
+        || explicit_codex_signal;
+
+    has_execution_signal && has_data_scope
+}
+
+fn assistant_run_prompt_explicit_customer_codex_signal(compact: &str, lower: &str) -> bool {
+    prompt_contains_any(
+        compact,
+        &[
+            "用Codex",
+            "让Codex",
+            "走Codex",
+            "Codex执行",
+            "codex执行器",
+            "复杂需求",
+            "复杂任务",
+            "客户复杂需求",
+            "执行器处理",
+            "执行计划",
+        ],
+    ) || ascii_prompt_contains_any(lower, &["codex"])
+}
+
+fn assistant_run_prompt_requests_generated_static_page_edit(
+    prompt: &str,
+    current_artifact: Option<&Value>,
+) -> bool {
+    let Some(current_artifact) = current_artifact else {
+        return false;
+    };
+    if static_page_public_url_from_current_artifact(current_artifact).is_none() {
+        return false;
+    }
+    static_page_revision_explicit_intent_present(prompt)
+}
+
+fn assistant_run_prompt_requests_generated_static_page_publish(
+    prompt: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    let has_static_page_surface = prompt_contains_any(
+        &compact,
+        &[
+            "静态页",
+            "报表页面",
+            "报表页",
+            "交互页面",
+            "动态页面",
+            "页面",
+            "网页",
+            "网站",
+            "看板",
+            "仪表盘",
+            "大屏",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &["dashboard", "webpage", "htmlpage", "landingpage", "website"],
+    );
+    if !has_static_page_surface {
+        return false;
+    }
+    let has_publish_action = prompt_contains_any(
+        &compact,
+        &[
+            "生成",
+            "输出",
+            "创建",
+            "制作",
+            "做成",
+            "做个",
+            "做一个",
+            "出页面",
+            "发布",
+            "渲染",
+            "重新生成",
+            "重新做",
+            "重新设计",
+            "全新页面",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &["create", "generate", "build", "make", "publish", "render"],
+    );
+    if !has_publish_action {
+        return false;
+    }
+    let explicit_codex_signal =
+        assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower);
+    assistant_run_customer_codex_context_present(request, selected_scope, &compact, &lower)
+        || explicit_codex_signal
+        || has_static_page_surface
+}
+
+fn assistant_run_prompt_requests_data_analysis_report_sidecar(
+    prompt: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    let has_customer_context =
+        assistant_run_customer_codex_context_present(request, selected_scope, &compact, &lower);
+    if !has_customer_context {
+        return false;
+    }
+    let has_data_analysis_intent = prompt_contains_any(
+        &compact,
+        &[
+            "经营分析",
+            "数据分析",
+            "经营工作分析",
+            "经营复盘",
+            "管理层复盘",
+            "业务分析",
+            "趋势分析",
+            "统计分析",
+            "综合分析",
+            "整体分析",
+            "全面分析",
+            "多维分析",
+            "分析数据",
+            "分析一下数据",
+            "新百经营",
+            "新世界经营",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "analysis",
+            "analytics",
+            "business",
+            "operating",
+            "operation",
+            "dataanalysis",
+            "businessanalysis",
+        ],
+    );
+    if !has_data_analysis_intent {
+        return false;
+    }
+    let has_execution_signal = prompt_contains_any(
+        &compact,
+        &[
+            "做一下",
+            "做个",
+            "做一个",
+            "生成",
+            "输出",
+            "创建",
+            "制作",
+            "整理",
+            "给出",
+            "出一版",
+            "复盘",
+            "分析",
+            "梳理",
+            "帮我",
+            "处理",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "create",
+            "generate",
+            "build",
+            "make",
+            "produce",
+            "analyze",
+            "analyse",
+            "review",
+            "summarize",
+            "summarise",
+        ],
+    );
+    if !has_execution_signal {
+        return false;
+    }
+
+    let explicit_report_output = prompt_contains_any(
+        &compact,
+        &[
+            "输出报告",
+            "输出报表",
+            "生成报告",
+            "生成报表",
+            "生成看板",
+            "生成图表",
+            "生成可视化",
+            "做成报告",
+            "做成报表",
+            "做成看板",
+            "整理成报告",
+            "整理成报表",
+            "给一份报告",
+            "给一份报表",
+            "出一份报告",
+            "出一份报表",
+        ],
+    ) || lower.contains("analysisreport")
+        || lower.contains("analyticsreport")
+        || lower.contains("generatereport")
+        || lower.contains("createreport")
+        || lower.contains("buildreport");
+    let report_context =
+        assistant_run_prompt_or_context_has_report_artifact(prompt, request, selected_scope);
+    let strong_large_output_signal = prompt_contains_any(
+        &compact,
+        &[
+            "全面",
+            "完整",
+            "详细",
+            "系统",
+            "整体",
+            "多维",
+            "多角度",
+            "大篇幅",
+            "长篇",
+            "大体量",
+            "大量",
+            "内容量大",
+            "内容比较多",
+            "长输出",
+            "全部",
+            "所有",
+            "各",
+            "逐",
+            "分维度",
+            "分门店",
+            "分品牌",
+            "明细",
+            "清单",
+            "汇总",
+            "表格",
+            "图表",
+            "可视化",
+            "报告",
+            "报表",
+            "看板",
+            "页面",
+            "输出",
+            "整理",
+            "生成",
+            "做成",
+            "给一份",
+            "出一份",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "detailed",
+            "complete",
+            "comprehensive",
+            "long",
+            "large",
+            "full",
+            "report",
+            "dashboard",
+            "visualization",
+            "visualisation",
+            "table",
+            "chart",
+        ],
+    );
+
+    if external_channel_prompt_is_report_explanation_question(&lower, prompt)
+        && !explicit_report_output
+    {
+        return false;
+    }
+
+    explicit_report_output || report_context || strong_large_output_signal
+}
+
+fn assistant_run_customer_codex_context_present(
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    compact_prompt: &str,
+    lower_prompt: &str,
+) -> bool {
+    request.current_artifact.is_some()
+        || !selected_dataset_ids_from_scope(selected_scope).is_empty()
+        || !selected_document_ids_from_scope(selected_scope).is_empty()
+        || selected_scope.get("database_sources").is_some()
+        || selected_scope.get("databaseSources").is_some()
+        || selected_scope.get("type").and_then(Value::as_str) == Some("external_channel")
+        || request_like_prompt_mentions_data_context(compact_prompt, lower_prompt)
+}
+
+fn assistant_run_prompt_or_context_has_report_artifact(
+    prompt: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let lower = compact.to_ascii_lowercase();
+    let prompt_has_report_context = prompt_contains_any(
+        &compact,
+        &[
+            "报表",
+            "报告",
+            "看板",
+            "仪表盘",
+            "可视化",
+            "图表",
+            "页面",
+            "静态页",
+            "月报",
+            "周报",
+            "日报",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "report",
+            "dashboard",
+            "visualization",
+            "visualisation",
+            "chart",
+        ],
+    );
+    if prompt_has_report_context {
+        return true;
+    }
+    if request
+        .current_artifact
+        .as_ref()
+        .is_some_and(assistant_run_current_artifact_is_reportish)
+    {
+        return true;
+    }
+    [
+        "report_plan_id",
+        "reportPlanId",
+        "report_entry",
+        "reportEntry",
+        "static_page_draft_id",
+        "staticPageDraftId",
+        "static_page",
+        "staticPage",
+        "current_report",
+        "currentReport",
+    ]
+    .iter()
+    .any(|key| selected_scope.get(*key).is_some())
+}
+
+fn assistant_run_current_artifact_is_reportish(current_artifact: &Value) -> bool {
+    if static_page_public_url_from_current_artifact(current_artifact).is_some() {
+        return true;
+    }
+    [
+        "type",
+        "artifact_type",
+        "artifactType",
+        "artifact_kind",
+        "artifactKind",
+        "kind",
+    ]
+    .iter()
+    .filter_map(|key| current_artifact.get(*key).and_then(Value::as_str))
+    .any(|value| {
+        let lower = value.to_ascii_lowercase();
+        value.contains("报表")
+            || value.contains("报告")
+            || value.contains("看板")
+            || lower.contains("report")
+            || lower.contains("static_page")
+            || lower.contains("dashboard")
+    })
+}
+
+fn assistant_run_prompt_requests_customer_artifact_workspace(
+    prompt: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    let explicit_codex_signal =
+        assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower);
+    let artifact_signal = prompt_contains_any(
+        &compact,
+        &[
+            "生成页面",
+            "生成网页",
+            "生成网站",
+            "生成报表",
+            "生成报告",
+            "生成看板",
+            "生成图表",
+            "生成文档",
+            "生成方案",
+            "生成脚本",
+            "生成产物",
+            "生成计划",
+            "输出页面",
+            "输出网页",
+            "输出报表",
+            "输出报告",
+            "输出看板",
+            "输出文档",
+            "输出方案",
+            "输出脚本",
+            "输出产物",
+            "输出计划",
+            "创建文档",
+            "创建方案",
+            "创建计划",
+            "制作页面",
+            "制作报表",
+            "制作报告",
+            "制作方案",
+            "制作脚本",
+            "制作计划",
+            "做成页面",
+            "做成报表",
+            "做成报告",
+            "做一份文档",
+            "做一份方案",
+            "做一份计划",
+            "做个方案",
+            "做个计划",
+            "说明文件",
+            "方案文档",
+            "执行方案",
+            "分析方案",
+            "运营方案",
+            "客户沟通方案",
+            "客户产物",
+            "客户制品",
+            "产物包",
+            "文档包",
+            "脚本包",
+            "文档",
+            "文件",
+            "制品包",
+            "写一个页面",
+            "写个页面",
+            "写一份文档",
+            "写一份方案",
+            "写一份计划",
+            "写个文档",
+            "写个方案",
+            "写个计划",
+            "写一个脚本",
+            "写个脚本",
+            "出一份报告",
+            "出一份报表",
+            "出一份文档",
+            "出一份方案",
+            "出一份计划",
+            "出一个文档包",
+            "出一个脚本包",
+            "脚本",
+            "改这个页面",
+            "改当前页面",
+            "修改这个页面",
+            "修改当前页面",
+            "调整这个页面",
+            "调整当前页面",
+            "静态页",
+            "可视化报表",
+            "dashboard",
+            "html",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "buildpage",
+            "buildreport",
+            "createpage",
+            "createreport",
+            "dashboard",
+            "artifact",
+            "package",
+            "webpage",
+            "html",
+            "script",
+        ],
+    );
+    let execution_signal = prompt_contains_any(
+        &compact,
+        &[
+            "做一下",
+            "做个",
+            "做一个",
+            "生成",
+            "输出",
+            "创建",
+            "制作",
+            "整理",
+            "写",
+            "改",
+            "修改",
+            "调整",
+            "优化",
+            "执行",
+            "跑一下",
+            "帮我",
+            "处理",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "create", "generate", "build", "make", "write", "revise", "edit", "run", "handle",
+        ],
+    );
+    let has_customer_context = request.current_artifact.is_some()
+        || !selected_dataset_ids_from_scope(selected_scope).is_empty()
+        || !selected_document_ids_from_scope(selected_scope).is_empty()
+        || selected_scope.get("database_sources").is_some()
+        || selected_scope.get("databaseSources").is_some()
+        || selected_scope.get("type").and_then(Value::as_str) == Some("external_channel")
+        || request_like_prompt_mentions_data_context(&compact, &lower)
+        || artifact_signal
+        || explicit_codex_signal;
+
+    has_customer_context && execution_signal && artifact_signal
+}
+
+fn request_like_prompt_mentions_data_context(compact_prompt: &str, lower_prompt: &str) -> bool {
+    prompt_contains_any(
+        compact_prompt,
+        &[
+            "数据",
+            "数据集",
+            "数据库",
+            "文档",
+            "报表",
+            "新百",
+            "门店",
+            "经营",
+        ],
+    ) || ascii_prompt_contains_any(lower_prompt, &["data", "dataset", "database", "document"])
+}
+
+fn assistant_run_customer_codex_sidecar_execution(
+    tenant_id: TenantId,
+    workflow_catalog: &WorkflowCatalog,
+    assistant_run_id: AssistantRunId,
+    local_thread_id: Option<String>,
+    capability: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    evidence_state: &Value,
+) -> std::result::Result<(WorkflowExecution, WorkflowEventRecord), ApiError> {
+    let definition = workflow_catalog
+        .find_definition(WorkflowKind::CodexHostTask)
+        .ok_or_else(|| {
+            ApiError::internal(
+                "workflow_definition_missing",
+                "codex_host_task workflow definition is not registered".to_string(),
+            )
+        })?;
+    let now = Utc::now();
+    let execution_id = WorkflowExecutionId::new();
+    let runtime_state = definition.initial_state(execution_id, now);
+    let request_view = CodexHostTaskRequestView {
+        assistant_run_id,
+        capability: capability.to_string(),
+        task: Some(assistant_run_customer_codex_sidecar_task(
+            capability,
+            request,
+            selected_scope,
+            evidence_state,
+        )),
+        local_thread_id,
+        fixed_task: None,
+        task_memory_policy: CodexHostTaskMemoryPolicyView::task_scoped(
+            assistant_run_id,
+            execution_id,
+        ),
+        safety: CodexHostTaskSafetyPolicyView::default(),
+    };
+    let mut context = match request_view.to_workflow_context() {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    if let Some(workspace_seed) =
+        assistant_run_customer_codex_sidecar_workspace_seed(capability, request)
+    {
+        context.insert("workspace_seed".to_string(), workspace_seed);
+    }
+    context.insert(
+        "codex_sidecar".to_string(),
+        json!({
+            "version": 1,
+            "route": assistant_run_customer_codex_sidecar_route(capability),
+            "non_blocking": true,
+            "main_answer_path_preserved": true,
+            "permission_scope": assistant_run_customer_codex_sidecar_permission_scope(capability),
+            "selected_scope_summary": assistant_run_customer_codex_sidecar_scope_summary(selected_scope),
+            "evidence_summary": assistant_run_customer_codex_sidecar_evidence_summary(evidence_state),
+            "current_artifact": request.current_artifact.as_ref().and_then(assistant_run_safe_model_completion_action).unwrap_or(Value::Null),
+        }),
+    );
+    context.insert(
+        "retries_remaining".to_string(),
+        Value::Number(runtime_state.retries_remaining.into()),
+    );
+    let execution = WorkflowExecution {
+        id: execution_id,
+        tenant_id,
+        dataset_id: None,
+        report_plan_id: None,
+        kind: WorkflowKind::CodexHostTask,
+        version: runtime_state.version,
+        stage: runtime_state.stage,
+        status: runtime_state.status,
+        attempt: 0,
+        context: Value::Object(context),
+        created_at: now,
+        updated_at: now,
+    };
+    let initial_event = codex_host_fixed_task_created_event(&execution, assistant_run_id);
+    Ok((execution, initial_event))
+}
+
+fn assistant_run_customer_codex_sidecar_workspace_seed(
+    capability: &str,
+    request: &CreateAssistantRunRequest,
+) -> Option<Value> {
+    if capability != CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT {
+        return None;
+    }
+    let current_artifact = request.current_artifact.as_ref()?;
+    let public_url = static_page_public_url_from_current_artifact(current_artifact)?;
+    Some(json!({
+        "schema": "v3.codex_host_workspace_seed",
+        "version": 1,
+        "kind": "generated_static_page_edit",
+        "source": "assistant_run.current_artifact",
+        "existing_artifact": {
+            "public_url": public_url,
+            "index_url": public_url,
+            "revision_requested": true,
+            "source": "assistant_run_current_artifact"
+        },
+        "current_artifact": assistant_run_current_artifact_brief(current_artifact),
+        "output_manifest": {
+            "preferred_path": "customer-artifact-manifest.json",
+            "compatible_paths": ["artifacts/manifest.json", "generated-artifacts/manifest.json"]
+        },
+        "safety": {
+            "workspace_write_only": true,
+            "v3_product_repo_write_allowed": false,
+            "stable_url_overwrite_allowed": false
+        }
+    }))
+}
+
+fn assistant_run_customer_codex_sidecar_task(
+    capability: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    evidence_state: &Value,
+) -> String {
+    let permission_scope = assistant_run_customer_codex_sidecar_permission_scope(capability);
+    let capability_instructions =
+        assistant_run_customer_codex_sidecar_capability_instructions(capability);
+    format!(
+        "Run DataMax Codex Host capability `{capability}` for a customer request from the web UI.\n\
+         Return a concise structured result, action intent, or customer artifact package. Preserve the main AssistantRun answer path; this sidecar must not block customer-visible text.\n\
+         Safety boundary: do not modify V3 product source code, services, migrations, auth, public APIs, provider configuration, deployment, commits, or system files. \
+         If the customer asks for V3 product changes, return needs_operator_review. V3-generated static pages and customer artifacts are customer-owned outputs, not V3 product code.\n\
+         Permission scope: {permission_scope}.\n\
+         Capability instructions: {capability_instructions}\n\n\
+         User request:\n{prompt}\n\n\
+         Selected scope summary:\n{scope}\n\n\
+         Evidence summary:\n{evidence}",
+        prompt = truncate_assistant_supply_text(&request.prompt, 1600),
+        scope = assistant_run_customer_codex_sidecar_scope_summary(selected_scope),
+        evidence = assistant_run_customer_codex_sidecar_evidence_summary(evidence_state),
+    )
+}
+
+fn assistant_run_customer_codex_sidecar_route(capability: &str) -> &'static str {
+    match capability {
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => "assistant_run_generated_static_page_edit",
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => {
+            "assistant_run_generated_static_page_publish"
+        }
+        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST => "assistant_run_customer_artifact_request",
+        _ => "assistant_run_customer_complex_request",
+    }
+}
+
+fn assistant_run_customer_codex_sidecar_permission_scope(capability: &str) -> &'static str {
+    match capability {
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => {
+            "workspace-write only inside the isolated task workspace seeded from the current generated static page artifact; no V3 repo writes"
+        }
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => {
+            "workspace-write only inside the isolated task workspace for a new generated static page package; DataMax validates and publishes generated artifacts; no V3 repo writes"
+        }
+        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST => {
+            "workspace-write only inside the isolated customer task workspace for generated customer artifacts; no V3 repo writes"
+        }
+        _ => "read-only analysis and planning; no filesystem writes",
+    }
+}
+
+fn assistant_run_customer_codex_sidecar_capability_instructions(capability: &str) -> &'static str {
+    match capability {
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => {
+            "Revise only the supplied V3-generated static page/customer artifact context. Read workspace-seed.json and, when present, existing-artifact/ as the current page copy. Produce a new package under the task workspace for DataMax validation; do not overwrite stable URLs or bypass DataMax publish checks. If you create files, write customer-artifact-manifest.json at the workspace root with artifacts[].path as workspace-relative paths plus title, kind, and mime_type."
+        }
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => {
+            "Create a new generated static page/customer page package inside the isolated task workspace. Use the supplied selected scope and evidence summary as context, write customer-artifact-manifest.json at the workspace root with artifacts[].path as workspace-relative paths plus title, kind, and mime_type, and rely on DataMax validation/publish checks before any public generated-artifact URL is exposed."
+        }
+        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST => {
+            "Use the isolated task workspace as the customer's Codex scratchpad. Create or modify customer-facing artifacts there when useful. Write customer-artifact-manifest.json at the workspace root with artifacts[].path as workspace-relative paths plus title, kind, and mime_type; also return a concise next action intent and keep normal answer generation unblocked."
+        }
+        _ => {
+            "Analyze the customer request, supplied scope, and evidence. Return a structured plan, findings, or recommended DataMax actions without assuming write access."
+        }
+    }
+}
+
+fn assistant_run_customer_codex_sidecar_scope_summary(selected_scope: &Value) -> Value {
+    json!({
+        "intent": assistant_run_scope_intent(selected_scope),
+        "dataset_count": selected_dataset_ids_from_scope(selected_scope).len(),
+        "document_count": selected_document_ids_from_scope(selected_scope).len(),
+        "has_database_sources": selected_scope.get("database_sources").is_some() || selected_scope.get("databaseSources").is_some(),
+        "scope_type": selected_scope.get("type").and_then(Value::as_str).unwrap_or("unknown"),
+    })
+}
+
+fn assistant_run_customer_codex_sidecar_evidence_summary(evidence_state: &Value) -> Value {
+    json!({
+        "status": evidence_state.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+        "supplied_item_count": assistant_run_evidence_supplied_count(evidence_state),
+        "supply_quality": evidence_state.get("supply_quality").cloned().unwrap_or(Value::Null),
+    })
 }
 
 async fn assistant_run_answer_quality_autofix_enqueue_if_enabled(
@@ -76240,10 +77548,16 @@ async fn load_workflow_runtime_artifact_manifests(
         .list_events(state.tenant_id, run_id)
         .await
         .map_err(ApiError::from_storage)?;
+    let event_output_artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
     manifests.extend(
         events
             .iter()
             .filter_map(|event| safe_output_artifact_manifest(&event.payload)),
+    );
+    manifests.extend(
+        event_output_artifacts
+            .iter()
+            .filter_map(safe_output_artifact_manifest),
     );
     Ok(dedupe_output_artifact_manifests(manifests))
 }
@@ -76277,6 +77591,547 @@ fn dedupe_output_artifact_manifests(manifests: Vec<Value>) -> Vec<Value> {
             seen.insert(key)
         })
         .collect()
+}
+
+fn assistant_run_append_deduped_output_artifacts(
+    output_artifacts: Vec<Value>,
+    additional_artifacts: Vec<Value>,
+) -> Vec<Value> {
+    let mut seen = BTreeSet::new();
+    output_artifacts
+        .into_iter()
+        .chain(additional_artifacts)
+        .filter(|artifact| {
+            let key = serde_json::to_string(artifact).unwrap_or_default();
+            seen.insert(key)
+        })
+        .collect()
+}
+
+fn assistant_run_customer_codex_output_artifacts_from_events(
+    events: &[AssistantRunEvent],
+) -> Vec<Value> {
+    assistant_run_append_deduped_output_artifacts(
+        Vec::new(),
+        events
+            .iter()
+            .filter_map(assistant_run_customer_codex_output_artifact_from_ready_event)
+            .collect(),
+    )
+}
+
+fn assistant_run_customer_codex_output_artifact_from_ready_event(
+    event: &AssistantRunEvent,
+) -> Option<Value> {
+    let event_name = event.event_name.as_str();
+    if !matches!(
+        event_name,
+        ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT
+            | ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT
+    ) {
+        return None;
+    }
+    let payload = &event.payload;
+    if payload.get("source").and_then(Value::as_str) != Some("codex_host_customer_artifacts") {
+        return None;
+    }
+    let mut customer_artifacts =
+        assistant_run_safe_customer_codex_artifacts(payload.get("customer_artifacts")?)?;
+    let artifacts = customer_artifacts
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if artifacts.is_empty() {
+        return None;
+    }
+    let artifact_paths = artifacts
+        .iter()
+        .filter_map(|artifact| artifact.get("path").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let default_capability =
+        if event_name == ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT {
+            CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT
+        } else {
+            CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST
+        };
+    let capability = payload
+        .get("capability")
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_artifact_capability)
+        .unwrap_or_else(|| default_capability.to_string());
+    let default_route =
+        assistant_run_customer_codex_default_route_for_capability(event_name, &capability);
+    let route = payload
+        .get("route")
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_artifact_route)
+        .unwrap_or(default_route);
+    if let Some(object) = customer_artifacts.as_object_mut() {
+        object.insert("capability".to_string(), json!(capability.clone()));
+    }
+    let status = assistant_run_safe_customer_codex_text(
+        payload
+            .get("status")
+            .or_else(|| customer_artifacts.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("available"),
+        40,
+    );
+    let workflow_execution_id = assistant_run_safe_uuid_string(payload, "workflow_execution_id");
+    let title = customer_artifacts
+        .get("title")
+        .and_then(Value::as_str)
+        .map(|value| assistant_run_safe_customer_codex_display_text(value, 160))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if event_name == ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT {
+                "Codex generated page edit artifacts".to_string()
+            } else {
+                "Codex customer artifacts".to_string()
+            }
+        });
+    let manifest_path = customer_artifacts
+        .get("manifest_path")
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_relative_path);
+    let artifact_count = artifacts.len();
+    let primary_url = customer_artifacts
+        .get("primary_url")
+        .or_else(|| customer_artifacts.get("public_url"))
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_generated_artifact_url);
+    let published = customer_artifacts
+        .get("published")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && primary_url.is_some();
+    let status = if published {
+        "published".to_string()
+    } else {
+        status
+    };
+    let links =
+        assistant_run_customer_codex_artifact_links(&customer_artifacts, primary_url.as_deref());
+    let primary_url_value = primary_url
+        .as_ref()
+        .map(|url| json!(url))
+        .unwrap_or(Value::Null);
+
+    Some(json!({
+        "type": "codex_customer_artifact_bundle",
+        "artifact_type": "codex_customer_artifacts",
+        "artifact_kind": "customer_artifact_bundle",
+        "status": status.clone(),
+        "capability": capability,
+        "route": route,
+        "workflow_execution_id": workflow_execution_id.clone(),
+        "published": published,
+        "primary_url": primary_url_value.clone(),
+        "public_url": primary_url_value.clone(),
+        "artifact_count": artifact_count,
+        "customer_artifacts": customer_artifacts,
+        "artifact_manifest": {
+            "schema": "v3.output_artifact_manifest",
+            "schema_version": 1,
+            "artifact_type": "codex_customer_artifacts",
+            "artifact_kind": "customer_artifact_bundle",
+            "title": title,
+            "status": status,
+            "primary_url": primary_url_value,
+            "links": links,
+            "refs": {
+                "workflow_execution_id": workflow_execution_id,
+                "artifact_paths": artifact_paths,
+                "manifest_path": manifest_path,
+            },
+            "safety": {
+                "credentials_exposed": false,
+                "raw_logs_exposed": false,
+                "workspace_paths_only": true,
+                "absolute_paths_exposed": false,
+                "published": published,
+                "requires_datamax_publish_validation": !published,
+            },
+        },
+    }))
+}
+
+fn assistant_run_safe_customer_codex_artifacts(customer_artifacts: &Value) -> Option<Value> {
+    if !customer_artifacts.is_object() {
+        return None;
+    }
+    if customer_artifacts.get("schema").and_then(Value::as_str)
+        != Some("v3.customer_codex_artifacts")
+    {
+        return None;
+    }
+    if customer_artifacts.get("version").and_then(Value::as_i64) != Some(1) {
+        return None;
+    }
+    let artifacts = customer_artifacts
+        .get("artifacts")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(assistant_run_safe_customer_codex_artifact_item)
+        .collect::<Vec<_>>();
+    if artifacts.is_empty() {
+        return None;
+    }
+    let status = assistant_run_safe_customer_codex_text(
+        customer_artifacts
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("available"),
+        40,
+    );
+    let capability = customer_artifacts
+        .get("capability")
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_artifact_capability)
+        .unwrap_or_else(|| CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST.to_string());
+    let manifest_path = customer_artifacts
+        .get("manifest_path")
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_relative_path);
+    let title = customer_artifacts
+        .get("title")
+        .and_then(Value::as_str)
+        .map(|value| assistant_run_safe_customer_codex_display_text(value, 160))
+        .unwrap_or_default();
+    let summary = customer_artifacts
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(|value| assistant_run_safe_customer_codex_display_text(value, 600))
+        .unwrap_or_default();
+    let primary_url = customer_artifacts
+        .get("primary_url")
+        .or_else(|| customer_artifacts.get("public_url"))
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_generated_artifact_url)
+        .or_else(|| {
+            artifacts
+                .iter()
+                .filter_map(|artifact| artifact.get("public_url").and_then(Value::as_str))
+                .find_map(assistant_run_safe_customer_codex_generated_artifact_url)
+        });
+    let published_manifest_url = customer_artifacts
+        .get("published_manifest_url")
+        .or_else(|| customer_artifacts.pointer("/publish/manifest_url"))
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_generated_artifact_url);
+    let published = customer_artifacts
+        .get("published")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && primary_url.is_some();
+    let published_artifact_count = customer_artifacts
+        .get("published_artifact_count")
+        .or_else(|| customer_artifacts.pointer("/publish/artifact_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            artifacts
+                .iter()
+                .filter(|artifact| artifact.get("public_url").and_then(Value::as_str).is_some())
+                .count() as u64
+        });
+
+    let primary_url_value = primary_url
+        .as_ref()
+        .map(|url| json!(url))
+        .unwrap_or(Value::Null);
+    let published_manifest_url_value = published_manifest_url
+        .as_ref()
+        .map(|url| json!(url))
+        .unwrap_or(Value::Null);
+
+    Some(json!({
+        "schema": "v3.customer_codex_artifacts",
+        "version": 1,
+        "status": if published { "published".to_string() } else { status },
+        "capability": capability,
+        "manifest_path": manifest_path,
+        "artifact_count": artifacts.len(),
+        "artifacts": artifacts,
+        "summary": summary,
+        "title": title,
+        "published": published,
+        "published_artifact_count": published_artifact_count,
+        "primary_url": primary_url_value.clone(),
+        "public_url": primary_url_value,
+        "published_manifest_url": published_manifest_url_value,
+        "validation": {
+            "workspace_scoped": true,
+            "v3_product_repo_write_blocked": true,
+            "absolute_paths_redacted": true,
+            "published_to_generated_artifacts": published,
+        },
+    }))
+}
+
+fn assistant_run_safe_customer_codex_artifact_item(item: &Value) -> Option<Value> {
+    let path = item
+        .get("path")
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_relative_path)?;
+    let title = item
+        .get("title")
+        .or_else(|| item.get("name"))
+        .or_else(|| item.get("label"))
+        .and_then(Value::as_str)
+        .map(|value| assistant_run_safe_customer_codex_display_text(value, 160))
+        .unwrap_or_default();
+    let kind = item
+        .get("kind")
+        .or_else(|| item.get("type"))
+        .or_else(|| item.get("artifact_kind"))
+        .and_then(Value::as_str)
+        .map(|value| assistant_run_safe_customer_codex_text(value, 80))
+        .unwrap_or_else(|| "file".to_string());
+    let mime_type = item
+        .get("mime_type")
+        .or_else(|| item.get("mimeType"))
+        .or_else(|| item.get("content_type"))
+        .and_then(Value::as_str)
+        .map(|value| assistant_run_safe_customer_codex_text(value, 120))
+        .unwrap_or_default();
+    let bytes = item.get("bytes").and_then(Value::as_u64).unwrap_or(0);
+    let sha256 = item
+        .get("sha256")
+        .and_then(Value::as_str)
+        .filter(|value| value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .unwrap_or_default();
+    let public_url = item
+        .get("public_url")
+        .or_else(|| item.get("publicUrl"))
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_generated_artifact_url);
+    let published = item
+        .get("published")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && public_url.is_some();
+
+    Some(json!({
+        "path": path,
+        "title": title,
+        "kind": kind,
+        "mime_type": mime_type,
+        "bytes": bytes,
+        "sha256": sha256,
+        "published": published,
+        "public_url": public_url,
+    }))
+}
+
+fn assistant_run_safe_customer_codex_relative_path(path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('~')
+        || trimmed.starts_with("\\\\")
+        || trimmed.contains('\\')
+        || trimmed.contains(':')
+        || trimmed.contains('\0')
+    {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("/srv/aiv3/repo")
+        || lower.contains("/users/")
+        || lower.contains("node_modules")
+        || lower.contains(".git")
+        || lower.contains(".env")
+        || lower.ends_with(".env")
+        || lower.contains("secret")
+        || lower.contains("credential")
+        || lower.contains("access_token")
+        || lower.contains("refresh_token")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("private_key")
+        || lower.contains("password")
+        || lower.ends_with(".pem")
+        || lower.ends_with(".key")
+        || lower.ends_with(".p12")
+        || lower.ends_with(".pfx")
+        || lower.contains("id_rsa")
+        || lower.contains("id_dsa")
+        || lower.contains("id_ecdsa")
+        || lower.contains("id_ed25519")
+        || lower.contains("authorized_keys")
+    {
+        return None;
+    }
+    if trimmed
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn assistant_run_safe_customer_codex_generated_artifact_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty()
+        || trimmed.contains('\0')
+        || trimmed.contains("/generated-artifacts/pending-")
+        || trimmed.contains("/generated-artifacts/pending/")
+        || trimmed.ends_with("/generated-artifacts/pending")
+    {
+        return None;
+    }
+    if trimmed.starts_with("/generated-artifacts/") {
+        return Some(trimmed.to_string());
+    }
+    let default_base = "https://v3.elepcloud.com/generated-artifacts";
+    if trimmed.starts_with(&format!("{default_base}/")) {
+        return Some(trimmed.to_string());
+    }
+    let configured_base = external_channel_generated_artifact_public_base_url();
+    if configured_base != default_base
+        && trimmed.starts_with(&format!("{}/", configured_base.trim_end_matches('/')))
+    {
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+fn assistant_run_customer_codex_artifact_links(
+    customer_artifacts: &Value,
+    primary_url: Option<&str>,
+) -> Vec<Value> {
+    let mut links = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(url) = primary_url {
+        if seen.insert(url.to_string()) {
+            links.push(json!({"rel": "public", "url": url}));
+        }
+    }
+    if let Some(url) = customer_artifacts
+        .get("published_manifest_url")
+        .and_then(Value::as_str)
+        .and_then(assistant_run_safe_customer_codex_generated_artifact_url)
+    {
+        if seen.insert(url.clone()) {
+            links.push(json!({"rel": "manifest", "url": url}));
+        }
+    }
+    if let Some(artifacts) = customer_artifacts
+        .get("artifacts")
+        .and_then(Value::as_array)
+    {
+        for artifact in artifacts {
+            let Some(url) = artifact
+                .get("public_url")
+                .and_then(Value::as_str)
+                .and_then(assistant_run_safe_customer_codex_generated_artifact_url)
+            else {
+                continue;
+            };
+            if !seen.insert(url.clone()) {
+                continue;
+            }
+            let path = artifact
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(assistant_run_safe_customer_codex_relative_path);
+            let kind = artifact
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(|value| assistant_run_safe_customer_codex_text(value, 80))
+                .unwrap_or_else(|| "file".to_string());
+            links.push(json!({
+                "rel": "file",
+                "url": url,
+                "path": path,
+                "kind": kind,
+            }));
+        }
+    }
+    links
+}
+
+fn assistant_run_safe_customer_codex_artifact_capability(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    match trimmed {
+        CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST
+        | CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT
+        | CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => Some(trimmed.to_string()),
+        _ => None,
+    }
+}
+
+fn assistant_run_safe_customer_codex_artifact_route(value: &str) -> Option<String> {
+    assistant_run_safe_customer_codex_artifact_capability(value)
+}
+
+fn assistant_run_customer_codex_default_route_for_capability(
+    event_name: &str,
+    capability: &str,
+) -> String {
+    match capability {
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => "generated_static_page_edit",
+        CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => "generated_static_page_publish",
+        CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST => "customer_complex_request",
+        CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST => "v3_product_change_request",
+        _ if event_name == ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT => {
+            "generated_static_page_edit"
+        }
+        _ => "customer_artifact_request",
+    }
+    .to_string()
+}
+
+fn assistant_run_customer_codex_text_looks_sensitive(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("authorization")
+        || lower.contains("bearer ")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("access_token")
+        || lower.contains("refresh_token")
+        || lower.contains("private_key")
+        || lower.contains("secret")
+        || lower.contains("cookie")
+        || lower.contains("database_url")
+        || lower.contains("mysql://")
+        || lower.contains("postgres://")
+        || lower.contains("postgresql://")
+        || lower.contains("mongodb://")
+        || lower.contains("/users/")
+        || lower.contains("/srv/aiv3/repo")
+        || lower.contains("/srv/aiv3/shared")
+        || lower.contains("/private/var/")
+        || lower.contains("\\.codex")
+        || lower.contains("/.codex")
+        || lower.contains(".env")
+        || lower.contains("sk-")
+        || lower.contains(":\\")
+}
+
+fn assistant_run_safe_customer_codex_display_text(value: &str, max_chars: usize) -> String {
+    let text = assistant_run_safe_customer_codex_text(value, max_chars);
+    if assistant_run_customer_codex_text_looks_sensitive(&text) {
+        String::new()
+    } else {
+        text
+    }
+}
+
+fn assistant_run_safe_customer_codex_text(value: &str, max_chars: usize) -> String {
+    truncate_assistant_supply_text(value.trim(), max_chars)
+}
+
+fn assistant_run_safe_uuid_string(payload: &Value, key: &str) -> Value {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(|uuid| json!(uuid.to_string()))
+        .unwrap_or(Value::Null)
 }
 
 fn safe_output_artifact_manifest(artifact: &Value) -> Option<Value> {
@@ -98002,9 +99857,13 @@ mod tests {
         assert!(static_page_prompt_allows_stable_artifact_reuse(
             "把之前生成过的报表链接再发我一下"
         ));
-        assert!(!static_page_prompt_allows_stable_artifact_reuse(
+        assert!(static_page_prompt_allows_stable_artifact_reuse(
             "看看最新的门店取高报表"
         ));
+        assert_eq!(
+            static_page_stable_artifact_reuse_reason("看看最新的门店取高报表"),
+            "default_dataset_template_reuse"
+        );
         assert!(!static_page_prompt_requests_existing_artifact_delivery(
             "看看最新的门店取高报表"
         ));
@@ -98017,7 +99876,13 @@ mod tests {
         assert!(!static_page_prompt_requests_existing_artifact_delivery(
             "随便生成一个报表我看看"
         ));
+        assert!(static_page_prompt_allows_stable_artifact_reuse(
+            "随便生成一个报表我看看"
+        ));
         assert!(!static_page_prompt_requests_existing_artifact_delivery(
+            "生成新百经营分析月报，按当前数据刷新并保留分店筛选"
+        ));
+        assert!(static_page_prompt_allows_stable_artifact_reuse(
             "生成新百经营分析月报，按当前数据刷新并保留分店筛选"
         ));
         let existing_artifact = static_page_existing_artifact_reference_from_prompt(
@@ -101650,7 +103515,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn external_channel_static_page_dataset_template_overlap_skips_image2_and_queues_codex() {
+    async fn external_channel_static_page_dataset_template_overlap_reuses_by_default_and_queues_codex_for_revision(
+    ) {
         let _guard = shared_local_postgres_test_lock().lock().await;
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
@@ -101886,28 +103752,31 @@ mod tests {
         .expect("static-page pipeline should complete")
         .expect("static-page reply should be returned");
 
-        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::TaskStatus);
-        assert_eq!(reply.task_status.as_deref(), Some("processing"));
+        assert_eq!(reply.reply_type, ExternalBotReplyTypeView::ArtifactLink);
+        assert_eq!(reply.task_status.as_deref(), Some("static_page_published"));
         assert_eq!(reply.artifact_links, vec![public_url.to_string()]);
         let card = reply.card.expect("card should be returned");
-        assert_eq!(
-            card["status"],
-            json!("static_page_image2_auto_publish_pending")
-        );
+        assert_eq!(card["status"], json!("static_page_published"));
         assert_eq!(card["public_url"], json!(public_url));
         assert_eq!(card["generated_artifact_url"], json!(public_url));
+        assert_eq!(card["download_url"], json!(public_url));
+        assert_eq!(card["html_download_url"], json!(public_url));
         assert_eq!(card["artifact_links"], json!([public_url]));
-        assert_eq!(card["provisional_existing_artifact"], json!(true));
         assert_eq!(card["image2_skipped"], json!(true));
         assert_eq!(
             card["image2_skip_reason"],
             json!("accepted_dataset_overlap_template_baseline")
         );
         assert_eq!(card["template_match_policy"], json!("dataset_overlap"));
-        assert_eq!(card["visual_contract_url"], json!(public_url));
-        assert!(card["codex_host_workflow_execution_id"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(
+            card["reuse_policy"],
+            json!("reuse_accepted_baseline_unless_explicit_redesign")
+        );
+        assert_eq!(
+            card["reuse_reason"],
+            json!("default_dataset_template_reuse")
+        );
+        assert_eq!(card["default_template_reuse"], json!(true));
 
         let new_run_drafts = state
             .storage
@@ -101915,19 +103784,9 @@ mod tests {
             .list_by_assistant_run(state.tenant_id, run.id)
             .await
             .expect("drafts should list");
-        assert_eq!(new_run_drafts.len(), 1);
-        let image_jobs = state
-            .storage
-            .static_page_image_jobs()
-            .list_by_draft(state.tenant_id, new_run_drafts[0].id)
-            .await
-            .expect("image jobs should list");
-        assert_eq!(image_jobs.len(), 1);
-        assert_eq!(image_jobs[0].status, StaticPageImageJobStatus::PreviewReady);
-        assert_eq!(image_jobs[0].preview_asset_key.as_deref(), Some(public_url));
-        assert_eq!(
-            image_jobs[0].image_prompt_payload["image2_skipped"],
-            json!(true)
+        assert!(
+            new_run_drafts.is_empty(),
+            "default template reuse should not create a new draft or Image2 job"
         );
 
         let workflows = state
@@ -101943,19 +103802,11 @@ mod tests {
                 .count(),
             0
         );
-        let codex_workflows = workflows
-            .iter()
-            .filter(|execution| execution.kind == WorkflowKind::CodexHostTask)
-            .collect::<Vec<_>>();
-        assert_eq!(codex_workflows.len(), 1);
-        assert_eq!(
-            codex_workflows[0].context["fixed_task"]["requirements"]["existing_artifact"]
-                ["public_url"],
-            json!(public_url)
-        );
-        assert_eq!(
-            codex_workflows[0].context["fixed_task"]["image2"]["preview_asset_key"],
-            json!(public_url)
+        assert!(
+            workflows
+                .iter()
+                .all(|execution| execution.kind != WorkflowKind::CodexHostTask),
+            "default template reuse should not enqueue a Codex publish task"
         );
 
         let events = state
@@ -101965,11 +103816,15 @@ mod tests {
             .await
             .expect("events should list");
         assert!(events.iter().any(|event| {
-            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+            event.event_name == "assistant_run.external_channel_static_page_stable_artifact_reused"
                 && event.payload["image2_skip_reason"]
                     == json!("accepted_dataset_overlap_template_baseline")
-                && event.payload["provisional_existing_artifact"] == json!(true)
+                && event.payload["default_template_reuse"] == json!(true)
                 && event.payload["artifact_links"] == json!([public_url])
+        }));
+        assert!(!events.iter().any(|event| {
+            event.event_name == "assistant_run.external_channel_static_page_publish_queued"
+                || event.event_name == "assistant_run.external_channel_static_page_pipeline_queued"
         }));
 
         let mut revision_message = message.clone();
@@ -112989,6 +114844,593 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_customer_codex_sidecar_routes_complex_business_analysis_readonly() {
+        let request = CreateAssistantRunRequest {
+            prompt: "做一下新百的经营工作分析，给出管理层可执行建议。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_customer_artifact_workspace() {
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 做一下新百经营分析，输出适合管理层看的可视化报表和说明文件。"
+                .to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_new_static_page_publish() {
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 基于新百数据生成一个经营分析静态页看板。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_document_artifact_without_dataset_context() {
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 生成一份客户沟通方案文档。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_customer_artifact_package_without_dataset_context(
+    ) {
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 生成一个客户产物包。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_general_document_script_package_without_codex_word(
+    ) {
+        let request = CreateAssistantRunRequest {
+            prompt: "写一份客户运营方案，并附带执行脚本。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_explicit_codex_complex_task_readonly() {
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 帮我分析这条客户经营需求，给出处理思路。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_general_complex_task_readonly() {
+        let request = CreateAssistantRunRequest {
+            prompt: "这是一个复杂任务，帮我拆解执行计划。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_keeps_non_artifact_codex_analysis_readonly() {
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 做一下新百经营分析，给出管理层建议。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_report_context_business_analysis_as_artifact() {
+        let request = CreateAssistantRunRequest {
+            prompt: "基于当前报表做一下新百经营分析，给管理层建议。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: Some(json!({
+                "type": "static_page_draft",
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html"
+                }
+            })),
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_large_data_analysis_as_report_artifact() {
+        let request = CreateAssistantRunRequest {
+            prompt: "请基于新百数据做一版全面多维经营分析，输出内容比较完整，给管理层复盘。"
+                .to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_keeps_report_explanation_readonly() {
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 解释这份经营分析报表口径问题。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_current_static_page_edit() {
+        let request = CreateAssistantRunRequest {
+            prompt: "修改当前报表页面：把取高风险模块提到最前面，并刷新数据后给我新链接。"
+                .to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: Some(json!({
+                "type": "static_page_draft",
+                "backendDraftId": Uuid::new_v4().to_string(),
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html"
+                }
+            })),
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_v3_generated_static_page_edit_not_product_change(
+    ) {
+        let request = CreateAssistantRunRequest {
+            prompt: "修改 V3 生成的静态页：把取高风险模块提到最前面，并刷新数据后给我新链接。"
+                .to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: Some(json!({
+                "type": "static_page_draft",
+                "backendDraftId": Uuid::new_v4().to_string(),
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html"
+                }
+            })),
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert!(!assistant_run_prompt_requests_v3_product_change(
+            &request.prompt
+        ));
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT)
+        );
+    }
+
+    #[test]
+    fn assistant_run_generated_static_page_edit_embeds_workspace_seed() {
+        let assistant_run_id = AssistantRunId::new();
+        let public_url =
+            "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html";
+        let request = CreateAssistantRunRequest {
+            prompt: "修改当前报表页面：把取高风险模块提到最前面，并刷新数据后给我新链接。"
+                .to_string(),
+            local_thread_id: Some("thread-static-page".to_string()),
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: Some(json!({
+                "type": "static_page_draft",
+                "backendDraftId": Uuid::new_v4().to_string(),
+                "title": "新百经营分析报表",
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": public_url
+                },
+                "modules": [{
+                    "id": "take-high",
+                    "title": "取高风险"
+                }]
+            })),
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+        let evidence_state = json!({"status": "supplied"});
+
+        let (execution, _) = assistant_run_customer_codex_sidecar_execution(
+            TenantId::new(),
+            &workflow_definitions::catalog(),
+            assistant_run_id,
+            request.local_thread_id.clone(),
+            CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT,
+            &request,
+            &selected_scope,
+            &evidence_state,
+        )
+        .expect("static-page edit execution should build");
+
+        assert_eq!(
+            execution.context["workspace_seed"]["schema"],
+            json!("v3.codex_host_workspace_seed")
+        );
+        assert_eq!(
+            execution.context["workspace_seed"]["kind"],
+            json!("generated_static_page_edit")
+        );
+        assert_eq!(
+            execution.context["workspace_seed"]["existing_artifact"]["public_url"],
+            json!(public_url)
+        );
+        assert_eq!(
+            execution.context["workspace_seed"]["current_artifact"]["publicUrl"],
+            json!(public_url)
+        );
+        assert_eq!(
+            execution.context["workspace_seed"]["safety"]["v3_product_repo_write_allowed"],
+            json!(false)
+        );
+        assert!(execution.context["task"]
+            .as_str()
+            .expect("task")
+            .contains("existing-artifact/"));
+    }
+
+    #[test]
+    fn assistant_run_generated_static_page_publish_embeds_publish_route_context() {
+        let assistant_run_id = AssistantRunId::new();
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 基于新百数据生成一个经营分析静态页看板。".to_string(),
+            local_thread_id: Some("thread-static-page-publish".to_string()),
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+        let evidence_state = json!({"status": "supplied"});
+
+        let (execution, _) = assistant_run_customer_codex_sidecar_execution(
+            TenantId::new(),
+            &workflow_definitions::catalog(),
+            assistant_run_id,
+            request.local_thread_id.clone(),
+            CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH,
+            &request,
+            &selected_scope,
+            &evidence_state,
+        )
+        .expect("static-page publish execution should build");
+
+        assert_eq!(
+            execution.context["codex_sidecar"]["route"],
+            json!("assistant_run_generated_static_page_publish")
+        );
+        assert_eq!(
+            execution.context["codex_sidecar"]["permission_scope"],
+            json!("workspace-write only inside the isolated task workspace for a new generated static page package; DataMax validates and publishes generated artifacts; no V3 repo writes")
+        );
+        assert!(execution.context["task"]
+            .as_str()
+            .expect("task")
+            .contains("new generated static page"));
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_does_not_route_v3_product_change() {
+        let request = CreateAssistantRunRequest {
+            prompt: "帮我修改 V3 登录功能并部署。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            None
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_blocks_v3_main_site_page_change() {
+        let request = CreateAssistantRunRequest {
+            prompt: "帮我修改 V3 主站页面样式。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert!(assistant_run_prompt_requests_v3_product_change(
+            &request.prompt
+        ));
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            None
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_product_change_payload_requests_operator_review() {
+        let payload = assistant_run_customer_codex_sidecar_scope_blocked_payload(
+            CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST,
+            "v3_product_change_not_customer_writable",
+        );
+
+        assert_eq!(
+            payload["capability"],
+            json!(CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST)
+        );
+        assert_eq!(payload["status"], json!("needs_operator_review"));
+        assert_eq!(
+            payload["reason"],
+            json!("v3_product_change_not_customer_writable")
+        );
+        assert_eq!(payload["v3_product_repo_write_allowed"], json!(false));
+        assert_eq!(payload["customer_writable"], json!(false));
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_provider_input_marks_v3_product_change_as_operator_review() {
+        let request = CreateAssistantRunRequest {
+            prompt: "帮我修改 V3 登录功能并部署。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        let provider_input = build_assistant_run_provider_input(&request);
+
+        assert!(provider_input.contains("needs_operator_review"));
+        assert!(provider_input.contains("不要承诺已经修改"));
+        assert!(provider_input.contains("V3 产品变更边界"));
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_preflight_requires_profile_allowlist() {
+        let _enabled = TestEnvVarRestore::set("CODEX_HOST_TASK_ENABLED", "true");
+        let _task_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_TASK_ALLOWLIST",
+            CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST,
+        );
+        let _agent_allowlist = TestEnvVarRestore::set(
+            "CODEX_HOST_AGENT_PROFILE_ALLOWED_CAPABILITIES",
+            "static_page_image2_data_publish",
+        );
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_preflight(
+                CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST
+            )
+            .expect_err("agent profile should block missing capability"),
+            "codex_host_agent_capability_not_allowlisted"
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_execution_embeds_customer_workspace_context() {
+        let assistant_run_id = AssistantRunId::new();
+        let request = CreateAssistantRunRequest {
+            prompt: "用 Codex 做一下新百经营分析，输出适合管理层看的可视化报表和说明文件。"
+                .to_string(),
+            local_thread_id: Some("thread-1".to_string()),
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+        let evidence_state = json!({"status": "supplied", "items": [{"id": "ev-1"}]});
+
+        let (execution, initial_event) = assistant_run_customer_codex_sidecar_execution(
+            TenantId::new(),
+            &workflow_definitions::catalog(),
+            assistant_run_id,
+            request.local_thread_id.clone(),
+            CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+            &request,
+            &selected_scope,
+            &evidence_state,
+        )
+        .expect("sidecar execution should build");
+
+        assert_eq!(execution.kind, WorkflowKind::CodexHostTask);
+        assert_eq!(
+            execution.context["capability"],
+            json!(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+        assert_eq!(execution.context["fixed_task"], Value::Null);
+        assert_eq!(
+            execution.context["codex_sidecar"]["non_blocking"],
+            json!(true)
+        );
+        assert_eq!(
+            execution.context["codex_sidecar"]["route"],
+            json!("assistant_run_customer_artifact_request")
+        );
+        assert!(execution.context["codex_sidecar"]["permission_scope"]
+            .as_str()
+            .expect("permission scope")
+            .contains("isolated customer task workspace"));
+        assert_eq!(
+            execution.context["codex_sidecar"]["main_answer_path_preserved"],
+            json!(true)
+        );
+        assert!(execution.context["task"]
+            .as_str()
+            .expect("task")
+            .contains("Use the isolated task workspace as the customer's Codex scratchpad"));
+        assert_eq!(initial_event.event_name, "codex_host_task.created");
+        assert_eq!(
+            initial_event.payload["capability"],
+            json!(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
     fn assistant_run_answer_quality_autofix_collects_weak_insufficient_case() {
         let request = CreateAssistantRunRequest {
             prompt: "这份考勤表里有哪些缺勤？工时最长和最短分别是谁？".to_string(),
@@ -120318,6 +122760,436 @@ retrieve_evidence:
             manifests[1]["artifact_kind"],
             json!("data_ingestion_staging_plan")
         );
+    }
+
+    #[test]
+    fn customer_codex_artifacts_ready_event_becomes_safe_output_artifact() {
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new();
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT,
+            json!({
+                "source": "codex_host_customer_artifacts",
+                "workflow_execution_id": workflow_execution_id.to_string(),
+                "assistant_run_id": run_id.to_string(),
+                "capability": CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+                "route": "customer_artifact_request",
+                "status": "available",
+                "artifact_count": 2,
+                "customer_artifacts": {
+                    "schema": "v3.customer_codex_artifacts",
+                    "version": 1,
+                    "status": "available",
+                    "capability": CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+                    "published": true,
+                    "primary_url": "https://example.com/not-hosted/index.html",
+                    "manifest_path": "customer-artifact-manifest.json",
+                    "artifact_count": 2,
+                    "title": "Authorization: Bearer must not leak",
+                    "summary": "secret token must not leak",
+                    "artifacts": [
+                        {
+                            "path": "reports/index.html",
+                            "title": "sk-should-not-leak",
+                            "kind": "html",
+                            "mime_type": "text/html",
+                            "bytes": 4096,
+                            "published": true,
+                            "public_url": "https://example.com/not-hosted/reports/index.html",
+                            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        },
+                        {
+                            "path": "/Users/manslive01/secrets/raw.txt",
+                            "title": "must not leak",
+                            "kind": "text/plain",
+                            "mime_type": "text/plain",
+                            "bytes": 10,
+                            "sha256": "bad"
+                        }
+                    ]
+                }
+            }),
+        )];
+
+        let artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0]["type"],
+            json!("codex_customer_artifact_bundle")
+        );
+        assert_eq!(artifacts[0]["artifact_count"], json!(1));
+        assert_eq!(
+            artifacts[0]["customer_artifacts"]["artifacts"][0]["path"],
+            json!("reports/index.html")
+        );
+        assert_eq!(
+            artifacts[0]["artifact_manifest"]["refs"]["artifact_paths"],
+            json!(["reports/index.html"])
+        );
+        assert_eq!(
+            artifacts[0]["artifact_manifest"]["refs"]["workflow_execution_id"],
+            json!(workflow_execution_id.to_string())
+        );
+        assert_eq!(
+            artifacts[0]["artifact_manifest"]["title"],
+            json!("Codex customer artifacts")
+        );
+        assert_eq!(artifacts[0]["customer_artifacts"]["summary"], json!(""));
+        assert_eq!(
+            artifacts[0]["customer_artifacts"]["artifacts"][0]["title"],
+            json!("")
+        );
+        assert_eq!(
+            artifacts[0]["artifact_manifest"]["safety"]["published"],
+            json!(false)
+        );
+        assert!(artifacts[0]["artifact_manifest"]["primary_url"].is_null());
+        let serialized = serde_json::to_string(&artifacts).expect("serialize artifacts");
+        assert!(!serialized.contains("/Users/"));
+        assert!(!serialized.contains("secrets"));
+        assert!(!serialized.contains("must not leak"));
+        assert!(!serialized.contains("should-not-leak"));
+        assert!(!serialized.contains("example.com"));
+    }
+
+    #[test]
+    fn customer_codex_artifacts_ready_event_rejects_secret_like_relative_paths() {
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new();
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT,
+            json!({
+                "source": "codex_host_customer_artifacts",
+                "workflow_execution_id": workflow_execution_id.to_string(),
+                "assistant_run_id": run_id.to_string(),
+                "capability": CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+                "route": "customer_artifact_request",
+                "status": "available",
+                "customer_artifacts": {
+                    "schema": "v3.customer_codex_artifacts",
+                    "version": 1,
+                    "status": "available",
+                    "capability": CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+                    "manifest_path": "customer-artifact-manifest.json",
+                    "artifact_count": 3,
+                    "artifacts": [
+                        {"path": "artifacts/.env.local", "title": "env"},
+                        {"path": "artifacts/secret.json", "title": "secret"},
+                        {"path": "artifacts/access_token.txt", "title": "token"}
+                    ]
+                }
+            }),
+        )];
+
+        let artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
+
+        assert!(artifacts.is_empty());
+    }
+
+    #[test]
+    fn customer_codex_artifacts_ready_event_falls_back_from_non_artifact_capability() {
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new();
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT,
+            json!({
+                "source": "codex_host_customer_artifacts",
+                "workflow_execution_id": workflow_execution_id.to_string(),
+                "assistant_run_id": run_id.to_string(),
+                "capability": CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST,
+                "route": CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST,
+                "status": "available",
+                "customer_artifacts": {
+                    "schema": "v3.customer_codex_artifacts",
+                    "version": 1,
+                    "status": "available",
+                    "capability": CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST,
+                    "manifest_path": "customer-artifact-manifest.json",
+                    "artifact_count": 1,
+                    "artifacts": [{
+                        "path": "reports/index.html",
+                        "title": "Management dashboard",
+                        "kind": "html",
+                        "mime_type": "text/html",
+                        "bytes": 4096,
+                        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    }]
+                }
+            }),
+        )];
+
+        let artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0]["capability"],
+            json!(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+        assert_eq!(artifacts[0]["route"], json!("customer_artifact_request"));
+        assert_eq!(
+            artifacts[0]["customer_artifacts"]["capability"],
+            json!(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+        let serialized = serde_json::to_string(&artifacts).expect("serialize artifacts");
+        assert!(!serialized.contains(CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST));
+    }
+
+    #[test]
+    fn customer_codex_published_artifacts_preserve_safe_generated_urls() {
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new();
+        let public_url = format!(
+            "https://v3.elepcloud.com/generated-artifacts/customer-codex/{}/{}/{}/reports/index.html",
+            CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+            run_id,
+            workflow_execution_id
+        );
+        let notes_url = public_url.replace("index.html", "notes.md");
+        let manifest_url = public_url.replace("reports/index.html", "manifest.json");
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT,
+            json!({
+                "source": "codex_host_customer_artifacts",
+                "workflow_execution_id": workflow_execution_id.to_string(),
+                "assistant_run_id": run_id.to_string(),
+                "capability": CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+                "route": "customer_artifact_request",
+                "status": "published",
+                "artifact_count": 2,
+                "customer_artifacts": {
+                    "schema": "v3.customer_codex_artifacts",
+                    "version": 1,
+                    "status": "published",
+                    "capability": CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+                    "published": true,
+                    "published_artifact_count": 2,
+                    "primary_url": public_url,
+                    "public_url": public_url,
+                    "published_manifest_url": manifest_url,
+                    "manifest_path": "customer-artifact-manifest.json",
+                    "artifact_count": 2,
+                    "title": "Published management package",
+                    "summary": "Host published customer Codex files.",
+                    "artifacts": [
+                        {
+                            "path": "reports/index.html",
+                            "title": "Management dashboard",
+                            "kind": "html",
+                            "mime_type": "text/html",
+                            "bytes": 4096,
+                            "published": true,
+                            "public_url": public_url,
+                            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        },
+                        {
+                            "path": "reports/notes.md",
+                            "title": "Notes",
+                            "kind": "markdown",
+                            "mime_type": "text/markdown",
+                            "bytes": 1024,
+                            "published": true,
+                            "public_url": notes_url,
+                            "sha256": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+                        },
+                        {
+                            "path": "reports/unsafe.md",
+                            "title": "Unsafe URL stripped",
+                            "kind": "markdown",
+                            "mime_type": "text/markdown",
+                            "bytes": 512,
+                            "published": true,
+                            "public_url": "https://example.com/leak.md",
+                            "sha256": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+                        }
+                    ]
+                }
+            }),
+        )];
+
+        let artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
+
+        assert_eq!(artifacts.len(), 1);
+        let artifact = &artifacts[0];
+        assert_eq!(artifact["status"], json!("published"));
+        assert_eq!(artifact["published"], json!(true));
+        assert_eq!(artifact["primary_url"], json!(public_url));
+        assert_eq!(
+            artifact["customer_artifacts"]["artifacts"][0]["public_url"],
+            json!(public_url)
+        );
+        assert_eq!(
+            artifact["customer_artifacts"]["artifacts"][1]["public_url"],
+            json!(notes_url)
+        );
+        assert!(artifact["customer_artifacts"]["artifacts"][2]["public_url"].is_null());
+        assert_eq!(
+            artifact["artifact_manifest"]["primary_url"],
+            json!(public_url)
+        );
+        assert_eq!(
+            artifact["artifact_manifest"]["links"],
+            json!([
+                {"rel": "public", "url": public_url},
+                {"rel": "manifest", "url": manifest_url},
+                {
+                    "rel": "file",
+                    "url": notes_url,
+                    "path": "reports/notes.md",
+                    "kind": "markdown"
+                }
+            ])
+        );
+        assert_eq!(
+            artifact["artifact_manifest"]["safety"]["published"],
+            json!(true)
+        );
+        assert_eq!(
+            artifact["artifact_manifest"]["safety"]["requires_datamax_publish_validation"],
+            json!(false)
+        );
+        let serialized = serde_json::to_string(&artifacts).expect("serialize artifacts");
+        assert!(!serialized.contains("example.com"));
+    }
+
+    #[test]
+    fn customer_codex_generated_static_page_publish_ready_event_preserves_publish_route_in_output_artifact(
+    ) {
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new();
+        let public_url = format!(
+            "https://v3.elepcloud.com/generated-artifacts/customer-codex/{}/{}/{}/reports/index.html",
+            CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH,
+            run_id,
+            workflow_execution_id
+        );
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            ASSISTANT_RUN_CUSTOMER_ARTIFACTS_READY_EVENT,
+            json!({
+                "source": "codex_host_customer_artifacts",
+                "workflow_execution_id": workflow_execution_id.to_string(),
+                "assistant_run_id": run_id.to_string(),
+                "capability": CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH,
+                "route": "/Users/manslive01/.codex/should-not-leak",
+                "status": "published",
+                "artifact_count": 1,
+                "customer_artifacts": {
+                    "schema": "v3.customer_codex_artifacts",
+                    "version": 1,
+                    "status": "published",
+                    "capability": CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST,
+                    "published": true,
+                    "published_artifact_count": 1,
+                    "primary_url": public_url,
+                    "public_url": public_url,
+                    "manifest_path": "customer-artifact-manifest.json",
+                    "artifact_count": 1,
+                    "title": "新静态页发布包",
+                    "summary": "已生成并发布新的经营分析页面。",
+                    "artifacts": [{
+                        "path": "reports/index.html",
+                        "title": "经营分析页面",
+                        "kind": "html",
+                        "mime_type": "text/html",
+                        "bytes": 4096,
+                        "published": true,
+                        "public_url": public_url,
+                        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    }]
+                }
+            }),
+        )];
+
+        let artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
+
+        assert_eq!(artifacts.len(), 1);
+        let artifact = &artifacts[0];
+        assert_eq!(
+            artifact["capability"],
+            json!(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH)
+        );
+        assert_eq!(artifact["route"], json!("generated_static_page_publish"));
+        assert_eq!(
+            artifact["customer_artifacts"]["capability"],
+            json!(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH)
+        );
+        assert_eq!(artifact["published"], json!(true));
+        assert_eq!(artifact["primary_url"], json!(public_url));
+        assert_eq!(
+            artifact["artifact_manifest"]["safety"]["requires_datamax_publish_validation"],
+            json!(false)
+        );
+        let serialized = serde_json::to_string(&artifacts).expect("serialize artifacts");
+        assert!(!serialized.contains("/Users/"));
+        assert!(!serialized.contains("should-not-leak"));
+    }
+
+    #[test]
+    fn customer_codex_output_artifact_manifest_is_exposed_for_runtime_inspect() {
+        let run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new();
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            ASSISTANT_RUN_GENERATED_STATIC_PAGE_EDIT_ARTIFACTS_READY_EVENT,
+            json!({
+                "source": "codex_host_customer_artifacts",
+                "workflow_execution_id": workflow_execution_id.to_string(),
+                "assistant_run_id": run_id.to_string(),
+                "capability": CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT,
+                "route": "generated_static_page_edit",
+                "status": "available",
+                "customer_artifacts": {
+                    "schema": "v3.customer_codex_artifacts",
+                    "version": 1,
+                    "status": "available",
+                    "capability": CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT,
+                    "manifest_path": "generated-artifacts/manifest.json",
+                    "artifact_count": 1,
+                    "title": "Static page revision package",
+                    "artifacts": [{
+                        "path": "generated-artifacts/index.html",
+                        "title": "Revised page",
+                        "kind": "html",
+                        "mime_type": "text/html",
+                        "bytes": 2048,
+                        "sha256": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+                    }]
+                }
+            }),
+        )];
+        let artifacts = assistant_run_customer_codex_output_artifacts_from_events(&events);
+
+        let manifests = output_artifact_manifests_from_output_artifacts(&Value::Array(artifacts));
+
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(
+            manifests[0]["artifact_type"],
+            json!("codex_customer_artifacts")
+        );
+        assert_eq!(
+            manifests[0]["artifact_kind"],
+            json!("customer_artifact_bundle")
+        );
+        assert_eq!(
+            manifests[0]["refs"]["manifest_path"],
+            json!("generated-artifacts/manifest.json")
+        );
+        assert_eq!(
+            manifests[0]["safety"]["requires_datamax_publish_validation"],
+            json!(true)
+        );
+        assert_eq!(manifests[0]["primary_url"], Value::Null);
     }
 
     #[tokio::test]

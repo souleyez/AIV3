@@ -158,6 +158,54 @@ The queued workflow context carries:
 
 Advanced static-page work can use this bridge with `capability=static_page_advanced_publish` after allowlisting. The task should receive only a bounded DataMax static-page package: requirement summary, draft/render ids, safe data-source summaries, artifact paths or generated-artifact URLs, and the expected output schema. The host may propose口径 repairs, HTML artifact edits, or publish steps, but DataMax remains responsible for applying writes, publishing to `/generated-artifacts/`, and recording audit.
 
+## Customer Web Codex Router
+
+Customer-facing complex requests are routed through Codex Host as a DataMax-controlled executor lane, not as arbitrary repo patch requests. This lets customers use Codex from the web UI while DataMax keeps task memory, workspace, and publication boundaries explicit. The default capability is `customer_complex_request`, which runs read-only and can return a structured answer, action intent, or handoff plan while the normal AssistantRun answer path remains available.
+
+The web router is a general customer Codex executor, not a static-page-only editor. Static-page editing is one specialized customer artifact path. General customer analysis, planning, data work, report generation, document/package/script creation, and artifact revision should be admitted into Codex Host whenever the capability and profile are allowlisted; only V3 product/source/deploy changes are blocked for operator review.
+
+Customer-owned artifacts may use a writable isolated workspace:
+
+- `customer_artifact_request` may run with `workspace-write` only inside an isolated customer task workspace under `CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT`.
+- `generated_static_page_edit` may run with `workspace-write` only in a task workspace seeded with a V3-generated static page artifact.
+- `generated_static_page_publish` may run with `workspace-write` only in a task workspace scoped by DataMax selected-scope/evidence context; when DataMax has a static-page package, it may be provided as an additional seed.
+- DataMax validates generated-artifact scope, data refs, manifests, redaction, and publication state before any user-visible artifact or static page version is published.
+- `generated_static_page_edit` workflow context should include `workspace_seed.schema=v3.codex_host_workspace_seed` with the current artifact's generated-artifact URL and safe static-page brief. The host agent materializes that seed into `workspace-seed.json`, `task.json`, and `existing-artifact/` when the source generated artifact exists on the host. `generated_static_page_publish` is used for explicit new static-page/webpage/dashboard generation requests and can start from the selected scope and evidence summary without an existing-artifact seed.
+
+Writable customer tasks must describe their produced files through a workspace-local manifest:
+
+- The preferred manifest path is `customer-artifact-manifest.json`; `artifacts/manifest.json` and `generated-artifacts/manifest.json` are accepted for compatibility.
+- Manifest file paths must be relative to the task workspace. Absolute paths, `..`, symlink escapes, `.git`, `node_modules`, `.env`, and credential-like files are rejected by the host agent.
+- Manifest paths must not point at reserved workspace inputs such as `existing-artifact/`, `workspace-seed.json`, `task.json`, `runtime.json`, `schemas/`, `evidence/`, or Image2 seed assets.
+- For `generated_static_page_edit`, when `existing-artifact/` was materialized, the host agent must validate the submitted manifest before publication: the output must include an HTML page artifact, at least one output file must be comparable to the seeded current page package, and at least one comparable file must differ from `existing-artifact/`. A byte-identical republish of the current page is rejected before copying to `/generated-artifacts/`.
+- When `CODEX_HOST_AGENT_CUSTOMER_ARTIFACT_PUBLISH_ENABLED` is unset or true, the host agent may copy only the already validated manifest-listed files into the generated-artifact root under `customer-codex/{capability}/{assistant_run_id}/{workflow_execution_id}/...`. Setting the flag to `false` keeps the task as a workspace-only handoff.
+- Published customer artifact output includes only public `/generated-artifacts/` URLs plus safe metadata; it must not expose absolute task workspace paths or the generated-artifact filesystem root.
+- Host output appends a safe `customer_artifacts` object to `codex_host_task.exec_completed` and emits a dedicated assistant-run event:
+  - `assistant_run.customer_artifact_request_artifacts_ready`
+  - `assistant_run.generated_static_page_edit_artifacts_ready`
+- `generated_static_page_publish` intentionally uses the generic `assistant_run.customer_artifact_request_artifacts_ready` event name, but the payload must include `capability=generated_static_page_publish` and `route=generated_static_page_publish`; Platform API must preserve those fields when projecting the event into output artifacts.
+- Platform API projects those ready events into `AssistantRunDetailView.run.output_artifacts` as `type=codex_customer_artifact_bundle`, with a `v3.output_artifact_manifest` that contains only relative artifact paths, metadata, size, sha256, publication flags, and generated-artifact URLs that pass the DataMax URL allowlist.
+- Platform API must allow only artifact-producing capabilities/routes in projected artifact bundles: `customer_artifact_request`, `generated_static_page_edit`, and `generated_static_page_publish`. Non-artifact capabilities such as `customer_complex_request` and `v3_product_change_request` must not be projected as customer artifact bundles. The web normalizer may still show task cards for the broader customer Codex status set: `customer_complex_request`, `customer_artifact_request`, `generated_static_page_edit`, `generated_static_page_publish`, and `v3_product_change_request`. Unknown or unsafe routes must fall back to the validated capability/default route, not be displayed verbatim.
+- Browser-visible and runtime-inspect-visible customer Codex display text, including artifact title/summary/file title, task failure reason, and permission scope, must be dropped or replaced with a fixed safe fallback when it resembles credentials, tokens, database URLs, raw prompt/log text, absolute local paths, `/srv/aiv3/repo`, `/srv/aiv3/shared`, `.env`, or other internal paths.
+- Platform API and the web UI must reject arbitrary external URLs and pending generated-artifact placeholders. Only `/generated-artifacts/...` or the configured generated-artifact public base URL may be surfaced as `public_url` / `primary_url`.
+- The web UI may poll assistant-run detail after likely customer Codex requests and render both task status cards and artifact bundles in the right-side Codex shelf. `customer_complex_request` can be visible as a read-only Codex execution even when it produces no files. Workspace-only bundles remain `published=false` and show a manifest-ready state; host-published bundles show `published=true` and may expose an "open artifact" link plus safe per-file generated-artifact links.
+- `customer_complex_request` and other customer Web Codex capabilities may attach `customer_result_summary` to `codex_host_task.exec_completed`. This is the only browser-facing Codex result surface for no-file tasks. The host must rebuild it from structured final JSON, not from raw stdout/stderr. For `codex_exec`, the host should materialize `schemas/customer-result-summary.schema.json` in the task workspace and pass `--output-schema schemas/customer-result-summary.schema.json` unless `CODEX_HOST_AGENT_CUSTOMER_RESULT_OUTPUT_SCHEMA_ENABLED=false` is set for an older CLI. The accepted schema is `v3.customer_codex_result_summary` with bounded `title`, `summary`, `findings`, `recommended_next_actions`, `warnings`, `artifact_intent`, `capability`, and safety flags. The host and web normalizer must drop summaries that expose raw logs, credentials, absolute local paths, prompt text, database URLs, cookies, or token-like strings.
+- The dedicated event is still a DataMax-owned artifact lifecycle signal. DataMax owns persistence, preview, publication policy, redaction, versioning, and rollback.
+
+Customer traffic must not mutate the V3 product itself. Requests to change V3 source code, services, migrations, auth, public APIs, provider configuration, systemd/nginx/database settings, commits, deployment, or rollback are classified as `v3_product_change_request` and require operator review. The Platform API should record `assistant_run.codex_sidecar_scope_blocked` with `status=needs_operator_review`, `reason=v3_product_change_not_customer_writable`, `v3_product_repo_write_allowed=false`, and `customer_writable=false` instead of silently routing the request to a writable task. The normal AssistantRun answer path remains available but must tell the customer that operator review is required. The Codex Host agent should reject that capability even if it is accidentally allowlisted by a profile.
+
+## Static Page Template Governance
+
+Static-page reports are governed as reusable customer templates, not disposable pages. Once a dataset/default-prompt combination has an accepted static-page baseline, normal report/page requests should reuse that baseline unless the customer explicitly asks for a redesign, new style, new effect image, or from-scratch page.
+
+Current routing rules:
+
+- Delivery/view requests such as "send the previous report link" or "open the latest report" return the accepted generated-artifact link without creating a new draft, Image2 job, or Codex publish workflow.
+- Default create/refresh requests for the same dataset, such as "生成新百经营分析月报，按当前数据刷新并保留分店筛选", reuse the accepted baseline by default and expose `reuse_reason=default_dataset_template_reuse`.
+- Concrete revision requests such as "修改已有报表", "修复联动", "补充面积/坪效", or "删除模块" should keep the accepted baseline as the visual contract and route to a controlled Codex update path.
+- Explicit redesign requests such as "重新设计", "换风格", "全新页面", or "从头做" may bypass the baseline and create a new candidate/effect-image flow.
+- Template reuse events must expose safe governance metadata such as `reuse_policy=reuse_accepted_baseline_unless_explicit_redesign`, `reuse_reason`, `default_template_reuse`, `template_match_policy`, and `dataset_artifact_key` when available.
+
 ## Fixed Task Templates
 
 Some Cloudflare Codex work is narrow enough to run without per-task human confirmation after the operator approves the template policy once. These tasks must use server-owned fixed template packages, not arbitrary user prompts.

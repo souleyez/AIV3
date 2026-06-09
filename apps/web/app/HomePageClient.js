@@ -27,6 +27,14 @@ import {
 } from './lib/api-error';
 import { buildAssistantRunProgress } from './lib/assistant-run-progress';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
+import {
+  isTerminalCodexCustomerTaskStatus,
+  mergeCodexCustomerArtifactBundles,
+  mergeCodexCustomerTasks,
+  normalizeCodexCustomerArtifactBundlesFromAssistantRunResponse,
+  normalizeCodexCustomerTasksFromAssistantRunResponse,
+  promptMayUseCustomerCodex,
+} from './lib/codex-customer-artifacts';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
   applyStaticPageOperation,
@@ -58,6 +66,8 @@ const REPORT_DETAIL_POLL_INTERVAL_MS = 6000;
 const STATIC_PAGE_SHELF_POLL_INTERVAL_MS = 12000;
 const STATIC_PAGE_ACTIVE_JOB_POLL_INTERVAL_MS = 4000;
 const STATIC_PAGE_ACTIVE_RENDER_POLL_INTERVAL_MS = 4000;
+const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_INTERVAL_MS = 2500;
+const ASSISTANT_RUN_CUSTOMER_CODEX_POLL_ATTEMPTS = 8;
 const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
@@ -302,6 +312,12 @@ async function fetchJson(url, options = {}) {
   }
 
   return payload;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
 }
 
 function parseSseEventBlock(block) {
@@ -1189,6 +1205,8 @@ export default function HomePageClient() {
   const [activityEvents, setActivityEvents] = useState([]);
   const [lastAssistantRunId, setLastAssistantRunId] = useState('');
   const [assistantRunProgress, setAssistantRunProgress] = useState(null);
+  const [codexCustomerTasks, setCodexCustomerTasks] = useState([]);
+  const [codexCustomerArtifacts, setCodexCustomerArtifacts] = useState([]);
   const [documentSearch, setDocumentSearch] = useState('');
   const [selectedDocumentId, setSelectedDocumentId] = useState('');
   const [selectedDocumentDetail, setSelectedDocumentDetail] = useState(null);
@@ -1200,6 +1218,7 @@ export default function HomePageClient() {
   const staticPageAutoRenderKeysRef = useRef(new Set());
   const staticPageProgressMessageKeysRef = useRef(new Set());
   const staticPageDraftStatusRef = useRef(new Map());
+  const assistantRunCustomerCodexPollRef = useRef(0);
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -2860,6 +2879,64 @@ export default function HomePageClient() {
     };
   }
 
+  function mergeAssistantRunCustomerCodexState(response) {
+    const bundles = normalizeCodexCustomerArtifactBundlesFromAssistantRunResponse(response);
+    if (bundles.length) {
+      setCodexCustomerArtifacts((current) => mergeCodexCustomerArtifactBundles(current, bundles));
+    }
+    const tasks = normalizeCodexCustomerTasksFromAssistantRunResponse(response);
+    if (tasks.length) {
+      setCodexCustomerTasks((current) => mergeCodexCustomerTasks(current, tasks));
+    }
+    return { bundles, tasks };
+  }
+
+  function hasTerminalCustomerCodexTask(tasks = []) {
+    return tasks.some((task) => isTerminalCodexCustomerTaskStatus(task?.status));
+  }
+
+  async function pollAssistantRunCustomerCodexState(assistantRunId, pollKey) {
+    for (let attempt = 0; attempt < ASSISTANT_RUN_CUSTOMER_CODEX_POLL_ATTEMPTS; attempt += 1) {
+      if (assistantRunCustomerCodexPollRef.current !== pollKey) {
+        return;
+      }
+      if (attempt > 0) {
+        await wait(ASSISTANT_RUN_CUSTOMER_CODEX_POLL_INTERVAL_MS);
+      }
+      if (assistantRunCustomerCodexPollRef.current !== pollKey) {
+        return;
+      }
+      try {
+        const detail = await fetchJson(`/api/v3/assistant-runs/${assistantRunId}`, {
+          timeoutMs: 15000,
+        });
+        const { bundles, tasks } = mergeAssistantRunCustomerCodexState(detail);
+        if (bundles.length || hasTerminalCustomerCodexTask(tasks)) {
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+  }
+
+  function startAssistantRunCustomerCodexPolling(assistantRunId, prompt, responsePayload) {
+    const initial = mergeAssistantRunCustomerCodexState(responsePayload);
+    if (
+      !assistantRunId
+      || (
+        !initial.bundles.length
+        && !initial.tasks.length
+        && !promptMayUseCustomerCodex(prompt)
+      )
+    ) {
+      return;
+    }
+    const pollKey = assistantRunCustomerCodexPollRef.current + 1;
+    assistantRunCustomerCodexPollRef.current = pollKey;
+    void pollAssistantRunCustomerCodexState(assistantRunId, pollKey);
+  }
+
   function findDatasetForUploadPayload(items, payload) {
     return (Array.isArray(items) ? items : []).find((dataset) =>
       dataset?.key === payload.key || dataset?.title === payload.title,
@@ -3210,6 +3287,7 @@ export default function HomePageClient() {
           }
           const responsePayload = assistantRun.response || {};
           setAssistantRunProgress(buildAssistantRunProgress(responsePayload, usedAssistantRunContinue));
+          startAssistantRunCustomerCodexPolling(assistantRunId, prompt, responsePayload);
           const backendCandidates = Array.isArray(responsePayload?.scope_candidates)
             ? responsePayload.scope_candidates
             : [];
@@ -3335,6 +3413,9 @@ export default function HomePageClient() {
     setLocalMessages([]);
     setLastAssistantRunId('');
     setAssistantRunProgress(null);
+    setCodexCustomerTasks([]);
+    setCodexCustomerArtifacts([]);
+    assistantRunCustomerCodexPollRef.current += 1;
     setMobilePanel('chat');
   }
 
@@ -4698,6 +4779,8 @@ export default function HomePageClient() {
     onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: false }),
     staticPageEditorOpen,
     assistantRunProgress,
+    codexCustomerTasks,
+    codexCustomerArtifacts,
     htmlArtifacts,
     activeHtmlArtifactId,
     onSelectHtmlArtifact: handleSelectHtmlArtifact,

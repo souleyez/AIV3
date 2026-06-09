@@ -2,7 +2,8 @@ use anyhow::{anyhow, Result};
 use chrono::{SecondsFormat, Utc};
 use codex_host_agent::{
     extract_fixed_task_output_from_stdout, fixed_task_output_schema_hint,
-    materialize_fixed_task_bundle, safe_log_excerpt, CodexCommandPlan, CodexHostAgentPolicy,
+    materialize_customer_web_codex_output_schema, materialize_fixed_task_bundle,
+    materialize_workspace_seed, safe_log_excerpt, CodexCommandPlan, CodexHostAgentPolicy,
     CodexHostExecutionDecision, CodexHostExecutionMode, CodexHostRuntimeConfig,
     CodexHostTaskContext, CodexProcessOutput,
 };
@@ -19,6 +20,7 @@ use event_bus::{
     EventSubscription,
 };
 use hmac::{Hmac, Mac};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -47,6 +49,15 @@ const DEFAULT_ORCHESTRATOR_RETRY_DELAY_MS: u64 = 15_000;
 const ORCHESTRATOR_FIXED_TASK_PROMPT_LIMIT_CHARS: usize = 4_800;
 const ORCHESTRATOR_FULL_PROMPT_LIMIT_CHARS: usize = 6_500;
 const STATIC_PAGE_IMAGE2_DATA_PUBLISH: &str = "static_page_image2_data_publish";
+const CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_request";
+const CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
+const GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
+const GENERATED_STATIC_PAGE_PUBLISH: &str = "generated_static_page_publish";
+const CUSTOMER_CODEX_RESULT_SUMMARY_SCHEMA: &str = "v3.customer_codex_result_summary";
+const CUSTOMER_ARTIFACT_PUBLISH_ENABLED_ENV: &str =
+    "CODEX_HOST_AGENT_CUSTOMER_ARTIFACT_PUBLISH_ENABLED";
+const CUSTOMER_ARTIFACT_MAX_FILES: usize = 24;
+const CUSTOMER_ARTIFACT_MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
 const DEFAULT_CODEX_HOST_CONCURRENCY: usize = 1;
 const MAX_CODEX_HOST_CONCURRENCY: usize = 8;
 const DEFAULT_STATIC_PAGE_CODEX_EXEC_TIMEOUT_MS: u64 = 900_000;
@@ -327,6 +338,15 @@ async fn process_task(
             task_context.assistant_run_id,
             event_name,
             output.clone(),
+        )
+        .await?;
+        maybe_record_customer_codex_artifacts_result_from_task_output(
+            storage,
+            task.tenant_id,
+            task_context.assistant_run_id,
+            task.execution_id,
+            &task_context,
+            &output,
         )
         .await?;
         maybe_record_external_static_page_publish_completed_from_task_output(
@@ -859,6 +879,279 @@ fn codex_exec_cloudflare_fallback_started_payload(
 
 fn codex_host_safe_error_summary(error_message: &str) -> String {
     safe_response_excerpt(error_message, 500)
+}
+
+fn customer_codex_result_summary_from_text(
+    text: &str,
+    task_context: &CodexHostTaskContext,
+) -> Option<Value> {
+    if !customer_codex_result_summary_capability(&task_context.capability) {
+        return None;
+    }
+    for (start, ch) in text.char_indices().rev() {
+        if ch != '{' {
+            continue;
+        }
+        let candidate = &text[start..];
+        let mut deserializer = serde_json::Deserializer::from_str(candidate);
+        let Ok(value) = Value::deserialize(&mut deserializer) else {
+            continue;
+        };
+        if let Some(summary) =
+            customer_codex_result_summary_from_value(&value, task_context.capability.as_str())
+        {
+            return Some(summary);
+        }
+    }
+    None
+}
+
+fn customer_codex_result_summary_capability(capability: &str) -> bool {
+    matches!(
+        capability,
+        CUSTOMER_COMPLEX_REQUEST
+            | CUSTOMER_ARTIFACT_REQUEST
+            | GENERATED_STATIC_PAGE_EDIT
+            | GENERATED_STATIC_PAGE_PUBLISH
+    )
+}
+
+fn customer_codex_result_summary_from_value(value: &Value, capability: &str) -> Option<Value> {
+    for key in [
+        "customer_result_summary",
+        "customerResultSummary",
+        "result_summary",
+        "resultSummary",
+    ] {
+        if let Some(nested) = value.get(key) {
+            if let Some(summary) = normalize_customer_codex_result_summary(nested, capability) {
+                return Some(summary);
+            }
+            if let Some(summary) = customer_codex_result_summary_from_value(nested, capability) {
+                return Some(summary);
+            }
+        }
+    }
+    if let Some(summary) = normalize_customer_codex_result_summary(value, capability) {
+        return Some(summary);
+    }
+    for key in ["result", "output", "final", "final_output", "finalOutput"] {
+        if let Some(nested) = value.get(key) {
+            if let Some(summary) = customer_codex_result_summary_from_value(nested, capability) {
+                return Some(summary);
+            }
+        }
+    }
+    None
+}
+
+fn normalize_customer_codex_result_summary(value: &Value, capability: &str) -> Option<Value> {
+    if !customer_codex_result_safety_allows(value) {
+        return None;
+    }
+    let status = safe_customer_codex_result_status(value);
+    let title = customer_result_string_field(value, &["title", "name", "heading"], 80)
+        .unwrap_or_else(|| "Codex 执行结果".to_string());
+    let summary = customer_result_string_field(
+        value,
+        &[
+            "summary",
+            "message",
+            "final_message",
+            "finalMessage",
+            "description",
+        ],
+        280,
+    );
+    let findings = customer_result_array_field(
+        value,
+        &["findings", "key_findings", "keyFindings", "insights"],
+        6,
+        180,
+    );
+    let recommended_next_actions = customer_result_array_field(
+        value,
+        &[
+            "recommended_next_actions",
+            "recommendedNextActions",
+            "next_actions",
+            "nextActions",
+            "actions",
+            "recommendations",
+        ],
+        5,
+        180,
+    );
+    let warnings =
+        customer_result_array_field(value, &["warnings", "notes", "caveats", "risks"], 4, 160);
+    if summary.is_none()
+        && findings.is_empty()
+        && recommended_next_actions.is_empty()
+        && warnings.is_empty()
+    {
+        return None;
+    }
+    let artifact_intent = value
+        .get("artifact_intent")
+        .or_else(|| value.get("artifactIntent"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| capability != CUSTOMER_COMPLEX_REQUEST);
+    Some(json!({
+        "schema": CUSTOMER_CODEX_RESULT_SUMMARY_SCHEMA,
+        "schema_version": 1,
+        "status": status,
+        "title": title,
+        "summary": summary.unwrap_or_else(|| "Codex 已完成客户任务。".to_string()),
+        "findings": findings,
+        "recommended_next_actions": recommended_next_actions,
+        "warnings": warnings,
+        "artifact_intent": artifact_intent,
+        "capability": capability,
+        "safety": {
+            "raw_logs_exposed": false,
+            "credentials_exposed": false,
+            "absolute_paths_exposed": false,
+            "prompt_exposed": false,
+        },
+    }))
+}
+
+fn safe_customer_codex_result_status(value: &Value) -> &'static str {
+    match value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "completed" | "success" | "succeeded" | "done" => "completed",
+        "needs_human" | "needs-human" | "needs_review" | "needs-review" => "needs_human",
+        "failed" | "error" => "failed",
+        _ => "completed",
+    }
+}
+
+fn customer_codex_result_safety_allows(value: &Value) -> bool {
+    for key in [
+        "raw_logs_exposed",
+        "rawLogsExposed",
+        "credentials_exposed",
+        "credentialsExposed",
+        "absolute_paths_exposed",
+        "absolutePathsExposed",
+        "prompt_exposed",
+        "promptExposed",
+        "secrets_exposed",
+        "secretsExposed",
+    ] {
+        if value.get(key).and_then(Value::as_bool) == Some(true) {
+            return false;
+        }
+    }
+    if let Some(safety) = value.get("safety").filter(|value| value.is_object()) {
+        return customer_codex_result_safety_allows(safety);
+    }
+    true
+}
+
+fn customer_result_string_field(value: &Value, keys: &[&str], max_chars: usize) -> Option<String> {
+    for key in keys {
+        if let Some(text) = value
+            .get(*key)
+            .and_then(Value::as_str)
+            .and_then(|text| safe_customer_result_text(text, max_chars))
+        {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn customer_result_array_field(
+    value: &Value,
+    keys: &[&str],
+    max_items: usize,
+    max_chars: usize,
+) -> Vec<String> {
+    for key in keys {
+        let Some(array) = value.get(*key).and_then(Value::as_array) else {
+            continue;
+        };
+        let items = array
+            .iter()
+            .filter_map(|item| customer_result_item_text(item, max_chars))
+            .take(max_items)
+            .collect::<Vec<_>>();
+        if !items.is_empty() {
+            return items;
+        }
+    }
+    Vec::new()
+}
+
+fn customer_result_item_text(value: &Value, max_chars: usize) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return safe_customer_result_text(text, max_chars);
+    }
+    for key in [
+        "title",
+        "summary",
+        "message",
+        "action",
+        "text",
+        "description",
+    ] {
+        if let Some(text) = value
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|text| safe_customer_result_text(text, max_chars))
+        {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn safe_customer_result_text(text: &str, max_chars: usize) -> Option<String> {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim();
+    if trimmed.is_empty() || customer_result_text_looks_sensitive(trimmed) {
+        return None;
+    }
+    Some(trimmed.chars().take(max_chars).collect())
+}
+
+fn customer_result_text_looks_sensitive(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "authorization",
+        "bearer ",
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "private_key",
+        "secret",
+        "cookie",
+        "database_url",
+        "mysql://",
+        "postgres://",
+        "postgresql://",
+        "mongodb://",
+        "[redacted-log-line]",
+        "/users/",
+        "/srv/aiv3/repo",
+        "/srv/aiv3/shared",
+        "/private/var/",
+        "\\.codex",
+        "/.codex",
+        ".env",
+        "sk-",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+        || lower.contains(":\\")
 }
 
 fn codex_host_task_failed_payload(
@@ -1859,6 +2152,76 @@ fn bytes_to_lower_hex(bytes: &[u8]) -> String {
         output.push_str(&format!("{byte:02x}"));
     }
     output
+}
+
+async fn maybe_record_customer_codex_artifacts_result_from_task_output(
+    storage: &PgStorage,
+    tenant_id: domain_model::TenantId,
+    assistant_run_id: AssistantRunId,
+    workflow_execution_id: WorkflowExecutionId,
+    task_context: &CodexHostTaskContext,
+    task_output: &Value,
+) -> Result<()> {
+    let Some(customer_artifacts) = task_output
+        .get("customer_artifacts")
+        .filter(|value| value.is_object())
+    else {
+        return Ok(());
+    };
+    if !customer_artifact_capability(&task_context.capability) {
+        return Ok(());
+    }
+    let event_name = customer_codex_artifacts_ready_event_name(&task_context.capability);
+    append_assistant_event(
+        storage,
+        tenant_id,
+        assistant_run_id,
+        event_name,
+        customer_codex_artifacts_ready_payload(
+            workflow_execution_id,
+            task_context,
+            customer_artifacts,
+        ),
+    )
+    .await
+}
+
+fn customer_codex_artifacts_ready_event_name(capability: &str) -> &'static str {
+    match capability {
+        GENERATED_STATIC_PAGE_EDIT => "assistant_run.generated_static_page_edit_artifacts_ready",
+        _ => "assistant_run.customer_artifact_request_artifacts_ready",
+    }
+}
+
+fn customer_codex_artifacts_ready_payload(
+    workflow_execution_id: WorkflowExecutionId,
+    task_context: &CodexHostTaskContext,
+    customer_artifacts: &Value,
+) -> Value {
+    json!({
+        "source": "codex_host_customer_artifacts",
+        "workflow_execution_id": workflow_execution_id.to_string(),
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "route": customer_codex_artifacts_ready_route(&task_context.capability),
+        "status": customer_artifacts
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| json!("available")),
+        "artifact_count": customer_artifacts
+            .get("artifact_count")
+            .cloned()
+            .unwrap_or_else(|| json!(0)),
+        "customer_artifacts": customer_artifacts,
+    })
+}
+
+fn customer_codex_artifacts_ready_route(capability: &str) -> &'static str {
+    match capability {
+        GENERATED_STATIC_PAGE_EDIT => "generated_static_page_edit",
+        GENERATED_STATIC_PAGE_PUBLISH => "generated_static_page_publish",
+        _ => "customer_artifact_request",
+    }
 }
 
 async fn maybe_record_external_static_page_publish_completed_from_task_output(
@@ -3529,23 +3892,26 @@ async fn run_cloudflare_orchestrator(
             "Cloudflare Codex task still running; task_id={task_id} status={status}"
         ));
     }
+    let result_text = cloudflare_orchestrator_result_text(&polled);
     let fixed_task_output = task_context
         .fixed_task
         .as_ref()
         .map(|fixed_task| {
-            let text = cloudflare_orchestrator_result_text(&polled);
             let output = extract_fixed_task_output_from_stdout(
-                text.as_bytes(),
+                result_text.as_bytes(),
                 fixed_task.template_id.as_str(),
             )?;
             normalize_cloudflare_fixed_task_output(output, task_context, execution_id, &task_id)
         })
         .transpose()?;
+    let customer_result_summary =
+        customer_codex_result_summary_from_text(&result_text, task_context);
     Ok(cloudflare_orchestrator_output(
         task_context,
         decision,
         &task_id,
         fixed_task_output,
+        customer_result_summary,
     ))
 }
 
@@ -6629,6 +6995,16 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+fn env_bool(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(default)
+}
+
 fn parse_codex_host_concurrency(value: Option<&str>) -> usize {
     value
         .and_then(|value| value.trim().parse::<usize>().ok())
@@ -6642,6 +7018,7 @@ fn cloudflare_orchestrator_output(
     decision: &CodexHostExecutionDecision,
     orchestrator_task_id: &str,
     fixed_task_output: Option<Value>,
+    customer_result_summary: Option<Value>,
 ) -> serde_json::Value {
     let process_output = CodexProcessOutput {
         exit_code: Some(0),
@@ -6680,6 +7057,12 @@ fn cloudflare_orchestrator_output(
             "orchestrator_task_id".to_string(),
             Value::String(orchestrator_task_id.to_string()),
         );
+        if let Some(customer_result_summary) = customer_result_summary {
+            object.insert(
+                "customer_result_summary".to_string(),
+                customer_result_summary,
+            );
+        }
     }
     output
 }
@@ -6704,6 +7087,13 @@ async fn run_codex_exec(
             decision,
             &runtime_config.workspace_retention_policy(),
         )?;
+        materialize_workspace_seed(
+            workspace_path,
+            task_context,
+            decision,
+            &runtime_config.workspace_retention_policy(),
+        )?;
+        materialize_customer_web_codex_output_schema(workspace_path, task_context)?;
     }
     let mut command = Command::new(&command_plan.program);
     command.args(command_plan.process_args());
@@ -6764,6 +7154,12 @@ async fn run_codex_exec(
             )
         })
         .transpose()?;
+    let customer_result_summary = customer_codex_result_summary_from_text(
+        &String::from_utf8_lossy(&output.stdout),
+        task_context,
+    );
+    let customer_artifacts =
+        collect_customer_artifacts_from_workspace(task_context, execution_id, command_plan)?;
 
     Ok(codex_exec_output(
         command_plan,
@@ -6771,6 +7167,8 @@ async fn run_codex_exec(
         decision,
         process_output,
         fixed_task_output,
+        customer_result_summary,
+        customer_artifacts,
     ))
 }
 
@@ -6780,6 +7178,8 @@ fn codex_exec_output(
     decision: &CodexHostExecutionDecision,
     process_output: CodexProcessOutput,
     fixed_task_output: Option<Value>,
+    customer_result_summary: Option<Value>,
+    customer_artifacts: Option<Value>,
 ) -> serde_json::Value {
     let html_artifacts = vec![task_context.html_report_artifact(
         "codex_exec",
@@ -6787,7 +7187,7 @@ fn codex_exec_output(
         Some(decision),
         Some(&process_output),
     )];
-    json!(CodexHostTaskOutputView {
+    let mut output = json!(CodexHostTaskOutputView {
         mode: "codex_exec".to_string(),
         codex_invoked: true,
         status: "completed".to_string(),
@@ -6807,7 +7207,646 @@ fn codex_exec_output(
         task_memory_space_id: task_context.task_memory_space_id.clone(),
         html_artifacts,
         fixed_task_output,
+    });
+    if let Some(customer_artifacts) = customer_artifacts {
+        if let Some(object) = output.as_object_mut() {
+            object.insert("customer_artifacts".to_string(), customer_artifacts);
+        }
+    }
+    if let Some(customer_result_summary) = customer_result_summary {
+        if let Some(object) = output.as_object_mut() {
+            object.insert(
+                "customer_result_summary".to_string(),
+                customer_result_summary,
+            );
+        }
+    }
+    output
+}
+
+fn collect_customer_artifacts_from_workspace(
+    task_context: &CodexHostTaskContext,
+    workflow_execution_id: WorkflowExecutionId,
+    command_plan: &CodexCommandPlan,
+) -> Result<Option<Value>> {
+    if !customer_artifact_capability(&task_context.capability) {
+        return Ok(None);
+    }
+    let Some(workspace_path) = command_plan.workspace_path.as_ref() else {
+        return Ok(None);
+    };
+    let Some((manifest_relative_path, manifest_value)) =
+        read_customer_artifact_manifest(workspace_path)?
+    else {
+        return Ok(None);
+    };
+    let mut artifacts =
+        customer_artifacts_from_manifest(&manifest_value, workspace_path, &manifest_relative_path)?;
+    let static_page_edit_diff = validate_generated_static_page_edit_customer_artifacts(
+        task_context,
+        workspace_path,
+        &artifacts,
+    )?;
+    let publish_summary = publish_customer_artifacts_to_generated_artifacts(
+        task_context,
+        workflow_execution_id,
+        workspace_path,
+        &mut artifacts,
+    )?;
+    let published = publish_summary.is_some();
+    let mut output = json!({
+        "schema": "v3.customer_codex_artifacts",
+        "version": 1,
+        "status": if published { "published" } else { "available" },
+        "capability": task_context.capability.clone(),
+        "workspace_label": command_plan.workspace_label.clone(),
+        "manifest_path": manifest_relative_path,
+        "artifact_count": artifacts.len(),
+        "artifacts": artifacts,
+        "summary": manifest_value
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(|value| safe_response_excerpt(value, 800))
+            .unwrap_or_default(),
+        "title": manifest_value
+            .get("title")
+            .and_then(Value::as_str)
+            .map(|value| safe_response_excerpt(value, 200))
+            .unwrap_or_default(),
+        "validation": {
+            "workspace_scoped": true,
+            "v3_product_repo_write_blocked": true,
+            "absolute_paths_redacted": true,
+            "published_to_generated_artifacts": published,
+        },
+    });
+    if let Some(static_page_edit_diff) = static_page_edit_diff {
+        if let Some(validation) = output
+            .get_mut("validation")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            validation.insert("static_page_edit_diff".to_string(), static_page_edit_diff);
+        }
+    }
+    if let Some(publish_summary) = publish_summary {
+        if let Some(object) = output.as_object_mut() {
+            object.insert("published".to_string(), Value::Bool(true));
+            object.insert(
+                "published_artifact_count".to_string(),
+                publish_summary
+                    .get("artifact_count")
+                    .cloned()
+                    .unwrap_or_else(|| json!(0)),
+            );
+            object.insert(
+                "primary_url".to_string(),
+                publish_summary
+                    .get("primary_url")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            object.insert(
+                "public_url".to_string(),
+                publish_summary
+                    .get("primary_url")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            object.insert(
+                "published_manifest_url".to_string(),
+                publish_summary
+                    .get("manifest_url")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+            object.insert("publish".to_string(), publish_summary);
+        }
+    }
+    Ok(Some(output))
+}
+
+fn validate_generated_static_page_edit_customer_artifacts(
+    task_context: &CodexHostTaskContext,
+    workspace_path: &Path,
+    artifacts: &[Value],
+) -> Result<Option<Value>> {
+    if task_context.capability != GENERATED_STATIC_PAGE_EDIT {
+        return Ok(None);
+    }
+    let existing_root = workspace_path.join("existing-artifact");
+    if !existing_root.is_dir() {
+        return Ok(Some(json!({
+            "status": "skipped",
+            "required": false,
+            "reason": "existing_artifact_not_materialized",
+        })));
+    }
+    if !existing_root.join("index.html").is_file() {
+        return Ok(Some(json!({
+            "status": "skipped",
+            "required": false,
+            "reason": "existing_artifact_index_missing",
+        })));
+    }
+
+    let mut page_artifact_count = 0usize;
+    let mut comparable_file_count = 0usize;
+    let mut changed_file_count = 0usize;
+    let mut unchanged_file_count = 0usize;
+    let mut new_file_count = 0usize;
+    let mut changed_paths = Vec::new();
+    let mut unchanged_paths = Vec::new();
+
+    for artifact in artifacts {
+        let Some(path_text) = artifact.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let relative_path = validate_customer_artifact_relative_path(path_text)?;
+        if generated_static_page_edit_page_artifact(&relative_path) {
+            page_artifact_count += 1;
+        }
+        let Some(existing_path) =
+            generated_static_page_edit_matching_existing_path(&existing_root, &relative_path)
+        else {
+            new_file_count += 1;
+            continue;
+        };
+        comparable_file_count += 1;
+        let output_path = workspace_path.join(&relative_path);
+        let output_bytes = fs::read(&output_path).map_err(|error| {
+            anyhow!(
+                "failed to read generated static page edit output {}: {error}",
+                relative_path.display()
+            )
+        })?;
+        let existing_bytes = fs::read(&existing_path).map_err(|error| {
+            anyhow!(
+                "failed to read existing static page artifact {}: {error}",
+                existing_path.display()
+            )
+        })?;
+        if output_bytes == existing_bytes {
+            unchanged_file_count += 1;
+            if unchanged_paths.len() < 8 {
+                unchanged_paths.push(relative_path.to_string_lossy().replace('\\', "/"));
+            }
+        } else {
+            changed_file_count += 1;
+            if changed_paths.len() < 8 {
+                changed_paths.push(relative_path.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+
+    if page_artifact_count == 0 {
+        return Err(anyhow!(
+            "generated_static_page_edit customer artifact manifest must include an HTML page artifact"
+        ));
+    }
+    if comparable_file_count == 0 {
+        return Err(anyhow!(
+            "generated_static_page_edit output has no comparable existing-artifact file; include a revised index.html or changed static page asset"
+        ));
+    }
+    if changed_file_count == 0 {
+        return Err(anyhow!(
+            "generated_static_page_edit output does not change the existing static page artifact"
+        ));
+    }
+
+    Ok(Some(json!({
+        "status": "changed",
+        "required": true,
+        "existing_artifact_present": true,
+        "page_artifact_count": page_artifact_count,
+        "comparable_file_count": comparable_file_count,
+        "changed_file_count": changed_file_count,
+        "unchanged_file_count": unchanged_file_count,
+        "new_file_count": new_file_count,
+        "changed_paths": changed_paths,
+        "unchanged_paths_sample": unchanged_paths,
+    })))
+}
+
+fn generated_static_page_edit_page_artifact(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "html" | "htm"))
+        .unwrap_or(false)
+}
+
+fn generated_static_page_edit_matching_existing_path(
+    existing_root: &Path,
+    relative_path: &Path,
+) -> Option<PathBuf> {
+    let components = relative_path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_os_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for start_index in 0..components.len() {
+        let mut suffix = PathBuf::new();
+        for component in &components[start_index..] {
+            suffix.push(component);
+        }
+        if suffix.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = existing_root.join(&suffix);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    let file_name = relative_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())?;
+    if matches!(
+        file_name.as_str(),
+        "index.html" | "data.json" | "data-snapshot.json"
+    ) {
+        let candidate = existing_root.join(&file_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn publish_customer_artifacts_to_generated_artifacts(
+    task_context: &CodexHostTaskContext,
+    workflow_execution_id: WorkflowExecutionId,
+    workspace_path: &Path,
+    artifacts: &mut [Value],
+) -> Result<Option<Value>> {
+    if artifacts.is_empty() || !customer_artifact_publish_enabled() {
+        return Ok(None);
+    }
+
+    let capability_segment = safe_path_segment(&task_context.capability);
+    let run_segment = safe_path_segment(&task_context.assistant_run_id.to_string());
+    let execution_segment = safe_path_segment(&workflow_execution_id.to_string());
+    let relative_dir =
+        format!("customer-codex/{capability_segment}/{run_segment}/{execution_segment}");
+    let artifact_dir = generated_artifact_root()?.join(&relative_dir);
+    fs::create_dir_all(&artifact_dir).map_err(|error| {
+        anyhow!(
+            "failed to create customer Codex artifact publish directory {}: {error}",
+            artifact_dir.display()
+        )
+    })?;
+
+    let mut public_urls = Vec::new();
+    for artifact in artifacts.iter_mut() {
+        let Some(path_text) = artifact.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let relative_path = validate_customer_artifact_relative_path(path_text)?;
+        let source_path = workspace_path.join(&relative_path);
+        validate_customer_artifact_path_in_workspace(workspace_path, &source_path)?;
+        let target_path = artifact_dir.join(&relative_path);
+        let Some(target_parent) = target_path.parent() else {
+            return Err(anyhow!("customer artifact publish target has no parent"));
+        };
+        fs::create_dir_all(target_parent).map_err(|error| {
+            anyhow!(
+                "failed to create customer Codex artifact target directory {}: {error}",
+                target_parent.display()
+            )
+        })?;
+        fs::copy(&source_path, &target_path).map_err(|error| {
+            anyhow!(
+                "failed to publish customer Codex artifact {} to {}: {error}",
+                relative_path.display(),
+                target_path.display()
+            )
+        })?;
+        let public_url = generated_artifact_public_file_url(
+            &relative_dir,
+            &relative_path.to_string_lossy().replace('\\', "/"),
+        );
+        public_urls.push(public_url.clone());
+        if let Some(object) = artifact.as_object_mut() {
+            object.insert("public_url".to_string(), Value::String(public_url));
+            object.insert("published".to_string(), Value::Bool(true));
+        }
+    }
+
+    if public_urls.is_empty() {
+        return Ok(None);
+    }
+    let primary_url = customer_artifact_primary_public_url(artifacts, &public_urls);
+    let publish_manifest = json!({
+        "schema": "v3.customer_codex_published_artifacts",
+        "version": 1,
+        "assistant_run_id": task_context.assistant_run_id.to_string(),
+        "workflow_execution_id": workflow_execution_id.to_string(),
+        "capability": task_context.capability.clone(),
+        "relative_dir": relative_dir,
+        "artifact_count": public_urls.len(),
+        "primary_url": primary_url,
+        "artifacts": artifacts,
+        "created_at": Utc::now(),
+    });
+    let manifest_path = artifact_dir.join("manifest.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&publish_manifest).map_err(|error| {
+            anyhow!("failed to serialize customer Codex artifact manifest: {error}")
+        })?,
+    )
+    .map_err(|error| {
+        anyhow!(
+            "failed to write customer Codex artifact publish manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+
+    Ok(Some(json!({
+        "schema": "v3.customer_codex_artifact_publish",
+        "version": 1,
+        "status": "published",
+        "relative_dir": relative_dir,
+        "artifact_count": public_urls.len(),
+        "primary_url": primary_url,
+        "manifest_url": generated_artifact_public_file_url(&relative_dir, "manifest.json"),
+        "public_urls": public_urls,
+    })))
+}
+
+fn customer_artifact_publish_enabled() -> bool {
+    env_bool(CUSTOMER_ARTIFACT_PUBLISH_ENABLED_ENV, true)
+}
+
+fn customer_artifact_primary_public_url(artifacts: &[Value], public_urls: &[String]) -> String {
+    artifacts
+        .iter()
+        .filter_map(|artifact| {
+            let path = artifact.get("path").and_then(Value::as_str)?;
+            let public_url = artifact.get("public_url").and_then(Value::as_str)?;
+            Some((path.to_ascii_lowercase(), public_url.to_string()))
+        })
+        .find(|(path, _)| path.ends_with("/index.html") || path == "index.html")
+        .map(|(_, public_url)| public_url)
+        .or_else(|| {
+            artifacts
+                .iter()
+                .filter_map(|artifact| {
+                    let path = artifact.get("path").and_then(Value::as_str)?;
+                    let public_url = artifact.get("public_url").and_then(Value::as_str)?;
+                    path.to_ascii_lowercase()
+                        .ends_with(".html")
+                        .then(|| public_url.to_string())
+                })
+                .next()
+        })
+        .unwrap_or_else(|| public_urls[0].clone())
+}
+
+fn customer_artifact_capability(capability: &str) -> bool {
+    matches!(
+        capability,
+        CUSTOMER_ARTIFACT_REQUEST | GENERATED_STATIC_PAGE_EDIT | GENERATED_STATIC_PAGE_PUBLISH
+    )
+}
+
+fn read_customer_artifact_manifest(workspace_path: &Path) -> Result<Option<(String, Value)>> {
+    for relative_path in [
+        "customer-artifact-manifest.json",
+        "artifacts/manifest.json",
+        "generated-artifacts/manifest.json",
+    ] {
+        let Some(value) = read_json_value_if_available(&workspace_path.join(relative_path))? else {
+            continue;
+        };
+        return Ok(Some((relative_path.to_string(), value)));
+    }
+    Ok(None)
+}
+
+fn customer_artifacts_from_manifest(
+    manifest: &Value,
+    workspace_path: &Path,
+    manifest_relative_path: &str,
+) -> Result<Vec<Value>> {
+    let items = customer_artifact_manifest_items(manifest);
+    let mut artifacts = Vec::new();
+    for item in items.into_iter().take(CUSTOMER_ARTIFACT_MAX_FILES) {
+        let Some(path_text) = customer_artifact_item_path(&item) else {
+            continue;
+        };
+        let relative_path = validate_customer_artifact_relative_path(&path_text)?;
+        let artifact_path = workspace_path.join(&relative_path);
+        validate_customer_artifact_path_in_workspace(workspace_path, &artifact_path)?;
+        let metadata = fs::metadata(&artifact_path).map_err(|error| {
+            anyhow!(
+                "customer artifact {} from {} is not readable: {error}",
+                relative_path.display(),
+                manifest_relative_path
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(anyhow!(
+                "customer artifact {} from {} is not a file",
+                relative_path.display(),
+                manifest_relative_path
+            ));
+        }
+        if metadata.len() > CUSTOMER_ARTIFACT_MAX_FILE_BYTES {
+            return Err(anyhow!(
+                "customer artifact {} exceeds max size {} bytes",
+                relative_path.display(),
+                CUSTOMER_ARTIFACT_MAX_FILE_BYTES
+            ));
+        }
+        let sha256 = sha256_file_hex(&artifact_path)?;
+        artifacts.push(json!({
+            "path": relative_path.to_string_lossy().to_string(),
+            "title": customer_artifact_item_string(&item, &["title", "name", "label"])
+                .map(|value| safe_response_excerpt(&value, 200))
+                .unwrap_or_default(),
+            "kind": customer_artifact_item_string(&item, &["kind", "type", "artifact_kind"])
+                .map(|value| safe_response_excerpt(&value, 80))
+                .unwrap_or_else(|| "file".to_string()),
+            "mime_type": customer_artifact_item_string(&item, &["mime_type", "mimeType", "content_type"])
+                .map(|value| safe_response_excerpt(&value, 120))
+                .unwrap_or_default(),
+            "bytes": metadata.len(),
+            "sha256": sha256,
+        }));
+    }
+    Ok(artifacts)
+}
+
+fn customer_artifact_manifest_items(manifest: &Value) -> Vec<Value> {
+    if let Some(items) = manifest.get("artifacts").and_then(Value::as_array) {
+        return items.clone();
+    }
+    if let Some(items) = manifest.get("files").and_then(Value::as_array) {
+        return items.clone();
+    }
+    if let Some(item) = manifest.get("artifact").filter(|value| value.is_object()) {
+        return vec![item.clone()];
+    }
+    Vec::new()
+}
+
+fn customer_artifact_item_path(item: &Value) -> Option<String> {
+    if let Some(path) = item
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(path.to_string());
+    }
+    customer_artifact_item_string(
+        item,
+        &[
+            "path",
+            "relative_path",
+            "relativePath",
+            "file",
+            "file_path",
+            "filePath",
+        ],
+    )
+}
+
+fn customer_artifact_item_string(item: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        item.get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
     })
+}
+
+fn validate_customer_artifact_relative_path(path_text: &str) -> Result<PathBuf> {
+    let path_text = path_text.trim();
+    if path_text.is_empty() {
+        return Err(anyhow!("customer artifact path is empty"));
+    }
+    let raw = Path::new(path_text);
+    if raw.is_absolute() {
+        return Err(anyhow!(
+            "customer artifact path must be relative to the task workspace"
+        ));
+    }
+    let mut normalized = PathBuf::new();
+    for component in raw.components() {
+        match component {
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(anyhow!(
+                    "customer artifact path must not escape the task workspace"
+                ));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(anyhow!("customer artifact path is empty"));
+    }
+    validate_customer_artifact_safe_file_name(&normalized)?;
+    validate_customer_artifact_not_reserved_workspace_path(&normalized)?;
+    Ok(normalized)
+}
+
+fn validate_customer_artifact_safe_file_name(path: &Path) -> Result<()> {
+    for component in path.components() {
+        let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
+        if matches!(name.as_str(), ".git" | "node_modules" | ".env" | "secrets")
+            || name.starts_with(".env.")
+            || name.ends_with(".env")
+            || name.contains("secret")
+            || name.contains("credential")
+            || name.contains("access_token")
+            || name.contains("refresh_token")
+            || name.contains("api_key")
+            || name.contains("apikey")
+            || name.contains("private_key")
+            || name.contains("password")
+            || matches!(
+                name.as_str(),
+                "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519" | "authorized_keys"
+            )
+        {
+            return Err(anyhow!(
+                "customer artifact path contains a disallowed component"
+            ));
+        }
+        if name.ends_with(".pem")
+            || name.ends_with(".key")
+            || name.ends_with(".p12")
+            || name.ends_with(".pfx")
+        {
+            return Err(anyhow!(
+                "customer artifact path looks like a credential file"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_customer_artifact_not_reserved_workspace_path(path: &Path) -> Result<()> {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    let first_component = lower.split('/').next().unwrap_or_default();
+    if matches!(
+        lower.as_str(),
+        "task.json"
+            | "runtime.json"
+            | "workspace-seed.json"
+            | "existing-artifact-seed.json"
+            | "readme.md"
+    ) || matches!(
+        first_component,
+        "existing-artifact" | "image2" | "schemas" | "evidence"
+    ) {
+        return Err(anyhow!(
+            "customer artifact path points at a reserved workspace input file"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_customer_artifact_path_in_workspace(
+    workspace_path: &Path,
+    artifact_path: &Path,
+) -> Result<()> {
+    let workspace_canonical = fs::canonicalize(workspace_path).map_err(|error| {
+        anyhow!(
+            "failed to canonicalize customer artifact workspace {}: {error}",
+            workspace_path.display()
+        )
+    })?;
+    let artifact_canonical = fs::canonicalize(artifact_path).map_err(|error| {
+        anyhow!(
+            "failed to canonicalize customer artifact {}: {error}",
+            artifact_path.display()
+        )
+    })?;
+    if !artifact_canonical.starts_with(&workspace_canonical) {
+        return Err(anyhow!(
+            "customer artifact path must stay inside the task workspace"
+        ));
+    }
+    Ok(())
+}
+
+fn sha256_file_hex(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).map_err(|error| {
+        anyhow!(
+            "failed to read customer artifact {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn codex_host_task_event_name(output: &serde_json::Value) -> &'static str {
@@ -7031,6 +8070,7 @@ mod tests {
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+            workspace_seed: None,
         };
         let command_plan = CodexCommandPlan {
             program: "codex".to_string(),
@@ -7069,6 +8109,8 @@ mod tests {
             &decision,
             process_output,
             None,
+            None,
+            None,
         );
 
         assert_eq!(output["mode"], json!("codex_exec"));
@@ -7100,6 +8142,149 @@ mod tests {
     }
 
     #[test]
+    fn customer_codex_result_summary_extracts_safe_structured_json() {
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: CUSTOMER_COMPLEX_REQUEST.to_string(),
+            task: Some("Analyze customer business request".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: None,
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let output = r#"
+analysis text that must not be exposed directly
+{"customer_result_summary":{"schema":"v3.customer_codex_result_summary","schema_version":1,"status":"completed","title":"Business analysis plan","summary":"Prioritize operating metrics over document summarization.","findings":["The customer asked for operating analysis."],"recommended_next_actions":["Use sales, margin, traffic, and store dimensions."],"warnings":["Evidence is still thin."],"safety":{"raw_logs_exposed":false,"credentials_exposed":false,"absolute_paths_exposed":false,"prompt_exposed":false},"debug":"Authorization: Bearer should-not-leak"}}
+"#;
+
+        let summary = customer_codex_result_summary_from_text(output, &task_context)
+            .expect("summary should parse");
+        let serialized = summary.to_string();
+
+        assert_eq!(
+            summary["schema"],
+            json!(CUSTOMER_CODEX_RESULT_SUMMARY_SCHEMA)
+        );
+        assert_eq!(
+            summary["summary"],
+            json!("Prioritize operating metrics over document summarization.")
+        );
+        assert_eq!(
+            summary["findings"][0],
+            json!("The customer asked for operating analysis.")
+        );
+        assert_eq!(
+            summary["recommended_next_actions"][0],
+            json!("Use sales, margin, traffic, and store dimensions.")
+        );
+        assert!(serialized.contains("\"raw_logs_exposed\":false"));
+        assert!(!serialized.contains("should-not-leak"));
+    }
+
+    #[test]
+    fn customer_codex_result_summary_rejects_sensitive_or_non_customer_output() {
+        let mut task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: CUSTOMER_COMPLEX_REQUEST.to_string(),
+            task: Some("Analyze customer business request".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: None,
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let unsafe_output = r#"{"customer_result_summary":{"status":"completed","summary":"secret token should not leak","findings":["/Users/manslive01/.codex/session.json"],"safety":{"raw_logs_exposed":true}}}"#;
+
+        assert!(customer_codex_result_summary_from_text(unsafe_output, &task_context).is_none());
+
+        task_context.capability = "inspect_project".to_string();
+        let safe_but_non_customer =
+            r#"{"customer_result_summary":{"status":"completed","summary":"safe summary"}}"#;
+        assert!(
+            customer_codex_result_summary_from_text(safe_but_non_customer, &task_context).is_none()
+        );
+    }
+
+    #[test]
+    fn codex_exec_output_can_carry_customer_result_summary_without_logs() {
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: CUSTOMER_COMPLEX_REQUEST.to_string(),
+            task: Some("Analyze customer business request".to_string()),
+            local_thread_id: Some("thread-a".to_string()),
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:test".to_string()),
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string(), "--ephemeral".to_string()],
+            prompt: "Analyze customer business request".to_string(),
+            sandbox: "read-only".to_string(),
+            workspace_path: Some(std::path::PathBuf::from(
+                "D:/codex-host/tasks/codex-host-task-test",
+            )),
+            workspace_label: Some("codex-host-task-test".to_string()),
+        };
+        let decision = CodexHostExecutionDecision {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: codex_host_agent::CodexHostProfile {
+                id: "rightcode".to_string(),
+                kind: "codex-compatible-shim".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                provider_id: Some("rightcode".to_string()),
+                base_url: None,
+                env_key: Some("RIGHTCODE_API_KEY_MAIN".to_string()),
+                wire_api: Some("responses".to_string()),
+                allowed_capabilities: vec![CUSTOMER_COMPLEX_REQUEST.to_string()],
+            },
+            host_kind: "aiv3_server".to_string(),
+            command_plan: Some(command_plan.clone()),
+        };
+        let summary = json!({
+            "schema": CUSTOMER_CODEX_RESULT_SUMMARY_SCHEMA,
+            "schema_version": 1,
+            "status": "completed",
+            "title": "Business analysis plan",
+            "summary": "Prioritize operating metrics over document summarization.",
+            "findings": ["The customer asked for operating analysis."],
+            "recommended_next_actions": ["Use sales, margin, traffic, and store dimensions."],
+            "warnings": [],
+            "artifact_intent": false,
+            "capability": CUSTOMER_COMPLEX_REQUEST,
+            "safety": {
+                "raw_logs_exposed": false,
+                "credentials_exposed": false,
+                "absolute_paths_exposed": false,
+                "prompt_exposed": false
+            }
+        });
+
+        let output = codex_exec_output(
+            &command_plan,
+            &task_context,
+            &decision,
+            CodexProcessOutput {
+                exit_code: Some(0),
+                stdout_excerpt: "raw stdout should not leak".to_string(),
+                stderr_excerpt: "raw stderr should not leak".to_string(),
+            },
+            None,
+            Some(summary.clone()),
+            None,
+        );
+        let serialized = output.to_string();
+
+        assert_eq!(output["customer_result_summary"], summary);
+        assert_eq!(output["process"]["stdout_excerpt"], json!(""));
+        assert_eq!(output["process"]["stderr_excerpt"], json!(""));
+        assert!(!serialized.contains("raw stdout should not leak"));
+        assert!(!serialized.contains("raw stderr should not leak"));
+    }
+
+    #[test]
     fn codex_exec_output_keeps_fixed_task_output_without_raw_stdout() {
         let mut task_context = CodexHostTaskContext {
             assistant_run_id: AssistantRunId::new(),
@@ -7111,6 +8296,7 @@ mod tests {
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
             ),
+            workspace_seed: None,
         };
         task_context.capability = task_context
             .fixed_task
@@ -7166,6 +8352,8 @@ mod tests {
             &decision,
             process_output,
             Some(fixed_task_output.clone()),
+            None,
+            None,
         );
         let serialized = output.to_string();
 
@@ -7174,6 +8362,596 @@ mod tests {
         assert_eq!(output["process"]["stderr_excerpt"], json!(""));
         assert!(!serialized.contains("raw public url and internal notes"));
         assert!(!serialized.contains("stderr internals"));
+    }
+
+    #[test]
+    fn customer_artifact_manifest_collects_workspace_files() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _publish = TestEnvVarRestore::set(CUSTOMER_ARTIFACT_PUBLISH_ENABLED_ENV, "false");
+        let workspace =
+            std::env::temp_dir().join(format!("aiv3-customer-artifact-{}", Uuid::new_v4()));
+        fs::create_dir_all(workspace.join("artifacts")).expect("workspace should be created");
+        fs::write(workspace.join("artifacts/report.md"), "# Report\n")
+            .expect("artifact should be written");
+        fs::write(
+            workspace.join("customer-artifact-manifest.json"),
+            serde_json::to_vec_pretty(&json!({
+                "title": "Management report",
+                "summary": "Customer-facing report package.",
+                "artifacts": [{
+                    "path": "artifacts/report.md",
+                    "title": "Report",
+                    "kind": "markdown",
+                    "mime_type": "text/markdown"
+                }]
+            }))
+            .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: CUSTOMER_ARTIFACT_REQUEST.to_string(),
+            task: Some("Create customer artifacts".to_string()),
+            local_thread_id: Some("thread-artifact".to_string()),
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:artifact".to_string()),
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string()],
+            prompt: "Create customer artifacts".to_string(),
+            sandbox: "workspace-write".to_string(),
+            workspace_path: Some(workspace.clone()),
+            workspace_label: Some("customer-artifact-test".to_string()),
+        };
+        let manifest = collect_customer_artifacts_from_workspace(
+            &task_context,
+            WorkflowExecutionId::new(),
+            &command_plan,
+        )
+        .expect("manifest should collect")
+        .expect("manifest should be present");
+
+        assert_eq!(manifest["artifact_count"], json!(1));
+        assert_eq!(manifest["workspace_label"], json!("customer-artifact-test"));
+        assert_eq!(
+            manifest["artifacts"][0]["path"],
+            json!("artifacts/report.md")
+        );
+        assert_eq!(manifest["artifacts"][0]["kind"], json!("markdown"));
+        assert!(manifest["artifacts"][0]["sha256"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64));
+
+        let decision = CodexHostExecutionDecision {
+            mode: CodexHostExecutionMode::CodexExec,
+            profile: codex_host_agent::CodexHostProfile {
+                id: "rightcode".to_string(),
+                kind: "codex-compatible-shim".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                provider_id: Some("rightcode".to_string()),
+                base_url: None,
+                env_key: Some("RIGHTCODE_API_KEY_MAIN".to_string()),
+                wire_api: Some("responses".to_string()),
+                allowed_capabilities: vec![CUSTOMER_ARTIFACT_REQUEST.to_string()],
+            },
+            host_kind: "aiv3_server".to_string(),
+            command_plan: Some(command_plan.clone()),
+        };
+        let output = codex_exec_output(
+            &command_plan,
+            &task_context,
+            &decision,
+            CodexProcessOutput {
+                exit_code: Some(0),
+                stdout_excerpt: "done".to_string(),
+                stderr_excerpt: String::new(),
+            },
+            None,
+            None,
+            Some(manifest),
+        );
+        assert_eq!(output["customer_artifacts"]["artifact_count"], json!(1));
+        assert!(output["fixed_task_output"].is_null());
+
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn generated_static_page_publish_collects_customer_artifact_manifest() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _publish = TestEnvVarRestore::set(CUSTOMER_ARTIFACT_PUBLISH_ENABLED_ENV, "false");
+        let workspace =
+            std::env::temp_dir().join(format!("aiv3-static-page-publish-{}", Uuid::new_v4()));
+        fs::create_dir_all(workspace.join("reports")).expect("workspace should be created");
+        fs::write(
+            workspace.join("reports/index.html"),
+            "<!doctype html><h1>Published dashboard</h1>",
+        )
+        .expect("html artifact should be written");
+        fs::write(
+            workspace.join("customer-artifact-manifest.json"),
+            serde_json::to_vec_pretty(&json!({
+                "title": "经营分析页面",
+                "summary": "客户要求生成新的经营分析静态页。",
+                "artifacts": [{
+                    "path": "reports/index.html",
+                    "title": "经营分析页面",
+                    "kind": "html",
+                    "mime_type": "text/html"
+                }]
+            }))
+            .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: GENERATED_STATIC_PAGE_PUBLISH.to_string(),
+            task: Some("Create a new generated static page".to_string()),
+            local_thread_id: Some("thread-static-page-publish".to_string()),
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:static-page-publish".to_string()),
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string()],
+            prompt: "Create a new generated static page".to_string(),
+            sandbox: "workspace-write".to_string(),
+            workspace_path: Some(workspace.clone()),
+            workspace_label: Some("static-page-publish-test".to_string()),
+        };
+
+        let manifest = collect_customer_artifacts_from_workspace(
+            &task_context,
+            WorkflowExecutionId::new(),
+            &command_plan,
+        )
+        .expect("manifest should collect")
+        .expect("manifest should be present");
+
+        assert_eq!(manifest["status"], json!("available"));
+        assert_eq!(manifest["capability"], json!(GENERATED_STATIC_PAGE_PUBLISH));
+        assert_eq!(manifest["artifact_count"], json!(1));
+        assert_eq!(
+            manifest["artifacts"][0]["path"],
+            json!("reports/index.html")
+        );
+        assert_eq!(manifest["artifacts"][0]["kind"], json!("html"));
+
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn customer_artifact_manifest_publishes_generated_artifact_urls() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let artifact_root = std::env::temp_dir()
+            .join("v3-codex-host-customer-artifacts")
+            .join(Uuid::new_v4().to_string());
+        let _root = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_ROOT",
+            artifact_root.display().to_string(),
+        );
+        let _base = TestEnvVarRestore::set(
+            "V3_GENERATED_ARTIFACT_PUBLIC_BASE_URL",
+            "https://v3.elepcloud.com/generated-artifacts",
+        );
+        let _publish = TestEnvVarRestore::set(CUSTOMER_ARTIFACT_PUBLISH_ENABLED_ENV, "true");
+        let workspace =
+            std::env::temp_dir().join(format!("aiv3-customer-artifact-{}", Uuid::new_v4()));
+        fs::create_dir_all(workspace.join("reports")).expect("workspace should be created");
+        fs::write(
+            workspace.join("reports/index.html"),
+            "<!doctype html><h1>Report</h1>",
+        )
+        .expect("html artifact should be written");
+        fs::write(workspace.join("reports/notes.md"), "# Notes\n")
+            .expect("markdown artifact should be written");
+        fs::write(
+            workspace.join("customer-artifact-manifest.json"),
+            serde_json::to_vec_pretty(&json!({
+                "title": "Management report",
+                "summary": "Customer-facing report package.",
+                "artifacts": [
+                    {
+                        "path": "reports/notes.md",
+                        "title": "Notes",
+                        "kind": "markdown",
+                        "mime_type": "text/markdown"
+                    },
+                    {
+                        "path": "reports/index.html",
+                        "title": "Dashboard",
+                        "kind": "html",
+                        "mime_type": "text/html"
+                    }
+                ]
+            }))
+            .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+
+        let assistant_run_id = AssistantRunId::new();
+        let workflow_execution_id = WorkflowExecutionId::new();
+        let task_context = CodexHostTaskContext {
+            assistant_run_id,
+            capability: CUSTOMER_ARTIFACT_REQUEST.to_string(),
+            task: Some("Create customer artifacts".to_string()),
+            local_thread_id: Some("thread-artifact".to_string()),
+            task_memory_isolated: true,
+            task_memory_space_id: Some("codex-host-task:artifact".to_string()),
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string()],
+            prompt: "Create customer artifacts".to_string(),
+            sandbox: "workspace-write".to_string(),
+            workspace_path: Some(workspace.clone()),
+            workspace_label: Some("customer-artifact-test".to_string()),
+        };
+
+        let manifest = collect_customer_artifacts_from_workspace(
+            &task_context,
+            workflow_execution_id,
+            &command_plan,
+        )
+        .expect("manifest should collect")
+        .expect("manifest should be present");
+
+        assert_eq!(manifest["status"], json!("published"));
+        assert_eq!(manifest["published"], json!(true));
+        assert_eq!(manifest["published_artifact_count"], json!(2));
+        assert!(manifest["public_url"]
+            .as_str()
+            .expect("public url")
+            .ends_with("/reports/index.html"));
+        assert_eq!(
+            manifest["artifacts"][1]["public_url"],
+            manifest["public_url"]
+        );
+        let published_html = artifact_root
+            .join("customer-codex")
+            .join(CUSTOMER_ARTIFACT_REQUEST)
+            .join(assistant_run_id.to_string())
+            .join(workflow_execution_id.to_string())
+            .join("reports/index.html");
+        assert!(published_html.is_file());
+        let published_manifest = published_html
+            .parent()
+            .expect("published report dir")
+            .parent()
+            .expect("published root dir")
+            .join("manifest.json");
+        assert!(published_manifest.is_file());
+        let serialized = manifest.to_string();
+        assert!(!serialized.contains(&artifact_root.display().to_string()));
+        assert!(!serialized.contains(&workspace.display().to_string()));
+
+        let _ = fs::remove_dir_all(workspace);
+        let _ = fs::remove_dir_all(artifact_root);
+    }
+
+    #[test]
+    fn customer_artifact_manifest_rejects_workspace_escape_path() {
+        let workspace =
+            std::env::temp_dir().join(format!("aiv3-customer-artifact-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).expect("workspace should be created");
+        fs::write(
+            workspace.join("customer-artifact-manifest.json"),
+            serde_json::to_vec_pretty(&json!({
+                "artifacts": [{"path": "../secret.txt"}]
+            }))
+            .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: CUSTOMER_ARTIFACT_REQUEST.to_string(),
+            task: Some("Create customer artifacts".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: None,
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string()],
+            prompt: "Create customer artifacts".to_string(),
+            sandbox: "workspace-write".to_string(),
+            workspace_path: Some(workspace.clone()),
+            workspace_label: Some("customer-artifact-test".to_string()),
+        };
+
+        let error = collect_customer_artifacts_from_workspace(
+            &task_context,
+            WorkflowExecutionId::new(),
+            &command_plan,
+        )
+        .expect_err("workspace escape should be rejected");
+
+        assert!(error.to_string().contains("task workspace"));
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn customer_artifact_manifest_rejects_reserved_workspace_inputs() {
+        for path in [
+            "existing-artifact/index.html",
+            "task.json",
+            "workspace-seed.json",
+            "schemas/output.schema.json",
+        ] {
+            let error = validate_customer_artifact_relative_path(path)
+                .expect_err("reserved workspace input should be rejected");
+            assert!(
+                error.to_string().contains("reserved workspace input"),
+                "unexpected error for {path}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn customer_artifact_manifest_rejects_secret_like_paths() {
+        for path in [
+            "artifacts/.env.local",
+            "artifacts/report.env",
+            "artifacts/secret.json",
+            "artifacts/credentials.json",
+            "artifacts/access_token.txt",
+            "artifacts/private_key.txt",
+            "artifacts/id_ed25519",
+            "artifacts/authorized_keys",
+        ] {
+            let error = validate_customer_artifact_relative_path(path)
+                .expect_err("secret-like customer artifact path should be rejected");
+            assert!(
+                error.to_string().contains("disallowed component")
+                    || error.to_string().contains("credential file"),
+                "unexpected error for {path}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_static_page_edit_rejects_unchanged_existing_artifact_copy() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _publish = TestEnvVarRestore::set(CUSTOMER_ARTIFACT_PUBLISH_ENABLED_ENV, "false");
+        let workspace =
+            std::env::temp_dir().join(format!("aiv3-static-page-edit-{}", Uuid::new_v4()));
+        fs::create_dir_all(workspace.join("existing-artifact/assets"))
+            .expect("existing artifact dir should be created");
+        fs::create_dir_all(workspace.join("generated-artifacts/final/assets"))
+            .expect("output artifact dir should be created");
+        fs::write(
+            workspace.join("existing-artifact/index.html"),
+            "<!doctype html><h1>Original report</h1>",
+        )
+        .expect("existing index should be written");
+        fs::write(
+            workspace.join("existing-artifact/assets/report.css"),
+            "body{color:#111}",
+        )
+        .expect("existing css should be written");
+        fs::write(
+            workspace.join("generated-artifacts/final/index.html"),
+            "<!doctype html><h1>Original report</h1>",
+        )
+        .expect("output index should be written");
+        fs::write(
+            workspace.join("generated-artifacts/final/assets/report.css"),
+            "body{color:#111}",
+        )
+        .expect("output css should be written");
+        fs::write(
+            workspace.join("customer-artifact-manifest.json"),
+            serde_json::to_vec_pretty(&json!({
+                "title": "Static page revision",
+                "artifacts": [{
+                    "path": "generated-artifacts/final/index.html",
+                    "title": "Revised page",
+                    "kind": "html",
+                    "mime_type": "text/html"
+                }, {
+                    "path": "generated-artifacts/final/assets/report.css",
+                    "title": "Styles",
+                    "kind": "css",
+                    "mime_type": "text/css"
+                }]
+            }))
+            .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: GENERATED_STATIC_PAGE_EDIT.to_string(),
+            task: Some("Revise current generated static page".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: None,
+            fixed_task: None,
+            workspace_seed: Some(json!({"kind": "generated_static_page_edit"})),
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string()],
+            prompt: "Revise current generated static page".to_string(),
+            sandbox: "workspace-write".to_string(),
+            workspace_path: Some(workspace.clone()),
+            workspace_label: Some("static-page-edit-test".to_string()),
+        };
+
+        let error = collect_customer_artifacts_from_workspace(
+            &task_context,
+            WorkflowExecutionId::new(),
+            &command_plan,
+        )
+        .expect_err("unchanged static page copy should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not change the existing static page artifact"),
+            "unexpected error: {error}"
+        );
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn generated_static_page_edit_accepts_changed_page_artifact() {
+        let _lock = test_env_lock().lock().expect("env lock");
+        let _publish = TestEnvVarRestore::set(CUSTOMER_ARTIFACT_PUBLISH_ENABLED_ENV, "false");
+        let workspace =
+            std::env::temp_dir().join(format!("aiv3-static-page-edit-{}", Uuid::new_v4()));
+        fs::create_dir_all(workspace.join("existing-artifact"))
+            .expect("existing artifact dir should be created");
+        fs::create_dir_all(workspace.join("generated-artifacts/final"))
+            .expect("output artifact dir should be created");
+        fs::write(
+            workspace.join("existing-artifact/index.html"),
+            "<!doctype html><h1>Original report</h1>",
+        )
+        .expect("existing index should be written");
+        fs::write(
+            workspace.join("generated-artifacts/final/index.html"),
+            "<!doctype html><h1>Revised management report</h1>",
+        )
+        .expect("output index should be written");
+        fs::write(
+            workspace.join("customer-artifact-manifest.json"),
+            serde_json::to_vec_pretty(&json!({
+                "title": "Static page revision",
+                "summary": "Updated the headline and priority module.",
+                "artifacts": [{
+                    "path": "generated-artifacts/final/index.html",
+                    "title": "Revised page",
+                    "kind": "html",
+                    "mime_type": "text/html"
+                }]
+            }))
+            .expect("manifest should serialize"),
+        )
+        .expect("manifest should be written");
+
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: GENERATED_STATIC_PAGE_EDIT.to_string(),
+            task: Some("Revise current generated static page".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: None,
+            fixed_task: None,
+            workspace_seed: Some(json!({"kind": "generated_static_page_edit"})),
+        };
+        let command_plan = CodexCommandPlan {
+            program: "codex".to_string(),
+            args_without_prompt: vec!["exec".to_string()],
+            prompt: "Revise current generated static page".to_string(),
+            sandbox: "workspace-write".to_string(),
+            workspace_path: Some(workspace.clone()),
+            workspace_label: Some("static-page-edit-test".to_string()),
+        };
+
+        let manifest = collect_customer_artifacts_from_workspace(
+            &task_context,
+            WorkflowExecutionId::new(),
+            &command_plan,
+        )
+        .expect("changed static page should collect")
+        .expect("manifest should be present");
+
+        assert_eq!(manifest["artifact_count"], json!(1));
+        assert_eq!(
+            manifest["validation"]["static_page_edit_diff"]["status"],
+            json!("changed")
+        );
+        assert_eq!(
+            manifest["validation"]["static_page_edit_diff"]["changed_file_count"],
+            json!(1)
+        );
+        assert_eq!(
+            manifest["validation"]["static_page_edit_diff"]["changed_paths"],
+            json!(["generated-artifacts/final/index.html"])
+        );
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn customer_codex_artifacts_ready_payload_summarizes_manifest() {
+        let task_context = CodexHostTaskContext {
+            assistant_run_id: AssistantRunId::new(),
+            capability: CUSTOMER_ARTIFACT_REQUEST.to_string(),
+            task: Some("Create customer artifacts".to_string()),
+            local_thread_id: None,
+            task_memory_isolated: true,
+            task_memory_space_id: None,
+            fixed_task: None,
+            workspace_seed: None,
+        };
+        let execution_id = WorkflowExecutionId::new();
+        let customer_artifacts = json!({
+            "status": "available",
+            "artifact_count": 1,
+            "artifacts": [{
+                "path": "artifacts/report.md",
+                "sha256": "abc"
+            }]
+        });
+
+        let payload = customer_codex_artifacts_ready_payload(
+            execution_id,
+            &task_context,
+            &customer_artifacts,
+        );
+
+        assert_eq!(
+            customer_codex_artifacts_ready_event_name(CUSTOMER_ARTIFACT_REQUEST),
+            "assistant_run.customer_artifact_request_artifacts_ready"
+        );
+        assert_eq!(
+            customer_codex_artifacts_ready_event_name(GENERATED_STATIC_PAGE_EDIT),
+            "assistant_run.generated_static_page_edit_artifacts_ready"
+        );
+        assert_eq!(
+            payload["workflow_execution_id"],
+            json!(execution_id.to_string())
+        );
+        assert_eq!(payload["capability"], json!(CUSTOMER_ARTIFACT_REQUEST));
+        assert_eq!(payload["artifact_count"], json!(1));
+        assert_eq!(
+            payload["customer_artifacts"]["artifacts"][0]["path"],
+            json!("artifacts/report.md")
+        );
+
+        let publish_context = CodexHostTaskContext {
+            capability: GENERATED_STATIC_PAGE_PUBLISH.to_string(),
+            ..task_context
+        };
+        let publish_payload = customer_codex_artifacts_ready_payload(
+            execution_id,
+            &publish_context,
+            &customer_artifacts,
+        );
+        assert_eq!(
+            customer_codex_artifacts_ready_event_name(GENERATED_STATIC_PAGE_PUBLISH),
+            "assistant_run.customer_artifact_request_artifacts_ready"
+        );
+        assert_eq!(
+            publish_payload["route"],
+            json!("generated_static_page_publish")
+        );
+        assert_eq!(
+            publish_payload["capability"],
+            json!(GENERATED_STATIC_PAGE_PUBLISH)
+        );
     }
 
     #[tokio::test]
@@ -7273,6 +9051,7 @@ mod tests {
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
             ),
+            workspace_seed: None,
         };
         let execution_id = domain_model::WorkflowExecutionId::new();
         let output = json!({
@@ -7357,6 +9136,7 @@ mod tests {
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
             ),
+            workspace_seed: None,
         };
         let output = json!({
             "template_id": "static_page_image2_data_publish",
@@ -7416,6 +9196,7 @@ mod tests {
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
             ),
+            workspace_seed: None,
         };
         let draft_id = task_context
             .fixed_task
@@ -7518,6 +9299,7 @@ mod tests {
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
             ),
+            workspace_seed: None,
         };
         let output = json!({
             "template_id": "static_page_image2_data_publish",
@@ -7608,6 +9390,7 @@ mod tests {
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
             ),
+            workspace_seed: None,
         };
         let output = json!({
             "template_id": "static_page_image2_data_publish",
@@ -7668,6 +9451,7 @@ mod tests {
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::static_page_image2_data_publish_example(),
             ),
+            workspace_seed: None,
         };
         let output = json!({
             "template_id": "static_page_image2_data_publish",
@@ -8506,6 +10290,7 @@ function renderInsight(k){
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:prompt-bound".to_string()),
             fixed_task: Some(fixed_task),
+            workspace_seed: None,
         };
         let full_prompt =
             build_cloudflare_orchestrator_prompt(&task_context).expect("full prompt should build");
@@ -8650,6 +10435,7 @@ function renderInsight(k){
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+            workspace_seed: None,
         };
         assert!(!should_requeue_cloudflare_orchestrator_poll(
             &CodexHostExecutionMode::CodexExec,
@@ -8749,6 +10535,7 @@ function renderInsight(k){
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+            workspace_seed: None,
         };
 
         let _attempts =
@@ -8784,6 +10571,7 @@ function renderInsight(k){
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+            workspace_seed: None,
         };
         let retryable = anyhow!("Codex Host command failed: kind=non_zero_exit exit_code=Some(1)");
         let timeout = anyhow!("Codex Host command timed out after 900000ms");
@@ -8900,6 +10688,7 @@ function renderInsight(k){
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+            workspace_seed: None,
         };
         let unchanged = codex_exec_runtime_config_for_task_context(&non_static_context, &base);
         assert_eq!(unchanged.task_timeout_ms(), 1_800_000);
@@ -9046,6 +10835,7 @@ function renderInsight(k){
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example(),
             ),
+            workspace_seed: None,
         };
         task_context.fixed_task.as_mut().unwrap().requirements =
             json!({"database_url": "mysql://secret"});
@@ -9084,6 +10874,7 @@ function renderInsight(k){
             fixed_task: Some(
                 contracts::CodexHostFixedTaskTemplateContextView::data_ingestion_analysis_example(),
             ),
+            workspace_seed: None,
         };
         task_context.fixed_task.as_mut().unwrap().requirements =
             json!({"database_url": "mysql://secret"});
@@ -9147,6 +10938,7 @@ function renderInsight(k){
             task_memory_isolated: true,
             task_memory_space_id: Some("codex-host-task:test".to_string()),
             fixed_task: None,
+            workspace_seed: None,
         };
         let command_plan = codex_exec_test_command_plan(slow);
         let decision = CodexHostExecutionDecision {
@@ -9244,6 +11036,7 @@ function renderInsight(k){
             task_memory_isolated: true,
             task_memory_space_id: Some(format!("codex-host-task:{assistant_run_id}")),
             fixed_task: Some(fixed_task),
+            workspace_seed: None,
         }
     }
 

@@ -5,6 +5,7 @@ Place workflow replay fixtures, API contract checks, and system validation repor
 Current operator-facing references:
 
 - [assistant-run-worker-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/assistant-run-worker-smoke.md>)
+- [customer-web-codex-executor-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/customer-web-codex-executor-smoke.md>)
 - [codex-host-workspace-retention-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/codex-host-workspace-retention-smoke.md>)
 - [datamax-main-gap-closure.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/datamax-main-gap-closure.md>)
 - [data-ingestion-staging-sync-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/data-ingestion-staging-sync-smoke.md>)
