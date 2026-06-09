@@ -19554,6 +19554,22 @@ async fn find_external_documents_by_dataset_external_id(
     source_id: &str,
     dataset_external_id: &str,
 ) -> std::result::Result<Vec<Document>, ApiError> {
+    let dataset_ids = state
+        .storage
+        .datasets()
+        .list_by_tenant(state.tenant_id)
+        .await
+        .map_err(ApiError::from_storage)?
+        .into_iter()
+        .filter(|dataset| {
+            external_dataset_matches_external_document_parse_dataset(
+                dataset,
+                source_id,
+                dataset_external_id,
+            )
+        })
+        .map(|dataset| dataset.id)
+        .collect::<BTreeSet<_>>();
     let documents = state
         .storage
         .documents()
@@ -19563,12 +19579,31 @@ async fn find_external_documents_by_dataset_external_id(
     Ok(documents
         .into_iter()
         .filter(|document| {
-            external_document_source_matches(&document.metadata, source_id, None)
-                && external_document_dataset_external_ids_from_metadata(&document.metadata)
-                    .iter()
-                    .any(|value| value == dataset_external_id)
+            dataset_ids.contains(&document.dataset_id)
+                || (external_document_source_matches(&document.metadata, source_id, None)
+                    && external_document_dataset_external_ids_from_metadata(&document.metadata)
+                        .iter()
+                        .any(|value| value == dataset_external_id))
         })
         .collect())
+}
+
+fn external_dataset_matches_external_document_parse_dataset(
+    dataset: &Dataset,
+    source_id: &str,
+    dataset_external_id: &str,
+) -> bool {
+    if dataset.lifecycle == DatasetLifecycle::Archived {
+        return false;
+    }
+    let expected_key = external_document_parse_dataset_key(source_id, Some(dataset_external_id));
+    if dataset.key == expected_key {
+        return true;
+    }
+    external_document_source_id_from_metadata(&dataset.metadata, None).as_deref() == Some(source_id)
+        && external_document_dataset_external_ids_from_metadata(&dataset.metadata)
+            .iter()
+            .any(|value| value == dataset_external_id)
 }
 
 async fn infer_external_document_scope_source_id_by_dataset_external_ids(
@@ -31264,14 +31299,152 @@ fn external_channel_assistant_text_reply_for_conversation(
     conversation_external_id: &str,
     reply: String,
 ) -> ExternalBotReplyView {
-    external_channel_needs_input_reply_from_recovery_followup(
+    let reply = external_channel_needs_input_reply_from_recovery_followup(
         &run.evidence_state,
         conversation_external_id,
         Some(&reply),
     )
     .unwrap_or_else(|| {
         external_channel_text_reply_for_conversation(conversation_external_id, reply, "answered")
-    })
+    });
+    external_channel_reply_with_public_citations(reply, &run.evidence_state)
+}
+
+fn external_channel_reply_with_public_citations(
+    mut reply: ExternalBotReplyView,
+    evidence_state: &Value,
+) -> ExternalBotReplyView {
+    if reply.reply_type != ExternalBotReplyTypeView::Text {
+        return reply;
+    }
+    let citations = external_channel_public_citations_from_evidence_state(evidence_state);
+    if citations.is_empty() {
+        return reply;
+    }
+    let citations = Value::Array(citations);
+    match reply.card.as_mut() {
+        Some(Value::Object(card)) => {
+            card.entry("citations".to_string()).or_insert(citations);
+        }
+        Some(_) => {}
+        None => {
+            reply.card = Some(json!({
+                "type": "answer_citations",
+                "citations": citations,
+            }));
+        }
+    }
+    reply
+}
+
+fn external_channel_public_citations_from_evidence_state(evidence_state: &Value) -> Vec<Value> {
+    const CITATION_LIMIT: usize = 8;
+    const CITATION_TEXT_LIMIT: usize = 520;
+
+    let Some(items) = evidence_state
+        .get("supplied_items")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut citations = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in items {
+        let Some(item_type) = item
+            .get("type")
+            .and_then(Value::as_str)
+            .and_then(non_empty_trimmed_string)
+        else {
+            continue;
+        };
+        if matches!(item_type.as_str(), "dataset" | "external_channel") {
+            continue;
+        }
+        let Some(text) = external_channel_public_citation_text(item, CITATION_TEXT_LIMIT) else {
+            continue;
+        };
+        let source =
+            external_channel_public_citation_source(item).unwrap_or_else(|| item_type.clone());
+        let dedupe_key = format!("{item_type}\n{source}\n{text}");
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+        citations.push(json!({
+            "type": item_type,
+            "source": source,
+            "text": text,
+        }));
+        if citations.len() >= CITATION_LIMIT {
+            break;
+        }
+    }
+    citations
+}
+
+fn external_channel_public_citation_text(item: &Value, limit: usize) -> Option<String> {
+    for key in ["summary", "content_excerpt", "text", "note", "title"] {
+        if let Some(value) = item
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(non_empty_trimmed_string)
+        {
+            return Some(truncate_assistant_supply_text(&value, limit));
+        }
+    }
+    None
+}
+
+fn external_channel_public_citation_source(item: &Value) -> Option<String> {
+    if let Some(source) = external_channel_public_database_citation_source(item) {
+        return Some(source);
+    }
+    for key in [
+        "source_locator",
+        "sourceLocator",
+        "document_external_id",
+        "documentExternalId",
+        "source_id",
+        "sourceId",
+        "source",
+        "dataset_key",
+        "datasetKey",
+    ] {
+        if let Some(value) = item
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(non_empty_trimmed_string)
+        {
+            return Some(truncate_assistant_supply_text(&value, 240));
+        }
+    }
+    None
+}
+
+fn external_channel_public_database_citation_source(item: &Value) -> Option<String> {
+    let item_type = item.get("type").and_then(Value::as_str)?;
+    if !item_type.starts_with("database_") {
+        return None;
+    }
+    let table = item
+        .get("table")
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string)?;
+    let source_id = item
+        .get("source_id")
+        .or_else(|| item.get("sourceId"))
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string)
+        .unwrap_or_else(|| "database".to_string());
+    let mut source = format!("database://{source_id}/{table}");
+    if let Some(metric) = item
+        .get("metric")
+        .and_then(Value::as_str)
+        .and_then(non_empty_trimmed_string)
+    {
+        source.push('#');
+        source.push_str(&metric);
+    }
+    Some(truncate_assistant_supply_text(&source, 240))
 }
 
 fn external_channel_needs_input_reply_from_recovery_followup(
@@ -103972,6 +104145,78 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_text_reply_includes_public_citations() {
+        let now = Utc::now();
+        let tenant_id = TenantId::new();
+        let run_id = AssistantRunId::new();
+        let run = AssistantRun {
+            id: run_id,
+            tenant_id,
+            user_id: None,
+            local_thread_id: None,
+            user_prompt: "固定提成取高".to_string(),
+            startup_briefing: json!({}),
+            selected_scope: json!({}),
+            scope_candidates: json!([]),
+            context_policy: json!({}),
+            evidence_state: json!({
+                "status": "supplied",
+                "supplied_items": [
+                    {
+                        "type": "retrieval_evidence",
+                        "source_locator": "documents/newbai.xlsx#chunk=0",
+                        "summary": "固定提成取高资料说明"
+                    },
+                    {
+                        "type": "database_aggregate",
+                        "source_id": "hy-sql-traffic-area",
+                        "table": "bi_contract_warning",
+                        "metric": "quekou",
+                        "summary": "按门店聚合销售缺口，扫描上限 5000 行。"
+                    },
+                    {
+                        "type": "dataset",
+                        "summary": "数据集摘要不应作为 citation"
+                    }
+                ]
+            }),
+            service_lane: "external_channel".to_string(),
+            execution_trail: json!([]),
+            output_artifacts: json!([{
+                "type": "assistant_message",
+                "role": "assistant",
+                "content": "这是正常业务回答。",
+            }]),
+            runtime_manifest: json!({}),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let reply =
+            external_channel_reply_from_run_and_events(&run, &[], "room-1").expect("answer reply");
+        let card = reply.card.as_ref().expect("citation card");
+        let citations = card["citations"].as_array().expect("citations");
+        assert_eq!(citations.len(), 2);
+        assert_eq!(citations[0]["type"], json!("retrieval_evidence"));
+        assert_eq!(
+            citations[0]["source"],
+            json!("documents/newbai.xlsx#chunk=0")
+        );
+        assert_eq!(
+            citations[1]["source"],
+            json!("database://hy-sql-traffic-area/bi_contract_warning#quekou")
+        );
+
+        let public_reply = external_channel_public_reply(reply);
+        let public_card = public_reply.card.as_ref().expect("public citation card");
+        assert_eq!(public_card["citations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            public_card["citations"][0]["text"],
+            json!("固定提成取高资料说明")
+        );
+    }
+
+    #[test]
     fn external_channel_static_page_artifact_ignores_short_report_question() {
         let mut message = sample_external_bot_message();
         message.render_mode = Some("normal".to_string());
@@ -137479,6 +137724,57 @@ retrieve_evidence:
                 "e64cb5b5-e05a-40ce-a904-0c371da04048".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn external_dataset_lookup_accepts_external_parse_dataset_key() {
+        let mut dataset = test_dataset(DatasetVisibility::Public, Vec::new());
+        dataset.key = external_document_parse_dataset_key(
+            "third-party-source-main",
+            Some("345214b9-13cb-4f1d-a3c1-cb000d1e4d81"),
+        );
+
+        assert!(external_dataset_matches_external_document_parse_dataset(
+            &dataset,
+            "third-party-source-main",
+            "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+        ));
+        assert!(!external_dataset_matches_external_document_parse_dataset(
+            &dataset,
+            "other-source",
+            "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+        ));
+    }
+
+    #[test]
+    fn external_dataset_lookup_accepts_external_source_metadata() {
+        let mut dataset = test_dataset(DatasetVisibility::Public, Vec::new());
+        dataset.key = "external-source-third-party-source-main-dataset-current".to_string();
+        dataset.metadata.insert(
+            "external_source".to_string(),
+            json!({
+                "source_id": "third-party-source-main",
+                "dataset_external_id": "external-source-third-party-source-main-dataset-current",
+                "requested_dataset_external_id": "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+            }),
+        );
+
+        assert!(external_dataset_matches_external_document_parse_dataset(
+            &dataset,
+            "third-party-source-main",
+            "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+        ));
+        assert!(external_dataset_matches_external_document_parse_dataset(
+            &dataset,
+            "third-party-source-main",
+            "external-source-third-party-source-main-dataset-current"
+        ));
+        dataset.lifecycle = DatasetLifecycle::Archived;
+        assert!(!external_dataset_matches_external_document_parse_dataset(
+            &dataset,
+            "third-party-source-main",
+            "345214b9-13cb-4f1d-a3c1-cb000d1e4d81"
+        ));
     }
 
     #[test]
