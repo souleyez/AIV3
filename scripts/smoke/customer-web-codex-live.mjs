@@ -97,6 +97,7 @@ function parseArgs(argv) {
     selfTest: parseBoolean(process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_SELF_TEST),
     ackControlledLive: parseBoolean(process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_ACK_CONTROLLED_LIVE),
     allowPending: parseBoolean(process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_ALLOW_PENDING),
+    allowMissingGates: parseBoolean(process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_ALLOW_MISSING_GATES),
     selectedCaseIds: [],
   };
 
@@ -164,6 +165,8 @@ function parseArgs(argv) {
       args.ackControlledLive = true;
     } else if (arg === '--allow-pending') {
       args.allowPending = true;
+    } else if (arg === '--allow-missing-gates') {
+      args.allowMissingGates = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -177,6 +180,9 @@ function parseArgs(argv) {
   }
   if (!args.selfTest && args.execute && args.preflight) {
     throw new Error('--execute and --preflight cannot be combined');
+  }
+  if (!args.selfTest && args.execute && args.allowMissingGates) {
+    throw new Error('--allow-missing-gates is only valid for preflight/no-execute mode');
   }
   if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 10_000) {
     throw new Error('--timeout-ms must be at least 10000');
@@ -224,6 +230,8 @@ function printHelp() {
 Modes:
   --self-test   No network. Verifies approval gates, SSE parsing, evidence checks, and redaction.
   --preflight   No network. Writes a readiness report for controlled live execution.
+  --allow-missing-gates
+                Preflight only. Exit 0 after writing the missing-input checklist; does not relax --execute.
   --execute     Live write mode. Requires credentials, dataset id, static page artifact context,
                 --ack-controlled-live, and --approval-id.
 `);
@@ -795,6 +803,7 @@ function preflightReport(args, currentArtifact) {
     mode: 'preflight',
     ok: missing.length === 0,
     readyToExecute: missing.length === 0,
+    allowMissingGates: args.allowMissingGates === true,
     generatedAt: new Date().toISOString(),
     target: {
       baseUrlKind: targetKind(args.baseUrl),
@@ -820,7 +829,7 @@ function preflightReport(args, currentArtifact) {
     })),
     missingGates: missing,
     controlledLiveInputChecklist,
-    approvalRequestSummary: buildApprovalRequestSummary(controlledLiveInputChecklist),
+    approvalRequestSummary: buildApprovalRequestSummary(controlledLiveInputChecklist, args),
     liveWritesAttempted: false,
     nextCommandTemplate: buildNextCommandTemplate(args, cases),
   };
@@ -945,12 +954,13 @@ function buildControlledLiveInputChecklist(args, cases, currentArtifact, current
   };
 }
 
-function buildApprovalRequestSummary(checklist) {
+function buildApprovalRequestSummary(checklist, args = {}) {
   return {
     schema: 'v3.customer_web_codex_controlled_live_approval_request.v1',
     status: checklist.readyToExecute ? 'ready_for_controlled_live_execute' : 'missing_required_inputs',
     requestedScope: 'controlled_customer_web_codex_live_smoke_only',
     preflightNetworkCalls: false,
+    allowMissingGates: args.allowMissingGates === true,
     liveWritesRequireExecuteAckAndApproval: true,
     selectedCaseCount: checklist.selectedCaseCount,
     readyToExecute: checklist.readyToExecute,
@@ -1008,7 +1018,12 @@ async function runPreflight(args) {
   const paths = await writeReports(args.outputDir, report);
   console.log(`Customer Web Codex live smoke preflight report: ${paths.jsonPath}`);
   console.log(`Customer Web Codex live smoke preflight summary: ${paths.mdPath}`);
-  return report.ok ? 0 : 1;
+  return preflightExitCode(args, report);
+}
+
+function preflightExitCode(args, report) {
+  if (report.ok) return 0;
+  return args.allowMissingGates === true ? 0 : 1;
 }
 
 async function runExecute(args) {
@@ -1170,6 +1185,65 @@ function assertApprovalGateContract() {
   if (publicUrlArtifact.missingGates.length || !publicUrlArtifact.readyToExecute) {
     throw new Error('approval gate failed to accept current artifact public URL shorthand');
   }
+}
+
+function assertPreflightExitCodeContract() {
+  const base = {
+    baseUrl: DEFAULT_BASE_URL,
+    cookie: '',
+    bearer: '',
+    datasetId: '',
+    datasetTitle: 'Dataset Smoke',
+    currentArtifactJson: '',
+    currentArtifactFile: '',
+    currentArtifactPublicUrl: '',
+    currentArtifactId: '',
+    currentArtifactTitle: '',
+    approvalId: '',
+    localThreadPrefix: 'self-test',
+    outputDir: DEFAULT_OUTPUT_DIR,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+    pollAttempts: DEFAULT_POLL_ATTEMPTS,
+    execute: false,
+    preflight: true,
+    selfTest: false,
+    ackControlledLive: false,
+    allowPending: false,
+    allowMissingGates: false,
+    selectedCaseIds: [],
+  };
+  const missingReport = preflightReport(base, parseCurrentArtifact(base));
+  if (preflightExitCode(base, missingReport) !== 1) {
+    throw new Error('preflight should fail closed when gates are missing by default');
+  }
+  const checklistModeArgs = { ...base, allowMissingGates: true };
+  const checklistModeReport = preflightReport(checklistModeArgs, parseCurrentArtifact(checklistModeArgs));
+  if (preflightExitCode(checklistModeArgs, checklistModeReport) !== 0) {
+    throw new Error('preflight should allow missing gates when explicit checklist mode is enabled');
+  }
+  if (checklistModeReport.readyToExecute || checklistModeReport.approvalRequestSummary.readyToExecute) {
+    throw new Error('allow-missing-gates must not mark missing controlled-live inputs ready');
+  }
+  if (!checklistModeReport.allowMissingGates || !checklistModeReport.approvalRequestSummary.allowMissingGates) {
+    throw new Error('preflight checklist mode receipt should record allowMissingGates=true');
+  }
+  assertReportSafe(checklistModeReport, checklistModeArgs);
+
+  const readyArgs = {
+    ...base,
+    cookie: 'aidp_v3_session=self-test-secret',
+    datasetId: 'dataset-smoke',
+    currentArtifactPublicUrl: 'https://v3.elepcloud.com/generated-artifacts/customer-web-codex-live-smoke/index.html',
+    currentArtifactId: '11111111-1111-4111-8111-000000000401',
+    approvalId: 'approval-self-test-secret',
+    ackControlledLive: true,
+  };
+  const readyReport = preflightReport(readyArgs, parseCurrentArtifact(readyArgs));
+  if (preflightExitCode(readyArgs, readyReport) !== 0 || !readyReport.readyToExecute) {
+    throw new Error('preflight should return success when controlled-live inputs are ready');
+  }
+  assertReportSafe(readyReport, readyArgs);
 }
 
 function assertNextCommandTemplateContract() {
@@ -1580,6 +1654,7 @@ function assertSyntheticCaseEvidenceContracts() {
 
 async function runSelfTest(args) {
   assertApprovalGateContract();
+  assertPreflightExitCodeContract();
   assertNextCommandTemplateContract();
   const controlledLiveInputChecklistEvidence = assertControlledLiveInputChecklistContract();
   assertSseParsingContract();
@@ -1591,6 +1666,7 @@ async function runSelfTest(args) {
     generatedAt: new Date().toISOString(),
     checks: [
       { name: 'approval_gate_requires_ack_approval_auth_dataset_and_artifact', status: 'passed' },
+      { name: 'preflight_allow_missing_gates_exit_code_contract', status: 'passed' },
       { name: 'controlled_live_next_command_template_redacted', status: 'passed' },
       { name: 'controlled_live_input_checklist_contract', status: 'passed' },
       { name: 'current_static_page_artifact_shape_rejects_placeholder_context', status: 'passed' },
@@ -1703,6 +1779,7 @@ function markdownReport(report) {
     lines.push(`- Status: ${report.approvalRequestSummary.status}`);
     lines.push(`- Requested scope: ${report.approvalRequestSummary.requestedScope}`);
     lines.push(`- Ready to execute: ${report.approvalRequestSummary.readyToExecute === true ? 'true' : 'false'}`);
+    lines.push(`- Allow missing gates: ${report.approvalRequestSummary.allowMissingGates === true ? 'true' : 'false'}`);
     lines.push(
       `- Required operator inputs: ${report.approvalRequestSummary.requiredOperatorInputCount}`,
     );

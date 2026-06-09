@@ -44,6 +44,7 @@ These checks cover:
 - the guarded live-smoke harness self-test validates approval gates and a synthetic five-case evidence matrix for task cards, artifact bundles, and product-change blocked cards before any live API call is allowed.
 - the guarded live-smoke harness self-test writes a redacted `Synthetic Shelf Evidence` receipt section with task-card, artifact-bundle, blocked-task, and product-change no-artifact counts for the right-side shelf contract.
 - the guarded live-smoke harness preflight writes `controlledLiveInputChecklist` and `approvalRequestSummary`, so operators can see required live inputs, selected-case requirements, and missing gates without exposing cookies, bearer values, approval text, artifact URLs, raw prompts, local paths, or current artifact JSON.
+- the guarded live-smoke harness supports `--allow-missing-gates` for preflight-only missing-input collection; this changes only the preflight exit code and does not mark `readyToExecute=true` or relax live `--execute` gate enforcement.
 - the top-level executor smoke receipt writes `acceptance_status.schema=v3.customer_web_codex_executor_acceptance_status.v1`, so reviewers can distinguish passed no-live evidence from pending controlled-live gates.
 - the top-level executor smoke writes the live-smoke self-test into a per-run child report directory, reads it back, and only marks live-readiness evidence ready when approval, redacted command-template, current-artifact, SSE parsing, synthetic shelf, product-change blocking, and redaction checks are present in that child report.
 
@@ -111,6 +112,7 @@ The top-level executor smoke JSON includes an `acceptance_status` object with:
 - `no_live_gate.status=passed` when local/deployment-target checks pass.
 - `no_live_gate.live_self_test_evidence_ready=true` only after the executor smoke parses the per-run live-smoke self-test child report.
 - `live_gate_readiness_summary.required_inputs` listing the four controlled-live inputs required before execution.
+- `live_gate_readiness_summary.preflight_allow_missing_gates_ready=true` proving the live-smoke self-test covered the preflight-only checklist exit-code mode without marking missing live inputs ready.
 - `live_gate_readiness_summary.next_command_template_redacted=true` proving the live-smoke self-test covered the redacted command-template contract for cookie and bearer auth shapes.
 - `live_gate_readiness_summary.controlled_live_input_checklist_ready=true` proving the live-smoke self-test covered the machine-readable checklist, including the product-change-only case that does not require dataset or current artifact inputs.
 - `live_gate_readiness_summary.approval_request_summary` listing the required operator input categories and `--execute` / `--ack-controlled-live` gates without recording their values.
@@ -152,6 +154,13 @@ It checks whether the operator has supplied the required controlled-live inputs 
 - `controlledLiveInputChecklist.caseRequirements`, so a narrowed run such as `--case v3_product_change_request` can prove it does not need dataset or current artifact inputs.
 - `approvalRequestSummary.schema=v3.customer_web_codex_controlled_live_approval_request.v1`
 - `approvalRequestSummary.executionGates`, listing `--execute` and `--ack-controlled-live` without recording live values.
+
+If the operator only wants to collect the missing-input checklist before credentials or approval exist, add `--allow-missing-gates`. The command still writes `readyToExecute=false` and lists the missing gates, but exits 0 so deployment checklists can archive the receipt without treating the missing-input state as a script failure:
+
+```bash
+npm run smoke:customer-web-codex-live -- --preflight --allow-missing-gates \
+  --base-url https://v3.elepcloud.com
+```
 
 For the `generated_static_page_edit` case, preflight also validates the current static-page artifact shape without recording the actual URL or JSON: the context must look like a V3 static page, be finally rendered, expose an allowed generated-artifact URL, and include an absolute `https://v3.elepcloud.com/generated-artifacts/...` URL that the host agent can copy into the task workspace as the existing page seed.
 

@@ -143,6 +143,7 @@ const evidence = {
   live_writes_attempted: report.liveWritesAttempted === true,
   live_writes_blocked: report.liveWritesAttempted === false,
   approval_gate_enforced: checkNames.has("approval_gate_requires_ack_approval_auth_dataset_and_artifact"),
+  preflight_allow_missing_gates_ready: checkNames.has("preflight_allow_missing_gates_exit_code_contract"),
   next_command_template_redacted: checkNames.has("controlled_live_next_command_template_redacted"),
   controlled_live_input_checklist_ready:
     checkNames.has("controlled_live_input_checklist_contract")
@@ -180,6 +181,7 @@ evidence.ready = evidence.ok
   && evidence.mode_self_test
   && evidence.live_writes_blocked
   && evidence.approval_gate_enforced
+  && evidence.preflight_allow_missing_gates_ready
   && evidence.next_command_template_redacted
   && evidence.controlled_live_input_checklist_ready
   && evidence.current_artifact_shape_gate_enforced
@@ -196,7 +198,7 @@ process.stdout.write(JSON.stringify(evidence));
 NODE
 )"
 checks+=("customer-web-codex-live self-test evidence readback")
-echo "${live_self_test_evidence_json}" | node -e 'const fs = require("fs"); const evidence = JSON.parse(fs.readFileSync(0, "utf8")); console.log(`evidence_ready=${evidence.ready} input_checklist_ready=${evidence.controlled_live_input_checklist_ready} synthetic_cases=${evidence.synthetic_shelf_evidence_summary.case_count} artifact_bundles=${evidence.synthetic_shelf_evidence_summary.artifact_bundle_case_count}`);'
+echo "${live_self_test_evidence_json}" | node -e 'const fs = require("fs"); const evidence = JSON.parse(fs.readFileSync(0, "utf8")); console.log(`evidence_ready=${evidence.ready} allow_missing_gates_ready=${evidence.preflight_allow_missing_gates_ready} input_checklist_ready=${evidence.controlled_live_input_checklist_ready} synthetic_cases=${evidence.synthetic_shelf_evidence_summary.case_count} artifact_bundles=${evidence.synthetic_shelf_evidence_summary.artifact_bundle_case_count}`);'
 
 run_check "npm --prefix apps/web run build" \
   npm --prefix apps/web run build
@@ -268,6 +270,8 @@ const report = {
       schema: "v3.customer_web_codex_executor_live_gate_readiness_summary.v1",
       controlled_live_harness_self_test_ready: liveSelfTestEvidence.ready === true,
       approval_gate_enforced: liveSelfTestEvidence.approval_gate_enforced === true,
+      preflight_allow_missing_gates_ready:
+        liveSelfTestEvidence.preflight_allow_missing_gates_ready === true,
       next_command_template_redacted:
         liveSelfTestEvidence.next_command_template_redacted === true,
       controlled_live_input_checklist_ready:
@@ -409,6 +413,7 @@ const lines = [
   `- No-live check count: ${report.acceptance_status.no_live_gate.check_count}`,
   `- Video/PPT no-live rollup: ${report.acceptance_status.no_live_gate.video_ppt_no_live_rollup_status}`,
   `- Live self-test evidence ready: ${report.acceptance_status.no_live_gate.live_self_test_evidence_ready}`,
+  `- Preflight allow-missing-gates ready: ${report.acceptance_status.live_gate_readiness_summary.preflight_allow_missing_gates_ready}`,
   `- Live command template redacted: ${report.acceptance_status.live_gate_readiness_summary.next_command_template_redacted}`,
   `- Live input checklist ready: ${report.acceptance_status.live_gate_readiness_summary.controlled_live_input_checklist_ready}`,
   `- Synthetic shelf cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.case_count ?? "unknown"}`,
