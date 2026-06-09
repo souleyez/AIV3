@@ -1163,6 +1163,7 @@ function syntheticResponseForCase(testCase) {
 }
 
 function assertSyntheticCaseEvidenceContracts() {
+  const rows = [];
   for (const testCase of LIVE_CASES) {
     const response = syntheticResponseForCase(testCase);
     const evidence = evaluateEvidence(testCase, [response], false);
@@ -1178,13 +1179,41 @@ function assertSyntheticCaseEvidenceContracts() {
     if (testCase.expectsBlocked && !evidence.blockedSatisfied) {
       throw new Error(`synthetic blocked evidence missing for ${testCase.id}`);
     }
+    rows.push({
+      id: testCase.id,
+      taskCardExpected: true,
+      artifactBundleExpected: testCase.expectsArtifactBundle,
+      blockedTaskExpected: testCase.expectsBlocked,
+      taskFound: evidence.taskFound,
+      terminalSatisfied: evidence.terminalSatisfied,
+      artifactBundleCount: evidence.matchingArtifactBundleCount,
+      blockedSatisfied: evidence.blockedSatisfied,
+      noUnexpectedArtifacts: evidence.noUnexpectedArtifacts,
+    });
   }
+  return {
+    caseCount: rows.length,
+    taskCardCaseCount: rows.filter((row) => row.taskCardExpected && row.taskFound).length,
+    artifactBundleCaseCount: rows.filter((row) => row.artifactBundleExpected && row.artifactBundleCount > 0).length,
+    blockedTaskCaseCount: rows.filter((row) => row.blockedTaskExpected && row.blockedSatisfied).length,
+    productChangeArtifactBundleCount: rows
+      .filter((row) => row.id === 'v3_product_change_request')
+      .reduce((sum, row) => sum + row.artifactBundleCount, 0),
+    allSyntheticCasesMet: rows.every((row) => (
+      row.taskFound
+      && row.terminalSatisfied
+      && (!row.artifactBundleExpected || row.artifactBundleCount > 0)
+      && (!row.blockedTaskExpected || row.blockedSatisfied)
+      && row.noUnexpectedArtifacts
+    )),
+    rows,
+  };
 }
 
 async function runSelfTest(args) {
   assertApprovalGateContract();
   assertSseParsingContract();
-  assertSyntheticCaseEvidenceContracts();
+  const syntheticShelfEvidence = assertSyntheticCaseEvidenceContracts();
   const report = {
     smoke: 'customer-web-codex-live',
     mode: 'self-test',
@@ -1199,6 +1228,7 @@ async function runSelfTest(args) {
       { name: 'blocked_product_change_evidence_has_no_artifact_bundle', status: 'passed' },
       { name: 'report_redaction_rejects_auth_and_prompt_secrets', status: 'passed' },
     ],
+    syntheticShelfEvidence,
     liveWritesAttempted: false,
   };
   assertReportSafe(report, args);
@@ -1316,6 +1346,20 @@ function markdownReport(report) {
     lines.push('## Checks', '');
     report.checks.forEach((check) => lines.push(`- ${check.status}: ${check.name}`));
     lines.push('');
+  }
+  if (report.syntheticShelfEvidence) {
+    lines.push('## Synthetic Shelf Evidence', '');
+    lines.push(`- Case count: ${report.syntheticShelfEvidence.caseCount}`);
+    lines.push(`- Task-card cases: ${report.syntheticShelfEvidence.taskCardCaseCount}`);
+    lines.push(`- Artifact-bundle cases: ${report.syntheticShelfEvidence.artifactBundleCaseCount}`);
+    lines.push(`- Blocked-task cases: ${report.syntheticShelfEvidence.blockedTaskCaseCount}`);
+    lines.push(
+      `- Product-change artifact bundles: ${report.syntheticShelfEvidence.productChangeArtifactBundleCount}`,
+    );
+    lines.push(
+      `- All synthetic cases met: ${report.syntheticShelfEvidence.allSyntheticCasesMet === true ? 'true' : 'false'}`,
+      '',
+    );
   }
   if (report.nextCommandTemplate) {
     lines.push('## Next Command Template', '', `\`${report.nextCommandTemplate}\``, '');

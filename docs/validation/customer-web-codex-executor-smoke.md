@@ -42,6 +42,7 @@ These checks cover:
 - the right-side `Codex 执行与产物` shelf can show both task cards and artifact bundles.
 - readiness parsing treats self-test fixtures and parsed env-file values as authoritative, so conflicting shell env variables cannot make a deployment-target check look ready.
 - the guarded live-smoke harness self-test validates approval gates and a synthetic five-case evidence matrix for task cards, artifact bundles, and product-change blocked cards before any live API call is allowed.
+- the guarded live-smoke harness self-test writes a redacted `Synthetic Shelf Evidence` receipt section with task-card, artifact-bundle, blocked-task, and product-change no-artifact counts for the right-side shelf contract.
 
 ## Optional Video PPT Regression Rollup
 
