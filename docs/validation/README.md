@@ -9,6 +9,7 @@ Current operator-facing references:
 - [datamax-main-gap-closure.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/datamax-main-gap-closure.md>)
 - [data-ingestion-staging-sync-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/data-ingestion-staging-sync-smoke.md>)
 - [document-understanding-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/document-understanding-smoke.md>)
+- [newbai-customer-answer-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/newbai-customer-answer-smoke.md>)
 - [runtime-inspect-pretty.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/runtime-inspect-pretty.md>)
 - [static-page-browser-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/static-page-browser-smoke.md>)
 - [static-page-quality-smoke.md](</C:/Users/soulzyn/Desktop/codex/ai-data-platform-v3/docs/validation/static-page-quality-smoke.md>)
