@@ -44664,7 +44664,10 @@ async fn external_channel_chat_model_or_acceptance_reply(
         )
         .await?;
 
-        let mut reply = external_channel_text_reply(message, output_text, "answered");
+        let mut reply = external_channel_reply_with_public_citations(
+            external_channel_text_reply(message, output_text, "answered"),
+            evidence_state,
+        );
         if let Some(static_page_reply) =
             external_channel_static_page_artifact_reply_from_output_artifacts(
                 &output_artifacts_value,
