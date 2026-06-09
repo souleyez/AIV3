@@ -1220,6 +1220,7 @@ export default function HomePageClient() {
   const staticPageDraftStatusRef = useRef(new Map());
   const assistantRunCustomerCodexPollRef = useRef(0);
   const codexCustomerChatMessageKeysRef = useRef(new Set());
+  const uiNoticeMessageKeysRef = useRef(new Set());
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -1653,6 +1654,36 @@ export default function HomePageClient() {
         });
       });
       return appended.length ? [...current, ...appended].slice(-40) : current;
+    });
+  }
+
+  function appendUiNoticeMessage(kind, content) {
+    const text = String(content || '').trim();
+    if (!text) return;
+    if (text === '已发送，助手正在后台处理；你可以继续输入。') {
+      return;
+    }
+    const displayContent = kind === 'error' ? `提示：${text}` : text;
+    const stableKey = `ui-notice:${kind}:${displayContent.replace(/\s+/g, ' ')}`;
+    setLocalMessages((current) => {
+      if (
+        uiNoticeMessageKeysRef.current.has(stableKey)
+        || current.some((message) => message?.metadata?.key === stableKey)
+      ) {
+        return current;
+      }
+      uiNoticeMessageKeysRef.current.add(stableKey);
+      return [
+        ...current,
+        {
+          ...createLocalMessage('assistant', displayContent),
+          metadata: {
+            source: 'ui_notice',
+            tone: kind,
+            key: stableKey,
+          },
+        },
+      ].slice(-40);
     });
   }
 
@@ -4279,6 +4310,14 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
+    appendUiNoticeMessage('banner', banner);
+  }, [banner]);
+
+  useEffect(() => {
+    appendUiNoticeMessage('error', error);
+  }, [error]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
@@ -5021,9 +5060,6 @@ export default function HomePageClient() {
           onSelectSession={handleSelectConversation}
           onRenameConversation={handleRenameConversation}
         />
-
-        {banner ? <div className="page-banner success-banner">{banner}</div> : null}
-        {error ? <div className="page-banner error-banner">{error}</div> : null}
 
         <section
           className={`workspace-grid homepage-workspace ${activePage === 'home' ? '' : 'page-directory-workspace'} mobile-panel-${mobilePanel}`.trim()}

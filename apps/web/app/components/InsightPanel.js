@@ -1461,10 +1461,6 @@ export default function InsightPanel({
       {showExecutionObservability ? <ExecutionObservationCard progress={assistantRunProgress} /> : null}
 
       <section className="card insight-card right-results-card">
-        <SectionHeader
-          title="数据集报表"
-          subtitle={resultCount ? `${dataset?.title || dataset?.name || '当前数据集'} · ${resultCount} 个报表` : '当前数据集还没有报表'}
-        />
         <div className="generated-project-list">
           {reportShelfItems.map((item) => (
             <ReportShelfCard

@@ -276,9 +276,6 @@ export default function HomeMobileShell({
         </button>
       </div>
 
-      {banner ? <div className="page-banner success-banner mobile-home-banner">{banner}</div> : null}
-      {error ? <div className="page-banner error-banner mobile-home-banner">{error}</div> : null}
-
       <main className={`mobile-home-stage mobile-home-stage-${surface}`}>
         {surface === 'static-page' ? (
           <StaticPageMobileBuilder

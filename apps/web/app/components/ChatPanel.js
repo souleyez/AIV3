@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
+import { formatDateTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import HtmlArtifactViewer from './artifacts/HtmlArtifactViewer';
 import StaticPageAssistantNotice from './static-page/StaticPageAssistantNotice';
 import StaticPagePlanningPanel from './static-page/StaticPagePlanningPanel';
@@ -17,12 +17,6 @@ const CONTINUATION_LABELS = {
   ready_for_host_action: '待宿主动作',
   in_progress: '进行中',
   completed: '已完成',
-};
-
-const REPORT_ENTRY_LABELS = {
-  not_applicable: '保持资料服务',
-  confirmation_required: '待确认报告入口',
-  confirmed: '已进入报告服务',
 };
 
 const STATIC_PAGE_PRIMARY_ACTION_LABEL = '提交生图文案';
@@ -510,50 +504,6 @@ export default function ChatPanel({
 
   return (
     <section className={`chat-panel card ${panelClassName}`.trim()}>
-      <div className="panel-header chat-header">
-        <div>
-          <h3>{session ? session.title : selectedScope.length ? `普通聊天 · ${selectedScope.length} 个供料范围` : '普通聊天 · 未选数据集'}</h3>
-          <p>
-            {session
-              ? `会话 ${truncateText(session.id, 16)} · 最后更新 ${formatRelativeTime(session.updated_at)}`
-              : selectedScope.length
-                ? `已选 ${selectedScopeLabel} 作为优先供料范围；不会切换对话。`
-                : '可以直接提问；系统会先做范围判断，命中资料意图时自动选中相关数据集。'}
-          </p>
-        </div>
-        {session ? (
-          <div className="header-pill-row">
-            <span className="badge">
-              {REPORT_ENTRY_LABELS[reportEntry?.state] || REPORT_ENTRY_LABELS.not_applicable}
-            </span>
-            {showRuntimeObservability && session.model_facing?.recommended_tool_key ? (
-              <span className="badge badge-soft">
-                推荐工具 {session.model_facing.recommended_tool_key}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              className="ghost-btn compact-action-btn"
-              onClick={onStartNewConversation}
-              disabled={submitting}
-            >
-              新会话
-            </button>
-          </div>
-        ) : selectedScope.length ? (
-          <div className="header-pill-row">
-            <button
-              type="button"
-              className="ghost-btn compact-action-btn"
-              onClick={onStartNewConversation}
-              disabled={submitting}
-            >
-              新会话
-            </button>
-          </div>
-        ) : null}
-      </div>
-
       <ReportEntryGate
         reportEntry={reportEntry}
         busy={reportEntryBusy}
