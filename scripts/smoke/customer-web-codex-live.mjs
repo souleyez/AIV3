@@ -15,6 +15,8 @@ const DEFAULT_OUTPUT_DIR = 'target/customer-web-codex-live-smoke';
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const DEFAULT_POLL_ATTEMPTS = 90;
+const V3_GENERATED_ARTIFACTS_URL_PREFIX = 'https://v3.elepcloud.com/generated-artifacts/';
+const V3_GENERATED_ARTIFACTS_PATH_PREFIX = '/generated-artifacts/';
 
 const LIVE_CASES = [
   {
@@ -229,6 +231,147 @@ function parseCurrentArtifact(args) {
   } catch (error) {
     throw new Error(`current artifact is not valid JSON: ${error.message}`);
   }
+}
+
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function stringField(object, keys) {
+  const source = objectValue(object);
+  if (!source) return '';
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function pointerString(object, pointer) {
+  const source = objectValue(object);
+  if (!source) return '';
+  const value = pointer
+    .split('/')
+    .filter(Boolean)
+    .reduce((current, key) => (objectValue(current) ? current[key] : undefined), source);
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function firstCurrentArtifactPublicUrl(currentArtifact) {
+  const pointerCandidates = [
+    '/finalPage/publicUrl',
+    '/finalPage/public_url',
+    '/finalPage/generatedArtifactUrl',
+    '/finalPage/generated_artifact_url',
+    '/final_page/publicUrl',
+    '/final_page/public_url',
+    '/final_page/generatedArtifactUrl',
+    '/final_page/generated_artifact_url',
+    '/artifactStability/publicUrl',
+    '/artifactStability/public_url',
+    '/artifact_stability/publicUrl',
+    '/artifact_stability/public_url',
+  ];
+  for (const pointer of pointerCandidates) {
+    const value = pointerString(currentArtifact, pointer);
+    if (value) return value;
+  }
+  return stringField(currentArtifact, [
+    'publicUrl',
+    'public_url',
+    'generatedArtifactUrl',
+    'generated_artifact_url',
+  ]);
+}
+
+function generatedArtifactUrlAllowed(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (
+    text.includes('/generated-artifacts/pending-')
+    || text.includes('/generated-artifacts/pending/')
+    || text.endsWith('/generated-artifacts/pending')
+  ) {
+    return false;
+  }
+  return text.startsWith(V3_GENERATED_ARTIFACTS_URL_PREFIX)
+    || text.startsWith(V3_GENERATED_ARTIFACTS_PATH_PREFIX);
+}
+
+function hostSeedPublicUrlAllowed(value) {
+  const text = String(value || '').trim();
+  if (!generatedArtifactUrlAllowed(text)) return false;
+  return text.startsWith(V3_GENERATED_ARTIFACTS_URL_PREFIX);
+}
+
+function currentArtifactFinalStatus(currentArtifact) {
+  return stringField(currentArtifact?.finalPage, ['status'])
+    || stringField(currentArtifact?.final_page, ['status'])
+    || stringField(currentArtifact, ['finalRenderStatus', 'final_render_status', 'status']);
+}
+
+function currentArtifactIsStaticPage(currentArtifact) {
+  const type = stringField(currentArtifact, ['type', 'kind']);
+  if (['static_page_draft', 'static_page'].includes(type)) return true;
+  return Boolean(
+    currentArtifact?.backendDraftId
+      || currentArtifact?.backend_draft_id
+      || currentArtifact?.previewContract
+      || currentArtifact?.preview_contract
+      || currentArtifact?.finalPage
+      || currentArtifact?.final_page
+      || currentArtifact?.previewStale
+      || currentArtifact?.preview_stale
+      || (Array.isArray(currentArtifact?.modules)
+        && (currentArtifact?.styleDirection
+          || currentArtifact?.style_direction
+          || currentArtifact?.previewStatus
+          || currentArtifact?.preview_status
+          || currentArtifact?.finalRenderStatus
+          || currentArtifact?.final_render_status)),
+  );
+}
+
+function currentArtifactDraftIdPresent(currentArtifact) {
+  return Boolean(
+    stringField(currentArtifact, [
+      'backendDraftId',
+      'backend_draft_id',
+      'staticPageDraftId',
+      'static_page_draft_id',
+      'draft_id',
+      'id',
+    ]),
+  );
+}
+
+function summarizeCurrentArtifact(currentArtifact) {
+  const publicUrl = firstCurrentArtifactPublicUrl(currentArtifact);
+  const finalStatus = currentArtifactFinalStatus(currentArtifact).toLowerCase();
+  const staticPageContext = currentArtifactIsStaticPage(currentArtifact);
+  const rendered = finalStatus === 'rendered';
+  const generatedArtifactUrlPresent = generatedArtifactUrlAllowed(publicUrl);
+  const hostSeedPublicUrlPresent = hostSeedPublicUrlAllowed(publicUrl);
+  return {
+    present: Boolean(currentArtifact),
+    staticPageContext,
+    finalRendered: rendered,
+    generatedArtifactUrlPresent,
+    hostSeedPublicUrlPresent,
+    draftIdPresent: currentArtifactDraftIdPresent(currentArtifact),
+    moduleCountPresent: Array.isArray(currentArtifact?.modules),
+  };
+}
+
+function currentArtifactMissingGates(currentArtifact) {
+  const summary = summarizeCurrentArtifact(currentArtifact);
+  if (!summary.present) return ['current_static_page_artifact'];
+  const missing = [];
+  if (!summary.staticPageContext) missing.push('current_static_page_artifact_static_page_context');
+  if (!summary.finalRendered) missing.push('current_static_page_artifact_rendered');
+  if (!summary.generatedArtifactUrlPresent) missing.push('current_static_page_artifact_generated_artifact_url');
+  if (!summary.hostSeedPublicUrlPresent) missing.push('current_static_page_artifact_host_seed_url');
+  return missing;
 }
 
 function normalizeBaseUrl(value) {
@@ -583,13 +726,14 @@ async function runLiveCase(args, testCase, currentArtifact) {
 
 function preflightReport(args, currentArtifact) {
   const cases = selectedCases(args);
+  const currentArtifactSummary = summarizeCurrentArtifact(currentArtifact);
   const missing = [];
   if (!args.ackControlledLive) missing.push('ack_controlled_live');
   if (!args.approvalId.trim()) missing.push('approval_id');
   if (!args.cookie && !args.bearer) missing.push('auth_cookie_or_bearer');
   if (cases.some((testCase) => testCase.requiresDataset) && !args.datasetId) missing.push('dataset_id');
-  if (cases.some((testCase) => testCase.requiresCurrentArtifact) && !currentArtifact) {
-    missing.push('current_static_page_artifact');
+  if (cases.some((testCase) => testCase.requiresCurrentArtifact)) {
+    missing.push(...currentArtifactMissingGates(currentArtifact));
   }
   return {
     smoke: 'customer-web-codex-live',
@@ -603,6 +747,7 @@ function preflightReport(args, currentArtifact) {
       authBearerPresent: Boolean(args.bearer),
       datasetIdPresent: Boolean(args.datasetId),
       currentArtifactPresent: Boolean(currentArtifact),
+      currentArtifact: currentArtifactSummary,
       approvalIdPresent: Boolean(args.approvalId.trim()),
       approvalHash: approvalHash(args.approvalId),
       ackControlledLive: args.ackControlledLive,
@@ -689,13 +834,22 @@ async function runExecute(args) {
 }
 
 function assertApprovalGateContract() {
+  const readyArtifact = JSON.stringify({
+    type: 'static_page_draft',
+    id: '11111111-1111-4111-8111-000000000101',
+    status: 'rendered',
+    finalPage: {
+      status: 'rendered',
+      publicUrl: 'https://v3.elepcloud.com/generated-artifacts/customer-web-codex-live-smoke/index.html',
+    },
+  });
   const base = {
     baseUrl: DEFAULT_BASE_URL,
     cookie: '',
     bearer: '',
     datasetId: 'dataset-smoke',
     datasetTitle: 'Dataset Smoke',
-    currentArtifactJson: '{"type":"static_page_draft","finalPage":{"status":"rendered","publicUrl":"https://v3.elepcloud.com/generated-artifacts/smoke/index.html"}}',
+    currentArtifactJson: readyArtifact,
     currentArtifactFile: '',
     approvalId: '',
     localThreadPrefix: 'self-test',
@@ -736,6 +890,38 @@ function assertApprovalGateContract() {
   );
   if (ready.missingGates.length || !ready.readyToExecute) {
     throw new Error('approval gate failed to mark complete controlled-live inputs as ready');
+  }
+  const placeholderArtifactArgs = {
+    ...base,
+    ackControlledLive: true,
+    approvalId: 'approval-self-test',
+    cookie: 'aidp_v3_session=self-test-secret',
+    currentArtifactJson: '{"type":"static_page","artifact_id":"controlled-artifact-placeholder","files":[{"path":"index.html"}]}',
+  };
+  const placeholderArtifact = preflightReport(
+    placeholderArtifactArgs,
+    parseCurrentArtifact(placeholderArtifactArgs),
+  );
+  for (const gate of [
+    'current_static_page_artifact_rendered',
+    'current_static_page_artifact_generated_artifact_url',
+    'current_static_page_artifact_host_seed_url',
+  ]) {
+    if (!placeholderArtifact.missingGates.includes(gate)) {
+      throw new Error(`approval gate failed to reject placeholder current artifact: ${gate}`);
+    }
+  }
+  const relativeUrlArtifactArgs = {
+    ...base,
+    ackControlledLive: true,
+    approvalId: 'approval-self-test',
+    cookie: 'aidp_v3_session=self-test-secret',
+    currentArtifactJson:
+      '{"type":"static_page_draft","status":"rendered","finalPage":{"status":"rendered","publicUrl":"/generated-artifacts/customer-web-codex-live-smoke/index.html"}}',
+  };
+  const relativeUrlArtifact = preflightReport(relativeUrlArtifactArgs, parseCurrentArtifact(relativeUrlArtifactArgs));
+  if (!relativeUrlArtifact.missingGates.includes('current_static_page_artifact_host_seed_url')) {
+    throw new Error('approval gate failed to require absolute V3 generated-artifact URL for host seed');
   }
 }
 
@@ -942,6 +1128,7 @@ async function runSelfTest(args) {
     generatedAt: new Date().toISOString(),
     checks: [
       { name: 'approval_gate_requires_ack_approval_auth_dataset_and_artifact', status: 'passed' },
+      { name: 'current_static_page_artifact_shape_rejects_placeholder_context', status: 'passed' },
       { name: 'sse_parser_extracts_completed_response', status: 'passed' },
       { name: 'synthetic_five_case_evidence_matrix', status: 'passed' },
       { name: 'blocked_product_change_evidence_has_no_artifact_bundle', status: 'passed' },
@@ -1000,6 +1187,28 @@ function markdownReport(report) {
     lines.push(`- Auth bearer present: ${report.target.authBearerPresent === true ? 'true' : 'false'}`);
     lines.push(`- Dataset id present: ${report.target.datasetIdPresent === true ? 'true' : 'false'}`);
     lines.push(`- Current artifact present: ${report.target.currentArtifactPresent === true ? 'true' : 'false'}`);
+    if (report.target.currentArtifact) {
+      lines.push(
+        `- Current artifact static page context: ${
+          report.target.currentArtifact.staticPageContext === true ? 'true' : 'false'
+        }`,
+      );
+      lines.push(
+        `- Current artifact final rendered: ${
+          report.target.currentArtifact.finalRendered === true ? 'true' : 'false'
+        }`,
+      );
+      lines.push(
+        `- Current artifact generated URL present: ${
+          report.target.currentArtifact.generatedArtifactUrlPresent === true ? 'true' : 'false'
+        }`,
+      );
+      lines.push(
+        `- Current artifact host seed URL present: ${
+          report.target.currentArtifact.hostSeedPublicUrlPresent === true ? 'true' : 'false'
+        }`,
+      );
+    }
     lines.push(`- Approval id present: ${report.target.approvalIdPresent === true ? 'true' : 'false'}`);
     lines.push(`- Approval hash: ${report.target.approvalHash || 'none'}`, '');
   }

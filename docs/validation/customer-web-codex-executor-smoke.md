@@ -120,7 +120,7 @@ The preflight writes a redacted receipt under:
 target/customer-web-codex-live-smoke/
 ```
 
-It checks whether the operator has supplied the required controlled-live inputs without printing cookies, bearer tokens, approval text, raw prompts, generated-artifact URLs, local paths, or current artifact JSON.
+It checks whether the operator has supplied the required controlled-live inputs without printing cookies, bearer tokens, approval text, raw prompts, generated-artifact URLs, local paths, or current artifact JSON. For the `generated_static_page_edit` case, preflight also validates the current static-page artifact shape without recording the actual URL or JSON: the context must look like a V3 static page, be finally rendered, expose an allowed generated-artifact URL, and include an absolute `https://v3.elepcloud.com/generated-artifacts/...` URL that the host agent can copy into the task workspace as the existing page seed.
 
 To execute against the approved test account, the command must include all live-write gates:
 
@@ -133,7 +133,7 @@ npm run smoke:customer-web-codex-live -- --execute --ack-controlled-live \
   --current-artifact-file <current_static_page_artifact.json>
 ```
 
-`--bearer <token>` may be used instead of `--cookie` when the target auth mode supports it. `generated_static_page_edit` requires the current rendered V3-generated static page context through `--current-artifact-json` or `--current-artifact-file`; the script intentionally does not invent this context.
+`--bearer <token>` may be used instead of `--cookie` when the target auth mode supports it. `generated_static_page_edit` requires the current rendered V3-generated static page context through `--current-artifact-json` or `--current-artifact-file`; the script intentionally does not invent this context. A placeholder such as `{ "artifact_id": "...", "files": [...] }` is not sufficient for this live smoke because it cannot prove that the old generated page will be available for changed-page comparison.
 
 Required cases:
 
