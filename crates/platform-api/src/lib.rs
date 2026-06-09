@@ -79599,6 +79599,14 @@ fn prompt_requests_spreadsheet_overview(prompt: &str) -> bool {
     ]
     .iter()
     .any(|signal| prompt.contains(signal))
+        || prompt_requests_spreadsheet_contents(prompt)
+}
+
+fn prompt_requests_spreadsheet_contents(prompt: &str) -> bool {
+    prompt.contains("内容")
+        && (prompt.contains('表')
+            || prompt.contains("报表")
+            || prompt.to_ascii_lowercase().contains("sheet"))
 }
 
 fn retrieval_evidence_search_text(evidence: &RetrievalEvidence) -> String {
@@ -145632,6 +145640,41 @@ retrieve_evidence:
         );
 
         assert_eq!(selected, vec![february_id]);
+    }
+
+    #[test]
+    fn retrieval_ranking_prefers_sheet_summary_for_table_contents() {
+        let now = Utc::now();
+        let overview_id = RetrievalEvidenceId::new();
+        let row_id = RetrievalEvidenceId::new();
+        let evidences = vec![
+            retrieval_ranking_test_evidence(
+                row_id,
+                10,
+                "表4 固定提成取高20260226.xlsx chunk 10 section 31012 31012 上淮海店 indexed for lexical retrieval recall.",
+                "西南區 重慶店 MOKA 零售 固租租金 8236 12 47432.7 5691.924 2 中预警：重点关注有望触发提成取高。",
+                0.99,
+                1,
+                now,
+            ),
+            retrieval_ranking_test_evidence(
+                overview_id,
+                0,
+                "表4 固定提成取高20260226.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "# Sheet 1\n预警等级 等级名称 判定逻辑 品牌数量 数量占比\nI 级 高预警 即将触发提成取高：销售缺口1万元以内，可触发提成租金。",
+                0.40,
+                18,
+                now,
+            ),
+        ];
+
+        let selected = select_retrieval_evidence_ids_for_prompt(
+            &evidences,
+            "表4 固定提成取高20260226 固定提成内容",
+            1,
+        );
+
+        assert_eq!(selected, vec![overview_id]);
     }
 
     #[test]
