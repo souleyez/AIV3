@@ -41,6 +41,7 @@ These checks cover:
 - browser-visible and runtime-inspect-visible fields do not expose secrets, raw prompts/logs, absolute paths, `/srv/aiv3/repo`, `/srv/aiv3/shared`, `.env`, or arbitrary external URLs.
 - the right-side `Codex 执行与产物` shelf can show both task cards and artifact bundles.
 - readiness parsing treats self-test fixtures and parsed env-file values as authoritative, so conflicting shell env variables cannot make a deployment-target check look ready.
+- the guarded live-smoke harness self-test validates approval gates and a synthetic five-case evidence matrix for task cards, artifact bundles, and product-change blocked cards before any live API call is allowed.
 
 ## Optional Video PPT Regression Rollup
 

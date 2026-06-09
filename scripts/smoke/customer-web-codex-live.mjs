@@ -770,9 +770,171 @@ function assertSseParsingContract() {
   }
 }
 
+function syntheticArtifactBundle(capability, workflowExecutionId) {
+  return {
+    type: 'codex_customer_artifact_bundle',
+    artifact_type: 'codex_customer_artifacts',
+    artifact_kind: 'customer_artifact_bundle',
+    capability,
+    route: capability,
+    status: 'available',
+    workflow_execution_id: workflowExecutionId,
+    customer_artifacts: {
+      schema: 'v3.customer_codex_artifacts',
+      version: 1,
+      status: 'available',
+      capability,
+      route: capability,
+      title: 'Customer Codex smoke artifact',
+      summary: 'Synthetic artifact bundle for Customer Web Codex smoke.',
+      manifest_path: 'customer-artifact-manifest.json',
+      artifacts: [
+        {
+          path: 'reports/index.html',
+          title: 'Management report',
+          kind: 'html',
+          mime_type: 'text/html',
+          bytes: 4096,
+          sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        },
+      ],
+    },
+    artifact_manifest: {
+      schema: 'v3.output_artifact_manifest',
+      schema_version: 1,
+      artifact_type: 'codex_customer_artifacts',
+      artifact_kind: 'customer_artifact_bundle',
+      capability,
+      route: capability,
+      title: 'Customer Codex smoke artifact',
+      status: 'available',
+      primary_url: null,
+      refs: {
+        workflow_execution_id: workflowExecutionId,
+        artifact_paths: ['reports/index.html'],
+        manifest_path: 'customer-artifact-manifest.json',
+      },
+      safety: {
+        credentials_exposed: false,
+        raw_logs_exposed: false,
+        workspace_paths_only: true,
+        absolute_paths_exposed: false,
+        published: false,
+        requires_datamax_publish_validation: true,
+      },
+    },
+  };
+}
+
+function syntheticResponseForCase(testCase) {
+  const workflowExecutionId = `11111111-1111-4111-8111-${String(LIVE_CASES.indexOf(testCase) + 1).padStart(12, '0')}`;
+  if (testCase.expectsBlocked) {
+    return {
+      events: [
+        {
+          event_name: 'assistant_run.codex_sidecar_scope_blocked',
+          sequence_no: 1,
+          created_at: '2026-06-09T08:00:00Z',
+          payload: {
+            capability: testCase.expectedCapability,
+            route: testCase.expectedCapability,
+            status: 'needs_operator_review',
+            reason: 'v3_product_change_not_customer_writable',
+            workflow_execution_id: workflowExecutionId,
+            non_blocking: true,
+            main_answer_path_preserved: true,
+          },
+        },
+      ],
+      output_artifacts: [],
+    };
+  }
+  const readyEventName = testCase.expectedCapability === 'generated_static_page_edit'
+    ? 'assistant_run.generated_static_page_edit_artifacts_ready'
+    : 'assistant_run.customer_artifact_request_artifacts_ready';
+  const terminalEvent = testCase.expectsArtifactBundle
+    ? {
+        event_name: readyEventName,
+        sequence_no: 2,
+        created_at: '2026-06-09T08:00:10Z',
+        payload: {
+          capability: testCase.expectedCapability,
+          route: testCase.expectedCapability,
+          workflow_execution_id: workflowExecutionId,
+          status: 'available',
+        },
+      }
+    : {
+        event_name: 'codex_host_task.exec_completed',
+        sequence_no: 2,
+        created_at: '2026-06-09T08:00:10Z',
+        payload: {
+          capability: testCase.expectedCapability,
+          route: testCase.expectedCapability,
+          workflow_execution_id: workflowExecutionId,
+          status: 'completed',
+          customer_result_summary: {
+            schema: 'v3.customer_codex_result_summary',
+            schema_version: 1,
+            status: 'completed',
+            title: 'Customer Codex smoke result',
+            summary: 'Synthetic safe result summary for Customer Web Codex smoke.',
+            findings: ['The customer request should be visible as a Codex task card.'],
+            recommended_next_actions: ['Run the controlled live smoke after operator approval.'],
+            safety: {
+              raw_logs_exposed: false,
+              credentials_exposed: false,
+              absolute_paths_exposed: false,
+              prompt_exposed: false,
+            },
+          },
+        },
+      };
+  return {
+    events: [
+      {
+        event_name: 'assistant_run.codex_sidecar_queued',
+        sequence_no: 1,
+        created_at: '2026-06-09T08:00:00Z',
+        payload: {
+          capability: testCase.expectedCapability,
+          route: testCase.expectedCapability,
+          workflow_execution_id: workflowExecutionId,
+          non_blocking: true,
+          main_answer_path_preserved: true,
+        },
+      },
+      terminalEvent,
+    ],
+    output_artifacts: testCase.expectsArtifactBundle
+      ? [syntheticArtifactBundle(testCase.expectedCapability, workflowExecutionId)]
+      : [],
+  };
+}
+
+function assertSyntheticCaseEvidenceContracts() {
+  for (const testCase of LIVE_CASES) {
+    const response = syntheticResponseForCase(testCase);
+    const evidence = evaluateEvidence(testCase, [response], false);
+    if (!evidence.met) {
+      throw new Error(`synthetic evidence contract failed for ${testCase.id}`);
+    }
+    if (testCase.expectsArtifactBundle && evidence.matchingArtifactBundleCount < 1) {
+      throw new Error(`synthetic artifact bundle evidence missing for ${testCase.id}`);
+    }
+    if (!testCase.expectsArtifactBundle && evidence.matchingArtifactBundleCount !== 0) {
+      throw new Error(`unexpected synthetic artifact bundle for ${testCase.id}`);
+    }
+    if (testCase.expectsBlocked && !evidence.blockedSatisfied) {
+      throw new Error(`synthetic blocked evidence missing for ${testCase.id}`);
+    }
+  }
+}
+
 async function runSelfTest(args) {
   assertApprovalGateContract();
   assertSseParsingContract();
+  assertSyntheticCaseEvidenceContracts();
   const report = {
     smoke: 'customer-web-codex-live',
     mode: 'self-test',
@@ -781,6 +943,7 @@ async function runSelfTest(args) {
     checks: [
       { name: 'approval_gate_requires_ack_approval_auth_dataset_and_artifact', status: 'passed' },
       { name: 'sse_parser_extracts_completed_response', status: 'passed' },
+      { name: 'synthetic_five_case_evidence_matrix', status: 'passed' },
       { name: 'blocked_product_change_evidence_has_no_artifact_bundle', status: 'passed' },
       { name: 'report_redaction_rejects_auth_and_prompt_secrets', status: 'passed' },
     ],
