@@ -352,13 +352,15 @@ Interpretation:
 
 ## 2026-06-09 Local NewBai Ranking Fix Receipt
 
-- Scope: local code/test receipt only; no GitHub push, no 8 server deploy, no
-  service restart, no `RETRIEVAL_SEARCH_BACKEND` change.
+- Scope: local code/test receipt before deployment; no `RETRIEVAL_SEARCH_BACKEND`
+  change.
 - Code path changed: `rank_retrieval_evidences_for_prompt` now adds bounded
   original-query signal scoring for retrieval evidence ranking.
 - New ranking signals covered by tests:
   - Sheet summary / report overview wins when the prompt asks for calculation
     method or data-source style information.
+  - Sheet summary / report overview wins when a table/report prompt asks for
+    its content.
   - Exact numeric CJK literals such as `2月` and `4天` disambiguate same-family
     workbooks, with a small conflicting-month penalty.
   - ASCII business field names such as `quekou` and `xuzengxiaoshou` are strong
@@ -379,15 +381,15 @@ bash scripts/run-retrieval-quality-smoke.sh --baseline
 
 Local results:
 
-- `retrieval_ranking`: `9` passed, including the three NewBai-style regression
-  cases for calculation method, month/day disambiguation, and ASCII field
-  tokens.
+- `retrieval_ranking`: `10` passed, including NewBai-style regression cases for
+  calculation method, table content overview, month/day disambiguation, and
+  ASCII field tokens.
 - `select_retrieval_evidence_ids_for_prompt`: `4` passed.
 - `retrieval_search_backend_parser_defaults_to_legacy_scan`: passed; default
   behavior remains `legacy_scan` unless the env flag is explicitly set.
 - Full baseline smoke result: passed.
 - Full baseline smoke JSON report:
-  `target/retrieval-quality-smoke/retrieval-quality-smoke-20260608T235718Z.json`
+  `target/retrieval-quality-smoke/retrieval-quality-smoke-20260609T002751Z.json`
 - Fixture policy: `baseline`
 - Fixture count: `35`
 - Required fixture count: `30`
@@ -399,13 +401,69 @@ Interpretation:
 
 - This locally closes the specific P1-8 ranking bug class exposed by the 8
   server NewBai retrieval-level live subset.
-- It does not yet prove live improvement on 8. The same live subset must be
-  re-run after the patch is deployed, and assistant-run/customer-answer quality
-  evidence is still separate.
+- Assistant-run/customer-answer quality evidence is still separate.
 - It does not justify enabling `postgres_lexical` by default.
+
+## 2026-06-09 8 Server NewBai Ranking Rerun
+
+- Scope: deploy GitHub main ranking fix to 8 server and rerun the same
+  controlled NewBai retrieval-level live subset.
+- GitHub/server commit: `141d04fc0`
+- Deployed service: `aiv3-platform-api.service` only.
+- Services not redeployed: `aiv3-retrieval-worker.service`, `aiv3-web.service`.
+- Runtime flag status:
+  - `/etc/aiv3/aiv3.env`: no `RETRIEVAL_SEARCH_BACKEND`
+  - platform process env: no `RETRIEVAL_SEARCH_BACKEND`
+  - effective retrieval backend remains default `legacy_scan`
+- Health after restart:
+  - `http://127.0.0.1:3000/healthz`: ok
+  - `http://127.0.0.1:3000/readyz`: ready
+  - `aiv3-platform-api.service`: active
+  - `aiv3-retrieval-worker.service`: active
+- Logs: no warning-or-higher entries for `aiv3-platform-api.service` in the
+  checked post-deploy window.
+- Live subset path:
+  `target/retrieval-quality-smoke/live-8-newbai-20260609T003305Z`
+- Smoke report:
+  `target/retrieval-quality-smoke/live-8-newbai-20260609T003305Z/reports/retrieval-quality-smoke-20260609T003306Z.json`
+- Result generator: sequential `target/release/retrieval-search-cli search ...
+  --limit 20` calls with evidence excerpts from the returned retrieval evidence
+  IDs. This remains retrieval-level evidence quality, not LLM answer quality.
+
+Metrics:
+
+- Fixture policy: `live_subset`
+- Case count: `8`
+- Recall@20: `1.0`
+- MRR@20: `1.0`
+- Citation accuracy: `1.0`
+- Answer pattern match rate: `0.875`
+- p95 latency ms: `95.0`
+- Permission leak count: `0`
+
+Expected-source ranks after the ranking fix:
+
+- `live-8-newbai-001`: expected source rank `1` (was `18`)
+- `live-8-newbai-002`: expected source rank `1`
+- `live-8-newbai-003`: expected source rank `1` (was `2`)
+- `live-8-newbai-004`: expected source rank `1`
+- `live-8-newbai-005`: expected source rank `1`
+- `live-8-newbai-006`: expected source rank `1`
+- `live-8-newbai-007`: expected source rank `1` (was `18`)
+- `live-8-newbai-008`: expected source rank `1` (was `7`)
+
+Interpretation:
+
+- P1-8 ranking weakness is closed for this controlled NewBai retrieval-level
+  subset.
+- The prior MRR@20 baseline was `0.594246`; the rerun is `1.0`.
+- `postgres_lexical` remains disabled. This receipt does not authorize turning
+  it on by default.
+- Full assistant-run/customer-answer quality metrics are still required before
+  treating customer-facing answer quality as closed.
 
 ## Remaining Gaps
 
 - Full assistant-run/customer-answer live quality metrics are not yet recorded;
-  the current live receipt is retrieval-level only.
+  the current live receipts are retrieval-level only.
 - `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` has not been enabled on 8 server.
