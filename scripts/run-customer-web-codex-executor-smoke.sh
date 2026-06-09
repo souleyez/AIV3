@@ -82,6 +82,8 @@ CODEX_HOST_AGENT_TASK_WORKSPACE_ROOT=/srv/aiv3/codex-workspaces
 OPENAI_API_KEY=fixture-secret-not-for-output
 EOF
   bash scripts/run-customer-web-codex-readiness.sh --env-file "${tmp}" --json-stdout --allow-not-ready | node -e '\''const fs = require("fs"); const text = fs.readFileSync(0, "utf8"); if (text.includes("fixture-secret-not-for-output")) process.exit(1); const report = JSON.parse(text); if (report.ready) process.exit(1); if (report.missing_task_allowlist_capabilities.length !== 4) process.exit(1); if (report.missing_profile_allowed_capabilities.length !== 4) process.exit(1); if (report.remediation.raw_secret_values_included !== false) process.exit(1); if (!report.remediation.required_env_updates.some((update) => update.key === "RIGHTCODE_API_KEY_MAIN" && update.secret_value === true)) process.exit(1);'\'''
+run_check "npm run smoke:customer-web-codex-live -- --self-test" \
+  npm run smoke:customer-web-codex-live -- --self-test
 run_check "npm --prefix apps/web run build" \
   npm --prefix apps/web run build
 run_check "git diff --check" \

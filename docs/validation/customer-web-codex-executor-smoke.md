@@ -27,6 +27,7 @@ The smoke runs the same checks that protect the customer Web Codex chain:
 - `npm run smoke:customer-web-codex-readiness -- --self-test`
 - `bash scripts/run-customer-web-codex-readiness.sh --self-test --json-stdout`
 - `bash scripts/run-customer-web-codex-readiness.sh --json-stdout --allow-not-ready` against a local not-ready fixture
+- `npm run smoke:customer-web-codex-live -- --self-test`
 - `npm --prefix apps/web run build`
 - `git diff --check`
 
@@ -102,6 +103,36 @@ When the target is not ready, the JSON report must remain non-secret but actiona
 ## Post-Deploy Live Smoke
 
 Run live smoke only after explicit deployment approval.
+
+A guarded live-smoke harness is available, but it defaults to preflight/dry-run behavior and never calls the live API unless `--execute` is passed:
+
+```bash
+npm run smoke:customer-web-codex-live -- --preflight \
+  --base-url https://v3.elepcloud.com \
+  --dataset-id <controlled_test_dataset_id> \
+  --current-artifact-file <current_static_page_artifact.json>
+```
+
+The preflight writes a redacted receipt under:
+
+```text
+target/customer-web-codex-live-smoke/
+```
+
+It checks whether the operator has supplied the required controlled-live inputs without printing cookies, bearer tokens, approval text, raw prompts, generated-artifact URLs, local paths, or current artifact JSON.
+
+To execute against the approved test account, the command must include all live-write gates:
+
+```bash
+npm run smoke:customer-web-codex-live -- --execute --ack-controlled-live \
+  --approval-id <operator_approval_ref> \
+  --base-url https://v3.elepcloud.com \
+  --cookie "<redacted_test_session_cookie>" \
+  --dataset-id <controlled_test_dataset_id> \
+  --current-artifact-file <current_static_page_artifact.json>
+```
+
+`--bearer <token>` may be used instead of `--cookie` when the target auth mode supports it. `generated_static_page_edit` requires the current rendered V3-generated static page context through `--current-artifact-json` or `--current-artifact-file`; the script intentionally does not invent this context.
 
 Required cases:
 
