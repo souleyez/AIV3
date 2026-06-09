@@ -9,6 +9,7 @@ report_dir="${CUSTOMER_WEB_CODEX_SMOKE_REPORT_DIR:-${repo_root}/target/customer-
 report_basename="customer-web-codex-executor-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 report_json="${report_dir}/${report_basename}.json"
 report_md="${report_dir}/${report_basename}.md"
+live_self_test_output_dir="${report_dir}/${report_basename}-live-self-test"
 include_video_ppt_rollup="${CUSTOMER_WEB_CODEX_SMOKE_INCLUDE_VIDEO_PPT_ROLLUP:-false}"
 cargo_bin="${CARGO_BIN:-cargo}"
 
@@ -83,7 +84,91 @@ OPENAI_API_KEY=fixture-secret-not-for-output
 EOF
   bash scripts/run-customer-web-codex-readiness.sh --env-file "${tmp}" --json-stdout --allow-not-ready | node -e '\''const fs = require("fs"); const text = fs.readFileSync(0, "utf8"); if (text.includes("fixture-secret-not-for-output")) process.exit(1); const report = JSON.parse(text); if (report.ready) process.exit(1); if (report.missing_task_allowlist_capabilities.length !== 4) process.exit(1); if (report.missing_profile_allowed_capabilities.length !== 4) process.exit(1); if (report.remediation.raw_secret_values_included !== false) process.exit(1); if (!report.remediation.required_env_updates.some((update) => update.key === "RIGHTCODE_API_KEY_MAIN" && update.secret_value === true)) process.exit(1);'\'''
 run_check "npm run smoke:customer-web-codex-live -- --self-test" \
-  npm run smoke:customer-web-codex-live -- --self-test
+  env CUSTOMER_WEB_CODEX_LIVE_SMOKE_OUTPUT_DIR="${live_self_test_output_dir}" \
+    npm run smoke:customer-web-codex-live -- --self-test
+
+echo ""
+echo "== customer-web-codex-live self-test evidence readback =="
+live_self_test_evidence_json="$(
+  CUSTOMER_WEB_CODEX_LIVE_SELF_TEST_OUTPUT_DIR="${live_self_test_output_dir}" node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const dir = process.env.CUSTOMER_WEB_CODEX_LIVE_SELF_TEST_OUTPUT_DIR;
+const files = fs.readdirSync(dir)
+  .filter((name) => name.endsWith(".json"))
+  .map((name) => {
+    const filePath = path.join(dir, name);
+    return { name, filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+  })
+  .sort((left, right) => right.mtimeMs - left.mtimeMs);
+if (!files.length) {
+  throw new Error("customer web codex live self-test report was not written");
+}
+const selected = files[0];
+const report = JSON.parse(fs.readFileSync(selected.filePath, "utf8"));
+const checkNames = new Set(
+  (Array.isArray(report.checks) ? report.checks : [])
+    .filter((check) => check && check.status === "passed")
+    .map((check) => String(check.name || "")),
+);
+const synthetic = report.syntheticShelfEvidence || {};
+const syntheticShelfEvidenceSummary = {
+  case_count: Number(synthetic.caseCount || 0),
+  task_card_case_count: Number(synthetic.taskCardCaseCount || 0),
+  artifact_bundle_case_count: Number(synthetic.artifactBundleCaseCount || 0),
+  blocked_task_case_count: Number(synthetic.blockedTaskCaseCount || 0),
+  product_change_artifact_bundle_count: Number(synthetic.productChangeArtifactBundleCount || 0),
+  all_synthetic_cases_met: synthetic.allSyntheticCasesMet === true,
+};
+const evidence = {
+  report_basename: selected.name,
+  ok: report.ok === true,
+  mode_self_test: report.mode === "self-test",
+  live_writes_attempted: report.liveWritesAttempted === true,
+  live_writes_blocked: report.liveWritesAttempted === false,
+  approval_gate_enforced: checkNames.has("approval_gate_requires_ack_approval_auth_dataset_and_artifact"),
+  current_artifact_shape_gate_enforced: checkNames.has(
+    "current_static_page_artifact_shape_rejects_placeholder_context",
+  ),
+  current_artifact_public_url_shorthand_ready: checkNames.has(
+    "current_static_page_artifact_public_url_shorthand_builds_valid_context",
+  ),
+  sse_parser_ready: checkNames.has("sse_parser_extracts_completed_response"),
+  synthetic_five_case_evidence_matrix_ready: checkNames.has("synthetic_five_case_evidence_matrix"),
+  product_change_blocked_no_artifact_ready: checkNames.has(
+    "blocked_product_change_evidence_has_no_artifact_bundle",
+  ),
+  report_redaction_ready: checkNames.has("report_redaction_rejects_auth_and_prompt_secrets"),
+  synthetic_shelf_evidence_ready:
+    syntheticShelfEvidenceSummary.case_count === 5
+    && syntheticShelfEvidenceSummary.task_card_case_count === 5
+    && syntheticShelfEvidenceSummary.artifact_bundle_case_count === 3
+    && syntheticShelfEvidenceSummary.blocked_task_case_count === 1
+    && syntheticShelfEvidenceSummary.product_change_artifact_bundle_count === 0
+    && syntheticShelfEvidenceSummary.all_synthetic_cases_met,
+  synthetic_shelf_evidence_summary: syntheticShelfEvidenceSummary,
+};
+evidence.ready = evidence.ok
+  && evidence.mode_self_test
+  && evidence.live_writes_blocked
+  && evidence.approval_gate_enforced
+  && evidence.current_artifact_shape_gate_enforced
+  && evidence.current_artifact_public_url_shorthand_ready
+  && evidence.sse_parser_ready
+  && evidence.synthetic_five_case_evidence_matrix_ready
+  && evidence.product_change_blocked_no_artifact_ready
+  && evidence.report_redaction_ready
+  && evidence.synthetic_shelf_evidence_ready;
+if (!evidence.ready) {
+  throw new Error(`customer web codex live self-test evidence is incomplete: ${JSON.stringify(evidence)}`);
+}
+process.stdout.write(JSON.stringify(evidence));
+NODE
+)"
+checks+=("customer-web-codex-live self-test evidence readback")
+echo "${live_self_test_evidence_json}" | node -e 'const fs = require("fs"); const evidence = JSON.parse(fs.readFileSync(0, "utf8")); console.log(`evidence_ready=${evidence.ready} synthetic_cases=${evidence.synthetic_shelf_evidence_summary.case_count} artifact_bundles=${evidence.synthetic_shelf_evidence_summary.artifact_bundle_case_count}`);'
+
 run_check "npm --prefix apps/web run build" \
   npm --prefix apps/web run build
 run_check "git diff --check" \
@@ -114,8 +199,10 @@ SMOKE_FINISHED_AT="${finished_at}" \
 SMOKE_CHECKS_JSON="${checks_json}" \
 SMOKE_VIDEO_PPT_ROLLUP_STATUS="${video_ppt_rollup_status}" \
 SMOKE_VIDEO_PPT_ROLLUP_REASON="${video_ppt_rollup_reason}" \
+SMOKE_LIVE_SELF_TEST_EVIDENCE_JSON="${live_self_test_evidence_json}" \
 node >"${report_json}" <<'NODE'
 const fs = require("fs");
+const liveSelfTestEvidence = JSON.parse(process.env.SMOKE_LIVE_SELF_TEST_EVIDENCE_JSON || "{}");
 const report = {
   smoke: "customer-web-codex-executor",
   ready: true,
@@ -144,14 +231,26 @@ const report = {
       status: "passed",
       check_count: JSON.parse(process.env.SMOKE_CHECKS_JSON || "[]").length,
       video_ppt_no_live_rollup_status: process.env.SMOKE_VIDEO_PPT_ROLLUP_STATUS,
-      proves_controlled_live: false
+      proves_controlled_live: false,
+      live_self_test_evidence_ready: liveSelfTestEvidence.ready === true,
+      live_self_test_report: liveSelfTestEvidence.report_basename || ""
     },
     live_gate_readiness_summary: {
       schema: "v3.customer_web_codex_executor_live_gate_readiness_summary.v1",
-      controlled_live_harness_self_test_ready: true,
-      approval_gate_enforced: true,
-      current_artifact_public_url_shorthand_ready: true,
-      right_side_shelf_synthetic_evidence_ready: true,
+      controlled_live_harness_self_test_ready: liveSelfTestEvidence.ready === true,
+      approval_gate_enforced: liveSelfTestEvidence.approval_gate_enforced === true,
+      current_artifact_shape_gate_enforced:
+        liveSelfTestEvidence.current_artifact_shape_gate_enforced === true,
+      current_artifact_public_url_shorthand_ready:
+        liveSelfTestEvidence.current_artifact_public_url_shorthand_ready === true,
+      sse_parser_ready: liveSelfTestEvidence.sse_parser_ready === true,
+      right_side_shelf_synthetic_evidence_ready:
+        liveSelfTestEvidence.synthetic_shelf_evidence_ready === true,
+      product_change_blocked_no_artifact_ready:
+        liveSelfTestEvidence.product_change_blocked_no_artifact_ready === true,
+      report_redaction_ready: liveSelfTestEvidence.report_redaction_ready === true,
+      synthetic_shelf_evidence_summary:
+        liveSelfTestEvidence.synthetic_shelf_evidence_summary || null,
       required_input_count: 4,
       required_inputs: [
         "test account session cookie or bearer",
@@ -177,6 +276,7 @@ const report = {
     safety_summary: {
       no_provider_secrets_read: true,
       no_live_api_calls: true,
+      live_self_test_writes_blocked: liveSelfTestEvidence.live_writes_blocked === true,
       no_deploy_or_service_restart: true,
       no_120_touched: true,
       screen_recording_enabled: false
@@ -236,6 +336,9 @@ const lines = [
   `- No-live gate: ${report.acceptance_status.no_live_gate.status}`,
   `- No-live check count: ${report.acceptance_status.no_live_gate.check_count}`,
   `- Video/PPT no-live rollup: ${report.acceptance_status.no_live_gate.video_ppt_no_live_rollup_status}`,
+  `- Live self-test evidence ready: ${report.acceptance_status.no_live_gate.live_self_test_evidence_ready}`,
+  `- Synthetic shelf cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.case_count ?? "unknown"}`,
+  `- Synthetic shelf artifact-bundle cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.artifact_bundle_case_count ?? "unknown"}`,
   `- Controlled live smoke pending: ${report.acceptance_status.live_gate_readiness_summary.live_smoke_pending}`,
   `- Required controlled-live inputs: ${report.acceptance_status.live_gate_readiness_summary.required_input_count}`,
   `- Pending live gate count: ${report.acceptance_status.pending_gate_requirements_summary.pending_gate_count}`,
