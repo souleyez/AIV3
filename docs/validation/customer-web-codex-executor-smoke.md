@@ -44,7 +44,7 @@ These checks cover:
 - the guarded live-smoke harness self-test validates approval gates and a synthetic five-case evidence matrix for task cards, artifact bundles, and product-change blocked cards before any live API call is allowed.
 - the guarded live-smoke harness self-test writes a redacted `Synthetic Shelf Evidence` receipt section with task-card, artifact-bundle, blocked-task, and product-change no-artifact counts for the right-side shelf contract.
 - the top-level executor smoke receipt writes `acceptance_status.schema=v3.customer_web_codex_executor_acceptance_status.v1`, so reviewers can distinguish passed no-live evidence from pending controlled-live gates.
-- the top-level executor smoke writes the live-smoke self-test into a per-run child report directory, reads it back, and only marks live-readiness evidence ready when approval, current-artifact, SSE parsing, synthetic shelf, product-change blocking, and redaction checks are present in that child report.
+- the top-level executor smoke writes the live-smoke self-test into a per-run child report directory, reads it back, and only marks live-readiness evidence ready when approval, redacted command-template, current-artifact, SSE parsing, synthetic shelf, product-change blocking, and redaction checks are present in that child report.
 
 ## Optional Video PPT Regression Rollup
 
@@ -110,6 +110,7 @@ The top-level executor smoke JSON includes an `acceptance_status` object with:
 - `no_live_gate.status=passed` when local/deployment-target checks pass.
 - `no_live_gate.live_self_test_evidence_ready=true` only after the executor smoke parses the per-run live-smoke self-test child report.
 - `live_gate_readiness_summary.required_inputs` listing the four controlled-live inputs required before execution.
+- `live_gate_readiness_summary.next_command_template_redacted=true` proving the live-smoke self-test covered the redacted command-template contract for cookie and bearer auth shapes.
 - `live_gate_readiness_summary.synthetic_shelf_evidence_summary` containing task-card, artifact-bundle, blocked-task, and product-change no-artifact counts.
 - `pending_gate_requirements_summary.no_live_substitute_available_for_pending_gates=true`, so no-live receipts cannot be used as a substitute for live Customer Web Codex evidence.
 

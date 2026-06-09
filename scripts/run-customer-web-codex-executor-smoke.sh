@@ -128,6 +128,7 @@ const evidence = {
   live_writes_attempted: report.liveWritesAttempted === true,
   live_writes_blocked: report.liveWritesAttempted === false,
   approval_gate_enforced: checkNames.has("approval_gate_requires_ack_approval_auth_dataset_and_artifact"),
+  next_command_template_redacted: checkNames.has("controlled_live_next_command_template_redacted"),
   current_artifact_shape_gate_enforced: checkNames.has(
     "current_static_page_artifact_shape_rejects_placeholder_context",
   ),
@@ -153,6 +154,7 @@ evidence.ready = evidence.ok
   && evidence.mode_self_test
   && evidence.live_writes_blocked
   && evidence.approval_gate_enforced
+  && evidence.next_command_template_redacted
   && evidence.current_artifact_shape_gate_enforced
   && evidence.current_artifact_public_url_shorthand_ready
   && evidence.sse_parser_ready
@@ -239,6 +241,8 @@ const report = {
       schema: "v3.customer_web_codex_executor_live_gate_readiness_summary.v1",
       controlled_live_harness_self_test_ready: liveSelfTestEvidence.ready === true,
       approval_gate_enforced: liveSelfTestEvidence.approval_gate_enforced === true,
+      next_command_template_redacted:
+        liveSelfTestEvidence.next_command_template_redacted === true,
       current_artifact_shape_gate_enforced:
         liveSelfTestEvidence.current_artifact_shape_gate_enforced === true,
       current_artifact_public_url_shorthand_ready:
@@ -337,6 +341,7 @@ const lines = [
   `- No-live check count: ${report.acceptance_status.no_live_gate.check_count}`,
   `- Video/PPT no-live rollup: ${report.acceptance_status.no_live_gate.video_ppt_no_live_rollup_status}`,
   `- Live self-test evidence ready: ${report.acceptance_status.no_live_gate.live_self_test_evidence_ready}`,
+  `- Live command template redacted: ${report.acceptance_status.live_gate_readiness_summary.next_command_template_redacted}`,
   `- Synthetic shelf cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.case_count ?? "unknown"}`,
   `- Synthetic shelf artifact-bundle cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.artifact_bundle_case_count ?? "unknown"}`,
   `- Controlled live smoke pending: ${report.acceptance_status.live_gate_readiness_summary.live_smoke_pending}`,

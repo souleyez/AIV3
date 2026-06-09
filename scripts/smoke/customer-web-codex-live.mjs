@@ -813,9 +813,33 @@ function preflightReport(args, currentArtifact) {
     })),
     missingGates: missing,
     liveWritesAttempted: false,
-    nextCommandTemplate:
-      'npm run smoke:customer-web-codex-live -- --execute --ack-controlled-live --approval-id <approval_ref> --base-url <v3_url> --cookie <redacted> --dataset-id <test_dataset_id> --current-artifact-public-url <generated_artifact_url>',
+    nextCommandTemplate: buildNextCommandTemplate(args, cases),
   };
+}
+
+function buildNextCommandTemplate(args, cases) {
+  const parts = [
+    'npm run smoke:customer-web-codex-live --',
+    '--execute',
+    '--ack-controlled-live',
+    '--approval-id <approval_ref>',
+    '--base-url <v3_url>',
+  ];
+  if (args.bearer && !args.cookie) {
+    parts.push('--bearer <redacted>');
+  } else {
+    parts.push('--cookie <redacted>');
+  }
+  if (cases.some((testCase) => testCase.requiresDataset)) {
+    parts.push('--dataset-id <test_dataset_id>');
+  }
+  if (cases.some((testCase) => testCase.requiresCurrentArtifact)) {
+    parts.push('--current-artifact-public-url <generated_artifact_url>');
+  }
+  for (const caseId of args.selectedCaseIds || []) {
+    parts.push('--case', caseId);
+  }
+  return parts.join(' ');
 }
 
 async function runPreflight(args) {
@@ -987,6 +1011,80 @@ function assertApprovalGateContract() {
   if (publicUrlArtifact.missingGates.length || !publicUrlArtifact.readyToExecute) {
     throw new Error('approval gate failed to accept current artifact public URL shorthand');
   }
+}
+
+function assertNextCommandTemplateContract() {
+  const base = {
+    baseUrl: DEFAULT_BASE_URL,
+    cookie: 'aidp_v3_session=self-test-secret',
+    bearer: '',
+    datasetId: 'dataset-smoke',
+    datasetTitle: 'Dataset Smoke',
+    currentArtifactJson: '',
+    currentArtifactFile: '',
+    currentArtifactPublicUrl: 'https://v3.elepcloud.com/generated-artifacts/customer-web-codex-live-smoke/index.html',
+    currentArtifactId: '11111111-1111-4111-8111-000000000201',
+    currentArtifactTitle: '',
+    approvalId: 'approval-self-test-secret',
+    localThreadPrefix: 'self-test',
+    outputDir: DEFAULT_OUTPUT_DIR,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+    pollAttempts: DEFAULT_POLL_ATTEMPTS,
+    execute: true,
+    preflight: false,
+    selfTest: false,
+    ackControlledLive: true,
+    allowPending: false,
+    selectedCaseIds: [],
+  };
+  const allCases = preflightReport(base, parseCurrentArtifact(base));
+  const allCasesTemplate = allCases.nextCommandTemplate;
+  for (const token of [
+    '--execute',
+    '--ack-controlled-live',
+    '--approval-id <approval_ref>',
+    '--base-url <v3_url>',
+    '--cookie <redacted>',
+    '--dataset-id <test_dataset_id>',
+    '--current-artifact-public-url <generated_artifact_url>',
+  ]) {
+    if (!allCasesTemplate.includes(token)) {
+      throw new Error(`controlled live command template missing token: ${token}`);
+    }
+  }
+  assertReportSafe(allCases, base);
+
+  const bearerOnly = {
+    ...base,
+    cookie: '',
+    bearer: 'self-test-bearer-secret',
+  };
+  const bearerReport = preflightReport(bearerOnly, parseCurrentArtifact(bearerOnly));
+  if (!bearerReport.nextCommandTemplate.includes('--bearer <redacted>')) {
+    throw new Error('controlled live command template failed to use bearer placeholder');
+  }
+  if (bearerReport.nextCommandTemplate.includes('--cookie <redacted>')) {
+    throw new Error('controlled live command template included cookie placeholder for bearer-only auth');
+  }
+  assertReportSafe(bearerReport, bearerOnly);
+
+  const productOnly = {
+    ...base,
+    datasetId: '',
+    selectedCaseIds: ['v3_product_change_request'],
+  };
+  const productOnlyReport = preflightReport(productOnly, parseCurrentArtifact(productOnly));
+  if (productOnlyReport.nextCommandTemplate.includes('--dataset-id <test_dataset_id>')) {
+    throw new Error('product-change-only command template should not require dataset placeholder');
+  }
+  if (productOnlyReport.nextCommandTemplate.includes('--current-artifact-public-url <generated_artifact_url>')) {
+    throw new Error('product-change-only command template should not require current artifact placeholder');
+  }
+  if (!productOnlyReport.nextCommandTemplate.includes('--case v3_product_change_request')) {
+    throw new Error('selected-case command template should preserve case selector');
+  }
+  assertReportSafe(productOnlyReport, productOnly);
 }
 
 function assertSseParsingContract() {
@@ -1212,6 +1310,7 @@ function assertSyntheticCaseEvidenceContracts() {
 
 async function runSelfTest(args) {
   assertApprovalGateContract();
+  assertNextCommandTemplateContract();
   assertSseParsingContract();
   const syntheticShelfEvidence = assertSyntheticCaseEvidenceContracts();
   const report = {
@@ -1221,6 +1320,7 @@ async function runSelfTest(args) {
     generatedAt: new Date().toISOString(),
     checks: [
       { name: 'approval_gate_requires_ack_approval_auth_dataset_and_artifact', status: 'passed' },
+      { name: 'controlled_live_next_command_template_redacted', status: 'passed' },
       { name: 'current_static_page_artifact_shape_rejects_placeholder_context', status: 'passed' },
       { name: 'current_static_page_artifact_public_url_shorthand_builds_valid_context', status: 'passed' },
       { name: 'sse_parser_extracts_completed_response', status: 'passed' },
@@ -1251,7 +1351,10 @@ function assertReportSafe(report, args = {}) {
       throw new Error('customer web codex live smoke report includes an unredacted input secret/context value');
     }
   }
-  if (/Bearer\s|aidp_v3_session=|cookie=|bearer=|token=|password=|secret=/i.test(serialized)) {
+  if (
+    /Bearer\s+(?!<redacted>)/i.test(serialized)
+    || /aidp_v3_session=|cookie=|bearer=|token=|password=|secret=/i.test(serialized)
+  ) {
     throw new Error('customer web codex live smoke report includes an auth/token marker');
   }
   if (/https?:\/\/|\/srv\/aiv3\/repo|\/srv\/aiv3\/shared|\.env|\/Users\/|\/home\/|[A-Za-z]:[\\/]/i.test(serialized)) {
