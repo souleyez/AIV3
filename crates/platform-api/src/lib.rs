@@ -79477,6 +79477,7 @@ fn lexical_ascii_field_signal_score(content: &str, prompt: &str) -> f64 {
     let lower_content = content.to_ascii_lowercase();
     let mut seen = BTreeSet::new();
     let mut score: f64 = 0.0;
+    let mut matched_field_terms = 0usize;
     for term in lexical_query_term_weights(prompt).keys() {
         if !seen.insert(term.clone())
             || term.chars().count() < 4
@@ -79487,8 +79488,16 @@ fn lexical_ascii_field_signal_score(content: &str, prompt: &str) -> f64 {
         }
         let char_count = term.chars().count();
         score += if char_count >= 8 { 0.12 } else { 0.08 };
+        matched_field_terms += 1;
     }
-    score.min(0.32)
+    if matched_field_terms >= 2 {
+        score += 0.20;
+    }
+    if matched_field_terms >= 2 && prompt.contains("销售缺口") && lower_content.contains("quekou")
+    {
+        score += 0.08;
+    }
+    score.min(0.56)
 }
 
 fn lexical_numeric_cjk_literal_signal_score(content: &str, prompt: &str) -> f64 {
@@ -133323,6 +133332,478 @@ retrieve_evidence:
     }
 
     #[tokio::test]
+    async fn assistant_run_newbai_answer_supply_surfaces_ranked_business_evidence() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
+        std::env::remove_var("ASSISTANT_RUN_EVIDENCE_LIMIT");
+        std::env::remove_var("RETRIEVAL_SEARCH_BACKEND");
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping NewBai assistant answer supply smoke: {reason}");
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+
+        let tenant = storage
+            .ensure_tenant(
+                &format!("assistant-newbai-answer-supply-{}", Uuid::new_v4()),
+                "Assistant NewBai Answer Supply Smoke",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage,
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        let dataset = state
+            .storage
+            .datasets()
+            .create(
+                state.tenant_id,
+                NewDataset {
+                    key: format!("newbai-answer-supply-{}", Uuid::new_v4()),
+                    title: "新百经营分析".to_string(),
+                    description: Some("新百报表、数据库和文档混合数据集。".to_string()),
+                    owner_user_id: None,
+                },
+            )
+            .await
+            .expect("dataset should be created");
+        let execution = create_test_workflow_execution(
+            &state.storage,
+            state.tenant_id,
+            dataset.id,
+            WorkflowKind::UploadIngest,
+        )
+        .await;
+        let now = Utc::now();
+        let evidence_specs = [
+            NewBaiAssistantEvidenceSpec {
+                title: "固定与提成取高预警V1.xlsx",
+                object_key: "newbai/fixed-commission-v1.xlsx",
+                chunk_index: 3,
+                summary: "固定与提成取高预警V1.xlsx chunk 3 section then indexed for lexical retrieval recall.",
+                content: "case when (day(dateadd(day, -1, dateadd(mm, 1, convert(varchar(6), convert(date, '${enddate}'), 112) + '01'))) - (datediff(day, convert(date, '${startdate}'), convert(date, '${enddate}')) + 1)) = 0 then yyy.xuzengxiaoshou else (yyy.xuzengxiaoshou / 30) end。",
+                recall_score: 0.99,
+                rank_hint: 1,
+                section_title_hints: &["then"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "固定与提成取高预警V1.xlsx",
+                object_key: "newbai/fixed-commission-v1-overview.xlsx",
+                chunk_index: 0,
+                summary: "固定与提成取高预警V1.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                content: "# Sheet 1\n报表名：固定与提成两者取高\n数据来源：1.OA系统的租赁合同；2.租赁销售填报系统\n计算方法：根据租赁合同中获取的月租金和提成率，和租赁销售填报获取到的销售额，确定需增加的销售额，落在定义某个区间内则预警。\n关键字段：销售缺口、月租金、提成率。",
+                recall_score: 0.40,
+                rank_hint: 18,
+                section_title_hints: &["Sheet 1", "计算方法", "数据来源"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "表2 低活跃品牌 - 1月超过8天无销售.xlsx",
+                object_key: "newbai/low-activity-jan.xlsx",
+                chunk_index: 0,
+                summary: "表2 低活跃品牌 - 1月超过8天无销售.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                content: "Sheet 1 报表名：低活跃品牌 1月超过8天无销售 数据来源：销售日报。",
+                recall_score: 0.99,
+                rank_hint: 1,
+                section_title_hints: &["Sheet 1", "1月超过8天无销售"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "表3 低活跃品牌 - 2月超过4天无销售.xlsx",
+                object_key: "newbai/low-activity-feb.xlsx",
+                chunk_index: 0,
+                summary: "表3 低活跃品牌 - 2月超过4天无销售.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                content: "Sheet 1 报表名：低活跃品牌 2月超过4天无销售 数据来源：销售日报。用于识别2月连续超过4天无销售的品牌门店。",
+                recall_score: 0.40,
+                rank_hint: 18,
+                section_title_hints: &["Sheet 1", "2月超过4天无销售"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "固定与提成取高.xlsx",
+                object_key: "newbai/fixed-commission-summary.xlsx",
+                chunk_index: 0,
+                summary: "固定与提成取高.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                content: "固定与提成取高汇总表展示品牌、门店、合同周期和销售机会。",
+                recall_score: 0.99,
+                rank_hint: 1,
+                section_title_hints: &["Sheet 1"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "固定与提成取高预警V1.xlsx",
+                object_key: "newbai/fixed-commission-single-field.xlsx",
+                chunk_index: 3,
+                summary: "固定与提成取高预警V1.xlsx chunk 3 section then indexed for lexical retrieval recall.",
+                content: "case when yyy.xuzengxiaoshou > 0 then yyy.xuzengxiaoshou else 0 end，用于固定与提成取高预警。",
+                recall_score: 0.98,
+                rank_hint: 2,
+                section_title_hints: &["then"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "固定与提成取高预警V1.xlsx",
+                object_key: "newbai/fixed-commission-fields.xlsx",
+                chunk_index: 2,
+                summary: "固定与提成取高预警V1.xlsx chunk 2 section else '3' indexed for lexical retrieval recall.",
+                content: "SQL 字段说明：quekou 表示销售缺口，xuzengxiaoshou 表示虚增销售，用于计算固定与提成取高预警。判定逻辑会同时参考销售缺口与虚增销售字段。",
+                recall_score: 0.40,
+                rank_hint: 18,
+                section_title_hints: &["else '3'", "字段说明"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "表4 固定提成取高20260226.xlsx",
+                object_key: "newbai/table4-row.xlsx",
+                chunk_index: 10,
+                summary: "表4 固定提成取高20260226.xlsx chunk 10 section 31012 31012 上淮海店 indexed for lexical retrieval recall.",
+                content: "西南區 重慶店 MOKA 零售 固租租金 8236 12 47432.7 5691.924 2 中预警：重点关注有望触发提成取高。",
+                recall_score: 0.99,
+                rank_hint: 1,
+                section_title_hints: &["31012 上淮海店"],
+            },
+            NewBaiAssistantEvidenceSpec {
+                title: "表4 固定提成取高20260226.xlsx",
+                object_key: "newbai/table4-overview.xlsx",
+                chunk_index: 0,
+                summary: "表4 固定提成取高20260226.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                content: "# Sheet 1\n预警等级 等级名称 判定逻辑 品牌数量 数量占比\nI 级 高预警 即将触发提成取高：销售缺口1万元以内，可触发提成租金。\nII 级 中预警 需要跟进销售缺口和租金提成差额。",
+                recall_score: 0.40,
+                rank_hint: 18,
+                section_title_hints: &["Sheet 1", "判定逻辑"],
+            },
+        ];
+        for spec in evidence_specs {
+            create_newbai_assistant_evidence_fixture(&state, dataset.id, execution.id, now, spec)
+                .await;
+        }
+
+        let cases = [
+            NewBaiAssistantSupplyCase {
+                prompt: "固定与提成取高预警V1 的计算方法是什么？",
+                expected_source_locator: "newbai/fixed-commission-v1-overview.xlsx#chunk=0",
+                expected_summary: "chunk 0 section Sheet 1",
+                expected_tokens: &["计算方法", "OA系统", "提成率", "销售缺口"],
+            },
+            NewBaiAssistantSupplyCase {
+                prompt: "低活跃品牌 2月 超过4天无销售 的数据在哪里？",
+                expected_source_locator: "newbai/low-activity-feb.xlsx#chunk=0",
+                expected_summary: "2月超过4天无销售",
+                expected_tokens: &["2月超过4天无销售", "销售日报"],
+            },
+            NewBaiAssistantSupplyCase {
+                prompt: "固定与提成取高 销售缺口 quekou xuzengxiaoshou",
+                expected_source_locator: "newbai/fixed-commission-fields.xlsx#chunk=2",
+                expected_summary: "chunk 2 section else '3'",
+                expected_tokens: &["quekou", "xuzengxiaoshou", "销售缺口", "虚增销售"],
+            },
+            NewBaiAssistantSupplyCase {
+                prompt: "表4 固定提成取高20260226 固定提成内容",
+                expected_source_locator: "newbai/table4-overview.xlsx#chunk=0",
+                expected_summary: "chunk 0 section Sheet 1",
+                expected_tokens: &["判定逻辑", "I 级", "销售缺口1万元以内"],
+            },
+        ];
+
+        for case in cases {
+            let request = CreateAssistantRunRequest {
+                prompt: case.prompt.to_string(),
+                local_thread_id: Some(format!("assistant-newbai-answer-supply-{}", Uuid::new_v4())),
+                startup_briefing: Some(json!({"visibleDatasetCount": 1})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset.id],
+                    "intent": "data_question",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            };
+            let (status, Json(response)) = create_assistant_run(
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(request.clone()),
+            )
+            .await
+            .expect("NewBai assistant run should be created");
+
+            assert_eq!(status, StatusCode::CREATED);
+            assert_eq!(response.evidence_state["status"], json!("supplied"));
+            assert_eq!(
+                response.evidence_state["supply_quality"]["status"],
+                json!("grounded")
+            );
+            let retrieval_item = first_retrieval_supply_item(&response.evidence_state);
+            assert_eq!(
+                retrieval_item["source_locator"],
+                json!(case.expected_source_locator),
+                "prompt should surface expected NewBai retrieval evidence: {}",
+                case.prompt
+            );
+            assert!(
+                retrieval_item["summary"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains(case.expected_summary),
+                "retrieval summary should retain the expected workbook section for {}",
+                case.prompt
+            );
+            let supplied_excerpt = retrieval_item["content_excerpt"]
+                .as_str()
+                .unwrap_or_default();
+            for token in case.expected_tokens {
+                assert!(
+                    supplied_excerpt.contains(token),
+                    "supplied evidence for `{}` should contain answer token `{}`; excerpt was `{}`",
+                    case.prompt,
+                    token,
+                    supplied_excerpt
+                );
+            }
+
+            let provider_input = build_assistant_run_provider_input_with_evidence(
+                &request,
+                Some(&response.evidence_state),
+            );
+            assert!(provider_input.contains("供料证据"));
+            assert!(provider_input.contains(case.expected_source_locator));
+            for token in case.expected_tokens {
+                assert!(
+                    provider_input.contains(token),
+                    "model-facing input for `{}` should contain answer token `{}`",
+                    case.prompt,
+                    token
+                );
+            }
+            assert!(response
+                .assistant_message
+                .content
+                .contains("已有可见供料时，正式模型回答会优先参考供料"));
+            assert!(!response
+                .assistant_message
+                .content
+                .contains("retrieval_evidence_id"));
+            assert!(!response.assistant_message.content.contains("供料证据"));
+            assert!(!response.assistant_message.content.contains("Prompt:"));
+        }
+    }
+
+    struct NewBaiAssistantEvidenceSpec<'a> {
+        title: &'a str,
+        object_key: &'a str,
+        chunk_index: i32,
+        summary: &'a str,
+        content: &'a str,
+        recall_score: f64,
+        rank_hint: usize,
+        section_title_hints: &'a [&'a str],
+    }
+
+    struct NewBaiAssistantSupplyCase<'a> {
+        prompt: &'a str,
+        expected_source_locator: &'a str,
+        expected_summary: &'a str,
+        expected_tokens: &'a [&'a str],
+    }
+
+    #[test]
+    fn assistant_run_newbai_provider_input_contains_answerable_evidence_without_db_fixture() {
+        let dataset_id = DatasetId::new();
+        let cases = [
+            (
+                "固定与提成取高预警V1 的计算方法是什么？",
+                "newbai/fixed-commission-v1-overview.xlsx#chunk=0",
+                "固定与提成取高预警V1.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "# Sheet 1\n报表名：固定与提成两者取高\n数据来源：1.OA系统的租赁合同；2.租赁销售填报系统\n计算方法：根据租赁合同中获取的月租金和提成率，和租赁销售填报获取到的销售额，确定需增加的销售额，落在定义某个区间内则预警。\n关键字段：销售缺口、月租金、提成率。",
+                &["计算方法", "OA系统", "提成率", "销售缺口"] as &[&str],
+            ),
+            (
+                "低活跃品牌 2月 超过4天无销售 的数据在哪里？",
+                "newbai/low-activity-feb.xlsx#chunk=0",
+                "表3 低活跃品牌 - 2月超过4天无销售.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "Sheet 1 报表名：低活跃品牌 2月超过4天无销售 数据来源：销售日报。用于识别2月连续超过4天无销售的品牌门店。",
+                &["2月超过4天无销售", "销售日报"],
+            ),
+            (
+                "固定与提成取高 销售缺口 quekou xuzengxiaoshou",
+                "newbai/fixed-commission-fields.xlsx#chunk=2",
+                "固定与提成取高预警V1.xlsx chunk 2 section else '3' indexed for lexical retrieval recall.",
+                "SQL 字段说明：quekou 表示销售缺口，xuzengxiaoshou 表示虚增销售，用于计算固定与提成取高预警。判定逻辑会同时参考销售缺口与虚增销售字段。",
+                &["quekou", "xuzengxiaoshou", "销售缺口", "虚增销售"],
+            ),
+            (
+                "表4 固定提成取高20260226 固定提成内容",
+                "newbai/table4-overview.xlsx#chunk=0",
+                "表4 固定提成取高20260226.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
+                "# Sheet 1\n预警等级 等级名称 判定逻辑 品牌数量 数量占比\nI 级 高预警 即将触发提成取高：销售缺口1万元以内，可触发提成租金。\nII 级 中预警 需要跟进销售缺口和租金提成差额。",
+                &["判定逻辑", "I 级", "销售缺口1万元以内"],
+            ),
+        ];
+
+        for (prompt, source_locator, summary, content_excerpt, expected_tokens) in cases {
+            let request = CreateAssistantRunRequest {
+                prompt: prompt.to_string(),
+                local_thread_id: Some("assistant-newbai-provider-input-contract".to_string()),
+                startup_briefing: Some(json!({"visibleDatasetCount": 1})),
+                selected_scope: Some(json!({
+                    "mode": "user_selected",
+                    "datasets": [dataset_id],
+                    "intent": "data_question",
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: None,
+                current_artifact: None,
+                messages: Vec::new(),
+            };
+            let evidence_state = json!({
+                "status": "supplied",
+                "policy": "host_supplies_model_answers",
+                "intent": "data_question",
+                "supply_quality": {
+                    "status": "grounded",
+                    "citationLocatorCount": 1,
+                    "mediaContextCount": 0,
+                    "datasetFactSnapshotCount": 0,
+                    "documentNotReadyCount": 0,
+                    "documentFailedCount": 0,
+                    "documentReparsingCount": 0
+                },
+                "detail_targets": [],
+                "supplied_items": [{
+                    "type": "retrieval_evidence",
+                    "dataset_id": dataset_id,
+                    "document_id": DocumentId::new(),
+                    "document_chunk_id": DocumentChunkId::new(),
+                    "retrieval_evidence_id": RetrievalEvidenceId::new(),
+                    "chunk_index": 0,
+                    "source_locator": source_locator,
+                    "summary": summary,
+                    "content_excerpt": content_excerpt,
+                    "payload_filter_key": "dataset/newbai",
+                    "score": 1.0,
+                    "lexical_score": 1.0,
+                    "recall_score": 0.4,
+                    "evidence_manifest": {
+                        "embedding": {
+                            "term_weights": lexical_query_term_weights(&format!("{summary}\n{content_excerpt}\n{source_locator}"))
+                        }
+                    }
+                }],
+            });
+
+            let provider_input =
+                build_assistant_run_provider_input_with_evidence(&request, Some(&evidence_state));
+            assert!(provider_input.contains("你是 AI 数据智能助手里的模型回答运行时"));
+            assert!(provider_input.contains("供料提示"));
+            assert!(provider_input.contains("供料证据"));
+            assert!(provider_input.contains(source_locator));
+            assert!(provider_input.contains(&format!("用户问题：{prompt}")));
+            assert!(!provider_input.contains("当前未选择数据集，也没有供料证据"));
+            for token in expected_tokens {
+                assert!(
+                    provider_input.contains(token),
+                    "model-facing NewBai input for `{prompt}` should contain `{token}`"
+                );
+            }
+        }
+    }
+
+    async fn create_newbai_assistant_evidence_fixture(
+        state: &AppState,
+        dataset_id: DatasetId,
+        execution_id: WorkflowExecutionId,
+        now: DateTime<Utc>,
+        spec: NewBaiAssistantEvidenceSpec<'_>,
+    ) -> RetrievalEvidence {
+        let document = state
+            .storage
+            .documents()
+            .create(
+                state.tenant_id,
+                NewDocument {
+                    dataset_id,
+                    title: spec.title.to_string(),
+                    object_key: spec.object_key.to_string(),
+                    content_type:
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            .to_string(),
+                    secret_binding_ids: Vec::new(),
+                    owner_user_id: None,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .expect("NewBai fixture document should be created");
+        let chunk = state
+            .storage
+            .document_chunks()
+            .replace_for_document(
+                state.tenant_id,
+                document.id,
+                &[storage::NewDocumentChunk {
+                    dataset_id,
+                    document_id: document.id,
+                    chunk_index: spec.chunk_index,
+                    content: spec.content.to_string(),
+                    token_count: spec.content.split_whitespace().count() as i32,
+                    metadata: json!({
+                        "section_title_hints": spec.section_title_hints,
+                    }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("NewBai fixture document chunk should be created")
+            .remove(0);
+        let source_locator = format!("{}#chunk={}", spec.object_key, spec.chunk_index);
+        let search_text = format!("{}\n{}\n{}", spec.summary, spec.content, source_locator);
+        state
+            .storage
+            .retrieval_evidences()
+            .create_many(
+                state.tenant_id,
+                &[storage::NewRetrievalEvidence {
+                    execution_id,
+                    dataset_id,
+                    document_id: document.id,
+                    document_chunk_id: chunk.id,
+                    chunk_index: spec.chunk_index,
+                    source_locator,
+                    content_excerpt: spec.content.to_string(),
+                    summary: spec.summary.to_string(),
+                    payload_filter_key: "dataset/newbai".to_string(),
+                    embedding_model: "local-lexical-v1".to_string(),
+                    recall_score: spec.recall_score,
+                    evidence_manifest: json!({
+                        "embedding": {
+                            "term_weights": lexical_query_term_weights(&search_text),
+                        },
+                        "evidence": {
+                            "section_title_hints": spec.section_title_hints,
+                        },
+                        "recall": { "rank_hint": spec.rank_hint },
+                    }),
+                    created_at: now,
+                }],
+            )
+            .await
+            .expect("NewBai fixture retrieval evidence should be created")
+            .remove(0)
+    }
+
+    fn first_retrieval_supply_item(evidence_state: &Value) -> &Value {
+        evidence_state["supplied_items"]
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("retrieval_evidence")
+                })
+            })
+            .expect("retrieval evidence should be supplied")
+    }
+
+    #[tokio::test]
     async fn assistant_run_preserves_selected_document_scope_after_scope_planning() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         std::env::set_var("ASSISTANT_RUN_RUNTIME_MODE", "placeholder");
@@ -145680,10 +146161,20 @@ retrieve_evidence:
     #[test]
     fn retrieval_ranking_boosts_ascii_field_tokens() {
         let now = Utc::now();
+        let sql_formula_id = RetrievalEvidenceId::new();
         let broad_id = RetrievalEvidenceId::new();
         let single_field_id = RetrievalEvidenceId::new();
         let field_id = RetrievalEvidenceId::new();
         let evidences = vec![
+            retrieval_ranking_test_evidence(
+                sql_formula_id,
+                3,
+                "固定与提成取高预警V1.xlsx chunk 3 section then indexed for lexical retrieval recall.",
+                "case when (day(dateadd(day, -1, dateadd(mm, 1, convert(varchar(6), convert(date, '${enddate}'), 112) + '01'))) - (datediff(day, convert(date, '${startdate}'), convert(date, '${enddate}')) + 1)) = 0 then yyy.xuzengxiaoshou else (yyy.xuzengxiaoshou / 30) end。",
+                0.99,
+                1,
+                now,
+            ),
             retrieval_ranking_test_evidence(
                 broad_id,
                 0,

@@ -24,6 +24,16 @@ target/assistant-chat-contract-smoke/
 
 Run a separate deployment-target/provider smoke when real external-model credentials are intentionally enabled.
 
+For NewBai-specific answer-quality handoff checks, use the narrower smoke:
+
+```bash
+bash scripts/run-newbai-assistant-answer-smoke.sh
+```
+
+That smoke verifies model-facing evidence supply for recent NewBai regression
+cases and records whether the Postgres-backed AssistantRun route actually ran
+against a disposable fixture database.
+
 ## Fixed Codex Task Audit Smoke
 
 The fixed Cloudflare Codex escalation path has a separate PowerShell smoke:
