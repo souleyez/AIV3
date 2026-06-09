@@ -79486,9 +79486,9 @@ fn lexical_ascii_field_signal_score(content: &str, prompt: &str) -> f64 {
             continue;
         }
         let char_count = term.chars().count();
-        score += if char_count >= 8 { 0.08 } else { 0.04 };
+        score += if char_count >= 8 { 0.12 } else { 0.08 };
     }
-    score.min(0.18)
+    score.min(0.32)
 }
 
 fn lexical_numeric_cjk_literal_signal_score(content: &str, prompt: &str) -> f64 {
@@ -79570,17 +79570,17 @@ fn lexical_spreadsheet_overview_signal_score(
         0.0
     };
     if prompt.contains("计算方法") && content.contains("计算方法") {
-        score += 0.22;
+        score += 0.44;
     }
     if prompt.contains("数据来源") && content.contains("数据来源") {
-        score += 0.16;
+        score += 0.24;
     }
     if (prompt.contains("哪张表") || prompt.contains("哪个表") || prompt.contains("报表名"))
         && content.contains("报表名")
     {
         score += 0.12;
     }
-    score.min(0.42)
+    score.min(0.68)
 }
 
 fn prompt_requests_spreadsheet_overview(prompt: &str) -> bool {
@@ -145573,8 +145573,8 @@ retrieve_evidence:
             retrieval_ranking_test_evidence(
                 sql_chunk_id,
                 3,
-                "固定与提成取高预警V1.xlsx chunk 3 section Sheet 3 indexed for lexical retrieval recall.",
-                "固定与提成取高预警V1 SQL 明细：case when yyy.xuzengxiaoshou > 0 then yyy.quekou else 0 end。",
+                "固定与提成取高预警V1.xlsx chunk 3 section then indexed for lexical retrieval recall.",
+                "case when (day(dateadd(day, -1, dateadd(mm, 1, convert(varchar(6), convert(date, '${enddate}'), 112) + '01'))) - (datediff(day, convert(date, '${startdate}'), convert(date, '${enddate}')) + 1)) = 0 then yyy.xuzengxiaoshou else (yyy.xuzengxiaoshou / 30) end。",
                 0.99,
                 1,
                 now,
@@ -145583,7 +145583,7 @@ retrieve_evidence:
                 overview_id,
                 0,
                 "固定与提成取高预警V1.xlsx chunk 0 section Sheet 1 indexed for lexical retrieval recall.",
-                "# Sheet 1 报表名：固定与提成两者取高 数据来源：OA系统 计算方法：根据租赁合同，比较固定金额与提成金额并取较高值形成预警。",
+                "# Sheet 1\n报表名：固定与提成两者取高\n数据来源：1.OA系统的租赁合同；2.租赁销售填报系统\n计算方法：根据租赁合同中获取的月租金和提成率，和租赁销售填报获取到的销售额，确定需增加的销售额，落在定义某个区间内则预警。",
                 0.40,
                 18,
                 now,
@@ -145638,6 +145638,7 @@ retrieve_evidence:
     fn retrieval_ranking_boosts_ascii_field_tokens() {
         let now = Utc::now();
         let broad_id = RetrievalEvidenceId::new();
+        let single_field_id = RetrievalEvidenceId::new();
         let field_id = RetrievalEvidenceId::new();
         let evidences = vec![
             retrieval_ranking_test_evidence(
@@ -145650,9 +145651,18 @@ retrieve_evidence:
                 now,
             ),
             retrieval_ranking_test_evidence(
-                field_id,
+                single_field_id,
                 3,
-                "固定与提成取高.xlsx chunk 3 section Sheet 3 indexed for lexical retrieval recall.",
+                "固定与提成取高预警V1.xlsx chunk 3 section then indexed for lexical retrieval recall.",
+                "case when yyy.xuzengxiaoshou > 0 then yyy.xuzengxiaoshou else 0 end，用于固定与提成取高预警。",
+                0.98,
+                2,
+                now,
+            ),
+            retrieval_ranking_test_evidence(
+                field_id,
+                2,
+                "固定与提成取高预警V1.xlsx chunk 2 section else '3' indexed for lexical retrieval recall.",
                 "SQL 字段说明：quekou 表示销售缺口，xuzengxiaoshou 表示虚增销售，用于计算固定与提成取高预警。",
                 0.40,
                 18,
