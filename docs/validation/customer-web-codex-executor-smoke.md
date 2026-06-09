@@ -114,6 +114,15 @@ npm run smoke:customer-web-codex-live -- --preflight \
   --current-artifact-file <current_static_page_artifact.json>
 ```
 
+When the operator already has the current rendered page URL, the file can be replaced by a shorthand URL input:
+
+```bash
+npm run smoke:customer-web-codex-live -- --preflight \
+  --base-url https://v3.elepcloud.com \
+  --dataset-id <controlled_test_dataset_id> \
+  --current-artifact-public-url https://v3.elepcloud.com/generated-artifacts/<artifact>/index.html
+```
+
 The preflight writes a redacted receipt under:
 
 ```text
@@ -133,7 +142,7 @@ npm run smoke:customer-web-codex-live -- --execute --ack-controlled-live \
   --current-artifact-file <current_static_page_artifact.json>
 ```
 
-`--bearer <token>` may be used instead of `--cookie` when the target auth mode supports it. `generated_static_page_edit` requires the current rendered V3-generated static page context through `--current-artifact-json` or `--current-artifact-file`; the script intentionally does not invent this context. A placeholder such as `{ "artifact_id": "...", "files": [...] }` is not sufficient for this live smoke because it cannot prove that the old generated page will be available for changed-page comparison.
+`--bearer <token>` may be used instead of `--cookie` when the target auth mode supports it. `generated_static_page_edit` requires the current rendered V3-generated static page context through exactly one of `--current-artifact-json`, `--current-artifact-file`, or `--current-artifact-public-url`; the script intentionally does not invent this context. A placeholder such as `{ "artifact_id": "...", "files": [...] }` is not sufficient for this live smoke because it cannot prove that the old generated page will be available for changed-page comparison.
 
 Required cases:
 

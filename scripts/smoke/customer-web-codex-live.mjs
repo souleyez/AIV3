@@ -80,6 +80,9 @@ function parseArgs(argv) {
     datasetTitle: process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_DATASET_TITLE || 'Customer Web Codex Live Smoke Dataset',
     currentArtifactJson: process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_CURRENT_ARTIFACT_JSON || '',
     currentArtifactFile: process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_CURRENT_ARTIFACT_FILE || '',
+    currentArtifactPublicUrl: process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_CURRENT_ARTIFACT_PUBLIC_URL || '',
+    currentArtifactId: process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_CURRENT_ARTIFACT_ID || '',
+    currentArtifactTitle: process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_CURRENT_ARTIFACT_TITLE || '',
     approvalId: process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_APPROVAL_ID || '',
     localThreadPrefix:
       process.env.CUSTOMER_WEB_CODEX_LIVE_SMOKE_LOCAL_THREAD_PREFIX || `customer-web-codex-live-${Date.now()}`,
@@ -120,6 +123,15 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--current-artifact-file') {
       args.currentArtifactFile = requireValue(arg, next);
+      index += 1;
+    } else if (arg === '--current-artifact-public-url') {
+      args.currentArtifactPublicUrl = requireValue(arg, next);
+      index += 1;
+    } else if (arg === '--current-artifact-id') {
+      args.currentArtifactId = requireValue(arg, next);
+      index += 1;
+    } else if (arg === '--current-artifact-title') {
+      args.currentArtifactTitle = requireValue(arg, next);
       index += 1;
     } else if (arg === '--approval-id') {
       args.approvalId = requireValue(arg, next);
@@ -175,6 +187,14 @@ function parseArgs(argv) {
   if (!Number.isInteger(args.pollAttempts) || args.pollAttempts < 1) {
     throw new Error('--poll-attempts must be at least 1');
   }
+  const artifactSources = [
+    args.currentArtifactJson ? '--current-artifact-json' : '',
+    args.currentArtifactFile ? '--current-artifact-file' : '',
+    args.currentArtifactPublicUrl ? '--current-artifact-public-url' : '',
+  ].filter(Boolean);
+  if (artifactSources.length > 1) {
+    throw new Error(`current artifact source must be unique; got ${artifactSources.join(', ')}`);
+  }
   const unknownCase = args.selectedCaseIds.find((id) => !LIVE_CASES.some((item) => item.id === id));
   if (unknownCase) {
     throw new Error(`unknown --case: ${unknownCase}`);
@@ -195,6 +215,11 @@ function printHelp() {
     --cookie "aidp_v3_session=..." \\
     --dataset-id <test_dataset_id> \\
     --current-artifact-file ./current-static-page-artifact.json
+
+  npm run smoke:customer-web-codex-live -- --preflight \\
+    --base-url https://v3.elepcloud.com \\
+    --dataset-id <test_dataset_id> \\
+    --current-artifact-public-url https://v3.elepcloud.com/generated-artifacts/<artifact>/index.html
 
 Modes:
   --self-test   No network. Verifies approval gates, SSE parsing, evidence checks, and redaction.
@@ -222,6 +247,9 @@ function selectedCases(args) {
 }
 
 function parseCurrentArtifact(args) {
+  if (args.currentArtifactPublicUrl) {
+    return buildCurrentArtifactFromPublicUrl(args);
+  }
   const raw = args.currentArtifactFile
     ? readFileSync(args.currentArtifactFile, 'utf8')
     : args.currentArtifactJson;
@@ -231,6 +259,25 @@ function parseCurrentArtifact(args) {
   } catch (error) {
     throw new Error(`current artifact is not valid JSON: ${error.message}`);
   }
+}
+
+function buildCurrentArtifactFromPublicUrl(args) {
+  const publicUrl = String(args.currentArtifactPublicUrl || '').trim();
+  const id = String(args.currentArtifactId || 'customer-web-codex-live-current-static-page').trim();
+  const title = String(args.currentArtifactTitle || 'Customer Web Codex live smoke current static page').trim();
+  return {
+    type: 'static_page_draft',
+    id,
+    title,
+    status: 'rendered',
+    finalPage: {
+      status: 'rendered',
+      publicUrl,
+    },
+    artifactStability: {
+      publicUrl,
+    },
+  };
 }
 
 function objectValue(value) {
@@ -561,6 +608,7 @@ function sanitizeError(error, args = {}, testCase = null) {
     args.bearer,
     args.approvalId,
     args.currentArtifactJson,
+    args.currentArtifactPublicUrl,
     testCase?.prompt,
   ].filter((value) => typeof value === 'string' && value.length >= 4);
   for (const value of redactions) {
@@ -766,7 +814,7 @@ function preflightReport(args, currentArtifact) {
     missingGates: missing,
     liveWritesAttempted: false,
     nextCommandTemplate:
-      'npm run smoke:customer-web-codex-live -- --execute --ack-controlled-live --approval-id <approval_ref> --base-url <v3_url> --cookie <redacted> --dataset-id <test_dataset_id> --current-artifact-file <artifact.json>',
+      'npm run smoke:customer-web-codex-live -- --execute --ack-controlled-live --approval-id <approval_ref> --base-url <v3_url> --cookie <redacted> --dataset-id <test_dataset_id> --current-artifact-public-url <generated_artifact_url>',
   };
 }
 
@@ -851,6 +899,9 @@ function assertApprovalGateContract() {
     datasetTitle: 'Dataset Smoke',
     currentArtifactJson: readyArtifact,
     currentArtifactFile: '',
+    currentArtifactPublicUrl: '',
+    currentArtifactId: '',
+    currentArtifactTitle: '',
     approvalId: '',
     localThreadPrefix: 'self-test',
     outputDir: DEFAULT_OUTPUT_DIR,
@@ -922,6 +973,19 @@ function assertApprovalGateContract() {
   const relativeUrlArtifact = preflightReport(relativeUrlArtifactArgs, parseCurrentArtifact(relativeUrlArtifactArgs));
   if (!relativeUrlArtifact.missingGates.includes('current_static_page_artifact_host_seed_url')) {
     throw new Error('approval gate failed to require absolute V3 generated-artifact URL for host seed');
+  }
+  const publicUrlArtifactArgs = {
+    ...base,
+    ackControlledLive: true,
+    approvalId: 'approval-self-test',
+    cookie: 'aidp_v3_session=self-test-secret',
+    currentArtifactJson: '',
+    currentArtifactPublicUrl: 'https://v3.elepcloud.com/generated-artifacts/customer-web-codex-live-smoke/index.html',
+    currentArtifactId: '11111111-1111-4111-8111-000000000102',
+  };
+  const publicUrlArtifact = preflightReport(publicUrlArtifactArgs, parseCurrentArtifact(publicUrlArtifactArgs));
+  if (publicUrlArtifact.missingGates.length || !publicUrlArtifact.readyToExecute) {
+    throw new Error('approval gate failed to accept current artifact public URL shorthand');
   }
 }
 
@@ -1129,6 +1193,7 @@ async function runSelfTest(args) {
     checks: [
       { name: 'approval_gate_requires_ack_approval_auth_dataset_and_artifact', status: 'passed' },
       { name: 'current_static_page_artifact_shape_rejects_placeholder_context', status: 'passed' },
+      { name: 'current_static_page_artifact_public_url_shorthand_builds_valid_context', status: 'passed' },
       { name: 'sse_parser_extracts_completed_response', status: 'passed' },
       { name: 'synthetic_five_case_evidence_matrix', status: 'passed' },
       { name: 'blocked_product_change_evidence_has_no_artifact_bundle', status: 'passed' },
@@ -1145,7 +1210,13 @@ async function runSelfTest(args) {
 
 function assertReportSafe(report, args = {}) {
   const serialized = JSON.stringify(report);
-  for (const secret of [args.cookie, args.bearer, args.approvalId, args.currentArtifactJson].filter(Boolean)) {
+  for (const secret of [
+    args.cookie,
+    args.bearer,
+    args.approvalId,
+    args.currentArtifactJson,
+    args.currentArtifactPublicUrl,
+  ].filter(Boolean)) {
     if (secret.length >= 4 && serialized.includes(secret)) {
       throw new Error('customer web codex live smoke report includes an unredacted input secret/context value');
     }
