@@ -34001,6 +34001,9 @@ fn external_channel_message_requests_static_page_artifact(
     if message.artifact_type.as_deref() == Some("static_page") {
         return true;
     }
+    if external_channel_message_requests_template_html_artifact(message) {
+        return false;
+    }
 
     let explicit_report_workflow_request =
         external_channel_prompt_requests_static_page_report_workflow(prompt);
@@ -34063,7 +34066,12 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>()
         .to_ascii_lowercase();
+    let report_explanation_question =
+        external_channel_prompt_is_report_explanation_question(&compact, prompt);
     if external_channel_prompt_requests_business_report_module_workflow(&compact, prompt) {
+        return true;
+    }
+    if external_channel_prompt_requests_large_data_analysis_report_workflow(&compact, prompt) {
         return true;
     }
     let asks_for_report_artifact = external_channel_text_has_any(
@@ -34075,6 +34083,7 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
             "可视化报表",
             "经营分析报表",
             "报表",
+            "报告",
             "看板",
             "大屏",
             "页面",
@@ -34088,6 +34097,9 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
     );
     if !asks_for_report_artifact {
         return false;
+    }
+    if !report_explanation_question {
+        return true;
     }
     if external_channel_text_has_any(
         &compact,
@@ -34137,6 +34149,229 @@ fn external_channel_prompt_requests_static_page_report_workflow(prompt: &str) ->
     }
 
     external_channel_prompt_is_short_report_artifact_request(&compact, prompt)
+}
+
+fn external_channel_prompt_is_report_explanation_question(compact: &str, prompt: &str) -> bool {
+    external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "什么",
+            "怎么",
+            "如何",
+            "为什么",
+            "是否",
+            "能不能",
+            "可不可以",
+            "吗",
+            "介绍",
+            "说明",
+            "含义",
+            "口径",
+            "原因",
+            "是什么意思",
+            "是什么",
+        ],
+    ) || (external_channel_text_has_any(compact, prompt, &["问题", "有哪些问题"])
+        && !external_channel_text_has_any(
+            compact,
+            prompt,
+            &[
+                "全面", "完整", "详细", "系统", "多维", "各", "全部", "所有", "清单", "明细",
+                "报告", "报表", "看板", "页面", "输出", "生成", "整理",
+            ],
+        ))
+        || (external_channel_text_has_any(compact, prompt, &["哪些", "有哪些"])
+            && external_channel_text_has_any(
+                compact,
+                prompt,
+                &["问题", "口径", "原因", "含义", "意思", "是什么"],
+            ))
+}
+
+fn external_channel_prompt_requests_large_data_analysis_report_workflow(
+    compact: &str,
+    prompt: &str,
+) -> bool {
+    let explicit_large_report_output = external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "输出报告",
+            "输出报表",
+            "生成报告",
+            "生成报表",
+            "生成看板",
+            "生成图表",
+            "生成可视化",
+            "做成报告",
+            "做成报表",
+            "做成看板",
+            "做成图表",
+            "做成可视化",
+            "整理成报告",
+            "整理成报表",
+            "整理成看板",
+            "整理成图表",
+            "整理成可视化",
+            "给一份报告",
+            "给一份报表",
+            "出一份报告",
+            "出一份报表",
+            "分析报告",
+            "分析报表",
+            "analysis report",
+            "analytics report",
+            "dashboard",
+        ],
+    );
+    if external_channel_prompt_is_report_explanation_question(compact, prompt)
+        && !explicit_large_report_output
+    {
+        return false;
+    }
+
+    let has_data_analysis_intent = external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "数据分析",
+            "经营分析",
+            "经营工作分析",
+            "经营工作的分析",
+            "业务分析",
+            "分析数据",
+            "分析一下数据",
+            "做数据分析",
+            "做一下数据分析",
+            "做经营分析",
+            "做一下经营分析",
+            "做经营工作分析",
+            "做一下经营工作分析",
+            "统计分析",
+            "综合分析",
+            "整体分析",
+            "全面分析",
+            "完整分析",
+            "详细分析",
+            "系统分析",
+            "多维分析",
+            "趋势分析",
+            "排行分析",
+            "排名分析",
+            "明细分析",
+            "拆解分析",
+            "分析一下",
+            "帮我分析",
+            "做一下",
+            "data analysis",
+            "business analysis",
+            "analytics",
+        ],
+    );
+    if !has_data_analysis_intent {
+        return false;
+    }
+
+    let has_data_context = external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "数据",
+            "数据集",
+            "数据库",
+            "表格",
+            "报表",
+            "指标",
+            "经营",
+            "销售",
+            "客流",
+            "租金",
+            "门店",
+            "店铺",
+            "品牌",
+            "收入",
+            "风险",
+            "趋势",
+            "排行",
+            "排名",
+            "明细",
+            "汇总",
+            "统计",
+            "新百",
+            "新世界",
+            "业务",
+            "dataset",
+            "database",
+            "metric",
+            "sales",
+            "traffic",
+        ],
+    );
+    if !has_data_context {
+        return false;
+    }
+
+    external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "全面",
+            "完整",
+            "详细",
+            "系统",
+            "整体",
+            "多维",
+            "多角度",
+            "大体量",
+            "大量",
+            "全部",
+            "所有",
+            "各",
+            "逐",
+            "分维度",
+            "分门店",
+            "分品牌",
+            "趋势",
+            "排行",
+            "排名",
+            "明细",
+            "清单",
+            "汇总",
+            "表格",
+            "图表",
+            "可视化",
+            "报告",
+            "报表",
+            "看板",
+            "页面",
+            "输出",
+            "整理",
+            "生成",
+            "做成",
+            "给一份",
+            "出一份",
+            "dashboard",
+            "visualization",
+            "report",
+        ],
+    ) || external_channel_text_has_any(
+        compact,
+        prompt,
+        &[
+            "经营工作分析",
+            "做一下经营",
+            "做经营",
+            "帮我经营分析",
+            "帮我做经营",
+            "做一下数据",
+            "做数据分析",
+            "帮我数据分析",
+            "帮我做数据",
+            "新百经营",
+            "新世界经营",
+        ],
+    )
 }
 
 fn external_channel_prompt_requests_business_report_module_workflow(
@@ -34315,6 +34550,8 @@ fn external_channel_prompt_requests_business_report_module_workflow(
             "整理",
             "做成",
             "做个",
+            "做一下",
+            "分析",
             "输出",
             "最新",
             "本月",
@@ -48179,6 +48416,12 @@ fn build_assistant_run_provider_input_with_evidence(
             "外部通道供料表达要求：如果已经收到文档、检索切片、事实快照或会话范围供料，优先把相关证据整理成可执行结论、步骤、表格或清单；不要把“当前可见”“暂未直接检索到”“资料不足”“建议补充资料”放在答案开头。若供料只是相关章节而非专项原文，必须区分“文档明文规定”和“按相关章节/通用规范整理的可参考流程”，不要把推导或通用经验写成文档明文。只有完全没有相关供料、或确实只能确认文档未就绪/不可见时，才用缺资料说明，并给出最短下一步。"
                 .to_string(),
         );
+        if external_channel_prompt_requests_static_page_report_workflow(&request.prompt) {
+            sections.push(
+                "外部通道经营/数据分析要求：用户要经营分析、数据分析、报表、看板或长篇分析时，优先使用 database_schema_context、database_aggregate、dataset_fact_snapshot、spreadsheet_row_analysis 等结构化指标证据形成经营判断；检索片段、文档和模板说明只作为口径/场景补充。不要只复述文档内容。即使宿主已排队或复用右侧报表/静态页，也必须先给用户一版直接的自然语言分析结论、关键指标、风险和下一步动作。"
+                    .to_string(),
+            );
+        }
         sections.extend(external_channel_model_tool_capability_guidance_lines());
     }
     sections.extend(assistant_run_v3_awareness_lines());
@@ -104127,6 +104370,60 @@ mod tests {
     }
 
     #[test]
+    fn external_channel_static_page_artifact_defaults_large_data_analysis_to_report() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for prompt in [
+            "帮我对门店销售数据做一次全面数据分析，输出详细结论和图表",
+            "对新百经营数据做多维分析，整理销售趋势、风险门店、助推清单",
+            "把各门店销售、客流、租金数据做完整分析，给一份报告",
+            "做一下新百的经营工作分析",
+            "Please run a data analysis over sales and traffic metrics and generate an analytics report.",
+        ] {
+            assert!(
+                external_channel_message_requests_static_page_artifact(&message, prompt),
+                "large data analysis should create a side report artifact: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_defaults_report_terms_to_side_report() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for prompt in ["新百经营最近的取高报表", "门店经营看板", "请看当前销售报告"]
+        {
+            assert!(
+                external_channel_message_requests_static_page_artifact(&message, prompt),
+                "report artifact terms should create a side report artifact unless this is an explanation question: {prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_channel_static_page_artifact_keeps_normal_reply_for_analysis_explanations() {
+        let mut message = sample_external_bot_message();
+        message.render_mode = Some("normal".to_string());
+        message.output_format = Some("rich_text".to_string());
+
+        for prompt in [
+            "帮我分析这份报表口径有哪些问题",
+            "分析一下经营状况有哪些问题",
+            "分析一下现金流折现是什么意思",
+            "为什么这个销售指标会波动",
+        ] {
+            assert!(
+                !external_channel_message_requests_static_page_artifact(&message, prompt),
+                "explanatory analysis should stay ordinary QA: {prompt}"
+            );
+        }
+    }
+
+    #[test]
     fn external_channel_text_reply_keeps_answer_and_appends_static_page_link() {
         let message = sample_external_bot_message();
         let public_url =
@@ -104573,6 +104870,43 @@ mod tests {
         assert_eq!(
             selected_scope["database_source_scope"]["default_dataset_bindings"][0]["source_id"],
             json!("hy-sql-report")
+        );
+
+        let mut large_analysis_scope = json!({"type": "external_channel"});
+        enrich_external_channel_database_source_scope(
+            &state,
+            &connection,
+            &message,
+            "帮我对门店销售数据做一次全面数据分析，输出详细结论和图表",
+            &mut large_analysis_scope,
+        )
+        .await
+        .expect("large data analysis should enrich database scope");
+
+        assert_eq!(
+            large_analysis_scope["database_source_ids"],
+            json!(["hy-sql-report"])
+        );
+        assert_eq!(large_analysis_scope["datasets"][0]["id"], json!(dataset.id));
+
+        let mut business_work_analysis_scope = json!({"type": "external_channel"});
+        enrich_external_channel_database_source_scope(
+            &state,
+            &connection,
+            &message,
+            "做一下新百的经营工作分析",
+            &mut business_work_analysis_scope,
+        )
+        .await
+        .expect("business work analysis should enrich database scope");
+
+        assert_eq!(
+            business_work_analysis_scope["database_source_ids"],
+            json!(["hy-sql-report"])
+        );
+        assert_eq!(
+            business_work_analysis_scope["datasets"][0]["id"],
+            json!(dataset.id)
         );
     }
 
@@ -123349,6 +123683,47 @@ retrieve_evidence:
         ));
         assert!(input.contains("temporary_dataset"));
         assert!(input.contains("external-session-generic-chat-main-chat-risk-room-src-docs"));
+    }
+
+    #[test]
+    fn external_channel_business_analysis_provider_input_prefers_structured_metrics() {
+        let dataset_id = DatasetId::new();
+        let input = build_assistant_run_provider_input_with_evidence(
+            &CreateAssistantRunRequest {
+                prompt: "做一下新百的经营工作分析".to_string(),
+                local_thread_id: Some("external-thread-business-analysis".to_string()),
+                startup_briefing: Some(json!({
+                    "surface": "external_channel",
+                    "channel_connection_id": "generic-chat-main"
+                })),
+                selected_scope: Some(json!({
+                    "type": "external_channel",
+                    "mode": "external_document_scope",
+                    "datasets": [{"type": "dataset", "id": dataset_id}],
+                    "database_source_ids": ["hy-sql-report"]
+                })),
+                scope_candidates: Vec::new(),
+                context_policy_hint: Some(json!({"source": "external_channel"})),
+                current_artifact: None,
+                messages: Vec::new(),
+            },
+            Some(&json!({
+                "status": "supplied",
+                "supplied_items": [{
+                    "type": "database_aggregate",
+                    "summary": "按区域汇总月租金、销售额和缺口。"
+                }],
+                "supply_quality": {
+                    "databaseAggregateCount": 1
+                },
+                "detail_targets": []
+            })),
+        );
+
+        assert!(input.contains("外部通道经营/数据分析要求"));
+        assert!(input.contains("优先使用 database_schema_context、database_aggregate"));
+        assert!(input.contains("不要只复述文档内容"));
+        assert!(input.contains("直接的自然语言分析结论"));
     }
 
     #[test]

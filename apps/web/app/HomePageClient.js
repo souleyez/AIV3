@@ -1347,6 +1347,12 @@ export default function HomePageClient() {
     if (/静态页|静态页面|页面规划|一页|生成页面|落地页|效果图|网页|html|HTML|可视化页|报表|看板/.test(text)) {
       return true;
     }
+    const hasDataAnalysisTopic = /经营分析|经营工作分析|数据分析|业务分析|综合分析|多维分析/.test(compact)
+      && /数据|数据集|数据库|指标|经营|销售|客流|租金|门店|店铺|品牌|收入|风险|趋势|排行|排名|明细|汇总|统计|新百|新世界/.test(compact);
+    const hasAnalysisReportAction = /做一下|做一做|帮我|请|输出|整理|生成|制作|汇总|全面|完整|详细|系统|多维|多角度|图表|可视化|报告|报表|看板|清单|明细/.test(compact);
+    if (hasDataAnalysisTopic && hasAnalysisReportAction) {
+      return true;
+    }
     const hasRiskIdentificationTopic = /风险识别/.test(compact) && !/风险识别系统/.test(compact);
     const hasBusinessReportTopic = /取高|经营状况|经营情况|经营状态|经营健康度|销售缺口|销售额缺口|需要助推|需助推|助推门店|门店助推|销售统计|门店统计|品牌统计|经营统计|风险门店|风险店铺/.test(compact)
       || hasRiskIdentificationTopic;
