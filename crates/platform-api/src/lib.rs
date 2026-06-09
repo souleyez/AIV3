@@ -48418,7 +48418,7 @@ fn build_assistant_run_provider_input_with_evidence(
         );
         if external_channel_prompt_requests_static_page_report_workflow(&request.prompt) {
             sections.push(
-                "外部通道经营/数据分析要求：用户要经营分析、数据分析、报表、看板或长篇分析时，优先使用 database_schema_context、database_aggregate、dataset_fact_snapshot、spreadsheet_row_analysis 等结构化指标证据形成经营判断；检索片段、文档和模板说明只作为口径/场景补充。不要只复述文档内容。即使宿主已排队或复用右侧报表/静态页，也必须先给用户一版直接的自然语言分析结论、关键指标、风险和下一步动作。"
+                "外部通道经营/数据分析要求：用户要经营分析、数据分析、报表、看板或长篇分析时，优先使用 database_schema_context、database_aggregate、dataset_fact_snapshot、spreadsheet_row_analysis 等结构化指标证据形成经营判断；检索片段、文档和模板说明只作为口径/场景补充。不要只复述文档内容。即使宿主已排队或复用右侧报表/静态页，也必须先给用户一版直接的自然语言分析结论、关键指标、风险和下一步动作；直答控制为 800-1200 字以内的简明经营摘要，不要把整份报表正文、图表清单和长篇展开都写在聊天回复里，详细图表和大篇幅分析由右侧报表承载。"
                     .to_string(),
             );
         }
@@ -123724,6 +123724,8 @@ retrieve_evidence:
         assert!(input.contains("优先使用 database_schema_context、database_aggregate"));
         assert!(input.contains("不要只复述文档内容"));
         assert!(input.contains("直接的自然语言分析结论"));
+        assert!(input.contains("直答控制为 800-1200 字以内的简明经营摘要"));
+        assert!(input.contains("详细图表和大篇幅分析由右侧报表承载"));
     }
 
     #[test]
