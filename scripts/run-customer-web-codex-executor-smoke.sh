@@ -121,6 +121,21 @@ const syntheticShelfEvidenceSummary = {
   product_change_artifact_bundle_count: Number(synthetic.productChangeArtifactBundleCount || 0),
   all_synthetic_cases_met: synthetic.allSyntheticCasesMet === true,
 };
+const inputChecklist = report.controlledLiveInputChecklistEvidence || {};
+const controlledLiveInputChecklistEvidenceSummary = {
+  schema: inputChecklist.schema || "",
+  all_cases_required_operator_input_count: Number(inputChecklist.allCasesRequiredOperatorInputCount || 0),
+  all_cases_missing_operator_input_count_without_inputs: Number(
+    inputChecklist.allCasesMissingOperatorInputCountWithoutInputs || 0,
+  ),
+  all_cases_missing_gate_count_without_inputs: Number(inputChecklist.allCasesMissingGateCountWithoutInputs || 0),
+  ready_all_cases_runnable_count: Number(inputChecklist.readyAllCasesRunnableCount || 0),
+  product_change_only_required_operator_input_count: Number(
+    inputChecklist.productChangeOnlyRequiredOperatorInputCount || 0,
+  ),
+  product_change_only_ready_without_dataset_or_artifact:
+    inputChecklist.productChangeOnlyReadyWithoutDatasetOrArtifact === true,
+};
 const evidence = {
   report_basename: selected.name,
   ok: report.ok === true,
@@ -129,6 +144,17 @@ const evidence = {
   live_writes_blocked: report.liveWritesAttempted === false,
   approval_gate_enforced: checkNames.has("approval_gate_requires_ack_approval_auth_dataset_and_artifact"),
   next_command_template_redacted: checkNames.has("controlled_live_next_command_template_redacted"),
+  controlled_live_input_checklist_ready:
+    checkNames.has("controlled_live_input_checklist_contract")
+    && controlledLiveInputChecklistEvidenceSummary.schema
+      === "v3.customer_web_codex_live_input_checklist_evidence.v1"
+    && controlledLiveInputChecklistEvidenceSummary.all_cases_required_operator_input_count === 4
+    && controlledLiveInputChecklistEvidenceSummary.all_cases_missing_operator_input_count_without_inputs === 4
+    && controlledLiveInputChecklistEvidenceSummary.all_cases_missing_gate_count_without_inputs === 5
+    && controlledLiveInputChecklistEvidenceSummary.ready_all_cases_runnable_count === 5
+    && controlledLiveInputChecklistEvidenceSummary.product_change_only_required_operator_input_count === 2
+    && controlledLiveInputChecklistEvidenceSummary.product_change_only_ready_without_dataset_or_artifact === true,
+  controlled_live_input_checklist_evidence_summary: controlledLiveInputChecklistEvidenceSummary,
   current_artifact_shape_gate_enforced: checkNames.has(
     "current_static_page_artifact_shape_rejects_placeholder_context",
   ),
@@ -155,6 +181,7 @@ evidence.ready = evidence.ok
   && evidence.live_writes_blocked
   && evidence.approval_gate_enforced
   && evidence.next_command_template_redacted
+  && evidence.controlled_live_input_checklist_ready
   && evidence.current_artifact_shape_gate_enforced
   && evidence.current_artifact_public_url_shorthand_ready
   && evidence.sse_parser_ready
@@ -169,7 +196,7 @@ process.stdout.write(JSON.stringify(evidence));
 NODE
 )"
 checks+=("customer-web-codex-live self-test evidence readback")
-echo "${live_self_test_evidence_json}" | node -e 'const fs = require("fs"); const evidence = JSON.parse(fs.readFileSync(0, "utf8")); console.log(`evidence_ready=${evidence.ready} synthetic_cases=${evidence.synthetic_shelf_evidence_summary.case_count} artifact_bundles=${evidence.synthetic_shelf_evidence_summary.artifact_bundle_case_count}`);'
+echo "${live_self_test_evidence_json}" | node -e 'const fs = require("fs"); const evidence = JSON.parse(fs.readFileSync(0, "utf8")); console.log(`evidence_ready=${evidence.ready} input_checklist_ready=${evidence.controlled_live_input_checklist_ready} synthetic_cases=${evidence.synthetic_shelf_evidence_summary.case_count} artifact_bundles=${evidence.synthetic_shelf_evidence_summary.artifact_bundle_case_count}`);'
 
 run_check "npm --prefix apps/web run build" \
   npm --prefix apps/web run build
@@ -243,6 +270,10 @@ const report = {
       approval_gate_enforced: liveSelfTestEvidence.approval_gate_enforced === true,
       next_command_template_redacted:
         liveSelfTestEvidence.next_command_template_redacted === true,
+      controlled_live_input_checklist_ready:
+        liveSelfTestEvidence.controlled_live_input_checklist_ready === true,
+      controlled_live_input_checklist_evidence_summary:
+        liveSelfTestEvidence.controlled_live_input_checklist_evidence_summary || null,
       current_artifact_shape_gate_enforced:
         liveSelfTestEvidence.current_artifact_shape_gate_enforced === true,
       current_artifact_public_url_shorthand_ready:
@@ -262,6 +293,43 @@ const report = {
         "current rendered V3 generated-artifact URL or artifact context",
         "operator approval id/reference"
       ],
+      approval_request_summary: {
+        schema: "v3.customer_web_codex_controlled_live_approval_request.v1",
+        status: "waiting_for_operator_inputs",
+        requested_scope: "controlled_customer_web_codex_live_smoke_only",
+        preflight_network_calls: false,
+        live_writes_require_execute_ack_and_approval: true,
+        required_operator_input_count: 4,
+        missing_operator_input_count: 4,
+        required_operator_inputs: [
+          {
+            id: "auth_cookie_or_bearer",
+            label: "test account session cookie or bearer"
+          },
+          {
+            id: "dataset_id",
+            label: "controlled test dataset id"
+          },
+          {
+            id: "current_static_page_artifact",
+            label: "current rendered V3 generated static-page artifact context"
+          },
+          {
+            id: "approval_id",
+            label: "operator approval id/reference"
+          }
+        ],
+        execution_gates: [
+          {
+            id: "ack_controlled_live",
+            required_flag: "--ack-controlled-live"
+          },
+          {
+            id: "execute_flag",
+            required_flag: "--execute"
+          }
+        ]
+      },
       live_smoke_pending: true
     },
     pending_gate_requirements_summary: {
@@ -342,10 +410,12 @@ const lines = [
   `- Video/PPT no-live rollup: ${report.acceptance_status.no_live_gate.video_ppt_no_live_rollup_status}`,
   `- Live self-test evidence ready: ${report.acceptance_status.no_live_gate.live_self_test_evidence_ready}`,
   `- Live command template redacted: ${report.acceptance_status.live_gate_readiness_summary.next_command_template_redacted}`,
+  `- Live input checklist ready: ${report.acceptance_status.live_gate_readiness_summary.controlled_live_input_checklist_ready}`,
   `- Synthetic shelf cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.case_count ?? "unknown"}`,
   `- Synthetic shelf artifact-bundle cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.artifact_bundle_case_count ?? "unknown"}`,
   `- Controlled live smoke pending: ${report.acceptance_status.live_gate_readiness_summary.live_smoke_pending}`,
   `- Required controlled-live inputs: ${report.acceptance_status.live_gate_readiness_summary.required_input_count}`,
+  `- Approval request status: ${report.acceptance_status.live_gate_readiness_summary.approval_request_summary?.status ?? "unknown"}`,
   `- Pending live gate count: ${report.acceptance_status.pending_gate_requirements_summary.pending_gate_count}`,
   `- No-live substitute for pending gates: ${report.acceptance_status.pending_gate_requirements_summary.no_live_substitute_available_for_pending_gates}`,
   "",

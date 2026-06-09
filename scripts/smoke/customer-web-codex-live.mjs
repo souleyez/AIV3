@@ -783,6 +783,13 @@ function preflightReport(args, currentArtifact) {
   if (cases.some((testCase) => testCase.requiresCurrentArtifact)) {
     missing.push(...currentArtifactMissingGates(currentArtifact));
   }
+  const controlledLiveInputChecklist = buildControlledLiveInputChecklist(
+    args,
+    cases,
+    currentArtifact,
+    currentArtifactSummary,
+    missing,
+  );
   return {
     smoke: 'customer-web-codex-live',
     mode: 'preflight',
@@ -812,8 +819,160 @@ function preflightReport(args, currentArtifact) {
       expectsBlocked: testCase.expectsBlocked,
     })),
     missingGates: missing,
+    controlledLiveInputChecklist,
+    approvalRequestSummary: buildApprovalRequestSummary(controlledLiveInputChecklist),
     liveWritesAttempted: false,
     nextCommandTemplate: buildNextCommandTemplate(args, cases),
+  };
+}
+
+function buildControlledLiveInputChecklist(args, cases, currentArtifact, currentArtifactSummary, missingGates) {
+  const datasetRequiredByCases = cases.filter((testCase) => testCase.requiresDataset).map((testCase) => testCase.id);
+  const currentArtifactRequiredByCases = cases
+    .filter((testCase) => testCase.requiresCurrentArtifact)
+    .map((testCase) => testCase.id);
+  const currentArtifactGates = currentArtifactRequiredByCases.length
+    ? currentArtifactMissingGates(currentArtifact)
+    : [];
+  const requiredOperatorInputs = [
+    {
+      id: 'auth_cookie_or_bearer',
+      label: 'test account session cookie or bearer',
+      required: true,
+      present: Boolean(args.cookie || args.bearer),
+      missing: !(args.cookie || args.bearer),
+      scope: 'all_selected_cases',
+      acceptedForms: ['cookie', 'bearer'],
+    },
+    {
+      id: 'approval_id',
+      label: 'operator approval id/reference',
+      required: true,
+      present: Boolean(args.approvalId.trim()),
+      missing: !args.approvalId.trim(),
+      scope: 'all_selected_cases',
+      acceptedForms: ['approval_reference'],
+    },
+    {
+      id: 'dataset_id',
+      label: 'controlled test dataset id',
+      required: datasetRequiredByCases.length > 0,
+      present: datasetRequiredByCases.length === 0 || Boolean(args.datasetId),
+      missing: datasetRequiredByCases.length > 0 && !args.datasetId,
+      scope: datasetRequiredByCases.length > 0 ? 'dataset_cases' : 'not_required_for_selected_cases',
+      requiredByCases: datasetRequiredByCases,
+      acceptedForms: ['dataset_id'],
+    },
+    {
+      id: 'current_static_page_artifact',
+      label: 'current rendered V3 generated static-page artifact context',
+      required: currentArtifactRequiredByCases.length > 0,
+      present: currentArtifactRequiredByCases.length === 0 || currentArtifactGates.length === 0,
+      missing: currentArtifactRequiredByCases.length > 0 && currentArtifactGates.length > 0,
+      scope: currentArtifactRequiredByCases.length > 0 ? 'static_page_edit_cases' : 'not_required_for_selected_cases',
+      requiredByCases: currentArtifactRequiredByCases,
+      acceptedForms: [
+        'current_artifact_json',
+        'current_artifact_file',
+        'current_artifact_public_url',
+      ],
+      missingGates: currentArtifactGates,
+    },
+  ].filter((input) => input.required);
+  const executionGates = [
+    {
+      id: 'ack_controlled_live',
+      label: 'explicit controlled-live acknowledgement flag',
+      required: true,
+      present: args.ackControlledLive === true,
+      missing: args.ackControlledLive !== true,
+      requiredFlag: '--ack-controlled-live',
+    },
+    {
+      id: 'execute_flag',
+      label: 'live execution mode flag',
+      required: false,
+      requiredForLiveExecution: true,
+      present: args.execute === true,
+      missing: false,
+      requiredFlag: '--execute',
+      suppliedByNextCommandTemplate: true,
+    },
+  ];
+  const caseRequirements = cases.map((testCase) => {
+    const caseMissingGates = [];
+    if (!args.ackControlledLive) caseMissingGates.push('ack_controlled_live');
+    if (!args.approvalId.trim()) caseMissingGates.push('approval_id');
+    if (!args.cookie && !args.bearer) caseMissingGates.push('auth_cookie_or_bearer');
+    if (testCase.requiresDataset && !args.datasetId) caseMissingGates.push('dataset_id');
+    if (testCase.requiresCurrentArtifact) {
+      caseMissingGates.push(...currentArtifactMissingGates(currentArtifact));
+    }
+    return {
+      id: testCase.id,
+      expectedCapability: testCase.expectedCapability,
+      requiresDataset: testCase.requiresDataset,
+      requiresCurrentArtifact: testCase.requiresCurrentArtifact,
+      expectsArtifactBundle: testCase.expectsArtifactBundle,
+      expectsBlocked: testCase.expectsBlocked,
+      readyToExecute: caseMissingGates.length === 0,
+      missingGates: caseMissingGates,
+    };
+  });
+  return {
+    schema: 'v3.customer_web_codex_live_input_checklist.v1',
+    selectedCaseCount: cases.length,
+    selectedCaseIds: cases.map((testCase) => testCase.id),
+    readyToExecute: missingGates.length === 0,
+    missingGateCount: missingGates.length,
+    missingGates,
+    requiredOperatorInputCount: requiredOperatorInputs.length,
+    missingOperatorInputCount: requiredOperatorInputs.filter((input) => input.missing).length,
+    requiredOperatorInputs,
+    executionGates,
+    currentArtifactContext: {
+      required: currentArtifactRequiredByCases.length > 0,
+      present: Boolean(currentArtifact),
+      staticPageContext: currentArtifactSummary.staticPageContext === true,
+      finalRendered: currentArtifactSummary.finalRendered === true,
+      generatedArtifactUrlPresent: currentArtifactSummary.generatedArtifactUrlPresent === true,
+      hostSeedPublicUrlPresent: currentArtifactSummary.hostSeedPublicUrlPresent === true,
+      missingGates: currentArtifactGates,
+    },
+    caseRequirements,
+    runnableCaseCount: caseRequirements.filter((item) => item.readyToExecute).length,
+    nextCommandTemplateAvailable: true,
+  };
+}
+
+function buildApprovalRequestSummary(checklist) {
+  return {
+    schema: 'v3.customer_web_codex_controlled_live_approval_request.v1',
+    status: checklist.readyToExecute ? 'ready_for_controlled_live_execute' : 'missing_required_inputs',
+    requestedScope: 'controlled_customer_web_codex_live_smoke_only',
+    preflightNetworkCalls: false,
+    liveWritesRequireExecuteAckAndApproval: true,
+    selectedCaseCount: checklist.selectedCaseCount,
+    readyToExecute: checklist.readyToExecute,
+    requiredOperatorInputCount: checklist.requiredOperatorInputCount,
+    missingOperatorInputCount: checklist.missingOperatorInputCount,
+    missingGateCount: checklist.missingGateCount,
+    missingGates: checklist.missingGates,
+    requiredOperatorInputs: checklist.requiredOperatorInputs.map((input) => ({
+      id: input.id,
+      label: input.label,
+      present: input.present === true,
+      missing: input.missing === true,
+      requiredByCases: input.requiredByCases || [],
+      missingGates: input.missingGates || [],
+      acceptedForms: input.acceptedForms || [],
+    })),
+    executionGates: checklist.executionGates.map((gate) => ({
+      id: gate.id,
+      present: gate.present === true,
+      missing: gate.missing === true,
+      requiredFlag: gate.requiredFlag,
+    })),
   };
 }
 
@@ -1087,6 +1246,117 @@ function assertNextCommandTemplateContract() {
   assertReportSafe(productOnlyReport, productOnly);
 }
 
+function assertControlledLiveInputChecklistContract() {
+  const base = {
+    baseUrl: DEFAULT_BASE_URL,
+    cookie: '',
+    bearer: '',
+    datasetId: '',
+    datasetTitle: 'Dataset Smoke',
+    currentArtifactJson: '',
+    currentArtifactFile: '',
+    currentArtifactPublicUrl: '',
+    currentArtifactId: '',
+    currentArtifactTitle: '',
+    approvalId: '',
+    localThreadPrefix: 'self-test',
+    outputDir: DEFAULT_OUTPUT_DIR,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+    pollAttempts: DEFAULT_POLL_ATTEMPTS,
+    execute: false,
+    preflight: true,
+    selfTest: false,
+    ackControlledLive: false,
+    allowPending: false,
+    selectedCaseIds: [],
+  };
+  const missingReport = preflightReport(base, parseCurrentArtifact(base));
+  const missingChecklist = missingReport.controlledLiveInputChecklist;
+  if (missingChecklist.schema !== 'v3.customer_web_codex_live_input_checklist.v1') {
+    throw new Error('controlled live input checklist schema is missing');
+  }
+  if (missingReport.approvalRequestSummary?.schema !== 'v3.customer_web_codex_controlled_live_approval_request.v1') {
+    throw new Error('controlled live approval request summary schema is missing');
+  }
+  if (missingChecklist.requiredOperatorInputCount !== 4) {
+    throw new Error('all-case checklist should require four operator inputs');
+  }
+  if (missingChecklist.missingOperatorInputCount !== 4) {
+    throw new Error('all-case checklist should mark four operator inputs missing without inputs');
+  }
+  for (const gate of [
+    'ack_controlled_live',
+    'approval_id',
+    'auth_cookie_or_bearer',
+    'dataset_id',
+    'current_static_page_artifact',
+  ]) {
+    if (!missingChecklist.missingGates.includes(gate)) {
+      throw new Error(`controlled live input checklist missing gate: ${gate}`);
+    }
+  }
+  if (missingChecklist.executionGates.find((gate) => gate.id === 'execute_flag')?.missing === true) {
+    throw new Error('preflight checklist should not mark the execute flag as a missing preflight gate');
+  }
+  assertReportSafe(missingReport, base);
+
+  const readyAllCases = {
+    ...base,
+    cookie: 'aidp_v3_session=self-test-secret',
+    datasetId: 'dataset-smoke',
+    currentArtifactPublicUrl: 'https://v3.elepcloud.com/generated-artifacts/customer-web-codex-live-smoke/index.html',
+    currentArtifactId: '11111111-1111-4111-8111-000000000301',
+    approvalId: 'approval-self-test-secret',
+    ackControlledLive: true,
+  };
+  const readyReport = preflightReport(readyAllCases, parseCurrentArtifact(readyAllCases));
+  const readyChecklist = readyReport.controlledLiveInputChecklist;
+  if (!readyChecklist.readyToExecute || readyChecklist.missingGateCount !== 0) {
+    throw new Error('controlled live input checklist should mark complete all-case inputs ready');
+  }
+  if (readyChecklist.runnableCaseCount !== LIVE_CASES.length) {
+    throw new Error('controlled live input checklist should mark every all-case smoke runnable');
+  }
+  if (readyReport.approvalRequestSummary.status !== 'ready_for_controlled_live_execute') {
+    throw new Error('approval request summary should mark complete inputs ready');
+  }
+  assertReportSafe(readyReport, readyAllCases);
+
+  const productOnly = {
+    ...base,
+    bearer: 'self-test-bearer-secret',
+    approvalId: 'approval-self-test-secret',
+    ackControlledLive: true,
+    selectedCaseIds: ['v3_product_change_request'],
+  };
+  const productOnlyReport = preflightReport(productOnly, parseCurrentArtifact(productOnly));
+  const productChecklist = productOnlyReport.controlledLiveInputChecklist;
+  if (!productOnlyReport.readyToExecute || !productChecklist.readyToExecute) {
+    throw new Error('product-change-only checklist should be ready without dataset or current artifact');
+  }
+  if (productChecklist.requiredOperatorInputCount !== 2 || productChecklist.missingOperatorInputCount !== 0) {
+    throw new Error('product-change-only checklist should require only auth and approval inputs');
+  }
+  if (
+    productChecklist.requiredOperatorInputs.some((input) => (
+      input.id === 'dataset_id' || input.id === 'current_static_page_artifact'
+    ))
+  ) {
+    throw new Error('product-change-only checklist should not require dataset or current artifact inputs');
+  }
+  assertReportSafe(productOnlyReport, productOnly);
+  return {
+    schema: 'v3.customer_web_codex_live_input_checklist_evidence.v1',
+    allCasesRequiredOperatorInputCount: missingChecklist.requiredOperatorInputCount,
+    allCasesMissingOperatorInputCountWithoutInputs: missingChecklist.missingOperatorInputCount,
+    allCasesMissingGateCountWithoutInputs: missingChecklist.missingGateCount,
+    readyAllCasesRunnableCount: readyChecklist.runnableCaseCount,
+    productChangeOnlyRequiredOperatorInputCount: productChecklist.requiredOperatorInputCount,
+    productChangeOnlyReadyWithoutDatasetOrArtifact: productChecklist.readyToExecute === true,
+  };
+}
+
 function assertSseParsingContract() {
   const bufferState = { buffer: '' };
   const frames = parseSseFrames(
@@ -1311,6 +1581,7 @@ function assertSyntheticCaseEvidenceContracts() {
 async function runSelfTest(args) {
   assertApprovalGateContract();
   assertNextCommandTemplateContract();
+  const controlledLiveInputChecklistEvidence = assertControlledLiveInputChecklistContract();
   assertSseParsingContract();
   const syntheticShelfEvidence = assertSyntheticCaseEvidenceContracts();
   const report = {
@@ -1321,6 +1592,7 @@ async function runSelfTest(args) {
     checks: [
       { name: 'approval_gate_requires_ack_approval_auth_dataset_and_artifact', status: 'passed' },
       { name: 'controlled_live_next_command_template_redacted', status: 'passed' },
+      { name: 'controlled_live_input_checklist_contract', status: 'passed' },
       { name: 'current_static_page_artifact_shape_rejects_placeholder_context', status: 'passed' },
       { name: 'current_static_page_artifact_public_url_shorthand_builds_valid_context', status: 'passed' },
       { name: 'sse_parser_extracts_completed_response', status: 'passed' },
@@ -1328,6 +1600,7 @@ async function runSelfTest(args) {
       { name: 'blocked_product_change_evidence_has_no_artifact_bundle', status: 'passed' },
       { name: 'report_redaction_rejects_auth_and_prompt_secrets', status: 'passed' },
     ],
+    controlledLiveInputChecklistEvidence,
     syntheticShelfEvidence,
     liveWritesAttempted: false,
   };
@@ -1422,6 +1695,34 @@ function markdownReport(report) {
       report.missingGates.forEach((gate) => lines.push(`- ${gate}`));
     } else {
       lines.push('- none');
+    }
+    lines.push('');
+  }
+  if (report.approvalRequestSummary) {
+    lines.push('## Approval Request Summary', '');
+    lines.push(`- Status: ${report.approvalRequestSummary.status}`);
+    lines.push(`- Requested scope: ${report.approvalRequestSummary.requestedScope}`);
+    lines.push(`- Ready to execute: ${report.approvalRequestSummary.readyToExecute === true ? 'true' : 'false'}`);
+    lines.push(
+      `- Required operator inputs: ${report.approvalRequestSummary.requiredOperatorInputCount}`,
+    );
+    lines.push(`- Missing operator inputs: ${report.approvalRequestSummary.missingOperatorInputCount}`);
+    lines.push(`- Missing gates: ${report.approvalRequestSummary.missingGateCount}`, '');
+  }
+  if (report.controlledLiveInputChecklist) {
+    lines.push('## Controlled Live Input Checklist', '');
+    lines.push(`- Schema: ${report.controlledLiveInputChecklist.schema}`);
+    lines.push(`- Selected case count: ${report.controlledLiveInputChecklist.selectedCaseCount}`);
+    lines.push(`- Runnable case count: ${report.controlledLiveInputChecklist.runnableCaseCount}`);
+    lines.push(
+      `- Ready to execute: ${report.controlledLiveInputChecklist.readyToExecute === true ? 'true' : 'false'}`,
+    );
+    lines.push(`- Required operator inputs: ${report.controlledLiveInputChecklist.requiredOperatorInputCount}`);
+    lines.push(`- Missing operator inputs: ${report.controlledLiveInputChecklist.missingOperatorInputCount}`);
+    if (Array.isArray(report.controlledLiveInputChecklist.requiredOperatorInputs)) {
+      report.controlledLiveInputChecklist.requiredOperatorInputs.forEach((input) => {
+        lines.push(`- ${input.id}: ${input.present === true ? 'present' : 'missing'}`);
+      });
     }
     lines.push('');
   }

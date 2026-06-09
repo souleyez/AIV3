@@ -43,6 +43,7 @@ These checks cover:
 - readiness parsing treats self-test fixtures and parsed env-file values as authoritative, so conflicting shell env variables cannot make a deployment-target check look ready.
 - the guarded live-smoke harness self-test validates approval gates and a synthetic five-case evidence matrix for task cards, artifact bundles, and product-change blocked cards before any live API call is allowed.
 - the guarded live-smoke harness self-test writes a redacted `Synthetic Shelf Evidence` receipt section with task-card, artifact-bundle, blocked-task, and product-change no-artifact counts for the right-side shelf contract.
+- the guarded live-smoke harness preflight writes `controlledLiveInputChecklist` and `approvalRequestSummary`, so operators can see required live inputs, selected-case requirements, and missing gates without exposing cookies, bearer values, approval text, artifact URLs, raw prompts, local paths, or current artifact JSON.
 - the top-level executor smoke receipt writes `acceptance_status.schema=v3.customer_web_codex_executor_acceptance_status.v1`, so reviewers can distinguish passed no-live evidence from pending controlled-live gates.
 - the top-level executor smoke writes the live-smoke self-test into a per-run child report directory, reads it back, and only marks live-readiness evidence ready when approval, redacted command-template, current-artifact, SSE parsing, synthetic shelf, product-change blocking, and redaction checks are present in that child report.
 
@@ -111,6 +112,8 @@ The top-level executor smoke JSON includes an `acceptance_status` object with:
 - `no_live_gate.live_self_test_evidence_ready=true` only after the executor smoke parses the per-run live-smoke self-test child report.
 - `live_gate_readiness_summary.required_inputs` listing the four controlled-live inputs required before execution.
 - `live_gate_readiness_summary.next_command_template_redacted=true` proving the live-smoke self-test covered the redacted command-template contract for cookie and bearer auth shapes.
+- `live_gate_readiness_summary.controlled_live_input_checklist_ready=true` proving the live-smoke self-test covered the machine-readable checklist, including the product-change-only case that does not require dataset or current artifact inputs.
+- `live_gate_readiness_summary.approval_request_summary` listing the required operator input categories and `--execute` / `--ack-controlled-live` gates without recording their values.
 - `live_gate_readiness_summary.synthetic_shelf_evidence_summary` containing task-card, artifact-bundle, blocked-task, and product-change no-artifact counts.
 - `pending_gate_requirements_summary.no_live_substitute_available_for_pending_gates=true`, so no-live receipts cannot be used as a substitute for live Customer Web Codex evidence.
 
@@ -142,7 +145,15 @@ The preflight writes a redacted receipt under:
 target/customer-web-codex-live-smoke/
 ```
 
-It checks whether the operator has supplied the required controlled-live inputs without printing cookies, bearer tokens, approval text, raw prompts, generated-artifact URLs, local paths, or current artifact JSON. For the `generated_static_page_edit` case, preflight also validates the current static-page artifact shape without recording the actual URL or JSON: the context must look like a V3 static page, be finally rendered, expose an allowed generated-artifact URL, and include an absolute `https://v3.elepcloud.com/generated-artifacts/...` URL that the host agent can copy into the task workspace as the existing page seed.
+It checks whether the operator has supplied the required controlled-live inputs without printing cookies, bearer tokens, approval text, raw prompts, generated-artifact URLs, local paths, or current artifact JSON. The JSON receipt includes:
+
+- `controlledLiveInputChecklist.schema=v3.customer_web_codex_live_input_checklist.v1`
+- `controlledLiveInputChecklist.requiredOperatorInputs`, with only input categories, present/missing booleans, selected case ids, and missing gate names.
+- `controlledLiveInputChecklist.caseRequirements`, so a narrowed run such as `--case v3_product_change_request` can prove it does not need dataset or current artifact inputs.
+- `approvalRequestSummary.schema=v3.customer_web_codex_controlled_live_approval_request.v1`
+- `approvalRequestSummary.executionGates`, listing `--execute` and `--ack-controlled-live` without recording live values.
+
+For the `generated_static_page_edit` case, preflight also validates the current static-page artifact shape without recording the actual URL or JSON: the context must look like a V3 static page, be finally rendered, expose an allowed generated-artifact URL, and include an absolute `https://v3.elepcloud.com/generated-artifacts/...` URL that the host agent can copy into the task workspace as the existing page seed.
 
 To execute against the approved test account, the command must include all live-write gates:
 
