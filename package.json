@@ -14,6 +14,7 @@
     "smoke:main-chat-20way": "node scripts/smoke/main-chat-20way.mjs",
     "smoke:model-gateway-operator": "node scripts/smoke/model-gateway-operator.mjs",
     "smoke:newbai-customer-answer": "node scripts/smoke/newbai-customer-answer.mjs",
+    "smoke:newbai-customer-answer-live-capture": "node scripts/smoke/newbai-customer-answer-live-capture.mjs",
     "smoke:static-page-5way": "node scripts/smoke/static-page-5way.mjs",
     "smoke:video-ppt-handoff": "node scripts/smoke/video-ppt-handoff.mjs",
     "smoke:video-ppt-main-visible": "node scripts/smoke/video-ppt-main-visible.mjs",

@@ -51,6 +51,7 @@ function parseArgs(argv) {
   const args = {
     selfTest: false,
     pretty: false,
+    requireReady: parseBoolean(process.env.NEWBAI_CUSTOMER_ANSWER_REQUIRE_READY),
     fixturePath: process.env.NEWBAI_CUSTOMER_ANSWER_FIXTURE || DEFAULT_FIXTURE_PATH,
     resultsJsonl: process.env.NEWBAI_CUSTOMER_ANSWER_RESULTS_JSONL || null,
     outputDir: process.env.NEWBAI_CUSTOMER_ANSWER_SMOKE_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
@@ -60,6 +61,8 @@ function parseArgs(argv) {
     const next = argv[index + 1];
     if (arg === '--self-test') {
       args.selfTest = true;
+    } else if (arg === '--require-ready') {
+      args.requireReady = true;
     } else if (arg === '--pretty') {
       args.pretty = true;
     } else if (arg === '--fixture') {
@@ -92,12 +95,17 @@ function printHelp() {
   console.log(`Usage:
   node scripts/smoke/newbai-customer-answer.mjs --self-test
   node scripts/smoke/newbai-customer-answer.mjs --results-jsonl target/live-results.jsonl
+  node scripts/smoke/newbai-customer-answer.mjs --results-jsonl target/live-results.jsonl --require-ready
 
 This deterministic smoke evaluates NewBai customer-facing answer quality from
 local fixture data or supplied result JSONL. It does not call DataMax, does not
 call a model provider, does not enqueue report rendering, and does not publish
 static pages.
 `);
+}
+
+function parseBoolean(value) {
+  return ['1', 'true', 'yes', 'y', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 function compactText(value) {
@@ -472,12 +480,12 @@ async function main() {
   const resultsByCaseId = new Map(results.map((result) => [resultCaseId(result), result]));
   const report = buildReport(fixtures, resultsByCaseId, args.resultsJsonl ? 'results_jsonl' : 'fixture_sample');
 
-  if (args.selfTest && !report.ready) {
+  if ((args.selfTest || args.requireReady) && !report.ready) {
     const failed = report.cases
       .filter((item) => !item.passed)
       .map((item) => `${item.case_id}:${item.failure_reasons.join('|')}`)
       .join(', ');
-    throw new Error(`self-test fixture should pass, failed cases: ${failed}`);
+    throw new Error(`NewBai customer answer smoke did not pass required readiness: ${failed}`);
   }
 
   await mkdir(args.outputDir, { recursive: true });

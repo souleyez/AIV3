@@ -37,6 +37,14 @@ NEWBAI_CUSTOMER_ANSWER_RESULTS_JSONL=target/newbai-customer-answer-smoke/live-re
   bash scripts/run-newbai-customer-answer-smoke.sh
 ```
 
+To fail the evaluator when any supplied result does not pass:
+
+```bash
+npm run smoke:newbai-customer-answer -- \
+  --results-jsonl target/newbai-customer-answer-live-capture/<run>.results.jsonl \
+  --require-ready
+```
+
 Each result line should include at least:
 
 ```json
@@ -104,3 +112,44 @@ structured query plan
 
 It should be paired with retrieval-quality and AssistantRun handoff smokes
 before any release decision.
+
+## P1-12B Live Capture Harness
+
+The result capture harness is separate from the evaluator:
+
+```bash
+npm run smoke:newbai-customer-answer-live-capture -- --self-test
+```
+
+Self-test writes a synthetic result JSONL from the committed fixture
+`sample_result` entries and immediately feeds that JSONL into the evaluator. It
+does not call DataMax.
+
+Preflight validates the controlled external-channel payload shape without
+network calls:
+
+```bash
+npm run smoke:newbai-customer-answer-live-capture -- \
+  --preflight \
+  --base-url https://v3.elepcloud.com \
+  --connection-id generic-chat-main \
+  --dataset-external-ids <newbai-dataset-external-id>
+```
+
+Live capture is intentionally gated:
+
+```bash
+npm run smoke:newbai-customer-answer-live-capture -- \
+  --run-live \
+  --ack-controlled-live \
+  --base-url https://v3.elepcloud.com \
+  --connection-id generic-chat-main \
+  --bearer <token> \
+  --dataset-external-ids <newbai-dataset-external-id>
+```
+
+Default live scope skips `template_reuse_guard` cases, because those prompts can
+touch static-page routing. Add `--include-template-guards` or explicit
+`--case-id ...` only for an approved controlled run. Live mode still records
+side-effect signals into the result JSONL so the evaluator can fail if the
+answer created or claimed report/static-page output.

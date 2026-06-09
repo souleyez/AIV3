@@ -37,6 +37,7 @@ Static-page handoff checks:
 External integration checks:
 
 - `bash scripts/run-external-direct-reply-smoke.sh`: Rust smoke coverage for the external ordinary-chat direct-reply contract, provider fallback/timeout behavior, SSE started/delta/completed semantics, and low-quality PDF parse gating.
+- `npm run smoke:newbai-customer-answer-live-capture -- --self-test`: deterministic no-network harness for producing NewBai customer-answer result JSONL and feeding it into the evaluator. Use `-- --preflight --dataset-external-ids <id>` to validate live payload shape without network calls. Live mode requires `--run-live --ack-controlled-live --bearer <token> --dataset-external-ids <id>` and defaults to skipping template-reuse guard prompts unless explicitly included.
 - `npm run smoke:external-report-export`: live external-channel smoke for report/static-page delivery. It checks JSON and SSE report cards, one customer-facing report link, export fields, `download_exports[]`, and non-empty generated artifact files. Use `-- --self-test` for the deterministic offline report-surface contract.
 - `npm run smoke:external-report-focus`: deterministic offline smoke for Xinbai report trigger/focus routing, ordinary-QA guards, primary-template reuse, and one-link report surfaces.
 - `npm run smoke:newbai-customer-answer -- --self-test`: deterministic offline evaluator for NewBai customer-answer result JSONL. The wrapper `bash scripts/run-newbai-customer-answer-smoke.sh` runs the same evaluator against the bundled fixture samples and writes JSON/Markdown receipts.
