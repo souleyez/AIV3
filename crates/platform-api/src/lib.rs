@@ -269,6 +269,8 @@ const ASSISTANT_RUN_MODEL_CONTEXT_OTHER_LIMIT: usize = 2;
 const ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT: usize = 520;
 const ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT: usize = 1200;
 const ASSISTANT_RUN_MODEL_CONTEXT_ROW_TEXT_LIMIT: usize = 240;
+const ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT: usize = 12;
+const ASSISTANT_RUN_MODEL_SCOPE_ID_LIMIT: usize = 24;
 const ASSISTANT_RUN_RETRIEVAL_SUPPLY_EXCERPT_CHARS: usize = 1200;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_RUN_LIMIT: i64 = 6;
 const EXTERNAL_CHANNEL_CONVERSATION_HISTORY_TEXT_LIMIT: usize = 1200;
@@ -47906,6 +47908,173 @@ fn assistant_run_model_context_value(value: &Value) -> Value {
     }
 }
 
+fn assistant_run_model_scope_value(value: &Value) -> Value {
+    let mut model_value = assistant_run_model_context_value(value);
+    assistant_run_compact_model_scope_collections(&mut model_value);
+    model_value
+}
+
+fn assistant_run_model_scope_candidates_value(candidates: &[Value]) -> Value {
+    Value::Array(
+        candidates
+            .iter()
+            .map(|candidate| {
+                let mut model_candidate = assistant_run_model_context_value(candidate);
+                if let Some(scope) = model_candidate
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("scope"))
+                {
+                    *scope = assistant_run_model_scope_value(scope);
+                }
+                assistant_run_compact_model_scope_collections(&mut model_candidate);
+                model_candidate
+            })
+            .collect(),
+    )
+}
+
+fn assistant_run_compact_model_scope_collections(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            assistant_run_compact_model_scope_documents(object);
+            for key in [
+                "available_document_external_ids",
+                "requested_document_external_ids",
+                "unresolved_document_external_ids",
+                "dataset_external_ids",
+                "requested_dataset_external_ids",
+                "business_datasource_ids",
+                "database_source_ids",
+            ] {
+                assistant_run_compact_model_scope_array_field(
+                    object,
+                    key,
+                    ASSISTANT_RUN_MODEL_SCOPE_ID_LIMIT,
+                );
+            }
+
+            let keys = object.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                if key == "documents"
+                    || key.ends_with("_model_context_budget")
+                    || key == "documents_model_context_budget"
+                {
+                    continue;
+                }
+                if let Some(child) = object.get_mut(&key) {
+                    assistant_run_compact_model_scope_collections(child);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                assistant_run_compact_model_scope_collections(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assistant_run_compact_model_scope_documents(object: &mut Map<String, Value>) {
+    let budget = if let Some(Value::Array(documents)) = object.get_mut("documents") {
+        let original_count = documents.len();
+        let compacted = documents
+            .iter()
+            .take(ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT)
+            .map(assistant_run_model_scope_document_item)
+            .collect::<Vec<_>>();
+        *documents = compacted;
+        if original_count > ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT {
+            Some(json!({
+                "policy": "model_input_document_scope_sample",
+                "original_document_count": original_count,
+                "model_document_count": ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT,
+                "omitted_document_count": original_count - ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT,
+                "model_rule": "The model input only includes a small sample of scoped document identifiers. Use supplied_items/retrieval evidence as the answer source; omitted scope documents remain available to host retrieval/detail tools and must not be treated as absent.",
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(budget) = budget {
+        object.insert("documents_model_context_budget".to_string(), budget);
+    }
+}
+
+fn assistant_run_compact_model_scope_array_field(
+    object: &mut Map<String, Value>,
+    key: &str,
+    limit: usize,
+) {
+    let budget = if let Some(Value::Array(items)) = object.get_mut(key) {
+        let original_count = items.len();
+        let compacted = items
+            .iter()
+            .take(limit)
+            .map(|item| assistant_run_model_compact_json_value(item, 160, 4))
+            .collect::<Vec<_>>();
+        *items = compacted;
+        if original_count > limit {
+            Some(json!({
+                "policy": "model_input_scope_array_sample",
+                "original_count": original_count,
+                "model_count": limit,
+                "omitted_count": original_count - limit,
+                "model_rule": "The model input only includes a bounded sample of this scope array. Omitted ids remain in host scope for retrieval/detail tools and must not be treated as absent.",
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(budget) = budget {
+        object.insert(format!("{key}_model_context_budget"), budget);
+    }
+}
+
+fn assistant_run_model_scope_document_item(document: &Value) -> Value {
+    let mut output = Map::new();
+    for key in [
+        "id",
+        "type",
+        "title",
+        "source_id",
+        "document_external_id",
+        "content_type",
+        "lifecycle",
+        "parse_status",
+        "model_status",
+        "chunk_count",
+    ] {
+        match document.get(key) {
+            Some(Value::String(text)) => {
+                output.insert(
+                    key.to_string(),
+                    Value::String(truncate_assistant_supply_text(
+                        text,
+                        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+                    )),
+                );
+            }
+            Some(value) => {
+                output.insert(
+                    key.to_string(),
+                    assistant_run_model_compact_json_value(
+                        value,
+                        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+                        4,
+                    ),
+                );
+            }
+            None => {}
+        }
+    }
+    Value::Object(output)
+}
+
 fn assistant_run_external_answer_policy_guidance_lines(answer_policy: &Value) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(default_prompt) = answer_policy
@@ -48044,7 +48213,7 @@ fn build_assistant_run_provider_input_with_evidence(
     }
     if !plain_ordinary_chat && !request.scope_candidates.is_empty() {
         let model_scope_candidates =
-            assistant_run_model_context_value(&Value::Array(request.scope_candidates.clone()));
+            assistant_run_model_scope_candidates_value(&request.scope_candidates);
         sections.push(format!(
             "范围候选：{}",
             serde_json::to_string(&model_scope_candidates).unwrap_or_else(|_| "[]".to_string())
@@ -48052,7 +48221,7 @@ fn build_assistant_run_provider_input_with_evidence(
     }
     if !plain_ordinary_chat {
         if let Some(selected_scope) = selected_scope {
-            let model_selected_scope = assistant_run_model_context_value(selected_scope);
+            let model_selected_scope = assistant_run_model_scope_value(selected_scope);
             sections.push(format!(
                 "当前选中范围：{}",
                 serde_json::to_string(&model_selected_scope).unwrap_or_else(|_| "{}".to_string())
@@ -48151,7 +48320,7 @@ fn build_assistant_run_continue_provider_input(
             format!("本次最多连续动作数：{}", max_steps),
             format!(
                 "当前选中范围：{}",
-                serde_json::to_string(&assistant_run_model_context_value(selected_scope))
+                serde_json::to_string(&assistant_run_model_scope_value(selected_scope))
                     .unwrap_or_else(|_| "{}".to_string())
             ),
             format!(
@@ -48360,6 +48529,9 @@ fn assistant_run_model_evidence_state(evidence_state: &Value) -> Value {
             .and_then(Value::as_array_mut)
         {
             detail_targets.truncate(ASSISTANT_RUN_DETAIL_TARGET_LIMIT);
+        }
+        if let Some(selected_scope) = object.get_mut("selected_scope") {
+            *selected_scope = assistant_run_model_scope_value(selected_scope);
         }
     }
     assistant_run_model_context_value(&model_state)
@@ -124771,6 +124943,95 @@ retrieve_evidence:
 
         assert!(input.contains(&"A".repeat(ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT)));
         assert!(!input.contains(&"A".repeat(ASSISTANT_RUN_MODEL_HISTORY_TEXT_LIMIT + 1)));
+    }
+
+    #[test]
+    fn external_channel_provider_input_compacts_large_document_scope() {
+        let documents = (0..50)
+            .map(|index| {
+                json!({
+                    "id": format!("doc-{index}"),
+                    "type": "document",
+                    "title": format!("Document {index}"),
+                    "source_id": "third-party-source-main",
+                    "document_external_id": format!("external-doc-{index}"),
+                    "metadata": {
+                        "large_internal_blob": "X".repeat(1000)
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let document_external_ids = (0..50)
+            .map(|index| json!(format!("external-doc-{index}")))
+            .collect::<Vec<_>>();
+        let scope = json!({
+            "type": "external_channel",
+            "mode": "external_channel",
+            "channel_connection_id": "generic-chat-main",
+            "documents": documents,
+            "available_document_external_ids": document_external_ids,
+            "dataset_external_ids": ["64fff6c8-10e2-4ee8-8243-23166cce3abc"],
+            "answer_policy": {
+                "source": "external_channel_message",
+                "output_format": "rich_text"
+            }
+        });
+        let evidence = json!({
+            "status": "supplied",
+            "selected_scope": scope.clone(),
+            "supplied_items": [{
+                "type": "retrieval_evidence",
+                "source": "document_chunk_fallback",
+                "document_id": "doc-0",
+                "summary": "新百资料证据",
+                "content_excerpt": "租售比与客流分析相关。"
+            }]
+        });
+        let request = CreateAssistantRunRequest {
+            prompt: "租售比怎么看？".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(scope.clone()),
+            scope_candidates: vec![json!({
+                "type": "external_channel",
+                "scope": scope
+            })],
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+
+        let input = build_assistant_run_provider_input_with_evidence(&request, Some(&evidence));
+
+        assert!(input.contains("documents_model_context_budget"));
+        assert!(input.contains("\"original_document_count\":50"));
+        assert!(input.contains("\"omitted_document_count\":38"));
+        assert!(input.contains("doc-11"));
+        assert!(!input.contains("\"id\":\"doc-12\""));
+        assert!(!input.contains("Document 12"));
+        assert!(!input.contains("external-doc-24"));
+        assert!(!input.contains("large_internal_blob"));
+        assert!(input.contains("supplied_items"));
+        assert!(input.contains("retrieval_evidence"));
+        assert!(
+            input.len() < 30_000,
+            "input should stay compact: {}",
+            input.len()
+        );
+
+        let model_state = assistant_run_model_evidence_state(&evidence);
+        assert_eq!(
+            model_state["selected_scope"]["documents"]
+                .as_array()
+                .expect("model scope documents")
+                .len(),
+            ASSISTANT_RUN_MODEL_SCOPE_DOCUMENT_LIMIT
+        );
+        assert_eq!(
+            model_state["selected_scope"]["documents_model_context_budget"]
+                ["original_document_count"],
+            json!(50)
+        );
     }
 
     #[test]
