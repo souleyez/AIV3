@@ -136,6 +136,18 @@ const controlledLiveInputChecklistEvidenceSummary = {
   product_change_only_ready_without_dataset_or_artifact:
     inputChecklist.productChangeOnlyReadyWithoutDatasetOrArtifact === true,
 };
+const executeSnapshot = report.executePreflightSnapshotEvidence || {};
+const executePreflightSnapshotEvidenceSummary = {
+  schema: executeSnapshot.schema || "",
+  all_cases_snapshot_ready: executeSnapshot.allCasesSnapshotReady === true,
+  all_cases_selected_case_count: Number(executeSnapshot.allCasesSelectedCaseCount || 0),
+  all_cases_missing_gate_count: Number(executeSnapshot.allCasesMissingGateCount || 0),
+  product_change_only_snapshot_ready: executeSnapshot.productChangeOnlySnapshotReady === true,
+  product_change_only_selected_case_count: Number(executeSnapshot.productChangeOnlySelectedCaseCount || 0),
+  product_change_only_required_operator_input_count: Number(
+    executeSnapshot.productChangeOnlyRequiredOperatorInputCount || 0,
+  ),
+};
 const evidence = {
   report_basename: selected.name,
   ok: report.ok === true,
@@ -156,6 +168,17 @@ const evidence = {
     && controlledLiveInputChecklistEvidenceSummary.product_change_only_required_operator_input_count === 2
     && controlledLiveInputChecklistEvidenceSummary.product_change_only_ready_without_dataset_or_artifact === true,
   controlled_live_input_checklist_evidence_summary: controlledLiveInputChecklistEvidenceSummary,
+  execute_report_preflight_snapshot_ready:
+    checkNames.has("execute_report_preflight_snapshot_contract")
+    && executePreflightSnapshotEvidenceSummary.schema
+      === "v3.customer_web_codex_execute_preflight_snapshot_evidence.v1"
+    && executePreflightSnapshotEvidenceSummary.all_cases_snapshot_ready === true
+    && executePreflightSnapshotEvidenceSummary.all_cases_selected_case_count === 5
+    && executePreflightSnapshotEvidenceSummary.all_cases_missing_gate_count === 0
+    && executePreflightSnapshotEvidenceSummary.product_change_only_snapshot_ready === true
+    && executePreflightSnapshotEvidenceSummary.product_change_only_selected_case_count === 1
+    && executePreflightSnapshotEvidenceSummary.product_change_only_required_operator_input_count === 2,
+  execute_preflight_snapshot_evidence_summary: executePreflightSnapshotEvidenceSummary,
   current_artifact_shape_gate_enforced: checkNames.has(
     "current_static_page_artifact_shape_rejects_placeholder_context",
   ),
@@ -184,6 +207,7 @@ evidence.ready = evidence.ok
   && evidence.preflight_allow_missing_gates_ready
   && evidence.next_command_template_redacted
   && evidence.controlled_live_input_checklist_ready
+  && evidence.execute_report_preflight_snapshot_ready
   && evidence.current_artifact_shape_gate_enforced
   && evidence.current_artifact_public_url_shorthand_ready
   && evidence.sse_parser_ready
@@ -198,7 +222,7 @@ process.stdout.write(JSON.stringify(evidence));
 NODE
 )"
 checks+=("customer-web-codex-live self-test evidence readback")
-echo "${live_self_test_evidence_json}" | node -e 'const fs = require("fs"); const evidence = JSON.parse(fs.readFileSync(0, "utf8")); console.log(`evidence_ready=${evidence.ready} allow_missing_gates_ready=${evidence.preflight_allow_missing_gates_ready} input_checklist_ready=${evidence.controlled_live_input_checklist_ready} synthetic_cases=${evidence.synthetic_shelf_evidence_summary.case_count} artifact_bundles=${evidence.synthetic_shelf_evidence_summary.artifact_bundle_case_count}`);'
+echo "${live_self_test_evidence_json}" | node -e 'const fs = require("fs"); const evidence = JSON.parse(fs.readFileSync(0, "utf8")); console.log(`evidence_ready=${evidence.ready} allow_missing_gates_ready=${evidence.preflight_allow_missing_gates_ready} input_checklist_ready=${evidence.controlled_live_input_checklist_ready} execute_snapshot_ready=${evidence.execute_report_preflight_snapshot_ready} synthetic_cases=${evidence.synthetic_shelf_evidence_summary.case_count} artifact_bundles=${evidence.synthetic_shelf_evidence_summary.artifact_bundle_case_count}`);'
 
 run_check "npm --prefix apps/web run build" \
   npm --prefix apps/web run build
@@ -278,6 +302,10 @@ const report = {
         liveSelfTestEvidence.controlled_live_input_checklist_ready === true,
       controlled_live_input_checklist_evidence_summary:
         liveSelfTestEvidence.controlled_live_input_checklist_evidence_summary || null,
+      execute_report_preflight_snapshot_ready:
+        liveSelfTestEvidence.execute_report_preflight_snapshot_ready === true,
+      execute_preflight_snapshot_evidence_summary:
+        liveSelfTestEvidence.execute_preflight_snapshot_evidence_summary || null,
       current_artifact_shape_gate_enforced:
         liveSelfTestEvidence.current_artifact_shape_gate_enforced === true,
       current_artifact_public_url_shorthand_ready:
@@ -416,6 +444,7 @@ const lines = [
   `- Preflight allow-missing-gates ready: ${report.acceptance_status.live_gate_readiness_summary.preflight_allow_missing_gates_ready}`,
   `- Live command template redacted: ${report.acceptance_status.live_gate_readiness_summary.next_command_template_redacted}`,
   `- Live input checklist ready: ${report.acceptance_status.live_gate_readiness_summary.controlled_live_input_checklist_ready}`,
+  `- Execute preflight snapshot ready: ${report.acceptance_status.live_gate_readiness_summary.execute_report_preflight_snapshot_ready}`,
   `- Synthetic shelf cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.case_count ?? "unknown"}`,
   `- Synthetic shelf artifact-bundle cases: ${report.acceptance_status.live_gate_readiness_summary.synthetic_shelf_evidence_summary?.artifact_bundle_case_count ?? "unknown"}`,
   `- Controlled live smoke pending: ${report.acceptance_status.live_gate_readiness_summary.live_smoke_pending}`,

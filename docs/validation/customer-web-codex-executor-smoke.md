@@ -45,6 +45,7 @@ These checks cover:
 - the guarded live-smoke harness self-test writes a redacted `Synthetic Shelf Evidence` receipt section with task-card, artifact-bundle, blocked-task, and product-change no-artifact counts for the right-side shelf contract.
 - the guarded live-smoke harness preflight writes `controlledLiveInputChecklist` and `approvalRequestSummary`, so operators can see required live inputs, selected-case requirements, and missing gates without exposing cookies, bearer values, approval text, artifact URLs, raw prompts, local paths, or current artifact JSON.
 - the guarded live-smoke harness supports `--allow-missing-gates` for preflight-only missing-input collection; this changes only the preflight exit code and does not mark `readyToExecute=true` or relax live `--execute` gate enforcement.
+- the guarded live-smoke harness execute receipt includes a redacted `preflightSnapshot`, so a real controlled-live result can prove the gates, selected cases, checklist, and approval-request summary were ready before live writes.
 - the top-level executor smoke receipt writes `acceptance_status.schema=v3.customer_web_codex_executor_acceptance_status.v1`, so reviewers can distinguish passed no-live evidence from pending controlled-live gates.
 - the top-level executor smoke writes the live-smoke self-test into a per-run child report directory, reads it back, and only marks live-readiness evidence ready when approval, redacted command-template, current-artifact, SSE parsing, synthetic shelf, product-change blocking, and redaction checks are present in that child report.
 
@@ -115,6 +116,7 @@ The top-level executor smoke JSON includes an `acceptance_status` object with:
 - `live_gate_readiness_summary.preflight_allow_missing_gates_ready=true` proving the live-smoke self-test covered the preflight-only checklist exit-code mode without marking missing live inputs ready.
 - `live_gate_readiness_summary.next_command_template_redacted=true` proving the live-smoke self-test covered the redacted command-template contract for cookie and bearer auth shapes.
 - `live_gate_readiness_summary.controlled_live_input_checklist_ready=true` proving the live-smoke self-test covered the machine-readable checklist, including the product-change-only case that does not require dataset or current artifact inputs.
+- `live_gate_readiness_summary.execute_report_preflight_snapshot_ready=true` proving the live-smoke self-test covered execute receipts that preserve a redacted ready preflight snapshot for all cases and the product-change-only narrowed run.
 - `live_gate_readiness_summary.approval_request_summary` listing the required operator input categories and `--execute` / `--ack-controlled-live` gates without recording their values.
 - `live_gate_readiness_summary.synthetic_shelf_evidence_summary` containing task-card, artifact-bundle, blocked-task, and product-change no-artifact counts.
 - `pending_gate_requirements_summary.no_live_substitute_available_for_pending_gates=true`, so no-live receipts cannot be used as a substitute for live Customer Web Codex evidence.
@@ -176,6 +178,8 @@ npm run smoke:customer-web-codex-live -- --execute --ack-controlled-live \
 ```
 
 `--bearer <token>` may be used instead of `--cookie` when the target auth mode supports it. `generated_static_page_edit` requires the current rendered V3-generated static page context through exactly one of `--current-artifact-json`, `--current-artifact-file`, or `--current-artifact-public-url`; the script intentionally does not invent this context. A placeholder such as `{ "artifact_id": "...", "files": [...] }` is not sufficient for this live smoke because it cannot prove that the old generated page will be available for changed-page comparison.
+
+The execute JSON receipt includes `preflightSnapshot.schema=v3.customer_web_codex_execute_preflight_snapshot.v1`. It records only safe readiness evidence: target booleans, selected case metadata, missing gate names, `controlledLiveInputChecklist`, and `approvalRequestSummary`. It must not record raw cookies, bearer values, approval text, generated-artifact URLs, local paths, raw prompts, or current artifact JSON.
 
 Required cases:
 

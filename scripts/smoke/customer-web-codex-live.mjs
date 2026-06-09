@@ -1039,7 +1039,16 @@ async function runExecute(args) {
     console.log(`== live case: ${testCase.id} ==`);
     caseResults.push(await runLiveCase(args, testCase, currentArtifact));
   }
-  const report = {
+  const report = buildExecuteReport(args, currentArtifact, caseResults, preflight);
+  assertReportSafe(report, args);
+  const paths = await writeReports(args.outputDir, report);
+  console.log(`Customer Web Codex live smoke report: ${paths.jsonPath}`);
+  console.log(`Customer Web Codex live smoke summary: ${paths.mdPath}`);
+  return report.ok ? 0 : 1;
+}
+
+function buildExecuteReport(args, currentArtifact, caseResults, preflight) {
+  return {
     smoke: 'customer-web-codex-live',
     mode: 'execute',
     ok: caseResults.every((item) => item.ok),
@@ -1055,28 +1064,43 @@ async function runExecute(args) {
       ackControlledLive: args.ackControlledLive,
       allowPending: args.allowPending,
     },
+    preflightSnapshot: buildExecutePreflightSnapshot(preflight),
     liveWritesAttempted: true,
     cases: caseResults,
-    acceptance: {
-      allCasesPassed: caseResults.every((item) => item.ok),
-      caseCount: caseResults.length,
-      passedCount: caseResults.filter((item) => item.ok).length,
-      productChangeBlocked: caseResults.some(
-        (item) => item.id === 'v3_product_change_request' && item.evidence?.blockedSatisfied === true,
-      ),
-      artifactBundleCasesPassed: caseResults
-        .filter((item) => item.expectsArtifactBundle)
-        .every((item) => item.evidence?.artifactSatisfied === true),
-      noProductArtifactBundle: caseResults
-        .filter((item) => item.expectsBlocked)
-        .every((item) => item.evidence?.noUnexpectedArtifacts === true),
-    },
+    acceptance: buildExecuteAcceptance(caseResults),
   };
-  assertReportSafe(report, args);
-  const paths = await writeReports(args.outputDir, report);
-  console.log(`Customer Web Codex live smoke report: ${paths.jsonPath}`);
-  console.log(`Customer Web Codex live smoke summary: ${paths.mdPath}`);
-  return report.ok ? 0 : 1;
+}
+
+function buildExecutePreflightSnapshot(preflight) {
+  return {
+    schema: 'v3.customer_web_codex_execute_preflight_snapshot.v1',
+    ok: preflight.ok === true,
+    readyToExecute: preflight.readyToExecute === true,
+    allowMissingGates: preflight.allowMissingGates === true,
+    missingGateCount: Array.isArray(preflight.missingGates) ? preflight.missingGates.length : 0,
+    missingGates: Array.isArray(preflight.missingGates) ? preflight.missingGates : [],
+    target: preflight.target || null,
+    selectedCases: Array.isArray(preflight.selectedCases) ? preflight.selectedCases : [],
+    controlledLiveInputChecklist: preflight.controlledLiveInputChecklist || null,
+    approvalRequestSummary: preflight.approvalRequestSummary || null,
+  };
+}
+
+function buildExecuteAcceptance(caseResults) {
+  return {
+    allCasesPassed: caseResults.every((item) => item.ok),
+    caseCount: caseResults.length,
+    passedCount: caseResults.filter((item) => item.ok).length,
+    productChangeBlocked: caseResults.some(
+      (item) => item.id === 'v3_product_change_request' && item.evidence?.blockedSatisfied === true,
+    ),
+    artifactBundleCasesPassed: caseResults
+      .filter((item) => item.expectsArtifactBundle)
+      .every((item) => item.evidence?.artifactSatisfied === true),
+    noProductArtifactBundle: caseResults
+      .filter((item) => item.expectsBlocked)
+      .every((item) => item.evidence?.noUnexpectedArtifacts === true),
+  };
 }
 
 function assertApprovalGateContract() {
@@ -1431,6 +1455,124 @@ function assertControlledLiveInputChecklistContract() {
   };
 }
 
+function syntheticLiveCaseResult(testCase) {
+  const evidence = evaluateEvidence(testCase, [syntheticResponseForCase(testCase)], false);
+  return {
+    id: testCase.id,
+    promptClass: testCase.promptClass,
+    expectedCapability: testCase.expectedCapability,
+    expectsArtifactBundle: testCase.expectsArtifactBundle,
+    expectsBlocked: testCase.expectsBlocked,
+    ok: evidence.met,
+    assistantRunId: `run-self-test-${testCase.id}`,
+    create: {
+      httpStatus: 200,
+      acceptedCount: 1,
+      deltaCount: 0,
+      completedCount: 1,
+      doneCount: 1,
+      errorCount: 0,
+      eventNames: ['assistant_run.accepted', 'assistant_run.completed', 'done'],
+    },
+    evidence,
+    pollAttemptsUsed: 0,
+    latencyMs: 1,
+    error: null,
+  };
+}
+
+function assertExecuteReportPreflightSnapshotContract() {
+  const base = {
+    baseUrl: DEFAULT_BASE_URL,
+    cookie: 'aidp_v3_session=self-test-secret',
+    bearer: '',
+    datasetId: 'dataset-smoke',
+    datasetTitle: 'Dataset Smoke',
+    currentArtifactJson: '',
+    currentArtifactFile: '',
+    currentArtifactPublicUrl: 'https://v3.elepcloud.com/generated-artifacts/customer-web-codex-live-smoke/index.html',
+    currentArtifactId: '11111111-1111-4111-8111-000000000501',
+    currentArtifactTitle: '',
+    approvalId: 'approval-self-test-secret',
+    localThreadPrefix: 'self-test',
+    outputDir: DEFAULT_OUTPUT_DIR,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+    pollAttempts: DEFAULT_POLL_ATTEMPTS,
+    execute: true,
+    preflight: false,
+    selfTest: false,
+    ackControlledLive: true,
+    allowPending: false,
+    allowMissingGates: false,
+    selectedCaseIds: [],
+  };
+  const currentArtifact = parseCurrentArtifact(base);
+  const preflight = preflightReport(base, currentArtifact);
+  const report = buildExecuteReport(
+    base,
+    currentArtifact,
+    LIVE_CASES.map((testCase) => syntheticLiveCaseResult(testCase)),
+    preflight,
+  );
+  if (report.preflightSnapshot?.schema !== 'v3.customer_web_codex_execute_preflight_snapshot.v1') {
+    throw new Error('execute report preflight snapshot schema is missing');
+  }
+  if (!report.preflightSnapshot.readyToExecute || report.preflightSnapshot.missingGateCount !== 0) {
+    throw new Error('execute report preflight snapshot should show ready gates');
+  }
+  if (report.preflightSnapshot.selectedCases.length !== LIVE_CASES.length) {
+    throw new Error('execute report preflight snapshot should preserve selected case metadata');
+  }
+  if (report.preflightSnapshot.controlledLiveInputChecklist?.readyToExecute !== true) {
+    throw new Error('execute report preflight snapshot should preserve ready input checklist');
+  }
+  if (report.preflightSnapshot.approvalRequestSummary?.status !== 'ready_for_controlled_live_execute') {
+    throw new Error('execute report preflight snapshot should preserve ready approval request summary');
+  }
+  if (!report.acceptance.allCasesPassed || report.acceptance.caseCount !== LIVE_CASES.length) {
+    throw new Error('execute report acceptance should summarize all synthetic cases');
+  }
+  assertReportSafe(report, base);
+
+  const productOnly = {
+    ...base,
+    cookie: '',
+    bearer: 'self-test-bearer-secret',
+    datasetId: '',
+    currentArtifactPublicUrl: '',
+    currentArtifactId: '',
+    selectedCaseIds: ['v3_product_change_request'],
+  };
+  const productOnlyCases = selectedCases(productOnly);
+  const productOnlyReport = buildExecuteReport(
+    productOnly,
+    parseCurrentArtifact(productOnly),
+    productOnlyCases.map((testCase) => syntheticLiveCaseResult(testCase)),
+    preflightReport(productOnly, parseCurrentArtifact(productOnly)),
+  );
+  if (!productOnlyReport.preflightSnapshot.readyToExecute) {
+    throw new Error('product-change-only execute preflight snapshot should be ready');
+  }
+  if (productOnlyReport.preflightSnapshot.selectedCases.length !== 1) {
+    throw new Error('product-change-only execute preflight snapshot should preserve single selected case');
+  }
+  if (productOnlyReport.preflightSnapshot.controlledLiveInputChecklist?.requiredOperatorInputCount !== 2) {
+    throw new Error('product-change-only execute preflight snapshot should require only auth and approval');
+  }
+  assertReportSafe(productOnlyReport, productOnly);
+  return {
+    schema: 'v3.customer_web_codex_execute_preflight_snapshot_evidence.v1',
+    allCasesSnapshotReady: report.preflightSnapshot.readyToExecute === true,
+    allCasesSelectedCaseCount: report.preflightSnapshot.selectedCases.length,
+    allCasesMissingGateCount: report.preflightSnapshot.missingGateCount,
+    productChangeOnlySnapshotReady: productOnlyReport.preflightSnapshot.readyToExecute === true,
+    productChangeOnlySelectedCaseCount: productOnlyReport.preflightSnapshot.selectedCases.length,
+    productChangeOnlyRequiredOperatorInputCount:
+      productOnlyReport.preflightSnapshot.controlledLiveInputChecklist?.requiredOperatorInputCount || 0,
+  };
+}
+
 function assertSseParsingContract() {
   const bufferState = { buffer: '' };
   const frames = parseSseFrames(
@@ -1657,6 +1799,7 @@ async function runSelfTest(args) {
   assertPreflightExitCodeContract();
   assertNextCommandTemplateContract();
   const controlledLiveInputChecklistEvidence = assertControlledLiveInputChecklistContract();
+  const executePreflightSnapshotEvidence = assertExecuteReportPreflightSnapshotContract();
   assertSseParsingContract();
   const syntheticShelfEvidence = assertSyntheticCaseEvidenceContracts();
   const report = {
@@ -1669,6 +1812,7 @@ async function runSelfTest(args) {
       { name: 'preflight_allow_missing_gates_exit_code_contract', status: 'passed' },
       { name: 'controlled_live_next_command_template_redacted', status: 'passed' },
       { name: 'controlled_live_input_checklist_contract', status: 'passed' },
+      { name: 'execute_report_preflight_snapshot_contract', status: 'passed' },
       { name: 'current_static_page_artifact_shape_rejects_placeholder_context', status: 'passed' },
       { name: 'current_static_page_artifact_public_url_shorthand_builds_valid_context', status: 'passed' },
       { name: 'sse_parser_extracts_completed_response', status: 'passed' },
@@ -1677,6 +1821,7 @@ async function runSelfTest(args) {
       { name: 'report_redaction_rejects_auth_and_prompt_secrets', status: 'passed' },
     ],
     controlledLiveInputChecklistEvidence,
+    executePreflightSnapshotEvidence,
     syntheticShelfEvidence,
     liveWritesAttempted: false,
   };
@@ -1772,6 +1917,19 @@ function markdownReport(report) {
     } else {
       lines.push('- none');
     }
+    lines.push('');
+  }
+  if (report.preflightSnapshot) {
+    lines.push('## Execute Preflight Snapshot', '');
+    lines.push(`- Schema: ${report.preflightSnapshot.schema}`);
+    lines.push(`- Ready to execute: ${report.preflightSnapshot.readyToExecute === true ? 'true' : 'false'}`);
+    lines.push(`- Missing gates: ${report.preflightSnapshot.missingGateCount}`);
+    lines.push(`- Selected cases: ${report.preflightSnapshot.selectedCases?.length ?? 0}`);
+    lines.push(
+      `- Required operator inputs: ${
+        report.preflightSnapshot.controlledLiveInputChecklist?.requiredOperatorInputCount ?? 0
+      }`,
+    );
     lines.push('');
   }
   if (report.approvalRequestSummary) {
