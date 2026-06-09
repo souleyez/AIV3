@@ -10990,12 +10990,26 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
     {
         return reply;
     }
+    let preserve_direct_answer_text = reply.reply_type == ExternalBotReplyTypeView::Text
+        && reply.task_status.as_deref() == Some("answered")
+        && reply
+            .text
+            .as_deref()
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false);
     let ready_text = external_channel_static_page_customer_ready_text_for_payload(
         external_channel_static_page_customer_ready_text(),
         reply.card.as_ref(),
         &public_url,
     );
-    if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
+    if preserve_direct_answer_text {
+        if let Some(text) = reply.text.take() {
+            reply.text = Some(external_channel_text_with_public_artifact_link(
+                text,
+                &public_url,
+            ));
+        }
+    } else if raw_status != "static_page_stable_artifact_reused" && !provisional_existing_artifact {
         reply.task_status = Some("static_page_published".to_string());
         reply.reply_type = ExternalBotReplyTypeView::ArtifactLink;
         reply.text = Some(external_channel_text_with_public_artifact_link(
@@ -104614,6 +104628,15 @@ mod tests {
         let text = reply.text.as_deref().expect("reply text");
         assert!(text.contains("这是正常业务回答。"));
         assert!(text.contains("页面链接：[点击查看报表]"));
+
+        let public_reply = external_channel_public_reply(reply);
+        assert_eq!(public_reply.reply_type, ExternalBotReplyTypeView::Text);
+        assert_eq!(public_reply.task_status.as_deref(), Some("answered"));
+        assert_eq!(public_reply.artifact_links, vec![public_url.to_string()]);
+        let public_text = public_reply.text.as_deref().expect("public reply text");
+        assert!(public_text.contains("这是正常业务回答。"));
+        assert!(public_text.contains("页面链接：[点击查看报表]"));
+        assert!(!public_text.contains("已依据客户需求生成可查看的报表页面"));
     }
 
     #[test]
