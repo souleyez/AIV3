@@ -43,6 +43,7 @@ These checks cover:
 - readiness parsing treats self-test fixtures and parsed env-file values as authoritative, so conflicting shell env variables cannot make a deployment-target check look ready.
 - the guarded live-smoke harness self-test validates approval gates and a synthetic five-case evidence matrix for task cards, artifact bundles, and product-change blocked cards before any live API call is allowed.
 - the guarded live-smoke harness self-test writes a redacted `Synthetic Shelf Evidence` receipt section with task-card, artifact-bundle, blocked-task, and product-change no-artifact counts for the right-side shelf contract.
+- the top-level executor smoke receipt writes `acceptance_status.schema=v3.customer_web_codex_executor_acceptance_status.v1`, so reviewers can distinguish passed no-live evidence from pending controlled-live gates.
 
 ## Optional Video PPT Regression Rollup
 
@@ -101,6 +102,13 @@ When the target is not ready, the JSON report must remain non-secret but actiona
 - deployment scope is limited to affected services only.
 - 120 is not touched.
 - screen recording remains disabled unless explicitly approved for a separate login-gated video workflow.
+
+The top-level executor smoke JSON includes an `acceptance_status` object with:
+
+- `full_acceptance_ready=false` until controlled-live smoke is executed with the required test account, dataset, current artifact, and approval id.
+- `no_live_gate.status=passed` when local/deployment-target checks pass.
+- `live_gate_readiness_summary.required_inputs` listing the four controlled-live inputs required before execution.
+- `pending_gate_requirements_summary.no_live_substitute_available_for_pending_gates=true`, so no-live receipts cannot be used as a substitute for live Customer Web Codex evidence.
 
 ## Post-Deploy Live Smoke
 

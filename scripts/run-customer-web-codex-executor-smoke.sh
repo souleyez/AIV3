@@ -137,11 +137,54 @@ const report = {
     status: process.env.SMOKE_VIDEO_PPT_ROLLUP_STATUS,
     reason: process.env.SMOKE_VIDEO_PPT_ROLLUP_REASON
   },
-  deployment_gates_not_executed: [
-    "GitHub main contains the smoke commit",
-    "8-server profile/env allowlists include customer Web Codex capabilities",
-    "8-server profile env key is explicitly RIGHTCODE_API_KEY_MAIN",
-    "affected services deployed only after approval",
+  acceptance_status: {
+    schema: "v3.customer_web_codex_executor_acceptance_status.v1",
+    full_acceptance_ready: false,
+    no_live_gate: {
+      status: "passed",
+      check_count: JSON.parse(process.env.SMOKE_CHECKS_JSON || "[]").length,
+      video_ppt_no_live_rollup_status: process.env.SMOKE_VIDEO_PPT_ROLLUP_STATUS,
+      proves_controlled_live: false
+    },
+    live_gate_readiness_summary: {
+      schema: "v3.customer_web_codex_executor_live_gate_readiness_summary.v1",
+      controlled_live_harness_self_test_ready: true,
+      approval_gate_enforced: true,
+      current_artifact_public_url_shorthand_ready: true,
+      right_side_shelf_synthetic_evidence_ready: true,
+      required_input_count: 4,
+      required_inputs: [
+        "test account session cookie or bearer",
+        "controlled test dataset id",
+        "current rendered V3 generated-artifact URL or artifact context",
+        "operator approval id/reference"
+      ],
+      live_smoke_pending: true
+    },
+    pending_gate_requirements_summary: {
+      schema: "v3.customer_web_codex_executor_pending_gate_requirements_summary.v1",
+      pending_gate_count: 6,
+      pending_gates: [
+        "live Right Code customer_complex_request smoke",
+        "live Right Code customer_artifact_request smoke",
+        "live generated_static_page_edit smoke",
+        "live generated_static_page_publish smoke",
+        "live v3_product_change_request operator-review smoke",
+        "live right-side shelf task/artifact visibility smoke"
+      ],
+      no_live_substitute_available_for_pending_gates: true
+    },
+    safety_summary: {
+      no_provider_secrets_read: true,
+      no_live_api_calls: true,
+      no_deploy_or_service_restart: true,
+      no_120_touched: true,
+      screen_recording_enabled: false
+    }
+  },
+  external_gates_not_executed_by_this_smoke: [
+    "GitHub push or deployment approval",
+    "deployment-target service restart or rollout",
     "live Right Code customer_complex_request smoke",
     "live Right Code customer_artifact_request smoke",
     "live generated_static_page_edit smoke",
@@ -152,6 +195,7 @@ const report = {
   safety_notes: [
     "This smoke does not read or print provider secrets.",
     "This smoke does not deploy services, push GitHub, touch 120, or modify production env files.",
+    "This smoke does not execute controlled live Customer Web Codex writes.",
     "Use the optional video/PPT no-live rollup before release approval to confirm the Codex executor changes did not regress video PPT handoff/upload gates."
   ]
 };
@@ -185,9 +229,21 @@ const lines = [
     ? `- Reason: ${report.video_ppt_no_live_rollup.reason}`
     : "",
   "",
-  "## Deployment Gates Not Executed",
+  "## Acceptance Status",
   "",
-  ...report.deployment_gates_not_executed.map((gate) => `- ${gate}`),
+  `- Schema: ${report.acceptance_status.schema}`,
+  `- Full acceptance ready: ${report.acceptance_status.full_acceptance_ready}`,
+  `- No-live gate: ${report.acceptance_status.no_live_gate.status}`,
+  `- No-live check count: ${report.acceptance_status.no_live_gate.check_count}`,
+  `- Video/PPT no-live rollup: ${report.acceptance_status.no_live_gate.video_ppt_no_live_rollup_status}`,
+  `- Controlled live smoke pending: ${report.acceptance_status.live_gate_readiness_summary.live_smoke_pending}`,
+  `- Required controlled-live inputs: ${report.acceptance_status.live_gate_readiness_summary.required_input_count}`,
+  `- Pending live gate count: ${report.acceptance_status.pending_gate_requirements_summary.pending_gate_count}`,
+  `- No-live substitute for pending gates: ${report.acceptance_status.pending_gate_requirements_summary.no_live_substitute_available_for_pending_gates}`,
+  "",
+  "## External Gates Not Executed By This Smoke",
+  "",
+  ...report.external_gates_not_executed_by_this_smoke.map((gate) => `- ${gate}`),
   "",
   "## Safety Notes",
   "",
