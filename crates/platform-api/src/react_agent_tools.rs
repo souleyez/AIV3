@@ -1219,9 +1219,12 @@ fn report_choice_result(action: &AssistantRunNextAction) -> AssistantRunReactToo
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("continue_qa");
-    let (choice, message) = match choice {
-        "create_report" => ("create_report", "已选择生成报表，下一步进入报表流程。"),
-        _ => ("continue_qa", "已选择继续问答。"),
+    let (choice, next_step) = match choice {
+        "create_report" => (
+            "create_report",
+            "继续基于已供料证据给用户一版自然语言经营/数据分析摘要；右侧报表或产物流单独推进。",
+        ),
+        _ => ("continue_qa", "继续基于已供料证据给用户正常回复。"),
     };
 
     AssistantRunReactToolResult {
@@ -1237,6 +1240,7 @@ fn report_choice_result(action: &AssistantRunNextAction) -> AssistantRunReactToo
             }],
             "limits": {},
             "choice": choice,
+            "next_step": next_step,
         }),
         trail_step: json!({
             "status": "completed",
@@ -1245,7 +1249,7 @@ fn report_choice_result(action: &AssistantRunNextAction) -> AssistantRunReactToo
             "choice": choice,
             "at": Utc::now(),
         }),
-        final_answer: Some(message.to_string()),
+        final_answer: None,
     }
 }
 
@@ -5278,7 +5282,7 @@ mod tests {
     }
 
     #[test]
-    fn report_choice_records_handoff_without_report_body() {
+    fn report_choice_records_handoff_without_blocking_direct_answer() {
         let mut action = test_action(AssistantRunReactActionType::ReportChoice);
         action.status = AssistantRunReActStatus::ReportChoice;
         action.arguments = json!({"choice": "create_report"});
@@ -5288,9 +5292,12 @@ mod tests {
 
         assert_eq!(result.observation["choice"], json!("create_report"));
         assert_eq!(
-            result.final_answer.as_deref(),
-            Some("已选择生成报表，下一步进入报表流程。")
+            result.observation["next_step"],
+            json!(
+                "继续基于已供料证据给用户一版自然语言经营/数据分析摘要；右侧报表或产物流单独推进。"
+            )
         );
+        assert!(result.final_answer.is_none());
         assert!(!observation.contains("report_body"));
         assert!(!observation.contains("sections"));
         assert!(!observation.contains("markdown"));

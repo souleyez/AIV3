@@ -1219,6 +1219,7 @@ export default function HomePageClient() {
   const staticPageProgressMessageKeysRef = useRef(new Set());
   const staticPageDraftStatusRef = useRef(new Map());
   const assistantRunCustomerCodexPollRef = useRef(0);
+  const codexCustomerChatMessageKeysRef = useRef(new Set());
 
   const selectedDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === selectedDatasetId) || null,
@@ -1356,9 +1357,16 @@ export default function HomePageClient() {
     setSelectedDocumentDetail(null);
   }
 
+  function promptRequestsCodexForward(prompt) {
+    return /^cc(?:$|[\s:：,，.。;；-])/i.test(String(prompt || '').trimStart());
+  }
+
   function promptRequestsStaticPage(prompt) {
     const text = String(prompt || '');
     const compact = text.replace(/\s+/g, '');
+    if (promptRequestsCodexForward(text)) {
+      return false;
+    }
     const hasCreateAction = /生成|制作|创建|输出|发布|渲染|出页面|出报表|做成|做个|做一个|做一份|改成|修改|调整/.test(compact);
     if (/是什么意思|什么含义|怎么计算|如何计算|为什么|口径|有哪些问题|什么问题/.test(compact) && !hasCreateAction) {
       return false;
@@ -1520,7 +1528,10 @@ export default function HomePageClient() {
     };
   }
 
-  function appendStaticPageProgressMessage(key, content) {
+  function appendStaticPageProgressMessage(key, content, options = {}) {
+    if (!options.final) {
+      return;
+    }
     const stableKey = `static-page:${key}`;
     setLocalMessages((current) => {
       if (staticPageProgressMessageKeysRef.current.has(stableKey)
@@ -1538,6 +1549,110 @@ export default function HomePageClient() {
           },
         },
       ].slice(-40);
+    });
+  }
+
+  function markdownLabel(value, fallback = '产物') {
+    return String(value || fallback)
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\]/g, '\\]')
+      .trim()
+      .slice(0, 80) || fallback;
+  }
+
+  function codexCustomerBundleChatContent(bundle) {
+    if (!bundle) return '';
+    const lines = [
+      `Codex 产物：${bundle.title || '客户产物'}`,
+    ];
+    if (bundle.summary) {
+      lines.push(bundle.summary);
+    }
+    const seenUrls = new Set();
+    if (bundle.primaryUrl) {
+      seenUrls.add(bundle.primaryUrl);
+      lines.push(`[打开产物](${bundle.primaryUrl})`);
+    }
+    const fileLines = (Array.isArray(bundle.files) ? bundle.files : [])
+      .slice(0, 6)
+      .map((file) => {
+        const title = markdownLabel(file?.title || file?.path, '文件');
+        if (file?.publicUrl && !seenUrls.has(file.publicUrl)) {
+          seenUrls.add(file.publicUrl);
+          return `- [${title}](${file.publicUrl})`;
+        }
+        const path = file?.path && file.path !== file?.title ? `：${file.path}` : '';
+        return `- ${title}${path}`;
+      });
+    if (fileLines.length) {
+      lines.push('文件：', ...fileLines);
+    }
+    if (!bundle.published && bundle.requiresPublishValidation) {
+      lines.push('产物已进入 DataMax 发布校验，公开链接生成后会继续回传。');
+    }
+    return lines.filter(Boolean).join('\n');
+  }
+
+  function codexCustomerTaskChatContent(task) {
+    if (!task || !isTerminalCodexCustomerTaskStatus(task.status)) return '';
+    const result = task.resultSummary;
+    if (result) {
+      const lines = [
+        `Codex 回复：${result.title || task.title || '执行结果'}`,
+        result.summary || task.summary || '',
+      ];
+      if (Array.isArray(result.findings) && result.findings.length) {
+        lines.push('要点：', ...result.findings.slice(0, 5).map((item) => `- ${item}`));
+      }
+      if (Array.isArray(result.recommendedNextActions) && result.recommendedNextActions.length) {
+        lines.push('下一步：', ...result.recommendedNextActions.slice(0, 4).map((item) => `- ${item}`));
+      }
+      if (Array.isArray(result.warnings) && result.warnings.length) {
+        lines.push('注意：', ...result.warnings.slice(0, 3).map((item) => `- ${item}`));
+      }
+      return lines.filter(Boolean).join('\n');
+    }
+    if (task.status === 'completed') return '';
+    return `${task.title || 'Codex 执行'}${task.statusLabel ? `（${task.statusLabel}）` : ''}：${task.summary || '任务已结束。'}`;
+  }
+
+  function appendCodexCustomerChatUpdates(bundles = [], tasks = []) {
+    const nextMessages = [];
+    bundles.forEach((bundle) => {
+      const content = codexCustomerBundleChatContent(bundle);
+      const key = `codex-artifact:${bundle?.id || content}`;
+      if (content && key) {
+        nextMessages.push({ key, content, source: 'codex_customer_artifact' });
+      }
+    });
+    tasks.forEach((task) => {
+      const content = codexCustomerTaskChatContent(task);
+      const key = `codex-task:${task?.id || task?.workflowExecutionId || content}:${task?.status || 'terminal'}`;
+      if (content && key) {
+        nextMessages.push({ key, content, source: 'codex_customer_task' });
+      }
+    });
+    if (!nextMessages.length) return;
+    setLocalMessages((current) => {
+      const appended = [];
+      nextMessages.forEach((message) => {
+        const stableKey = message.key;
+        if (
+          codexCustomerChatMessageKeysRef.current.has(stableKey)
+          || current.some((item) => item?.metadata?.key === stableKey)
+        ) {
+          return;
+        }
+        codexCustomerChatMessageKeysRef.current.add(stableKey);
+        appended.push({
+          ...createLocalMessage('assistant', message.content),
+          metadata: {
+            source: message.source,
+            key: stableKey,
+          },
+        });
+      });
+      return appended.length ? [...current, ...appended].slice(-40) : current;
     });
   }
 
@@ -2070,8 +2185,9 @@ export default function HomePageClient() {
       appendStaticPageProgressMessage(
         `${draft.id}:rendered:${renderOutput?.id || finalUrl || 'ready'}`,
         finalUrl
-          ? `静态页已生成：${finalUrl}`
-          : '静态页已生成，可以在右侧生成结果区打开。',
+          ? `报表页面已生成：${finalUrl}`
+          : '报表页面已生成。',
+        { final: true },
       );
     }
     setBanner(renderStatus === 'rendered'
@@ -2888,6 +3004,7 @@ export default function HomePageClient() {
     if (tasks.length) {
       setCodexCustomerTasks((current) => mergeCodexCustomerTasks(current, tasks));
     }
+    appendCodexCustomerChatUpdates(bundles, tasks);
     return { bundles, tasks };
   }
 
@@ -4476,8 +4593,9 @@ export default function HomePageClient() {
     appendStaticPageProgressMessage(
       `${draft.id}:rendered:${draft.finalPage?.renderOutputId || finalUrl || 'ready'}`,
       finalUrl
-        ? `静态页已生成：${finalUrl}`
-        : '静态页已生成，可以在右侧生成结果区打开。',
+        ? `报表页面已生成：${finalUrl}`
+        : '报表页面已生成。',
+      { final: true },
     );
     const artifact = publishedStaticPageArtifactForDraft(draft);
     if (artifact?.id && activeHtmlArtifactId !== artifact.id) {
@@ -4548,8 +4666,9 @@ export default function HomePageClient() {
     appendStaticPageProgressMessage(
       `${rendered.draft.id}:rendered:${rendered.snapshot.renderOutputId || finalUrl || 'ready'}`,
       finalUrl
-        ? `静态页已生成：${finalUrl}`
-        : '静态页已生成，可以在右侧生成结果区打开。',
+        ? `报表页面已生成：${finalUrl}`
+        : '报表页面已生成。',
+      { final: true },
     );
     if (staticPageEditorOpen) {
       return;
@@ -4770,6 +4889,10 @@ export default function HomePageClient() {
         refreshReportDetail(selectedReportPlanId);
       }
     },
+    onRefreshReports: () => refreshCatalog({
+      preferredDatasetId: selectedDatasetId,
+      silent: false,
+    }),
     staticPageDraft: activeStaticPageDraft,
     staticPageDrafts: staticPageDraftItems,
     onSelectStaticPageDraft: handleSelectStaticPageDraft,

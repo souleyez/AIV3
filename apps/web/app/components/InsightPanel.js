@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { formatDateTime, formatRelativeTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import {
   buildStaticPageFinalRenderPayload,
@@ -1295,6 +1294,122 @@ function GeneratedCodexCustomerTaskCard({ task }) {
   );
 }
 
+function reportPlanPublishedReport(plan, publishedReports = []) {
+  if (!plan?.id) return null;
+  return publishedReports.find((report) =>
+    report?.report_plan_id === plan.id
+    || report?.reportPlanId === plan.id
+    || report?.plan_id === plan.id
+    || report?.planId === plan.id,
+  ) || null;
+}
+
+function reportShelfTitle(item) {
+  const plan = item?.plan;
+  const published = item?.published;
+  return published?.title
+    || published?.report_title
+    || published?.reportTitle
+    || plan?.title
+    || plan?.objective
+    || 'DataMax 经营分析报表';
+}
+
+function reportShelfUpdatedAt(item) {
+  const plan = item?.plan;
+  const published = item?.published;
+  return published?.updated_at
+    || published?.updatedAt
+    || published?.created_at
+    || published?.createdAt
+    || plan?.updated_at
+    || plan?.updatedAt
+    || plan?.created_at
+    || plan?.createdAt
+    || '';
+}
+
+function reportShelfStatus(item) {
+  const published = item?.published;
+  const plan = item?.plan;
+  if (published) return '已发布';
+  return formatSnakeCaseLabel(plan?.status || 'planning');
+}
+
+function reportShelfMeta(item) {
+  const plan = item?.plan;
+  const published = item?.published;
+  const surface = published?.surface || published?.current_surface || published?.currentSurface || '';
+  const parts = [
+    published ? '成品报表' : '报表计划',
+    surface ? SURFACE_LABELS[surface] || surface : '',
+    plan?.current_ast_version_id ? 'AST 就绪' : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function reportShelfDetail(item) {
+  const plan = item?.plan;
+  const published = item?.published;
+  return published?.summary
+    || published?.description
+    || published?.publish_note
+    || published?.publishNote
+    || plan?.objective
+    || '选择后可在聊天里要求修改这个报表。';
+}
+
+function buildReportShelfItems(reportPlans = [], publishedReports = []) {
+  const planItems = reportPlans.map((plan) => ({
+    id: `plan:${plan.id}`,
+    plan,
+    published: reportPlanPublishedReport(plan, publishedReports),
+  }));
+  const planIds = new Set(reportPlans.map((plan) => plan.id).filter(Boolean));
+  const publishedOnlyItems = publishedReports
+    .filter((report) => {
+      const planId = report?.report_plan_id || report?.reportPlanId || report?.plan_id || report?.planId || '';
+      return !planId || !planIds.has(planId);
+    })
+    .map((published) => ({
+      id: `published:${published.id || published.report_id || published.reportId || reportShelfTitle({ published })}`,
+      plan: null,
+      published,
+    }));
+  return [...planItems, ...publishedOnlyItems];
+}
+
+function ReportShelfCard({ item, active, onSelect }) {
+  const title = reportShelfTitle(item);
+  const updatedAt = reportShelfUpdatedAt(item);
+  const status = reportShelfStatus(item);
+  const meta = reportShelfMeta(item);
+  const detail = reportShelfDetail(item);
+  const Component = onSelect ? 'button' : 'article';
+  return (
+    <Component
+      type={onSelect ? 'button' : undefined}
+      className={`generated-project-card report-shelf-card ${active ? 'active' : ''}`.trim()}
+      onClick={onSelect}
+    >
+      <div className="generated-project-main">
+        <div className="generated-project-title-row">
+          <strong>{truncateText(title, 38)}</strong>
+          <time dateTime={updatedAt || undefined}>{updatedAt ? formatRelativeTime(updatedAt) : '刚刚'}</time>
+        </div>
+        <div className="generated-project-brief-row">
+          <span>{truncateText(detail, 64)}</span>
+          <em>{status}</em>
+        </div>
+        <div className="codex-artifact-file-list">
+          {meta ? <span>{truncateText(meta, 28)}</span> : null}
+          {item?.plan?.id ? <span title={item.plan.id}>{truncateText(item.plan.id, 18)}</span> : null}
+        </div>
+      </div>
+    </Component>
+  );
+}
+
 export default function InsightPanel({
   dataset,
   sessions,
@@ -1321,6 +1436,7 @@ export default function InsightPanel({
   onRetryWorkflowExecution,
   onCancelWorkflowExecution,
   onRefreshReportDetail,
+  onRefreshReports,
   staticPageDraft,
   staticPageDrafts = [],
   onSelectStaticPageDraft,
@@ -1337,35 +1453,8 @@ export default function InsightPanel({
   activeHtmlArtifactId,
   onSelectHtmlArtifact,
 }) {
-  const [copiedProjectId, setCopiedProjectId] = useState('');
-  const shelfHtmlArtifacts = htmlArtifacts.filter((artifact) => {
-    const templateId = artifact?.templateId || artifact?.template_id;
-    return templateId !== 'static_page_planning_handoff'
-      && templateId !== 'static_page_published_preview'
-      && templateId !== 'static_page_data_quality_report';
-  });
-  const resultCount = staticPageDrafts.length
-    + shelfHtmlArtifacts.length
-    + codexCustomerTasks.length
-    + codexCustomerArtifacts.length;
-
-  async function copyProjectLink(draft) {
-    const finalPageUrl = staticPageHtmlDownloadHref(staticPageFinalPageUrl(draft));
-    const link = finalPageUrl
-      ? finalPageUrl.startsWith('/') && typeof window !== 'undefined'
-        ? `${window.location.origin}${finalPageUrl}`
-        : finalPageUrl
-      : (typeof window === 'undefined'
-      ? `#static-page-${draft.id}`
-      : `${window.location.origin}${window.location.pathname}#static-page-${draft.id}`);
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopiedProjectId(draft.id);
-      window.setTimeout(() => setCopiedProjectId(''), 1600);
-    } catch {
-      setCopiedProjectId('');
-    }
-  }
+  const reportShelfItems = buildReportShelfItems(reportPlans, publishedReports);
+  const resultCount = reportShelfItems.length;
 
   return (
     <aside className="insight-panel">
@@ -1373,55 +1462,22 @@ export default function InsightPanel({
 
       <section className="card insight-card right-results-card">
         <SectionHeader
-          title="Codex 执行与产物"
-          subtitle={resultCount ? `${resultCount} 个任务或产物` : '从聊天发起 Codex 任务或生成项目'}
+          title="数据集报表"
+          subtitle={resultCount ? `${dataset?.title || dataset?.name || '当前数据集'} · ${resultCount} 个报表` : '当前数据集还没有报表'}
         />
         <div className="generated-project-list">
-          {codexCustomerTasks.map((task) => (
-            <GeneratedCodexCustomerTaskCard
-              key={task.id}
-              task={task}
+          {reportShelfItems.map((item) => (
+            <ReportShelfCard
+              key={item.id}
+              item={item}
+              active={Boolean(item.plan?.id && item.plan.id === selectedReportPlanId)}
+              onSelect={item.plan?.id ? () => onSelectReportPlan?.(item.plan.id) : undefined}
             />
           ))}
-          {staticPageDrafts.map((draft) => {
-            const active = staticPageDraft?.id === draft.id;
-            return (
-              <GeneratedProjectCard
-                key={draft.id}
-                active={active}
-                open={active && staticPageEditorOpen}
-                copied={copiedProjectId === draft.id}
-                draft={draft}
-                onClick={() => onSelectStaticPageDraft?.(draft.id)}
-                onSelect={() => onSelectStaticPageDraft?.(draft.id)}
-                onPreview={() => onPreviewStaticPageDraft?.(draft.id)}
-                onDelete={() => onDeleteStaticPageDraft?.(draft.id)}
-                onRevert={() => onRevertStaticPageStage?.(draft.id)}
-                onCopyLink={() => copyProjectLink(draft)}
-              />
-            );
-          })}
-          {shelfHtmlArtifacts.map((artifact) => {
-            const artifactId = artifact?.id || artifact?.artifact_id;
-            return (
-              <GeneratedHtmlArtifactCard
-                key={artifactId}
-                active={activeHtmlArtifactId === artifactId}
-                artifact={artifact}
-                onSelect={() => onSelectHtmlArtifact?.(artifactId)}
-              />
-            );
-          })}
-          {codexCustomerArtifacts.map((bundle) => (
-            <GeneratedCodexCustomerArtifactCard
-              key={bundle.id}
-              bundle={bundle}
-            />
-          ))}
-          {!resultCount ? <EmptySection text="暂时还没有 Codex 任务或生成产物。通过对话发起后会出现在这里。" /> : null}
+          {!resultCount ? <EmptySection text="当前数据集还没有生成过报表。生成后会自动出现在这里。" /> : null}
         </div>
-        <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshStaticPageDrafts}>
-          刷新项目
+        <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshReports || onRefreshReportDetail}>
+          刷新报表
         </button>
       </section>
     </aside>

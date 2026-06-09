@@ -53725,6 +53725,9 @@ async fn maybe_enqueue_assistant_run_customer_codex_sidecar(
     if prompt.is_empty() {
         return Ok(None);
     }
+    if !assistant_run_prompt_requests_codex_forward(prompt) {
+        return Ok(None);
+    }
     if assistant_run_prompt_requests_v3_product_change(prompt) {
         state
             .storage
@@ -53848,7 +53851,10 @@ fn assistant_run_customer_codex_sidecar_capability(
     selected_scope: &Value,
 ) -> Option<&'static str> {
     let prompt = request.prompt.trim();
-    if prompt.is_empty() || assistant_run_prompt_requests_v3_product_change(prompt) {
+    if prompt.is_empty()
+        || !assistant_run_prompt_requests_codex_forward(prompt)
+        || assistant_run_prompt_requests_v3_product_change(prompt)
+    {
         return None;
     }
     if assistant_run_prompt_requests_generated_static_page_edit(
@@ -53856,6 +53862,13 @@ fn assistant_run_customer_codex_sidecar_capability(
         request.current_artifact.as_ref(),
     ) {
         return Some(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT);
+    }
+    if assistant_run_prompt_requests_customer_codex_report_artifact_package(
+        prompt,
+        request,
+        selected_scope,
+    ) {
+        return Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST);
     }
     if assistant_run_prompt_requests_generated_static_page_publish(prompt, request, selected_scope)
     {
@@ -53867,8 +53880,40 @@ fn assistant_run_customer_codex_sidecar_capability(
     if assistant_run_prompt_requests_data_analysis_report_sidecar(prompt, request, selected_scope) {
         return Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST);
     }
-    assistant_run_prompt_requests_complex_analysis_or_report(prompt, selected_scope)
-        .then_some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+    Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+}
+
+fn assistant_run_prompt_requests_codex_forward(prompt: &str) -> bool {
+    let trimmed = prompt.trim_start();
+    if trimmed.eq_ignore_ascii_case("cc") {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("cc ")
+        || lower.starts_with("cc:")
+        || lower.starts_with("cc：")
+        || lower.starts_with("cc,")
+        || lower.starts_with("cc，")
+        || lower.starts_with("cc.")
+        || lower.starts_with("cc。")
+        || lower.starts_with("cc;")
+        || lower.starts_with("cc；")
+        || lower.starts_with("cc-")
+        || lower.starts_with("cc\n")
+        || lower.starts_with("cc\t")
+}
+
+fn assistant_run_prompt_without_codex_forward_prefix(prompt: &str) -> &str {
+    let trimmed = prompt.trim_start();
+    if !assistant_run_prompt_requests_codex_forward(trimmed) {
+        return prompt;
+    }
+    if trimmed.eq_ignore_ascii_case("cc") {
+        return "";
+    }
+    trimmed[2..].trim_start_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, ':' | '：' | ',' | '，' | '.' | '。' | ';' | '；' | '-')
+    })
 }
 
 fn assistant_run_prompt_requests_v3_product_change(prompt: &str) -> bool {
@@ -54010,88 +54055,6 @@ fn assistant_run_prompt_mentions_v3_product_system_surface(
     )
 }
 
-fn assistant_run_prompt_requests_complex_analysis_or_report(
-    prompt: &str,
-    selected_scope: &Value,
-) -> bool {
-    let compact = prompt
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    let lower = compact.to_ascii_lowercase();
-    let explicit_codex_signal =
-        assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower);
-    let has_analysis_signal = prompt_contains_any(
-        &compact,
-        &[
-            "经营分析",
-            "数据分析",
-            "经营工作分析",
-            "经营复盘",
-            "管理层复盘",
-            "趋势分析",
-            "业务分析",
-            "分析报表",
-            "可视化",
-            "仪表盘",
-            "看板",
-            "静态页",
-            "报表页面",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "analysis",
-            "analytics",
-            "dashboard",
-            "visualization",
-            "report",
-            "business",
-        ],
-    ) || explicit_codex_signal;
-    if !has_analysis_signal {
-        return false;
-    }
-    let has_execution_signal = prompt_contains_any(
-        &compact,
-        &[
-            "做一下",
-            "做个",
-            "生成",
-            "输出",
-            "创建",
-            "制作",
-            "整理",
-            "给出",
-            "出一版",
-            "改成",
-            "优化",
-            "帮我",
-            "处理",
-            "分析",
-            "研究",
-            "检查",
-            "看下",
-            "梳理",
-        ],
-    ) || ascii_prompt_contains_any(
-        &lower,
-        &[
-            "create", "generate", "build", "make", "produce", "revise", "analyze", "analyse",
-            "inspect", "review", "handle",
-        ],
-    );
-    let has_data_scope = !selected_dataset_ids_from_scope(selected_scope).is_empty()
-        || !selected_document_ids_from_scope(selected_scope).is_empty()
-        || selected_scope.get("database_sources").is_some()
-        || selected_scope.get("databaseSources").is_some()
-        || selected_scope.get("type").and_then(Value::as_str) == Some("external_channel")
-        || request_like_prompt_mentions_data_context(&compact, &lower)
-        || explicit_codex_signal;
-
-    has_execution_signal && has_data_scope
-}
-
 fn assistant_run_prompt_explicit_customer_codex_signal(compact: &str, lower: &str) -> bool {
     prompt_contains_any(
         compact,
@@ -54188,6 +54151,130 @@ fn assistant_run_prompt_requests_generated_static_page_publish(
     assistant_run_customer_codex_context_present(request, selected_scope, &compact, &lower)
         || explicit_codex_signal
         || has_static_page_surface
+}
+
+fn assistant_run_prompt_requests_customer_codex_report_artifact_package(
+    prompt: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+) -> bool {
+    let compact = prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    if !assistant_run_prompt_requests_codex_forward(prompt)
+        && !assistant_run_prompt_explicit_customer_codex_signal(&compact, &lower)
+    {
+        return false;
+    }
+    if !assistant_run_customer_codex_context_present(request, selected_scope, &compact, &lower) {
+        return false;
+    }
+    let has_data_analysis_intent = prompt_contains_any(
+        &compact,
+        &[
+            "经营分析",
+            "数据分析",
+            "经营工作分析",
+            "经营复盘",
+            "管理层复盘",
+            "业务分析",
+            "综合分析",
+            "多维分析",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "analysis",
+            "analytics",
+            "businessanalysis",
+            "operatinganalysis",
+        ],
+    );
+    if !has_data_analysis_intent {
+        return false;
+    }
+    let has_explicit_deliverable_signal = prompt_contains_any(
+        &compact,
+        &[
+            "可下载",
+            "说明文件",
+            "文件产物",
+            "页面产物",
+            "报告产物",
+            "报表产物",
+            "产物包",
+            "交付包",
+            "下载包",
+            "文档包",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &["downloadable", "artifact", "package", "deliverable"],
+    );
+    if external_channel_prompt_is_report_explanation_question(&lower, prompt)
+        && !has_explicit_deliverable_signal
+    {
+        return false;
+    }
+    let has_artifact_package_signal = prompt_contains_any(
+        &compact,
+        &[
+            "可下载",
+            "报告",
+            "报表",
+            "说明文件",
+            "文件产物",
+            "页面产物",
+            "报告产物",
+            "报表产物",
+            "产物包",
+            "交付包",
+            "下载包",
+            "文档包",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "downloadable",
+            "artifact",
+            "package",
+            "report",
+            "deliverable",
+        ],
+    );
+    if !has_artifact_package_signal {
+        return false;
+    }
+    let strong_static_page_surface = prompt_contains_any(
+        &compact,
+        &[
+            "静态页",
+            "静态页面",
+            "看板",
+            "仪表盘",
+            "大屏",
+            "网页",
+            "网站",
+            "交互页面",
+            "动态页面",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "dashboard",
+            "webpage",
+            "website",
+            "htmlpage",
+            "staticpage",
+            "static_page",
+        ],
+    );
+    !strong_static_page_surface
 }
 
 fn assistant_run_prompt_requests_data_analysis_report_sidecar(
@@ -54772,6 +54859,7 @@ fn assistant_run_customer_codex_sidecar_task(
     let permission_scope = assistant_run_customer_codex_sidecar_permission_scope(capability);
     let capability_instructions =
         assistant_run_customer_codex_sidecar_capability_instructions(capability);
+    let forwarded_prompt = assistant_run_prompt_without_codex_forward_prefix(&request.prompt);
     format!(
         "Run DataMax Codex Host capability `{capability}` for a customer request from the web UI.\n\
          Return a concise structured result, action intent, or customer artifact package. Preserve the main AssistantRun answer path; this sidecar must not block customer-visible text.\n\
@@ -54782,7 +54870,7 @@ fn assistant_run_customer_codex_sidecar_task(
          User request:\n{prompt}\n\n\
          Selected scope summary:\n{scope}\n\n\
          Evidence summary:\n{evidence}",
-        prompt = truncate_assistant_supply_text(&request.prompt, 1600),
+        prompt = truncate_assistant_supply_text(forwarded_prompt, 1600),
         scope = assistant_run_customer_codex_sidecar_scope_summary(selected_scope),
         evidence = assistant_run_customer_codex_sidecar_evidence_summary(evidence_state),
     )
@@ -62589,7 +62677,8 @@ fn build_assistant_run_react_provider_input(
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
         "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 DataMax 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
-        "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
+        "只有用户消息以 `cc` 开头时，才表示把后续正常聊天内容转发给 Codex 执行器；普通“用 Codex/让 Codex”等文字按普通用户表达理解，不要因此切换到 Codex 专用页面生成或右侧任务流程。".to_string(),
+        "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report。report_choice 只登记右侧报表/产物流向，不是最终回答；之后必须继续用已供料 evidence 给聊天区一版 800-1200 字以内的自然语言经营分析摘要、关键指标、风险和下一步动作，不要让报表流程拦住正常回复。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         "final_answer 面向用户聊天框，只写自然语言结论、必要步骤和简短来源说明；禁止粘贴 observation JSON、execution_trail、react_trace、tool_trace、runtime_manifest、provider 原始载荷、私有路径或内部 URL。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
@@ -62678,7 +62767,8 @@ fn build_assistant_run_react_continue_provider_input(
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
         "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 DataMax 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
-        "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report，不能编写报表正文。".to_string(),
+        "只有用户消息以 `cc` 开头时，才表示把后续正常聊天内容转发给 Codex 执行器；普通“用 Codex/让 Codex”等文字按普通用户表达理解，不要因此切换到 Codex 专用页面生成或右侧任务流程。".to_string(),
+        "如果用户表达报表意图，先用 list_report_options；收到该 observation 后，才能用 report_choice，并只在 arguments.choice 填 continue_qa 或 create_report。report_choice 只登记右侧报表/产物流向，不是最终回答；之后必须继续用已供料 evidence 给聊天区一版 800-1200 字以内的自然语言经营分析摘要、关键指标、风险和下一步动作，不要让报表流程拦住正常回复。".to_string(),
         "如果已经可以回答，使用 action_type=final_answer，arguments.content 放最终正文。".to_string(),
         "final_answer 面向用户聊天框，只写自然语言结论、必要步骤和简短来源说明；禁止粘贴 observation JSON、execution_trail、react_trace、tool_trace、runtime_manifest、provider 原始载荷、私有路径或内部 URL。".to_string(),
         format!("当前 ReAct 步骤：{step_index}/{max_steps}"),
@@ -114844,7 +114934,7 @@ mod tests {
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_routes_complex_business_analysis_readonly() {
+    fn assistant_run_customer_codex_sidecar_ignores_business_analysis_without_cc() {
         let request = CreateAssistantRunRequest {
             prompt: "做一下新百的经营工作分析，给出管理层可执行建议。".to_string(),
             local_thread_id: None,
@@ -114859,15 +114949,34 @@ mod tests {
 
         assert_eq!(
             assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
-            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+            None
         );
     }
 
     #[test]
     fn assistant_run_customer_codex_sidecar_routes_customer_artifact_workspace() {
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 做一下新百经营分析，输出适合管理层看的可视化报表和说明文件。"
-                .to_string(),
+            prompt: "cc 做一下新百经营分析，输出适合管理层看的可视化报表和说明文件。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"datasets": ["00000000-0000-0000-0000-000000000001"]});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_downloadable_report_page_artifact_package() {
+        let request = CreateAssistantRunRequest {
+            prompt: "cc 对这个数据集做一版经营分析，并生成一个可下载的报告/页面产物。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
@@ -114887,7 +114996,7 @@ mod tests {
     #[test]
     fn assistant_run_customer_codex_sidecar_routes_new_static_page_publish() {
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 基于新百数据生成一个经营分析静态页看板。".to_string(),
+            prompt: "cc 基于新百数据生成一个经营分析静态页看板。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
@@ -114907,7 +115016,7 @@ mod tests {
     #[test]
     fn assistant_run_customer_codex_sidecar_routes_document_artifact_without_dataset_context() {
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 生成一份客户沟通方案文档。".to_string(),
+            prompt: "cc 生成一份客户沟通方案文档。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: None,
@@ -114928,7 +115037,7 @@ mod tests {
     fn assistant_run_customer_codex_sidecar_routes_customer_artifact_package_without_dataset_context(
     ) {
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 生成一个客户产物包。".to_string(),
+            prompt: "cc 生成一个客户产物包。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: None,
@@ -114946,8 +115055,7 @@ mod tests {
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_routes_general_document_script_package_without_codex_word(
-    ) {
+    fn assistant_run_customer_codex_sidecar_ignores_general_document_script_package_without_cc() {
         let request = CreateAssistantRunRequest {
             prompt: "写一份客户运营方案，并附带执行脚本。".to_string(),
             local_thread_id: None,
@@ -114962,12 +115070,12 @@ mod tests {
 
         assert_eq!(
             assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
-            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+            None
         );
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_routes_explicit_codex_complex_task_readonly() {
+    fn assistant_run_customer_codex_sidecar_ignores_explicit_codex_text_without_cc() {
         let request = CreateAssistantRunRequest {
             prompt: "用 Codex 帮我分析这条客户经营需求，给出处理思路。".to_string(),
             local_thread_id: None,
@@ -114982,14 +115090,50 @@ mod tests {
 
         assert_eq!(
             assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
-            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+            None
         );
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_routes_general_complex_task_readonly() {
+    fn assistant_run_customer_codex_sidecar_ignores_general_complex_task_without_cc() {
         let request = CreateAssistantRunRequest {
             prompt: "这是一个复杂任务，帮我拆解执行计划。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            None
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_forward_prefix_accepts_short_trigger_boundaries() {
+        assert!(assistant_run_prompt_requests_codex_forward("cc"));
+        assert!(assistant_run_prompt_requests_codex_forward(" CC 帮我处理"));
+        assert!(assistant_run_prompt_requests_codex_forward("cc: 帮我处理"));
+        assert!(assistant_run_prompt_requests_codex_forward("cc：帮我处理"));
+        assert!(assistant_run_prompt_requests_codex_forward("cc，帮我处理"));
+        assert!(!assistant_run_prompt_requests_codex_forward(
+            "cc123 帮我处理"
+        ));
+        assert_eq!(
+            assistant_run_prompt_without_codex_forward_prefix("cc，帮我处理"),
+            "帮我处理"
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_routes_cc_general_chat_readonly() {
+        let request = CreateAssistantRunRequest {
+            prompt: "cc 帮我看一下这个客户问题，给一段处理建议。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: None,
@@ -115007,9 +115151,9 @@ mod tests {
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_keeps_non_artifact_codex_analysis_readonly() {
+    fn assistant_run_customer_codex_sidecar_keeps_non_artifact_cc_analysis_readonly() {
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 做一下新百经营分析，给出管理层建议。".to_string(),
+            prompt: "cc 做一下新百经营分析，给出管理层建议。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
@@ -115027,7 +115171,7 @@ mod tests {
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_routes_report_context_business_analysis_as_artifact() {
+    fn assistant_run_customer_codex_sidecar_ignores_report_context_business_analysis_without_cc() {
         let request = CreateAssistantRunRequest {
             prompt: "基于当前报表做一下新百经营分析，给管理层建议。".to_string(),
             local_thread_id: None,
@@ -115048,12 +115192,12 @@ mod tests {
 
         assert_eq!(
             assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
-            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+            None
         );
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_routes_large_data_analysis_as_report_artifact() {
+    fn assistant_run_customer_codex_sidecar_ignores_large_data_analysis_without_cc() {
         let request = CreateAssistantRunRequest {
             prompt: "请基于新百数据做一版全面多维经营分析，输出内容比较完整，给管理层复盘。"
                 .to_string(),
@@ -115069,14 +115213,14 @@ mod tests {
 
         assert_eq!(
             assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
-            Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST)
+            None
         );
     }
 
     #[test]
-    fn assistant_run_customer_codex_sidecar_keeps_report_explanation_readonly() {
+    fn assistant_run_customer_codex_sidecar_keeps_cc_report_explanation_readonly() {
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 解释这份经营分析报表口径问题。".to_string(),
+            prompt: "cc 解释这份经营分析报表口径问题。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
@@ -115096,7 +115240,7 @@ mod tests {
     #[test]
     fn assistant_run_customer_codex_sidecar_routes_current_static_page_edit() {
         let request = CreateAssistantRunRequest {
-            prompt: "修改当前报表页面：把取高风险模块提到最前面，并刷新数据后给我新链接。"
+            prompt: "cc 修改当前报表页面：把取高风险模块提到最前面，并刷新数据后给我新链接。"
                 .to_string(),
             local_thread_id: None,
             startup_briefing: None,
@@ -115125,7 +115269,7 @@ mod tests {
     fn assistant_run_customer_codex_sidecar_routes_v3_generated_static_page_edit_not_product_change(
     ) {
         let request = CreateAssistantRunRequest {
-            prompt: "修改 V3 生成的静态页：把取高风险模块提到最前面，并刷新数据后给我新链接。"
+            prompt: "cc 修改 V3 生成的静态页：把取高风险模块提到最前面，并刷新数据后给我新链接。"
                 .to_string(),
             local_thread_id: None,
             startup_briefing: None,
@@ -115159,7 +115303,7 @@ mod tests {
         let public_url =
             "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/index.html";
         let request = CreateAssistantRunRequest {
-            prompt: "修改当前报表页面：把取高风险模块提到最前面，并刷新数据后给我新链接。"
+            prompt: "cc 修改当前报表页面：把取高风险模块提到最前面，并刷新数据后给我新链接。"
                 .to_string(),
             local_thread_id: Some("thread-static-page".to_string()),
             startup_briefing: None,
@@ -115226,7 +115370,7 @@ mod tests {
     fn assistant_run_generated_static_page_publish_embeds_publish_route_context() {
         let assistant_run_id = AssistantRunId::new();
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 基于新百数据生成一个经营分析静态页看板。".to_string(),
+            prompt: "cc 基于新百数据生成一个经营分析静态页看板。".to_string(),
             local_thread_id: Some("thread-static-page-publish".to_string()),
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
@@ -115287,7 +115431,7 @@ mod tests {
     #[test]
     fn assistant_run_customer_codex_sidecar_blocks_v3_main_site_page_change() {
         let request = CreateAssistantRunRequest {
-            prompt: "帮我修改 V3 主站页面样式。".to_string(),
+            prompt: "cc 帮我修改 V3 主站页面样式。".to_string(),
             local_thread_id: None,
             startup_briefing: None,
             selected_scope: None,
@@ -115372,8 +115516,7 @@ mod tests {
     fn assistant_run_customer_codex_sidecar_execution_embeds_customer_workspace_context() {
         let assistant_run_id = AssistantRunId::new();
         let request = CreateAssistantRunRequest {
-            prompt: "用 Codex 做一下新百经营分析，输出适合管理层看的可视化报表和说明文件。"
-                .to_string(),
+            prompt: "cc 做一下新百经营分析，输出适合管理层看的可视化报表和说明文件。".to_string(),
             local_thread_id: Some("thread-1".to_string()),
             startup_briefing: None,
             selected_scope: Some(json!({"datasets": ["00000000-0000-0000-0000-000000000001"]})),
@@ -115419,10 +115562,10 @@ mod tests {
             execution.context["codex_sidecar"]["main_answer_path_preserved"],
             json!(true)
         );
-        assert!(execution.context["task"]
-            .as_str()
-            .expect("task")
-            .contains("Use the isolated task workspace as the customer's Codex scratchpad"));
+        let task = execution.context["task"].as_str().expect("task");
+        assert!(task.contains("Use the isolated task workspace as the customer's Codex scratchpad"));
+        assert!(task.contains("User request:\n做一下新百经营分析"));
+        assert!(!task.contains("User request:\ncc "));
         assert_eq!(initial_event.event_name, "codex_host_task.created");
         assert_eq!(
             initial_event.payload["capability"],

@@ -27,7 +27,7 @@ const LIVE_CASES = [
     requiresCurrentArtifact: false,
     expectsArtifactBundle: false,
     expectsBlocked: false,
-    prompt: '用 Codex 对这个测试数据集做一版经营分析，给出管理层可执行建议，不需要生成文件。',
+    prompt: 'cc 对这个测试数据集做一版经营分析，给出管理层可执行建议，不需要生成文件。',
   },
   {
     id: 'customer_artifact_request',
@@ -37,7 +37,7 @@ const LIVE_CASES = [
     requiresCurrentArtifact: false,
     expectsArtifactBundle: true,
     expectsBlocked: false,
-    prompt: '用 Codex 基于这个测试数据集生成一份管理层经营分析报表和说明文件产物包。',
+    prompt: 'cc 基于这个测试数据集生成一份管理层经营分析报表和说明文件产物包。',
   },
   {
     id: 'generated_static_page_edit',
@@ -47,7 +47,7 @@ const LIVE_CASES = [
     requiresCurrentArtifact: true,
     expectsArtifactBundle: true,
     expectsBlocked: false,
-    prompt: '修改当前 V3 生成的静态页报表：把关键指标模块放到最前面，保留当前模板风格，并输出新链接。',
+    prompt: 'cc 修改当前 V3 生成的静态页报表：把关键指标模块放到最前面，保留当前模板风格，并输出新链接。',
   },
   {
     id: 'generated_static_page_publish',
@@ -57,7 +57,7 @@ const LIVE_CASES = [
     requiresCurrentArtifact: false,
     expectsArtifactBundle: true,
     expectsBlocked: false,
-    prompt: '用 Codex 基于这个测试数据集生成一个经营分析静态页看板，作为新的客户产物页面。',
+    prompt: 'cc 基于这个测试数据集生成一个经营分析静态页看板，作为新的客户产物页面。',
   },
   {
     id: 'v3_product_change_request',
@@ -67,7 +67,7 @@ const LIVE_CASES = [
     requiresCurrentArtifact: false,
     expectsArtifactBundle: false,
     expectsBlocked: true,
-    prompt: '帮我修改 V3 登录接口源码并部署到服务器。',
+    prompt: 'cc 帮我修改 V3 登录接口源码并部署到服务器。',
   },
 ];
 

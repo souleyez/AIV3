@@ -13,16 +13,22 @@ import {
 
 const SAFE_SHA = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
-test('promptMayUseCustomerCodex covers general web Codex task prompts', () => {
-  assert.equal(promptMayUseCustomerCodex('用 Codex 帮我分析这条客户经营需求，给出处理思路。'), true);
-  assert.equal(promptMayUseCustomerCodex('做一个新百经营分析页面。'), true);
-  assert.equal(promptMayUseCustomerCodex('做个管理层经营分析看板。'), true);
-  assert.equal(promptMayUseCustomerCodex('创建一份客户沟通方案文档。'), true);
-  assert.equal(promptMayUseCustomerCodex('这是一个复杂任务，帮我拆解执行计划。'), true);
-  assert.equal(promptMayUseCustomerCodex('写一份客户运营方案，并附带执行脚本。'), true);
-  assert.equal(promptMayUseCustomerCodex('出一个交付文档包和脚本包。'), true);
-  assert.equal(promptMayUseCustomerCodex('生成一个客户产物包，里面包含脚本和说明文件。'), true);
-  assert.equal(promptMayUseCustomerCodex('帮我修改 V3 主站页面样式。'), true);
+test('promptMayUseCustomerCodex only allows the cc forwarding trigger', () => {
+  assert.equal(promptMayUseCustomerCodex('cc'), true);
+  assert.equal(promptMayUseCustomerCodex('CC 帮我分析这条客户经营需求，给出处理思路。'), true);
+  assert.equal(promptMayUseCustomerCodex('cc: 生成一个客户产物包。'), true);
+  assert.equal(promptMayUseCustomerCodex('cc：修改这个报表。'), true);
+  assert.equal(promptMayUseCustomerCodex('cc，修改这个报表。'), true);
+  assert.equal(promptMayUseCustomerCodex('cc123 修改这个报表。'), false);
+  assert.equal(promptMayUseCustomerCodex('用 Codex 帮我分析这条客户经营需求，给出处理思路。'), false);
+  assert.equal(promptMayUseCustomerCodex('做一个新百经营分析页面。'), false);
+  assert.equal(promptMayUseCustomerCodex('做个管理层经营分析看板。'), false);
+  assert.equal(promptMayUseCustomerCodex('创建一份客户沟通方案文档。'), false);
+  assert.equal(promptMayUseCustomerCodex('这是一个复杂任务，帮我拆解执行计划。'), false);
+  assert.equal(promptMayUseCustomerCodex('写一份客户运营方案，并附带执行脚本。'), false);
+  assert.equal(promptMayUseCustomerCodex('出一个交付文档包和脚本包。'), false);
+  assert.equal(promptMayUseCustomerCodex('生成一个客户产物包，里面包含脚本和说明文件。'), false);
+  assert.equal(promptMayUseCustomerCodex('帮我修改 V3 主站页面样式。'), false);
   assert.equal(promptMayUseCustomerCodex('今天天气不错。'), false);
 });
 
