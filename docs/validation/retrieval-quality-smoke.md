@@ -462,8 +462,68 @@ Interpretation:
 - Full assistant-run/customer-answer quality metrics are still required before
   treating customer-facing answer quality as closed.
 
+## 2026-06-09 8 Server NewBai Assistant-Answer Handoff Deploy
+
+- Scope: deploy GitHub main P1-11 handoff/ranking refinement to 8 server and
+  rerun the controlled NewBai retrieval-level live subset.
+- GitHub/server commit: `5a0363e4e`
+- Deployed service: `aiv3-platform-api.service` only.
+- Services not redeployed: `aiv3-retrieval-worker.service`, `aiv3-web.service`.
+- Build note: default `cc` was rejected by `aws-lc-sys` compiler safety check;
+  release build completed with `CC=clang CXX=clang++`.
+- Runtime flag status:
+  - platform process env: no `RETRIEVAL_SEARCH_BACKEND=postgres_lexical`
+  - effective retrieval backend remains default `legacy_scan`
+- Health after restart:
+  - `http://127.0.0.1:3000/healthz`: ok
+  - `http://127.0.0.1:3000/readyz`: ready
+  - `aiv3-platform-api.service`: active
+  - `aiv3-retrieval-worker.service`: active
+- Logs: no warning-or-higher entries for `aiv3-platform-api.service` in the
+  checked post-deploy window.
+- Live subset path:
+  `target/retrieval-quality-smoke/live-8-newbai-20260609T011858Z`
+- Smoke report:
+  `target/retrieval-quality-smoke/live-8-newbai-20260609T011858Z/reports/retrieval-quality-smoke-20260609T011859Z.json`
+- Result generator: sequential `target/release/retrieval-search-cli search ...
+  --limit 20` calls plus `retrieval_evidences.content_excerpt` lookup for top
+  returned evidence IDs. This remains retrieval-level evidence quality, not
+  real LLM/customer-answer quality.
+
+Metrics:
+
+- Fixture policy: `live_subset`
+- Case count: `8`
+- Recall@20: `1.0`
+- MRR@20: `1.0`
+- Citation accuracy: `1.0`
+- Answer pattern match rate: `0.875`
+- p95 latency ms: `95.0`
+- Permission leak count: `0`
+
+Expected-source ranks after the P1-11 deployment:
+
+- `live-8-newbai-001`: expected source rank `1`
+- `live-8-newbai-002`: expected source rank `1`
+- `live-8-newbai-003`: expected source rank `1`
+- `live-8-newbai-004`: expected source rank `1`
+- `live-8-newbai-005`: expected source rank `1`
+- `live-8-newbai-006`: expected source rank `1`
+- `live-8-newbai-007`: expected source rank `1`
+- `live-8-newbai-008`: expected source rank `1`
+
+Interpretation:
+
+- P1-11 local AssistantRun fixture proves the model-facing supply handoff can
+  carry the expected NewBai business evidence.
+- The 8 server rerun proves the deployed retrieval ranking still keeps all
+  controlled NewBai expected sources at rank `1`.
+- This still does not claim real provider/customer-answer quality; no live LLM
+  answer generation was run.
+
 ## Remaining Gaps
 
-- Full assistant-run/customer-answer live quality metrics are not yet recorded;
-  the current live receipts are retrieval-level only.
+- Real provider/customer-answer live quality metrics are not yet recorded; the
+  current live receipts are retrieval-level only, and the AssistantRun evidence
+  handoff receipt is a local deterministic fixture.
 - `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` has not been enabled on 8 server.

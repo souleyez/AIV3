@@ -38,11 +38,11 @@ Phase 5: quality gate and release receipt
 
 暂不建议直接把 Qdrant 设为默认主链路。Qdrant 已在 compose 中存在，可以保留 adapter 接口；但当前用户目标更偏“清洗后统一入 PostgreSQL”，所以第一轮落地应优先降低运维复杂度。
 
-Phase 0/1 最小版已经提交 GitHub 并部署到 8 服务器，当前线上仍保持 `legacy_scan` 默认行为。已完成 fixture、baseline smoke、PostgreSQL lexical migration、retrieval worker lexical 写入、storage DB-side lexical search、platform feature flag、8 服务器 schema/code 部署、生产 EXPLAIN、NewBai 检索级 live subset metrics，以及 P1-8 ranking 修正部署复测。P1-8 复测后 NewBai live subset 的 Recall@20=`1.0`、MRR@20=`1.0`、permission leak count=`0`，8 条 expected source 均为 rank `1`。P1-11 已补 NewBai provider-input deterministic smoke、AssistantRun DB route smoke 和脚本 receipt，并用一次性 Postgres fixture 跑通；仍未记录真实 provider/customer-answer live 输出质量。
+Phase 0/1 最小版已经提交 GitHub 并部署到 8 服务器，当前线上仍保持 `legacy_scan` 默认行为。已完成 fixture、baseline smoke、PostgreSQL lexical migration、retrieval worker lexical 写入、storage DB-side lexical search、platform feature flag、8 服务器 schema/code 部署、生产 EXPLAIN、NewBai 检索级 live subset metrics，以及 P1-8 ranking 修正部署复测。P1-8 复测后 NewBai live subset 的 Recall@20=`1.0`、MRR@20=`1.0`、permission leak count=`0`，8 条 expected source 均为 rank `1`。P1-11 已补 NewBai provider-input deterministic smoke、AssistantRun DB route smoke 和脚本 receipt，并用一次性 Postgres fixture 跑通；P1-11 ranking/handoff refinement 已部署 8 服务器并重跑 NewBai live subset，8 条 expected source 仍均为 rank `1`。仍未记录真实 provider/customer-answer live 输出质量。
 
 当前仍不能声称完成的事项：
 
-- 未记录完整 assistant-run/customer-answer 的 live 质量指标；当前已记录的是 `retrieval-search-cli` 检索级 live subset、NewBai provider-input deterministic smoke、以及一次性 Postgres fixture 下的 AssistantRun DB route smoke。
+- 未记录完整 assistant-run/customer-answer 的 live 质量指标；当前已记录的是 8 服务器 `retrieval-search-cli` 检索级 live subset、NewBai provider-input deterministic smoke、以及一次性 Postgres fixture 下的 AssistantRun DB route smoke。
 - 未启用 `RETRIEVAL_SEARCH_BACKEND=postgres_lexical`，8 服务器线上仍是默认 `legacy_scan`。
 - 未启用 pgvector、Qdrant、hybrid RRF、reranker 或 structured database query plan。
 - P1-8 只证明检索级 ranking 修复；P1-11 本地 fixture 已证明 AssistantRun 能把预期证据供给到模型侧，但还不等于真实 provider/live customer-answer 质量闭环。
@@ -728,6 +728,7 @@ p95 retrieval latency <= 1500ms for 10k evidence local dataset
 - [x] 部署 ranking 修正后，用同一 NewBai live subset 重跑 MRR/rank 证据，8 条 expected source 均为 rank `1`。
 - [x] 补 NewBai assistant-answer provider-input deterministic smoke，验证模型侧供料包含可答业务证据。
 - [x] 用一次性 Postgres fixture 补跑 NewBai AssistantRun DB route smoke，不把共享库保护跳过视为闭环。
+- [x] 部署 P1-11 handoff/ranking refinement 到 8 服务器，仅重启 `aiv3-platform-api.service`，并重跑 NewBai live subset，8 条 expected source 均为 rank `1`。
 - [ ] 8 服务器启用 `RETRIEVAL_SEARCH_BACKEND=postgres_lexical` 灰度。
 - [x] 针对新百报表/数据库混合文档样例补至少 3 条 retrieval-quality case。
 - [x] 代码审查确认 selected documents、owner scope、external temporary document scope 没有回退。
