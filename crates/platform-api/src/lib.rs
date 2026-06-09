@@ -79470,7 +79470,7 @@ fn lexical_retrieval_original_query_signal_score(
         + lexical_ascii_field_signal_score(content, prompt)
         + lexical_numeric_cjk_literal_signal_score(content, prompt)
         + lexical_spreadsheet_overview_signal_score(evidence, content, prompt);
-    score.clamp(-0.16, 0.72)
+    score.clamp(-0.16, 0.82)
 }
 
 fn lexical_ascii_field_signal_score(content: &str, prompt: &str) -> f64 {
@@ -79580,7 +79580,7 @@ fn lexical_spreadsheet_overview_signal_score(
     {
         score += 0.12;
     }
-    score.min(0.68)
+    score.min(0.78)
 }
 
 fn prompt_requests_spreadsheet_overview(prompt: &str) -> bool {
