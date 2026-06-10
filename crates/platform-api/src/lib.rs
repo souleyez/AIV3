@@ -47149,7 +47149,15 @@ async fn update_static_page_draft(
 ) -> std::result::Result<Json<UpdateStaticPageDraftResponse>, ApiError> {
     let draft_id = parse_static_page_draft_id(&draft_id)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
-    let mut draft = load_visible_static_page_draft(&state, draft_id, current_user_id).await?;
+    let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
+    let owner_visible = static_page_owner_is_visible(draft.owner_user_id, current_user_id);
+    if !owner_visible {
+        if !static_page_public_template_baseline_is_visible(&draft)
+            || !static_page_public_template_update_is_safe(&request)
+        {
+            return Err(static_page_draft_not_found_error(draft_id));
+        }
+    }
 
     if let Some(title) = request.title {
         validate_required("title", &title)?;
@@ -96461,6 +96469,66 @@ fn static_page_draft_list_item_is_visible(
             && static_page_public_template_baseline_is_visible(draft))
 }
 
+fn static_page_update_value_baseline_status(value: &Value) -> Option<&str> {
+    [
+        value.pointer("/artifact_stability/baseline_status"),
+        value.pointer("/artifact_stability/baselineStatus"),
+        value.pointer("/artifactStability/baselineStatus"),
+        value.pointer("/artifactStability/baseline_status"),
+        value.pointer("/finalPage/baselineStatus"),
+        value.pointer("/finalPage/baseline_status"),
+        value.pointer("/final_page/baselineStatus"),
+        value.pointer("/final_page/baseline_status"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+}
+
+fn static_page_update_value_status(value: &Value) -> Option<&str> {
+    [
+        value.pointer("/status"),
+        value.pointer("/backendStatus"),
+        value.pointer("/backend_status"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+}
+
+fn static_page_public_template_update_is_safe(request: &UpdateStaticPageDraftRequest) -> bool {
+    if request.title.is_some()
+        || request.selected_scope.is_some()
+        || request.visibility_snapshot.is_some()
+    {
+        return false;
+    }
+    let archives = request
+        .status
+        .as_ref()
+        .is_some_and(|status| status == &contracts::StaticPageDraftStatusView::Archived)
+        || request
+            .draft_payload
+            .as_ref()
+            .and_then(static_page_update_value_status)
+            .is_some_and(|status| status == "archived");
+    let retires_template = request
+        .source_refs
+        .as_ref()
+        .and_then(static_page_update_value_baseline_status)
+        .is_some_and(|status| status == "retired")
+        || request
+            .draft_payload
+            .as_ref()
+            .and_then(static_page_update_value_baseline_status)
+            .is_some_and(|status| status == "retired");
+    archives || retires_template
+}
+
 fn static_page_draft_not_found_error(draft_id: StaticPageDraftId) -> ApiError {
     ApiError::not_found(
         "static_page_draft_not_found",
@@ -141581,6 +141649,29 @@ retrieve_evidence:
             }
         });
         assert!(!static_page_public_template_baseline_is_visible(&draft));
+
+        let retire_request = UpdateStaticPageDraftRequest {
+            source_refs: Some(json!({
+                "artifact_stability": {
+                    "baseline_status": "retired"
+                }
+            })),
+            ..Default::default()
+        };
+        assert!(static_page_public_template_update_is_safe(&retire_request));
+
+        let unsafe_title_request = UpdateStaticPageDraftRequest {
+            title: Some("随意改公开模板".to_string()),
+            source_refs: Some(json!({
+                "artifact_stability": {
+                    "baseline_status": "retired"
+                }
+            })),
+            ..Default::default()
+        };
+        assert!(!static_page_public_template_update_is_safe(
+            &unsafe_title_request
+        ));
     }
 
     #[test]

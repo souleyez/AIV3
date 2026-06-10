@@ -1372,6 +1372,18 @@ function reportShelfDetail(item) {
     || '选择后可在聊天里要求修改这个报表。';
 }
 
+function reportShelfUrl(item) {
+  const draft = item?.draft;
+  const published = item?.published;
+  return staticPageFinalPageUrl(draft)
+    || published?.public_url
+    || published?.publicUrl
+    || published?.generated_artifact_url
+    || published?.generatedArtifactUrl
+    || published?.url
+    || '';
+}
+
 function buildReportShelfItems(reportPlans = [], publishedReports = [], staticPageDrafts = []) {
   const planItems = reportPlans.map((plan) => ({
     id: `plan:${plan.id}`,
@@ -1406,22 +1418,45 @@ function buildReportShelfItems(reportPlans = [], publishedReports = [], staticPa
       plan: null,
       published: null,
       draft,
-    }));
+  }));
   return [...planItems, ...publishedOnlyItems, ...staticPageItems];
 }
 
-function ReportShelfCard({ item, active, onSelect }) {
+function ReportShelfCard({
+  item,
+  active,
+  onSelect,
+  onOpen,
+  onEdit,
+  onCancelDefault,
+  onDelete,
+}) {
   const title = reportShelfTitle(item);
   const updatedAt = reportShelfUpdatedAt(item);
   const status = reportShelfStatus(item);
   const meta = reportShelfMeta(item);
   const detail = reportShelfDetail(item);
-  const Component = onSelect ? 'button' : 'article';
+  const url = reportShelfUrl(item);
+  const isStaticTemplate = Boolean(item?.draft?.id);
+  const handleKeyDown = (event) => {
+    if (!onSelect) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect();
+    }
+  };
+  const stopAndRun = (event, action) => {
+    event.stopPropagation();
+    action?.();
+  };
   return (
-    <Component
-      type={onSelect ? 'button' : undefined}
+    <article
+      role={onSelect ? 'button' : undefined}
+      tabIndex={onSelect ? 0 : undefined}
       className={`generated-project-card report-shelf-card ${active ? 'active' : ''}`.trim()}
       onClick={onSelect}
+      onDoubleClick={url && onOpen ? onOpen : undefined}
+      onKeyDown={handleKeyDown}
     >
       <div className="generated-project-main">
         <div className="generated-project-title-row">
@@ -1437,7 +1472,42 @@ function ReportShelfCard({ item, active, onSelect }) {
           {item?.plan?.id ? <span title={item.plan.id}>{truncateText(item.plan.id, 18)}</span> : null}
         </div>
       </div>
-    </Component>
+      <div className="generated-project-actions report-shelf-actions">
+        <button
+          type="button"
+          className="ghost-btn compact-action-btn"
+          disabled={!url || !onOpen}
+          onClick={(event) => stopAndRun(event, onOpen)}
+        >
+          打开
+        </button>
+        {isStaticTemplate ? (
+          <>
+            <button
+              type="button"
+              className="primary-btn compact-action-btn"
+              onClick={(event) => stopAndRun(event, onEdit || onSelect)}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              className="ghost-btn compact-action-btn"
+              onClick={(event) => stopAndRun(event, onCancelDefault)}
+            >
+              取消默认
+            </button>
+            <button
+              type="button"
+              className="ghost-btn compact-action-btn danger-action"
+              onClick={(event) => stopAndRun(event, onDelete)}
+            >
+              删除
+            </button>
+          </>
+        ) : null}
+      </div>
+    </article>
   );
 }
 
@@ -1472,6 +1542,9 @@ export default function InsightPanel({
   staticPageDrafts = [],
   onSelectStaticPageDraft,
   onPreviewStaticPageDraft,
+  onOpenStaticPageDraft,
+  onEditStaticPageDraft,
+  onCancelDefaultStaticPageTemplate,
   onDeleteStaticPageDraft,
   onRevertStaticPageStage,
   onRefreshStaticPageDrafts,
@@ -1508,6 +1581,16 @@ export default function InsightPanel({
                     ? () => onSelectStaticPageDraft?.(item.draft.id)
                     : undefined
               }
+              onOpen={
+                item.draft?.id
+                  ? () => onOpenStaticPageDraft?.(item.draft.id)
+                  : reportShelfUrl(item)
+                    ? () => window.open(reportShelfUrl(item), '_blank', 'noopener,noreferrer')
+                    : undefined
+              }
+              onEdit={item.draft?.id ? () => onEditStaticPageDraft?.(item.draft.id) : undefined}
+              onCancelDefault={item.draft?.id ? () => onCancelDefaultStaticPageTemplate?.(item.draft.id) : undefined}
+              onDelete={item.draft?.id ? () => onDeleteStaticPageDraft?.(item.draft.id) : undefined}
             />
           ))}
           {!resultCount ? <EmptySection text="当前数据集还没有生成过报表。生成后会自动出现在这里。" /> : null}

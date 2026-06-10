@@ -814,6 +814,24 @@ function staticPageDraftArtifactKey(draft) {
   ).trim();
 }
 
+function staticPageDraftBaselineStatus(draft) {
+  return String(
+    draft?.source_refs?.artifact_stability?.baseline_status
+      || draft?.source_refs?.artifact_stability?.baselineStatus
+      || draft?.sourceRefs?.artifactStability?.baselineStatus
+      || draft?.sourceRefs?.artifact_stability?.baseline_status
+      || draft?.artifact_stability?.baseline_status
+      || draft?.artifactStability?.baselineStatus
+      || draft?.draft_payload?.artifact_stability?.baseline_status
+      || draft?.draft_payload?.artifactStability?.baselineStatus
+      || draft?.draftPayload?.artifactStability?.baselineStatus
+      || draft?.draftPayload?.artifact_stability?.baseline_status
+      || draft?.finalPage?.baselineStatus
+      || draft?.finalPage?.baseline_status
+      || '',
+  ).trim().toLowerCase();
+}
+
 function staticPageDraftIsDataReportArtifact(draft) {
   return /template:data-report(?:\||$)/.test(staticPageDraftArtifactKey(draft));
 }
@@ -828,6 +846,9 @@ function isReusableStaticPageReportDraft(draft) {
   }
   const stale = draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
   const snapshot = staticPageDraftAsyncSnapshot(draft);
+  if (staticPageDraftBaselineStatus(draft) === 'retired') {
+    return false;
+  }
   if (staticPageDraftIsDataReportArtifact(draft)) {
     return false;
   }
@@ -1491,7 +1512,6 @@ export default function HomePageClient() {
   const staticPageDraftStatusRef = useRef(new Map());
   const assistantRunCustomerCodexPollRef = useRef(0);
   const codexCustomerChatMessageKeysRef = useRef(new Set());
-  const reportTemplateReuseMessageKeysRef = useRef(new Set());
   const uiNoticeMessageKeysRef = useRef(new Set());
 
   const selectedDataset = useMemo(
@@ -1849,47 +1869,6 @@ export default function HomePageClient() {
       ? `：[打开设计图](${previewUrl})`
       : '';
     return `设计图已生成${link}。DataMax 正在继续读取视觉稿并制作最终页面。`;
-  }
-
-  async function appendReusableReportTemplateMessage(candidate, options = {}) {
-    if (!candidate) {
-      return;
-    }
-    let detail = null;
-    if (candidate.plan?.id) {
-      detail = await fetchPlanPublishedReport(candidate.plan.id).catch(() => null);
-    }
-    const enrichedCandidate = { ...candidate, detail };
-    const title = markdownLabel(reportTemplateTitle(enrichedCandidate), '报表模板');
-    const url = reportTemplateUrl(enrichedCandidate);
-    if (url && String(options.assistantContent || '').includes(url)) {
-      return;
-    }
-    const candidateId = reportTemplateCandidateId(enrichedCandidate) || url || title;
-    const stableKey = `report-template-reuse:${options.messageId || Date.now()}:${candidateId}`;
-    const content = url
-      ? `已找到当前数据集已有报表模板，可直接复用，不再重新生成页面：\n\n[${title}](${url})\n\n后续需要调整指标、版式或数据口径时，可以继续在聊天里说明修改项。`
-      : `已找到当前数据集已有报表模板「${title}」，已在右侧报表区展示；后续需要调整时，可以继续在聊天里说明修改项。`;
-
-    setLocalMessages((current) => {
-      if (reportTemplateReuseMessageKeysRef.current.has(stableKey)
-        || current.some((message) => message?.metadata?.key === stableKey)) {
-        return current;
-      }
-      reportTemplateReuseMessageKeysRef.current.add(stableKey);
-      return [
-        ...current,
-        {
-          ...createLocalMessage('assistant', content),
-          metadata: {
-            source: 'report_template_reuse',
-            key: stableKey,
-            reportPlanId: candidate.plan?.id || '',
-            publishedReportId: candidate.published?.id || '',
-          },
-        },
-      ].slice(-40);
-    });
   }
 
   function markdownLabel(value, fallback = '产物') {
@@ -3900,16 +3879,14 @@ export default function HomePageClient() {
               }
             : message,
         ).slice(-40));
-        await appendReusableReportTemplateMessage(reusableReportTemplate, {
-          messageId: userMessage.id,
-          assistantContent: finalAssistantContent,
-        });
         rememberLocalUserStatement(userMessage, assistantRunId);
         let completionBanner = '';
-        if (!usedBackendAssistantRun) {
-          completionBanner = reusableReportTemplate
-            ? 'AssistantRun 本轮回复失败；已保留已有报表模板链接。'
-            : 'AssistantRun 本轮回复失败；用户消息已保留，详情见助手消息。';
+        if (reusableReportTemplate) {
+          completionBanner = usedBackendAssistantRun
+            ? '已优先使用右侧已有报表模板；需要调整时先选中模板，再在聊天框描述修改需求。'
+            : 'AssistantRun 本轮回复失败；已有报表模板仍保留在右侧报表栏。';
+        } else if (!usedBackendAssistantRun) {
+          completionBanner = 'AssistantRun 本轮回复失败；用户消息已保留，详情见助手消息。';
         }
         setBanner(completionBanner);
         setError('');
@@ -4144,6 +4121,35 @@ export default function HomePageClient() {
     setMobilePanel('chat');
   }
 
+  function handleOpenStaticPageDraft(draftId) {
+    const draft = staticPageDraftByAnyId(draftId);
+    if (!draft) {
+      return;
+    }
+    const finalUrl = staticPageRenderedUrl(draft);
+    setActiveStaticPageDraftId(draft.id);
+    setStaticPageEditorOpen(false);
+    setMobilePanel('chat');
+    if (finalUrl && typeof window !== 'undefined') {
+      window.open(finalUrl, '_blank', 'noopener,noreferrer');
+      setBanner('已在新窗口打开报表；如需修改，先选中该报表再在聊天框描述需求。');
+      return;
+    }
+    setBanner('这个报表还没有可直接打开的公开链接。');
+  }
+
+  function handleEditStaticPageDraft(draftId) {
+    const draft = staticPageDraftByAnyId(draftId);
+    if (!draft) {
+      return;
+    }
+    setActiveStaticPageDraftId(draft.id);
+    setStaticPageEditorOpen(true);
+    setActiveHtmlArtifactId(null);
+    setMobilePanel('chat');
+    setBanner('已选中这个报表模板；在聊天框描述修改需求，会基于模板生成新版报表。');
+  }
+
   function handleCloseStaticPageDraft() {
     setStaticPageEditorOpen(false);
     setBanner('已返回聊天记录；右侧静态页成品架可随时重新打开草稿或成品。');
@@ -4225,6 +4231,85 @@ export default function HomePageClient() {
       }
     }
     setBanner('生成项目已删除。');
+  }
+
+  function retireStaticPageTemplateDraft(draft) {
+    const sourceRefs = {
+      ...(draft.source_refs || draft.sourceRefs || {}),
+    };
+    const sourceStability = {
+      ...(sourceRefs.artifact_stability || sourceRefs.artifactStability || {}),
+      baseline_status: 'retired',
+      baselineStatus: 'retired',
+    };
+    sourceRefs.artifact_stability = sourceStability;
+    sourceRefs.artifactStability = sourceStability;
+
+    const payload = {
+      ...(draft.draft_payload || draft.draftPayload || draft),
+    };
+    const payloadStability = {
+      ...(payload.artifact_stability || payload.artifactStability || {}),
+      baseline_status: 'retired',
+      baselineStatus: 'retired',
+    };
+    payload.artifact_stability = payloadStability;
+    payload.artifactStability = payloadStability;
+    payload.baselineStatus = 'retired';
+    payload.baseline_status = 'retired';
+    payload.templateDefaultRetiredAt = new Date().toISOString();
+    if (payload.finalPage && typeof payload.finalPage === 'object') {
+      payload.finalPage = {
+        ...payload.finalPage,
+        baselineStatus: 'retired',
+        baseline_status: 'retired',
+      };
+    }
+
+    return {
+      ...draft,
+      source_refs: sourceRefs,
+      sourceRefs,
+      draft_payload: payload,
+      draftPayload: payload,
+      baselineStatus: 'retired',
+      baseline_status: 'retired',
+    };
+  }
+
+  async function handleCancelDefaultStaticPageTemplate(draftId) {
+    const draft = staticPageDraftByAnyId(draftId);
+    if (!draft) {
+      return;
+    }
+    if (typeof window !== 'undefined' && !window.confirm('取消这个报表模板的默认复用？取消后它不会再作为当前数据集默认模板展示。')) {
+      return;
+    }
+    const nextDraft = retireStaticPageTemplateDraft(draft);
+    setStaticPageDrafts((current) => ({
+      ...current,
+      [nextDraft.id]: nextDraft,
+    }));
+    if (activeStaticPageDraftId === draft.id) {
+      setActiveStaticPageDraftId(null);
+      setStaticPageEditorOpen(false);
+      setActiveHtmlArtifactId(null);
+    }
+    if (draft.backendDraftId) {
+      try {
+        await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}`, {
+          method: 'PATCH',
+          body: {
+            source_refs: nextDraft.source_refs,
+            draft_payload: nextDraft.draft_payload,
+          },
+        });
+      } catch (retireError) {
+        setBanner(`已先从当前列表取消默认；后端同步失败：${retireError instanceof Error ? retireError.message : '请求失败'}。`);
+        return;
+      }
+    }
+    setBanner('已取消默认模板；右侧报表栏不再默认展示它。');
   }
 
   function handleSelectHtmlArtifact(artifactId) {
@@ -5365,6 +5450,9 @@ export default function HomePageClient() {
     staticPageDrafts: datasetReportStaticPageDraftItems,
     onSelectStaticPageDraft: handleSelectStaticPageDraft,
     onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
+    onOpenStaticPageDraft: handleOpenStaticPageDraft,
+    onEditStaticPageDraft: handleEditStaticPageDraft,
+    onCancelDefaultStaticPageTemplate: handleCancelDefaultStaticPageTemplate,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,
     onRevertStaticPageStage: handleRevertStaticPageStage,
     onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: false }),

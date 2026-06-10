@@ -2695,6 +2695,15 @@ textarea {
     linear-gradient(145deg, rgba(13, 31, 55, 0.98), rgba(7, 18, 34, 0.96));
 }
 
+.generated-project-card[role="button"] {
+  cursor: pointer;
+}
+
+.generated-project-card[role="button"]:focus-visible {
+  outline: 2px solid rgba(125, 211, 252, 0.82);
+  outline-offset: 2px;
+}
+
 .generated-project-main {
   width: 100%;
   display: grid;
@@ -2765,6 +2774,14 @@ textarea {
   flex-wrap: wrap;
   gap: 6px;
   padding: 0 12px 11px;
+}
+
+.report-shelf-actions {
+  padding-top: 1px;
+}
+
+.report-shelf-actions .compact-action-btn {
+  flex: 0 0 auto;
 }
 
 .artifact-download-link {
