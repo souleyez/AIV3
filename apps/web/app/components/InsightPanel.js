@@ -1613,8 +1613,6 @@ export default function InsightPanel({
   onPublishReport,
   onRetryWorkflowExecution,
   onCancelWorkflowExecution,
-  onRefreshReportDetail,
-  onRefreshReports,
   staticPageDraft,
   staticPageDrafts = [],
   onSelectStaticPageDraft,
@@ -1623,7 +1621,6 @@ export default function InsightPanel({
   onCancelDefaultStaticPageTemplate,
   onDeleteStaticPageDraft,
   onRevertStaticPageStage,
-  onRefreshStaticPageDrafts,
   staticPageEditorOpen = false,
   assistantRunProgress,
   showExecutionObservability = false,
@@ -1641,11 +1638,6 @@ export default function InsightPanel({
     || (item.draft?.id && item.draft.id === staticPageDraft?.id)
   ));
   const activeReportShelfTitle = activeReportShelfItem ? reportShelfTitle(activeReportShelfItem, fallbackDatasetLabel) : '';
-  const handleRefreshReports = () => {
-    onRefreshReports?.();
-    onRefreshReportDetail?.();
-    onRefreshStaticPageDrafts?.();
-  };
 
   return (
     <aside className="insight-panel">
@@ -1687,9 +1679,6 @@ export default function InsightPanel({
           ))}
           {!resultCount ? <EmptySection text="当前数据集还没有生成过报表。生成后会自动出现在这里。" /> : null}
         </div>
-        <button type="button" className="ghost-btn compact-action-btn" onClick={handleRefreshReports}>
-          刷新报表
-        </button>
       </section>
     </aside>
   );
