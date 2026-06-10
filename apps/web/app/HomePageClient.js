@@ -3780,7 +3780,7 @@ export default function HomePageClient() {
             ...(effectiveDatasetIds.length ? [] : uiDatasetIdsFromBackendScope(responsePayload?.selected_scope)),
             ...backendCandidateDatasetIds,
           ]);
-          if (backendDatasetIds.length) {
+          if (!codexForwardRequested && backendDatasetIds.length) {
             setSelectedDatasetIds((current) => normalizeDatasetIds([...current, ...backendDatasetIds]));
             setSelectedDatasetId((current) => current || backendDatasetIds[0]);
             await refreshCatalog({ preferredDatasetId: backendDatasetIds[0], silent: true });
