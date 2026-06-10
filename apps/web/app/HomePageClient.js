@@ -814,16 +814,24 @@ function staticPageDraftArtifactKey(draft) {
   ).trim();
 }
 
+function staticPageDraftIsDataReportArtifact(draft) {
+  return /template:data-report(?:\||$)/.test(staticPageDraftArtifactKey(draft));
+}
+
+function shouldAnnounceStaticPageRendered(draft) {
+  return !staticPageDraftIsDataReportArtifact(draft);
+}
+
 function isReusableStaticPageReportDraft(draft) {
   if (!draft) {
     return false;
   }
   const stale = draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
   const snapshot = staticPageDraftAsyncSnapshot(draft);
-  const artifactKey = staticPageDraftArtifactKey(draft);
-  if (/template:data-report(?:\||$)/.test(artifactKey)) {
+  if (staticPageDraftIsDataReportArtifact(draft)) {
     return false;
   }
+  const artifactKey = staticPageDraftArtifactKey(draft);
   const highQualityTemplate = /template:generated-static-page/.test(artifactKey)
     || /template:dashboard/.test(artifactKey)
     || /复用默认模板|按这个模板|新百经营分析月报/.test(artifactKey);
@@ -2598,7 +2606,7 @@ export default function HomePageClient() {
       finalPage: rendered.finalPage,
     };
     replaceStaticPageDraft(baseDraft.id, finalDraft);
-    if (renderStatus === 'rendered') {
+    if (renderStatus === 'rendered' && shouldAnnounceStaticPageRendered(finalDraft)) {
       const finalUrl = staticPageRenderedUrl(renderOutput || finalDraft);
       appendStaticPageProgressMessage(
         `${draft.id}:rendered:${renderOutput?.id || finalUrl || 'ready'}`,
@@ -5043,6 +5051,9 @@ export default function HomePageClient() {
     if (!draft || draft.finalPage?.status !== 'rendered') {
       return;
     }
+    if (!shouldAnnounceStaticPageRendered(draft)) {
+      return;
+    }
     const finalUrl = staticPageRenderedUrl(draft);
     appendStaticPageProgressMessage(
       `${draft.id}:rendered:${draft.finalPage?.renderOutputId || finalUrl || 'ready'}`,
@@ -5114,6 +5125,9 @@ export default function HomePageClient() {
 
     const rendered = renderedTransitions[0];
     if (!rendered?.draft) {
+      return;
+    }
+    if (!shouldAnnounceStaticPageRendered(rendered.draft)) {
       return;
     }
     const finalUrl = rendered.snapshot.finalUrl;
