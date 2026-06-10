@@ -1431,7 +1431,7 @@ function reportShelfMeta(item) {
   const published = item?.published;
   const draft = item?.draft;
   if (draft) {
-    return '成品报表 · 静态页';
+    return draft.reportShelfDefault ? '默认模板 · 静态页' : '可见模板 · 静态页';
   }
   const surface = published?.surface || published?.current_surface || published?.currentSurface || '';
   const parts = [

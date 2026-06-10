@@ -1552,6 +1552,14 @@ export default function HomePageClient() {
     () => normalizeDatasetIds(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []),
     [selectedDatasetId, selectedDatasetIds],
   );
+  const reportShelfVisibleDatasetIds = useMemo(
+    () => normalizeDatasetIds(datasets.map((dataset) => dataset.id)),
+    [datasets],
+  );
+  const reportShelfFetchDatasetIds = useMemo(
+    () => normalizeDatasetIds([...reportShelfVisibleDatasetIds, ...reportShelfDatasetIds]),
+    [reportShelfVisibleDatasetIds, reportShelfDatasetIds],
+  );
   const datasetPublishedReports = useMemo(
     () => filterRecordsByDatasetIds(publishedReports, reportShelfDatasetIds),
     [publishedReports, reportShelfDatasetIds],
@@ -1575,13 +1583,31 @@ export default function HomePageClient() {
     })),
     [staticPageDrafts],
   );
-  const datasetStaticPageDraftItems = useMemo(
-    () => filterRecordsByDatasetIds(staticPageDraftItems, reportShelfDatasetIds, staticPageDraftDatasetIds),
+  const reportShelfStaticPageDraftItems = useMemo(
+    () => {
+      const selectedIdSet = new Set(reportShelfDatasetIds);
+      return staticPageDraftItems
+        .filter((draft) => isVisibleReportShelfStaticPageDraft(draft))
+        .map((draft) => {
+          const relatedDatasetIds = staticPageDraftDatasetIds(draft);
+          const isDefaultForSelectedDataset = selectedIdSet.size > 0
+            && relatedDatasetIds.some((datasetId) => selectedIdSet.has(datasetId));
+          return {
+            ...draft,
+            reportShelfDefault: isDefaultForSelectedDataset,
+            reportShelfRelatedDatasetIds: relatedDatasetIds,
+          };
+        })
+        .sort((left, right) => {
+          if (left.reportShelfDefault !== right.reportShelfDefault) {
+            return left.reportShelfDefault ? -1 : 1;
+          }
+          const leftValue = new Date(left?.backendUpdatedAt || left?.updated_at || left?.updatedAt || left?.created_at || 0).getTime();
+          const rightValue = new Date(right?.backendUpdatedAt || right?.updated_at || right?.updatedAt || right?.created_at || 0).getTime();
+          return rightValue - leftValue;
+        });
+    },
     [reportShelfDatasetIds, staticPageDraftItems],
-  );
-  const datasetReportStaticPageDraftItems = useMemo(
-    () => datasetStaticPageDraftItems.filter((draft) => isVisibleReportShelfStaticPageDraft(draft)),
-    [datasetStaticPageDraftItems],
   );
   const htmlArtifacts = useMemo(
     () => mergeHtmlArtifacts(
@@ -1621,9 +1647,9 @@ export default function HomePageClient() {
       selectedDataset,
       selectedDatasets,
       activeStaticPageDraft: isReusableStaticPageReportDraft(activeStaticPageDraft) ? activeStaticPageDraft : null,
-      staticPageDrafts: datasetReportStaticPageDraftItems,
+      staticPageDrafts: reportShelfStaticPageDraftItems,
     }),
-    [activityEvents, activeStaticPageDraft, datasetReportStaticPageDraftItems, datasets, documents, publishedReports, reportPlans, selectedDataset, selectedDatasets, visibleMessages],
+    [activityEvents, activeStaticPageDraft, reportShelfStaticPageDraftItems, datasets, documents, publishedReports, reportPlans, selectedDataset, selectedDatasets, visibleMessages],
   );
   const toolbarSourceItems = useMemo(
     () => selectedDatasets.map((dataset) => ({ name: dataset.title, status: 'healthy' })),
@@ -2351,10 +2377,13 @@ export default function HomePageClient() {
   }
 
   async function refreshStaticPageDraftShelf(options = {}) {
-    const { silent = true, datasetIds = reportShelfDatasetIds } = options;
+    const { silent = true, datasetIds = reportShelfFetchDatasetIds } = options;
     const queries = [];
     const localThreadId = readLocalThreadId();
-    const targetDatasetIds = normalizeDatasetIds(datasetIds);
+    const targetDatasetIds = normalizeDatasetIds([
+      ...(Array.isArray(datasetIds) ? datasetIds : [datasetIds]),
+      ...reportShelfVisibleDatasetIds,
+    ]);
     if (localThreadId) {
       queries.push({
         query: new URLSearchParams({
@@ -4804,7 +4833,7 @@ export default function HomePageClient() {
 
   useEffect(() => {
     refreshStaticPageDraftShelf({ silent: true });
-  }, [reportShelfDatasetIds.join('|')]);
+  }, [reportShelfFetchDatasetIds.join('|')]);
 
   useEffect(() => {
     setActiveSecretCount(readLocalSecretBindingIds().length);
@@ -5457,7 +5486,7 @@ export default function HomePageClient() {
       silent: true,
     }),
     staticPageDraft: activeStaticPageDraft,
-    staticPageDrafts: datasetReportStaticPageDraftItems,
+    staticPageDrafts: reportShelfStaticPageDraftItems,
     onSelectStaticPageDraft: handleSelectReportShelfStaticPageDraft,
     onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
     onOpenStaticPageDraft: handleOpenStaticPageDraft,
