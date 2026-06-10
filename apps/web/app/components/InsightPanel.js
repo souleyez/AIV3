@@ -1431,7 +1431,7 @@ function reportShelfMeta(item) {
   const published = item?.published;
   const draft = item?.draft;
   if (draft) {
-    return draft.reportShelfDefault ? '默认模板 · 静态页' : '可见模板 · 静态页';
+    return '';
   }
   const surface = published?.surface || published?.current_surface || published?.currentSurface || '';
   const parts = [
@@ -1522,6 +1522,8 @@ function ReportShelfCard({
   const detail = reportShelfDetail(item);
   const url = reportShelfUrl(item);
   const isStaticTemplate = Boolean(item?.draft?.id);
+  const staticTemplateIsDefault = Boolean(item?.draft?.reportShelfDefault);
+  const showMetaRow = Boolean(meta || item?.plan?.id);
   const handleKeyDown = (event) => {
     if (!onSelect) return;
     if (event.key === 'Enter' || event.key === ' ') {
@@ -1537,49 +1539,54 @@ function ReportShelfCard({
     <article
       role={onSelect ? 'button' : undefined}
       tabIndex={onSelect ? 0 : undefined}
-      className={`generated-project-card report-shelf-card ${active ? 'active' : ''}`.trim()}
+      className={`generated-project-card report-shelf-card ${isStaticTemplate ? 'static-template' : ''} ${active ? 'active' : ''}`.trim()}
       onClick={onSelect}
       onDoubleClick={url && onOpen ? onOpen : undefined}
       onKeyDown={handleKeyDown}
     >
-      <div className="generated-project-main">
-        <div className="generated-project-title-row">
-          <strong>{truncateText(title, 38)}</strong>
-          <time dateTime={updatedAt || undefined}>{updatedAt ? formatRelativeTime(updatedAt) : '刚刚'}</time>
+      {isStaticTemplate ? (
+        <div className="generated-project-main report-shelf-static-main">
+          <strong title={title}>{truncateText(title, 42)}</strong>
         </div>
-        <div className="generated-project-brief-row">
-          <span>{truncateText(detail, 64)}</span>
-          <em>{status}</em>
+      ) : (
+        <div className="generated-project-main">
+          <div className="generated-project-title-row">
+            <strong>{truncateText(title, 38)}</strong>
+            <time dateTime={updatedAt || undefined}>{updatedAt ? formatRelativeTime(updatedAt) : '刚刚'}</time>
+          </div>
+          <div className="generated-project-brief-row">
+            <span>{truncateText(detail, 64)}</span>
+            <em>{status}</em>
+          </div>
+          {showMetaRow ? (
+            <div className="codex-artifact-file-list">
+              {meta ? <span>{truncateText(meta, 28)}</span> : null}
+              {item?.plan?.id ? <span title={item.plan.id}>{truncateText(item.plan.id, 18)}</span> : null}
+            </div>
+          ) : null}
         </div>
-        <div className="codex-artifact-file-list">
-          {meta ? <span>{truncateText(meta, 28)}</span> : null}
-          {item?.plan?.id ? <span title={item.plan.id}>{truncateText(item.plan.id, 18)}</span> : null}
-        </div>
-      </div>
+      )}
       <div className="generated-project-actions report-shelf-actions">
-        <button
-          type="button"
-          className="ghost-btn compact-action-btn"
-          disabled={!url || !onOpen}
-          onClick={(event) => stopAndRun(event, onOpen)}
-        >
-          打开
-        </button>
         {isStaticTemplate ? (
           <>
             <button
               type="button"
-              className="ghost-btn compact-action-btn"
+              className="ghost-btn compact-action-btn report-shelf-icon-btn report-shelf-default-toggle"
+              disabled={!staticTemplateIsDefault || !onCancelDefault}
+              title={staticTemplateIsDefault ? '取消默认模板' : '非当前默认模板'}
+              aria-label={staticTemplateIsDefault ? '取消默认模板' : '非当前默认模板'}
               onClick={(event) => stopAndRun(event, onCancelDefault)}
             >
-              取消默认
+              {staticTemplateIsDefault ? '▲' : '○'}
             </button>
             <button
               type="button"
-              className="ghost-btn compact-action-btn danger-action"
+              className="ghost-btn compact-action-btn report-shelf-icon-btn report-shelf-delete-action"
+              title="删除模板"
+              aria-label="删除模板"
               onClick={(event) => stopAndRun(event, onDelete)}
             >
-              删除
+              X
             </button>
           </>
         ) : null}
@@ -1643,43 +1650,44 @@ export default function InsightPanel({
     <aside className="insight-panel">
       {showExecutionObservability ? <ExecutionObservationCard progress={assistantRunProgress} /> : null}
 
-      <section className="card insight-card right-results-card">
-        {activeReportShelfTitle ? (
-          <div className="report-shelf-selected-note">
-            已选中「{truncateText(activeReportShelfTitle, 30)}」报表，可以告诉我你想怎么调整这个报表。
+      {resultCount ? (
+        <section className="card insight-card right-results-card">
+          {activeReportShelfTitle ? (
+            <div className="report-shelf-selected-note">
+              已选中「{truncateText(activeReportShelfTitle, 30)}」报表，可以告诉我你想怎么调整这个报表。
+            </div>
+          ) : null}
+          <div className="generated-project-list">
+            {reportShelfItems.map((item) => (
+              <ReportShelfCard
+                key={item.id}
+                item={item}
+                datasetLabel={fallbackDatasetLabel}
+                active={Boolean(
+                  (item.plan?.id && item.plan.id === selectedReportPlanId)
+                    || (item.draft?.id && item.draft.id === staticPageDraft?.id),
+                )}
+                onSelect={
+                  item.plan?.id
+                    ? () => onSelectReportPlan?.(item.plan.id)
+                    : item.draft?.id
+                      ? () => onSelectStaticPageDraft?.(item.draft.id)
+                      : undefined
+                }
+                onOpen={
+                  item.draft?.id
+                    ? () => onOpenStaticPageDraft?.(item.draft.id)
+                    : reportShelfUrl(item)
+                      ? () => window.open(reportShelfUrl(item), '_blank', 'noopener,noreferrer')
+                      : undefined
+                }
+                onCancelDefault={item.draft?.id ? () => onCancelDefaultStaticPageTemplate?.(item.draft.id) : undefined}
+                onDelete={item.draft?.id ? () => onDeleteStaticPageDraft?.(item.draft.id) : undefined}
+              />
+            ))}
           </div>
-        ) : null}
-        <div className="generated-project-list">
-          {reportShelfItems.map((item) => (
-            <ReportShelfCard
-              key={item.id}
-              item={item}
-              datasetLabel={fallbackDatasetLabel}
-              active={Boolean(
-                (item.plan?.id && item.plan.id === selectedReportPlanId)
-                  || (item.draft?.id && item.draft.id === staticPageDraft?.id),
-              )}
-              onSelect={
-                item.plan?.id
-                  ? () => onSelectReportPlan?.(item.plan.id)
-                  : item.draft?.id
-                    ? () => onSelectStaticPageDraft?.(item.draft.id)
-                    : undefined
-              }
-              onOpen={
-                item.draft?.id
-                  ? () => onOpenStaticPageDraft?.(item.draft.id)
-                  : reportShelfUrl(item)
-                    ? () => window.open(reportShelfUrl(item), '_blank', 'noopener,noreferrer')
-                    : undefined
-              }
-              onCancelDefault={item.draft?.id ? () => onCancelDefaultStaticPageTemplate?.(item.draft.id) : undefined}
-              onDelete={item.draft?.id ? () => onDeleteStaticPageDraft?.(item.draft.id) : undefined}
-            />
-          ))}
-          {!resultCount ? <EmptySection text="当前数据集还没有生成过报表。生成后会自动出现在这里。" /> : null}
-        </div>
-      </section>
+        </section>
+      ) : null}
     </aside>
   );
 }

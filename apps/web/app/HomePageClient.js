@@ -867,7 +867,6 @@ function isVisibleReportShelfStaticPageDraft(draft) {
   const snapshot = staticPageDraftAsyncSnapshot(draft);
   return Boolean(
     !stale
-      && staticPageDraftBaselineStatus(draft) !== 'retired'
       && snapshot.rendered
       && snapshot.finalUrl,
   );
@@ -1591,6 +1590,7 @@ export default function HomePageClient() {
         .map((draft) => {
           const relatedDatasetIds = staticPageDraftDatasetIds(draft);
           const isDefaultForSelectedDataset = selectedIdSet.size > 0
+            && staticPageDraftBaselineStatus(draft) !== 'retired'
             && relatedDatasetIds.some((datasetId) => selectedIdSet.has(datasetId));
           return {
             ...draft,

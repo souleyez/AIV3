@@ -2704,6 +2704,12 @@ textarea {
   outline-offset: 2px;
 }
 
+.report-shelf-card.static-template {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
 .generated-project-main {
   width: 100%;
   display: grid;
@@ -2713,6 +2719,21 @@ textarea {
   background: transparent;
   color: inherit;
   text-align: left;
+}
+
+.report-shelf-static-main {
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.report-shelf-static-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #f8fbff;
+  font-size: 12px;
+  line-height: 1.25;
 }
 
 .generated-project-title-row,
@@ -2780,8 +2801,52 @@ textarea {
   padding-top: 1px;
 }
 
+.report-shelf-card.static-template .report-shelf-actions {
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px 0 0;
+}
+
 .report-shelf-actions .compact-action-btn {
   flex: 0 0 auto;
+}
+
+.report-shelf-icon-btn {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  color: #9fb2c9;
+  background: rgba(148, 163, 184, 0.08);
+  border-color: rgba(148, 163, 184, 0.14);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.report-shelf-default-toggle:not(:disabled) {
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(96, 165, 250, 0.2);
+}
+
+.report-shelf-default-toggle:disabled {
+  opacity: 0.38;
+  color: #64748b;
+}
+
+.report-shelf-delete-action:not(:disabled) {
+  color: #7d8ca1;
+  background: rgba(100, 116, 139, 0.07);
+  border-color: rgba(100, 116, 139, 0.1);
+}
+
+.report-shelf-delete-action:hover:not(:disabled) {
+  color: #cbd5e1;
+  background: rgba(100, 116, 139, 0.14);
+  border-color: rgba(148, 163, 184, 0.2);
 }
 
 .report-shelf-selected-note {
