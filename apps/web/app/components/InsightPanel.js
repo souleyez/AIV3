@@ -1427,7 +1427,6 @@ function ReportShelfCard({
   active,
   onSelect,
   onOpen,
-  onEdit,
   onCancelDefault,
   onDelete,
 }) {
@@ -1485,13 +1484,6 @@ function ReportShelfCard({
           <>
             <button
               type="button"
-              className="primary-btn compact-action-btn"
-              onClick={(event) => stopAndRun(event, onEdit || onSelect)}
-            >
-              编辑
-            </button>
-            <button
-              type="button"
               className="ghost-btn compact-action-btn"
               onClick={(event) => stopAndRun(event, onCancelDefault)}
             >
@@ -1543,7 +1535,6 @@ export default function InsightPanel({
   onSelectStaticPageDraft,
   onPreviewStaticPageDraft,
   onOpenStaticPageDraft,
-  onEditStaticPageDraft,
   onCancelDefaultStaticPageTemplate,
   onDeleteStaticPageDraft,
   onRevertStaticPageStage,
@@ -1559,12 +1550,27 @@ export default function InsightPanel({
 }) {
   const reportShelfItems = buildReportShelfItems(reportPlans, publishedReports, staticPageDrafts);
   const resultCount = reportShelfItems.length;
+  const activeReportShelfItem = reportShelfItems.find((item) => (
+    (item.plan?.id && item.plan.id === selectedReportPlanId)
+    || (item.draft?.id && item.draft.id === staticPageDraft?.id)
+  ));
+  const activeReportShelfTitle = activeReportShelfItem ? reportShelfTitle(activeReportShelfItem) : '';
+  const handleRefreshReports = () => {
+    onRefreshReports?.();
+    onRefreshReportDetail?.();
+    onRefreshStaticPageDrafts?.();
+  };
 
   return (
     <aside className="insight-panel">
       {showExecutionObservability ? <ExecutionObservationCard progress={assistantRunProgress} /> : null}
 
       <section className="card insight-card right-results-card">
+        {activeReportShelfTitle ? (
+          <div className="report-shelf-selected-note">
+            已选中「{truncateText(activeReportShelfTitle, 30)}」报表，可以告诉我你想怎么调整这个报表。
+          </div>
+        ) : null}
         <div className="generated-project-list">
           {reportShelfItems.map((item) => (
             <ReportShelfCard
@@ -1588,14 +1594,13 @@ export default function InsightPanel({
                     ? () => window.open(reportShelfUrl(item), '_blank', 'noopener,noreferrer')
                     : undefined
               }
-              onEdit={item.draft?.id ? () => onEditStaticPageDraft?.(item.draft.id) : undefined}
               onCancelDefault={item.draft?.id ? () => onCancelDefaultStaticPageTemplate?.(item.draft.id) : undefined}
               onDelete={item.draft?.id ? () => onDeleteStaticPageDraft?.(item.draft.id) : undefined}
             />
           ))}
           {!resultCount ? <EmptySection text="当前数据集还没有生成过报表。生成后会自动出现在这里。" /> : null}
         </div>
-        <button type="button" className="ghost-btn compact-action-btn" onClick={onRefreshReports || onRefreshReportDetail}>
+        <button type="button" className="ghost-btn compact-action-btn" onClick={handleRefreshReports}>
           刷新报表
         </button>
       </section>

@@ -2337,9 +2337,10 @@ export default function HomePageClient() {
   }
 
   async function refreshStaticPageDraftShelf(options = {}) {
-    const { silent = true } = options;
+    const { silent = true, datasetIds = reportShelfDatasetIds } = options;
     const queries = [];
     const localThreadId = readLocalThreadId();
+    const targetDatasetIds = normalizeDatasetIds(datasetIds);
     if (localThreadId) {
       queries.push({
         query: new URLSearchParams({
@@ -2349,7 +2350,7 @@ export default function HomePageClient() {
         datasetId: '',
       });
     }
-    reportShelfDatasetIds.forEach((datasetId) => {
+    targetDatasetIds.forEach((datasetId) => {
       queries.push({
         query: new URLSearchParams({
           dataset_id: datasetId,
@@ -4146,17 +4147,6 @@ export default function HomePageClient() {
     }
   }
 
-  function handleEditStaticPageDraft(draftId) {
-    const draft = staticPageDraftByAnyId(draftId);
-    if (!draft) {
-      return;
-    }
-    setActiveStaticPageDraftId(draft.id);
-    setStaticPageEditorOpen(true);
-    setActiveHtmlArtifactId(null);
-    setMobilePanel('chat');
-  }
-
   function handleCloseStaticPageDraft() {
     setStaticPageEditorOpen(false);
     setBanner('已返回聊天记录；右侧静态页成品架可随时重新打开草稿或成品。');
@@ -4827,10 +4817,6 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
-    appendUiNoticeMessage('banner', banner);
-  }, [banner]);
-
-  useEffect(() => {
     appendUiNoticeMessage('error', error);
   }, [error]);
 
@@ -5314,6 +5300,7 @@ export default function HomePageClient() {
       : [...currentIds, datasetId];
     setSelectedDatasetIds(nextIds);
     setSelectedDatasetId(nextIds[0] || null);
+    refreshStaticPageDraftShelf({ silent: true, datasetIds: nextIds });
     setMobileSidebarOpen(false);
     setMobilePanel('chat');
   }
@@ -5452,15 +5439,14 @@ export default function HomePageClient() {
       }
     },
     onRefreshReports: () => refreshCatalog({
-      preferredDatasetId: selectedDatasetId,
-      silent: false,
+      preferredDatasetId: selectedDatasetIds[0] || selectedDatasetId,
+      silent: true,
     }),
     staticPageDraft: activeStaticPageDraft,
     staticPageDrafts: datasetReportStaticPageDraftItems,
     onSelectStaticPageDraft: handleSelectReportShelfStaticPageDraft,
     onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
     onOpenStaticPageDraft: handleOpenStaticPageDraft,
-    onEditStaticPageDraft: handleEditStaticPageDraft,
     onCancelDefaultStaticPageTemplate: handleCancelDefaultStaticPageTemplate,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,
     onRevertStaticPageStage: handleRevertStaticPageStage,
