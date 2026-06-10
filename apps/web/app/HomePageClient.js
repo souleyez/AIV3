@@ -859,6 +859,20 @@ function isReusableStaticPageReportDraft(draft) {
   return Boolean(!stale && snapshot.rendered && snapshot.finalUrl && highQualityTemplate);
 }
 
+function isVisibleReportShelfStaticPageDraft(draft) {
+  if (!draft) {
+    return false;
+  }
+  const stale = draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
+  const snapshot = staticPageDraftAsyncSnapshot(draft);
+  return Boolean(
+    !stale
+      && staticPageDraftBaselineStatus(draft) !== 'retired'
+      && snapshot.rendered
+      && snapshot.finalUrl,
+  );
+}
+
 function findReusableReportTemplate(reportPlans = [], publishedReports = [], staticPageDrafts = []) {
   const plans = Array.isArray(reportPlans) ? reportPlans : [];
   const published = Array.isArray(publishedReports) ? publishedReports : [];
@@ -1566,7 +1580,7 @@ export default function HomePageClient() {
     [reportShelfDatasetIds, staticPageDraftItems],
   );
   const datasetReportStaticPageDraftItems = useMemo(
-    () => datasetStaticPageDraftItems.filter((draft) => isReusableStaticPageReportDraft(draft)),
+    () => datasetStaticPageDraftItems.filter((draft) => isVisibleReportShelfStaticPageDraft(draft)),
     [datasetStaticPageDraftItems],
   );
   const htmlArtifacts = useMemo(
