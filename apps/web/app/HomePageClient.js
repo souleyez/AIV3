@@ -5464,7 +5464,7 @@ export default function HomePageClient() {
     onCancelDefaultStaticPageTemplate: handleCancelDefaultStaticPageTemplate,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,
     onRevertStaticPageStage: handleRevertStaticPageStage,
-    onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: false }),
+    onRefreshStaticPageDrafts: () => refreshStaticPageDraftShelf({ silent: true }),
     staticPageEditorOpen,
     assistantRunProgress,
     codexCustomerTasks,
