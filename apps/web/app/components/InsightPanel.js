@@ -1304,11 +1304,91 @@ function reportPlanPublishedReport(plan, publishedReports = []) {
   ) || null;
 }
 
+function cleanReportShelfTitleText(value) {
+  return String(value || '')
+    .replace(/[#*_`[\]()]/g, '')
+    .replace(/^静态页[：:]\s*/i, '')
+    .replace(/^报表[：:]\s*/i, '')
+    .replace(/^看看\s*/, '')
+    .replace(/^请(帮我|帮忙)?\s*/, '')
+    .replace(/^用\s*Codex\s*对这个数据集做一版\s*/i, '')
+    .replace(/^用\s*Codex\s*对这个做一版\s*/i, '')
+    .replace(/并生成一个可下载的报告\/页面产物[。.!！]?/g, '')
+    .replace(/不要重新生成页面或图片[。.!！]?/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[。.!！]+$/g, '')
+    .trim();
+}
+
+function reportShelfPlanningBrief(draft) {
+  return draft?.source_refs?.client_source?.planningBrief
+    || draft?.source_refs?.client_source?.planning_brief
+    || draft?.source_refs?.clientSource?.planningBrief
+    || draft?.sourceRefs?.clientSource?.planningBrief
+    || draft?.sourceRefs?.client_source?.planning_brief
+    || draft?.draft_payload?.client_source?.planningBrief
+    || draft?.draft_payload?.client_source?.planning_brief
+    || draft?.draftPayload?.clientSource?.planningBrief
+    || {};
+}
+
+function reportShelfDraftDatasetLabel(draft) {
+  const brief = reportShelfPlanningBrief(draft);
+  const datasetLine = String(
+    brief?.datasetLine
+      || brief?.dataset_line
+      || draft?.source_refs?.dataset_title
+      || draft?.sourceRefs?.datasetTitle
+      || draft?.dataSnapshot?.datasetTitle
+      || draft?.dataSnapshot?.dataset_title
+      || '',
+  ).trim();
+  if (!datasetLine) return '';
+  const cleaned = datasetLine
+    .replace(/^数据集[：:]\s*/g, '')
+    .split(/[、,，/]+/)
+    .map((part) => part
+      .replace(/（[^）]*）/g, '')
+      .replace(/\([^)]*\)/g, '')
+      .replace(/\/parsed:\d+/gi, '')
+      .trim())
+    .filter(Boolean);
+  return [...new Set(cleaned)].slice(0, 2).join(' / ');
+}
+
+function titleAlreadyCarriesDataset(title, datasetLabel) {
+  if (!title || !datasetLabel) return false;
+  return datasetLabel
+    .split(/\s*\/\s*/)
+    .map((part) => part.replace(/(经营)?分析|项目资料|资料|数据集|数据/g, '').trim())
+    .filter((part) => part.length >= 2)
+    .some((part) => title.includes(part));
+}
+
+function staticPageContextualReportTitle(draft) {
+  if (!draft) return '';
+  const brief = reportShelfPlanningBrief(draft);
+  const focus = cleanReportShelfTitleText(
+    brief?.userGoal
+      || brief?.user_goal
+      || brief?.subject
+      || draft?.title
+      || draft?.objective
+      || '',
+  );
+  const datasetLabel = reportShelfDraftDatasetLabel(draft);
+  if (focus && datasetLabel && !titleAlreadyCarriesDataset(focus, datasetLabel)) {
+    return `${datasetLabel} · ${focus}`;
+  }
+  return focus;
+}
+
 function reportShelfTitle(item) {
   const plan = item?.plan;
   const published = item?.published;
   const draft = item?.draft;
-  return staticPageOfficialTitle(draft)
+  return staticPageContextualReportTitle(draft)
+    || staticPageOfficialTitle(draft)
     || published?.title
     || published?.report_title
     || published?.reportTitle
