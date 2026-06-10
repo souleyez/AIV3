@@ -420,6 +420,7 @@ struct AuthAuditEventsQuery {
 struct StaticPageDraftListQuery {
     local_thread_id: Option<String>,
     assistant_run_id: Option<String>,
+    dataset_id: Option<String>,
     limit: Option<i64>,
 }
 
@@ -47051,6 +47052,18 @@ async fn list_static_page_drafts(
             .into_iter()
             .take(limit as usize)
             .collect()
+    } else if let Some(dataset_id) = query
+        .dataset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        state
+            .storage
+            .static_page_drafts()
+            .list_by_dataset_id(state.tenant_id, dataset_id, limit)
+            .await
+            .map_err(ApiError::from_storage)?
     } else {
         let local_thread_id = required_field("local_thread_id", query.local_thread_id)?;
         validate_required("local_thread_id", &local_thread_id)?;
@@ -135017,6 +135030,7 @@ retrieve_evidence:
             Query(StaticPageDraftListQuery {
                 local_thread_id: Some("static-page-draft-thread".to_string()),
                 assistant_run_id: None,
+                dataset_id: None,
                 limit: Some(10),
             }),
         )
@@ -135031,6 +135045,7 @@ retrieve_evidence:
             Query(StaticPageDraftListQuery {
                 local_thread_id: None,
                 assistant_run_id: Some(run_response.assistant_run_id.to_string()),
+                dataset_id: None,
                 limit: Some(10),
             }),
         )

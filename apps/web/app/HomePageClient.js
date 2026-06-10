@@ -2301,12 +2301,32 @@ export default function HomePageClient() {
 
   async function refreshStaticPageDraftShelf(options = {}) {
     const { silent = true } = options;
-    const query = new URLSearchParams({
-      local_thread_id: readLocalThreadId(),
-      limit: '12',
+    const queries = [];
+    const localThreadId = readLocalThreadId();
+    if (localThreadId) {
+      queries.push(new URLSearchParams({
+        local_thread_id: localThreadId,
+        limit: '12',
+      }));
+    }
+    reportShelfDatasetIds.forEach((datasetId) => {
+      queries.push(new URLSearchParams({
+        dataset_id: datasetId,
+        limit: '12',
+      }));
     });
     try {
-      const backendDrafts = await fetchJson(`/api/v3/static-page-drafts?${query.toString()}`);
+      const draftGroups = await Promise.all(
+        queries.map((query) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`).catch(() => [])),
+      );
+      const backendDrafts = [
+        ...new Map(
+          draftGroups
+            .flatMap((items) => (Array.isArray(items) ? items : []))
+            .map((draft) => [draft?.id || draft?.backendDraftId || draft?.backend_draft_id, draft])
+            .filter(([id]) => id),
+        ).values(),
+      ];
       const hydratedDrafts = await Promise.all(
         (Array.isArray(backendDrafts) ? backendDrafts : []).map((item) => hydrateBackendStaticPageDraft(item)),
       );
@@ -4602,6 +4622,10 @@ export default function HomePageClient() {
     refreshStaticPageDraftShelf({ silent: true });
     refreshHtmlArtifacts({ silent: true });
   }, []);
+
+  useEffect(() => {
+    refreshStaticPageDraftShelf({ silent: true });
+  }, [reportShelfDatasetIds.join('|')]);
 
   useEffect(() => {
     setActiveSecretCount(readLocalSecretBindingIds().length);

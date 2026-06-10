@@ -5234,6 +5234,41 @@ impl PgStaticPageDraftRepository {
         rows.iter().map(map_static_page_draft_row).collect()
     }
 
+    pub async fn list_by_dataset_id(
+        &self,
+        tenant_id: TenantId,
+        dataset_id: &str,
+        limit: i64,
+    ) -> Result<Vec<StaticPageDraft>> {
+        let rows = sqlx::query(
+            r#"
+            select id, tenant_id, owner_user_id, assistant_run_id, title, status,
+                   selected_scope, visibility_snapshot, source_refs,
+                   draft_payload, created_at, updated_at
+            from static_page_drafts
+            where tenant_id = $1
+              and (
+                    source_refs ->> 'dataset_id' = $2
+                 or source_refs ->> 'datasetId' = $2
+                 or draft_payload ->> 'datasetId' = $2
+                 or draft_payload ->> 'dataset_id' = $2
+                 or draft_payload #>> '{source,datasetId}' = $2
+                 or draft_payload #>> '{source,dataset_id}' = $2
+                 or position($2 in selected_scope::text) > 0
+              )
+            order by updated_at desc, created_at desc
+            limit $3
+            "#,
+        )
+        .bind(tenant_id.0)
+        .bind(dataset_id)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_static_page_draft_row).collect()
+    }
+
     pub async fn find_latest_accepted_baseline_by_artifact_key(
         &self,
         tenant_id: TenantId,
