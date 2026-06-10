@@ -602,10 +602,194 @@ function documentDatasetIds(document) {
   ]);
 }
 
+function reportRecordDatasetIds(record) {
+  return normalizeDatasetIds([
+    record?.dataset_id,
+    record?.datasetId,
+    record?.dataset?.id,
+    record?.plan?.dataset_id,
+    record?.plan?.datasetId,
+    ...(Array.isArray(record?.dataset_ids) ? record.dataset_ids : []),
+    ...(Array.isArray(record?.datasetIds) ? record.datasetIds : []),
+  ]);
+}
+
+function staticPageDraftDatasetIds(draft) {
+  return normalizeDatasetIds([
+    draft?.datasetId,
+    draft?.dataset_id,
+    draft?.dataSnapshot?.datasetId,
+    draft?.dataSnapshot?.dataset_id,
+    draft?.source?.datasetId,
+    draft?.source?.dataset_id,
+    draft?.source_refs?.dataset_id,
+    draft?.sourceRefs?.datasetId,
+  ]);
+}
+
+function filterRecordsByDatasetIds(items, datasetIds, ownerIds = reportRecordDatasetIds) {
+  const idSet = new Set(normalizeDatasetIds(datasetIds));
+  if (!idSet.size) {
+    return [];
+  }
+  return (Array.isArray(items) ? items : []).filter((item) =>
+    ownerIds(item).some((datasetId) => idSet.has(datasetId)),
+  );
+}
+
 function sameDatasetIds(left, right) {
   const leftIds = normalizeDatasetIds(left);
   const rightIds = normalizeDatasetIds(right);
   return leftIds.length === rightIds.length && leftIds.every((id, index) => id === rightIds[index]);
+}
+
+function reportPlanIdFromPublished(report) {
+  return String(
+    report?.report_plan_id
+      || report?.reportPlanId
+      || report?.plan_id
+      || report?.planId
+      || '',
+  ).trim();
+}
+
+function publishedReportForPlan(plan, publishedReports = []) {
+  if (!plan?.id) return null;
+  return (Array.isArray(publishedReports) ? publishedReports : []).find((report) =>
+    reportPlanIdFromPublished(report) === plan.id,
+  ) || null;
+}
+
+function addArtifactUrlContainers(containers, seen, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  containers.push(value);
+}
+
+function firstArtifactUrlFromObject(value) {
+  const containers = [];
+  const seen = new Set();
+  addArtifactUrlContainers(containers, seen, value);
+  for (let index = 0; index < containers.length; index += 1) {
+    const container = containers[index];
+    [
+      container.asset_manifest,
+      container.assetManifest,
+      container.current_version,
+      container.currentVersion,
+      container.version,
+      container.report,
+      container.artifact,
+      container.output,
+      container.finalPage,
+      container.final_page,
+      container.publish_result,
+      container.publishResult,
+      container.template_reference,
+      container.templateReference,
+      container.relaxed_template_match,
+      container.relaxedTemplateMatch,
+    ].forEach((candidate) => addArtifactUrlContainers(containers, seen, candidate));
+  }
+
+  const urlKeys = [
+    'public_url',
+    'publicUrl',
+    'primary_url',
+    'primaryUrl',
+    'generated_artifact_url',
+    'generatedArtifactUrl',
+    'artifact_public_url',
+    'artifactPublicUrl',
+    'html_preview_url',
+    'htmlPreviewUrl',
+    'html_download_url',
+    'htmlDownloadUrl',
+    'download_url',
+    'downloadUrl',
+    'baseline_public_url',
+    'baselinePublicUrl',
+    'template_url',
+    'templateUrl',
+    'url',
+    'href',
+  ];
+  for (const container of containers) {
+    for (const key of urlKeys) {
+      const text = String(container?.[key] || '').trim();
+      if (/^(https?:\/\/|\/)/i.test(text)) {
+        return text;
+      }
+    }
+    const artifactLinks = container?.artifact_links || container?.artifactLinks;
+    if (Array.isArray(artifactLinks)) {
+      const link = artifactLinks.map((item) => String(item || '').trim()).find((item) => /^(https?:\/\/|\/)/i.test(item));
+      if (link) return link;
+    }
+    const links = container?.links;
+    if (Array.isArray(links)) {
+      const link = links
+        .map((item) => String(item?.url || item?.href || item || '').trim())
+        .find((item) => /^(https?:\/\/|\/)/i.test(item));
+      if (link) return link;
+    }
+  }
+  return '';
+}
+
+function reportTemplateTitle(candidate, fallback = '当前数据集报表模板') {
+  const plan = candidate?.plan;
+  const published = candidate?.published;
+  const detail = candidate?.detail;
+  return detail?.current_version?.asset_manifest?.report_title
+    || detail?.current_version?.asset_manifest?.reportTitle
+    || detail?.currentVersion?.assetManifest?.reportTitle
+    || published?.title
+    || published?.report_title
+    || published?.reportTitle
+    || plan?.title
+    || plan?.objective
+    || fallback;
+}
+
+function reportTemplateCandidateId(candidate) {
+  return String(
+    candidate?.plan?.id
+      || candidate?.published?.id
+      || candidate?.published?.report_id
+      || candidate?.published?.reportId
+      || reportTemplateTitle(candidate),
+  ).trim();
+}
+
+function reportTemplateUrl(candidate) {
+  return firstArtifactUrlFromObject(candidate?.detail)
+    || firstArtifactUrlFromObject(candidate?.published)
+    || firstArtifactUrlFromObject(candidate?.plan)
+    || '';
+}
+
+function findReusableReportTemplate(reportPlans = [], publishedReports = []) {
+  const plans = Array.isArray(reportPlans) ? reportPlans : [];
+  const published = Array.isArray(publishedReports) ? publishedReports : [];
+  const planWithPublished = plans
+    .map((plan) => ({ plan, published: publishedReportForPlan(plan, published) }))
+    .find((candidate) => candidate.published);
+  if (planWithPublished) {
+    return planWithPublished;
+  }
+  const publishedOnly = published.find(Boolean);
+  if (publishedOnly) {
+    return { plan: null, published: publishedOnly };
+  }
+  const plannedTemplate = plans.find((plan) => (
+    plan?.current_ast_version_id
+      || plan?.currentAstVersionId
+      || ['planned', 'rendered', 'published'].includes(String(plan?.status || '').toLowerCase())
+  ));
+  return plannedTemplate ? { plan: plannedTemplate, published: null } : null;
 }
 
 function sortStaticPageDrafts(items) {
@@ -1220,6 +1404,7 @@ export default function HomePageClient() {
   const staticPageDraftStatusRef = useRef(new Map());
   const assistantRunCustomerCodexPollRef = useRef(0);
   const codexCustomerChatMessageKeysRef = useRef(new Set());
+  const reportTemplateReuseMessageKeysRef = useRef(new Set());
   const uiNoticeMessageKeysRef = useRef(new Set());
 
   const selectedDataset = useMemo(
@@ -1242,13 +1427,17 @@ export default function HomePageClient() {
     () => sessions.find((session) => session.id === selectedSessionId) || null,
     [sessions, selectedSessionId],
   );
+  const reportShelfDatasetIds = useMemo(
+    () => normalizeDatasetIds(selectedDatasetIds.length ? selectedDatasetIds : selectedDatasetId ? [selectedDatasetId] : []),
+    [selectedDatasetId, selectedDatasetIds],
+  );
   const datasetPublishedReports = useMemo(
-    () => publishedReports.filter((report) => report.dataset_id === selectedDatasetId),
-    [publishedReports, selectedDatasetId],
+    () => filterRecordsByDatasetIds(publishedReports, reportShelfDatasetIds),
+    [publishedReports, reportShelfDatasetIds],
   );
   const datasetReportPlans = useMemo(
-    () => reportPlans.filter((plan) => plan.dataset_id === selectedDatasetId),
-    [reportPlans, selectedDatasetId],
+    () => filterRecordsByDatasetIds(reportPlans, reportShelfDatasetIds),
+    [reportPlans, reportShelfDatasetIds],
   );
   const selectedReportPlan = useMemo(
     () => datasetReportPlans.find((plan) => plan.id === selectedReportPlanId) || null,
@@ -1264,6 +1453,10 @@ export default function HomePageClient() {
       return status !== 'archived';
     })),
     [staticPageDrafts],
+  );
+  const datasetStaticPageDraftItems = useMemo(
+    () => filterRecordsByDatasetIds(staticPageDraftItems, reportShelfDatasetIds, staticPageDraftDatasetIds),
+    [reportShelfDatasetIds, staticPageDraftItems],
   );
   const htmlArtifacts = useMemo(
     () => mergeHtmlArtifacts(
@@ -1530,9 +1723,6 @@ export default function HomePageClient() {
   }
 
   function appendStaticPageProgressMessage(key, content, options = {}) {
-    if (!options.final) {
-      return;
-    }
     const stableKey = `static-page:${key}`;
     setLocalMessages((current) => {
       if (staticPageProgressMessageKeysRef.current.has(stableKey)
@@ -1547,6 +1737,61 @@ export default function HomePageClient() {
           metadata: {
             source: 'static_page_progress',
             key: stableKey,
+            final: Boolean(options.final),
+          },
+        },
+      ].slice(-40);
+    });
+  }
+
+  function staticPagePreviewProgressContent(draft, snapshot = {}) {
+    const previewUrl = String(
+      snapshot.previewAssetKey
+        || draft?.previewImage?.assetKey
+        || draft?.previewContract?.assetKey
+        || '',
+    ).trim();
+    const link = /^(https?:\/\/|\/)/i.test(previewUrl)
+      ? `：[打开设计图](${previewUrl})`
+      : '';
+    return `设计图已生成${link}。DataMax 正在继续读取视觉稿并制作最终页面。`;
+  }
+
+  async function appendReusableReportTemplateMessage(candidate, options = {}) {
+    if (!candidate) {
+      return;
+    }
+    let detail = null;
+    if (candidate.plan?.id) {
+      detail = await fetchPlanPublishedReport(candidate.plan.id).catch(() => null);
+    }
+    const enrichedCandidate = { ...candidate, detail };
+    const title = markdownLabel(reportTemplateTitle(enrichedCandidate), '报表模板');
+    const url = reportTemplateUrl(enrichedCandidate);
+    if (url && String(options.assistantContent || '').includes(url)) {
+      return;
+    }
+    const candidateId = reportTemplateCandidateId(enrichedCandidate) || url || title;
+    const stableKey = `report-template-reuse:${options.messageId || Date.now()}:${candidateId}`;
+    const content = url
+      ? `已找到当前数据集已有报表模板，可直接复用，不再重新生成页面：\n\n[${title}](${url})\n\n后续需要调整指标、版式或数据口径时，可以继续在聊天里说明修改项。`
+      : `已找到当前数据集已有报表模板「${title}」，已在右侧报表区展示；后续需要调整时，可以继续在聊天里说明修改项。`;
+
+    setLocalMessages((current) => {
+      if (reportTemplateReuseMessageKeysRef.current.has(stableKey)
+        || current.some((message) => message?.metadata?.key === stableKey)) {
+        return current;
+      }
+      reportTemplateReuseMessageKeysRef.current.add(stableKey);
+      return [
+        ...current,
+        {
+          ...createLocalMessage('assistant', content),
+          metadata: {
+            source: 'report_template_reuse',
+            key: stableKey,
+            reportPlanId: candidate.plan?.id || '',
+            publishedReportId: candidate.published?.id || '',
           },
         },
       ].slice(-40);
@@ -3348,15 +3593,25 @@ export default function HomePageClient() {
     const staticPageCreateRequested = promptRequestsStaticPage(prompt);
     const staticPageEditRequested = Boolean(activeStaticPageDraft && promptRequestsStaticPageEdit(prompt));
     const backendStaticPageEditRequested = Boolean(staticPageEditRequested && activeStaticPageDraft?.backendDraftId && lastAssistantRunId);
+    const effectiveReportPlans = filterRecordsByDatasetIds(reportPlans, effectiveDatasetIds);
+    const effectivePublishedReports = filterRecordsByDatasetIds(publishedReports, effectiveDatasetIds);
+    const reusableReportTemplate = staticPageCreateRequested && !staticPageEditRequested
+      ? findReusableReportTemplate(effectiveReportPlans, effectivePublishedReports)
+      : null;
+    if (reusableReportTemplate?.plan?.id) {
+      setSelectedReportPlanId(reusableReportTemplate.plan.id);
+    }
     const shouldUseAssistantRun = true;
-    if (staticPageCreateRequested) {
+    if (staticPageCreateRequested && !reusableReportTemplate) {
       pendingStaticPageDraft = handleStartStaticPageDraft({
-        oneClick: /一键|直接|马上|立即|跳过/.test(prompt),
+        oneClick: true,
         openEditor: false,
         prompt,
         datasetId: effectiveDatasetId,
         dataset: effectiveDataset,
+        datasets: effectiveDatasets,
         assistantRunId: '',
+        announce: false,
       });
     } else if (staticPageEditRequested && !backendStaticPageEditRequested) {
       pendingStaticPageDraft = handleApplyStaticPagePrompt(prompt);
@@ -3474,29 +3729,36 @@ export default function HomePageClient() {
           assistantContent = assistantRunFailureMessage(assistantRunError);
         }
 
+        const finalAssistantContent = appendArtifactLinkText(
+          assistantContent || streamedAssistantContent || streamStatusText || '已完成，但本轮没有返回文本。',
+          streamArtifactLink,
+        );
         setLocalMessages((current) => current.map((message) =>
           message.id === assistantMessage.id
             ? {
                 ...message,
-                content: appendArtifactLinkText(
-                  assistantContent || streamedAssistantContent || streamStatusText || '已完成，但本轮没有返回文本。',
-                  streamArtifactLink,
-                ),
+                content: finalAssistantContent,
               }
             : message,
         ).slice(-40));
+        await appendReusableReportTemplateMessage(reusableReportTemplate, {
+          messageId: userMessage.id,
+          assistantContent: finalAssistantContent,
+        });
         rememberLocalUserStatement(userMessage, assistantRunId);
-        setBanner(
-          usedBackendAssistantRun
-            ? staticPageCreateRequested
-              ? '已正常完成本轮对话，并准备好静态页草稿；如果需要编辑，点消息末尾的“进入静态页工作台”。'
-              : backendStaticPageEditRequested && usedAssistantRunContinue
-              ? '已让模型在当前静态页草稿上继续执行；记录只缓存在当前浏览器。'
-              : usedAssistantRunContinue
-                ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
-              : '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。'
-            : 'AssistantRun 本轮回复失败；用户消息已保留，详情见助手消息。',
-        );
+        let completionBanner = '';
+        if (!usedBackendAssistantRun) {
+          completionBanner = reusableReportTemplate
+            ? 'AssistantRun 本轮回复失败；已保留已有报表模板链接。'
+            : 'AssistantRun 本轮回复失败；用户消息已保留，详情见助手消息。';
+        } else if (!staticPageCreateRequested) {
+          completionBanner = backendStaticPageEditRequested && usedAssistantRunContinue
+            ? '已让模型在当前静态页草稿上继续执行；记录只缓存在当前浏览器。'
+            : usedAssistantRunContinue
+              ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
+              : '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。';
+        }
+        setBanner(completionBanner);
         setError('');
       } finally {
         setSubmitting(false);
@@ -3616,17 +3878,19 @@ export default function HomePageClient() {
       prompt = '',
       datasetId = selectedDatasetId,
       dataset = selectedDataset,
+      datasets: draftDatasets = selectedDatasets,
       assistantRunId = lastAssistantRunId,
+      announce = true,
     } = options;
     const draftDatasetId = datasetId || '';
     const conversationSummary = buildStaticPageConversationSummary(prompt, {
       dataset,
-      datasets: selectedDatasets,
+      datasets: draftDatasets,
       messages: visibleMessages,
     });
     const fieldCandidates = buildStaticPageContextFieldCandidates({
       dataset,
-      datasets: selectedDatasets,
+      datasets: draftDatasets,
     });
 
     const baseDraft = buildInitialStaticPageDraft({
@@ -3651,9 +3915,11 @@ export default function HomePageClient() {
     setActiveStaticPageDraftId(draft.id);
     setStaticPageEditorOpen(Boolean(openEditor));
     setActiveHtmlArtifactId(null);
-    setBanner(openEditor
-      ? (oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。')
-      : '已准备静态页草稿；当前对话不会中断，需要时点击“进入静态页工作台”。');
+    if (announce) {
+      setBanner(openEditor
+        ? (oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。')
+        : '已准备静态页草稿；当前对话不会中断，需要时点击“进入静态页工作台”。');
+    }
     setError('');
     setMobilePanel('chat');
     if (assistantRunId) {
@@ -4501,7 +4767,7 @@ export default function HomePageClient() {
     setBanner('效果图已生成，正在自动继续制作静态页。');
     appendStaticPageProgressMessage(
       `${activeStaticPageDraft.id}:preview-ready:${activeStaticPageDraft.previewImage?.assetKey || activeStaticPageDraft.previewContract?.assetKey || 'ready'}`,
-      '效果图已生成，正在继续读取视觉稿并制作最终页面。',
+      staticPagePreviewProgressContent(activeStaticPageDraft),
     );
   }, [activeStaticPageDraft?.id, activeStaticPageDraft?.imageJob?.status, staticPageEditorOpen]);
 
@@ -4693,7 +4959,7 @@ export default function HomePageClient() {
     if (preview?.draft) {
       appendStaticPageProgressMessage(
         `${preview.draft.id}:preview-ready:${preview.snapshot.previewAssetKey || 'ready'}`,
-        '效果图已生成，DataMax 正在继续读取视觉稿并制作最终页面。',
+        staticPagePreviewProgressContent(preview.draft, preview.snapshot),
       );
     }
 
@@ -4933,7 +5199,7 @@ export default function HomePageClient() {
       silent: false,
     }),
     staticPageDraft: activeStaticPageDraft,
-    staticPageDrafts: staticPageDraftItems,
+    staticPageDrafts: datasetStaticPageDraftItems,
     onSelectStaticPageDraft: handleSelectStaticPageDraft,
     onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,

@@ -3,7 +3,6 @@
 import { useEffect, useRef } from 'react';
 import { formatDateTime, formatSnakeCaseLabel, truncateText } from '../lib/formatters';
 import HtmlArtifactViewer from './artifacts/HtmlArtifactViewer';
-import StaticPageAssistantNotice from './static-page/StaticPageAssistantNotice';
 import StaticPagePlanningPanel from './static-page/StaticPagePlanningPanel';
 
 const SERVICE_LANE_LABELS = {
@@ -18,8 +17,6 @@ const CONTINUATION_LABELS = {
   in_progress: '进行中',
   completed: '已完成',
 };
-
-const STATIC_PAGE_PRIMARY_ACTION_LABEL = '提交生图文案';
 
 const RUNTIME_PHASES = [
   {
@@ -302,120 +299,6 @@ function formatRecommendedActionLabel(action) {
   return labels[action] || action;
 }
 
-function staticPageJobStatus(draft) {
-  if (draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale') {
-    return 'stale';
-  }
-  return draft?.imageJob?.status || draft?.previewContract?.status || 'idle';
-}
-
-function staticPageActionState(draft) {
-  const jobStatus = staticPageJobStatus(draft);
-  const finalStatus = draft?.finalPage?.status || '';
-  const stale = draft?.previewContract?.status === 'stale' || jobStatus === 'stale';
-
-  if (!draft) {
-    return {
-      disabled: false,
-      label: '创建静态页',
-      helper: '先创建静态页规划，再编辑并提交生图文案。',
-      workspaceLabel: '效果图',
-      allowPromptEdit: true,
-    };
-  }
-
-  if (['queued', 'rendering'].includes(finalStatus)) {
-    return {
-      disabled: true,
-      label: '页面生成中',
-      helper: '最终静态页正在后台制作，完成后会直接给出页面链接。',
-      workspaceLabel: '生成中',
-      allowPromptEdit: false,
-    };
-  }
-
-  if (finalStatus === 'rendered' || draft.status === 'rendered') {
-    return {
-      disabled: false,
-      label: '查看页面',
-      helper: '页面已生成；需要调整时继续在对话里提出即可。',
-      workspaceLabel: '效果图',
-      allowPromptEdit: false,
-    };
-  }
-
-  if (['queued', 'running'].includes(jobStatus)) {
-    const queueText = draft.imageJob?.queuePosition
-      ? `当前前方约 ${draft.imageJob.queuePosition} 个任务。`
-      : '正在等待远程生图资源。';
-    return {
-      disabled: true,
-      label: '效果图生成中',
-      helper: `${draft.imageJob?.queueMessage || '资源正在排队。'} ${queueText} 完成后会自动继续生成页面。`,
-      workspaceLabel: '排队中',
-      allowPromptEdit: false,
-    };
-  }
-
-  if (jobStatus === 'preview_ready' || draft.status === 'preview_ready') {
-    return {
-      disabled: false,
-      label: '继续生成页面',
-      helper: '效果图已回来，系统会自动续接生成最终页面；如未开始，可点击继续。',
-      workspaceLabel: '生成页面',
-      allowPromptEdit: false,
-    };
-  }
-
-  if (draft.status === 'effect_confirmed' || draft.previewContract?.status === 'confirmed') {
-    return {
-      disabled: false,
-      label: '继续生成页面',
-      helper: '系统会按当前视觉稿制作静态页；如未自动开始，可点击继续。',
-      workspaceLabel: '生成页面',
-      allowPromptEdit: false,
-    };
-  }
-
-  if (jobStatus === 'failed') {
-    return {
-      disabled: false,
-      label: '重新提交生图文案',
-      helper: draft.imageJob?.queueMessage || '效果图生成失败，可以重新发起。',
-      workspaceLabel: '效果图',
-      allowPromptEdit: true,
-    };
-  }
-
-  if (stale) {
-    return {
-      disabled: false,
-      label: '重新提交生图文案',
-      helper: '规划已经改过，上一张效果图失效，需要重新确认文案并发起效果图。',
-      workspaceLabel: '效果图',
-      allowPromptEdit: true,
-    };
-  }
-
-  return {
-    disabled: false,
-    label: STATIC_PAGE_PRIMARY_ACTION_LABEL,
-    helper: '确认初始文案后进入效果图队列，之后会自动生成页面。',
-    workspaceLabel: '效果图',
-    allowPromptEdit: true,
-  };
-}
-
-function shouldOfferStaticPageWorkspaceEntry(draft) {
-  if (!draft) return false;
-  const jobStatus = staticPageJobStatus(draft);
-  const finalStatus = draft?.finalPage?.status || '';
-  return !draft.previewImage
-    && !draft.imageJob?.id
-    && !finalStatus
-    && (draft.status === 'planning' || jobStatus === 'idle');
-}
-
 export default function ChatPanel({
   dataset,
   selectedDatasets = [],
@@ -433,9 +316,7 @@ export default function ChatPanel({
   staticPageDraft = null,
   onStartStaticPageDraft,
   onApplyStaticPageOperation,
-  onStaticPagePrimaryAction,
   staticPageActionBusy = false,
-  onOpenStaticPageBuilder,
   onCloseStaticPageDraft,
   showStaticPageWorkspace = true,
   startupBriefing,
@@ -451,35 +332,11 @@ export default function ChatPanel({
   const latestTurn = session?.session_manifest_view?.last_turn || null;
   const showingHtmlArtifactWorkspace = Boolean(htmlArtifact);
   const showingStaticPageWorkspace = showStaticPageWorkspace && Boolean(staticPageDraft);
-  const staticPageAction = staticPageActionState(staticPageDraft);
-  const staticPageEntryOnly = shouldOfferStaticPageWorkspaceEntry(staticPageDraft);
   const selectedScope = selectedDatasets.length ? selectedDatasets : dataset ? [dataset] : [];
   const selectedScopeLabel = selectedScope.map((item) => item.title || item.key).filter(Boolean).join('、');
   const showRuntimeObservability = showExecutionObservability === true;
   const chatMessagesRef = useRef(null);
   const chatEndRef = useRef(null);
-  const staticPageNotice = staticPageDraft && !showingHtmlArtifactWorkspace && !showingStaticPageWorkspace ? (
-    <StaticPageAssistantNotice
-      draft={staticPageDraft}
-      onOpenBuilder={onOpenStaticPageBuilder}
-      simpleEntry={staticPageEntryOnly}
-      actionLabel={staticPageEntryOnly ? '编辑生图文案' : staticPageAction.label}
-      actionHelper={
-        staticPageEntryOnly
-          ? ''
-          : staticPageAction.helper
-      }
-      actionDisabled={staticPageEntryOnly ? false : (staticPageAction.disabled || staticPageActionBusy)}
-      onPrimaryAction={() => {
-        if (staticPageEntryOnly) {
-          onOpenStaticPageBuilder?.();
-          return;
-        }
-        onStaticPagePrimaryAction?.();
-      }}
-      secondaryLabel={staticPageEntryOnly || !staticPageAction.allowPromptEdit ? '' : '调整生图文案'}
-    />
-  ) : null;
 
   useEffect(() => {
     if (showingHtmlArtifactWorkspace || showingStaticPageWorkspace) {
@@ -497,7 +354,6 @@ export default function ChatPanel({
     messages.length,
     staticPageDraft?.id,
     staticPageDraft?.imageJob?.status,
-    staticPageEntryOnly,
     showingHtmlArtifactWorkspace,
     showingStaticPageWorkspace,
   ]);
@@ -598,7 +454,6 @@ export default function ChatPanel({
                 </p>
               </div>
             )}
-            {staticPageNotice}
             <div ref={chatEndRef} className="chat-scroll-anchor" aria-hidden="true" />
           </>
         )}

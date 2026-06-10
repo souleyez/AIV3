@@ -1307,7 +1307,9 @@ function reportPlanPublishedReport(plan, publishedReports = []) {
 function reportShelfTitle(item) {
   const plan = item?.plan;
   const published = item?.published;
-  return published?.title
+  const draft = item?.draft;
+  return staticPageOfficialTitle(draft)
+    || published?.title
     || published?.report_title
     || published?.reportTitle
     || plan?.title
@@ -1318,7 +1320,9 @@ function reportShelfTitle(item) {
 function reportShelfUpdatedAt(item) {
   const plan = item?.plan;
   const published = item?.published;
-  return published?.updated_at
+  const draft = item?.draft;
+  return staticPageUpdatedAt(draft)
+    || published?.updated_at
     || published?.updatedAt
     || published?.created_at
     || published?.createdAt
@@ -1332,6 +1336,8 @@ function reportShelfUpdatedAt(item) {
 function reportShelfStatus(item) {
   const published = item?.published;
   const plan = item?.plan;
+  const draft = item?.draft;
+  if (draft) return staticPageStatusLabel(draft);
   if (published) return '已发布';
   return formatSnakeCaseLabel(plan?.status || 'planning');
 }
@@ -1339,6 +1345,10 @@ function reportShelfStatus(item) {
 function reportShelfMeta(item) {
   const plan = item?.plan;
   const published = item?.published;
+  const draft = item?.draft;
+  if (draft) {
+    return '成品报表 · 静态页';
+  }
   const surface = published?.surface || published?.current_surface || published?.currentSurface || '';
   const parts = [
     published ? '成品报表' : '报表计划',
@@ -1351,7 +1361,10 @@ function reportShelfMeta(item) {
 function reportShelfDetail(item) {
   const plan = item?.plan;
   const published = item?.published;
-  return published?.summary
+  const draft = item?.draft;
+  return draft?.finalPage?.notice
+    || draft?.modelSummary
+    || published?.summary
     || published?.description
     || published?.publish_note
     || published?.publishNote
@@ -1359,11 +1372,12 @@ function reportShelfDetail(item) {
     || '选择后可在聊天里要求修改这个报表。';
 }
 
-function buildReportShelfItems(reportPlans = [], publishedReports = []) {
+function buildReportShelfItems(reportPlans = [], publishedReports = [], staticPageDrafts = []) {
   const planItems = reportPlans.map((plan) => ({
     id: `plan:${plan.id}`,
     plan,
     published: reportPlanPublishedReport(plan, publishedReports),
+    draft: null,
   }));
   const planIds = new Set(reportPlans.map((plan) => plan.id).filter(Boolean));
   const publishedOnlyItems = publishedReports
@@ -1375,8 +1389,25 @@ function buildReportShelfItems(reportPlans = [], publishedReports = []) {
       id: `published:${published.id || published.report_id || published.reportId || reportShelfTitle({ published })}`,
       plan: null,
       published,
+      draft: null,
     }));
-  return [...planItems, ...publishedOnlyItems];
+  const seenStaticPageUrls = new Set();
+  const staticPageItems = (Array.isArray(staticPageDrafts) ? staticPageDrafts : [])
+    .filter((draft) => staticPageIsRendered(draft))
+    .filter((draft) => {
+      const url = staticPageFinalPageUrl(draft);
+      if (!url) return true;
+      if (seenStaticPageUrls.has(url)) return false;
+      seenStaticPageUrls.add(url);
+      return true;
+    })
+    .map((draft) => ({
+      id: `static:${draft.backendDraftId || draft.id || staticPageFinalPageUrl(draft)}`,
+      plan: null,
+      published: null,
+      draft,
+    }));
+  return [...planItems, ...publishedOnlyItems, ...staticPageItems];
 }
 
 function ReportShelfCard({ item, active, onSelect }) {
@@ -1453,7 +1484,7 @@ export default function InsightPanel({
   activeHtmlArtifactId,
   onSelectHtmlArtifact,
 }) {
-  const reportShelfItems = buildReportShelfItems(reportPlans, publishedReports);
+  const reportShelfItems = buildReportShelfItems(reportPlans, publishedReports, staticPageDrafts);
   const resultCount = reportShelfItems.length;
 
   return (
@@ -1466,8 +1497,17 @@ export default function InsightPanel({
             <ReportShelfCard
               key={item.id}
               item={item}
-              active={Boolean(item.plan?.id && item.plan.id === selectedReportPlanId)}
-              onSelect={item.plan?.id ? () => onSelectReportPlan?.(item.plan.id) : undefined}
+              active={Boolean(
+                (item.plan?.id && item.plan.id === selectedReportPlanId)
+                  || (item.draft?.id && item.draft.id === staticPageDraft?.id),
+              )}
+              onSelect={
+                item.plan?.id
+                  ? () => onSelectReportPlan?.(item.plan.id)
+                  : item.draft?.id
+                    ? () => onSelectStaticPageDraft?.(item.draft.id)
+                    : undefined
+              }
             />
           ))}
           {!resultCount ? <EmptySection text="当前数据集还没有生成过报表。生成后会自动出现在这里。" /> : null}
