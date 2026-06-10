@@ -3618,6 +3618,37 @@ textarea {
     linear-gradient(135deg, #242b34 0%, #1a2028 48%, #141922 100%);
 }
 
+.assistant-shell,
+.assistant-shell *,
+.mobile-home-shell,
+.mobile-home-shell * {
+  scrollbar-width: thin;
+  scrollbar-color: #22334d #07101d;
+}
+
+.assistant-shell *::-webkit-scrollbar,
+.mobile-home-shell *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.assistant-shell *::-webkit-scrollbar-track,
+.mobile-home-shell *::-webkit-scrollbar-track {
+  background: #07101d;
+}
+
+.assistant-shell *::-webkit-scrollbar-thumb,
+.mobile-home-shell *::-webkit-scrollbar-thumb {
+  border: 2px solid #07101d;
+  border-radius: 999px;
+  background: #22334d;
+}
+
+.assistant-shell *::-webkit-scrollbar-thumb:hover,
+.mobile-home-shell *::-webkit-scrollbar-thumb:hover {
+  background: #2c4262;
+}
+
 html,
 body {
   background: #121820;
