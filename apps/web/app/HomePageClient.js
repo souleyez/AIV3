@@ -616,6 +616,10 @@ function reportRecordDatasetIds(record) {
 
 function staticPageDraftDatasetIds(draft) {
   return normalizeDatasetIds([
+    ...(Array.isArray(draft?.matchedDatasetIds) ? draft.matchedDatasetIds : []),
+    ...(Array.isArray(draft?.matched_dataset_ids) ? draft.matched_dataset_ids : []),
+    draft?.matchedDatasetId,
+    draft?.matched_dataset_id,
     draft?.datasetId,
     draft?.dataset_id,
     draft?.dataSnapshot?.datasetId,
@@ -790,13 +794,40 @@ function reportTemplateUrl(candidate) {
     || '';
 }
 
+function staticPageDraftArtifactKey(draft) {
+  return String(
+    draft?.source_refs?.artifact_stability?.dataset_artifact_key
+      || draft?.source_refs?.artifact_stability?.datasetArtifactKey
+      || draft?.sourceRefs?.artifactStability?.datasetArtifactKey
+      || draft?.sourceRefs?.artifact_stability?.dataset_artifact_key
+      || draft?.artifact_stability?.dataset_artifact_key
+      || draft?.artifactStability?.datasetArtifactKey
+      || draft?.draft_payload?.artifact_stability?.dataset_artifact_key
+      || draft?.draft_payload?.artifactStability?.datasetArtifactKey
+      || draft?.draftPayload?.artifactStability?.datasetArtifactKey
+      || draft?.draftPayload?.artifact_stability?.dataset_artifact_key
+      || draft?.source_refs?.dataset_artifact_key
+      || draft?.sourceRefs?.datasetArtifactKey
+      || draft?.dataset_artifact_key
+      || draft?.datasetArtifactKey
+      || '',
+  ).trim();
+}
+
 function isReusableStaticPageReportDraft(draft) {
   if (!draft) {
     return false;
   }
   const stale = draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
   const snapshot = staticPageDraftAsyncSnapshot(draft);
-  return Boolean(!stale && snapshot.rendered && snapshot.finalUrl);
+  const artifactKey = staticPageDraftArtifactKey(draft);
+  if (/template:data-report(?:\||$)/.test(artifactKey)) {
+    return false;
+  }
+  const highQualityTemplate = /template:generated-static-page/.test(artifactKey)
+    || /template:dashboard/.test(artifactKey)
+    || /复用默认模板|按这个模板|新百经营分析月报/.test(artifactKey);
+  return Boolean(!stale && snapshot.rendered && snapshot.finalUrl && highQualityTemplate);
 }
 
 function findReusableReportTemplate(reportPlans = [], publishedReports = [], staticPageDrafts = []) {
@@ -1506,6 +1537,10 @@ export default function HomePageClient() {
     () => filterRecordsByDatasetIds(staticPageDraftItems, reportShelfDatasetIds, staticPageDraftDatasetIds),
     [reportShelfDatasetIds, staticPageDraftItems],
   );
+  const datasetReportStaticPageDraftItems = useMemo(
+    () => datasetStaticPageDraftItems.filter((draft) => isReusableStaticPageReportDraft(draft)),
+    [datasetStaticPageDraftItems],
+  );
   const htmlArtifacts = useMemo(
     () => mergeHtmlArtifacts(
       backendHtmlArtifacts,
@@ -1991,6 +2026,16 @@ export default function HomePageClient() {
     const payload = backendDraft?.draft_payload && typeof backendDraft.draft_payload === 'object'
       ? backendDraft.draft_payload
       : {};
+    const matchedDatasetIds = [
+      ...new Set([
+        ...(Array.isArray(localDraft?.matchedDatasetIds) ? localDraft.matchedDatasetIds : []),
+        ...(Array.isArray(localDraft?.matched_dataset_ids) ? localDraft.matched_dataset_ids : []),
+        ...(Array.isArray(payload?.matchedDatasetIds) ? payload.matchedDatasetIds : []),
+        ...(Array.isArray(payload?.matched_dataset_ids) ? payload.matched_dataset_ids : []),
+        ...(Array.isArray(backendDraft?.matchedDatasetIds) ? backendDraft.matchedDatasetIds : []),
+        ...(Array.isArray(backendDraft?.matched_dataset_ids) ? backendDraft.matched_dataset_ids : []),
+      ]),
+    ];
     const merged = {
       ...localDraft,
       ...payload,
@@ -2000,6 +2045,11 @@ export default function HomePageClient() {
       assistantRunId: backendDraft?.assistant_run_id || localDraft.assistantRunId || '',
       backendStatus: backendDraft?.status || localDraft.backendStatus || '',
       backendUpdatedAt: backendDraft?.updated_at || localDraft.backendUpdatedAt || '',
+      source_refs: backendDraft?.source_refs || localDraft.source_refs || payload.source_refs || null,
+      sourceRefs: backendDraft?.source_refs || localDraft.sourceRefs || payload.sourceRefs || payload.source_refs || null,
+      draft_payload: backendDraft?.draft_payload || localDraft.draft_payload || payload,
+      draftPayload: backendDraft?.draft_payload || localDraft.draftPayload || payload,
+      matchedDatasetIds,
     };
     if (backendDraft?.status === 'rendered' && merged.finalPage?.status === 'rendered') {
       merged.status = 'rendered';
@@ -2304,29 +2354,50 @@ export default function HomePageClient() {
     const queries = [];
     const localThreadId = readLocalThreadId();
     if (localThreadId) {
-      queries.push(new URLSearchParams({
-        local_thread_id: localThreadId,
-        limit: '12',
-      }));
+      queries.push({
+        query: new URLSearchParams({
+          local_thread_id: localThreadId,
+          limit: '12',
+        }),
+        datasetId: '',
+      });
     }
     reportShelfDatasetIds.forEach((datasetId) => {
-      queries.push(new URLSearchParams({
-        dataset_id: datasetId,
-        limit: '12',
-      }));
+      queries.push({
+        query: new URLSearchParams({
+          dataset_id: datasetId,
+          limit: '12',
+        }),
+        datasetId,
+      });
     });
     try {
       const draftGroups = await Promise.all(
-        queries.map((query) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`).catch(() => [])),
+        queries.map(({ query, datasetId }) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`)
+          .then((items) => ({ items, datasetId }))
+          .catch(() => ({ items: [], datasetId }))),
       );
-      const backendDrafts = [
-        ...new Map(
-          draftGroups
-            .flatMap((items) => (Array.isArray(items) ? items : []))
-            .map((draft) => [draft?.id || draft?.backendDraftId || draft?.backend_draft_id, draft])
-            .filter(([id]) => id),
-        ).values(),
-      ];
+      const draftById = new Map();
+      draftGroups.forEach(({ items, datasetId }) => {
+        (Array.isArray(items) ? items : []).forEach((draft) => {
+          const id = draft?.id || draft?.backendDraftId || draft?.backend_draft_id;
+          if (!id) return;
+          const existing = draftById.get(id) || {};
+          const matchedDatasetIds = new Set([
+            ...(Array.isArray(existing.matchedDatasetIds) ? existing.matchedDatasetIds : []),
+            ...(Array.isArray(draft?.matchedDatasetIds) ? draft.matchedDatasetIds : []),
+          ]);
+          if (datasetId) {
+            matchedDatasetIds.add(datasetId);
+          }
+          draftById.set(id, {
+            ...existing,
+            ...draft,
+            matchedDatasetIds: [...matchedDatasetIds],
+          });
+        });
+      });
+      const backendDrafts = [...draftById.values()];
       const hydratedDrafts = await Promise.all(
         (Array.isArray(backendDrafts) ? backendDrafts : []).map((item) => hydrateBackendStaticPageDraft(item)),
       );
@@ -3667,7 +3738,8 @@ export default function HomePageClient() {
     const backendStaticPageEditRequested = Boolean(staticPageEditRequested && activeStaticPageDraft?.backendDraftId && lastAssistantRunId);
     const effectiveReportPlans = filterRecordsByDatasetIds(reportPlans, effectiveDatasetIds);
     const effectivePublishedReports = filterRecordsByDatasetIds(publishedReports, effectiveDatasetIds);
-    const effectiveStaticPageDrafts = filterRecordsByDatasetIds(staticPageDraftItems, effectiveDatasetIds, staticPageDraftDatasetIds);
+    const effectiveStaticPageDrafts = filterRecordsByDatasetIds(staticPageDraftItems, effectiveDatasetIds, staticPageDraftDatasetIds)
+      .filter((draft) => isReusableStaticPageReportDraft(draft));
     const reusableReportTemplate = staticPageCreateRequested && !staticPageEditRequested
       ? findReusableReportTemplate(effectiveReportPlans, effectivePublishedReports, effectiveStaticPageDrafts)
       : null;
@@ -5270,7 +5342,7 @@ export default function HomePageClient() {
       silent: false,
     }),
     staticPageDraft: activeStaticPageDraft,
-    staticPageDrafts: datasetStaticPageDraftItems,
+    staticPageDrafts: datasetReportStaticPageDraftItems,
     onSelectStaticPageDraft: handleSelectStaticPageDraft,
     onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,

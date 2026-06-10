@@ -5242,21 +5242,37 @@ impl PgStaticPageDraftRepository {
     ) -> Result<Vec<StaticPageDraft>> {
         let rows = sqlx::query(
             r#"
-            select id, tenant_id, owner_user_id, assistant_run_id, title, status,
-                   selected_scope, visibility_snapshot, source_refs,
-                   draft_payload, created_at, updated_at
-            from static_page_drafts
-            where tenant_id = $1
+            select d.id, d.tenant_id, d.owner_user_id, d.assistant_run_id, d.title, d.status,
+                   d.selected_scope, d.visibility_snapshot, d.source_refs,
+                   d.draft_payload, d.created_at, d.updated_at
+            from static_page_drafts d
+            left join datasets ds
+              on ds.tenant_id = d.tenant_id
+             and ds.id::text = $2
+            where d.tenant_id = $1
               and (
-                    source_refs ->> 'dataset_id' = $2
-                 or source_refs ->> 'datasetId' = $2
-                 or draft_payload ->> 'datasetId' = $2
-                 or draft_payload ->> 'dataset_id' = $2
-                 or draft_payload #>> '{source,datasetId}' = $2
-                 or draft_payload #>> '{source,dataset_id}' = $2
-                 or position($2 in selected_scope::text) > 0
+                    d.source_refs ->> 'dataset_id' = $2
+                 or d.source_refs ->> 'datasetId' = $2
+                 or d.draft_payload ->> 'datasetId' = $2
+                 or d.draft_payload ->> 'dataset_id' = $2
+                 or d.draft_payload #>> '{source,datasetId}' = $2
+                 or d.draft_payload #>> '{source,dataset_id}' = $2
+                 or position($2 in d.selected_scope::text) > 0
+                 or (
+                      ds.id is not null
+                  and (
+                         (nullif(ds.key, '') is not null and (
+                              d.source_refs::text ilike '%' || ds.key || '%'
+                           or d.draft_payload::text ilike '%' || ds.key || '%'
+                         ))
+                      or (nullif(ds.title, '') is not null and (
+                              d.source_refs::text ilike '%' || ds.title || '%'
+                           or d.draft_payload::text ilike '%' || ds.title || '%'
+                         ))
+                  )
+                 )
               )
-            order by updated_at desc, created_at desc
+            order by d.updated_at desc, d.created_at desc
             limit $3
             "#,
         )
