@@ -1332,19 +1332,10 @@ function reportShelfPlanningBrief(draft) {
     || {};
 }
 
-function reportShelfDraftDatasetLabel(draft) {
-  const brief = reportShelfPlanningBrief(draft);
-  const datasetLine = String(
-    brief?.datasetLine
-      || brief?.dataset_line
-      || draft?.source_refs?.dataset_title
-      || draft?.sourceRefs?.datasetTitle
-      || draft?.dataSnapshot?.datasetTitle
-      || draft?.dataSnapshot?.dataset_title
-      || '',
-  ).trim();
-  if (!datasetLine) return '';
-  const cleaned = datasetLine
+function cleanReportShelfDatasetLabel(datasetLine) {
+  const text = String(datasetLine || '').trim();
+  if (!text) return '';
+  const cleaned = text
     .replace(/^数据集[：:]\s*/g, '')
     .split(/[、,，/]+/)
     .map((part) => part
@@ -1356,6 +1347,19 @@ function reportShelfDraftDatasetLabel(draft) {
   return [...new Set(cleaned)].slice(0, 2).join(' / ');
 }
 
+function reportShelfDraftDatasetLabel(draft) {
+  const brief = reportShelfPlanningBrief(draft);
+  return cleanReportShelfDatasetLabel(
+    brief?.datasetLine
+      || brief?.dataset_line
+      || draft?.source_refs?.dataset_title
+      || draft?.sourceRefs?.datasetTitle
+      || draft?.dataSnapshot?.datasetTitle
+      || draft?.dataSnapshot?.dataset_title
+      || '',
+  );
+}
+
 function titleAlreadyCarriesDataset(title, datasetLabel) {
   if (!title || !datasetLabel) return false;
   return datasetLabel
@@ -1365,7 +1369,7 @@ function titleAlreadyCarriesDataset(title, datasetLabel) {
     .some((part) => title.includes(part));
 }
 
-function staticPageContextualReportTitle(draft) {
+function staticPageContextualReportTitle(draft, fallbackDatasetLabel = '') {
   if (!draft) return '';
   const brief = reportShelfPlanningBrief(draft);
   const focus = cleanReportShelfTitleText(
@@ -1376,18 +1380,18 @@ function staticPageContextualReportTitle(draft) {
       || draft?.objective
       || '',
   );
-  const datasetLabel = reportShelfDraftDatasetLabel(draft);
+  const datasetLabel = reportShelfDraftDatasetLabel(draft) || cleanReportShelfDatasetLabel(fallbackDatasetLabel);
   if (focus && datasetLabel && !titleAlreadyCarriesDataset(focus, datasetLabel)) {
     return `${datasetLabel} · ${focus}`;
   }
   return focus;
 }
 
-function reportShelfTitle(item) {
+function reportShelfTitle(item, fallbackDatasetLabel = '') {
   const plan = item?.plan;
   const published = item?.published;
   const draft = item?.draft;
-  return staticPageContextualReportTitle(draft)
+  return staticPageContextualReportTitle(draft, fallbackDatasetLabel)
     || staticPageOfficialTitle(draft)
     || published?.title
     || published?.report_title
@@ -1505,12 +1509,13 @@ function buildReportShelfItems(reportPlans = [], publishedReports = [], staticPa
 function ReportShelfCard({
   item,
   active,
+  datasetLabel,
   onSelect,
   onOpen,
   onCancelDefault,
   onDelete,
 }) {
-  const title = reportShelfTitle(item);
+  const title = reportShelfTitle(item, datasetLabel);
   const updatedAt = reportShelfUpdatedAt(item);
   const status = reportShelfStatus(item);
   const meta = reportShelfMeta(item);
@@ -1630,11 +1635,12 @@ export default function InsightPanel({
 }) {
   const reportShelfItems = buildReportShelfItems(reportPlans, publishedReports, staticPageDrafts);
   const resultCount = reportShelfItems.length;
+  const fallbackDatasetLabel = dataset?.title || dataset?.name || '';
   const activeReportShelfItem = reportShelfItems.find((item) => (
     (item.plan?.id && item.plan.id === selectedReportPlanId)
     || (item.draft?.id && item.draft.id === staticPageDraft?.id)
   ));
-  const activeReportShelfTitle = activeReportShelfItem ? reportShelfTitle(activeReportShelfItem) : '';
+  const activeReportShelfTitle = activeReportShelfItem ? reportShelfTitle(activeReportShelfItem, fallbackDatasetLabel) : '';
   const handleRefreshReports = () => {
     onRefreshReports?.();
     onRefreshReportDetail?.();
@@ -1656,6 +1662,7 @@ export default function InsightPanel({
             <ReportShelfCard
               key={item.id}
               item={item}
+              datasetLabel={fallbackDatasetLabel}
               active={Boolean(
                 (item.plan?.id && item.plan.id === selectedReportPlanId)
                   || (item.draft?.id && item.draft.id === staticPageDraft?.id),
