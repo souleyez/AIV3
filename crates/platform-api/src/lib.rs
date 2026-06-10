@@ -47036,6 +47036,12 @@ async fn list_static_page_drafts(
 ) -> std::result::Result<Json<Vec<StaticPageDraftView>>, ApiError> {
     let limit = normalize_static_page_draft_list_limit(query.limit);
     let current_user_id = current_auth_user_id(&state, &headers).await?;
+    let requested_dataset_id = query
+        .dataset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let allow_public_template_baselines = requested_dataset_id.is_some();
     let drafts = if let Some(run_id) = query
         .assistant_run_id
         .as_deref()
@@ -47052,12 +47058,7 @@ async fn list_static_page_drafts(
             .into_iter()
             .take(limit as usize)
             .collect()
-    } else if let Some(dataset_id) = query
-        .dataset_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    } else if let Some(dataset_id) = requested_dataset_id {
         state
             .storage
             .static_page_drafts()
@@ -47078,7 +47079,13 @@ async fn list_static_page_drafts(
     Ok(Json(
         drafts
             .into_iter()
-            .filter(|draft| static_page_owner_is_visible(draft.owner_user_id, current_user_id))
+            .filter(|draft| {
+                static_page_draft_list_item_is_visible(
+                    draft,
+                    current_user_id,
+                    allow_public_template_baselines,
+                )
+            })
             .map(to_static_page_draft_view)
             .collect(),
     ))
@@ -47106,7 +47113,11 @@ async fn list_static_page_templates(
     let templates = drafts
         .into_iter()
         .filter(|draft| static_page_draft_is_accepted_template_baseline(draft))
-        .filter(|draft| static_page_owner_is_visible(draft.owner_user_id, current_user_id))
+        .filter(|draft| {
+            static_page_owner_is_visible(draft.owner_user_id, current_user_id)
+                || (dataset_artifact_key.is_some()
+                    && static_page_public_template_baseline_is_visible(draft))
+        })
         .filter(|draft| {
             dataset_artifact_key.as_deref().is_none_or(|key| {
                 static_page_dataset_artifact_key_from_draft_context(draft).as_deref() == Some(key)
@@ -96428,6 +96439,28 @@ fn static_page_owner_is_visible(
     owner_user_id_is_visible(owner_user_id, current_user_id)
 }
 
+fn static_page_public_template_baseline_is_visible(draft: &StaticPageDraft) -> bool {
+    let dataset_artifact_key = static_page_dataset_artifact_key_from_draft_context(draft)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    static_page_draft_is_accepted_template_baseline(draft)
+        && !static_page_draft_is_template_fallback_baseline(draft)
+        && !static_page_template_draft_is_non_default_noise_baseline(draft)
+        && !static_page_template_draft_is_local_generated_report_instance(draft)
+        && !dataset_artifact_key.contains("template:data-report")
+        && static_page_published_public_url_from_draft(draft).is_some()
+}
+
+fn static_page_draft_list_item_is_visible(
+    draft: &StaticPageDraft,
+    current_user_id: Option<UserId>,
+    allow_public_template_baselines: bool,
+) -> bool {
+    static_page_owner_is_visible(draft.owner_user_id, current_user_id)
+        || (allow_public_template_baselines
+            && static_page_public_template_baseline_is_visible(draft))
+}
+
 fn static_page_draft_not_found_error(draft_id: StaticPageDraftId) -> ApiError {
     ApiError::not_found(
         "static_page_draft_not_found",
@@ -141507,6 +141540,47 @@ retrieve_evidence:
             Some(owner_user_id),
             Some(UserId::new())
         ));
+    }
+
+    #[test]
+    fn static_page_dataset_list_can_show_public_template_baseline_without_owner() {
+        let owner_user_id = UserId::new();
+        let mut draft = StaticPageDraft {
+            id: StaticPageDraftId::new(),
+            tenant_id: TenantId::new(),
+            assistant_run_id: AssistantRunId::new(),
+            owner_user_id: Some(owner_user_id),
+            title: "静态页：新百经营分析月报".to_string(),
+            status: StaticPageDraftStatus::Rendered,
+            selected_scope: json!({}),
+            visibility_snapshot: json!({}),
+            source_refs: json!({
+                "artifact_stability": {
+                    "baseline_status": "accepted",
+                    "dataset_artifact_key": "v3-static-page|template:generated-static-page:fixture|dataset_external_id:xinbai-project-dataset"
+                }
+            }),
+            draft_payload: json!({
+                "finalPage": {
+                    "status": "rendered",
+                    "publicUrl": "https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai/current/index.html"
+                }
+            }),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        assert!(!static_page_owner_is_visible(draft.owner_user_id, None));
+        assert!(!static_page_draft_list_item_is_visible(&draft, None, false));
+        assert!(static_page_draft_list_item_is_visible(&draft, None, true));
+
+        draft.source_refs = json!({
+            "artifact_stability": {
+                "baseline_status": "accepted",
+                "dataset_artifact_key": "v3-static-page|template:data-report|dataset_id:xinbai-operating-analysis"
+            }
+        });
+        assert!(!static_page_public_template_baseline_is_visible(&draft));
     }
 
     #[test]
