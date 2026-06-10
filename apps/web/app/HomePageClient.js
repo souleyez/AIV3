@@ -3634,6 +3634,7 @@ export default function HomePageClient() {
     setError('');
     setBanner('已发送，助手正在后台处理；你可以继续输入。');
 
+    const codexForwardRequested = promptRequestsCodexForward(prompt);
     const nextScopePlan = planAssistantScope({
       prompt,
       datasets,
@@ -3644,7 +3645,7 @@ export default function HomePageClient() {
       activeStaticPageDraft,
     });
     setScopePlan(nextScopePlan);
-    const plannedDatasetIds = selectPlannerDatasetIds(nextScopePlan);
+    const plannedDatasetIds = codexForwardRequested ? [] : selectPlannerDatasetIds(nextScopePlan);
     const currentSelectedDatasetIds = normalizeDatasetIds(selectedDatasetIds);
     const effectiveDatasetIds = currentSelectedDatasetIds.length
       ? currentSelectedDatasetIds
@@ -3655,7 +3656,7 @@ export default function HomePageClient() {
     const effectiveDatasetId = effectiveDatasetIds[0] || '';
     const effectiveDataset = effectiveDatasets[0] || null;
 
-    if (!sameDatasetIds(effectiveDatasetIds, selectedDatasetIds)) {
+    if (!codexForwardRequested && !sameDatasetIds(effectiveDatasetIds, selectedDatasetIds)) {
       setSelectedDatasetIds(effectiveDatasetIds);
       setSelectedDatasetId(effectiveDatasetId || null);
     }
