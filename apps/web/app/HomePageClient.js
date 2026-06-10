@@ -832,6 +832,131 @@ function staticPageDraftBaselineStatus(draft) {
   ).trim().toLowerCase();
 }
 
+function normalizeReportShelfDefaultValue(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'default', 'accepted', 'enabled'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'not_default', 'non_default', 'retired', 'disabled'].includes(normalized)) {
+      return false;
+    }
+  }
+  return null;
+}
+
+function mergeReportShelfDefaultEntries(target, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return target;
+  }
+  Object.entries(value).forEach(([datasetId, enabled]) => {
+    const normalizedDatasetId = String(datasetId || '').trim();
+    const normalizedValue = normalizeReportShelfDefaultValue(enabled);
+    if (normalizedDatasetId && normalizedValue !== null) {
+      target[normalizedDatasetId] = normalizedValue;
+    }
+  });
+  return target;
+}
+
+function staticPageDraftReportShelfDefaults(draft) {
+  const defaults = {};
+  [
+    draft?.source_refs?.artifact_stability?.report_shelf_defaults,
+    draft?.source_refs?.artifact_stability?.reportShelfDefaults,
+    draft?.sourceRefs?.artifactStability?.reportShelfDefaults,
+    draft?.sourceRefs?.artifact_stability?.report_shelf_defaults,
+    draft?.source_refs?.report_shelf_defaults,
+    draft?.sourceRefs?.reportShelfDefaults,
+    draft?.artifact_stability?.report_shelf_defaults,
+    draft?.artifactStability?.reportShelfDefaults,
+    draft?.draft_payload?.artifact_stability?.report_shelf_defaults,
+    draft?.draft_payload?.artifactStability?.reportShelfDefaults,
+    draft?.draftPayload?.artifactStability?.reportShelfDefaults,
+    draft?.draftPayload?.artifact_stability?.report_shelf_defaults,
+    draft?.reportShelfDefaults,
+    draft?.report_shelf_defaults,
+  ].forEach((value) => mergeReportShelfDefaultEntries(defaults, value));
+  return defaults;
+}
+
+function staticPageDraftIsDefaultForDatasetIds(draft, datasetIds) {
+  const ids = normalizeDatasetIds(datasetIds);
+  if (!draft || !ids.length) {
+    return false;
+  }
+  const overrides = staticPageDraftReportShelfDefaults(draft);
+  const relatedIdSet = new Set(staticPageDraftDatasetIds(draft));
+  return ids.some((datasetId) => {
+    if (Object.prototype.hasOwnProperty.call(overrides, datasetId)) {
+      return overrides[datasetId] === true;
+    }
+    return staticPageDraftBaselineStatus(draft) !== 'retired' && relatedIdSet.has(datasetId);
+  });
+}
+
+function staticPageDraftHasAnyReportShelfDefault(draft) {
+  if (!draft) {
+    return false;
+  }
+  const overrides = staticPageDraftReportShelfDefaults(draft);
+  if (Object.values(overrides).some((enabled) => enabled === true)) {
+    return true;
+  }
+  if (staticPageDraftBaselineStatus(draft) === 'retired') {
+    return false;
+  }
+  return staticPageDraftDatasetIds(draft).some((datasetId) => overrides[datasetId] !== false);
+}
+
+function reportShelfDefaultTargetDatasetIds(draft, selectedDatasetIds) {
+  const selectedIds = normalizeDatasetIds(selectedDatasetIds);
+  if (selectedIds.length) {
+    return selectedIds;
+  }
+  return staticPageDraftDatasetIds(draft);
+}
+
+function withStaticPageDraftReportShelfDefaults(draft, datasetIds, enabled) {
+  const targetDatasetIds = normalizeDatasetIds(datasetIds);
+  if (!draft || !targetDatasetIds.length) {
+    return draft;
+  }
+  const nextDefaults = {
+    ...staticPageDraftReportShelfDefaults(draft),
+  };
+  targetDatasetIds.forEach((datasetId) => {
+    nextDefaults[datasetId] = Boolean(enabled);
+  });
+
+  const sourceRefs = {
+    ...(draft.source_refs || draft.sourceRefs || {}),
+  };
+  const sourceStability = {
+    ...(sourceRefs.artifact_stability || sourceRefs.artifactStability || {}),
+    report_shelf_defaults: nextDefaults,
+    reportShelfDefaults: nextDefaults,
+    report_shelf_defaults_updated_at: new Date().toISOString(),
+  };
+  if (enabled) {
+    sourceStability.baseline_status = 'accepted';
+    sourceStability.baselineStatus = 'accepted';
+  }
+  sourceRefs.artifact_stability = sourceStability;
+  sourceRefs.artifactStability = sourceStability;
+
+  return {
+    ...draft,
+    source_refs: sourceRefs,
+    sourceRefs,
+    reportShelfDefaults: nextDefaults,
+    report_shelf_defaults: nextDefaults,
+  };
+}
+
 function staticPageDraftIsDataReportArtifact(draft) {
   return /template:data-report(?:\||$)/.test(staticPageDraftArtifactKey(draft));
 }
@@ -1584,14 +1709,11 @@ export default function HomePageClient() {
   );
   const reportShelfStaticPageDraftItems = useMemo(
     () => {
-      const selectedIdSet = new Set(reportShelfDatasetIds);
       return staticPageDraftItems
         .filter((draft) => isVisibleReportShelfStaticPageDraft(draft))
         .map((draft) => {
           const relatedDatasetIds = staticPageDraftDatasetIds(draft);
-          const isDefaultForSelectedDataset = selectedIdSet.size > 0
-            && staticPageDraftBaselineStatus(draft) !== 'retired'
-            && relatedDatasetIds.some((datasetId) => selectedIdSet.has(datasetId));
+          const isDefaultForSelectedDataset = staticPageDraftIsDefaultForDatasetIds(draft, reportShelfDatasetIds);
           return {
             ...draft,
             reportShelfDefault: isDefaultForSelectedDataset,
@@ -4210,6 +4332,45 @@ export default function HomePageClient() {
     setMobilePanel('chat');
   }
 
+  function appendReportShelfSelectionMessage(title, metadata = {}) {
+    const cleanTitle = String(title || '当前').replace(/^静态页[：:]\s*/, '').trim() || '当前';
+    const reportName = /报表|报告|看板|页面/.test(cleanTitle) ? cleanTitle : `${cleanTitle}报表`;
+    const content = `已选中「${reportName}」，你可以继续修改。`;
+    setLocalMessages((current) => {
+      const last = current[current.length - 1];
+      if (last?.metadata?.source === 'report_shelf_selection' && last?.content === content) {
+        return current;
+      }
+      return [
+        ...current,
+        {
+          ...createLocalMessage('assistant', content),
+          metadata: {
+            source: 'report_shelf_selection',
+            ...metadata,
+          },
+        },
+      ].slice(-40);
+    });
+  }
+
+  function handleSelectReportPlanFromShelf(reportPlanId) {
+    setSelectedReportPlanId(reportPlanId);
+    const plan = datasetReportPlans.find((item) => item.id === reportPlanId) || null;
+    const published = publishedReportForPlan(plan, datasetPublishedReports);
+    appendReportShelfSelectionMessage(reportTemplateTitle({ plan, published }, '当前'), {
+      reportPlanId,
+    });
+    setMobilePanel('chat');
+  }
+
+  function handleSelectPublishedReportFromShelf(reportId, title) {
+    appendReportShelfSelectionMessage(title || '当前', {
+      publishedReportId: reportId,
+    });
+    setMobilePanel('chat');
+  }
+
   function handleSelectReportShelfStaticPageDraft(draftId) {
     const draft = staticPageDraftByAnyId(draftId);
     if (!draft) {
@@ -4219,6 +4380,10 @@ export default function HomePageClient() {
     setStaticPageEditorOpen(false);
     setActiveHtmlArtifactId(null);
     setMobilePanel('chat');
+    const title = reportTemplateTitle({ draft }, '当前');
+    appendReportShelfSelectionMessage(title, {
+      draftId: draft.id,
+    });
   }
 
   function handleOpenStaticPageDraft(draftId) {
@@ -4284,8 +4449,12 @@ export default function HomePageClient() {
   }
 
   async function handleDeleteStaticPageDraft(draftId) {
-    const draft = staticPageDrafts[draftId];
+    const draft = staticPageDraftByAnyId(draftId);
     if (!draft) {
+      return;
+    }
+    if (staticPageDraftHasAnyReportShelfDefault(draft)) {
+      appendUiNoticeMessage('warning', '请先取消这个报表在相关数据集里的默认，再删除。');
       return;
     }
     if (typeof window !== 'undefined' && !window.confirm('删除这个生成项目？删除后右侧列表将不再展示。')) {
@@ -4293,10 +4462,10 @@ export default function HomePageClient() {
     }
     setStaticPageDrafts((current) => {
       const next = { ...current };
-      delete next[draftId];
+      delete next[draft.id];
       return next;
     });
-    if (activeStaticPageDraftId === draftId) {
+    if (activeStaticPageDraftId === draft.id) {
       setActiveStaticPageDraftId(null);
       setStaticPageEditorOpen(false);
     }
@@ -4323,48 +4492,47 @@ export default function HomePageClient() {
     }
   }
 
-  function retireStaticPageTemplateDraft(draft) {
-    const sourceRefs = {
-      ...(draft.source_refs || draft.sourceRefs || {}),
-    };
-    const sourceStability = {
-      ...(sourceRefs.artifact_stability || sourceRefs.artifactStability || {}),
-      baseline_status: 'retired',
-      baselineStatus: 'retired',
-    };
-    sourceRefs.artifact_stability = sourceStability;
-    sourceRefs.artifactStability = sourceStability;
-
-    const payload = {
-      ...(draft.draft_payload || draft.draftPayload || draft),
-    };
-    const payloadStability = {
-      ...(payload.artifact_stability || payload.artifactStability || {}),
-      baseline_status: 'retired',
-      baselineStatus: 'retired',
-    };
-    payload.artifact_stability = payloadStability;
-    payload.artifactStability = payloadStability;
-    payload.baselineStatus = 'retired';
-    payload.baseline_status = 'retired';
-    payload.templateDefaultRetiredAt = new Date().toISOString();
-    if (payload.finalPage && typeof payload.finalPage === 'object') {
-      payload.finalPage = {
-        ...payload.finalPage,
-        baselineStatus: 'retired',
-        baseline_status: 'retired',
-      };
+  async function syncStaticPageDraftSourceRefs(nextDraft, failureLabel) {
+    if (!nextDraft?.backendDraftId) {
+      return;
     }
+    try {
+      const response = await fetchJson(`/api/v3/static-page-drafts/${nextDraft.backendDraftId}`, {
+        method: 'PATCH',
+        body: {
+          source_refs: nextDraft.source_refs,
+        },
+      });
+      const normalized = response?.draft ? normalizeBackendStaticPageDraft(response.draft) : null;
+      if (normalized?.id) {
+        setStaticPageDrafts((current) => ({
+          ...current,
+          [normalized.id]: normalized,
+        }));
+      }
+    } catch (syncError) {
+      if (typeof window !== 'undefined') {
+        window.alert(`${failureLabel}；后端同步失败：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+      }
+    }
+  }
 
-    return {
-      ...draft,
-      source_refs: sourceRefs,
-      sourceRefs,
-      draft_payload: payload,
-      draftPayload: payload,
-      baselineStatus: 'retired',
-      baseline_status: 'retired',
-    };
+  async function handleSetDefaultStaticPageTemplate(draftId) {
+    const draft = staticPageDraftByAnyId(draftId);
+    if (!draft) {
+      return;
+    }
+    const targetDatasetIds = reportShelfDefaultTargetDatasetIds(draft, reportShelfDatasetIds);
+    if (!targetDatasetIds.length) {
+      appendUiNoticeMessage('warning', '请先选择一个数据集，再设置默认报表。');
+      return;
+    }
+    const nextDraft = withStaticPageDraftReportShelfDefaults(draft, targetDatasetIds, true);
+    setStaticPageDrafts((current) => ({
+      ...current,
+      [nextDraft.id]: nextDraft,
+    }));
+    await syncStaticPageDraftSourceRefs(nextDraft, '已先在当前页面设置默认');
   }
 
   async function handleCancelDefaultStaticPageTemplate(draftId) {
@@ -4372,35 +4540,17 @@ export default function HomePageClient() {
     if (!draft) {
       return;
     }
-    if (typeof window !== 'undefined' && !window.confirm('取消这个报表模板的默认复用？取消后它不会再作为当前数据集默认模板展示。')) {
+    const targetDatasetIds = reportShelfDefaultTargetDatasetIds(draft, reportShelfDatasetIds);
+    if (!targetDatasetIds.length) {
+      appendUiNoticeMessage('warning', '请先选择一个数据集，再取消默认报表。');
       return;
     }
-    const nextDraft = retireStaticPageTemplateDraft(draft);
+    const nextDraft = withStaticPageDraftReportShelfDefaults(draft, targetDatasetIds, false);
     setStaticPageDrafts((current) => ({
       ...current,
       [nextDraft.id]: nextDraft,
     }));
-    if (activeStaticPageDraftId === draft.id) {
-      setActiveStaticPageDraftId(null);
-      setStaticPageEditorOpen(false);
-      setActiveHtmlArtifactId(null);
-    }
-    if (draft.backendDraftId) {
-      try {
-        await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}`, {
-          method: 'PATCH',
-          body: {
-            source_refs: nextDraft.source_refs,
-            draft_payload: nextDraft.draft_payload,
-          },
-        });
-      } catch (retireError) {
-        if (typeof window !== 'undefined') {
-          window.alert(`已先从当前列表取消默认；后端同步失败：${retireError instanceof Error ? retireError.message : '请求失败'}。`);
-        }
-        return;
-      }
-    }
+    await syncStaticPageDraftSourceRefs(nextDraft, '已先在当前页面取消默认');
   }
 
   function handleSelectHtmlArtifact(artifactId) {
@@ -5517,7 +5667,8 @@ export default function HomePageClient() {
     reportSurface,
     publishNote,
     onSelectSession: handleSelectConversation,
-    onSelectReportPlan: setSelectedReportPlanId,
+    onSelectReportPlan: handleSelectReportPlanFromShelf,
+    onSelectPublishedReport: handleSelectPublishedReportFromShelf,
     onReportSurfaceChange: setReportSurface,
     onPublishNoteChange: setPublishNote,
     onContinueReportPlan: handleContinueReportPlan,
@@ -5539,6 +5690,7 @@ export default function HomePageClient() {
     onSelectStaticPageDraft: handleSelectReportShelfStaticPageDraft,
     onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
     onOpenStaticPageDraft: handleOpenStaticPageDraft,
+    onSetDefaultStaticPageTemplate: handleSetDefaultStaticPageTemplate,
     onCancelDefaultStaticPageTemplate: handleCancelDefaultStaticPageTemplate,
     onDeleteStaticPageDraft: handleDeleteStaticPageDraft,
     onRevertStaticPageStage: handleRevertStaticPageStage,

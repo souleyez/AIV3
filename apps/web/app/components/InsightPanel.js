@@ -1512,6 +1512,7 @@ function ReportShelfCard({
   datasetLabel,
   onSelect,
   onOpen,
+  onSetDefault,
   onCancelDefault,
   onDelete,
 }) {
@@ -1535,13 +1536,19 @@ function ReportShelfCard({
     event.stopPropagation();
     action?.();
   };
+  const handleClick = (event) => {
+    if (event.detail >= 2 && url && onOpen) {
+      onOpen();
+      return;
+    }
+    onSelect?.();
+  };
   return (
     <article
       role={onSelect ? 'button' : undefined}
       tabIndex={onSelect ? 0 : undefined}
       className={`generated-project-card report-shelf-card ${isStaticTemplate ? 'static-template' : ''} ${active ? 'active' : ''}`.trim()}
-      onClick={onSelect}
-      onDoubleClick={url && onOpen ? onOpen : undefined}
+      onClick={handleClick}
       onKeyDown={handleKeyDown}
     >
       {isStaticTemplate ? (
@@ -1572,10 +1579,10 @@ function ReportShelfCard({
             <button
               type="button"
               className="ghost-btn compact-action-btn report-shelf-icon-btn report-shelf-default-toggle"
-              disabled={!staticTemplateIsDefault || !onCancelDefault}
-              title={staticTemplateIsDefault ? '取消默认模板' : '非当前默认模板'}
-              aria-label={staticTemplateIsDefault ? '取消默认模板' : '非当前默认模板'}
-              onClick={(event) => stopAndRun(event, onCancelDefault)}
+              disabled={staticTemplateIsDefault ? !onCancelDefault : !onSetDefault}
+              title={staticTemplateIsDefault ? '取消默认模板' : '设为默认模板'}
+              aria-label={staticTemplateIsDefault ? '取消默认模板' : '设为默认模板'}
+              onClick={(event) => stopAndRun(event, staticTemplateIsDefault ? onCancelDefault : onSetDefault)}
             >
               {staticTemplateIsDefault ? '▲' : '○'}
             </button>
@@ -1613,6 +1620,7 @@ export default function InsightPanel({
   publishNote,
   onSelectSession,
   onSelectReportPlan,
+  onSelectPublishedReport,
   onReportSurfaceChange,
   onPublishNoteChange,
   onContinueReportPlan,
@@ -1625,6 +1633,7 @@ export default function InsightPanel({
   onSelectStaticPageDraft,
   onPreviewStaticPageDraft,
   onOpenStaticPageDraft,
+  onSetDefaultStaticPageTemplate,
   onCancelDefaultStaticPageTemplate,
   onDeleteStaticPageDraft,
   onRevertStaticPageStage,
@@ -1672,7 +1681,12 @@ export default function InsightPanel({
                     ? () => onSelectReportPlan?.(item.plan.id)
                     : item.draft?.id
                       ? () => onSelectStaticPageDraft?.(item.draft.id)
-                      : undefined
+                      : item.published
+                        ? () => onSelectPublishedReport?.(
+                          item.published.id || item.published.report_id || item.published.reportId || item.id,
+                          reportShelfTitle(item, fallbackDatasetLabel),
+                        )
+                        : undefined
                 }
                 onOpen={
                   item.draft?.id
@@ -1681,6 +1695,7 @@ export default function InsightPanel({
                       ? () => window.open(reportShelfUrl(item), '_blank', 'noopener,noreferrer')
                       : undefined
                 }
+                onSetDefault={item.draft?.id ? () => onSetDefaultStaticPageTemplate?.(item.draft.id) : undefined}
                 onCancelDefault={item.draft?.id ? () => onCancelDefaultStaticPageTemplate?.(item.draft.id) : undefined}
                 onDelete={item.draft?.id ? () => onDeleteStaticPageDraft?.(item.draft.id) : undefined}
               />

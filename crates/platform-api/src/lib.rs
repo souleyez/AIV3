@@ -47160,10 +47160,15 @@ async fn update_static_page_draft(
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let mut draft = load_static_page_draft_or_404(&state, draft_id).await?;
     let owner_visible = static_page_owner_is_visible(draft.owner_user_id, current_user_id);
+    let public_template_default_update = !owner_visible
+        && static_page_public_template_default_is_manageable(&draft)
+        && static_page_public_template_default_update_is_safe(&request);
     if !owner_visible {
-        if !static_page_public_template_baseline_is_visible(&draft)
-            || !static_page_public_template_update_is_safe(&request)
-        {
+        let public_template_update_allowed =
+            (static_page_public_template_baseline_is_visible(&draft)
+                && static_page_public_template_update_is_safe(&request))
+                || public_template_default_update;
+        if !public_template_update_allowed {
             return Err(static_page_draft_not_found_error(draft_id));
         }
     }
@@ -47182,7 +47187,11 @@ async fn update_static_page_draft(
         draft.visibility_snapshot = visibility_snapshot;
     }
     if let Some(source_refs) = request.source_refs {
-        draft.source_refs = source_refs;
+        draft.source_refs = if public_template_default_update {
+            merge_public_template_default_source_refs(draft.source_refs, &source_refs)
+        } else {
+            source_refs
+        };
     }
     if let Some(draft_payload) = request.draft_payload {
         draft.status = status_from_static_page_payload(&draft_payload).unwrap_or(draft.status);
@@ -96456,16 +96465,20 @@ fn static_page_owner_is_visible(
     owner_user_id_is_visible(owner_user_id, current_user_id)
 }
 
-fn static_page_public_template_baseline_is_visible(draft: &StaticPageDraft) -> bool {
+fn static_page_public_template_default_is_manageable(draft: &StaticPageDraft) -> bool {
     let dataset_artifact_key = static_page_dataset_artifact_key_from_draft_context(draft)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    static_page_draft_is_accepted_template_baseline(draft)
-        && !static_page_draft_is_template_fallback_baseline(draft)
+    !static_page_draft_is_template_fallback_baseline(draft)
         && !static_page_template_draft_is_non_default_noise_baseline(draft)
         && !static_page_template_draft_is_local_generated_report_instance(draft)
         && !dataset_artifact_key.contains("template:data-report")
         && static_page_published_public_url_from_draft(draft).is_some()
+}
+
+fn static_page_public_template_baseline_is_visible(draft: &StaticPageDraft) -> bool {
+    static_page_draft_is_accepted_template_baseline(draft)
+        && static_page_public_template_default_is_manageable(draft)
 }
 
 fn static_page_draft_list_item_is_visible(
@@ -96507,6 +96520,106 @@ fn static_page_update_value_status(value: &Value) -> Option<&str> {
     .filter_map(Value::as_str)
     .map(str::trim)
     .find(|value| !value.is_empty())
+}
+
+fn static_page_update_report_shelf_defaults(value: &Value) -> Option<&Value> {
+    [
+        value.pointer("/artifact_stability/report_shelf_defaults"),
+        value.pointer("/artifact_stability/reportShelfDefaults"),
+        value.pointer("/artifactStability/reportShelfDefaults"),
+        value.pointer("/artifactStability/report_shelf_defaults"),
+        value.pointer("/report_shelf_defaults"),
+        value.pointer("/reportShelfDefaults"),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| value.as_object().is_some_and(|object| !object.is_empty()))
+}
+
+fn static_page_report_shelf_defaults_value_is_safe(value: &Value) -> bool {
+    let Some(defaults) = value.as_object() else {
+        return false;
+    };
+    !defaults.is_empty()
+        && defaults.iter().all(|(dataset_id, enabled)| {
+            let dataset_id = dataset_id.trim();
+            !dataset_id.is_empty()
+                && (enabled.is_boolean()
+                    || enabled.as_str().is_some_and(|value| {
+                        matches!(
+                            value.trim().to_ascii_lowercase().as_str(),
+                            "true"
+                                | "false"
+                                | "1"
+                                | "0"
+                                | "yes"
+                                | "no"
+                                | "default"
+                                | "not_default"
+                                | "non_default"
+                                | "accepted"
+                                | "retired"
+                                | "enabled"
+                                | "disabled"
+                        )
+                    }))
+        })
+}
+
+fn static_page_public_template_default_update_is_safe(
+    request: &UpdateStaticPageDraftRequest,
+) -> bool {
+    if request.title.is_some()
+        || request.status.is_some()
+        || request.selected_scope.is_some()
+        || request.visibility_snapshot.is_some()
+        || request.draft_payload.is_some()
+    {
+        return false;
+    }
+    let Some(source_refs) = request.source_refs.as_ref() else {
+        return false;
+    };
+    let baseline_status_safe =
+        static_page_update_value_baseline_status(source_refs).is_none_or(|status| {
+            matches!(
+                status.trim().to_ascii_lowercase().as_str(),
+                "accepted" | "retired"
+            )
+        });
+    baseline_status_safe
+        && static_page_update_report_shelf_defaults(source_refs)
+            .is_some_and(static_page_report_shelf_defaults_value_is_safe)
+}
+
+fn merge_public_template_default_source_refs(mut current: Value, requested: &Value) -> Value {
+    let Some(defaults) = static_page_update_report_shelf_defaults(requested).cloned() else {
+        return current;
+    };
+    if !current.is_object() {
+        current = json!({});
+    }
+    let object = current.as_object_mut().expect("source_refs is object");
+    let stability_entry = object
+        .entry("artifact_stability".to_string())
+        .or_insert_with(|| json!({}));
+    if !stability_entry.is_object() {
+        *stability_entry = json!({});
+    }
+    let stability = stability_entry
+        .as_object_mut()
+        .expect("artifact_stability is object");
+    stability.insert("report_shelf_defaults".to_string(), defaults.clone());
+    stability.insert("reportShelfDefaults".to_string(), defaults);
+    if static_page_update_value_baseline_status(requested)
+        .is_some_and(|status| status.trim().eq_ignore_ascii_case("accepted"))
+    {
+        stability.insert("baseline_status".to_string(), json!("accepted"));
+        stability.insert("baselineStatus".to_string(), json!("accepted"));
+    }
+    let camel_stability = Value::Object(stability.clone());
+    object.insert("artifactStability".to_string(), camel_stability);
+    current
 }
 
 fn static_page_public_template_update_is_safe(request: &UpdateStaticPageDraftRequest) -> bool {
@@ -141670,6 +141783,41 @@ retrieve_evidence:
             ..Default::default()
         };
         assert!(static_page_public_template_update_is_safe(&retire_request));
+
+        let dataset_default_request = UpdateStaticPageDraftRequest {
+            source_refs: Some(json!({
+                "artifact_stability": {
+                    "baseline_status": "accepted",
+                    "report_shelf_defaults": {
+                        "31588c60-0885-47c4-81fe-4ff5c27de8e7": true
+                    }
+                }
+            })),
+            ..Default::default()
+        };
+        assert!(static_page_public_template_default_update_is_safe(
+            &dataset_default_request
+        ));
+        let merged_source_refs = merge_public_template_default_source_refs(
+            json!({
+                "artifact_stability": {
+                    "baseline_status": "retired",
+                    "dataset_artifact_key": "v3-static-page|template:generated-static-page:fixture|dataset_external_id:xinbai-project-dataset"
+                },
+                "local_thread_id": "thread-1"
+            }),
+            dataset_default_request.source_refs.as_ref().unwrap(),
+        );
+        assert_eq!(
+            merged_source_refs.pointer("/artifact_stability/baseline_status"),
+            Some(&json!("accepted"))
+        );
+        assert_eq!(
+            merged_source_refs.pointer(
+                "/artifact_stability/report_shelf_defaults/31588c60-0885-47c4-81fe-4ff5c27de8e7"
+            ),
+            Some(&json!(true))
+        );
 
         let unsafe_title_request = UpdateStaticPageDraftRequest {
             title: Some("随意改公开模板".to_string()),
