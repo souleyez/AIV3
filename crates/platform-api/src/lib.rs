@@ -421,6 +421,7 @@ struct StaticPageDraftListQuery {
     local_thread_id: Option<String>,
     assistant_run_id: Option<String>,
     dataset_id: Option<String>,
+    visible_templates: Option<bool>,
     limit: Option<i64>,
 }
 
@@ -47041,8 +47042,16 @@ async fn list_static_page_drafts(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let allow_public_template_baselines = requested_dataset_id.is_some();
-    let drafts = if let Some(run_id) = query
+    let visible_templates = query.visible_templates.unwrap_or(false);
+    let allow_public_template_baselines = requested_dataset_id.is_some() || visible_templates;
+    let drafts = if visible_templates {
+        state
+            .storage
+            .static_page_drafts()
+            .list_accepted_baselines(state.tenant_id, limit)
+            .await
+            .map_err(ApiError::from_storage)?
+    } else if let Some(run_id) = query
         .assistant_run_id
         .as_deref()
         .map(str::trim)
@@ -135132,6 +135141,7 @@ retrieve_evidence:
                 local_thread_id: Some("static-page-draft-thread".to_string()),
                 assistant_run_id: None,
                 dataset_id: None,
+                visible_templates: None,
                 limit: Some(10),
             }),
         )
@@ -135147,6 +135157,7 @@ retrieve_evidence:
                 local_thread_id: None,
                 assistant_run_id: Some(run_response.assistant_run_id.to_string()),
                 dataset_id: None,
+                visible_templates: None,
                 limit: Some(10),
             }),
         )

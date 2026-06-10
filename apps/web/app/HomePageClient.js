@@ -2423,6 +2423,13 @@ export default function HomePageClient() {
       ...priorityDatasetIds,
       ...targetDatasetIds.filter((datasetId) => !priorityDatasetIds.includes(datasetId)),
     ];
+    queries.push({
+      query: new URLSearchParams({
+        visible_templates: 'true',
+        limit: '60',
+      }),
+      datasetId: '',
+    });
     orderedDatasetIds.forEach((datasetId) => {
       queries.push({
         query: new URLSearchParams({
