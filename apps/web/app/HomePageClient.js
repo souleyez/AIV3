@@ -1301,6 +1301,21 @@ function promptRequestsStaticPageEdit(prompt) {
   return /继续|接着|下一步|刚才|上面|之前|这个|那版|草稿|标题|文案|内容|数据|图表|布局|模块|调整|修改|改|换|突出|减少|增加|放大|缩小|移动|排序|风格|确认|效果图|导出|老板|高层|风险|柱状图|折线图|环图|看板|精简/.test(String(prompt || ''));
 }
 
+function promptRejectsStaticPageOutput(prompt) {
+  const text = String(prompt || '');
+  const compact = text.replace(/\s+/g, '');
+  if (!compact) {
+    return false;
+  }
+  const asksExistingTemplateDelivery = /(?:已有|现有|旧|原|上次|之前|模板|复用).{0,16}(?:链接|地址|页面|报表|模板|产物)|(?:链接|地址).{0,16}(?:已有|现有|模板|复用|原页面|旧页面)/.test(compact);
+  if (asksExistingTemplateDelivery) {
+    return false;
+  }
+  const negativeLead = /(?:不要|别|不用|无需|不需要|禁止|避免|先别|不要再)(?:生成|制作|创建|输出|发布|渲染|做|做成|给|提供|返回|出|产出)?(?:任何|新的|新)?(?:静态页|静态页面|页面|网页|html|HTML|可视化页|报表|看板|链接|页面链接|报表链接)/.test(compact);
+  const negativeTail = /(?:静态页|静态页面|页面|网页|html|HTML|可视化页|报表|看板|链接|页面链接|报表链接)(?:也)?(?:不要|别|不用|无需|不需要|禁止|避免)(?:生成|制作|创建|输出|发布|渲染|做|做成|给|提供|返回|出|产出)?/.test(compact);
+  return negativeLead || negativeTail;
+}
+
 function readLocalAssistantRunId() {
   if (typeof window === 'undefined') {
     return '';
@@ -1559,6 +1574,9 @@ export default function HomePageClient() {
     const text = String(prompt || '');
     const compact = text.replace(/\s+/g, '');
     if (promptRequestsCodexForward(text)) {
+      return false;
+    }
+    if (promptRejectsStaticPageOutput(text)) {
       return false;
     }
     const hasCreateAction = /生成|制作|创建|输出|发布|渲染|出页面|出报表|做成|做个|做一个|做一份|改成|修改|调整/.test(compact);
