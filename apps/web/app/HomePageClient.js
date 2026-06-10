@@ -1578,10 +1578,10 @@ export default function HomePageClient() {
       activityEvents,
       selectedDataset,
       selectedDatasets,
-      activeStaticPageDraft,
-      staticPageDrafts: staticPageDraftItems,
+      activeStaticPageDraft: isReusableStaticPageReportDraft(activeStaticPageDraft) ? activeStaticPageDraft : null,
+      staticPageDrafts: datasetReportStaticPageDraftItems,
     }),
-    [activityEvents, activeStaticPageDraft, datasets, documents, publishedReports, reportPlans, selectedDataset, selectedDatasets, staticPageDraftItems, visibleMessages],
+    [activityEvents, activeStaticPageDraft, datasetReportStaticPageDraftItems, datasets, documents, publishedReports, reportPlans, selectedDataset, selectedDatasets, visibleMessages],
   );
   const toolbarSourceItems = useMemo(
     () => selectedDatasets.map((dataset) => ({ name: dataset.title, status: 'healthy' })),
@@ -3765,6 +3765,12 @@ export default function HomePageClient() {
     if (shouldUseAssistantRun) {
       try {
         const assistantSelectedScope = buildAssistantRunSelectedScope(effectiveDatasetIds, nextScopePlan);
+        const briefingActiveStaticPageDraft = pendingStaticPageDraft
+          || (staticPageEditRequested
+            ? activeStaticPageDraft
+            : isReusableStaticPageReportDraft(activeStaticPageDraft)
+              ? activeStaticPageDraft
+              : null);
         const briefing = buildAssistantStartupBriefing({
           datasets,
           documents,
@@ -3774,8 +3780,8 @@ export default function HomePageClient() {
           activityEvents,
           selectedDataset: effectiveDataset,
           selectedDatasets: effectiveDatasets,
-          activeStaticPageDraft: pendingStaticPageDraft || activeStaticPageDraft,
-          staticPageDrafts: staticPageDraftItems,
+          activeStaticPageDraft: briefingActiveStaticPageDraft,
+          staticPageDrafts: effectiveStaticPageDrafts,
         });
         let assistantContent = '';
         let streamedAssistantContent = '';
