@@ -3881,11 +3881,7 @@ export default function HomePageClient() {
         ).slice(-40));
         rememberLocalUserStatement(userMessage, assistantRunId);
         let completionBanner = '';
-        if (reusableReportTemplate) {
-          completionBanner = usedBackendAssistantRun
-            ? '已优先使用右侧已有报表模板；需要调整时先选中模板，再在聊天框描述修改需求。'
-            : 'AssistantRun 本轮回复失败；已有报表模板仍保留在右侧报表栏。';
-        } else if (!usedBackendAssistantRun) {
+        if (!usedBackendAssistantRun) {
           completionBanner = 'AssistantRun 本轮回复失败；用户消息已保留，详情见助手消息。';
         }
         setBanner(completionBanner);
@@ -4121,6 +4117,17 @@ export default function HomePageClient() {
     setMobilePanel('chat');
   }
 
+  function handleSelectReportShelfStaticPageDraft(draftId) {
+    const draft = staticPageDraftByAnyId(draftId);
+    if (!draft) {
+      return;
+    }
+    setActiveStaticPageDraftId(draft.id);
+    setStaticPageEditorOpen(false);
+    setActiveHtmlArtifactId(null);
+    setMobilePanel('chat');
+  }
+
   function handleOpenStaticPageDraft(draftId) {
     const draft = staticPageDraftByAnyId(draftId);
     if (!draft) {
@@ -4132,10 +4139,11 @@ export default function HomePageClient() {
     setMobilePanel('chat');
     if (finalUrl && typeof window !== 'undefined') {
       window.open(finalUrl, '_blank', 'noopener,noreferrer');
-      setBanner('已在新窗口打开报表；如需修改，先选中该报表再在聊天框描述需求。');
       return;
     }
-    setBanner('这个报表还没有可直接打开的公开链接。');
+    if (typeof window !== 'undefined') {
+      window.alert('这个报表还没有可直接打开的公开链接。');
+    }
   }
 
   function handleEditStaticPageDraft(draftId) {
@@ -4147,7 +4155,6 @@ export default function HomePageClient() {
     setStaticPageEditorOpen(true);
     setActiveHtmlArtifactId(null);
     setMobilePanel('chat');
-    setBanner('已选中这个报表模板；在聊天框描述修改需求，会基于模板生成新版报表。');
   }
 
   function handleCloseStaticPageDraft() {
@@ -4226,11 +4233,12 @@ export default function HomePageClient() {
           }),
         });
       } catch (deleteError) {
-        setBanner(`项目已先从本地列表移除；后端归档暂不可用：${deleteError instanceof Error ? deleteError.message : '请求失败'}。`);
+        if (typeof window !== 'undefined') {
+          window.alert(`项目已先从本地列表移除；后端归档暂不可用：${deleteError instanceof Error ? deleteError.message : '请求失败'}。`);
+        }
         return;
       }
     }
-    setBanner('生成项目已删除。');
   }
 
   function retireStaticPageTemplateDraft(draft) {
@@ -4305,11 +4313,12 @@ export default function HomePageClient() {
           },
         });
       } catch (retireError) {
-        setBanner(`已先从当前列表取消默认；后端同步失败：${retireError instanceof Error ? retireError.message : '请求失败'}。`);
+        if (typeof window !== 'undefined') {
+          window.alert(`已先从当前列表取消默认；后端同步失败：${retireError instanceof Error ? retireError.message : '请求失败'}。`);
+        }
         return;
       }
     }
-    setBanner('已取消默认模板；右侧报表栏不再默认展示它。');
   }
 
   function handleSelectHtmlArtifact(artifactId) {
@@ -5448,7 +5457,7 @@ export default function HomePageClient() {
     }),
     staticPageDraft: activeStaticPageDraft,
     staticPageDrafts: datasetReportStaticPageDraftItems,
-    onSelectStaticPageDraft: handleSelectStaticPageDraft,
+    onSelectStaticPageDraft: handleSelectReportShelfStaticPageDraft,
     onPreviewStaticPageDraft: handlePreviewStaticPageDraft,
     onOpenStaticPageDraft: handleOpenStaticPageDraft,
     onEditStaticPageDraft: handleEditStaticPageDraft,
