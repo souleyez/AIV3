@@ -3823,12 +3823,6 @@ export default function HomePageClient() {
           completionBanner = reusableReportTemplate
             ? 'AssistantRun 本轮回复失败；已保留已有报表模板链接。'
             : 'AssistantRun 本轮回复失败；用户消息已保留，详情见助手消息。';
-        } else if (!staticPageCreateRequested) {
-          completionBanner = backendStaticPageEditRequested && usedAssistantRunContinue
-            ? '已让模型在当前静态页草稿上继续执行；记录只缓存在当前浏览器。'
-            : usedAssistantRunContinue
-              ? '已在同一个 AssistantRun 上继续执行；记录只缓存在当前浏览器。'
-              : '已通过 AssistantRun 返回普通聊天；记录只缓存在当前浏览器。';
         }
         setBanner(completionBanner);
         setError('');
