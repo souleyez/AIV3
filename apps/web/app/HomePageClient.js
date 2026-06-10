@@ -743,6 +743,9 @@ function reportTemplateTitle(candidate, fallback = '当前数据集报表模板'
   const plan = candidate?.plan;
   const published = candidate?.published;
   const detail = candidate?.detail;
+  const draft = candidate?.draft || candidate?.staticPageDraft || candidate?.staticDraft;
+  const finalPage = draft?.finalPage || {};
+  const manifest = finalPage.assetManifest || finalPage.asset_manifest || {};
   return detail?.current_version?.asset_manifest?.report_title
     || detail?.current_version?.asset_manifest?.reportTitle
     || detail?.currentVersion?.assetManifest?.reportTitle
@@ -751,15 +754,30 @@ function reportTemplateTitle(candidate, fallback = '当前数据集报表模板'
     || published?.reportTitle
     || plan?.title
     || plan?.objective
+    || manifest.reportTitle
+    || manifest.report_title
+    || manifest.displayTitle
+    || manifest.display_title
+    || manifest.title
+    || finalPage.reportTitle
+    || finalPage.report_title
+    || finalPage.displayTitle
+    || finalPage.display_title
+    || draft?.title
+    || draft?.objective
     || fallback;
 }
 
 function reportTemplateCandidateId(candidate) {
+  const draft = candidate?.draft || candidate?.staticPageDraft || candidate?.staticDraft;
   return String(
     candidate?.plan?.id
       || candidate?.published?.id
       || candidate?.published?.report_id
       || candidate?.published?.reportId
+      || draft?.backendDraftId
+      || draft?.backendId
+      || draft?.id
       || reportTemplateTitle(candidate),
   ).trim();
 }
@@ -768,12 +786,23 @@ function reportTemplateUrl(candidate) {
   return firstArtifactUrlFromObject(candidate?.detail)
     || firstArtifactUrlFromObject(candidate?.published)
     || firstArtifactUrlFromObject(candidate?.plan)
+    || firstArtifactUrlFromObject(candidate?.draft || candidate?.staticPageDraft || candidate?.staticDraft)
     || '';
 }
 
-function findReusableReportTemplate(reportPlans = [], publishedReports = []) {
+function isReusableStaticPageReportDraft(draft) {
+  if (!draft) {
+    return false;
+  }
+  const stale = draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale';
+  const snapshot = staticPageDraftAsyncSnapshot(draft);
+  return Boolean(!stale && snapshot.rendered && snapshot.finalUrl);
+}
+
+function findReusableReportTemplate(reportPlans = [], publishedReports = [], staticPageDrafts = []) {
   const plans = Array.isArray(reportPlans) ? reportPlans : [];
   const published = Array.isArray(publishedReports) ? publishedReports : [];
+  const staticDrafts = Array.isArray(staticPageDrafts) ? staticPageDrafts : [];
   const planWithPublished = plans
     .map((plan) => ({ plan, published: publishedReportForPlan(plan, published) }))
     .find((candidate) => candidate.published);
@@ -783,6 +812,10 @@ function findReusableReportTemplate(reportPlans = [], publishedReports = []) {
   const publishedOnly = published.find(Boolean);
   if (publishedOnly) {
     return { plan: null, published: publishedOnly };
+  }
+  const renderedStaticPage = staticDrafts.find((draft) => isReusableStaticPageReportDraft(draft));
+  if (renderedStaticPage) {
+    return { plan: null, published: null, draft: renderedStaticPage };
   }
   const plannedTemplate = plans.find((plan) => (
     plan?.current_ast_version_id
@@ -3613,8 +3646,9 @@ export default function HomePageClient() {
     const backendStaticPageEditRequested = Boolean(staticPageEditRequested && activeStaticPageDraft?.backendDraftId && lastAssistantRunId);
     const effectiveReportPlans = filterRecordsByDatasetIds(reportPlans, effectiveDatasetIds);
     const effectivePublishedReports = filterRecordsByDatasetIds(publishedReports, effectiveDatasetIds);
+    const effectiveStaticPageDrafts = filterRecordsByDatasetIds(staticPageDraftItems, effectiveDatasetIds, staticPageDraftDatasetIds);
     const reusableReportTemplate = staticPageCreateRequested && !staticPageEditRequested
-      ? findReusableReportTemplate(effectiveReportPlans, effectivePublishedReports)
+      ? findReusableReportTemplate(effectiveReportPlans, effectivePublishedReports, effectiveStaticPageDrafts)
       : null;
     if (reusableReportTemplate?.plan?.id) {
       setSelectedReportPlanId(reusableReportTemplate.plan.id);
