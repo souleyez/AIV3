@@ -2376,14 +2376,62 @@ export default function HomePageClient() {
     return draft;
   }
 
+  function upsertStaticPageDraftBatch(drafts = []) {
+    const normalizedDrafts = (Array.isArray(drafts) ? drafts : [])
+      .map((draft) => (draft?.draft_payload ? normalizeBackendStaticPageDraft(draft) : draft))
+      .filter((draft) => draft?.id);
+    if (!normalizedDrafts.length) {
+      return;
+    }
+    setStaticPageDrafts((current) => {
+      const next = { ...current };
+      normalizedDrafts.forEach((draft) => {
+        const existing = next[draft.id] || next[draft.backendDraftId] || {};
+        const matchedDatasetIds = normalizeDatasetIds([
+          ...(Array.isArray(existing.matchedDatasetIds) ? existing.matchedDatasetIds : []),
+          ...(Array.isArray(existing.matched_dataset_ids) ? existing.matched_dataset_ids : []),
+          ...(Array.isArray(draft.matchedDatasetIds) ? draft.matchedDatasetIds : []),
+          ...(Array.isArray(draft.matched_dataset_ids) ? draft.matched_dataset_ids : []),
+        ]);
+        next[draft.id] = {
+          ...existing,
+          ...draft,
+          finalPage: {
+            ...(existing.finalPage || {}),
+            ...(draft.finalPage || {}),
+          },
+          imageJob: draft.imageJob || existing.imageJob,
+          previewContract: draft.previewContract || existing.previewContract,
+          matchedDatasetIds,
+        };
+      });
+      return next;
+    });
+  }
+
   async function refreshStaticPageDraftShelf(options = {}) {
     const { silent = true, datasetIds = reportShelfFetchDatasetIds } = options;
     const queries = [];
     const localThreadId = readLocalThreadId();
+    const priorityDatasetIds = normalizeDatasetIds(reportShelfDatasetIds);
     const targetDatasetIds = normalizeDatasetIds([
+      ...priorityDatasetIds,
       ...(Array.isArray(datasetIds) ? datasetIds : [datasetIds]),
       ...reportShelfVisibleDatasetIds,
     ]);
+    const orderedDatasetIds = [
+      ...priorityDatasetIds,
+      ...targetDatasetIds.filter((datasetId) => !priorityDatasetIds.includes(datasetId)),
+    ];
+    orderedDatasetIds.forEach((datasetId) => {
+      queries.push({
+        query: new URLSearchParams({
+          dataset_id: datasetId,
+          limit: '12',
+        }),
+        datasetId,
+      });
+    });
     if (localThreadId) {
       queries.push({
         query: new URLSearchParams({
@@ -2393,19 +2441,20 @@ export default function HomePageClient() {
         datasetId: '',
       });
     }
-    targetDatasetIds.forEach((datasetId) => {
-      queries.push({
-        query: new URLSearchParams({
-          dataset_id: datasetId,
-          limit: '12',
-        }),
-        datasetId,
-      });
-    });
     try {
       const draftGroups = await Promise.all(
-        queries.map(({ query, datasetId }) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`)
-          .then((items) => ({ items, datasetId }))
+        queries.map(({ query, datasetId }) => fetchJson(`/api/v3/static-page-drafts?${query.toString()}`, { timeoutMs: 18000 })
+          .then((items) => {
+            const drafts = (Array.isArray(items) ? items : []).map((draft) => ({
+              ...draft,
+              matchedDatasetIds: normalizeDatasetIds([
+                ...(Array.isArray(draft?.matchedDatasetIds) ? draft.matchedDatasetIds : []),
+                datasetId,
+              ]),
+            }));
+            upsertStaticPageDraftBatch(drafts);
+            return { items: drafts, datasetId };
+          })
           .catch(() => ({ items: [], datasetId }))),
       );
       const draftById = new Map();
@@ -2429,20 +2478,13 @@ export default function HomePageClient() {
         });
       });
       const backendDrafts = [...draftById.values()];
-      const hydratedDrafts = await Promise.all(
+      Promise.all(
         (Array.isArray(backendDrafts) ? backendDrafts : []).map((item) => hydrateBackendStaticPageDraft(item)),
-      );
-      setStaticPageDrafts((current) => {
-        const next = { ...current };
-        hydratedDrafts.forEach((draft) => {
-          if (draft?.id) {
-            next[draft.id] = draft;
-          }
-        });
-        return next;
-      });
+      ).then((hydratedDrafts) => {
+        upsertStaticPageDraftBatch(hydratedDrafts);
+      }).catch(() => {});
       if (!silent) {
-        setBanner(hydratedDrafts.length ? `已刷新 ${hydratedDrafts.length} 个静态页草稿/成品。` : '当前终端还没有静态页草稿。');
+        setBanner(backendDrafts.length ? `已刷新 ${backendDrafts.length} 个静态页草稿/成品。` : '当前终端还没有静态页草稿。');
       }
     } catch (shelfError) {
       if (!silent) {
