@@ -3826,3 +3826,40 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, or full document body was recorded;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 P2 Document Fingerprint Inventory Smoke
+
+- Purpose:
+  - add a fixed read-only P2-2 inventory entrypoint for duplicate/fingerprint governance;
+  - make aggregate document fingerprint state visible without exposing document titles, object locators, hash values, source rows, or credentials;
+  - keep object cleanup and historical backfill out of scope.
+- Code changes:
+  - added `scripts/smoke/document-fingerprint-inventory.mjs`;
+  - added `npm run smoke:document-fingerprint-inventory`;
+  - documented the entrypoint in `scripts/README.md`;
+  - added syntax check and deterministic self-test to `.github/workflows/datamax-ci.yml`;
+  - updated `docs/plans/datamax-active-execution-plan.md` P2-2 with the fixed entrypoint and current live aggregate result.
+- Contract:
+  - live mode loads a deployment env file and reads `PLATFORM_DATABASE_URL` without printing it;
+  - live mode executes one fixed aggregate SELECT through `psql`;
+  - report fields are aggregate counts only: overall document/fingerprint counts, `dedup_state` counts, top content-type counts, repeated-hash group counts, object-locator classification counts, and dataset-level aggregate rows;
+  - report explicitly records `filesystem_checked=false`, `deletesEnabled=false`, `writesEnabled=false`, `hashValuesIncluded=false`, and `rawLocatorsIncluded=false`.
+- Local verification:
+  - `node --check scripts/smoke/document-fingerprint-inventory.mjs`: passed;
+  - `npm run smoke:document-fingerprint-inventory -- --self-test --pretty`: passed, `ok=true`, checks `redactionContract=true`, `aggregateOnlyShape=true`, `noFilesystemCheck=true`;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`.
+- 8-server live verification before commit:
+  - executed the new script over SSH stdin against `/srv/aiv3/repo` with `--env-file /etc/aiv3/aiv3.env --dataset-limit 20`;
+  - result: `runId=20260611181946465-du33p2s6d8`, `ok=true`;
+  - overall: `document_count=2637`, `dataset_count=58`, `locator_present_count=2637`, `fingerprinted_document_count=32`, `canonical_document_reference_count=32`;
+  - `dedupStateCounts`: `canonical=32`, `unknown=2605`;
+  - `contentHashGroups`: `distinct_hash_group_count=32`, `repeated_hash_group_count=0`, `duplicate_document_candidate_count=0`;
+  - `objectLocatorClassification`: `empty_locator_count=0`, `remote_locator_count=3`, `local_locator_candidate_count=2634`, `filesystem_checked=false`;
+  - receipt: `/srv/aiv3/repo/target/document-fingerprint-inventory-smoke-p2-20260612-stdin/20260611181946465-du33p2s6d8/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, object file read, object file delete, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.

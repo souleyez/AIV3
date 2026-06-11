@@ -1,97 +1,111 @@
-# DataMax 主线补缺执行计划
+# DataMax 主线执行计划
 
 > **For Codex:** REQUIRED SUB-SKILL: Use executing-plans to implement this plan task-by-task.
 >
-> 本文件是 `docs/plans/` 下唯一主线计划。历史计划只保留在 `docs/archive/plans/`；验证证据写入 `docs/validation/`，不要再新增散落计划。
+> 本文件是 `docs/plans/` 下唯一有效计划。历史计划保留在 `docs/archive/plans/`；长日志、回执和失败定位统一写入 `docs/validation/datamax-main-gap-closure.md`。
 
-**Goal:** 把 DataMax 稳定在“主站可问、第三方可接、报表可出、数据可入、解析可深化、部署可回归”的生产状态。
+**目标:** 让 DataMax 在生产环境持续满足主站问答、第三方问答、范围授权、报表/静态页生成、数据接入分析和异步文档理解这几条主线。
 
-**Architecture:** 主站和第三方入口只处理会话、权限、任务编排和结果展示；企业资料、会话授权、报表模板、静态页产物、数据接入状态都由 DataMax 平台侧管理。模型调用保持无状态，只接收本轮由平台裁剪后的供料和工具结果。
+**架构:** 企业记忆、文档权限、报表模板、任务编排和产物发布都由 DataMax 平台侧管理。模型调用保持无状态，只接收本轮由平台裁剪后的上下文、检索证据和工具结果。重任务通过 worker、smoke 脚本或固定 Codex/Cloudflare 执行器链路处理；涉及生产写入的动作按本计划标注必须人工确认。
 
-**Tech Stack:** Rust workspace services, Next.js `apps/web`, Node smoke scripts, PostgreSQL, static-page/report workers, Cloudflare/Codex executor where available, 8 服务器 systemd deployment.
+**技术栈:** Rust workspace services、Next.js `apps/web`、Node smoke scripts、PostgreSQL、8 服务器 systemd workers、静态页/报表产物、本地模板复用和可选 Cloudflare/Codex fallback。
+
+**重建日期:** 2026-06-12。
 
 ---
 
-## 1. 维护规则
+## 1. 执行规则
 
 - `docs/plans/` 只保留本文件。
-- 本文件只记录当前状态、执行队列、验收命令和完成标准；长日志、回执、失败定位写入 `docs/validation/datamax-main-gap-closure.md`。
-- 不默默修改第三方公开接口、URL、鉴权、请求字段、响应字段；确需变更先问。
-- 不提交或记录密钥、cookie、bearer、数据库 URL、provider payload、原始客户行、完整客户文档、私有对象路径。
-- 不把 self-test、fixture、只读 preflight 写成真实 live 验收。
-- 质量门禁保持禁用或被动采样，不恢复会拦截正常回答的硬门禁。
-- 数据接入分析只产出安全摘要和 `staging_plan`；生产写入、schema 变更、覆盖导入必须人工确认。
-- 8 服务器部署必须记录 pull、build、restart、smoke；纯文档或纯 smoke 脚本更新不重启服务。
+- 本文件只保留当前状态、执行队列、验收命令和完成标准；详细证据写入 `docs/validation/datamax-main-gap-closure.md`。
+- 不默默修改第三方公开 API URL、鉴权、必填请求字段或已有响应字段；确需变更先问。
+- 不记录密钥、bearer、cookie、provider key、数据库 URL、原始客户行、原始 provider payload、完整文档内容、私有对象路径或 content hash。
 - 不动 120 服务器。
+- 质量门禁保持禁用或被动采样；不要恢复会拦截正常回答的硬门禁。
+- 数据接入可以产出分析和 `staging_plan`；生产 schema/data 写入必须人工确认。
+- P2 解析和 fingerprint 默认只走 `--dry-run --summary-only`；真实 backfill、入队、对象清理或源同步必须单独确认。
+- 纯文档或纯 smoke 脚本更新不需要重启 8 服务器服务。
 
-## 2. 当前生产基线
-
-已验证并作为后续回归基线：
-
-- `https://doc.elepcloud.com/` 是无需登录直接问答主站。
-- `https://v3.elepcloud.com/` 是管理台和第三方接口文档入口。
-- 主站普通聊天、自动滚动、新建对话保留原会话、管理台入口隔离已通过浏览器回归。
-- 第三方普通问答、SSE/报表、临时文档范围、报表导出字段已通过小规模 smoke。
-- 新百经营月报默认模板为 `xinbai-functional-modular-template-20260604`。
-- 报表名称统一为 `新世界百货经营管理月报表`。
-- 报表导出文件为 `table-data.csv`、`report.ppt`、`report.md`。
-- 数据源页已展示网页采集、数据库接入、ERP 登录、API 对接、MCP 对接、文件与模板接入，并支持已接入对象折叠展示。
-- Cloudflare/Codex executor 不可用时，静态页能力优先验证本地模板复用和本地生成通路。
-- P2 解析深化已在 8 服务器单文档小样本完成 summary-only dry-run：fingerprint would-record、fact-index 56 条派生事实、enrichment 2 个 would-enqueue；未写入、未入队。
+## 2. 当前基线
 
 详细证据入口：`docs/validation/datamax-main-gap-closure.md`。
 
-## 3. P0 发布回归门
+| 模块 | 当前状态 | 剩余缺口 |
+| --- | --- | --- |
+| 主站 | `https://doc.elepcloud.com/` 是无需登录直接问答入口。8 服务器主站 20 路 live smoke 已通过。 | 真实流式 delta 仍需在具备受控上下文时补一次生产验证。 |
+| 管理台/文档 | `https://v3.elepcloud.com/` 是管理台和第三方接口文档入口。 | 保持域名分工稳定；不做未经确认的公开接口变更。 |
+| 第三方问答 | 第三方 20 路 live smoke 已通过；使用服务器侧 active bearer，未打印 token。数据集/文档范围授权已实现。 | 遇到客户新失败样例时继续做范围相关 live smoke。 |
+| 报表/静态页 | 新百默认模板是 `xinbai-functional-modular-template-20260604`；第三方静态页 5 路 live smoke 已复用模板并返回 HTTP 200 产物。 | queue-stats 和低负载预热 live 观测需要合法 operator cookie/bearer 或运维侧安全回执。 |
+| 报表导出 | 标准产物为 `index.html`、`table-data.csv`、`report.ppt`、`report.md`。 | 用户可见文案里链接只出现一次；已有结构字段中继续承载产物 URL。 |
+| 数据源/CC 模式 | 数据源页和 staging analysis 链路已存在。CC/Codex 可协助 DB/API 接入，但必须落到明确目标数据集。 | 生产写入仍需人工确认。 |
+| P2 解析 | 8 服务器已对 DOC/DOCX/PDF/XLSX/PPTX/MP4 类小样本完成 summary-only dry-run；未写入、未入队。 | 继续扩样，并在真实 backfill 前确认 fact 类型用途策略。 |
+| 文档 fingerprint 治理 | 8 服务器只读聚合 inventory 已通过：`document_count=2637`、`fingerprinted_document_count=32`、`canonical=32`、`unknown=2605`、重复 hash 分组 `0`。 | 缺失对象原因和对象清理 dry-run 尚未做；当前不删除文件。 |
+| CI | 本地和 8 服务器等价命令覆盖当前主要缺口。GitHub Actions 因账号付款/额度状态在 job 启动前失败。 | 账号状态恢复后重跑 DataMax CI；当前 Actions 失败不按代码失败处理。 |
 
-### P0-1 第三方问答与范围授权
+## 3. 当前执行队列
 
-**目标:** 第三方普通问答、临时文档、数据集分组、同会话持续授权稳定可用。
+### P0-1 收尾当前 P2 Fingerprint Smoke 批次
 
-**规则:**
-- `dataset_external_ids` 是稳定业务分组权限，可多个。
-- `available_document_external_ids` 是额外文档权限，可与分组同时传。
-- 文档已在分组内时去重。
-- 授权按 conversation/session 持续，直到会话 ID 变化。
+**原因:** 当前工作区已有安全的 P2-2 文档 fingerprint inventory smoke 改动，应该先验证、提交、推送、同步 8 服务器，再开新功能。
 
-**验证命令:**
+**涉及文件:**
+- 新增：`scripts/smoke/document-fingerprint-inventory.mjs`
+- 修改：`package.json`
+- 修改：`scripts/README.md`
+- 修改：`.github/workflows/datamax-ci.yml`
+- 修改：`docs/plans/datamax-active-execution-plan.md`
+- 修改：`docs/validation/datamax-main-gap-closure.md`
 
-```bash
-npm run smoke:external-scoped-document-chat -- --self-test
-npm run smoke:external-video-ppt -- --self-test
-npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 5 --timeout-ms 120000
-```
-
-**完成标准:** 外部临时文档问答可命中；范围变更不污染其他会话；live 回执写入 validation。
-
-### P0-2 主站聊天体验
-
-**目标:** 主站直接问答在多轮、长回复、流式进度下可用。
-
-**重点文件:**
-- `apps/web/app/HomePageClient.js`
-- `apps/web/app/components/WorkspaceDirectoryPanel.js`
-- `apps/web/app/globals.css`
-- `apps/web/app/lib/assistant-run-progress.test.mjs`
-- `apps/web/app/lib/local-chat-sessions.test.mjs`
-
-**验证命令:**
+**本地验证:**
 
 ```bash
-node --test apps/web/app/lib/assistant-run-progress.test.mjs
-node --test apps/web/app/lib/local-chat-sessions.test.mjs
-npm --prefix apps/web run build
-npm run smoke:main-assistant-streaming -- --base-url https://v3.elepcloud.com --timeout-ms 120000 --require-live-delta --require-multiple-deltas
+git diff --check
+node --check scripts/smoke/document-fingerprint-inventory.mjs
+npm run smoke:document-fingerprint-inventory -- --self-test
+npm run smoke:p2-summary-only-dry-run -- --self-test
 ```
 
-**完成标准:** 未登录问答可用；长回复自动滚动；新建对话不丢历史；思考/进度只展示安全摘要。
+**推送后 8 服务器验证:**
 
-### P0-3 新百报表触发、焦点和导出
+```bash
+cd /srv/aiv3/repo
+git pull --ff-only origin main
+npm run smoke:document-fingerprint-inventory -- --self-test
+npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20 --pretty --output-dir target/document-fingerprint-inventory-smoke-p2-20260612
+systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service
+```
 
-**目标:** 新百经营类需求能触发报表，但不截断正常回答，不误触发非经营报表问题。
+**完成标准:**
+- 本地 self-test 通过。
+- 8 服务器 live inventory 只输出聚合计数。
+- 回执不含 DB URL、token、原始 URL、content hash、文档标题、对象路径或正文。
+- validation 记录 post-sync run id 和服务器 commit。
 
-**触发词范围:**
-- 应触发：`取高`、`经营状况`、`经营情况`、`风险识别`、`低活跃品牌`、`销售缺口`、`需要助推`、`经营健康度`。
-- 不应触发：`取高是什么意思？`、`风险识别系统有哪些项目经历？`。
+### P0-2 稳定第三方报表触发
+
+**原因:** 客户可见问题集中在“要求报表但没有触发”和“触发报表后截断正常回答”。
+
+**范围:**
+- 触发词放宽只限新百经营报表域。
+- 触发报表不能截断正常回答。
+- 用户可见文案中报表链接只出现一次。
+- 已有结构字段继续携带产物 URL，不新增公开字段。
+
+**应触发报表:**
+- `取高`
+- `经营状况`
+- `经营情况`
+- `经营健康度`
+- `风险识别`
+- `低活跃品牌`
+- `销售缺口`
+- `需要助推`
+- 其他明显的新百经营管理表述
+
+**不应触发报表:**
+- `取高是什么意思？`
+- `风险识别系统有哪些项目经历？`
+- 新百经营数据集之外的一般概念问题
 
 **验证命令:**
 
@@ -102,144 +116,157 @@ CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_art
 npm run validate:xinbai-report-template
 ```
 
-**完成标准:** 焦点正确；链接可点且只出现一次；固定结构字段含 `index.html`、`table-data.csv`、`report.ppt`、`report.md`。
+**完成标准:**
+- 当前关注焦点对应模块前置。
+- 正常回答不被报表任务截断。
+- 报表链接可点击且不重复。
+- 导出文件可访问。
 
-## 4. P1 近期补缺
+### P0-3 主站聊天体验回归
 
-### P1-1 模型网关与 20 路并发
+**原因:** DataMax 主站是直接可见入口，之前出现过新对话、自动滚动、进度展示相关回归。
 
-**目标:** 主站和第三方普通问答支持 20 路并发；复杂静态页/Image2/HTML 任务本地 5 路，Cloudflare fallback 2 路。
-
-**待完成:**
-- 拿到合法 operator 会话或运维安全回执后，跑 authenticated model-gateway operator smoke。
-- 证明 RightCode 主力模型不可用或耗尽时能正确切 MiniMax fallback。
-
-**已补自检:**
-- `npm run smoke:main-chat-20way -- --self-test` 验证主站 20 路脚本的 payload、summary、percentile 和 poll-result fixture，不调用 DataMax。
-- `npm run smoke:external-channel-20way -- --self-test` 验证第三方 20 路脚本的 payload、SSE parser、summary 和 percentile fixture，不调用 DataMax。
-
-**已验证 live:**
-- 8 服务器主站 20 路真实抽样通过：`okCount=20`，`assistantMessageCount=20`，`p95LatencyMs=21073`。
-- 8 服务器第三方 20 路真实抽样通过：服务器侧加载 `generic-chat-main` active bearer 且不打印 token，`okCount=20`，`completedCount=20`，`p95LatencyMs=5537`。
-- 无凭证第三方调用返回 401 `external_channel_auth_failed`，未授权保护有效。
+**重点文件:**
+- `apps/web/app/HomePageClient.js`
+- `apps/web/app/components/WorkspaceDirectoryPanel.js`
+- `apps/web/app/lib/assistant-run-progress.test.mjs`
+- `apps/web/app/lib/local-chat-sessions.test.mjs`
 
 **验证命令:**
 
 ```bash
-CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib
-CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib
-CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib
-npm run smoke:main-chat-20way -- --self-test
-npm run smoke:external-channel-20way -- --self-test
-npm run smoke:main-chat-20way -- --base-url https://doc.elepcloud.com --concurrency 20 --timeout-ms 180000
-npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20 --timeout-ms 180000
+node --test apps/web/app/lib/assistant-run-progress.test.mjs
+node --test apps/web/app/lib/local-chat-sessions.test.mjs
+npm --prefix apps/web run build
+```
+
+**完成标准:**
+- 未登录直接问答可用。
+- 长回复或流式进度能自动滚动到最新内容。
+- 新建对话不导致当前会话丢失。
+- 进度/思考展示为安全摘要，不暴露原始 provider payload。
+
+## 4. P1 生产观测与并发
+
+### P1-1 Model Gateway Operator Smoke
+
+**前置:** 需要合法 operator cookie/bearer，或运维侧提供安全脱敏回执。
+
+**验证命令:**
+
+```bash
 node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com
 ```
 
-**完成标准:** 普通问答 20 路稳定；复杂任务排队可观测；operator 状态不泄密。
+**完成标准:**
+- 能看到 provider lane、限流、fallback 状态，且不泄密。
+- RightCode 主力不可用或耗尽时切 MiniMax fallback 的状态可观测。
+- 未授权访问仍返回 HTTP 401。
 
-### P1-2 静态页复用、预热和 fallback
+### P1-2 Queue Stats 与静态页预热观测
 
-**目标:** 大多数报表需求优先命中模板；低负载时后台预热；Cloudflare/Codex 不通时本地链路仍能给出可用页面或明确状态。
-
-**已验证:**
-- `npm run smoke:static-page-5way -- --self-test`
-- `npm run smoke:static-page-prewarm-observability -- --self-test`
-- `npm run smoke:cloudflare-fallback-2way -- --self-test`
-- `CC=clang CXX=clang++ cargo test -p static-page-worker --lib`
-- 8 服务器静态页 5 路 live smoke 通过：服务器侧加载 `generic-chat-main` active bearer 且不打印 token，5/5 accepted，5/5 artifact URL，全部复用 `xinbai-functional-modular-template-20260604`，artifact URL HTTP 200。
-
-**待完成:**
-- 对低负载预热任务跑部署目标只读 queue-stats smoke，持续观察 queued、running、published、failed、skipped_existing_template、waiting_for_low_load。
-- queue-stats live smoke 需要合法 operator cookie/bearer；未授权管理面 401 保护已验证，不能用无凭证请求冒充 live 队列观测。
-
-**完成标准:** 用户要报表时优先复用模板；后台预热不主动打扰用户；失败状态可从管理台或 smoke receipt 追踪。
-
-### P1-3 数据接入与 CC 模式
-
-**目标:** CC/Codex 可以协助数据库/API 接入，但必须落到明确目标数据集；生产写入前保持人工确认。
-
-**已验证:**
-- 数据源页接入方式介绍和已接入对象折叠展示。
-- `data_ingestion_analysis` 可产出 `staging_plan`。
-- MySQL source sync 必须解析到有效目标数据集。
-- staging-sync self-test 和 live-readiness self-test 已在本地和 8 服务器通过。
+**前置:** 需要合法 operator cookie/bearer，或运维侧提供安全脱敏回执。
 
 **验证命令:**
 
-```powershell
-.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case data-ingestion-analysis -Json
+```bash
+npm run smoke:static-page-prewarm-observability -- --self-test
+npm run smoke:static-page-5way -- --self-test
+npm run smoke:cloudflare-fallback-2way -- --self-test
 ```
+
+**live 目标:** 观测 queued、running、published、failed、skipped-existing-template、waiting-for-low-load，不输出任务 payload。
+
+**完成标准:**
+- 低负载预热可安全观测。
+- 模板复用仍是优先路径。
+- Cloudflare/Codex fallback 不通时，本地模板复用不受影响。
+
+### P1-3 20 路并发保活
+
+**已验证 live:** 主站 20 路、第三方 20 路、静态页 5 路。
+
+**大版本前重复:**
 
 ```bash
-bash scripts/run-data-ingestion-staging-live-smoke.sh --self-test
-bash scripts/run-data-ingestion-staging-sync-smoke.sh
+npm run smoke:main-chat-20way -- --self-test
+npm run smoke:external-channel-20way -- --self-test
+npm run smoke:static-page-5way -- --self-test
 ```
 
-**完成标准:** 产出 `staging_plan`，不写生产；目标数据集明确；无密钥和 raw 连接信息泄漏。
+**live 重跑条件:** 只有在修改 runtime、model gateway、worker 或第三方 channel 相关逻辑时重跑。
 
-## 5. P2 解析深化与企业事实库
+## 5. P2 企业记忆与文档理解
 
-### P2-1 异步深化解析
+### P2-1 解析/事实 dry-run 扩样
 
-**目标:** 文档入库后，在空闲队列持续抽取结构化事实，不阻塞上传和即时问答。
+**目标:** 文档入库后可在空闲时异步深化：实体、别名、岗位、组织、项目、操作步骤、表格事实、合同指标、面积、客流、租售比、有效期和证据来源。
 
-**候选能力:**
-- 表格结构抽取。
-- 实体、别名、组织、人名、岗位、项目经历抽取。
-- 操作步骤、护理规范、合同指标、面积、客流、租售比抽取。
-- 事实有效期、来源 episode、证据 provenance。
+**当前规则:** 只做 dry-run。
 
-**下一步:**
-1. 继续用更多对象可达小样本跑 summary-only dry-run，扩大文档类型覆盖。
-2. 汇总不同文档类型的 would-enqueue、would-record、derived-fact 规模。
-3. 持续校准 fact 类型用途策略：`report_aggregation`、`retrieval_enhancement`、`evidence_index_only` 和 `review_required`。
-4. 真实历史 backfill 前单独确认范围、批量、回滚方式。
-
-**完成标准:** 默认 dry-run 和 summary-only；真实写入或入队必须另行确认。
-
-**当前证据:** 8 服务器已完成同一数据集 limit5 summary-only dry-run：fingerprint `would_record_count=5` 且 `duplicate_count=5`，fact-index `derived_fact_count=281`，enrichment `would_enqueue_count=2`；均未写入、未入队。另一个 37 文档、4 content-type 数据集已完成 limit10 summary-only dry-run：fingerprint `would_record_count=10`，fact-index `derived_fact_count=1067`，并按 legacy Word、PDF、Excel OpenXML、Word OpenXML 各跑 1 个单文档 summary-only probe；均未写入、未入队。第三个 5 文档、4 content-type 数据集已完成 limit5 summary-only dry-run，覆盖 PDF、Word OpenXML、PowerPoint OpenXML、MP4；`derived_fact_count=244`，单文档 probe 显示 PPTX/DOCX/MP4 可产生派生事实，PDF 样本为 0，MP4 fingerprint `skipped_count=1`；均未写入、未入队。
-
-**固定入口:**
+**验证命令:**
 
 ```bash
 npm run smoke:p2-summary-only-dry-run -- --self-test
 npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 --env-file /etc/aiv3/aiv3.env
 ```
 
-该入口只封装 `document-fingerprint-backfill`、`fact-index-backfill`、`document-enrichment-backfill` 的 `--dry-run --summary-only --pretty` 路径，不提供 `--confirm-real-run`。
+**下一批样本:**
+- 客户手册或制度流程类数据集。
+- 简历类数据集。
+- 经营表格类数据集。
+- 混合媒体数据集只做 dry-run。
 
-**8 服务器状态:** 固定入口已在 8 服务器通过 self-test、limit5 dry-run 和多类型扩样 dry-run；结果仍为不写入、不入队。wrapper 已修复连续运行 report-path 碰撞，`runId` 使用毫秒时间戳加单调后缀。dry-run 报告已增加 `factUsePolicy`，把已知 fact 类型归入 `report_aggregation`、`retrieval_enhancement` 或 `evidence_index_only`，未知类型固定进入 `review_required`。
+**完成标准:**
+- 已知 fact 类型归入 `report_aggregation`、`retrieval_enhancement` 或 `evidence_index_only`。
+- 未知 fact 类型固定进入 `review_required`。
+- 未经确认不写真实 facts、fingerprints、snapshots，也不入队。
 
 ### P2-2 重复文档与对象治理
 
-**目标:** 8 服务器本地文档按解析内容和 fingerprint 去重，文档可归属多个数据集，不重复存储不可控副本。
+**目标:** 降低重复存储，让同一文档可安全归属多个数据集，同时不破坏授权语义。
+
+**当前安全入口:**
+
+```bash
+npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20
+```
 
 **下一步:**
-1. 对对象可达样本做 fingerprint summary-only 统计。
-2. 对对象缺失样本只记录缺失原因，不重试下载、不删除。
-3. 区分“索引映射去重”和“对象文件清理”两类动作。
-4. 清理对象文件前必须给出 dry-run、影响清单和回滚方案。
+1. 增加缺失对象原因分类，不下载、不删除。
+2. 区分索引层重复映射和对象文件清理。
+3. 对象清理前必须产出 dry-run 影响清单和回滚方案。
 
-**完成标准:** 不直接删除源文件；不改变数据集可见权限；清理前有可审计预检。
+**完成标准:**
+- 不删除源对象。
+- 不改变数据集权限语义。
+- 清理决策可审计、可回滚。
 
 ## 6. P3 工程治理
 
-**目标:** 降低长期维护成本，减少大文件改动和 smoke 不可复现。
+**优先顺序:**
+1. 继续拆分 `crates/platform-api/src/lib.rs`，每次只做一个行为保持的小切片。
+2. 继续拆分 `apps/web/app/HomePageClient.js`，先有测试再抽 hook/component。
+3. smoke 脚本持续标注 self-test、preflight、live 边界。
+4. 生成的 integration HTML 如果只是行尾/stat 噪声，不要纳入提交。
+5. GitHub Actions 账号额度问题修复后再重跑 DataMax CI。
 
-**任务:**
-- 继续拆小 `crates/platform-api/src/lib.rs` 中高风险逻辑。
-- 前端按页面、hook、数据适配拆分 `HomePageClient.js`。
-- `scripts/README.md` 持续标注 self-test、preflight、live 的边界。
-- CI 最小矩阵已落到 `.github/workflows/datamax-ci.yml`，覆盖 Node smoke syntax/self-test、外部报表 focus/export、静态页/fallback/预热可观测、placeholder readiness、Web build、Rust fmt、模型网关最小测试和 static-page-worker 测试。
-- CI 首次 GitHub Actions 运行被 GitHub 账号付款/额度限制拦截，job 未启动；额度恢复前，用本地和 8 服务器等价命令作为临时回归依据。
-- CI 恢复后需要回看首轮真实 Actions 结果；如果失败，优先修 workflow 环境差异，不改线上接口。
-
-## 7. 8 服务器发布流程
-
-只在用户要求部署时执行。
+**源码重构最小回归集:**
 
 ```bash
+cargo fmt --check
+CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib
+CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib
+CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib
+npm --prefix apps/web run build
+```
+
+## 7. 8 服务器部署流程
+
+只在用户明确要求部署时执行。
+
+```bash
+cd /srv/aiv3/repo
 git pull --ff-only origin main
 npm --prefix apps/web run build
 CC=clang CXX=clang++ cargo build --release -p platform-api
@@ -251,9 +278,9 @@ sudo systemctl restart aiv3-static-page-worker.service
 systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-run-worker.service aiv3-chat-session-worker.service aiv3-static-page-worker.service
 ```
 
-按改动范围追加对应 worker build/restart。纯文档或纯 smoke 脚本更新不需要重启服务。
+按改动范围追加对应 worker build/restart。纯文档或纯 smoke 脚本更新不重启服务。
 
-部署后至少跑：
+**部署后 smoke 菜单:**
 
 ```bash
 npm run smoke:external-report-focus -- --self-test
@@ -263,11 +290,6 @@ npm run smoke:cloudflare-fallback-2way -- --self-test
 npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env --env-file /etc/aiv3/minimax.env --allow-not-ready --json-stdout
 ```
 
-## 8. 下一步队列
+## 8. 下一步建议
 
-1. 恢复 GitHub Actions 账号额度后，重跑 DataMax CI 首轮真实 Actions，并把失败项或通过回执写入 validation。
-2. 补 P1-1：获取合法 operator 会话或运维安全回执后跑 authenticated model-gateway smoke。
-3. 补 RightCode 主力模型不可用或耗尽时切 MiniMax fallback 的可观测验证。
-4. 跑低负载预热 queue-stats live smoke；需要合法 operator cookie/bearer 或运维侧回执。
-5. P2 继续对象可达小样本 summary-only，扩大文档类型覆盖；不做真实历史 backfill 或对象清理，除非用户单独确认。
-6. 继续拆分 `platform-api` 和主站前端大文件，但每次只收可回归的小改动。
+先完成 P0-1：验证、提交、推送并同步当前 P2 fingerprint-inventory smoke 批次。随后如果能拿到合法 operator 凭证或运维脱敏回执，就补 P1-1/P1-2；如果 operator 仍卡住，就继续做 P2 summary-only 扩样，因为这条线安全、可独立推进，也不依赖外部权限。
