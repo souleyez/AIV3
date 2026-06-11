@@ -15,9 +15,9 @@
 
 ## 2. 当前基线
 
-- GitHub `main`：`52f1e39 Record DataMax deployment validation`。
-- 8 服务器 `/srv/aiv3/repo`：已同步到 `52f1e39`。
-- 8 服务器当前运行时代码：`8f31a4a Consolidate DataMax plan and validation`，其后 `52f1e39` 为文档验证记录更新。
+- GitHub `main`：以 `git log --oneline -1` 为准；最近一次已同步验证记录为 `99cd34c Record DataMax live smoke progress`。
+- 8 服务器 `/srv/aiv3/repo`：已同步到 `99cd34c2d`；本轮后续文档同步不需要重启服务。
+- 8 服务器当前运行时代码：`8f31a4a Consolidate DataMax plan and validation`，其后提交主要为文档和验证台账更新。
 - 已部署并重启的 8 服务器服务：
   - `aiv3-platform-api.service`
   - `aiv3-web.service`
@@ -137,6 +137,15 @@ curl -I https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinba
 - 第三方报表导出字段线上检查：JSON/SSE 两种模式 `okCount=2`，标题 `新世界百货经营管理月报表`，focus `取高机会`，导出字段和文件检查覆盖 `table-data.csv`、`report.ppt`、`report.md`，回执 `/srv/aiv3/repo/target/external-report-export-smoke-52f1e39-live/20260611160219.json`。
 - 上述 smoke 使用服务器侧已有 `generic-chat-main` inbound bearer 注入子进程；token 未打印、未提交、未写入回执。
 
+主站浏览器级回归已通过：
+
+- `https://doc.elepcloud.com/` 未登录状态可直接发起普通聊天；测试问题为 `浏览器回归测试：请用三句话介绍 DataMax。`。
+- 线上页面显示思考摘要和最终答案；生成结束后 `正在生成回复` 消失。
+- 消息容器 `.chat-messages` 实测 `scrollHeight=540`、`clientHeight=446`、`scrollTop=94`，`nearBottom=true`，证明长回复后自动滚到底。
+- 按真实路径点击顶部“当前对话”菜单，再点击“新建对话”，页面切到空白草稿；原对话仍出现在列表中。
+- 点回原对话后，原问题和最终答案恢复，消息容器仍 `nearBottom=true`。
+- `https://v3.elepcloud.com/` 显示管理入口落地页，含 `DATAMAX V3`、`企业级数据处理助手`、`管理台登录`、`公开接口文档`，且不显示主站直接聊天输入框。
+
 ## 5. P0：凭据型线上 smoke 补齐
 
 ### 目标
@@ -180,7 +189,7 @@ node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.co
 
 确保主站面对真实用户时可用，不只是在接口层可用。
 
-### 待处理
+### 已完成
 
 - 输出追加时消息框自动滚动到底部。
 - 进度、思考、执行状态可以展示安全摘要，但不能泄露 raw prompt、密钥、provider payload。
@@ -204,11 +213,7 @@ npm --prefix apps/web run build
 npm run smoke:main-assistant-streaming -- --base-url https://v3.elepcloud.com --timeout-ms 120000 --require-live-delta --require-multiple-deltas
 ```
 
-还需要补一次浏览器级验证：
-
-- 流式输出时实际视图自动到底。
-- 新建对话后仍能回到原对话。
-- 管理台登录页视觉风格未被主站改动污染。
+浏览器级验证已经完成，详见 `docs/validation/datamax-main-gap-closure.md` 的 `2026-06-12 Main-Site Browser Interaction Smoke`。
 
 ## 7. P0：第三方报表触发和新百模板
 
@@ -395,6 +400,5 @@ CC=clang CXX=clang++ cargo test -p memory-worker --lib
 ## 14. 下一步执行顺序
 
 1. 补 model-gateway operator 鉴权 smoke；当前 8 服务器未配置专用 operator smoke cookie/email/local-key，不能绕过。
-2. 做主站浏览器级体验回归：自动滚动、新对话、管理台入口视觉。
-3. 如发现线上失败，优先定位配置、数据、部署差异；确认不是环境问题后再改代码。
-4. P0 剩余验证稳定后，推进 P1 的模板预热、数据源页面、临时文档权限增强。
+2. 如发现线上失败，优先定位配置、数据、部署差异；确认不是环境问题后再改代码。
+3. P0 剩余验证稳定后，推进 P1 的模板预热、数据源页面、临时文档权限增强。

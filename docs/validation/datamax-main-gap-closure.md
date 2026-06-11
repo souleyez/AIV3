@@ -285,6 +285,47 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - no 120-server action was taken;
   - no credential, cookie, bearer token, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, or full document body was recorded.
 
+## 2026-06-12 Main-Site Browser Interaction Smoke
+
+- Purpose:
+  - close the active plan's browser-level main-site UX validation gap;
+  - verify `doc.elepcloud.com` direct chat, streaming/progress visibility, auto-scroll, new-conversation behavior, previous-conversation restore, and `v3.elepcloud.com` management-entry separation.
+- Method:
+  - used the Codex in-app browser against production URLs;
+  - no code deploy, service restart, public API change, third-party contract change, 120-server action, credential entry, file upload, or destructive action was performed.
+- Direct chat entry:
+  - URL: `https://doc.elepcloud.com/`;
+  - unauthenticated page showed direct-chat controls and the prompt placeholder `直接提问；系统会按意图自动选中资料范围`;
+  - initial send button was disabled until input was filled;
+  - test prompt: `浏览器回归测试：请用三句话介绍 DataMax。`.
+- Streaming/progress visibility:
+  - after sending, the page showed `正在生成回复...`;
+  - after completion, `正在生成回复` disappeared;
+  - the answer area showed a `思考：` progress section plus the final Chinese answer, matching the current product decision to expose safe thinking/progress summaries rather than hiding all waiting state.
+- Auto-scroll evidence:
+  - after the final answer rendered, `.chat-messages` existed with `scrollHeight=540`, `clientHeight=446`, `scrollTop=94`;
+  - computed `nearBottom=true`, so the viewport stayed at the latest generated content after a reply longer than the visible message panel.
+- New-conversation behavior:
+  - direct DOM clicking of the hidden flyout action was not treated as valid user-path evidence;
+  - the validated path clicked the visible top `当前对话` trigger first, then clicked the visible `新建对话` action;
+  - after the click, the active title changed to `06-12 00:11 · 新对话`, the chat panel contained only the blank-thread notice, and the prior `浏览器回归测试：请用三句话介绍 DataMax。` conversation remained in the list with `本地 · 1 分钟前`;
+  - selecting the prior conversation restored both the original question and the final answer;
+  - restored message panel remained `nearBottom=true` with the same `scrollHeight=540`, `clientHeight=446`, `scrollTop=94`.
+- Management entry separation:
+  - URL: `https://v3.elepcloud.com/`;
+  - page title: `DataMax V3`;
+  - visible text included `DATAMAX V3`, `企业级数据处理助手`, `管理台登录`, and `公开接口文档`;
+  - the page did not show the direct-chat box or `可以直接聊天`, proving it is not currently serving the `doc.elepcloud.com` chat entry.
+- Model-gateway operator follow-up:
+  - command: `node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-20260612-browser-pass`;
+  - result: `ready=false`, `pending=true`, `failed=false`, `authMethod=none`, `credentialsProvided=false`;
+  - report: `/srv/aiv3/repo/target/model-gateway-operator-smoke-20260612-browser-pass/20260611161314.json`;
+  - summary: `/srv/aiv3/repo/target/model-gateway-operator-smoke-20260612-browser-pass/20260611161314.md`;
+  - authenticated model-gateway operator smoke still requires a legitimate operator session/cookie or approved operator-side receipt.
+- Safety:
+  - no cookie, bearer token, local key, provider key, database URL, raw provider payload, raw customer row, local object path, or full document body was recorded;
+  - no public URL, public auth behavior, third-party request field, third-party response field, or existing service route was changed.
+
 ## Gate Results
 
 | Gate | Status | Receipt |
