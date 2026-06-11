@@ -140,12 +140,13 @@ node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.co
 
 **已验证:**
 - `npm run smoke:static-page-5way -- --self-test`
+- `npm run smoke:static-page-prewarm-observability -- --self-test`
 - `npm run smoke:cloudflare-fallback-2way -- --self-test`
 - `CC=clang CXX=clang++ cargo test -p static-page-worker --lib`
 
 **待完成:**
 - 部署窗口内跑真实 5 路静态页 live smoke。
-- 对低负载预热任务补可观测状态：queued、running、published、failed、skipped_existing_template。
+- 对低负载预热任务跑部署目标只读 queue-stats smoke，持续观察 queued、running、published、failed、skipped_existing_template、waiting_for_low_load。
 - 确认相同数据集组合或有交集的数据集组合优先复用模板。
 
 **完成标准:** 用户要报表时优先复用模板；后台预热不主动打扰用户；失败状态可从管理台或 smoke receipt 追踪。
@@ -226,7 +227,7 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 - 继续拆小 `crates/platform-api/src/lib.rs` 中高风险逻辑。
 - 前端按页面、hook、数据适配拆分 `HomePageClient.js`。
 - `scripts/README.md` 持续标注 self-test、preflight、live 的边界。
-- CI 最小矩阵已落到 `.github/workflows/datamax-ci.yml`，覆盖 Node smoke syntax/self-test、外部报表 focus/export、静态页/fallback、placeholder readiness、Web build、Rust fmt、模型网关最小测试和 static-page-worker 测试。
+- CI 最小矩阵已落到 `.github/workflows/datamax-ci.yml`，覆盖 Node smoke syntax/self-test、外部报表 focus/export、静态页/fallback/预热可观测、placeholder readiness、Web build、Rust fmt、模型网关最小测试和 static-page-worker 测试。
 - CI 首次 GitHub Actions 运行被 GitHub 账号付款/额度限制拦截，job 未启动；额度恢复前，用本地和 8 服务器等价命令作为临时回归依据。
 - CI 恢复后需要回看首轮真实 Actions 结果；如果失败，优先修 workflow 环境差异，不改线上接口。
 

@@ -39,6 +39,7 @@ jobs:
           node --check scripts/smoke/main-chat-20way.mjs
           node --check scripts/smoke/external-channel-20way.mjs
           node --check scripts/smoke/static-page-5way.mjs
+          node --check scripts/smoke/static-page-prewarm-observability.mjs
           node --check scripts/smoke/cloudflare-fallback-2way.mjs
           node --check scripts/smoke/p2-summary-only-dry-run.mjs
 
@@ -51,6 +52,7 @@ jobs:
           npm run smoke:main-chat-20way -- --self-test
           npm run smoke:external-channel-20way -- --self-test
           npm run smoke:static-page-5way -- --self-test
+          npm run smoke:static-page-prewarm-observability -- --self-test
           npm run smoke:cloudflare-fallback-2way -- --self-test
           npm run smoke:p2-summary-only-dry-run -- --self-test
           npm run smoke:production-placeholder-readiness -- --self-test --allow-not-ready --json-stdout

@@ -17,6 +17,7 @@
     "smoke:newbai-customer-answer-live-capture": "node scripts/smoke/newbai-customer-answer-live-capture.mjs",
     "smoke:p2-summary-only-dry-run": "node scripts/smoke/p2-summary-only-dry-run.mjs",
     "smoke:production-placeholder-readiness": "node scripts/smoke/production-placeholder-readiness.mjs",
+    "smoke:static-page-prewarm-observability": "node scripts/smoke/static-page-prewarm-observability.mjs",
     "smoke:static-page-5way": "node scripts/smoke/static-page-5way.mjs",
     "smoke:customer-web-codex-executor": "bash scripts/run-customer-web-codex-executor-smoke.sh",
     "smoke:customer-web-codex-live": "node scripts/smoke/customer-web-codex-live.mjs",

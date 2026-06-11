@@ -3612,3 +3612,38 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 P1 Static-Page Prewarm Observability Contract
+
+- Purpose:
+  - make the static-page template prewarm/reuse lifecycle observable through a deterministic smoke contract;
+  - keep low-load prewarm and stable-template reuse status semantics fixed before live 5-way smoke is attempted.
+- Code changes:
+  - added `scripts/smoke/static-page-prewarm-observability.mjs`;
+  - added `npm run smoke:static-page-prewarm-observability`;
+  - documented the entrypoint in `scripts/README.md`;
+  - added the script syntax check and self-test to `.github/workflows/datamax-ci.yml`;
+  - updated `docs/plans/datamax-active-execution-plan.md` P1-2 and P3 CI coverage.
+- Status contract:
+  - `queued`: planning, accepted, queued, or prewarm candidate events;
+  - `running`: running, rendering, or retrying progress;
+  - `published`: publish completed or published status;
+  - `failed`: failed, cancelled, or needs-human terminal states;
+  - `skipped_existing_template`: stable artifact/template reuse without new generation;
+  - `waiting_for_low_load`: silent prewarm requeued because active heavy-task count exceeds the configured threshold.
+- Local verification:
+  - `node --check scripts/smoke/static-page-prewarm-observability.mjs`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, required statuses `queued`, `running`, `published`, `failed`, `skipped_existing_template`, and `waiting_for_low_load` all observed; receipt `target/static-page-prewarm-observability-smoke/20260611174033-self-test.json`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed;
+  - `package.json` parsed successfully.
+- Remaining live gate:
+  - deployment-target live/read-only queue-stats check still needs an operator cookie or bearer for `https://v3.elepcloud.com`;
+  - true static-page 5-way live smoke remains pending a controlled production window and scope.
+- Safety:
+  - self-test did not call DataMax or any live endpoint;
+  - live mode is read-only and only queries workflow queue stats when credentials are supplied;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, production data mapping, static-page template, or report output was changed;
+  - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
