@@ -193,9 +193,10 @@ npm run smoke:cloudflare-fallback-2way -- --self-test
 - 经营表格类 XLSX 样本，limit5 派生 facts 1204，未知 fact 类型 0。
 - 制度手册/护理流程类 Word 旧格式样本，limit5 派生 facts 256，未知 fact 类型 0。
 - 简历类 14 份 PDF 样本，limit14 派生 facts 3010，包含组织、岗位、项目系统、时间段等维度，未知 fact 类型 0。
+- 考勤/缺勤/工时表格候选所在混合数据集，limit20 派生 facts 2590，未知 fact 类型 0，parse quality warning 2。
 
 **Next samples:**
-- 考勤/缺勤/工时表格类数据集。
+- 新客户失败样例对应的数据集，仍按 aggregate-only 选样和 summary-only dry-run 处理。
 
 **Command:**
 
@@ -329,8 +330,8 @@ npm --prefix apps/web run build
 
 ## 9. 当前下一步
 
-1. 下一个可独立推进项是 P2-1：考勤/缺勤/工时表格类 summary-only dry-run 扩样。
-2. 若考勤类样本没有合适候选，转入 P1-1 operator 观测前置准备或 P5 小切片重构。
+1. 下一个可独立推进项是 P1-1：operator 观测闭环的无凭证/未授权路径整理；有合法 operator 凭证或脱敏回执后再做 live。
+2. 若继续 P2，只针对新客户失败样例或新数据类型补 summary-only dry-run，不再重复已覆盖类型。
 3. 若拿到合法 operator 凭证或脱敏回执，优先做 P1-1 operator 观测闭环。
 4. 若进入发布窗口，按 P0-1 和 P0-2 跑固定回归后再部署。
 5. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。

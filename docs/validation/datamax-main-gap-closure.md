@@ -3520,6 +3520,40 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Attendance And Workhour Table Summary-Only Dry-Run Expansion
+
+- Purpose:
+  - continue P2-1 parsing/fact-store dry-run expansion for attendance, absence, and workhour table-like data;
+  - keep selection aggregate-only and all processing non-mutating.
+- Candidate selection:
+  - selected dataset `c75ef99e-9369-4c65-bd53-e19e69d84f65`;
+  - aggregate-only selection fields: dataset id, spreadsheet document count, indexed chunk count, attendance/absence/workhour/date keyword-hit chunk counts, and content-type distribution;
+  - aggregate spreadsheet shape: `document_count=4`, `chunk_count=42`, `attendance_hit_chunks=39`, `absence_hit_chunks=0`, `workhour_hit_chunks=20`, `date_hit_chunks=4`;
+  - content-type distribution for the spreadsheet candidate subset: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet=4`;
+  - no dataset title, document title, object key, source URL, document body, raw chunk text, raw row, credential, bearer, provider payload, or private path was output or recorded.
+- 8-server dry-run:
+  - command: `npm run smoke:p2-summary-only-dry-run -- --dataset-id c75ef99e-9369-4c65-bd53-e19e69d84f65 --limit 20 --env-file /etc/aiv3/aiv3.env --output-dir target/p2-summary-only-dry-run-smoke-p2-attendance-20260612`;
+  - result: `runId=20260611192407550-dzi2gcwan3`, `ok=true`;
+  - note: the dry-run wrapper sampled at dataset level with `limit=20`; the candidate evidence above refers to the spreadsheet subset inside the dataset;
+  - fingerprint: `candidate_count=20`, `would_record_count=20`, `recorded_count=0`, `duplicate_count=0`, `skipped_count=0`, `summary_only=true`, `dry_run=true`;
+  - fact index: `document_count=20`, `derived_fact_count=2590`, `inserted_fact_count=0`, `snapshot_updated=false`, `parse_quality_warning_count=2`;
+  - fact types: `date_period=21`, `education_certificate=1`, `keyword=1853`, `location_area=11`, `organization=21`, `procedure_step=163`, `project_product_system=181`, `role_position=8`, `section=167`, `time_threshold=164`;
+  - fact use policy: `report_aggregation=407`, `evidence_index_only=2020`, `retrieval_enhancement=163`, `unknownFactTypes=[]`;
+  - enrichment: `document_count=20`, `missing_fingerprint_count=20`, `would_enqueue_count=0`, `enqueued_count=0`;
+  - receipt: `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke-p2-attendance-20260612/20260611192407550-dzi2gcwan3/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, 64-character hash value, shared object root, external-documents path, or generated-artifacts path;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- Safety:
+  - all runs used the fixed wrapper path with `--dry-run --summary-only`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no source object was deleted or cleaned;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, raw chunk text, table row, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0-3 Main-Site Chat UX Local Regression Refresh
 
 - Purpose:
