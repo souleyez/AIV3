@@ -3409,3 +3409,19 @@ Data-ingestion external fixed-task smoke:
   - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
   - no credential, bearer token, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
   - 120 server was not touched.
+
+## 2026-06-12 8-Server Documentation-Only Fast-Forward
+
+- Purpose:
+  - sync the rebuilt active plan and validation ledger to 8 server without deploying code.
+- 8-server sync:
+  - repository path: `/srv/aiv3/repo`;
+  - pre-pull head: `28c5cd487`;
+  - GitHub main checked via `git ls-remote`: `9994b9aaa0be090690d75e2a7ff6cd4e4518fc8d`;
+  - command: `git pull --ff-only origin main`;
+  - post-pull head: `9994b9aaa`;
+  - post-pull status: `## main...origin/main`.
+- Scope:
+  - fast-forward changed only `docs/plans/datamax-active-execution-plan.md` and `docs/validation/datamax-main-gap-closure.md`;
+  - no build, restart, migration, source sync, ingestion, live third-party mutation, or static-page generation was performed;
+  - 120 server was not touched.
