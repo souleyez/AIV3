@@ -209,6 +209,46 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - 8-server `CC=clang CXX=clang++` regression for the current source split batch is still required after a deploy approval;
   - credential/live checks for third-party ordinary question, temporary-document scoped question, third-party SSE, real report trigger, main-site streaming, and authenticated model-gateway operator smoke remain pending credential/operator input.
 
+## 2026-06-11 Deploy And 8-Server Post-Deploy Verification For `8f31a4a77`
+
+- Purpose:
+  - deploy the active-plan consolidation batch to 8 server;
+  - verify the deployed runtime, placeholder readiness, external report self-tests, public pages, model-gateway split regressions, auth/external-channel split regressions, and Customer Web Codex readiness.
+- Deployment:
+  - 8-server repo `/srv/aiv3/repo` fast-forwarded from `376262ff5` to `8f31a4a77` with `git pull --ff-only origin main`;
+  - `apps/web` build passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - Rust release build used `CC=clang CXX=clang++` and completed with `Finished release profile`; the first SSH long-running build connection reset while compilation continued, so the build was rerun through a background log and verified from `/tmp/datamax-build-8f31a4a.log`;
+  - restarted `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-dataset-output-worker.service`, `aiv3-external-action-worker.service`, `aiv3-external-source-worker.service`, `aiv3-ingest-worker.service`, `aiv3-media-worker.service`, `aiv3-memory-worker.service`, `aiv3-report-planner-worker.service`, `aiv3-report-render-worker.service`, `aiv3-retrieval-worker.service`, and `aiv3-static-page-worker.service`;
+  - all 14 restarted services reported `active`;
+  - post-restart `git rev-parse --short HEAD` returned `8f31a4a77` and `git status -sb` returned `## main...origin/main`;
+  - no 120-server action was taken.
+- 8-server non-credential smoke:
+  - `npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env --env-file /etc/aiv3/minimax.env --allow-not-ready --json-stdout`: passed with `ready=true`, `dataset_output.ready=true`, `report_planner.ready=true`, source status `deterministic_business_template`, and no raw env/provider key values printed;
+  - `npm run smoke:external-report-focus -- --self-test`: passed with `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed with `modeCount=2`, `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, and required exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `CUSTOMER_WEB_CODEX_REPO_ROOT=/srv/aiv3/repo npm run smoke:customer-web-codex-readiness -- --json-stdout --allow-not-ready`: passed with `ready=true`, provider `rightcode`, profile `rightcode-gpt-5-5-high`, named key kind `rightcode_main`, approved host kind `aiv3_server`, required capabilities present, and no raw secrets printed;
+  - `npm run smoke:customer-web-codex-live -- --preflight --allow-missing-gates --base-url https://v3.elepcloud.com`: completed preflight without live writes; Node emitted the existing typeless-package warning only;
+  - `node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com --allow-missing-credentials`: completed as `pending=true`, `failed=false`, `authMethod=none`, `credentialsProvided=false`, proving the operator surface remains protected without adding any bypass.
+- 8-server public URL smoke:
+  - `https://v3.elepcloud.com/`: HTTP 200, `text/html`;
+  - `https://doc.elepcloud.com/`: HTTP 200, `text/html`;
+  - `https://v3.elepcloud.com/external-integrations`: HTTP 200, `text/html`;
+  - `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html`: HTTP 200, `text/html`;
+  - `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/table-data.csv`: HTTP 200, `application/octet-stream`;
+  - `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/report.md`: HTTP 200, `application/octet-stream`.
+- 8-server clang regression:
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib --quiet`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib --quiet`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib --quiet`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api parse_worker_pool_concurrency_prefers_first_valid_value_and_clamps --lib --quiet`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api auth_session_endpoint_returns_current_user --lib --quiet`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_action_dispatch_auth_uses_only_explicit_dispatch_credentials --lib --quiet`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p report-planner-worker --quiet`: passed, 4/4 tests.
+- Remaining credential/live checks:
+  - third-party ordinary question, scoped temporary document question, SSE streaming, and real report trigger still require an active third-party bearer/context;
+  - authenticated model-gateway operator checks still require a legitimate operator session/cookie or approved operator-side receipt;
+  - no credential, cookie, bearer, provider key, env value, customer row, raw source payload, or private object path was recorded.
+
 ## Gate Results
 
 | Gate | Status | Receipt |

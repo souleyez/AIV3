@@ -12,9 +12,9 @@
 
 ## 0. 当前基线
 
-- 当前本地/GitHub 主线：`376262f Improve DataMax Codex handoff and report workflows`。
-- 当前 8 服务器 `/srv/aiv3/repo`：`376262ff5`。
-- 当前 8 服务器核心服务抽查：`aiv3-platform-api.service`、`aiv3-web.service`、`aiv3-assistant-run-worker.service`、`aiv3-chat-session-worker.service`、`aiv3-static-page-worker.service`、`aiv3-codex-host-agent.service` 均为 `active`。
+- 当前功能代码基线：`8f31a4a Consolidate DataMax plan and validation`。
+- 当前 8 服务器 `/srv/aiv3/repo` 运行时代码：`8f31a4a77`。
+- 当前 8 服务器核心服务抽查：`aiv3-platform-api.service`、`aiv3-web.service`、`aiv3-assistant-run-worker.service`、`aiv3-chat-session-worker.service`、`aiv3-dataset-output-worker.service`、`aiv3-external-action-worker.service`、`aiv3-external-source-worker.service`、`aiv3-ingest-worker.service`、`aiv3-media-worker.service`、`aiv3-memory-worker.service`、`aiv3-report-planner-worker.service`、`aiv3-report-render-worker.service`、`aiv3-retrieval-worker.service`、`aiv3-static-page-worker.service` 均为 `active`。
 - 当前公开入口：
   - 主站直接问答：`https://doc.elepcloud.com/`
   - 管理台：`https://v3.elepcloud.com/`
@@ -74,6 +74,14 @@ git diff --check
 rg -n "376262f|376262ff5|clang|xinbai-functional-modular-template-20260604" docs/validation/datamax-main-gap-closure.md
 ```
 
+**Progress:**
+- 2026-06-11: `8f31a4a77` 已部署到 8 服务器。
+  - `git pull --ff-only origin main` 已快进到 `8f31a4a77`。
+  - `pnpm build` 在 `apps/web` 通过，仅有既有 Next middleware deprecation 和 Turbopack NFT trace warning。
+  - `CC=clang CXX=clang++ cargo build --release -p platform-api -p assistant-run-worker -p chat-session-worker -p dataset-output-worker -p external-action-worker -p external-source-worker -p ingest-worker -p media-worker -p memory-worker -p report-planner-worker -p report-render-worker -p retrieval-worker -p static-page-worker` 通过；第一次 SSH 长连接中断后改用后台日志确认 `Finished release profile`。
+  - 已重启计划内 14 个服务，服务状态均为 `active`。
+  - 120 服务器未触碰。
+
 ### Task 2.3：建立当前 8 服务器正式 smoke 矩阵
 
 **Files:**
@@ -123,6 +131,14 @@ If credentials are missing, record as `pending credential` rather than skipped s
   - `npm --prefix apps/web run build` passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only.
   - `cargo fmt --check`, `git diff --check`, and `rg --files docs/plans` passed; `docs/plans` contains only this plan.
   - Credential/live checks remain pending until operator credentials or deployment approval are available.
+- 2026-06-11: 8-server post-deploy non-credential smoke passed for runtime code `8f31a4a77`.
+  - `npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env --env-file /etc/aiv3/minimax.env --allow-not-ready --json-stdout` passed with `ready=true`, `dataset_output.ready=true`, `report_planner.source_status=deterministic_business_template`, and no raw env values printed.
+  - `npm run smoke:external-report-focus -- --self-test` passed with `reportCases=7`, `ordinaryGuards=4`.
+  - `npm run smoke:external-report-export -- --self-test` passed with `modeCount=2`, `okCount=2`, expected title `新世界百货经营管理月报表`, focus `取高机会`, and export files `table-data.csv`, `report.ppt`, `report.md`.
+  - `curl -I` checks for `https://v3.elepcloud.com/`, `https://doc.elepcloud.com/`, `/external-integrations`, and the Xinbai template `index.html`/`table-data.csv`/`report.md` returned HTTP 200.
+  - `CUSTOMER_WEB_CODEX_REPO_ROOT=/srv/aiv3/repo npm run smoke:customer-web-codex-readiness -- --json-stdout --allow-not-ready` returned `ready=true` without printing secrets.
+  - `npm run smoke:customer-web-codex-live -- --preflight --allow-missing-gates --base-url https://v3.elepcloud.com` completed preflight without live writes.
+  - `node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com --allow-missing-credentials` completed as `pending=true`, `failed=false`; no credential bypass was added.
 
 ## 3. P0：模型和主站稳定性
 
