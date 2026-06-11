@@ -2,9 +2,9 @@
 
 ## 路由划分
 
-- `https://doc.elepcloud.com/`：公开主站入口，只展示 DataMax V3 设计图和公开入口，不挂到管理台；`/admin*` 会跳转到 `https://v3.elepcloud.com/admin*`。
+- `https://doc.elepcloud.com/`：DataMax 主站入口，未登录也可直接发起普通聊天、上传资料和使用主站功能；不挂到管理台。`/admin*` 会跳转到 `https://v3.elepcloud.com/admin*`。
 - `https://v3.elepcloud.com/`：管理台域名，根路径跳转到 `/admin`。
-- `/`：在非管理台专用域名上展示公开首页。
+- `/`：在非管理台专用域名上展示主站聊天页。
 - `/admin/login`：管理台登录页。
 - `/admin`：登录后的主工作台。
 - `/admin/external-integrations`：登录后的第三方通道和外部集成管理。
@@ -73,7 +73,7 @@ EXTERNAL_OBSERVABILITY_ACCESS_KEY="replace-with-observation-secret"
 ## 上线检查
 
 1. 配置 `ADMIN_CONSOLE_ACCESS_KEY`。
-2. 确认 `/` 能公开访问。
+2. 确认 `https://doc.elepcloud.com/` 展示主站聊天页，可未登录发消息。
 3. 确认 `/admin` 未登录会跳到 `/admin/login`。
 4. 如启用 Microsoft 登录，确认 Entra 应用回调地址包含 `/admin/microsoft/callback`。
 5. 确认登录后 `/admin` 和 `/admin/external-integrations` 可访问。
