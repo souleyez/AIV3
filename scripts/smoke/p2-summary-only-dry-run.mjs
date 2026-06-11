@@ -285,6 +285,91 @@ function summarizeParsed(reports) {
   };
 }
 
+const FACT_TYPE_USE_POLICY = {
+  date_period: {
+    primaryUse: 'report_aggregation',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'time filters, trend windows, and period-aware reporting',
+  },
+  education_certificate: {
+    primaryUse: 'report_aggregation',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'structured resume/person qualification dimensions',
+  },
+  keyword: {
+    primaryUse: 'evidence_index_only',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'broad lexical anchors; not stable enough for numeric aggregation',
+  },
+  location_area: {
+    primaryUse: 'report_aggregation',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'region, branch, site, and area dimensions',
+  },
+  organization: {
+    primaryUse: 'report_aggregation',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'company, customer, department, and brand dimensions',
+  },
+  procedure_step: {
+    primaryUse: 'retrieval_enhancement',
+    secondaryUses: ['evidence_index_only'],
+    reason: 'operating procedures should improve scoped answers before aggregation',
+  },
+  project_product_system: {
+    primaryUse: 'report_aggregation',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'project, product, system, and application dimensions',
+  },
+  role_position: {
+    primaryUse: 'report_aggregation',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'role, title, responsibility, and staffing dimensions',
+  },
+  section: {
+    primaryUse: 'evidence_index_only',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'document structure and provenance anchors',
+  },
+  time_threshold: {
+    primaryUse: 'report_aggregation',
+    secondaryUses: ['retrieval_enhancement'],
+    reason: 'SLA, frequency, duration, and threshold facts',
+  },
+};
+
+function factTypePolicy(factType) {
+  return FACT_TYPE_USE_POLICY[factType] || {
+    primaryUse: 'review_required',
+    secondaryUses: [],
+    reason: 'new fact type requires explicit routing policy before production use',
+  };
+}
+
+function summarizeFactUsePolicy(factTypeCounts) {
+  const countsByUse = {};
+  const factTypes = {};
+  for (const [factType, rawCount] of Object.entries(factTypeCounts || {})) {
+    const count = Number(rawCount || 0);
+    const policy = factTypePolicy(factType);
+    countsByUse[policy.primaryUse] = (countsByUse[policy.primaryUse] || 0) + count;
+    factTypes[factType] = {
+      count,
+      primaryUse: policy.primaryUse,
+      secondaryUses: policy.secondaryUses,
+      reason: policy.reason,
+    };
+  }
+  return {
+    policyVersion: 'p2_fact_type_use_policy_v1',
+    countsByUse,
+    factTypes,
+    unknownFactTypes: Object.entries(factTypes)
+      .filter(([, item]) => item.primaryUse === 'review_required')
+      .map(([factType]) => factType),
+  };
+}
+
 function validateNonMutating(parsedSummary) {
   return [
     parsedSummary.fingerprint.recorded_count === 0,
@@ -318,6 +403,11 @@ async function runSelfTest(args) {
     '  "derived_fact_count": 281,',
     '  "inserted_fact_count": 0,',
     '  "snapshot_updated": false,',
+    '  "fact_type_counts": {',
+    '    "keyword": 249,',
+    '    "procedure_step": 8,',
+    '    "organization": 16',
+    '  },',
     '  "dry_run": true,',
     '  "summary_only": true',
     '}',
@@ -359,6 +449,7 @@ async function runSelfTest(args) {
     },
   ];
   const parsedSummary = summarizeParsed(reports);
+  const factUsePolicy = summarizeFactUsePolicy(parsedSummary.fact_index.fact_type_counts);
   const checks = {
     specCountIsThree: specs.length === 3,
     allSpecsAreDryRunSummaryOnly: specs.every((spec) => (
@@ -370,6 +461,12 @@ async function runSelfTest(args) {
     limitScopeUsedWhenDocumentIdMissing: specs.every((spec) => spec.args.includes('--limit') && spec.args.includes('5')),
     fixtureJsonParsedAfterNoticeLines: parsedFixture?.derived_fact_count === 281,
     nonMutatingSummaryRecognized: validateNonMutating(parsedSummary),
+    factUsePolicyClassifiesKnownTypes:
+      factUsePolicy.factTypes.keyword?.primaryUse === 'evidence_index_only'
+      && factUsePolicy.factTypes.procedure_step?.primaryUse === 'retrieval_enhancement'
+      && factUsePolicy.factTypes.organization?.primaryUse === 'report_aggregation',
+    unknownFactTypesRequireReview:
+      summarizeFactUsePolicy({ future_fact_type: 3 }).unknownFactTypes.includes('future_fact_type'),
     rapidRunIdsAreUnique: makeRunId() !== makeRunId(),
     sanitizerRedactsSecrets: sanitizeText('DATABASE_URL=postgres://u:secret@example/db Bearer abc sk-1234567890')
       === 'DATABASE_URL=[REDACTED] Bearer [REDACTED] sk-[REDACTED]',
@@ -386,6 +483,7 @@ async function runSelfTest(args) {
       args: spec.args,
     })),
     parsedSummary,
+    factUsePolicy,
     generatedAt: new Date().toISOString(),
   };
   await mkdir(args.outputDir, { recursive: true });
@@ -408,6 +506,7 @@ async function runLiveDryRun(args) {
     commandReports.push(await runCommand(spec, args, env, outputDir));
   }
   const parsedSummary = summarizeParsed(commandReports);
+  const factUsePolicy = summarizeFactUsePolicy(parsedSummary.fact_index.fact_type_counts);
   const ok = commandReports.every((item) => item.exitCode === 0 && item.parsedOk)
     && validateNonMutating(parsedSummary);
   const report = {
@@ -423,6 +522,7 @@ async function runLiveDryRun(args) {
     outputDir,
     commandReports,
     parsedSummary,
+    factUsePolicy,
     safety: {
       dryRunOnly: true,
       summaryOnly: true,
@@ -443,6 +543,7 @@ async function runLiveDryRun(args) {
     documentId: args.documentId || null,
     limit: args.documentId ? null : args.limit,
     parsedSummary,
+    factUsePolicy,
     reportPath,
   }, null, 2));
   if (!ok) {

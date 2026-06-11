@@ -189,7 +189,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 **下一步:**
 1. 继续用更多对象可达小样本跑 summary-only dry-run，扩大文档类型覆盖。
 2. 汇总不同文档类型的 would-enqueue、would-record、derived-fact 规模。
-3. 明确哪些事实进入检索增强，哪些进入报表聚合，哪些只做证据索引。
+3. 持续校准 fact 类型用途策略：`report_aggregation`、`retrieval_enhancement`、`evidence_index_only` 和 `review_required`。
 4. 真实历史 backfill 前单独确认范围、批量、回滚方式。
 
 **完成标准:** 默认 dry-run 和 summary-only；真实写入或入队必须另行确认。
@@ -205,7 +205,7 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 
 该入口只封装 `document-fingerprint-backfill`、`fact-index-backfill`、`document-enrichment-backfill` 的 `--dry-run --summary-only --pretty` 路径，不提供 `--confirm-real-run`。
 
-**8 服务器状态:** 固定入口已在 8 服务器通过 self-test、limit5 dry-run 和多类型扩样 dry-run；结果仍为不写入、不入队。wrapper 已修复连续运行 report-path 碰撞，`runId` 使用毫秒时间戳加单调后缀。
+**8 服务器状态:** 固定入口已在 8 服务器通过 self-test、limit5 dry-run 和多类型扩样 dry-run；结果仍为不写入、不入队。wrapper 已修复连续运行 report-path 碰撞，`runId` 使用毫秒时间戳加单调后缀。dry-run 报告已增加 `factUsePolicy`，把已知 fact 类型归入 `report_aggregation`、`retrieval_enhancement` 或 `evidence_index_only`，未知类型固定进入 `review_required`。
 
 ### P2-2 重复文档与对象治理
 

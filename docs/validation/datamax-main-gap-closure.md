@@ -3698,3 +3698,32 @@ Data-ingestion external fixed-task smoke:
   - no source object was deleted or cleaned;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 P2 Fact-Type Use Policy In Dry-Run Reports
+
+- Purpose:
+  - turn the P2 plan item "which facts enter retrieval enhancement, report aggregation, or evidence indexing" into a machine-readable dry-run report field;
+  - prevent new fact types from silently entering production answer/report paths without explicit routing review.
+- Code change:
+  - `scripts/smoke/p2-summary-only-dry-run.mjs` now emits `factUsePolicy`;
+  - policy version: `p2_fact_type_use_policy_v1`;
+  - each fact type receives `count`, `primaryUse`, `secondaryUses`, and a short reason;
+  - unknown fact types are reported under `unknownFactTypes` and primary use `review_required`.
+- Current routing policy:
+  - `report_aggregation`: `date_period`, `education_certificate`, `location_area`, `organization`, `project_product_system`, `role_position`, `time_threshold`;
+  - `retrieval_enhancement`: `procedure_step`;
+  - `evidence_index_only`: `keyword`, `section`;
+  - `review_required`: any future fact type not listed above.
+- Local verification:
+  - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - self-test checks `factUsePolicyClassifiesKnownTypes=true` and `unknownFactTypesRequireReview=true`;
+  - self-test report contains `factUsePolicy.countsByUse.evidence_index_only=249`, `retrieval_enhancement=8`, and `report_aggregation=16`;
+  - `npm run smoke:production-placeholder-readiness -- --self-test --allow-not-ready --json-stdout`: passed.
+- Safety:
+  - this change only affects smoke/report metadata;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no live endpoint, production database, source database, object storage, static-page generation, source sync, ingestion, schema migration, or third-party mutation was performed;
+  - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
