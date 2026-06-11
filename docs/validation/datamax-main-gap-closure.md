@@ -3397,6 +3397,27 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P0-3 Main-Site Chat UX Local Regression Refresh
+
+- Purpose:
+  - refresh the no-credential local regression set for main-site chat progress, local conversation handling, and Web build after P0-1/P0-2 plan progress;
+  - keep the production browser smoke evidence in this ledger as the current live UX baseline.
+- Local verification:
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 4/4 tests;
+  - `npm --prefix apps/web run build`: passed.
+- Notes:
+  - Node emitted the existing typeless-package warning for ESM parsing in the test files;
+  - Next build emitted the existing middleware-to-proxy deprecation warning and Turbopack NFT trace warning for `apps/web/next.config.js` through `app/api/v3/local-document-uploads/route.js`;
+  - no production service was restarted for this local regression refresh.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no live third-party customer message was sent in this batch;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Rebuild And Local Self-Test Refresh
 
 - Purpose:

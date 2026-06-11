@@ -127,9 +127,11 @@ npm run validate:xinbai-report-template -- --artifact-dir /srv/aiv3/shared/objec
 - 报表链接可点击且不重复。
 - 导出文件可访问。
 
-### P0-3 主站聊天体验回归
+### P0-3 已完成本地回归：主站聊天体验
 
 **原因:** DataMax 主站是直接可见入口，之前出现过新对话、自动滚动、进度展示相关回归。
+
+**状态:** 本地 assistant-run 进度摘要测试、本地会话测试和 Web build 已通过。生产浏览器级直接问答/自动滚动/新建对话基线已有 validation 记录；后续修改主站 chat UI 时重跑本节。
 
 **重点文件:**
 - `apps/web/app/HomePageClient.js`
@@ -297,4 +299,4 @@ npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env 
 
 ## 8. 下一步建议
 
-下一步优先做 P0-3：主站聊天体验回归，确认未登录直接问答、长回复自动滚动、新建对话保留会话、进度展示不泄露原始 provider payload。随后如果能拿到合法 operator 凭证或运维脱敏回执，就补 P1-1/P1-2；如果 operator 仍卡住，就继续做 P2 summary-only 扩样，因为这条线安全、可独立推进，也不依赖外部权限。
+下一步优先处理 P1-1/P1-2 的 operator 观测缺口；如果拿不到合法 operator 凭证或运维脱敏回执，就继续做 P2 summary-only 扩样，因为这条线安全、可独立推进，也不依赖外部权限。
