@@ -3417,6 +3417,12 @@ Data-ingestion external fixed-task smoke:
   - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5 tests;
   - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1 test;
   - `npm --prefix apps/web run build`: passed; Next.js emitted existing warning classes for deprecated `middleware` convention and NFT tracing of `apps/web/next.config.js`.
+- 8-server source sync:
+  - repository path: `/srv/aiv3/repo`;
+  - fast-forwarded from `0f6f7f6f9` to `ea3221712`;
+  - `cargo test -p platform-api external_observability_access_requires_configured_header --lib`: passed, 1 test;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no release build or service restart was performed.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, object file read, object file delete, P2 real backfill, or production data mutation was performed;
