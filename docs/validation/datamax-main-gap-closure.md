@@ -3606,6 +3606,30 @@ Data-ingestion external fixed-task smoke:
   - the only runtime restart was `aiv3-platform-api.service` on 8 server for the backend queue-stats guard deploy;
   - 120 server was not touched.
 
+## 2026-06-12 P0 Post Operator-Guard Release Regression
+
+- Purpose:
+  - run the fixed P0 no-credential regression set after deploying the platform-api queue-stats guard;
+  - confirm report trigger/export, scoped document contracts, static-page fixture parsing, Cloudflare fallback fixture parsing, and external video/PPT self-test were not regressed.
+- 8-server state:
+  - repository path: `/srv/aiv3/repo`;
+  - head: `c5f50eb99`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- Smoke results:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, receipt `/srv/aiv3/repo/target/external-report-focus-smoke/external-report-focus-self-test-20260611194323.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`, receipt `/srv/aiv3/repo/target/external-report-export-smoke/20260611194323-self-test.json`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`, receipt `/srv/aiv3/repo/target/external-scoped-document-chat-smoke/20260611194323-self-test.json`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, `concurrency=5`, receipt `/srv/aiv3/repo/target/static-page-5way-smoke/20260611194328-self-test.json`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`, `watchedQueueCount=2`, receipt `/srv/aiv3/repo/target/cloudflare-fallback-2way-smoke/20260611194345-self-test.json`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`, receipt `/srv/aiv3/repo/target/external-video-ppt-smoke/20260611194345-self-test.json`;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests.
+- Safety:
+  - all smoke commands were self-tests or unit tests and did not call live third-party events, create datasets/documents/runs, trigger static-page generation, write production data, or call model providers;
+  - no public third-party URL, third-party auth method, required request field, existing response field, production schema, source sync, object cleanup, or P2 real backfill was changed;
+  - no credential, bearer, cookie, local key, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, raw chunk text, task payload, or full document body was recorded;
+  - no service was restarted for this regression record;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0-3 Main-Site Chat UX Local Regression Refresh
 
 - Purpose:
