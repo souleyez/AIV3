@@ -3338,3 +3338,34 @@ Data-ingestion external fixed-task smoke:
   - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
   - no credential, bearer token, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
   - 120 server was not touched.
+
+## 2026-06-12 P2 Summary-Only Dry-Run On Reachable Document
+
+- Purpose:
+  - advance the P2 parsing/fact-store and duplicate-document governance plan with a reachable single-document sample;
+  - prove that fingerprint, fact-index, and enrichment planning can be audited with `--dry-run --summary-only` before any real historical write or enqueue.
+- Scope:
+  - Host: `8服务器`;
+  - Repository: `/srv/aiv3/repo`;
+  - Commit at execution time: `28c5cd487`;
+  - Dataset: `1bcf2529-0bbb-46e6-884f-c2b33db352c2`;
+  - Document: `00fc651b-99f7-444b-9ee7-59695b2736cf`;
+  - Receipt directory: `/srv/aiv3/repo/target/p2-summary-only-dry-run-20260612`.
+- Commands:
+  - `./target/release/document-fingerprint-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --document-id 00fc651b-99f7-444b-9ee7-59695b2736cf --dry-run --summary-only --pretty`;
+  - `./target/release/fact-index-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --document-id 00fc651b-99f7-444b-9ee7-59695b2736cf --dry-run --summary-only --pretty`;
+  - `./target/release/document-enrichment-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --document-id 00fc651b-99f7-444b-9ee7-59695b2736cf --kind procedure_steps,table_structure --dry-run --summary-only --pretty`.
+- Results:
+  - fingerprint dry-run: `candidate_count=1`, `would_record_count=1`, `recorded_count=0`, `duplicate_count=0`, `skipped_count=0`, `summary_only=true`;
+  - fact-index dry-run: `document_count=1`, `derived_fact_count=56`, `inserted_fact_count=0`, `snapshot_updated=false`, fact types `date_period=1`, `keyword=50`, `section=5`, `summary_only=true`;
+  - enrichment dry-run: `document_count=1`, `missing_fingerprint_count=0`, `would_enqueue_count=2`, `enqueued_count=0`, kinds `procedure_steps_v1` and `table_structure_v1`, `summary_only=true`;
+  - PostgreSQL notice lines appeared in command output for already-existing schema objects; they did not include document title, document body, object path, raw row, database URL, credential, bearer, cookie, provider payload, or source content.
+- Safety:
+  - all three commands used `--dry-run --summary-only`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no document title, document body, external URL, local path, raw row, database URL, credential, bearer token, provider payload, cookie, local key, or secret env value was recorded;
+  - no public API, third-party URL, auth method, required request field, existing response field, production table, schema, or dataset-source mapping was changed;
+  - no service was restarted;
+  - 120 server was not touched.

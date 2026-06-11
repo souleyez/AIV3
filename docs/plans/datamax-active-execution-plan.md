@@ -226,6 +226,8 @@ CC=clang CXX=clang++ cargo test -p memory-worker --lib
 
 **完成标准:** 先 dry-run 和 summary-only；真实历史 backfill 需要单独确认。
 
+**8 服务器验证:** 已在单文档小样本上完成 summary-only dry-run：fingerprint would-record、fact-index 56 条派生事实、enrichment 2 个 would-enqueue；未写入、未入队。
+
 ### P2-2 重复文档和本地对象治理
 
 **目标:** 8 服务器本地文档按解析内容和 fingerprint 去重，文档可归属多个数据集，不重复存储不可控副本。
@@ -236,6 +238,8 @@ CC=clang CXX=clang++ cargo test -p memory-worker --lib
 - 明确哪些去重动作只改索引映射，哪些会影响对象文件。
 
 **完成标准:** 不直接删除源文件；清理前有 dry-run 和可回滚方案。
+
+**8 服务器验证:** 已使用对象可达的单文档小样本完成 fingerprint/fact-index/enrichment summary-only dry-run，证明后续治理可以先走可审计预检，不直接删除或写入。
 
 ## 7. P3：工程治理
 
@@ -281,4 +285,4 @@ npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env 
 2. 如果用户要求收版：提交、推 GitHub、8 服务器 pull；纯文档/smoke 脚本不重启服务，只跑 self-test。
 3. 补 P1-4：拿到合法 operator 凭据或运维安全回执后跑 model-gateway authenticated smoke。
 4. 在部署窗口跑主站 20 路和第三方 20 路并发抽样，记录 p50/p95/max 和失败原因。
-5. 推进 P2：选对象可达的小样本，做 fingerprint、fact-index、document-enrichment 的 summary-only dry-run。
+5. P2 后续只在明确批准后推进真实历史 backfill 或去重；默认继续使用 dry-run、summary-only 和小批量。
