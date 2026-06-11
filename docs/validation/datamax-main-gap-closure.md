@@ -3486,6 +3486,40 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Resume Summary-Only Dry-Run Expansion
+
+- Purpose:
+  - continue P2-1 parsing/fact-store dry-run expansion for resume datasets;
+  - cover the earlier cross-document project-experience scenario with a 14-document sample;
+  - keep selection aggregate-only and all processing non-mutating.
+- Candidate selection:
+  - selected dataset `a6abc2dc-2cc0-4c27-a7e4-149dce12a123`;
+  - aggregate-only selection fields: dataset id, document count, indexed chunk count, resume/project/work keyword-hit chunk counts, and content-type distribution;
+  - aggregate shape: `document_count=14`, `chunk_count=44`, `resume_hit_chunks=35`, `project_hit_chunks=39`, `work_hit_chunks=40`;
+  - content-type distribution: `application/pdf=14`;
+  - no dataset title, document title, object key, source URL, document body, raw chunk text, raw row, credential, bearer, provider payload, or private path was output or recorded.
+- 8-server dry-run:
+  - command: `npm run smoke:p2-summary-only-dry-run -- --dataset-id a6abc2dc-2cc0-4c27-a7e4-149dce12a123 --limit 14 --env-file /etc/aiv3/aiv3.env --output-dir target/p2-summary-only-dry-run-smoke-p2-resume-20260612`;
+  - result: `runId=20260611192115778-dz70jkcgve`, `ok=true`;
+  - fingerprint: `candidate_count=14`, `would_record_count=14`, `recorded_count=0`, `duplicate_count=0`, `skipped_count=0`, `summary_only=true`, `dry_run=true`;
+  - fact index: `document_count=14`, `derived_fact_count=3010`, `inserted_fact_count=0`, `snapshot_updated=false`;
+  - fact types: `date_period=206`, `education_certificate=10`, `keyword=1499`, `location_area=2`, `organization=91`, `procedure_step=392`, `project_product_system=485`, `role_position=65`, `section=245`, `time_threshold=15`;
+  - fact use policy: `report_aggregation=874`, `evidence_index_only=1744`, `retrieval_enhancement=392`, `unknownFactTypes=[]`;
+  - enrichment: `document_count=14`, `missing_fingerprint_count=14`, `would_enqueue_count=0`, `enqueued_count=0`;
+  - receipt: `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke-p2-resume-20260612/20260611192115778-dz70jkcgve/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, 64-character hash value, shared object root, external-documents path, or generated-artifacts path;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- Safety:
+  - all runs used the fixed wrapper path with `--dry-run --summary-only`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no source object was deleted or cleaned;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, raw chunk text, table row, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0-3 Main-Site Chat UX Local Regression Refresh
 
 - Purpose:
