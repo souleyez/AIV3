@@ -115,12 +115,18 @@ npm run validate:xinbai-report-template
 - 在部署窗口跑主站 20 路和第三方 20 路真实抽样。
 - 证明 RightCode 主力模型不可用或耗尽时能正确切 MiniMax fallback。
 
+**已补自检:**
+- `npm run smoke:main-chat-20way -- --self-test` 验证主站 20 路脚本的 payload、summary、percentile 和 poll-result fixture，不调用 DataMax。
+- `npm run smoke:external-channel-20way -- --self-test` 验证第三方 20 路脚本的 payload、SSE parser、summary 和 percentile fixture，不调用 DataMax。
+
 **验证命令:**
 
 ```bash
 CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib
 CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib
 CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib
+npm run smoke:main-chat-20way -- --self-test
+npm run smoke:external-channel-20way -- --self-test
 npm run smoke:main-chat-20way -- --base-url https://doc.elepcloud.com --concurrency 20 --timeout-ms 180000
 npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20 --timeout-ms 180000
 node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com

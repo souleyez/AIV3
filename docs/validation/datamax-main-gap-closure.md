@@ -3425,3 +3425,28 @@ Data-ingestion external fixed-task smoke:
   - fast-forward changed only `docs/plans/datamax-active-execution-plan.md` and `docs/validation/datamax-main-gap-closure.md`;
   - no build, restart, migration, source sync, ingestion, live third-party mutation, or static-page generation was performed;
   - 120 server was not touched.
+
+## 2026-06-12 P1 20-Way Smoke Self-Test Coverage
+
+- Purpose:
+  - make the main-site and third-party 20-way concurrency smoke scripts independently testable without production credentials;
+  - reduce release risk before the real live 20-way gate is run in an approved window.
+- Code changes:
+  - `scripts/smoke/main-chat-20way.mjs` now supports `--self-test` for deterministic payload, summary, percentile, and poll-result fixtures;
+  - `scripts/smoke/external-channel-20way.mjs` now supports `--self-test` for deterministic payload, SSE parser, summary, and percentile fixtures;
+  - `scripts/README.md` documents both self-tests and states that they do not replace the live 20-way production gate;
+  - `docs/plans/datamax-active-execution-plan.md` now lists the new self-test commands under P1-1.
+- Local verification:
+  - `node --check scripts/smoke/main-chat-20way.mjs`: passed;
+  - `node --check scripts/smoke/external-channel-20way.mjs`: passed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `ok=true`, `okCount=20`, `acceptedCount=20`, `assistantMessageCount=20`, receipt `target/main-chat-20way-smoke/20260611170904-self-test.json`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `ok=true`, `okCount=20`, `completedCount=20`, `acceptedOrAnsweredCount=20`, receipt `target/external-channel-20way-smoke/20260611170904-self-test.json`.
+- Remaining live gate:
+  - true main-site 20-way and third-party 20-way live sampling are still pending a controlled production window and credentials/scope;
+  - authenticated model-gateway operator smoke still requires a legitimate operator session/cookie/local-key or sanitized operator-side receipt.
+- Safety:
+  - no live endpoint was called by these self-tests;
+  - no bearer, cookie, provider key, database URL, raw customer row, source path, provider payload, or full customer document was recorded;
+  - no public API, URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no server was deployed or restarted;
+  - 120 server was not touched.

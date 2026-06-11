@@ -23,6 +23,7 @@ function parseArgs(argv) {
     prompt: process.env.MAIN_CHAT_SMOKE_PROMPT || '请用一句话回答：这是主站20路并发smoke测试。',
     titlePrefix: process.env.MAIN_CHAT_SMOKE_TITLE_PREFIX || '主站20路smoke',
     outputDir: process.env.MAIN_CHAT_SMOKE_OUTPUT_DIR || 'target/main-chat-20way-smoke',
+    selfTest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -61,6 +62,8 @@ function parseArgs(argv) {
     } else if (arg === '--output-dir') {
       args.outputDir = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -69,7 +72,7 @@ function parseArgs(argv) {
     }
   }
 
-  if (!args.datasetId) {
+  if (!args.selfTest && !args.datasetId) {
     throw new Error('--dataset-id or MAIN_CHAT_SMOKE_DATASET_ID is required');
   }
   if (!Number.isInteger(args.concurrency) || args.concurrency < 1 || args.concurrency > 100) {
@@ -104,6 +107,7 @@ function printHelp() {
 Optional:
   --poll-timeout-ms 120000       wait for assistant messages after enqueue
   --active-secret-binding-ids a,b forward selected local secret bindings
+  --self-test                    run deterministic fixture checks without calling DataMax
 `);
 }
 
@@ -241,17 +245,12 @@ function sleep(ms) {
   });
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const results = await Promise.all(
-    Array.from({ length: args.concurrency }, (_, index) => postOne(args, index, runId)),
-  );
+function summarizeRun(args, runId, results) {
   const okCount = results.filter((item) => item.ok).length;
   const acceptedCount = results.filter((item) => item.accepted).length;
   const assistantMessageCount = results.filter((item) => item.assistantMessageObserved).length;
   const latencies = results.map((item) => item.latencyMs);
-  const summary = {
+  return {
     runId,
     baseUrl: args.baseUrl,
     datasetId: args.datasetId,
@@ -266,6 +265,92 @@ async function main() {
     maxLatencyMs: latencies.length ? Math.max(...latencies) : null,
     generatedAt: new Date().toISOString(),
   };
+}
+
+async function runSelfTest(args) {
+  const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-self-test`;
+  const fixtureArgs = {
+    ...args,
+    baseUrl: 'https://doc.elepcloud.com',
+    datasetId: '00000000-0000-0000-0000-000000000020',
+    cookie: '',
+    bearer: '',
+    activeSecretBindingIds: '',
+    concurrency: DEFAULT_CONCURRENCY,
+    pollTimeoutMs: 120_000,
+  };
+  const payloads = Array.from({ length: fixtureArgs.concurrency }, (_, index) => buildPayload(fixtureArgs, index, runId));
+  const results = payloads.map((payload, index) => ({
+    index,
+    ok: true,
+    accepted: true,
+    httpStatus: 201,
+    latencyMs: 100 + index,
+    sessionId: `session-${index + 1}`,
+    workflowExecutionId: `workflow-${index + 1}`,
+    workflowStage: 'queued',
+    assistantMessageObserved: true,
+    pollCount: 1,
+    polls: [{ httpStatus: 200, messageCount: 2, assistantMessageObserved: true }],
+    bodyPrefix: '{"chat_session":{"id":"redacted"}}',
+    error: null,
+  }));
+  const summary = {
+    ...summarizeRun(fixtureArgs, runId, results),
+    selfTest: true,
+  };
+  const checks = {
+    defaultConcurrencyIsTwenty: fixtureArgs.concurrency === 20,
+    payloadCountMatchesConcurrency: payloads.length === 20,
+    payloadsHaveUniqueThreads: new Set(payloads.map((payload) => payload.local_thread_id)).size === 20,
+    payloadsHaveExpectedTitlePrefix: payloads.every((payload) => payload.title.startsWith(`${fixtureArgs.titlePrefix}-${runId}-`)),
+    promptNumberingPreserved: payloads[0]?.prompt.includes('编号 01') === true
+      && payloads[19]?.prompt.includes('编号 20') === true,
+    summaryCountsAllAccepted: summary.okCount === 20
+      && summary.acceptedCount === 20
+      && summary.assistantMessageCount === 20
+      && summary.failedCount === 0,
+    latencyPercentilesComputed: summary.p50LatencyMs === 109 && summary.p95LatencyMs === 118 && summary.maxLatencyMs === 119,
+  };
+  const ok = Object.values(checks).every(Boolean);
+  const report = {
+    summary: {
+      ...summary,
+      ok,
+      checks,
+      generatedAt: new Date().toISOString(),
+    },
+    payloadShape: {
+      count: payloads.length,
+      first: {
+        hasPrompt: Boolean(payloads[0]?.prompt),
+        hasTitle: Boolean(payloads[0]?.title),
+        hasLocalThreadId: Boolean(payloads[0]?.local_thread_id),
+      },
+    },
+  };
+  const outputDir = join(process.cwd(), args.outputDir);
+  await mkdir(outputDir, { recursive: true });
+  const reportPath = join(outputDir, `${runId}.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(report.summary, null, 2));
+  console.log(`report=${reportPath}`);
+  if (!ok) {
+    process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
+  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const results = await Promise.all(
+    Array.from({ length: args.concurrency }, (_, index) => postOne(args, index, runId)),
+  );
+  const summary = summarizeRun(args, runId, results);
 
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });

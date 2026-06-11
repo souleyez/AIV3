@@ -21,6 +21,7 @@ function parseArgs(argv) {
     tenantExternalId: process.env.EXTERNAL_CHANNEL_SMOKE_TENANT_EXTERNAL_ID || 'tenant-ext-smoke',
     botExternalId: process.env.EXTERNAL_CHANNEL_SMOKE_BOT_EXTERNAL_ID || 'bot-v3',
     outputDir: process.env.EXTERNAL_CHANNEL_SMOKE_OUTPUT_DIR || 'target/external-channel-20way-smoke',
+    selfTest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -50,6 +51,8 @@ function parseArgs(argv) {
     } else if (arg === '--output-dir') {
       args.outputDir = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -88,6 +91,9 @@ Environment aliases:
   EXTERNAL_CHANNEL_SMOKE_BEARER
   EXTERNAL_CHANNEL_SMOKE_CONCURRENCY
   EXTERNAL_CHANNEL_SMOKE_TIMEOUT_MS
+
+Use --self-test for deterministic offline payload, SSE parser, and summary
+checks without calling DataMax or requiring a bearer.
 `);
 }
 
@@ -235,15 +241,10 @@ function percentile(values, ratio) {
   return sorted[index];
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const results = await Promise.all(
-    Array.from({ length: args.concurrency }, (_, index) => postOne(args, index, runId)),
-  );
+function summarizeRun(args, runId, results) {
   const okCount = results.filter((item) => item.ok).length;
   const latencies = results.map((item) => item.latencyMs);
-  const summary = {
+  return {
     runId,
     baseUrl: args.baseUrl,
     connectionId: args.connectionId,
@@ -260,6 +261,118 @@ async function main() {
     ).length,
     generatedAt: new Date().toISOString(),
   };
+}
+
+async function runSelfTest(args) {
+  const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-self-test`;
+  const fixtureArgs = {
+    ...args,
+    baseUrl: 'https://v3.elepcloud.com',
+    connectionId: DEFAULT_CONNECTION_ID,
+    bearer: '',
+    concurrency: DEFAULT_CONCURRENCY,
+  };
+  const payloads = Array.from({ length: fixtureArgs.concurrency }, (_, index) => buildPayload(fixtureArgs, index, runId));
+  const sseText = [
+    'event: external_channel.started',
+    'data: {"assistant_run_id":"run-self-test"}',
+    '',
+    'event: external_channel.delta',
+    'data: {"delta":"progress"}',
+    '',
+    'event: external_channel.completed',
+    'data: {"assistant_run_id":"run-self-test","response":{"reply":{"reply_type":"answer","task_status":"answered"}}}',
+    '',
+  ].join('\n');
+  const errorSseText = [
+    'event: external_channel.error',
+    'data: {"code":"self_test_error","message":"fixture"}',
+    '',
+  ].join('\n');
+  const events = parseSse(sseText);
+  const errorEvents = parseSse(errorSseText);
+  const results = payloads.map((payload, index) => ({
+    index,
+    ok: true,
+    httpStatus: 200,
+    latencyMs: 200 + index,
+    conversationExternalId: payload.conversation_external_id,
+    messageExternalId: payload.message_external_id,
+    idempotencyKey: payload.idempotency_key,
+    assistantRunId: 'run-self-test',
+    completed: true,
+    replyType: 'answer',
+    taskStatus: index % 2 === 0 ? 'answered' : 'accepted',
+    error: null,
+    eventNames: events.map((item) => item.event),
+    bodyPrefix: 'event: external_channel.completed',
+  }));
+  const summary = {
+    ...summarizeRun(fixtureArgs, runId, results),
+    selfTest: true,
+  };
+  const checks = {
+    defaultConcurrencyIsTwenty: fixtureArgs.concurrency === 20,
+    payloadCountMatchesConcurrency: payloads.length === 20,
+    payloadsHaveUniqueConversationIds: new Set(payloads.map((payload) => payload.conversation_external_id)).size === 20,
+    payloadsHaveUniqueMessageIds: new Set(payloads.map((payload) => payload.message_external_id)).size === 20,
+    payloadsHaveUniqueIdempotencyKeys: new Set(payloads.map((payload) => payload.idempotency_key)).size === 20,
+    completedEventParsed: events.some((item) => item.event === 'external_channel.completed'
+      && item.data?.response?.reply?.task_status === 'answered'),
+    errorEventParsed: errorEvents.some((item) => item.event === 'external_channel.error'
+      && item.data?.code === 'self_test_error'),
+    summaryCountsAllComplete: summary.okCount === 20
+      && summary.completedCount === 20
+      && summary.answeredCount === 10
+      && summary.acceptedOrAnsweredCount === 20
+      && summary.failedCount === 0,
+    latencyPercentilesComputed: summary.p50LatencyMs === 209 && summary.p95LatencyMs === 218 && summary.maxLatencyMs === 219,
+  };
+  const ok = Object.values(checks).every(Boolean);
+  const report = {
+    summary: {
+      ...summary,
+      ok,
+      checks,
+      generatedAt: new Date().toISOString(),
+    },
+    payloadShape: {
+      count: payloads.length,
+      first: {
+        platform: payloads[0]?.platform,
+        output_format: payloads[0]?.output_format,
+        render_mode: payloads[0]?.render_mode,
+        dataset_external_ids_count: payloads[0]?.dataset_external_ids?.length || 0,
+        available_document_external_ids_count: payloads[0]?.available_document_external_ids?.length || 0,
+      },
+    },
+    parserShape: {
+      eventNames: events.map((item) => item.event),
+      errorEventNames: errorEvents.map((item) => item.event),
+    },
+  };
+  const outputDir = join(process.cwd(), args.outputDir);
+  await mkdir(outputDir, { recursive: true });
+  const reportPath = join(outputDir, `${runId}.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(report.summary, null, 2));
+  console.log(`report=${reportPath}`);
+  if (!ok) {
+    process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
+  const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const results = await Promise.all(
+    Array.from({ length: args.concurrency }, (_, index) => postOne(args, index, runId)),
+  );
+  const summary = summarizeRun(args, runId, results);
 
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
