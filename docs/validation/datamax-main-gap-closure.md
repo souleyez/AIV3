@@ -3529,6 +3529,18 @@ Data-ingestion external fixed-task smoke:
   - rollback requirements: `operator_approval_id`, `full_redacted_manifest_with_document_ids_and_object_locator_hashes`, `object_backup_or_retention_window`, `database_snapshot_or_reversible_mapping_plan`, `post_cleanup_verification_commands`;
   - receipt: `/srv/aiv3/repo/target/document-object-cleanup-plan-smoke-p2-20260612-stdin/20260611185054569-dwhew3zdbu/report.json`;
   - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value.
+- 8-server post-sync verification:
+  - commit `df9cd24` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `ffefea9fb` to `df9cd241d`;
+  - `npm run smoke:document-object-cleanup-plan -- --self-test`: passed, `runId=20260611185311903-dwrrzctkcg-self-test`, `ok=true`;
+  - `npm run smoke:document-object-cleanup-plan -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20 --pretty --output-dir target/document-object-cleanup-plan-smoke-p2-20260612`: passed, `runId=20260611185312016-dwsg1815xu`, `ok=true`;
+  - post-sync overall: `document_count=2637`, `dataset_count=58`, `blocked_count=2637`, `review_object_cleanup_candidate_count=0`, `review_index_mapping_candidate_count=0`, `no_cleanup_count=0`;
+  - post-sync `cleanupClassCounts`: `blocked_missing_fingerprint=2602`, `blocked_canonical_document=32`, `blocked_remote_locator=3`;
+  - post-sync rollback requirements remained `operator_approval_id`, `full_redacted_manifest_with_document_ids_and_object_locator_hashes`, `object_backup_or_retention_window`, `database_snapshot_or_reversible_mapping_plan`, and `post_cleanup_verification_commands`;
+  - receipt: `/srv/aiv3/repo/target/document-object-cleanup-plan-smoke-p2-20260612/20260611185312016-dwsg1815xu/report.json`;
+  - redaction grep over the post-sync receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this docs/smoke-only update.
 - Safety:
   - the smoke executes one fixed aggregate SELECT through `psql`;
   - no filesystem path was probed, read, deleted, or printed;

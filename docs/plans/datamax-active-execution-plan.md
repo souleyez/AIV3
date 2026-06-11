@@ -242,7 +242,7 @@ npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --
 npm run smoke:document-object-cleanup-plan -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20
 ```
 
-**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器正式脚本 post-sync 已验证，当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。对象清理计划脚本只输出聚合影响和 rollback 要求，`object_deletes_enabled=false`；当前 8 服务器 dry-run 显示 `review_object_cleanup_candidate_count=0`、`review_index_mapping_candidate_count=0`。
+**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器正式脚本 post-sync 已验证，当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。对象清理计划脚本已在 8 服务器正式 post-sync 通过，只输出聚合影响和 rollback 要求，`object_deletes_enabled=false`；当前 dry-run 显示 `review_object_cleanup_candidate_count=0`、`review_index_mapping_candidate_count=0`。
 
 **下一步:**
 1. 真实对象清理必须另行人工确认，并先产出 operator-reviewed manifest。
