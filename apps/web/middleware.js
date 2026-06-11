@@ -15,7 +15,9 @@ function hostWithoutPort(request) {
 }
 
 function isExternalObservationAllowedPath(pathname) {
-  return pathname.startsWith('/v1/')
+  return pathname === '/external-integrations'
+    || pathname.startsWith('/external-integrations/')
+    || pathname.startsWith('/v1/')
     || pathname.startsWith('/api/v3/')
     || pathname.startsWith('/_next/')
     || pathname === '/favicon.ico'
@@ -34,8 +36,8 @@ export function middleware(request) {
   }
 
   if (url.pathname === '/') {
-    url.pathname = '/admin';
-    return NextResponse.redirect(url);
+    url.pathname = '/external-integrations';
+    return NextResponse.rewrite(url);
   }
 
   if (
@@ -44,11 +46,6 @@ export function middleware(request) {
     || isExternalObservationAllowedPath(url.pathname)
   ) {
     return NextResponse.next();
-  }
-
-  if (url.pathname === '/external-integrations') {
-    url.pathname = '/admin/external-integrations';
-    return NextResponse.redirect(url);
   }
 
   url.pathname = '/';
