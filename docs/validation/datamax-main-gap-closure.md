@@ -3450,3 +3450,23 @@ Data-ingestion external fixed-task smoke:
   - no public API, URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no server was deployed or restarted;
   - 120 server was not touched.
+
+## 2026-06-12 8-Server 20-Way Smoke Self-Test Verification
+
+- Purpose:
+  - sync the new P1 20-way self-test coverage to 8 server;
+  - prove the scripts execute on the deployment host without service restart.
+- 8-server sync:
+  - repository path: `/srv/aiv3/repo`;
+  - command: `git pull --ff-only origin main`;
+  - post-pull head: `d088460c8`;
+  - post-pull status: `## main...origin/main`.
+- 8-server verification:
+  - `node --check scripts/smoke/main-chat-20way.mjs`: passed;
+  - `node --check scripts/smoke/external-channel-20way.mjs`: passed;
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `ok=true`, `okCount=20`, `acceptedCount=20`, `assistantMessageCount=20`, receipt `/srv/aiv3/repo/target/main-chat-20way-smoke/20260611171054-self-test.json`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `ok=true`, `okCount=20`, `completedCount=20`, `acceptedOrAnsweredCount=20`, receipt `/srv/aiv3/repo/target/external-channel-20way-smoke/20260611171054-self-test.json`.
+- Scope:
+  - no build, restart, migration, source sync, ingestion, live third-party mutation, or static-page generation was performed;
+  - these checks are deterministic self-tests and do not replace true 20-way live sampling;
+  - 120 server was not touched.
