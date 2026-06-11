@@ -3496,6 +3496,49 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Object Cleanup Dry-Run Plan
+
+- Purpose:
+  - add a safe P2-2 object-cleanup planning gate before any real object deletion can be considered;
+  - produce aggregate impact counts and rollback requirements;
+  - keep the cleanup plan read-only, non-mutating, and path-free.
+- Code changes:
+  - added `scripts/smoke/document-object-cleanup-plan.mjs`;
+  - added `npm run smoke:document-object-cleanup-plan`;
+  - added syntax check and deterministic self-test to `.github/workflows/datamax-ci.yml`;
+  - documented the entrypoint in `scripts/README.md`;
+  - updated `docs/plans/datamax-active-execution-plan.md` P2-2 with the fixed entrypoint and current dry-run result.
+- Contract:
+  - live mode loads a deployment env file and reads `PLATFORM_DATABASE_URL` without printing it;
+  - live mode executes one fixed aggregate SELECT through `psql`;
+  - report fields are aggregate counts only: cleanup class counts, locator kind counts, dataset-level aggregate impact rows, execution policy, and rollback requirements;
+  - report explicitly sets `manual_approval_required=true`, `filesystem_checked=false`, `remote_fetch_enabled=false`, `database_writes_enabled=false`, `object_deletes_enabled=false`, `object_paths_included=false`, and `impact_is_aggregate_only=true`;
+  - rollback requirements include operator approval id, redacted manifest, object backup or retention window, reversible database mapping plan, and post-cleanup verification commands.
+- Local verification:
+  - `node --check scripts/smoke/document-object-cleanup-plan.mjs`: passed;
+  - `npm run smoke:document-object-cleanup-plan -- --self-test --pretty`: passed, `runId=20260611185042476-ecorlhdro-self-test`, `ok=true`;
+  - self-test checks included `redactionContract=true`, `aggregateOnlyImpact=true`, `cleanupDisabled=true`, and `rollbackPlanPresent=true`;
+  - `npm run smoke:document-fingerprint-inventory -- --self-test`: passed, `runId=20260611185042476-ixkrlhkhc-self-test`, `ok=true`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- 8-server live verification before commit:
+  - executed the new script over SSH stdin against `/srv/aiv3/repo` with `--env-file /etc/aiv3/aiv3.env --dataset-limit 20`;
+  - result: `runId=20260611185054569-dwhew3zdbu`, `ok=true`;
+  - overall: `document_count=2637`, `dataset_count=58`, `blocked_count=2637`, `review_object_cleanup_candidate_count=0`, `review_index_mapping_candidate_count=0`, `no_cleanup_count=0`;
+  - `cleanupClassCounts`: `blocked_missing_fingerprint=2602`, `blocked_canonical_document=32`, `blocked_remote_locator=3`;
+  - `locatorKindCounts`: `local_candidate=2634`, `remote=3`;
+  - rollback requirements: `operator_approval_id`, `full_redacted_manifest_with_document_ids_and_object_locator_hashes`, `object_backup_or_retention_window`, `database_snapshot_or_reversible_mapping_plan`, `post_cleanup_verification_commands`;
+  - receipt: `/srv/aiv3/repo/target/document-object-cleanup-plan-smoke-p2-20260612-stdin/20260611185054569-dwhew3zdbu/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value.
+- Safety:
+  - the smoke executes one fixed aggregate SELECT through `psql`;
+  - no filesystem path was probed, read, deleted, or printed;
+  - no remote object was downloaded or retried;
+  - no database row was written, updated, or deleted;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Rebuild And Local Self-Test Refresh
 
 - Purpose:
