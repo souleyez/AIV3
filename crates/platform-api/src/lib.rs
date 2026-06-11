@@ -22710,10 +22710,7 @@ async fn record_external_action_run_from_suggestion(
         idempotency_key.as_bytes(),
     ]);
     let action_id = format!("external-action-{}", &digest[..16]);
-    let arguments_redacted = arguments
-        .get("arguments_redacted")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let arguments_redacted = external_action_dispatch_arguments_redacted(&action_type, &arguments);
     let requester_summary = json!({
         "channel_connection_id": connection_id,
         "platform": external_channel_platform_wire_value(&message.platform),
@@ -22783,6 +22780,28 @@ async fn record_external_action_run_from_suggestion(
         dispatch_status: None,
         dispatch_failure_kind: None,
     })
+}
+
+fn external_action_dispatch_arguments_redacted(action_type: &str, arguments: &Value) -> Value {
+    let mut arguments_redacted = arguments
+        .get("arguments_redacted")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if action_type == "external_business_action.invoke" {
+        if let Some(business_action_type) = arguments
+            .get("business_action_type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            set_payload_value(
+                &mut arguments_redacted,
+                "business_action_type",
+                json!(business_action_type),
+            );
+        }
+    }
+    arguments_redacted
 }
 
 async fn dispatch_external_action_run_if_ready(
@@ -110708,6 +110727,27 @@ mod tests {
         );
         assert!(!payload_text.contains("create a secret ticket"));
         assert!(!payload_text.contains("channel_connection_id"));
+    }
+
+    #[test]
+    fn external_business_action_dispatch_preserves_business_action_type() {
+        let arguments = json!({
+            "business_action_type": "aigolf.hole_geofence.apply",
+            "arguments_redacted": {
+                "courseId": "course-1"
+            }
+        });
+
+        let redacted = external_action_dispatch_arguments_redacted(
+            "external_business_action.invoke",
+            &arguments,
+        );
+
+        assert_eq!(
+            redacted["business_action_type"],
+            json!("aigolf.hole_geofence.apply")
+        );
+        assert_eq!(redacted["courseId"], json!("course-1"));
     }
 
     #[test]
