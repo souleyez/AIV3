@@ -3787,3 +3787,42 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, or full customer document was recorded;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 P2 Mixed-Media Summary-Only Dry-Run Expansion
+
+- Purpose:
+  - extend P2 parsing/fact-store dry-run coverage to a small mixed-media dataset, including a non-document media object and PowerPoint;
+  - keep selection aggregate-only and all processing non-mutating.
+- Candidate selection:
+  - queried only dataset id, document count, object-key coverage count, content-type count, and content-type distribution;
+  - no title, object key, source URL, document body, raw row, credential, bearer, provider payload, or private path was queried or recorded;
+  - selected dataset `7aaab2f7-1daa-4058-b9a1-76d3e54a1e44` with 5 documents, 5 object keys, and 4 content types:
+    `application/pdf=1`, `application/vnd.openxmlformats-officedocument.presentationml.presentation=1`,
+    `application/vnd.openxmlformats-officedocument.wordprocessingml.document=2`, `video/mp4=1`.
+- Dataset-level dry-run:
+  - command: `npm run smoke:p2-summary-only-dry-run -- --dataset-id 7aaab2f7-1daa-4058-b9a1-76d3e54a1e44 --limit 5 --env-file /etc/aiv3/aiv3.env --output-dir target/p2-summary-only-dry-run-smoke-p2-expand-20260612`;
+  - result: `runId=20260611181214706-dt7l5t3z4n`, `ok=true`;
+  - fingerprint: `candidate_count=5`, `would_record_count=4`, `recorded_count=0`, `duplicate_count=0`, `skipped_count=1`, `summary_only=true`, `dry_run=true`;
+  - fact index: `document_count=5`, `derived_fact_count=244`, `inserted_fact_count=0`, `snapshot_updated=false`;
+  - fact types: `keyword=202`, `procedure_step=24`, `project_product_system=3`, `section=8`, `time_threshold=7`;
+  - fact use policy: `evidence_index_only=210`, `retrieval_enhancement=24`, `report_aggregation=10`, `unknownFactTypes=[]`;
+  - enrichment: `document_count=5`, `missing_fingerprint_count=5`, `would_enqueue_count=0`, `enqueued_count=0`;
+  - receipt: `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke-p2-expand-20260612/20260611181214706-dt7l5t3z4n/report.json`.
+- Single-document probes by content type:
+  - PDF sample: `runId=20260611181316102-dtk0d6mc5w`, `ok=true`, fingerprint `would_record_count=1`, fact index `derived_fact_count=0`, `inserted_fact_count=0`, enrichment `enqueued_count=0`;
+  - PowerPoint OpenXML sample: `runId=20260611181316011-dtj5bomu1u`, `ok=true`, fingerprint `would_record_count=1`, fact index `derived_fact_count=161`, `inserted_fact_count=0`, enrichment `enqueued_count=0`;
+  - Word OpenXML sample: `runId=20260611181316275-dtmsg1w7oq`, `ok=true`, fingerprint `would_record_count=1`, fact index `derived_fact_count=43`, `inserted_fact_count=0`, enrichment `enqueued_count=0`;
+  - MP4 sample: `runId=20260611181316392-dto6hz7fca`, `ok=true`, fingerprint `would_record_count=0`, `skipped_count=1`, fact index `derived_fact_count=38`, `inserted_fact_count=0`, enrichment `enqueued_count=0`.
+- Findings:
+  - mixed media can pass the fixed P2 wrapper without writes or queue mutation;
+  - the MP4 sample produced fact-index evidence but was skipped by fingerprint recording, so media-object fingerprint policy should be reviewed before any real backfill;
+  - this expansion did not introduce unknown fact types.
+- Safety:
+  - all runs used the fixed wrapper path with `--dry-run --summary-only --pretty`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no source object was deleted or cleaned;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.

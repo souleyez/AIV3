@@ -198,7 +198,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 
 **完成标准:** 默认 dry-run 和 summary-only；真实写入或入队必须另行确认。
 
-**当前证据:** 8 服务器已完成同一数据集 limit5 summary-only dry-run：fingerprint `would_record_count=5` 且 `duplicate_count=5`，fact-index `derived_fact_count=281`，enrichment `would_enqueue_count=2`；均未写入、未入队。另一个 37 文档、4 content-type 数据集已完成 limit10 summary-only dry-run：fingerprint `would_record_count=10`，fact-index `derived_fact_count=1067`，并按 legacy Word、PDF、Excel OpenXML、Word OpenXML 各跑 1 个单文档 summary-only probe；均未写入、未入队。
+**当前证据:** 8 服务器已完成同一数据集 limit5 summary-only dry-run：fingerprint `would_record_count=5` 且 `duplicate_count=5`，fact-index `derived_fact_count=281`，enrichment `would_enqueue_count=2`；均未写入、未入队。另一个 37 文档、4 content-type 数据集已完成 limit10 summary-only dry-run：fingerprint `would_record_count=10`，fact-index `derived_fact_count=1067`，并按 legacy Word、PDF、Excel OpenXML、Word OpenXML 各跑 1 个单文档 summary-only probe；均未写入、未入队。第三个 5 文档、4 content-type 数据集已完成 limit5 summary-only dry-run，覆盖 PDF、Word OpenXML、PowerPoint OpenXML、MP4；`derived_fact_count=244`，单文档 probe 显示 PPTX/DOCX/MP4 可产生派生事实，PDF 样本为 0，MP4 fingerprint `skipped_count=1`；均未写入、未入队。
 
 **固定入口:**
 
