@@ -4,8 +4,8 @@ import { ADMIN_CONSOLE_COOKIE, adminConsoleAccessRequired, hasAdminConsoleAccess
 import { adminMicrosoftAuthEnabled } from '../../lib/admin-microsoft-auth';
 
 export const metadata = {
-  title: 'DataMax V3 管理登录',
-  description: '登录 DataMax V3 管理台。',
+  title: 'DataMax 管理登录',
+  description: '登录 DataMax 管理台。',
 };
 
 export default async function AdminLoginPage({ searchParams }) {
@@ -28,102 +28,84 @@ export default async function AdminLoginPage({ searchParams }) {
   }
 
   return (
-    <main style={{
-      minHeight: '100vh',
-      display: 'grid',
-      placeItems: 'center',
-      padding: 24,
-      background: 'radial-gradient(circle at top left, #1f3a5b 0, #08111f 42%, #030712 100%)',
-      color: '#f8fafc',
-      fontFamily: '"Avenir Next", "Segoe UI", sans-serif',
-    }}>
-      <section style={{
-        width: 'min(440px, 100%)',
-        border: '1px solid rgba(226, 232, 240, 0.16)',
-        borderRadius: 28,
-        padding: 28,
-        background: 'rgba(15, 23, 42, 0.82)',
-        boxShadow: '0 28px 100px rgba(0, 0, 0, 0.34)',
-      }}>
-        <a href="/" style={{ color: '#93c5fd', textDecoration: 'none', fontWeight: 700 }}>返回首页</a>
-        <h1 style={{ margin: '22px 0 8px', fontSize: 34, letterSpacing: '-0.04em' }}>管理台登录</h1>
-        <p style={{ margin: '0 0 24px', color: '#cbd5e1', lineHeight: 1.7 }}>
-          输入管理访问密钥或使用 Microsoft 账号进入 DataMax 管理台。公开接口文档仍可直接访问。
-        </p>
+    <main className="external-observability-shell admin-login-shell">
+      <section className="external-product-hero admin-login-hero">
+        <div className="external-product-copy admin-login-copy">
+          <p className="external-kicker">DataMax Admin Console</p>
+          <h1>
+            <span>管理台</span>
+            <span>安全登录</span>
+          </h1>
+          <p className="external-product-tagline">
+            <span>统一进入运营观测、外部集成、模型与工作区管理。</span>
+            <span>管理动作受鉴权保护，公开接口文档仍可直接访问。</span>
+          </p>
+          <div className="external-contact-row" aria-label="管理台入口">
+            <a href="/">返回管理首页</a>
+            <a href="/external-integrations/third-party-integration-api.zh-CN.html">公开接口文档</a>
+            <span>Microsoft SSO</span>
+            <span>访问密钥</span>
+          </div>
+          <div className="external-feature-chips" aria-label="管理台能力">
+            <span>接入观测</span>
+            <span>执行器队列</span>
+            <span>文档诊断</span>
+            <span>工作区管理</span>
+          </div>
+          <figure className="admin-login-preview">
+            <img
+              src="/external-integrations/v3-enterprise-assistant-hero.png"
+              alt="DataMax 管理台视觉参考"
+            />
+          </figure>
+        </div>
+
+        <section className="admin-login-card" aria-label="管理台登录">
+          <div className="admin-login-card-head">
+            <p className="external-kicker">Restricted Area</p>
+            <h2>进入管理台</h2>
+            <p>
+              输入管理访问密钥，或使用已配置白名单的 Microsoft 账号登录。
+            </p>
+          </div>
         {!adminConsoleAccessRequired() ? (
-          <div style={{
-            marginBottom: 16,
-            border: '1px solid rgba(248, 211, 111, 0.36)',
-            borderRadius: 14,
-            padding: 12,
-            color: '#fde68a',
-            background: 'rgba(248, 211, 111, 0.08)',
-          }}>
+          <div className="admin-login-alert admin-login-alert-warning">
             当前环境未配置管理密钥，本地环境会直接放行；生产建议配置 ADMIN_CONSOLE_ACCESS_KEY。
           </div>
         ) : null}
         {errorMessage ? (
-          <div style={{
-            marginBottom: 16,
-            border: '1px solid rgba(248, 113, 113, 0.34)',
-            borderRadius: 14,
-            padding: 12,
-            color: '#fecaca',
-            background: 'rgba(127, 29, 29, 0.22)',
-          }}>
+          <div className="admin-login-alert admin-login-alert-error">
             {errorMessage}
           </div>
         ) : null}
         {microsoftEnabled ? (
           <a
             href={`/admin/microsoft/start?next=${encodeURIComponent(next)}`}
-            style={{
-              display: 'block',
-              marginBottom: 14,
-              border: '1px solid rgba(147, 197, 253, 0.34)',
-              borderRadius: 16,
-              padding: '13px 16px',
-              color: '#e0f2fe',
-              background: 'rgba(37, 99, 235, 0.22)',
-              fontWeight: 900,
-              textAlign: 'center',
-              textDecoration: 'none',
-            }}
+            className="admin-login-sso"
           >
             使用 Microsoft 登录
           </a>
         ) : null}
-        <form action="/admin/access" method="post" style={{ display: 'grid', gap: 14 }}>
+        <form action="/admin/access" method="post" className="admin-login-form">
           <input type="hidden" name="next" value={next} />
-          <label style={{ display: 'grid', gap: 8, color: '#dbeafe', fontWeight: 700 }}>
+          <label>
             <span>访问密钥</span>
             <input
               name="access_key"
               type="password"
               autoComplete="current-password"
               required={adminConsoleAccessRequired()}
-              style={{
-                border: '1px solid rgba(226, 232, 240, 0.22)',
-                borderRadius: 14,
-                padding: '14px 15px',
-                background: 'rgba(255, 255, 255, 0.08)',
-                color: '#fff',
-                outline: 'none',
-              }}
+              placeholder="输入管理访问密钥"
             />
           </label>
-          <button type="submit" style={{
-            border: 0,
-            borderRadius: 16,
-            padding: '14px 18px',
-            color: '#07111f',
-            background: '#f8d36f',
-            fontWeight: 900,
-            cursor: 'pointer',
-          }}>
+          <button type="submit">
             进入管理台
           </button>
         </form>
+        <p className="admin-login-footnote">
+          未授权用户不会进入后台页面；公共文档和第三方回调接口不依赖此登录态。
+        </p>
+      </section>
       </section>
     </main>
   );
