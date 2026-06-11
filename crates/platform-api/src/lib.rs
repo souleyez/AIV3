@@ -45970,6 +45970,7 @@ fn external_channel_platform_from_wire_value(value: &str) -> Option<ExternalChan
         "lark" => Some(ExternalChannelPlatformView::Lark),
         "we_com" => Some(ExternalChannelPlatformView::WeCom),
         "generic_chat" => Some(ExternalChannelPlatformView::GenericChat),
+        "aigolf" => Some(ExternalChannelPlatformView::GenericChat),
         "third_party" => Some(ExternalChannelPlatformView::ThirdParty),
         _ => None,
     }
@@ -109902,6 +109903,10 @@ mod tests {
         );
         assert_eq!(
             external_channel_platform_from_wire_value("generic_chat"),
+            Some(ExternalChannelPlatformView::GenericChat)
+        );
+        assert_eq!(
+            external_channel_platform_from_wire_value("aigolf"),
             Some(ExternalChannelPlatformView::GenericChat)
         );
         let mut payload = json!({"platform": "aigolf"});
