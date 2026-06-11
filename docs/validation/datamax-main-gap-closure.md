@@ -3475,6 +3475,17 @@ Data-ingestion external fixed-task smoke:
   - `fingerprintGapReasonCounts`: `local_locator_requires_filesystem_probe=2602`, `remote_locator_requires_fetch=3`;
   - receipt: `/srv/aiv3/repo/target/document-fingerprint-inventory-smoke-p2-reason-20260612-stdin/20260611184221179-dvxa1kch34/report.json`;
   - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value.
+- 8-server post-sync verification:
+  - commit `9bb96bd` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `fe8061a69` to `9bb96bdda`;
+  - `npm run smoke:document-fingerprint-inventory -- --self-test`: passed, `runId=20260611184444580-dw36x5wi1e-self-test`, `ok=true`;
+  - `npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20 --pretty --output-dir target/document-fingerprint-inventory-smoke-p2-reason-20260612`: passed, `runId=20260611184444690-dw3uyzivyf`, `ok=true`;
+  - post-sync `objectLocatorReasonCounts`: `local_locator_candidate_unprobed=2634`, `remote_locator_unprobed=3`;
+  - post-sync `fingerprintGapReasonCounts`: `local_locator_requires_filesystem_probe=2602`, `remote_locator_requires_fetch=3`;
+  - receipt: `/srv/aiv3/repo/target/document-fingerprint-inventory-smoke-p2-reason-20260612/20260611184444690-dw3uyzivyf/report.json`;
+  - redaction grep over the post-sync receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this docs/smoke-only update.
 - Safety:
   - the smoke still executes one fixed aggregate SELECT through `psql`;
   - no filesystem path was probed, read, deleted, or printed;

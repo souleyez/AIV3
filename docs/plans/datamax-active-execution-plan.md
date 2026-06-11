@@ -241,7 +241,7 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20
 ```
 
-**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。
+**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器正式脚本 post-sync 已验证，当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。
 
 **下一步:**
 1. 区分索引层重复映射和对象文件清理。
