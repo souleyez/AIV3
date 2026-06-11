@@ -3551,6 +3551,52 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Local Object Filesystem Preflight
+
+- Purpose:
+  - add a read-only filesystem reachability preflight for local object candidates missing content fingerprints;
+  - keep candidate object locators in memory only;
+  - report only aggregate status counts so object paths and customer file names are not recorded.
+- Code changes:
+  - added `scripts/smoke/document-object-filesystem-preflight.mjs`;
+  - added `npm run smoke:document-object-filesystem-preflight`;
+  - added syntax check and deterministic self-test to `.github/workflows/datamax-ci.yml`;
+  - documented the entrypoint in `scripts/README.md`;
+  - updated `docs/plans/datamax-active-execution-plan.md` P2-2 with the fixed entrypoint and current preflight result.
+- Contract:
+  - live mode loads a deployment env file and reads `PLATFORM_DATABASE_URL` and `PLATFORM_LOCAL_OBJECT_ROOT` without printing them;
+  - live mode executes one fixed SELECT through `psql` for a bounded sample of local candidates missing `content_sha256`;
+  - candidate locators are used in process memory only and are not persisted;
+  - `psql.stdout.redacted.txt` contains only a fixed redaction placeholder;
+  - report explicitly sets `stat_only=true`, `file_content_read=false`, `filesystem_mutation_enabled=false`, `remote_fetch_enabled=false`, `database_writes_enabled=false`, `object_deletes_enabled=false`, `path_values_included=false`, and `impact_is_aggregate_only=true`.
+- Local verification:
+  - `node --check scripts/smoke/document-object-filesystem-preflight.mjs`: passed;
+  - `npm run smoke:document-object-filesystem-preflight -- --self-test --pretty`: passed, `runId=20260611190002099-7i8uqi094-self-test`, `ok=true`;
+  - self-test checks included `redactionContract=true`, `statOnly=true`, `noPathValues=true`, `traversalBlocked=true`, and `cleanupDisabled=true`;
+  - `npm run smoke:document-object-cleanup-plan -- --self-test`: passed, `ok=true`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- 8-server live verification before commit:
+  - executed the new script over SSH stdin against `/srv/aiv3/repo` with `--env-file /etc/aiv3/aiv3.env --probe-limit 200`;
+  - result: `runId=20260611190028692-dx6wn202xb`, `ok=true`;
+  - input summary: `document_count=2637`, `local_missing_fingerprint_count=2602`, `remote_missing_fingerprint_count=3`, `missing_locator_fingerprint_count=0`, `probe_limit=200`, `probed_count=200`;
+  - root summary: `root_configured=true`, `root_value_included=false`;
+  - status counts: `file_found=57`, `file_missing=143`;
+  - resolution counts: `relative_under_root=142`, `absolute_direct=58`;
+  - found-file size summary: `file_found_count=57`, `total_bytes=69424609`, `max_bytes=33717070`;
+  - receipt: `/srv/aiv3/repo/target/document-object-filesystem-preflight-smoke-p2-20260612-stdin/20260611190028692-dx6wn202xb/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, 64-character hash value, shared object root, external-documents path, or generated-artifacts path.
+- Safety:
+  - the smoke executes one fixed SELECT through `psql`;
+  - no filesystem path was printed;
+  - no file content was read;
+  - no filesystem path was mutated or deleted;
+  - no remote object was downloaded or retried;
+  - no database row was written, updated, or deleted;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Rebuild And Local Self-Test Refresh
 
 - Purpose:

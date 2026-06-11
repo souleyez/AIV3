@@ -39,7 +39,7 @@
 | 报表导出 | 标准产物为 `index.html`、`table-data.csv`、`report.ppt`、`report.md`。 | 用户可见文案里链接只出现一次；已有结构字段中继续承载产物 URL。 |
 | 数据源/CC 模式 | 数据源页和 staging analysis 链路已存在。CC/Codex 可协助 DB/API 接入，但必须落到明确目标数据集。 | 生产写入仍需人工确认。 |
 | P2 解析 | 8 服务器已对 DOC/DOCX/PDF/XLSX/PPTX/MP4 类小样本完成 summary-only dry-run；未写入、未入队。 | 继续扩样，并在真实 backfill 前确认 fact 类型用途策略。 |
-| 文档 fingerprint 治理 | 8 服务器只读聚合 inventory 已通过：`document_count=2637`、`fingerprinted_document_count=32`、`canonical=32`、`unknown=2605`、重复 hash 分组 `0`，并已增加缺 fingerprint 原因聚合。对象清理 dry-run 计划脚本已提供聚合影响和回滚要求。 | 真实对象清理仍禁用；当前不删除文件。 |
+| 文档 fingerprint 治理 | 8 服务器只读聚合 inventory 已通过：`document_count=2637`、`fingerprinted_document_count=32`、`canonical=32`、`unknown=2605`、重复 hash 分组 `0`，并已增加缺 fingerprint 原因聚合。对象清理 dry-run 计划脚本已提供聚合影响和回滚要求；本地对象可达性 preflight 已提供 stat-only 聚合检查。 | 真实对象清理仍禁用；当前不删除文件。 |
 | CI | 本地和 8 服务器等价命令覆盖当前主要缺口。GitHub Actions 因账号付款/额度状态在 job 启动前失败。 | 账号状态恢复后重跑 DataMax CI；当前 Actions 失败不按代码失败处理。 |
 
 ## 3. 当前执行队列
@@ -240,13 +240,14 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 ```bash
 npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20
 npm run smoke:document-object-cleanup-plan -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20
+npm run smoke:document-object-filesystem-preflight -- --env-file /etc/aiv3/aiv3.env --probe-limit 200
 ```
 
-**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器正式脚本 post-sync 已验证，当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。对象清理计划脚本已在 8 服务器正式 post-sync 通过，只输出聚合影响和 rollback 要求，`object_deletes_enabled=false`；当前 dry-run 显示 `review_object_cleanup_candidate_count=0`、`review_index_mapping_candidate_count=0`。
+**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器正式脚本 post-sync 已验证，当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。对象清理计划脚本已在 8 服务器正式 post-sync 通过，只输出聚合影响和 rollback 要求，`object_deletes_enabled=false`；当前 dry-run 显示 `review_object_cleanup_candidate_count=0`、`review_index_mapping_candidate_count=0`。本地对象可达性 preflight 只对有界样本执行 `stat()`，不读文件内容、不输出路径；8 服务器 200 条样本中 `file_found=57`、`file_missing=143`。
 
 **下一步:**
 1. 真实对象清理必须另行人工确认，并先产出 operator-reviewed manifest。
-2. 如需进一步确认本地对象可达性，先增加只读 filesystem preflight，并继续只输出原因计数，不输出路径。
+2. 若后续要修复缺 fingerprint 覆盖，先基于 preflight 聚合结果选择恢复对象、调整 root 配置或受控 backfill 范围。
 
 **完成标准:**
 - 不删除源对象。
