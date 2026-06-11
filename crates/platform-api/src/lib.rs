@@ -177,6 +177,7 @@ pub mod auth_email;
 mod auth_session_support;
 mod external_channel_support;
 pub mod external_feishu;
+mod external_observability;
 pub mod external_wecom;
 pub mod fact_index;
 mod model_gateway_admin;
@@ -188,6 +189,9 @@ mod react_agent_tools;
 
 use auth_session_support::*;
 use external_channel_support::*;
+use external_observability::{
+    access_allowed as external_observability_access_allowed, EXTERNAL_OBSERVABILITY_ACCESS_HEADER,
+};
 use model_gateway_admin::*;
 use model_gateway_runtime::*;
 use model_gateway_status::*;
@@ -12525,36 +12529,6 @@ struct ExternalConversationTestsQuery {
 struct ExternalConversationTimelineQuery {
     #[serde(default)]
     debug: Option<bool>,
-}
-
-const EXTERNAL_OBSERVABILITY_ACCESS_HEADER: &str = "x-ai-data-platform-external-observability-key";
-
-fn external_observability_configured_access_key() -> Option<String> {
-    std::env::var("EXTERNAL_OBSERVABILITY_ACCESS_KEY")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("EXTERNAL_INTEGRATIONS_OBSERVATION_KEY")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-}
-
-fn external_observability_access_allowed(headers: &HeaderMap) -> bool {
-    let Some(expected) = external_observability_configured_access_key() else {
-        return true;
-    };
-    let Some(actual) = headers
-        .get(EXTERNAL_OBSERVABILITY_ACCESS_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return false;
-    };
-    Sha256::digest(expected.as_bytes()) == Sha256::digest(actual.as_bytes())
 }
 
 async fn list_external_conversation_tests(

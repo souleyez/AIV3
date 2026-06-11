@@ -3397,6 +3397,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 External Observability Module Split
+
+- Purpose:
+  - continue the active plan's P5 engineering governance work;
+  - reduce `crates/platform-api/src/lib.rs` size with one behavior-preserving extraction;
+  - keep external observability authorization semantics unchanged.
+- Code changes:
+  - added `crates/platform-api/src/external_observability.rs`;
+  - moved `EXTERNAL_OBSERVABILITY_ACCESS_HEADER`, environment-key lookup, and hash-based access comparison out of `lib.rs`;
+  - imported the helper back into `lib.rs` under the same local names used by existing handlers and tests;
+  - updated `docs/plans/datamax-active-execution-plan.md` with the completed P5 slice.
+- Local verification:
+  - `cargo test -p platform-api external_observability_access_requires_configured_header --lib`: passed, 1 test;
+  - `cargo test -p platform-api workflow_task_queue_stats_group_logical_queues_and_retrying_tasks --lib`: passed, 1 test;
+  - `cargo fmt --check`: passed after formatting module order;
+  - `git diff --check`: passed; Git emitted only expected Windows LF-to-CRLF warnings;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1 test;
+  - `npm --prefix apps/web run build`: passed; Next.js emitted existing warning classes for deprecated `middleware` convention and NFT tracing of `apps/web/next.config.js`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, object file read, object file delete, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Cleanup Rebuild
 
 - Purpose:
