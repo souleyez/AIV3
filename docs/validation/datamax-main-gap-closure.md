@@ -3682,6 +3682,14 @@ Data-ingestion external fixed-task smoke:
   - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
   - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`, `rapidRunIdsAreUnique=true`;
   - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed.
+- 8-server verification after wrapper fix:
+  - repository `/srv/aiv3/repo` fast-forwarded to `d2de9f04c`;
+  - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`, `rapidRunIdsAreUnique=true`, receipt `target/p2-summary-only-dry-run-smoke/20260611175111589-dqlvw647x0-self-test.json`;
+  - two rapid single-document dry-runs produced distinct report paths:
+    `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke/20260611175111701-dqmiy0d8d3/report.json` and `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke/20260611175111918-dqnp1lvfzf/report.json`;
+  - both dry-runs returned `ok=true`, `recorded_count=0`, `inserted_fact_count=0`, `snapshot_updated=false`, and `enqueued_count=0`;
+  - services stayed active: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`.
 - Safety:
   - all P2 backfill runs used the fixed wrapper path with `--dry-run --summary-only --pretty`;
   - no fingerprint records were written;
