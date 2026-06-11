@@ -21789,13 +21789,12 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
-    if let Some(reply) = maybe_handle_external_channel_image_structured_extract(
+    if let Some(reply) = maybe_handle_external_channel_aigolf_requested_skill(
         state,
         connection_id,
         run.id,
         &run.execution_trail,
         &message,
-        &assistant_request.prompt,
         now,
     )
     .await?
@@ -21811,12 +21810,13 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
-    if let Some(reply) = maybe_handle_external_channel_aigolf_requested_skill(
+    if let Some(reply) = maybe_handle_external_channel_image_structured_extract(
         state,
         connection_id,
         run.id,
         &run.execution_trail,
         &message,
+        &assistant_request.prompt,
         now,
     )
     .await?
@@ -112051,6 +112051,7 @@ mod tests {
         let mut message = sample_external_bot_message();
         message.message_external_id = "msg-aigolf-map-001".to_string();
         message.idempotency_key = "generic:tenant-ext-001:msg-aigolf-map-001".to_string();
+        message.message_type = ExternalMessageTypeView::Image;
         message.text = Some(
             "AI Golf smoke: validate course map segmentation routing and schema policy."
                 .to_string(),
