@@ -123,7 +123,9 @@ async function loadEnvFile(path) {
 }
 
 function makeRunId() {
-  return new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 17);
+  const monotonic = process.hrtime.bigint().toString(36).slice(-6);
+  return `${timestamp}-${process.pid.toString(36)}${monotonic}`;
 }
 
 function commandSpecs(args) {
@@ -368,6 +370,7 @@ async function runSelfTest(args) {
     limitScopeUsedWhenDocumentIdMissing: specs.every((spec) => spec.args.includes('--limit') && spec.args.includes('5')),
     fixtureJsonParsedAfterNoticeLines: parsedFixture?.derived_fact_count === 281,
     nonMutatingSummaryRecognized: validateNonMutating(parsedSummary),
+    rapidRunIdsAreUnique: makeRunId() !== makeRunId(),
     sanitizerRedactsSecrets: sanitizeText('DATABASE_URL=postgres://u:secret@example/db Bearer abc sk-1234567890')
       === 'DATABASE_URL=[REDACTED] Bearer [REDACTED] sk-[REDACTED]',
   };

@@ -3652,3 +3652,41 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 P2 Multi-Type Summary-Only Dry-Run Expansion
+
+- Purpose:
+  - expand P2 parsing/fact-store dry-run coverage from the earlier single-dataset limit5 sample to a multi-content-type dataset sample;
+  - keep all runs summary-only and non-mutating.
+- Candidate selection:
+  - queried only aggregate dataset id, document count, content-type count, and content-type distribution on 8 server;
+  - selected a 37-document dataset with four content types: Word OpenXML, PDF, Excel OpenXML, and legacy Word;
+  - no document title, object key, document body, raw row, external URL, database URL, credential, bearer, cookie, or provider payload was queried or recorded.
+- 8-server limit10 dry-run before wrapper run-id fix:
+  - command: `npm run smoke:p2-summary-only-dry-run -- --dataset-id c75ef99e-9369-4c65-bd53-e19e69d84f65 --limit 10 --env-file /etc/aiv3/aiv3.env`;
+  - report: `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke/20260611174622/report.json`;
+  - `ok=true`;
+  - fingerprint: `candidate_count=10`, `would_record_count=10`, `recorded_count=0`, `duplicate_count=0`, `summary_only=true`, `dry_run=true`;
+  - fact-index: `document_count=10`, `derived_fact_count=1067`, `inserted_fact_count=0`, `snapshot_updated=false`, fact types include `date_period`, `education_certificate`, `keyword`, `location_area`, `organization`, `procedure_step`, `project_product_system`, `role_position`, `section`, and `time_threshold`;
+  - enrichment: `document_count=10`, `missing_fingerprint_count=10`, `would_enqueue_count=0`, `enqueued_count=0`, `summary_only=true`, `dry_run=true`.
+- 8-server single-document content-type probes before wrapper run-id fix:
+  - legacy Word: `ok=true`, `derived_fact_count=148`, `inserted_fact_count=0`, `enqueued_count=0`;
+  - PDF: `ok=true`, `derived_fact_count=256`, `inserted_fact_count=0`, `enqueued_count=0`;
+  - Excel OpenXML: `ok=true`, `derived_fact_count=11`, `inserted_fact_count=0`, `enqueued_count=0`;
+  - Word OpenXML: `ok=true`, `derived_fact_count=76`, `inserted_fact_count=0`, `enqueued_count=0`.
+- Wrapper issue found:
+  - rapid consecutive per-document runs reused the same second-level `runId`, causing report-path collisions for runs started within the same second;
+  - updated `scripts/smoke/p2-summary-only-dry-run.mjs` to include millisecond timestamp plus monotonic suffix in `runId`;
+  - self-test now asserts `rapidRunIdsAreUnique=true`.
+- Local verification after wrapper fix:
+  - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`, `rapidRunIdsAreUnique=true`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed.
+- Safety:
+  - all P2 backfill runs used the fixed wrapper path with `--dry-run --summary-only --pretty`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no source object was deleted or cleaned;
+  - no service was restarted;
+  - 120 server was not touched.

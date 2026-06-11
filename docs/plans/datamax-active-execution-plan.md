@@ -194,7 +194,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 
 **完成标准:** 默认 dry-run 和 summary-only；真实写入或入队必须另行确认。
 
-**当前证据:** 8 服务器已完成同一数据集 limit5 summary-only dry-run：fingerprint `would_record_count=5` 且 `duplicate_count=5`，fact-index `derived_fact_count=281`，enrichment `would_enqueue_count=2`；均未写入、未入队。
+**当前证据:** 8 服务器已完成同一数据集 limit5 summary-only dry-run：fingerprint `would_record_count=5` 且 `duplicate_count=5`，fact-index `derived_fact_count=281`，enrichment `would_enqueue_count=2`；均未写入、未入队。另一个 37 文档、4 content-type 数据集已完成 limit10 summary-only dry-run：fingerprint `would_record_count=10`，fact-index `derived_fact_count=1067`，并按 legacy Word、PDF、Excel OpenXML、Word OpenXML 各跑 1 个单文档 summary-only probe；均未写入、未入队。
 
 **固定入口:**
 
@@ -205,7 +205,7 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 
 该入口只封装 `document-fingerprint-backfill`、`fact-index-backfill`、`document-enrichment-backfill` 的 `--dry-run --summary-only --pretty` 路径，不提供 `--confirm-real-run`。
 
-**8 服务器状态:** 固定入口已在 8 服务器通过 self-test 和同数据集 limit5 dry-run；结果仍为不写入、不入队。
+**8 服务器状态:** 固定入口已在 8 服务器通过 self-test、limit5 dry-run 和多类型扩样 dry-run；结果仍为不写入、不入队。wrapper 已修复连续运行 report-path 碰撞，`runId` 使用毫秒时间戳加单调后缀。
 
 ### P2-2 重复文档与对象治理
 
