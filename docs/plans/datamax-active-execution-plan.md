@@ -44,9 +44,11 @@
 
 ## 3. 当前执行队列
 
-### P0-1 收尾当前 P2 Fingerprint Smoke 批次
+### P0-1 已完成：收尾当前 P2 Fingerprint Smoke 批次
 
 **原因:** 当前工作区已有安全的 P2-2 文档 fingerprint inventory smoke 改动，应该先验证、提交、推送、同步 8 服务器，再开新功能。
+
+**状态:** 已提交 `2b34dff`，已推送 GitHub，8 服务器已 fast-forward 到 `2b34dfffc` 并完成 post-sync smoke。后续只在修改 P2 fingerprint/inventory 逻辑时重跑本节。
 
 **涉及文件:**
 - 新增：`scripts/smoke/document-fingerprint-inventory.mjs`
@@ -292,4 +294,4 @@ npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env 
 
 ## 8. 下一步建议
 
-先完成 P0-1：验证、提交、推送并同步当前 P2 fingerprint-inventory smoke 批次。随后如果能拿到合法 operator 凭证或运维脱敏回执，就补 P1-1/P1-2；如果 operator 仍卡住，就继续做 P2 summary-only 扩样，因为这条线安全、可独立推进，也不依赖外部权限。
+下一步优先做 P0-2：稳定第三方新百报表触发，确认触发报表时不截断正常回答、链接不重复、焦点模块前置。随后如果能拿到合法 operator 凭证或运维脱敏回执，就补 P1-1/P1-2；如果 operator 仍卡住，就继续做 P2 summary-only 扩样，因为这条线安全、可独立推进，也不依赖外部权限。

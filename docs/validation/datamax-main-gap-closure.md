@@ -3857,6 +3857,19 @@ Data-ingestion external fixed-task smoke:
   - `objectLocatorClassification`: `empty_locator_count=0`, `remote_locator_count=3`, `local_locator_candidate_count=2634`, `filesystem_checked=false`;
   - receipt: `/srv/aiv3/repo/target/document-fingerprint-inventory-smoke-p2-20260612-stdin/20260611181946465-du33p2s6d8/report.json`;
   - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value.
+- 8-server post-sync verification:
+  - local commit `2b34dff` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `211e35823` to `2b34dfffc`;
+  - `npm run smoke:document-fingerprint-inventory -- --self-test`: passed, `runId=20260611182807797-dumu06qs8y-self-test`, `ok=true`;
+  - `npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20 --pretty --output-dir target/document-fingerprint-inventory-smoke-p2-20260612`: passed, `runId=20260611182807910-duni22cm3l`, `ok=true`;
+  - post-sync overall counts: `document_count=2637`, `dataset_count=58`, `locator_present_count=2637`, `fingerprinted_document_count=32`, `canonical_document_reference_count=32`;
+  - post-sync `dedupStateCounts`: `canonical=32`, `unknown=2605`;
+  - post-sync `contentHashGroups`: `distinct_hash_group_count=32`, `repeated_hash_group_count=0`, `duplicate_document_candidate_count=0`;
+  - post-sync `objectLocatorClassification`: `empty_locator_count=0`, `remote_locator_count=3`, `local_locator_candidate_count=2634`, `filesystem_checked=false`;
+  - receipt: `/srv/aiv3/repo/target/document-fingerprint-inventory-smoke-p2-20260612/20260611182807910-duni22cm3l/report.json`;
+  - redaction grep over the post-sync receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this docs/smoke-only update.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, object file read, object file delete, P2 real backfill, or production data mutation was performed;
