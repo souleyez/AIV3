@@ -3423,6 +3423,34 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
   - 120 server was not touched.
 
+## 2026-06-12 Active Plan Cleanup GitHub And 8-Server Sync
+
+- Purpose:
+  - publish the cleaned single active plan and latest P2 table-like dry-run validation;
+  - sync the documentation-only change to 8 server without build or restart;
+  - record CI state after push.
+- GitHub:
+  - commit: `a951504` (`Rebuild DataMax active execution plan`);
+  - pushed to `origin/main`.
+- 8-server docs-only sync:
+  - repository path: `/srv/aiv3/repo`;
+  - command: `git pull --ff-only origin main`;
+  - fast-forward range: `d6a0c7d8f..a9515047d`;
+  - verified remote head with PowerShell-safe SSH quoting: `a9515047d`;
+  - remote status after sync: `## main...origin/main`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- CI:
+  - GitHub Actions run `27371242203` for DataMax CI failed before jobs started;
+  - failure reason from `gh run view`: recent account payments failed or spending limit needs to be increased;
+  - no workflow test log was produced, so this remains an external account/billing gate rather than a code test failure.
+- Follow-up plan update:
+  - `docs/plans/datamax-active-execution-plan.md` section 9 now points to the next executable P2-1 dry-run expansion instead of the already completed commit/sync action.
+- Safety:
+  - no build, restart, migration, source sync, live third-party mutation, production data ingestion, schema write, object cleanup, or static-page generation was performed;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0-3 Main-Site Chat UX Local Regression Refresh
 
 - Purpose:

@@ -329,8 +329,8 @@ npm --prefix apps/web run build
 
 ## 9. 当前下一步
 
-1. 先把本次计划重建和最新 P2 经营表格 dry-run 回执收干净：`git diff --check`，只提交 `docs/plans/datamax-active-execution-plan.md` 和 `docs/validation/datamax-main-gap-closure.md`。
-2. 如果用户要求同步 8 服务器，只做 docs-only fast-forward，不 build、不 restart。
-3. 下一个可独立推进项是 P2-1：制度手册/流程类数据集 summary-only dry-run 扩样。
-4. 若拿到合法 operator 凭证或脱敏回执，优先做 P1-1 operator 观测闭环。
-5. 若进入发布窗口，按 P0-1 和 P0-2 跑固定回归后再部署。
+1. 下一个可独立推进项是 P2-1：制度手册/护理/运营流程类数据集 summary-only dry-run 扩样。
+2. 同批可继续补简历类和考勤/缺勤/工时表格类 summary-only dry-run，但每批只记录聚合结果。
+3. 若拿到合法 operator 凭证或脱敏回执，优先做 P1-1 operator 观测闭环。
+4. 若进入发布窗口，按 P0-1 和 P0-2 跑固定回归后再部署。
+5. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
