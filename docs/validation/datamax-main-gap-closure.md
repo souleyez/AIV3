@@ -3720,6 +3720,15 @@ Data-ingestion external fixed-task smoke:
   - self-test checks `factUsePolicyClassifiesKnownTypes=true` and `unknownFactTypesRequireReview=true`;
   - self-test report contains `factUsePolicy.countsByUse.evidence_index_only=249`, `retrieval_enhancement=8`, and `report_aggregation=16`;
   - `npm run smoke:production-placeholder-readiness -- --self-test --allow-not-ready --json-stdout`: passed.
+- 8 server verification:
+  - pulled `main` to `8cc014ef6`;
+  - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:p2-summary-only-dry-run -- --dataset-id c75ef99e-9369-4c65-bd53-e19e69d84f65 --limit 10 --env-file /etc/aiv3/aiv3.env`: passed, `ok=true`;
+  - live summary-only dry-run counts: fingerprint `candidate_count=10`, `would_record_count=10`, `recorded_count=0`, `duplicate_count=0`; fact index `document_count=10`, `derived_fact_count=1067`, `inserted_fact_count=0`, `snapshot_updated=false`; enrichment `document_count=10`, `missing_fingerprint_count=10`, `would_enqueue_count=0`, `enqueued_count=0`;
+  - live `factUsePolicy.countsByUse`: `report_aggregation=154`, `retrieval_enhancement=111`, `evidence_index_only=802`, `unknownFactTypes=[]`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`: all `active`;
+  - no service was restarted for this docs/smoke-only update.
 - Safety:
   - this change only affects smoke/report metadata;
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
