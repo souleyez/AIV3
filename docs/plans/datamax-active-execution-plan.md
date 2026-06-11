@@ -191,9 +191,9 @@ npm run smoke:cloudflare-fallback-2way -- --self-test
 - 小型混合媒体样本。
 - doc-heavy 样本。
 - 经营表格类 XLSX 样本，limit5 派生 facts 1204，未知 fact 类型 0。
+- 制度手册/护理流程类 Word 旧格式样本，limit5 派生 facts 256，未知 fact 类型 0。
 
 **Next samples:**
-- 制度手册/护理/运营流程类文档。
 - 简历类数据集，重点覆盖跨文档项目经历聚合。
 - 考勤/缺勤/工时表格类数据集。
 
@@ -329,8 +329,8 @@ npm --prefix apps/web run build
 
 ## 9. 当前下一步
 
-1. 下一个可独立推进项是 P2-1：制度手册/护理/运营流程类数据集 summary-only dry-run 扩样。
-2. 同批可继续补简历类和考勤/缺勤/工时表格类 summary-only dry-run，但每批只记录聚合结果。
+1. 下一个可独立推进项是 P2-1：简历类数据集 summary-only dry-run 扩样，重点覆盖跨文档项目经历聚合。
+2. 同批可继续补考勤/缺勤/工时表格类 summary-only dry-run，但每批只记录聚合结果。
 3. 若拿到合法 operator 凭证或脱敏回执，优先做 P1-1 operator 观测闭环。
 4. 若进入发布窗口，按 P0-1 和 P0-2 跑固定回归后再部署。
 5. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
