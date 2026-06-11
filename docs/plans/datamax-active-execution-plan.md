@@ -269,6 +269,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 **Current progress:**
 - 2026-06-12: `external_observability` helper 已从 `crates/platform-api/src/lib.rs` 拆到独立模块；header 名称、环境变量、默认放行逻辑和哈希比较逻辑保持不变。
 - 2026-06-12: external integration management access wrapper 已并入 `external_observability` 模块；错误码、提示文本和授权判断保持不变。
+- 2026-06-12: external integration JSON 脱敏 helper 已拆到 `external_integration_summary` 模块；敏感字段规则、递归脱敏和 redacted 标准化保持不变。
 
 **Regression commands:**
 

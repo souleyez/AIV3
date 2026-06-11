@@ -177,6 +177,7 @@ pub mod auth_email;
 mod auth_session_support;
 mod external_channel_support;
 pub mod external_feishu;
+mod external_integration_summary;
 mod external_observability;
 pub mod external_wecom;
 pub mod fact_index;
@@ -189,6 +190,11 @@ mod react_agent_tools;
 
 use auth_session_support::*;
 use external_channel_support::*;
+use external_integration_summary::{
+    has_redacted_value as external_integration_has_redacted_value,
+    redacted_summary as external_integration_redacted_summary,
+    sensitive_key as external_integration_sensitive_key,
+};
 use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
@@ -16037,43 +16043,6 @@ fn external_action_run_audit_summary(
         "callback_completed_at": callback.get("completed_at").cloned().unwrap_or(Value::Null),
         "callback_result_summary": callback.get("result_summary").cloned().unwrap_or(Value::Null),
     })
-}
-
-fn external_integration_redacted_summary(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .filter(|(key, _)| !external_integration_sensitive_key(key))
-                .map(|(key, value)| (key, external_integration_redacted_summary(value)))
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(
-            items
-                .into_iter()
-                .map(external_integration_redacted_summary)
-                .collect(),
-        ),
-        Value::String(text) if text.starts_with("[redacted") => json!("[redacted]"),
-        other => other,
-    }
-}
-
-fn external_integration_sensitive_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    lower.contains("secret")
-        || lower.contains("token")
-        || lower.contains("authorization")
-        || lower.contains("cookie")
-        || lower.contains("password")
-}
-
-fn external_integration_has_redacted_value(value: &Value) -> bool {
-    match value {
-        Value::String(text) => text.starts_with("[redacted"),
-        Value::Array(items) => items.iter().any(external_integration_has_redacted_value),
-        Value::Object(map) => map.values().any(external_integration_has_redacted_value),
-        _ => false,
-    }
 }
 
 async fn create_external_source_sync(

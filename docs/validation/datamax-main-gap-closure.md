@@ -3464,6 +3464,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 External Integration Redaction Helper Split
+
+- Purpose:
+  - continue P5 behavior-preserving `platform-api` decomposition;
+  - move pure external integration JSON redaction helpers out of `lib.rs`;
+  - keep config-summary shape, sensitive-key matching, recursive redaction, and `[redacted]` normalization unchanged.
+- Code changes:
+  - added `crates/platform-api/src/external_integration_summary.rs`;
+  - moved `external_integration_redacted_summary`, `external_integration_sensitive_key`, and `external_integration_has_redacted_value` into the new module under shorter internal names;
+  - imported them back into `lib.rs` under the existing local names used by handlers and tests.
+- Local verification:
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_integration_config_summary --lib`: passed, 2 tests;
+  - `cargo test -p platform-api external_integration_redacted_summary_removes_sensitive_keys_recursively --lib`: passed, 1 test;
+  - `cargo test -p platform-api external_channel_action_and_search_replies_hide_internal_observability_fields --lib`: passed, 1 test;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1 test;
+  - `git diff --check`: passed; Git emitted only expected Windows LF-to-CRLF warnings;
+  - `npm --prefix apps/web run build`: passed; Next.js emitted the existing deprecated `middleware` convention and NFT tracing warnings.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, object file read, object file delete, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Cleanup Rebuild
 
 - Purpose:
