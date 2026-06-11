@@ -3533,3 +3533,33 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no server was deployed or restarted;
   - 120 server was not touched.
+
+## 2026-06-12 8-Server P2 Summary-Only Wrapper Verification
+
+- Purpose:
+  - sync the fixed P2 summary-only wrapper to 8 server;
+  - prove both wrapper self-test and bounded live dry-run execute on the deployment host.
+- 8-server sync:
+  - repository path: `/srv/aiv3/repo`;
+  - command: `git pull --ff-only origin main`;
+  - post-pull head: `b1fd656b3`;
+  - post-pull status: `## main...origin/main`.
+- 8-server self-test:
+  - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - self-test receipt `target/p2-summary-only-dry-run-smoke/20260611172050-self-test.json`.
+- 8-server bounded dry-run:
+  - command: `npm run smoke:p2-summary-only-dry-run -- --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --limit 5 --env-file /etc/aiv3/aiv3.env`;
+  - report: `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke/20260611172105/report.json`;
+  - `ok=true`;
+  - fingerprint summary: `candidate_count=5`, `would_record_count=5`, `recorded_count=0`, `duplicate_count=5`, `summary_only=true`, `dry_run=true`;
+  - fact-index summary: `document_count=5`, `derived_fact_count=281`, `inserted_fact_count=0`, `snapshot_updated=false`, fact types `date_period=6`, `keyword=249`, `section=26`, `summary_only=true`, `dry_run=true`;
+  - enrichment summary: `document_count=5`, `missing_fingerprint_count=4`, `would_enqueue_count=2`, `enqueued_count=0`, kinds `procedure_steps_v1=1`, `table_structure_v1=1`, `summary_only=true`, `dry_run=true`.
+- Safety:
+  - the wrapper loaded `/etc/aiv3/aiv3.env` without printing env values;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no build, restart, migration, source sync, ingestion, live third-party mutation, or static-page generation was performed;
+  - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - 120 server was not touched.

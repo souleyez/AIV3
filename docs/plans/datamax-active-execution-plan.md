@@ -204,6 +204,8 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 
 该入口只封装 `document-fingerprint-backfill`、`fact-index-backfill`、`document-enrichment-backfill` 的 `--dry-run --summary-only --pretty` 路径，不提供 `--confirm-real-run`。
 
+**8 服务器状态:** 固定入口已在 8 服务器通过 self-test 和同数据集 limit5 dry-run；结果仍为不写入、不入队。
+
 ### P2-2 重复文档与对象治理
 
 **目标:** 8 服务器本地文档按解析内容和 fingerprint 去重，文档可归属多个数据集，不重复存储不可控副本。
