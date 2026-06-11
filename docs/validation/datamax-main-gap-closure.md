@@ -3397,6 +3397,32 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 Active Plan Cleanup Rebuild
+
+- Purpose:
+  - rebuild `docs/plans/datamax-active-execution-plan.md` as a shorter single active plan;
+  - keep completed work compressed into the production baseline;
+  - move operational detail and receipts to `docs/validation/datamax-main-gap-closure.md`.
+- Plan state:
+  - `rg --files docs/plans` returned only `docs/plans/datamax-active-execution-plan.md`;
+  - `docs/archive/plans` still contains historical plans for reference;
+  - no plan document was deleted in this cleanup.
+- New plan structure:
+  - maintenance rules and safety boundaries;
+  - current production baseline;
+  - current execution order from P0 to P5;
+  - per-task files, commands, and done criteria;
+  - 8-server docs-only sync versus code deploy boundary;
+  - current next-step queue.
+- Local verification:
+  - `git diff --check -- docs/plans/datamax-active-execution-plan.md docs/validation/datamax-main-gap-closure.md`: passed with expected Windows LF-to-CRLF warnings only;
+  - `rg --files docs/plans`: returned a single active plan file.
+- Safety:
+  - no server was deployed or restarted;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0-3 Main-Site Chat UX Local Regression Refresh
 
 - Purpose:
@@ -3607,6 +3633,38 @@ Data-ingestion external fixed-task smoke:
   - no database row was written, updated, or deleted;
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
+## 2026-06-12 P2 Table-Like Summary-Only Dry-Run Expansion
+
+- Purpose:
+  - continue P2 parsing/fact-store dry-run expansion for operation-table / structured-data style datasets;
+  - keep selection aggregate-only and all processing non-mutating.
+- Candidate selection:
+  - selected dataset `d4923d83-6053-4feb-8005-b22ee51e0227` from aggregate-only candidate output;
+  - aggregate shape: `document_count=8`, `object_key_count=8`, `table_like_count=8`, `content_type_count=1`;
+  - content-type distribution: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet=8`;
+  - no document title, object key, source URL, table row, document body, raw row, credential, bearer, provider payload, or private path was recorded.
+- 8-server dry-run:
+  - command: `npm run smoke:p2-summary-only-dry-run -- --dataset-id d4923d83-6053-4feb-8005-b22ee51e0227 --limit 5 --env-file /etc/aiv3/aiv3.env --output-dir target/p2-summary-only-dry-run-smoke-p2-table-20260612`;
+  - result: `runId=20260611190610659-dxv8qk0y83`, `ok=true`;
+  - fingerprint: `candidate_count=5`, `would_record_count=5`, `recorded_count=0`, `duplicate_count=0`, `skipped_count=0`, `summary_only=true`, `dry_run=true`;
+  - fact index: `document_count=5`, `derived_fact_count=1204`, `inserted_fact_count=0`, `snapshot_updated=false`;
+  - fact types: `date_period=14`, `keyword=331`, `procedure_step=228`, `project_product_system=6`, `section=585`, `time_threshold=40`;
+  - fact use policy: `report_aggregation=60`, `retrieval_enhancement=228`, `evidence_index_only=916`, `unknownFactTypes=[]`;
+  - enrichment: `document_count=5`, `missing_fingerprint_count=5`, `would_enqueue_count=0`, `enqueued_count=0`;
+  - receipt: `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke-p2-table-20260612/20260611190610659-dxv8qk0y83/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, 64-character hash value, shared object root, external-documents path, or generated-artifacts path;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- Safety:
+  - all runs used the fixed wrapper path with `--dry-run --summary-only`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no source object was deleted or cleaned;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, table row, or full document body was recorded;
   - no service was restarted;
   - 120 server was not touched.
 
