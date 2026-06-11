@@ -1,12 +1,12 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import HomePageClient from '../HomePageClient';
+import ExternalIntegrationsPageClient from '../external-integrations/ExternalIntegrationsPageClient';
 import { ADMIN_CONSOLE_COOKIE, hasAdminConsoleAccessCookieValue } from '../lib/admin-console-access';
 import AdminShell from './AdminShell';
 
 export const metadata = {
-  title: 'DataMax V3 管理台',
-  description: 'DataMax V3 后台管理台。',
+  title: 'DataMax 管理台',
+  description: 'DataMax 外部集成、运营观测和公开接口管理。',
 };
 
 export default async function AdminConsolePage() {
@@ -16,8 +16,8 @@ export default async function AdminConsolePage() {
     redirect('/admin/login?next=/admin');
   }
   return (
-    <AdminShell active="workspace">
-      <HomePageClient />
+    <AdminShell active="overview">
+      <ExternalIntegrationsPageClient />
     </AdminShell>
   );
 }

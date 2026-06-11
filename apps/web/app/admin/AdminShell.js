@@ -1,6 +1,7 @@
 export default function AdminShell({ active = 'workspace', children }) {
   const links = [
-    { key: 'workspace', href: '/admin', label: '工作台' },
+    { key: 'overview', href: '/admin', label: '管理台' },
+    { key: 'workspace', href: '/admin/workspace', label: '工作区' },
     { key: 'external', href: '/admin/external-integrations', label: '外部集成' },
     { key: 'api', href: '/external-integrations/third-party-integration-api.zh-CN.html', label: '公开接口文档' },
   ];
@@ -33,7 +34,7 @@ export default function AdminShell({ active = 'workspace', children }) {
           whiteSpace: 'nowrap',
           padding: '7px 8px',
         }}>
-          DataMax V3
+          DataMax
         </a>
         <nav style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {links.map((link) => (
