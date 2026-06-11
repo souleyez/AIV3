@@ -243,7 +243,7 @@ npm run smoke:document-object-cleanup-plan -- --env-file /etc/aiv3/aiv3.env --da
 npm run smoke:document-object-filesystem-preflight -- --env-file /etc/aiv3/aiv3.env --probe-limit 200
 ```
 
-**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器正式脚本 post-sync 已验证，当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。对象清理计划脚本已在 8 服务器正式 post-sync 通过，只输出聚合影响和 rollback 要求，`object_deletes_enabled=false`；当前 dry-run 显示 `review_object_cleanup_candidate_count=0`、`review_index_mapping_candidate_count=0`。本地对象可达性 preflight 只对有界样本执行 `stat()`，不读文件内容、不输出路径；8 服务器 200 条样本中 `file_found=57`、`file_missing=143`。
+**当前状态:** inventory 已输出 `object_locator_reason_counts` 和 `fingerprint_gap_reason_counts` 聚合字段。8 服务器正式脚本 post-sync 已验证，当前缺 fingerprint 原因聚合显示 `local_locator_requires_filesystem_probe=2602`、`remote_locator_requires_fetch=3`；该统计未读取文件系统、未下载远程对象、未输出路径。对象清理计划脚本已在 8 服务器正式 post-sync 通过，只输出聚合影响和 rollback 要求，`object_deletes_enabled=false`；当前 dry-run 显示 `review_object_cleanup_candidate_count=0`、`review_index_mapping_candidate_count=0`。本地对象可达性 preflight 已在 8 服务器正式 post-sync 通过，只对有界样本执行 `stat()`，不读文件内容、不输出路径；200 条样本中 `file_found=57`、`file_missing=143`。
 
 **下一步:**
 1. 真实对象清理必须另行人工确认，并先产出 operator-reviewed manifest。

@@ -3585,6 +3585,19 @@ Data-ingestion external fixed-task smoke:
   - found-file size summary: `file_found_count=57`, `total_bytes=69424609`, `max_bytes=33717070`;
   - receipt: `/srv/aiv3/repo/target/document-object-filesystem-preflight-smoke-p2-20260612-stdin/20260611190028692-dx6wn202xb/report.json`;
   - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, 64-character hash value, shared object root, external-documents path, or generated-artifacts path.
+- 8-server post-sync verification:
+  - commit `141e690` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `f75dfdc52` to `141e690ae`;
+  - `npm run smoke:document-object-filesystem-preflight -- --self-test`: passed, `runId=20260611190232078-dxhdbm8ou9-self-test`, `ok=true`;
+  - `npm run smoke:document-object-filesystem-preflight -- --env-file /etc/aiv3/aiv3.env --probe-limit 200 --pretty --output-dir target/document-object-filesystem-preflight-smoke-p2-20260612`: passed, `runId=20260611190232190-dxi2dh0e9h`, `ok=true`;
+  - post-sync input summary: `document_count=2637`, `local_missing_fingerprint_count=2602`, `remote_missing_fingerprint_count=3`, `missing_locator_fingerprint_count=0`, `probe_limit=200`, `probed_count=200`;
+  - post-sync root summary: `root_configured=true`, `root_value_included=false`;
+  - post-sync status counts: `file_found=57`, `file_missing=143`;
+  - post-sync resolution counts: `relative_under_root=142`, `absolute_direct=58`;
+  - receipt: `/srv/aiv3/repo/target/document-object-filesystem-preflight-smoke-p2-20260612/20260611190232190-dxi2dh0e9h/report.json`;
+  - redaction grep over the post-sync receipt found no database URL, bearer, provider key pattern, raw URL, 64-character hash value, shared object root, external-documents path, or generated-artifacts path;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - no service was restarted for this docs/smoke-only update.
 - Safety:
   - the smoke executes one fixed SELECT through `psql`;
   - no filesystem path was printed;
