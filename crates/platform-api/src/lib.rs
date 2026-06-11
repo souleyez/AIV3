@@ -22222,8 +22222,18 @@ async fn record_external_action_result_callback(
         r#"
         update external_action_runs
         set external_request_id = coalesce($3, external_request_id),
-            result_summary = result_summary || $4,
-            failure_kind = $5,
+            result_summary = case
+                when result_summary ? 'external_callback' then
+                    result_summary || jsonb_build_object(
+                        'dispatch', $4::jsonb -> 'dispatch',
+                        'dispatch_updated_at', $4::jsonb -> 'updated_at'
+                    )
+                else result_summary || $4::jsonb
+            end,
+            failure_kind = case
+                when result_summary ? 'external_callback' then failure_kind
+                else $5
+            end,
             updated_at = $6
         where tenant_id = $1 and id = $2
         "#,
