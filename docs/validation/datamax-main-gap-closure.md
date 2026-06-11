@@ -3554,6 +3554,58 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P1 Operator Observability Unauthorized Guard
+
+- Purpose:
+  - close the P1-1 no-credential / unauthorized operator observability path;
+  - keep authenticated operator live checks pending until a legitimate operator cookie, local-key login input, or sanitized operator-side receipt is available;
+  - prevent public no-credential reads of workflow queue stats while preserving the existing observability-key proxy path.
+- Code changes:
+  - `scripts/smoke/model-gateway-operator.mjs` now supports `--self-test` for deterministic unauthenticated guard, sanitized profile/status fixture handling, and secret-signal detection without calling DataMax;
+  - `scripts/smoke/static-page-prewarm-observability.mjs` now supports `--allow-missing-credentials`, records a 401 queue-stats response as `pending`, and keeps redacted receipt output;
+  - `/v1/workflow-tasks/queue-stats` now requires either the configured external observability access header or a model-gateway operator session before returning queue aggregates;
+  - `docs/plans/datamax-active-execution-plan.md` and `scripts/README.md` document the self-test and unauthenticated guard commands.
+- Local verification:
+  - `node --check scripts/smoke/model-gateway-operator.mjs`: passed;
+  - `node --check scripts/smoke/static-page-prewarm-observability.mjs`: passed;
+  - `npm run smoke:model-gateway-operator -- --self-test`: passed, `pending=true`, `failed=false`, receipt `target/model-gateway-operator-smoke/20260611193149-self-test.json`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, `pending=false`, receipt `target/static-page-prewarm-observability-smoke/20260611193149-self-test.json`;
+  - `cargo fmt --check`: passed;
+  - `cargo test -p platform-api external_observability_access_requires_configured_header --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api workflow_task_queue_stats_group_logical_queues_and_retrying_tasks --lib`: passed, 1/1 test;
+  - note: two earlier Rust attempts failed because the local PowerShell command incorrectly forced `CC=clang` on a Windows environment where `clang` is not installed; the same tests passed after rerunning without that override;
+  - `git diff --check`: passed with expected Windows LF-to-CRLF warnings only.
+- Pre-deploy observation:
+  - `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-p1-unauth-predeploy`: passed as `pending=true`, `failed=false`;
+  - `npm run smoke:static-page-prewarm-observability -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/static-page-prewarm-observability-smoke-p1-unauth-predeploy`: returned `queueHttpStatus=200`, proving the old deployed queue-stats path was still readable without credentials before the backend guard deploy.
+- GitHub:
+  - commit: `fc3d070` (`Guard operator queue stats smoke`);
+  - pushed to `origin/main`;
+  - GitHub Actions run `27372419862` failed before jobs started because recent account payments failed or the spending limit needs to be increased; no workflow test log was produced.
+- 8-server deploy:
+  - repository path: `/srv/aiv3/repo`;
+  - fast-forward range: `87e961cd7..fc3d07030`;
+  - build: `CC=clang CXX=clang++ cargo build --release -p platform-api`, passed;
+  - restarted only `aiv3-platform-api.service`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - remote head: `fc3d07030`.
+- 8-server post-deploy verification:
+  - `npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-p1-unauth-20260612`: passed as `pending=true`, `failed=false`, receipt `/srv/aiv3/repo/target/model-gateway-operator-smoke-p1-unauth-20260612/20260611193933.json`;
+  - `npm run smoke:static-page-prewarm-observability -- --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/static-page-prewarm-observability-smoke-p1-unauth-20260612`: passed as `pending=true`, `failed=false`, `queueHttpStatus=401`, receipt `/srv/aiv3/repo/target/static-page-prewarm-observability-smoke-p1-unauth-20260612/20260611193933.json`;
+  - `npm run smoke:model-gateway-operator -- --self-test --output-dir target/model-gateway-operator-smoke-p1-selftest-20260612`: passed as `pending=true`, `failed=false`;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test --output-dir target/static-page-prewarm-observability-smoke-p1-selftest-20260612`: passed as `ok=true`, `pending=false`;
+  - direct no-credential HTTP check: `/v1/workflow-tasks/queue-stats?limit=1` returned `UNAUTH_HTTP=401`;
+  - direct observability-header HTTP check using the configured 8-server env value without printing it returned `OBS_HTTP=200`;
+  - redacted JSON shape checks passed: unauth response formatted as JSON, observability response formatted as JSON and contained one queue aggregate in the bounded `limit=1` response.
+- Remaining P1-1 gate:
+  - authenticated operator live remains pending until a legitimate operator cookie/local-key login input or a sanitized operator-side receipt is available;
+  - expected authenticated evidence: provider lane, fallback profile, worker pool concurrency, and queue stats aggregate only, with no cookie, bearer, provider key, raw env value, task payload, or customer data.
+- Safety:
+  - no third-party public URL, third-party auth method, required request field, existing response field, production schema, source sync, production data write, object cleanup, or P2 real backfill was changed;
+  - no credential, bearer, cookie, local key, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, raw chunk text, task payload, or full document body was recorded;
+  - the only runtime restart was `aiv3-platform-api.service` on 8 server for the backend queue-stats guard deploy;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0-3 Main-Site Chat UX Local Regression Refresh
 
 - Purpose:

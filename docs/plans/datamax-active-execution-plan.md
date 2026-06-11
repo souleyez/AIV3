@@ -131,6 +131,8 @@ systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-ru
 
 **Blocked by:** 合法 operator cookie/bearer/local-key，或运维侧提供脱敏回执。
 
+**Current status:** 无凭证/未授权路径已完成部署验证：model-gateway status 和 workflow queue-stats 无凭证均返回 HTTP 401/pending receipt；workflow queue-stats 带观测 key 可返回脱敏聚合。authenticated operator live 仍等待合法 operator 凭证或运维侧脱敏回执。
+
 **Files:**
 - Validate: `scripts/smoke/model-gateway-operator.mjs`
 - Validate: `scripts/smoke/static-page-prewarm-observability.mjs`
@@ -332,8 +334,8 @@ npm --prefix apps/web run build
 
 ## 9. 当前下一步
 
-1. 完成 P1-1 无凭证/未授权路径发布验证：部署后确认 model-gateway status 和 workflow queue-stats 无凭证均为 HTTP 401 或 pending receipt。
-2. 若拿到合法 operator 凭证或脱敏回执，继续做 P1-1 authenticated operator live，验证 provider lane、fallback、queue stats 只输出脱敏聚合。
+1. 若拿到合法 operator 凭证或脱敏回执，继续做 P1-1 authenticated operator live，验证 provider lane、fallback、queue stats 只输出脱敏聚合。
+2. 若没有 operator 凭证，下一项转 P5-1：选择一个小切片做行为保持重构，优先补测试再拆文件。
 3. 若继续 P2，只针对新客户失败样例或新数据类型补 summary-only dry-run，不再重复已覆盖类型。
 4. 若进入发布窗口，按 P0-1 和 P0-2 跑固定回归后再部署。
 5. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
