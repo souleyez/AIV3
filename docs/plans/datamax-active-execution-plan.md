@@ -186,12 +186,14 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 事实有效期、来源 episode、证据 provenance。
 
 **下一步:**
-1. 继续用对象可达的小样本跑 summary-only dry-run。
+1. 继续用更多对象可达小样本跑 summary-only dry-run，扩大文档类型覆盖。
 2. 汇总不同文档类型的 would-enqueue、would-record、derived-fact 规模。
 3. 明确哪些事实进入检索增强，哪些进入报表聚合，哪些只做证据索引。
 4. 真实历史 backfill 前单独确认范围、批量、回滚方式。
 
 **完成标准:** 默认 dry-run 和 summary-only；真实写入或入队必须另行确认。
+
+**当前证据:** 8 服务器已完成同一数据集 limit5 summary-only dry-run：fingerprint `would_record_count=5` 且 `duplicate_count=5`，fact-index `derived_fact_count=281`，enrichment `would_enqueue_count=2`；均未写入、未入队。
 
 ### P2-2 重复文档与对象治理
 

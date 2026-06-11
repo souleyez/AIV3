@@ -3470,3 +3470,37 @@ Data-ingestion external fixed-task smoke:
   - no build, restart, migration, source sync, ingestion, live third-party mutation, or static-page generation was performed;
   - these checks are deterministic self-tests and do not replace true 20-way live sampling;
   - 120 server was not touched.
+
+## 2026-06-12 P2 Limit5 Summary-Only Dry-Run
+
+- Purpose:
+  - expand the P2 parsing/fact-store and duplicate-document governance dry-run from one document to a bounded five-document sample;
+  - keep the run non-mutating and summary-only.
+- Initial guard:
+  - the first attempt without loading the 8-server service environment failed with `role "ai_platform" does not exist`;
+  - this was an environment-loading error, not a production-data write or enrichment action.
+- Scope:
+  - Host: `8服务器`;
+  - Repository: `/srv/aiv3/repo`;
+  - Commit at execution time: `9a9aedb82`;
+  - Dataset: `1bcf2529-0bbb-46e6-884f-c2b33db352c2`;
+  - Limit: `5`;
+  - Receipt directory: `/srv/aiv3/repo/target/p2-summary-only-dry-run-20260612-limit5`;
+  - service environment was loaded from `/etc/aiv3/aiv3.env` without printing env values.
+- Commands:
+  - `./target/release/document-fingerprint-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --limit 5 --dry-run --summary-only --pretty`;
+  - `./target/release/fact-index-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --limit 5 --dry-run --summary-only --pretty`;
+  - `./target/release/document-enrichment-backfill --dataset-id 1bcf2529-0bbb-46e6-884f-c2b33db352c2 --kind procedure_steps,table_structure --limit 5 --dry-run --summary-only --pretty`.
+- Results:
+  - fingerprint dry-run: `candidate_count=5`, `would_record_count=5`, `recorded_count=0`, `duplicate_count=5`, `skipped_count=0`, `summary_only=true`;
+  - fact-index dry-run: `document_count=5`, `derived_fact_count=281`, `inserted_fact_count=0`, `snapshot_updated=false`, fact types `date_period=6`, `keyword=249`, `section=26`, `summary_only=true`;
+  - enrichment dry-run: `document_count=5`, `missing_fingerprint_count=4`, `would_enqueue_count=2`, `enqueued_count=0`, kinds `procedure_steps_v1` and `table_structure_v1`, `summary_only=true`.
+- Safety:
+  - all successful commands used `--dry-run --summary-only`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - PostgreSQL already-existing schema notice lines appeared and did not include document title, document body, object path, raw row, database URL, credential, bearer, cookie, provider payload, or source content;
+  - no public API, third-party URL, auth method, required request field, existing response field, production table, schema, or dataset-source mapping was changed;
+  - no service was restarted;
+  - 120 server was not touched.
