@@ -2,7 +2,7 @@
 
 ## 路由划分
 
-- `https://doc.elepcloud.com/`：公开主站入口，只展示 DataMax V3 设计图和公开入口，不挂到管理台。
+- `https://doc.elepcloud.com/`：公开主站入口，只展示 DataMax V3 设计图和公开入口，不挂到管理台；`/admin*` 会跳转到 `https://v3.elepcloud.com/admin*`。
 - `https://v3.elepcloud.com/`：管理台域名，根路径跳转到 `/admin`。
 - `/`：在非管理台专用域名上展示公开首页。
 - `/admin/login`：管理台登录页。

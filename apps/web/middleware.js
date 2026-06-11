@@ -4,6 +4,12 @@ const ADMIN_CONSOLE_HOSTS = new Set([
   'v3.elepcloud.com',
 ]);
 
+const PUBLIC_SITE_HOSTS = new Set([
+  'doc.elepcloud.com',
+]);
+
+const PRIMARY_ADMIN_CONSOLE_ORIGIN = 'https://v3.elepcloud.com';
+
 function hostWithoutPort(request) {
   return (request.headers.get('host') || '').split(':')[0].toLowerCase();
 }
@@ -18,11 +24,15 @@ function isExternalObservationAllowedPath(pathname) {
 }
 
 export function middleware(request) {
-  if (!ADMIN_CONSOLE_HOSTS.has(hostWithoutPort(request))) {
+  const host = hostWithoutPort(request);
+  const url = request.nextUrl.clone();
+  if (!ADMIN_CONSOLE_HOSTS.has(host)) {
+    if (PUBLIC_SITE_HOSTS.has(host) && url.pathname.startsWith('/admin')) {
+      return NextResponse.redirect(new URL(`${url.pathname}${url.search}`, PRIMARY_ADMIN_CONSOLE_ORIGIN));
+    }
     return NextResponse.next();
   }
 
-  const url = request.nextUrl.clone();
   if (url.pathname === '/') {
     url.pathname = '/admin';
     return NextResponse.redirect(url);

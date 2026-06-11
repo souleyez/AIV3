@@ -49,7 +49,7 @@ export default function HomePage() {
             文档、数据库、网页和业务系统统一接入，自动生成问答、报表、HTML 产物和第三方回调能力。
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-            <a href="/admin/login" style={{
+            <a href="https://v3.elepcloud.com/admin/login" style={{
               color: '#07111f',
               background: '#f8d36f',
               textDecoration: 'none',
