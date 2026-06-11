@@ -77443,6 +77443,7 @@ async fn get_workflow_task_queue_stats(
     headers: HeaderMap,
     Query(query): Query<WorkflowTaskQueueStatsQuery>,
 ) -> std::result::Result<Json<contracts::WorkflowTaskQueueStatsView>, ApiError> {
+    require_workflow_queue_stats_access(&state, &headers).await?;
     let active_secret_binding_ids = active_secret_binding_ids_from_headers(&headers)?;
     let current_user_id = current_auth_user_id(&state, &headers).await?;
     let kind_filter = query
@@ -77513,6 +77514,23 @@ async fn get_workflow_task_queue_stats(
         visible.len(),
         &tasks,
     )))
+}
+
+async fn require_workflow_queue_stats_access(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<(), ApiError> {
+    if external_observability_access_allowed(headers) {
+        return Ok(());
+    }
+    let Some((user, _session)) = current_auth_session(state, headers).await? else {
+        return Err(ApiError::unauthorized(
+            "external_observability_access_required",
+            "workflow queue stats require an observability access key or operator session"
+                .to_string(),
+        ));
+    };
+    ensure_model_gateway_operator(&user)
 }
 
 async fn get_workflow_execution(

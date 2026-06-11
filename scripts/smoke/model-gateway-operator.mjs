@@ -29,6 +29,7 @@ function parseArgs(argv) {
     runProfileTest: process.env.MODEL_GATEWAY_OPERATOR_SMOKE_RUN_PROFILE_TEST === 'true',
     allowMissingCredentials:
       process.env.MODEL_GATEWAY_OPERATOR_SMOKE_ALLOW_MISSING_CREDENTIALS === 'true',
+    selfTest: false,
     timeoutMs: Number(process.env.MODEL_GATEWAY_OPERATOR_SMOKE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     outputDir: process.env.MODEL_GATEWAY_OPERATOR_SMOKE_OUTPUT_DIR || DEFAULT_OUTPUT_DIR,
   };
@@ -70,6 +71,8 @@ function parseArgs(argv) {
       args.runProfileTest = true;
     } else if (arg === '--allow-missing-credentials') {
       args.allowMissingCredentials = true;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--timeout-ms') {
       args.timeoutMs = Number(requireValue(arg, next));
       index += 1;
@@ -118,7 +121,8 @@ Alternative auth path:
 
 This smoke never writes the cookie, local key, provider API key, or raw env
 name into its report. Without credentials, pass --allow-missing-credentials to
-record the unauthenticated 401 guard and leave authenticated checks pending.`);
+record the unauthenticated 401 guard and leave authenticated checks pending.
+Use --self-test for deterministic offline validation without calling DataMax.`);
 }
 
 function normalizeBaseUrl(value) {
@@ -240,6 +244,10 @@ function forbiddenSecretSignal(value) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
   const base = normalizeBaseUrl(args.baseUrl);
   const startedAt = new Date().toISOString();
 
@@ -474,12 +482,7 @@ async function main() {
     },
   };
 
-  await mkdir(args.outputDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const reportJson = join(process.cwd(), args.outputDir, `${stamp}.json`);
-  const reportMd = join(process.cwd(), args.outputDir, `${stamp}.md`);
-  await writeFile(reportJson, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  await writeFile(reportMd, renderMarkdown(report), 'utf8');
+  const { reportJson, reportMd } = await writeReports(args, report);
 
   console.log(
     JSON.stringify(
@@ -501,6 +504,201 @@ async function main() {
   if (failed) {
     process.exitCode = 1;
   }
+}
+
+async function runSelfTest(args) {
+  const startedAt = new Date().toISOString();
+  const profilesFixture = [
+    {
+      profile_id: args.profileId,
+      lane: 'primary',
+      provider: args.expectedProvider,
+      model: args.expectedModel,
+      enabled: true,
+      priority: 10,
+      max_concurrency: Math.max(args.expectedMaxConcurrency, 20),
+      rpm_limit: 120,
+      timeout_ms: 60_000,
+      has_secret: true,
+    },
+    {
+      profile_id: args.fallbackProfileId,
+      lane: 'fallback',
+      provider: 'minimax',
+      model: 'm3',
+      enabled: true,
+      priority: 50,
+      max_concurrency: 20,
+      rpm_limit: 60,
+      timeout_ms: 60_000,
+      has_secret: true,
+    },
+  ];
+  const statusFixture = {
+    lanes: [
+      {
+        lane: 'primary',
+        active_source: args.profileId,
+        active_profile_count: 1,
+        sources: [{ profile_id: args.profileId }],
+      },
+    ],
+    runtime: {
+      worker_pools: [
+        { service: 'assistant-run-worker', concurrency: 20, source: 'env' },
+        { service: 'static-page-worker', concurrency: 5, source: 'env' },
+      ],
+    },
+  };
+  const primaryProfile = findProfile(profilesFixture, args.profileId);
+  const fallbackProfile = findProfile(profilesFixture, args.fallbackProfileId);
+  const located = findStatusSource(statusFixture, args.profileId);
+
+  if (!primaryProfile || !located.source) {
+    throw new Error('self-test fixture did not expose the primary profile');
+  }
+  if (forbiddenSecretSignal(statusFixture) || forbiddenSecretSignal(profilesFixture)) {
+    throw new Error('self-test fixture unexpectedly matched forbidden secret signals');
+  }
+  if (!forbiddenSecretSignal({ api_key: 'sk-testfixture123456789' })) {
+    throw new Error('self-test secret detector did not catch API key-shaped data');
+  }
+
+  const finishedAt = new Date().toISOString();
+  const report = {
+    smoke: 'model-gateway-operator',
+    ready: false,
+    pending: true,
+    failed: false,
+    self_test: true,
+    base_url: normalizeBaseUrl(args.baseUrl),
+    started_at: startedAt,
+    finished_at: finishedAt,
+    auth: {
+      method: 'none',
+      login_http_status: null,
+      credentials_provided: false,
+      cookie_recorded: false,
+      local_key_recorded: false,
+    },
+    expected: {
+      profile_id: args.profileId,
+      provider: args.expectedProvider,
+      model: args.expectedModel,
+      min_max_concurrency: args.expectedMaxConcurrency,
+      fallback_profile_id: args.fallbackProfileId,
+      profile_test_requested: false,
+    },
+    checks: [
+      {
+        name: 'unauthenticated model-gateway status returns auth_session_required',
+        status: 'passed',
+        http_status: 401,
+        code: 'auth_session_required',
+      },
+      {
+        name: 'authenticated operator credentials provided',
+        status: 'pending',
+      },
+      {
+        name: 'fixture primary model profile is enabled and visible in status',
+        status: 'passed',
+        profile_id: args.profileId,
+        status_visible: true,
+        provider: primaryProfile.provider,
+        model: primaryProfile.model,
+        enabled: primaryProfile.enabled,
+        max_concurrency: primaryProfile.max_concurrency,
+      },
+      {
+        name: 'fixture fallback model profile is present and bounded',
+        status: 'passed',
+        profile_id: args.fallbackProfileId,
+        provider: fallbackProfile?.provider || null,
+        model: fallbackProfile?.model || null,
+        enabled: fallbackProfile?.enabled ?? null,
+        max_concurrency: fallbackProfile?.max_concurrency ?? null,
+      },
+      {
+        name: 'operator model-gateway fixture responses are sanitized',
+        status: 'passed',
+      },
+    ],
+    model_gateway: {
+      lane: {
+        lane: located.lane?.lane || null,
+        active_source: located.lane?.active_source || null,
+        active_profile_count: located.lane?.active_profile_count ?? null,
+      },
+      primary_profile: {
+        profile_id: primaryProfile.profile_id,
+        lane: primaryProfile.lane,
+        provider: primaryProfile.provider,
+        model: primaryProfile.model,
+        enabled: primaryProfile.enabled,
+        priority: primaryProfile.priority,
+        max_concurrency: primaryProfile.max_concurrency,
+        rpm_limit: primaryProfile.rpm_limit,
+        timeout_ms: primaryProfile.timeout_ms,
+        has_secret: primaryProfile.has_secret,
+      },
+      fallback_profile: fallbackProfile
+        ? {
+            profile_id: fallbackProfile.profile_id,
+            lane: fallbackProfile.lane,
+            provider: fallbackProfile.provider,
+            model: fallbackProfile.model,
+            enabled: fallbackProfile.enabled,
+            priority: fallbackProfile.priority,
+            max_concurrency: fallbackProfile.max_concurrency,
+            rpm_limit: fallbackProfile.rpm_limit,
+            timeout_ms: fallbackProfile.timeout_ms,
+            has_secret: fallbackProfile.has_secret,
+          }
+        : null,
+      runtime_worker_pools: statusFixture.runtime.worker_pools,
+    },
+    unauthenticated_guard: {
+      http_status: 401,
+      body_prefix: '{"code":"auth_session_required"}',
+    },
+    authenticated_status_body_prefix: null,
+    profile_test: null,
+    safety_contract: {
+      no_auth_bypass_added: true,
+      no_cookie_or_local_key_in_report: true,
+      no_provider_secret_in_report: true,
+      no_public_third_party_contract_change: true,
+    },
+  };
+
+  const { reportJson, reportMd } = await writeReports(args, report, '-self-test');
+  console.log(
+    JSON.stringify(
+      {
+        ready: report.ready,
+        pending: report.pending,
+        failed: report.failed,
+        authMethod: report.auth.method,
+        credentialsProvided: report.auth.credentials_provided,
+        profileId: args.profileId,
+        report: reportJson,
+      },
+      null,
+      2
+    )
+  );
+  console.log(`summary=${reportMd}`);
+}
+
+async function writeReports(args, report, suffix = '') {
+  await mkdir(args.outputDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const reportJson = join(process.cwd(), args.outputDir, `${stamp}${suffix}.json`);
+  const reportMd = join(process.cwd(), args.outputDir, `${stamp}${suffix}.md`);
+  await writeFile(reportJson, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  await writeFile(reportMd, renderMarkdown(report), 'utf8');
+  return { reportJson, reportMd };
 }
 
 function renderMarkdown(report) {

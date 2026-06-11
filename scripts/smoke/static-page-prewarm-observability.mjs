@@ -27,6 +27,8 @@ function parseArgs(argv) {
       process.env.STATIC_PAGE_PREWARM_OBSERVABILITY_REQUIRED_STATUSES,
       DEFAULT_REQUIRED_STATUSES,
     ),
+    allowMissingCredentials:
+      process.env.STATIC_PAGE_PREWARM_OBSERVABILITY_ALLOW_MISSING_CREDENTIALS === 'true',
     outputDir: process.env.STATIC_PAGE_PREWARM_OBSERVABILITY_OUTPUT_DIR
       || 'target/static-page-prewarm-observability-smoke',
     selfTest: false,
@@ -53,6 +55,8 @@ function parseArgs(argv) {
     } else if (arg === '--required-statuses') {
       args.requiredStatuses = parseList(requireValue(arg, next), []);
       index += 1;
+    } else if (arg === '--allow-missing-credentials') {
+      args.allowMissingCredentials = true;
     } else if (arg === '--output-dir') {
       args.outputDir = requireValue(arg, next);
       index += 1;
@@ -101,6 +105,8 @@ function printHelp() {
 This read-only smoke fixes the static-page template prewarm/reuse observability
 contract. Self-test uses deterministic fixtures and does not call DataMax.
 Live mode only reads workflow queue stats and writes a redacted receipt.
+Without credentials, pass --allow-missing-credentials to record the HTTP 401
+operator guard as pending instead of failing the smoke.
 `);
 }
 
@@ -246,16 +252,28 @@ function summarizeQueues(queueStats, queueFilter) {
 function buildReport(args, { events = [], queueStats = null, queueHttpStatus = null, queueBodyPrefix = '' }) {
   const eventSummary = summarizeEvents(events, args.requiredStatuses);
   const queueSummary = summarizeQueues(queueStats, args.queueFilter);
+  const credentialsProvided = Boolean(args.cookie || args.bearer);
+  const queueReadOk = queueHttpStatus >= 200 && queueHttpStatus < 300;
+  const missingCredentialPending = Boolean(
+    !args.selfTest &&
+      args.allowMissingCredentials &&
+      !credentialsProvided &&
+      queueHttpStatus === 401
+  );
   const summary = {
-    ok: args.selfTest ? eventSummary.ok : queueHttpStatus >= 200 && queueHttpStatus < 300,
+    ok: args.selfTest ? eventSummary.ok : queueReadOk,
+    pending: missingCredentialPending,
+    failed: args.selfTest ? !eventSummary.ok : !queueReadOk && !missingCredentialPending,
     selfTest: args.selfTest,
     baseUrl: args.baseUrl,
+    credentialsProvided,
     requiredStatuses: args.requiredStatuses,
     observedStatuses: Object.keys(eventSummary.counts).sort(),
     missingStatuses: eventSummary.missingStatuses,
     queueCount: queueSummary.queueCount,
     activeQueueTaskCount: queueSummary.activeCount,
     failedQueueTaskCount: queueSummary.failedCount,
+    queueHttpStatus,
     generatedAt: new Date().toISOString(),
   };
   return {
@@ -265,6 +283,11 @@ function buildReport(args, { events = [], queueStats = null, queueHttpStatus = n
     queueSummary,
     queueHttpStatus,
     queueBodyPrefix,
+    auth: {
+      credentialsProvided,
+      cookiePrinted: false,
+      bearerPrinted: false,
+    },
     redaction: {
       cookiePrinted: false,
       bearerPrinted: false,
@@ -364,6 +387,24 @@ async function runSelfTest(args) {
   assert.equal(report.eventSummary.normalized.find((item) => item.normalizedStatus === 'waiting_for_low_load')?.customerVisible, false);
   assert.equal(report.queueSummary.queueCount, 2);
   assert.equal(report.queueSummary.activeCount, 4);
+  const unauthReport = buildReport(
+    {
+      ...fixtureArgs,
+      selfTest: false,
+      allowMissingCredentials: true,
+      cookie: '',
+      bearer: '',
+    },
+    {
+      events: [],
+      queueStats: null,
+      queueHttpStatus: 401,
+      queueBodyPrefix: '{"code":"auth_session_required"}',
+    },
+  );
+  assert.equal(unauthReport.summary.pending, true);
+  assert.equal(unauthReport.summary.failed, false);
+  assert.equal(unauthReport.auth.credentialsProvided, false);
   const reportPath = await writeReport(fixtureArgs, report);
   console.log(JSON.stringify(report.summary, null, 2));
   console.log(`report=${reportPath}`);
@@ -386,7 +427,7 @@ async function runLive(args) {
   const reportPath = await writeReport(args, report);
   console.log(JSON.stringify(report.summary, null, 2));
   console.log(`report=${reportPath}`);
-  if (!report.summary.ok) {
+  if (report.summary.failed) {
     process.exitCode = 1;
   }
 }

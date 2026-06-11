@@ -139,8 +139,10 @@ systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-ru
 **Commands:**
 
 ```bash
-node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com
+npm run smoke:model-gateway-operator -- --self-test
+npm run smoke:model-gateway-operator -- --base-url https://v3.elepcloud.com --allow-missing-credentials
 npm run smoke:static-page-prewarm-observability -- --self-test
+npm run smoke:static-page-prewarm-observability -- --base-url https://v3.elepcloud.com --allow-missing-credentials
 ```
 
 **Done when:**
@@ -330,8 +332,8 @@ npm --prefix apps/web run build
 
 ## 9. 当前下一步
 
-1. 下一个可独立推进项是 P1-1：operator 观测闭环的无凭证/未授权路径整理；有合法 operator 凭证或脱敏回执后再做 live。
-2. 若继续 P2，只针对新客户失败样例或新数据类型补 summary-only dry-run，不再重复已覆盖类型。
-3. 若拿到合法 operator 凭证或脱敏回执，优先做 P1-1 operator 观测闭环。
+1. 完成 P1-1 无凭证/未授权路径发布验证：部署后确认 model-gateway status 和 workflow queue-stats 无凭证均为 HTTP 401 或 pending receipt。
+2. 若拿到合法 operator 凭证或脱敏回执，继续做 P1-1 authenticated operator live，验证 provider lane、fallback、queue stats 只输出脱敏聚合。
+3. 若继续 P2，只针对新客户失败样例或新数据类型补 summary-only dry-run，不再重复已覆盖类型。
 4. 若进入发布窗口，按 P0-1 和 P0-2 跑固定回归后再部署。
 5. GitHub Actions 账号额度恢复后，重跑 DataMax CI 并把结果补回 validation。
