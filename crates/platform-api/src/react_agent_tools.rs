@@ -13,6 +13,7 @@ use domain_model::{
     StaticPageImageJobId, UserId, WorkflowEventId, WorkflowEventRecord, WorkflowExecution,
     WorkflowExecutionId, WorkflowKind,
 };
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::{collections::BTreeMap, env, net::IpAddr, time::Duration};
 use storage::NewDocument;
@@ -36,6 +37,20 @@ use crate::react_agent_contract::{
     AssistantRunReActActionType as AssistantRunReactActionType,
     AssistantRunReActDecision as AssistantRunNextAction,
 };
+
+const ASSISTANT_RUN_WEB_SEARCH_ENABLED_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_ENABLED";
+const ASSISTANT_RUN_WEB_SEARCH_BACKEND_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_BACKEND";
+const ASSISTANT_RUN_WEB_SEARCH_URL_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_URL";
+const ASSISTANT_RUN_WEB_SEARCH_API_KEY_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_API_KEY";
+const ASSISTANT_RUN_WEB_SEARCH_AUTH_HEADER_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_AUTH_HEADER";
+const ASSISTANT_RUN_WEB_SEARCH_LIMIT_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_LIMIT";
+const ASSISTANT_RUN_WEB_SEARCH_TIMEOUT_MS_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_TIMEOUT_MS";
+const ASSISTANT_RUN_WEB_SEARCH_FIXTURE_JSON_ENV: &str = "ASSISTANT_RUN_WEB_SEARCH_FIXTURE_JSON";
+const ASSISTANT_RUN_WEB_SEARCH_DEFAULT_LIMIT: usize = 5;
+const ASSISTANT_RUN_WEB_SEARCH_MAX_LIMIT: usize = 8;
+const ASSISTANT_RUN_WEB_SEARCH_QUERY_MAX_CHARS: usize = 180;
+const ASSISTANT_RUN_WEB_SEARCH_TITLE_MAX_CHARS: usize = 180;
+const ASSISTANT_RUN_WEB_SEARCH_SNIPPET_MAX_CHARS: usize = 700;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AssistantRunReactToolResult {
@@ -126,7 +141,7 @@ pub(crate) async fn execute_assistant_run_react_action(
                 final_answer: None,
             })
         }
-        AssistantRunReactActionType::WebSearch => Ok(web_search_evidence_required_result(action)),
+        AssistantRunReactActionType::WebSearch => web_search_result(action, evidence_state).await,
         AssistantRunReactActionType::RecallConversationMemory => {
             let memory_scope = ensure_scope_requests_conversation_memory(selected_scope.clone());
             let refreshed = build_assistant_run_evidence_state(
@@ -314,7 +329,7 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::ExtractVideoPptTranscript => "提取视频 PPT 和原文",
         AssistantRunReactActionType::CreateStaticPageDraft => "创建静态页草稿",
         AssistantRunReactActionType::UpdateStaticPageModule => "更新静态页模块",
-        AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交效果图生成",
+        AssistantRunReactActionType::SubmitStaticPageImagePreview => "提交可视化生成",
         AssistantRunReactActionType::RenderStaticPage => "制作最终静态页",
         AssistantRunReactActionType::PublishStaticPageRevision => "发布当前静态页修订版",
         AssistantRunReactActionType::CreateReportDraft => "创建报表草稿",
@@ -324,6 +339,148 @@ pub(crate) fn assistant_run_react_action_label(
         AssistantRunReactActionType::CodexHostTask => "调用 Codex Host 任务",
         AssistantRunReactActionType::FinalAnswer => "模型生成最终回答",
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AssistantRunWebSearchBackend {
+    Fixture,
+    GenericJson,
+    Brave,
+    Tavily,
+}
+
+#[derive(Clone, Debug)]
+struct AssistantRunWebSearchConfig {
+    backend: AssistantRunWebSearchBackend,
+    url: Option<String>,
+    api_key: Option<String>,
+    auth_header: Option<String>,
+    limit: usize,
+    timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssistantRunWebSearchItem {
+    title: String,
+    url: String,
+    snippet: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssistantRunWebSearchWireItem {
+    title: Option<String>,
+    name: Option<String>,
+    url: Option<String>,
+    link: Option<String>,
+    snippet: Option<String>,
+    description: Option<String>,
+    content: Option<String>,
+    summary: Option<String>,
+}
+
+async fn web_search_result(
+    action: &AssistantRunNextAction,
+    evidence_state: &mut Value,
+) -> std::result::Result<AssistantRunReactToolResult, ApiError> {
+    let Some(config) = assistant_run_web_search_config_from_env() else {
+        return Ok(web_search_evidence_required_result(action));
+    };
+    let Some(query) = assistant_run_web_search_sanitized_query(action) else {
+        return Ok(web_search_unavailable_result(
+            action,
+            "query_missing_or_empty_after_sanitization",
+            "等待 DataMax 搜索证据",
+        ));
+    };
+
+    let search_result = assistant_run_execute_web_search(&config, &query, action).await;
+    let items = match search_result {
+        Ok(items) => items,
+        Err(reason) => {
+            return Ok(web_search_unavailable_result(
+                action,
+                reason,
+                "DataMax 搜索暂不可用",
+            ));
+        }
+    };
+    if items.is_empty() {
+        return Ok(web_search_unavailable_result(
+            action,
+            "no_search_results",
+            "DataMax 搜索未返回可用证据",
+        ));
+    }
+
+    let retrieved_at = Utc::now();
+    let evidence_items = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            json!({
+                "type": "search_evidence",
+                "source": "web_search",
+                "provider": assistant_run_web_search_backend_label(&config.backend),
+                "rank": index + 1,
+                "title": item.title,
+                "source_locator": item.url,
+                "url": item.url,
+                "summary": item.snippet,
+                "content_excerpt": item.snippet,
+                "retrieved_at": retrieved_at,
+                "evidence_contract": {
+                    "source_url": item.url,
+                    "source_title": item.title,
+                    "retrieved_at": retrieved_at,
+                    "query_metadata": {
+                        "query_chars": query.chars().count(),
+                        "raw_query_omitted": true,
+                        "sanitized": true
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    append_web_search_evidence_state(
+        evidence_state,
+        &evidence_items,
+        assistant_run_web_search_backend_label(&config.backend),
+        retrieved_at,
+    );
+
+    Ok(AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "task_status": "search_evidence_supplied",
+            "message": "search_evidence_supplied",
+            "items": evidence_items,
+            "limits": {
+                "result_limit": config.limit,
+                "query_max_chars": ASSISTANT_RUN_WEB_SEARCH_QUERY_MAX_CHARS,
+            },
+            "search_evidence_required": false,
+            "search_evidence_supplied": true,
+            "no_live_search_claim": false,
+            "query_present": true,
+            "query_chars": query.chars().count(),
+            "raw_query_omitted": true,
+            "provider": assistant_run_web_search_backend_label(&config.backend),
+            "retrieved_at": retrieved_at,
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": "联网搜索供料证据",
+            "react_action": action.action_type.as_str(),
+            "task_status": "search_evidence_supplied",
+            "search_evidence_supplied": true,
+            "result_count": evidence_items.len(),
+            "provider": assistant_run_web_search_backend_label(&config.backend),
+            "at": retrieved_at,
+        }),
+        final_answer: None,
+    })
 }
 
 fn web_search_evidence_required_result(
@@ -388,6 +545,397 @@ fn web_search_evidence_required_result(
             "at": Utc::now(),
         }),
         final_answer: None,
+    }
+}
+
+fn web_search_unavailable_result(
+    action: &AssistantRunNextAction,
+    reason: &str,
+    label: &str,
+) -> AssistantRunReactToolResult {
+    let query_chars = action
+        .arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().count())
+        .unwrap_or(0);
+    AssistantRunReactToolResult {
+        observation: json!({
+            "status": "completed",
+            "action_type": action.action_type.as_str(),
+            "actionType": action.action_type.as_str(),
+            "task_status": "v3_search_evidence_required",
+            "message": "v3_search_evidence_required",
+            "items": [],
+            "limits": {},
+            "search_evidence_required": true,
+            "search_evidence_supplied": false,
+            "no_live_search_claim": true,
+            "allow_general_model_answer": true,
+            "query_present": query_chars > 0,
+            "query_chars": query_chars,
+            "raw_query_omitted": true,
+            "unavailable_reason": reason,
+            "next_step": "未收到带来源和时间的 DataMax search evidence 前，不得声称已联网搜索；可先基于通用知识回答并标注非搜索证据。",
+        }),
+        trail_step: json!({
+            "status": "completed",
+            "label": label,
+            "react_action": action.action_type.as_str(),
+            "task_status": "v3_search_evidence_required",
+            "search_evidence_required": true,
+            "query_present": query_chars > 0,
+            "query_chars": query_chars,
+            "unavailable_reason": reason,
+            "at": Utc::now(),
+        }),
+        final_answer: None,
+    }
+}
+
+fn assistant_run_web_search_config_from_env() -> Option<AssistantRunWebSearchConfig> {
+    let backend_raw = env::var(ASSISTANT_RUN_WEB_SEARCH_BACKEND_ENV)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let enabled =
+        env_bool(ASSISTANT_RUN_WEB_SEARCH_ENABLED_ENV).unwrap_or_else(|| backend_raw.is_some());
+    if !enabled {
+        return None;
+    }
+
+    let backend = match backend_raw.as_deref() {
+        Some("fixture" | "mock" | "static") => AssistantRunWebSearchBackend::Fixture,
+        Some("generic" | "generic_json" | "json") => AssistantRunWebSearchBackend::GenericJson,
+        Some("brave") => AssistantRunWebSearchBackend::Brave,
+        Some("tavily") => AssistantRunWebSearchBackend::Tavily,
+        Some("disabled" | "off" | "none") => return None,
+        Some(_) => return None,
+        None if env::var(ASSISTANT_RUN_WEB_SEARCH_FIXTURE_JSON_ENV).is_ok() => {
+            AssistantRunWebSearchBackend::Fixture
+        }
+        None if env::var("BRAVE_SEARCH_API_KEY").is_ok() => AssistantRunWebSearchBackend::Brave,
+        None if env::var("TAVILY_API_KEY").is_ok() => AssistantRunWebSearchBackend::Tavily,
+        None if env::var(ASSISTANT_RUN_WEB_SEARCH_URL_ENV).is_ok() => {
+            AssistantRunWebSearchBackend::GenericJson
+        }
+        None => return None,
+    };
+
+    Some(AssistantRunWebSearchConfig {
+        backend,
+        url: env::var(ASSISTANT_RUN_WEB_SEARCH_URL_ENV)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        api_key: env::var(ASSISTANT_RUN_WEB_SEARCH_API_KEY_ENV)
+            .or_else(|_| env::var("BRAVE_SEARCH_API_KEY"))
+            .or_else(|_| env::var("TAVILY_API_KEY"))
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        auth_header: env::var(ASSISTANT_RUN_WEB_SEARCH_AUTH_HEADER_ENV)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        limit: env::var(ASSISTANT_RUN_WEB_SEARCH_LIMIT_ENV)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(ASSISTANT_RUN_WEB_SEARCH_DEFAULT_LIMIT)
+            .clamp(1, ASSISTANT_RUN_WEB_SEARCH_MAX_LIMIT),
+        timeout_ms: env::var(ASSISTANT_RUN_WEB_SEARCH_TIMEOUT_MS_ENV)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(8_000)
+            .clamp(500, 30_000),
+    })
+}
+
+fn env_bool(key: &str) -> Option<bool> {
+    env::var(key)
+        .ok()
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" | "enabled" => Some(true),
+            "0" | "false" | "no" | "off" | "disabled" => Some(false),
+            _ => None,
+        })
+}
+
+fn assistant_run_web_search_sanitized_query(action: &AssistantRunNextAction) -> Option<String> {
+    let raw = action
+        .arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .or_else(|| action.arguments.get("q").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let sanitized = raw
+        .split_whitespace()
+        .map(redact_web_search_query_token)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let sanitized = sanitized
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>();
+    let sanitized = truncate_chars(sanitized.trim(), ASSISTANT_RUN_WEB_SEARCH_QUERY_MAX_CHARS);
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
+fn redact_web_search_query_token(token: &str) -> String {
+    let lower = token.to_ascii_lowercase();
+    let compact = token
+        .trim_matches(|ch: char| ch == ',' || ch == ';' || ch == '"' || ch == '\'')
+        .to_string();
+    if compact.contains('@') {
+        return "[email]".to_string();
+    }
+    if lower.starts_with("sk-")
+        || lower.starts_with("bearer")
+        || lower.contains("authorization")
+        || lower.contains("password=")
+        || lower.contains("token=")
+    {
+        return "[secret]".to_string();
+    }
+    let alnum_count = compact
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .count();
+    if compact.len() >= 48 && alnum_count * 2 >= compact.len() {
+        return "[token]".to_string();
+    }
+    compact
+}
+
+async fn assistant_run_execute_web_search(
+    config: &AssistantRunWebSearchConfig,
+    query: &str,
+    action: &AssistantRunNextAction,
+) -> std::result::Result<Vec<AssistantRunWebSearchItem>, &'static str> {
+    let value = match config.backend {
+        AssistantRunWebSearchBackend::Fixture => {
+            let raw = env::var(ASSISTANT_RUN_WEB_SEARCH_FIXTURE_JSON_ENV)
+                .map_err(|_| "fixture_missing")?;
+            serde_json::from_str::<Value>(&raw).map_err(|_| "fixture_invalid_json")?
+        }
+        AssistantRunWebSearchBackend::GenericJson => {
+            execute_generic_json_web_search(config, query, action).await?
+        }
+        AssistantRunWebSearchBackend::Brave => execute_brave_web_search(config, query).await?,
+        AssistantRunWebSearchBackend::Tavily => execute_tavily_web_search(config, query).await?,
+    };
+
+    Ok(parse_web_search_items(&value, config.limit))
+}
+
+async fn execute_generic_json_web_search(
+    config: &AssistantRunWebSearchConfig,
+    query: &str,
+    action: &AssistantRunNextAction,
+) -> std::result::Result<Value, &'static str> {
+    let url = config.url.as_deref().ok_or("generic_search_url_missing")?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(config.timeout_ms))
+        .build()
+        .map_err(|_| "http_client_build_failed")?;
+    let mut request = client.post(url).json(&json!({
+        "query": query,
+        "limit": config.limit,
+        "freshness": action.arguments.get("freshness").and_then(Value::as_str).unwrap_or("unspecified"),
+        "language": action.arguments.get("language").and_then(Value::as_str).unwrap_or("zh-CN"),
+    }));
+    request = apply_web_search_auth(request, config);
+    let response = request.send().await.map_err(|_| "search_request_failed")?;
+    if !response.status().is_success() {
+        return Err("search_http_status");
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| "search_invalid_json")
+}
+
+async fn execute_brave_web_search(
+    config: &AssistantRunWebSearchConfig,
+    query: &str,
+) -> std::result::Result<Value, &'static str> {
+    let api_key = config.api_key.as_deref().ok_or("brave_api_key_missing")?;
+    let mut url = reqwest::Url::parse(
+        config
+            .url
+            .as_deref()
+            .unwrap_or("https://api.search.brave.com/res/v1/web/search"),
+    )
+    .map_err(|_| "brave_url_invalid")?;
+    url.query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("count", &config.limit.to_string());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(config.timeout_ms))
+        .build()
+        .map_err(|_| "http_client_build_failed")?;
+    let response = client
+        .get(url)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", api_key)
+        .send()
+        .await
+        .map_err(|_| "search_request_failed")?;
+    if !response.status().is_success() {
+        return Err("search_http_status");
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| "search_invalid_json")
+}
+
+async fn execute_tavily_web_search(
+    config: &AssistantRunWebSearchConfig,
+    query: &str,
+) -> std::result::Result<Value, &'static str> {
+    let api_key = config.api_key.as_deref().ok_or("tavily_api_key_missing")?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(config.timeout_ms))
+        .build()
+        .map_err(|_| "http_client_build_failed")?;
+    let response = client
+        .post(
+            config
+                .url
+                .as_deref()
+                .unwrap_or("https://api.tavily.com/search"),
+        )
+        .json(&json!({
+            "api_key": api_key,
+            "query": query,
+            "max_results": config.limit,
+            "include_answer": false,
+            "include_raw_content": false,
+        }))
+        .send()
+        .await
+        .map_err(|_| "search_request_failed")?;
+    if !response.status().is_success() {
+        return Err("search_http_status");
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| "search_invalid_json")
+}
+
+fn apply_web_search_auth(
+    request: reqwest::RequestBuilder,
+    config: &AssistantRunWebSearchConfig,
+) -> reqwest::RequestBuilder {
+    let Some(api_key) = config.api_key.as_deref() else {
+        return request;
+    };
+    match config.auth_header.as_deref() {
+        Some(header) if !header.eq_ignore_ascii_case("authorization") => {
+            request.header(header, api_key)
+        }
+        _ => request.bearer_auth(api_key),
+    }
+}
+
+fn parse_web_search_items(value: &Value, limit: usize) -> Vec<AssistantRunWebSearchItem> {
+    web_search_result_values(value)
+        .into_iter()
+        .filter_map(parse_web_search_item)
+        .take(limit)
+        .collect()
+}
+
+fn web_search_result_values(value: &Value) -> Vec<Value> {
+    if let Some(items) = value.as_array() {
+        return items.clone();
+    }
+    for pointer in ["/results", "/items", "/web/results", "/data/results"] {
+        if let Some(items) = value.pointer(pointer).and_then(Value::as_array) {
+            return items.clone();
+        }
+    }
+    Vec::new()
+}
+
+fn parse_web_search_item(value: Value) -> Option<AssistantRunWebSearchItem> {
+    let item = serde_json::from_value::<AssistantRunWebSearchWireItem>(value).ok()?;
+    let title = first_nonempty_string([item.title.as_deref(), item.name.as_deref()])?;
+    let url = first_nonempty_string([item.url.as_deref(), item.link.as_deref()])?;
+    let parsed_url = reqwest::Url::parse(&url).ok()?;
+    if !matches!(parsed_url.scheme(), "http" | "https")
+        || !public_video_page_host_allowed(parsed_url.host_str().unwrap_or_default())
+    {
+        return None;
+    }
+    let snippet = first_nonempty_string([
+        item.snippet.as_deref(),
+        item.description.as_deref(),
+        item.summary.as_deref(),
+        item.content.as_deref(),
+    ])
+    .unwrap_or_else(|| title.clone());
+    Some(AssistantRunWebSearchItem {
+        title: truncate_chars(&title, ASSISTANT_RUN_WEB_SEARCH_TITLE_MAX_CHARS),
+        url,
+        snippet: truncate_chars(&snippet, ASSISTANT_RUN_WEB_SEARCH_SNIPPET_MAX_CHARS),
+    })
+}
+
+fn first_nonempty_string<const N: usize>(values: [Option<&str>; N]) -> Option<String> {
+    values.into_iter().find_map(|value| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+fn append_web_search_evidence_state(
+    evidence_state: &mut Value,
+    items: &[Value],
+    provider: &str,
+    retrieved_at: chrono::DateTime<Utc>,
+) {
+    if !evidence_state.is_object() {
+        *evidence_state = json!({});
+    }
+    let Some(object) = evidence_state.as_object_mut() else {
+        return;
+    };
+    object.insert("status".to_string(), json!("supplied"));
+    object.insert(
+        "search_evidence".to_string(),
+        json!({
+            "status": "supplied",
+            "provider": provider,
+            "result_count": items.len(),
+            "retrieved_at": retrieved_at,
+            "raw_query_omitted": true,
+        }),
+    );
+    let supplied_items = object
+        .entry("supplied_items".to_string())
+        .or_insert_with(|| json!([]));
+    if !supplied_items.is_array() {
+        *supplied_items = json!([]);
+    }
+    if let Some(array) = supplied_items.as_array_mut() {
+        array.extend(items.iter().cloned());
+    }
+}
+
+fn assistant_run_web_search_backend_label(backend: &AssistantRunWebSearchBackend) -> &'static str {
+    match backend {
+        AssistantRunWebSearchBackend::Fixture => "fixture",
+        AssistantRunWebSearchBackend::GenericJson => "generic_json",
+        AssistantRunWebSearchBackend::Brave => "brave",
+        AssistantRunWebSearchBackend::Tavily => "tavily",
     }
 }
 
@@ -767,7 +1315,7 @@ async fn submit_static_page_image_preview_for_current_draft(
         }),
         trail_step: json!({
             "status": "completed",
-            "label": "提交效果图生成",
+            "label": "提交可视化生成",
             "react_action": action.action_type.as_str(),
             "draft_id": response.image_job.draft_id.to_string(),
             "image_job_id": response.image_job.id.to_string(),
@@ -2800,7 +3348,7 @@ fn static_page_preview_stale_react_result(
             "limits": {},
             "reason": "static_page_preview_stale",
             "recommendedActions": ["submit_static_page_image_preview"],
-            "nextStep": "规划已经改过，旧效果图和最终页不能继续复用。请先重新提交效果图预览，等待用户确认后再制作最终静态页。",
+            "nextStep": "规划已经改过，旧可视化和最终页不能继续复用。请先重新提交可视化预览，等待用户确认后再制作最终静态页。",
         }),
         trail_step: json!({
             "status": "rejected",
@@ -4227,6 +4775,23 @@ mod tests {
         }
     }
 
+    fn clear_assistant_web_search_env() {
+        for key in [
+            ASSISTANT_RUN_WEB_SEARCH_ENABLED_ENV,
+            ASSISTANT_RUN_WEB_SEARCH_BACKEND_ENV,
+            ASSISTANT_RUN_WEB_SEARCH_URL_ENV,
+            ASSISTANT_RUN_WEB_SEARCH_API_KEY_ENV,
+            ASSISTANT_RUN_WEB_SEARCH_AUTH_HEADER_ENV,
+            ASSISTANT_RUN_WEB_SEARCH_LIMIT_ENV,
+            ASSISTANT_RUN_WEB_SEARCH_TIMEOUT_MS_ENV,
+            ASSISTANT_RUN_WEB_SEARCH_FIXTURE_JSON_ENV,
+            "BRAVE_SEARCH_API_KEY",
+            "TAVILY_API_KEY",
+        ] {
+            env::remove_var(key);
+        }
+    }
+
     fn test_action(action_type: AssistantRunReactActionType) -> AssistantRunNextAction {
         AssistantRunNextAction {
             status: AssistantRunReActStatus::Act,
@@ -4931,7 +5496,7 @@ mod tests {
         );
         assert_eq!(
             result.observation["nextStep"],
-            json!("规划已经改过，旧效果图和最终页不能继续复用。请先重新提交效果图预览，等待用户确认后再制作最终静态页。")
+            json!("规划已经改过，旧可视化和最终页不能继续复用。请先重新提交可视化预览，等待用户确认后再制作最终静态页。")
         );
         assert_eq!(
             result.trail_step["recommended_action"],
@@ -5148,6 +5713,8 @@ mod tests {
 
     #[test]
     fn web_search_returns_pending_evidence_without_raw_query() {
+        let _guard = openclaw_env_test_lock().lock().expect("env lock");
+        clear_assistant_web_search_env();
         let mut action = test_action(AssistantRunReactActionType::WebSearch);
         action.arguments = json!({
             "query": "2026 年 DataMax 对外集成最新状态",
@@ -5177,6 +5744,68 @@ mod tests {
         assert!(result.final_answer.is_none());
         assert!(!serialized.contains("对外集成最新状态"));
         assert!(!serialized.contains("用户询问最新进展"));
+    }
+
+    #[tokio::test]
+    async fn web_search_fixture_supplies_search_evidence_without_raw_query() {
+        let _guard = openclaw_env_test_lock().lock().expect("env lock");
+        clear_assistant_web_search_env();
+        env::set_var(ASSISTANT_RUN_WEB_SEARCH_ENABLED_ENV, "true");
+        env::set_var(ASSISTANT_RUN_WEB_SEARCH_BACKEND_ENV, "fixture");
+        env::set_var(
+            ASSISTANT_RUN_WEB_SEARCH_FIXTURE_JSON_ENV,
+            r#"{
+                "results": [
+                    {
+                        "title": "DataMax 官方说明",
+                        "url": "https://example.com/datamax",
+                        "snippet": "DataMax 提供企业数据接入、受控检索和报表能力。"
+                    },
+                    {
+                        "title": "内部地址应过滤",
+                        "url": "http://127.0.0.1/private",
+                        "snippet": "不应进入模型证据。"
+                    }
+                ]
+            }"#,
+        );
+        let mut action = test_action(AssistantRunReactActionType::WebSearch);
+        action.arguments = json!({
+            "query": "DataMax 最新联网搜索能力 sk-secret-should-redact",
+            "reason": "用户询问最新进展",
+            "freshness": "latest",
+            "language": "zh-CN"
+        });
+        let mut evidence_state = json!({"status": "empty", "supplied_items": []});
+
+        let result = web_search_result(&action, &mut evidence_state)
+            .await
+            .expect("fixture search should not fail");
+        let serialized = serde_json::to_string(&result.observation).expect("observation");
+
+        assert_eq!(
+            result.observation["task_status"],
+            json!("search_evidence_supplied")
+        );
+        assert_eq!(result.observation["search_evidence_supplied"], json!(true));
+        assert_eq!(result.observation["raw_query_omitted"], json!(true));
+        assert_eq!(result.observation["items"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            result.observation["items"][0]["type"],
+            json!("search_evidence")
+        );
+        assert_eq!(
+            result.observation["items"][0]["source_locator"],
+            json!("https://example.com/datamax")
+        );
+        assert_eq!(evidence_state["status"], json!("supplied"));
+        assert_eq!(
+            evidence_state["supplied_items"][0]["type"],
+            json!("search_evidence")
+        );
+        assert!(!serialized.contains("sk-secret-should-redact"));
+        assert!(!serialized.contains("用户询问最新进展"));
+        clear_assistant_web_search_env();
     }
 
     #[test]

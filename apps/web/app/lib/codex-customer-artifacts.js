@@ -4,6 +4,7 @@ const CODEX_CUSTOMER_RESULT_SUMMARY_SCHEMA = 'v3.customer_codex_result_summary';
 const CUSTOMER_CODEX_CAPABILITIES = new Set([
   'customer_complex_request',
   'customer_artifact_request',
+  'data_ingestion_analysis',
   'generated_static_page_edit',
   'generated_static_page_publish',
   'v3_product_change_request',
@@ -554,6 +555,8 @@ function customerCodexCapabilityTitle(capability) {
       return 'Codex 复杂任务';
     case 'customer_artifact_request':
       return 'Codex 产物任务';
+    case 'data_ingestion_analysis':
+      return 'Codex 数据接入';
     case 'generated_static_page_edit':
       return 'Codex 页面编辑';
     case 'generated_static_page_publish':
@@ -562,6 +565,25 @@ function customerCodexCapabilityTitle(capability) {
       return '需人工审核';
     default:
       return 'Codex 执行';
+  }
+}
+
+function customerCodexPermissionScope(capability) {
+  switch (capability) {
+    case 'customer_complex_request':
+      return '只读分析';
+    case 'customer_artifact_request':
+      return '隔离工作区写入';
+    case 'data_ingestion_analysis':
+      return '只读数据接入分析';
+    case 'generated_static_page_edit':
+      return '页面副本工作区写入';
+    case 'generated_static_page_publish':
+      return '隔离静态页工作区写入';
+    case 'v3_product_change_request':
+      return '需人工审核';
+    default:
+      return '受控执行';
   }
 }
 
@@ -611,6 +633,9 @@ function customerCodexTaskSummary(eventName, payload = {}, status, capability, r
     return '远端 Codex 任务仍在运行，系统会继续轮询。';
   }
   if (status === 'completed') {
+    if (capability === 'data_ingestion_analysis') {
+      return 'Codex 已完成数据接入分析，结果通过任务摘要回传。';
+    }
     return capability === 'customer_complex_request'
       ? 'Codex 已完成复杂任务处理，结果通过主回答或后续事件回传。'
       : 'Codex 已完成客户任务，产物会在校验后显示。';
@@ -650,7 +675,8 @@ export function normalizeCodexCustomerTaskFromAssistantRunEvent(event = {}) {
     createdAt,
     nonBlocking: payload.non_blocking !== false && payload.nonBlocking !== false,
     mainAnswerPathPreserved: payload.main_answer_path_preserved !== false && payload.mainAnswerPathPreserved !== false,
-    permissionScope: safeResultText(payload.permission_scope || payload.permissionScope || '', 180),
+    permissionScope: safeResultText(payload.permission_scope || payload.permissionScope || '', 180)
+      || customerCodexPermissionScope(capability),
     retryable: payload.retryable === true,
   };
 }

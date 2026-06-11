@@ -28,9 +28,9 @@ const SURFACE_LABELS = {
 
 const STATIC_PAGE_STATUS_LABELS = {
   planning: '规划中',
-  queued: '效果图排队',
-  preview_ready: '效果图已生成',
-  effect_confirmed: '效果图已确认',
+  queued: '可视化排队',
+  preview_ready: '可视化已生成',
+  effect_confirmed: '可视化已确认',
   rendering: '生成中',
   failed: '生成失败',
   cancelled: '已取消',
@@ -808,7 +808,7 @@ function staticPageProjectStage(draft) {
     return {
       key: 'effect',
       index: 1,
-      label: '效果图',
+      label: '可视化',
       status: STATIC_PAGE_STATUS_LABELS[previewStatus] || STATIC_PAGE_STATUS_LABELS[draft.status] || formatSnakeCaseLabel(previewStatus || draft.status),
     };
   }
@@ -1021,7 +1021,7 @@ function GeneratedProjectCard({
     : '';
   const updatedAt = staticPageUpdatedAt(draft);
   const summary = truncateText(
-    staleReason || draft?.finalPage?.notice || draft?.modelSummary || '模板规划、效果图、静态页会按阶段推进。',
+    staleReason || draft?.finalPage?.notice || draft?.modelSummary || '模板规划、可视化、静态页会按阶段推进。',
     58,
   );
   const handleSelect = () => {
@@ -1238,9 +1238,11 @@ function codexCustomerTaskMeta(task) {
       ? '只读分析'
       : capability === 'customer_artifact_request'
         ? '隔离工作区写入'
-        : capability === 'generated_static_page_edit'
-          ? '页面副本工作区写入'
-          : '受控执行');
+        : capability === 'data_ingestion_analysis'
+          ? '只读数据接入分析'
+          : capability === 'generated_static_page_edit'
+            ? '页面副本工作区写入'
+            : '受控执行');
   return {
     title: task?.title || 'Codex 执行',
     summary: resultSummary?.summary || task?.summary || '客户 Codex 任务已进入受控执行链路。',

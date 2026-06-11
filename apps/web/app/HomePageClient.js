@@ -1391,7 +1391,7 @@ function buildStaticPagePlanningHtmlArtifact(draft) {
       visualBridge: {
         providerLane: 'gpt-image-2-cloudflare-queue',
         role: 'effect_preview_reference_only',
-        rule: '效果图只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。',
+        rule: '可视化只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。',
         status: draft.previewContract?.status || draft.imageJob?.status || 'not_requested',
         imageJobStatus: draft.imageJob?.status || 'not_requested',
         imageJobId: draft.imageJob?.id || '',
@@ -2334,7 +2334,7 @@ export default function HomePageClient() {
         status,
         queuePosition: imageJob.queue_position ?? null,
         queueMessage: imageJob.failure_reason
-          || (status === 'preview_ready' ? '效果图已生成，将自动继续制作页面。' : STATIC_PAGE_QUEUE_MESSAGE),
+          || (status === 'preview_ready' ? '可视化已生成，将自动继续制作页面。' : STATIC_PAGE_QUEUE_MESSAGE),
       },
       previewImage: imageJob.preview_asset_key
         ? buildConfirmedStaticPagePreview(draft, imageJob, draft.previewImage)
@@ -2475,7 +2475,7 @@ export default function HomePageClient() {
     replaceStaticPageDraft(localDraft.id, draft);
     if (draft?.imageJob?.status === 'queued' && !isBackendStaticPageImageJobId(draft.imageJob.id)) {
       createBackendStaticPageImageJob(draft, { prompt, oneClick: true }).catch((syncError) => {
-        setBanner(`静态页草稿已同步；效果图队列暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+        setBanner(`静态页草稿已同步；可视化队列暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
       });
     }
     return draft;
@@ -2738,9 +2738,9 @@ export default function HomePageClient() {
     const draft = replaceDraftWithOperation(latestDraft, staticPageImageJobQueueOperation(imageJob, operation));
     appendStaticPageProgressMessage(
       `${baseDraft.id}:image-queued:${imageJob?.id || 'pending'}`,
-      '已确认生图文案，效果图任务已入队。效果图只作为过程预览，完成后会自动继续生成静态页。',
+      '已确认生图文案，可视化任务已入队。可视化只作为预览，完成后会自动继续生成静态页。',
     );
-    setBanner(`效果图任务已进入资源队列，当前前方约 ${imageJob?.queue_position ?? 1} 个任务。`);
+    setBanner(`可视化任务已进入资源队列，当前前方约 ${imageJob?.queue_position ?? 1} 个任务。`);
     return { imageJob, draft };
   }
 
@@ -2765,7 +2765,7 @@ export default function HomePageClient() {
     const ensured = await ensureBackendStaticPageImageJob(baseDraft, operation);
     const imageJobId = ensured.imageJob?.id;
     if (!imageJobId) {
-      throw new Error('效果图任务不存在。');
+      throw new Error('可视化任务不存在。');
     }
     const draftWithJob = ensured.draft || baseDraft;
     const preview = operation.previewImage || draftWithJob.previewImage || buildMockStaticPagePreview(draftWithJob);
@@ -2795,7 +2795,7 @@ export default function HomePageClient() {
       },
     };
     replaceStaticPageDraft(baseDraft.id, draft);
-    setBanner('效果图已确认，下一步可以按效果制作静态页。');
+    setBanner('可视化已确认，下一步可以按效果制作静态页。');
     return { imageJob: response?.image_job, draft };
   }
 
@@ -2813,14 +2813,14 @@ export default function HomePageClient() {
         imageJobId = ensured.imageJob?.id || draft.imageJob?.id || imageJobId;
       }
       if (!canRequestStaticPageFinalRender(draft)) {
-        throw new Error(staticPageFinalRenderBlockReason(draft) || '效果图还未准备好。');
+        throw new Error(staticPageFinalRenderBlockReason(draft) || '可视化还未准备好。');
       }
     }
     appendStaticPageProgressMessage(
       `${draft.id}:render-requested:${directHtml ? 'direct-html' : imageJobId || 'image-ready'}`,
       directHtml
         ? '已进入快速 HTML 制作，DataMax 会先产出一个可打开的页面版本。'
-        : '效果图已接上，正在把视觉稿和数据绑定为可访问静态页。',
+        : '可视化已接上，正在把视觉稿和数据绑定为可访问静态页。',
     );
     const response = await fetchJson(`/api/v3/static-page-drafts/${draft.backendDraftId}/renders`, {
       method: 'POST',
@@ -2867,7 +2867,7 @@ export default function HomePageClient() {
     setBanner(renderStatus === 'rendered'
       ? directHtml
         ? '快速 HTML 已生成，可以下载 index.html。'
-        : '最终静态页已按效果图生成。'
+        : '最终静态页已按可视化生成。'
       : '最终静态页已进入后台制作队列，可以继续聊天；完成后会保存在右侧成品栏。');
     if (typeof window !== 'undefined') {
       window.setTimeout(() => {
@@ -4390,7 +4390,7 @@ export default function HomePageClient() {
     setActiveHtmlArtifactId(null);
     if (announce) {
       setBanner(openEditor
-        ? (oneClick ? '已按 AI 理解创建静态页草稿，并进入效果图排队。' : '已创建静态页草稿，下一步会展示页面规划。')
+        ? (oneClick ? '已按 AI 理解创建静态页草稿，并进入可视化排队。' : '已创建静态页草稿，下一步会展示页面规划。')
         : '已准备静态页草稿；当前对话不会中断，需要时点击“进入静态页工作台”。');
     }
     setError('');
@@ -4573,9 +4573,9 @@ export default function HomePageClient() {
     setStaticPageEditorOpen(true);
     setActiveHtmlArtifactId(null);
     syncStaticPageDraftOperations(draft, nextDraft, [operation], {
-      summary: hasFinalStage ? '已退回效果图阶段继续修改。' : '已退回模板规划阶段继续修改。',
+      summary: hasFinalStage ? '已退回可视化阶段继续修改。' : '已退回模板规划阶段继续修改。',
     });
-    setBanner(hasFinalStage ? '已退回效果图阶段，可调整后重新制作静态页。' : '已退回模板规划阶段，可继续修改模板和模块。');
+    setBanner(hasFinalStage ? '已退回可视化阶段，可调整后重新制作静态页。' : '已退回模板规划阶段，可继续修改模板和模块。');
     setMobilePanel('chat');
     return nextDraft;
   }
@@ -4762,7 +4762,7 @@ export default function HomePageClient() {
       && !directHtmlRender
       && !canRequestStaticPageFinalRender(activeStaticPageDraft)
     ) {
-      setBanner(staticPageFinalRenderBlockReason(activeStaticPageDraft) || '需要先确认当前效果图，再制作最终静态页。');
+      setBanner(staticPageFinalRenderBlockReason(activeStaticPageDraft) || '需要先确认当前可视化，再制作最终静态页。');
       return activeStaticPageDraft;
     }
 
@@ -4823,7 +4823,7 @@ export default function HomePageClient() {
           })
           .catch((syncError) => {
             setBanner('');
-            setError(`效果图未入队：${staticPagePreviewGateErrorMessage(syncError)}。`);
+            setError(`可视化未入队：${staticPagePreviewGateErrorMessage(syncError)}。`);
           })
           .finally(() => setStaticPageActionBusy(false));
         return activeStaticPageDraft;
@@ -4836,7 +4836,7 @@ export default function HomePageClient() {
     if (operation.type === 'confirm_preview') {
       if (draft.backendDraftId) {
         confirmBackendStaticPagePreview(draft, operation).catch((syncError) => {
-          setBanner(`效果图已先在本地确认；后端确认暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
+          setBanner(`可视化已先在本地确认；后端确认暂不可用：${syncError instanceof Error ? syncError.message : '请求失败'}。`);
         });
       }
       return draft;
@@ -4876,7 +4876,7 @@ export default function HomePageClient() {
 
     if (['queued', 'running'].includes(jobStatus)) {
       setStaticPageEditorOpen(false);
-      setBanner('效果图正在生成中；资源返回后会自动继续制作页面。');
+      setBanner('可视化正在生成中；资源返回后会自动继续制作页面。');
       return draft;
     }
 
@@ -4897,7 +4897,7 @@ export default function HomePageClient() {
 
       if (canContinueToRender) {
         if (!canRequestStaticPageFinalRender(draft)) {
-          setBanner(staticPageFinalRenderBlockReason(draft) || '效果图资源缺失，请重新发起效果图。');
+          setBanner(staticPageFinalRenderBlockReason(draft) || '可视化资源缺失，请重新发起可视化。');
           return draft;
         }
 
@@ -4916,7 +4916,7 @@ export default function HomePageClient() {
         const renderedDraft = replaceDraftWithOperation(confirmedDraft, { type: 'request_final_render' });
         setStaticPageEditorOpen(false);
         setMobilePanel('chat');
-        setBanner('已按效果图生成本地静态页模拟结果；接入后端时会进入正式后台渲染。');
+        setBanner('已按可视化生成本地静态页模拟结果；接入后端时会进入正式后台渲染。');
         return renderedDraft;
       }
 
@@ -4942,7 +4942,7 @@ export default function HomePageClient() {
       const previewDraft = replaceDraftWithOperation(queuedDraft, { type: 'mark_preview_ready' });
       setStaticPageEditorOpen(false);
       setMobilePanel('chat');
-      setBanner('当前草稿尚未同步到后端，已生成本地模拟效果图；正式运行会进入 Cloudflare/Codex 生图队列。');
+      setBanner('当前草稿尚未同步到后端，已生成本地模拟可视化；正式运行会进入后台生成队列。');
       return previewDraft;
     } catch (actionError) {
       setError(staticPagePreviewGateErrorMessage(actionError, '静态页生成动作失败'));
@@ -5417,7 +5417,7 @@ export default function HomePageClient() {
     }
     setStaticPageEditorOpen(false);
     setMobilePanel('chat');
-    setBanner('效果图已生成，正在自动继续制作静态页。');
+    setBanner('可视化已生成，正在自动继续制作静态页。');
     appendStaticPageProgressMessage(
       `${activeStaticPageDraft.id}:preview-ready:${activeStaticPageDraft.previewImage?.assetKey || activeStaticPageDraft.previewContract?.assetKey || 'ready'}`,
       staticPagePreviewProgressContent(activeStaticPageDraft),
@@ -5448,7 +5448,7 @@ export default function HomePageClient() {
     }
 
     if (!canRequestStaticPageFinalRender(draft)) {
-      setBanner(staticPageFinalRenderBlockReason(draft) || '效果图已生成，但最终页面生成条件还未满足。');
+      setBanner(staticPageFinalRenderBlockReason(draft) || '可视化已生成，但最终页面生成条件还未满足。');
       return;
     }
 
@@ -5456,7 +5456,7 @@ export default function HomePageClient() {
     setStaticPageActionBusy(true);
     appendStaticPageProgressMessage(
       `${draft.id}:auto-render:${jobId || previewAssetKey}`,
-      '已自动进入静态页制作，不需要再确认效果图。完成后会直接给出页面链接。',
+      '已自动进入静态页制作，不需要再确认可视化。完成后会直接给出页面链接。',
     );
     const optimisticDraft = replaceDraftWithOperation(draft, {
       type: 'request_final_render',
@@ -5518,7 +5518,7 @@ export default function HomePageClient() {
     setStaticPageActionBusy(true);
     appendStaticPageProgressMessage(
       `${draft.id}:auto-render:${snapshot.jobId || snapshot.previewAssetKey}`,
-      '后台发现效果图已生成，正在自动续接静态页制作。完成后会直接给出页面链接。',
+      '后台发现可视化已生成，正在自动续接静态页制作。完成后会直接给出页面链接。',
     );
     createBackendStaticPageRender(draft, {
       previewImage: draft.previewImage || buildMockStaticPagePreview(draft),

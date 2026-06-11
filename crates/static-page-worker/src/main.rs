@@ -1855,7 +1855,7 @@ fn mark_draft_preview_ready(payload: &Value, job: &StaticPageImageJob, asset_key
             "id": job.id,
             "status": "preview_ready",
             "queuePosition": null,
-            "queueMessage": "效果图已生成，将自动继续制作页面。",
+            "queueMessage": "可视化已生成，将自动继续制作页面。",
         }),
     );
     object.insert(
@@ -1864,7 +1864,7 @@ fn mark_draft_preview_ready(payload: &Value, job: &StaticPageImageJob, asset_key
             "kind": "static-page-effect-preview",
             "assetKey": asset_key,
             "imageJobId": job.id,
-            "title": "静态页效果图",
+            "title": "静态页可视化",
             "subtitle": "由 Codex 远程生图队列生成",
             "modules": [],
         }),
@@ -1928,7 +1928,7 @@ fn mark_draft_image_job_retrying(
             "id": job.id,
             "status": "retry_queued",
             "queuePosition": null,
-            "queueMessage": "效果图生成遇到临时问题，已进入重试队列。",
+            "queueMessage": "可视化生成遇到临时问题，已进入重试队列。",
             "retryable": true,
             "lastError": last_error,
         }),

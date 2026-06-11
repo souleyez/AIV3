@@ -232,7 +232,7 @@ function visualBridgeFromContext(draft = {}, manifest = {}) {
     version: 1,
     providerLane: 'gpt-image-2-cloudflare-queue',
     role: 'effect_preview_reference_only',
-    rule: '效果图只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。',
+    rule: '可视化只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。',
     status: previewContract.status || imageJob.status || manifest.status || 'unknown',
     imageJobStatus: imageJob.status || 'unknown',
     imageJobId: draft?.finalPage?.imageJobId || imageJob.id || manifest.image_job_id || previewContract.imageJobId || '',

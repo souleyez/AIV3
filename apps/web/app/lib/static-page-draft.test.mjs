@@ -257,7 +257,7 @@ test('style guide references force Image2 before HTML production', () => {
   });
 
   assert.match(promptText, /风格指南/);
-  assert.match(promptText, /GPT-Image2 出效果图/);
+  assert.match(promptText, /GPT-Image2 出可视化/);
   assert.match(promptText, /不要直接把风格指南翻译成低保真 HTML/);
   assert.equal(imagePayload.productionRules.codexHostEscalation.defaultMode, 'fixed_template_exec_schema');
   assert.equal(imagePayload.productionRules.codexHostEscalation.templateId, 'static_page_image2_data_publish');
@@ -387,7 +387,7 @@ test('preview queue gate still blocks modules without any content source', () =>
 
   const blockReason = staticPagePreviewBlockReason(weak);
 
-  assert.match(blockReason, /数据绑定未达到效果图生成要求/);
+  assert.match(blockReason, /数据绑定未达到可视化生成要求/);
   assert.match(blockReason, /未绑定图表/);
   assert.match(blockReason, /missing_binding/);
 });
@@ -720,7 +720,7 @@ test('final render can only start from current confirmed preview with ready data
   assert.equal(canRequestStaticPageFinalRender(failedFinalRender), true);
   assert.equal(staticPageFinalRenderBlockReason(failedFinalRender), '');
   assert.equal(canRequestStaticPageFinalRender(stale), false);
-  assert.match(staticPageFinalRenderBlockReason(stale), /重新生成效果图/);
+  assert.match(staticPageFinalRenderBlockReason(stale), /重新生成可视化/);
   assert.equal(canRequestStaticPageFinalRender(missingAsset), false);
   assert.match(staticPageFinalRenderBlockReason(missingAsset), /资源缺失/);
 });

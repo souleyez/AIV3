@@ -417,6 +417,62 @@ test('normalizes customer Codex sidecar task events', () => {
   assert.equal(JSON.stringify(tasks).includes('must not leak'), false);
 });
 
+test('normalizes data ingestion Codex sidecar task events', () => {
+  const workflowExecutionId = '33333333-3333-4333-8333-333333333333';
+  const tasks = normalizeCodexCustomerTasksFromAssistantRunResponse({
+    events: [
+      {
+        event_name: 'assistant_run.codex_sidecar_queued',
+        sequence_no: 1,
+        created_at: '2026-06-09T08:00:00Z',
+        payload: {
+          capability: 'data_ingestion_analysis',
+          route: 'assistant_run_data_ingestion_analysis',
+          workflow_execution_id: workflowExecutionId,
+          permission_scope: 'read-only data-ingestion analysis and staging-spec planning',
+          non_blocking: true,
+          main_answer_path_preserved: true,
+        },
+      },
+      {
+        event_name: 'codex_host_task.exec_completed',
+        sequence_no: 2,
+        created_at: '2026-06-09T08:00:10Z',
+        payload: {
+          capability: 'data_ingestion_analysis',
+          route: 'assistant_run_data_ingestion_analysis',
+          workflow_execution_id: workflowExecutionId,
+          status: 'completed',
+          customer_result_summary: {
+            schema: 'v3.customer_codex_result_summary',
+            schema_version: 1,
+            status: 'completed',
+            title: '数据接入分析',
+            summary: '已生成字段映射、staging plan 和校验建议。',
+            findings: ['当前业务库需要先做只读字段盘点。'],
+            recommended_next_actions: ['人工确认后再创建或更新 staging 数据集。'],
+            safety: {
+              raw_logs_exposed: false,
+              credentials_exposed: false,
+              absolute_paths_exposed: false,
+              prompt_exposed: false,
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].title, 'Codex 数据接入');
+  assert.equal(tasks[0].capability, 'data_ingestion_analysis');
+  assert.equal(tasks[0].route, 'data_ingestion_analysis');
+  assert.equal(tasks[0].status, 'completed');
+  assert.equal(tasks[0].summary, '已生成字段映射、staging plan 和校验建议。');
+  assert.equal(tasks[0].permissionScope, '只读数据接入分析');
+  assert.equal(tasks[0].resultSummary.artifactIntent, true);
+});
+
 test('rejects unsafe customer Codex result summary fields', () => {
   const tasks = normalizeCodexCustomerTasksFromAssistantRunResponse({
     events: [{
@@ -519,7 +575,7 @@ test('strips unsafe customer Codex task display fields', () => {
   assert.equal(tasks.length, 1);
   assert.equal(tasks[0].route, 'customer_complex_request');
   assert.equal(tasks[0].summary, '客户 Codex 任务已进入 DataMax 受控执行链路。');
-  assert.equal(tasks[0].permissionScope, '');
+  assert.equal(tasks[0].permissionScope, '只读分析');
   assert.equal(JSON.stringify(tasks).includes('should-not-leak'), false);
   assert.equal(JSON.stringify(tasks).includes('/Users/'), false);
   assert.equal(JSON.stringify(tasks).includes('/srv/aiv3/repo'), false);

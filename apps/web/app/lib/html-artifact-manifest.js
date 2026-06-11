@@ -304,7 +304,7 @@ function renderVisualBridge(value = {}) {
       <h2>视觉链路</h2>
       ${renderKeyValueGrid([
         { label: '生图通道', value: value.providerLane || value.provider_lane || 'gpt-image-2-cloudflare-queue' },
-        { label: '效果图状态', value: value.status || 'not_requested' },
+        { label: '可视化状态', value: value.status || 'not_requested' },
         { label: '排队位置', value: value.queuePosition || value.queue_position ? String(value.queuePosition || value.queue_position) : '未排队' },
         { label: '图片任务', value: value.imageJobId || value.image_job_id || '未创建' },
         { label: '预览资产', value: value.previewAssetKey || value.preview_asset_key || '未返回' },
@@ -313,7 +313,7 @@ function renderVisualBridge(value = {}) {
         { label: '最终渲染', value: value.finalRenderStatus || value.final_render_status || 'not_requested' },
         { label: '渲染模型', value: value.renderModel || value.render_model || 'renderer manifest' },
       ])}
-      <p>${escapeHtml(value.rule || '效果图只作为视觉参考；最终 HTML 仍由结构化草稿、数据快照和 renderer 生成。')}</p>
+      <p>${escapeHtml(value.rule || '可视化只作为视觉参考；最终 HTML 仍由结构化草稿、数据快照和 renderer 生成。')}</p>
     </section>
   `;
 }

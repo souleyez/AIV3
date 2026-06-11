@@ -2001,7 +2001,7 @@ export function buildOperationsSummary({
 
 export function workflowQueueLabel(value) {
   const labels = {
-    static_page_image_preview: '效果图',
+    static_page_image_preview: '可视化预览',
     static_page_publish: '页面发布',
     product_image_generation: '商品图',
     codex_fixed_task: '通用 Codex',
@@ -2018,8 +2018,8 @@ export function workflowQueueLabel(value) {
 
 export function workflowTaskKeyLabel(value) {
   const labels = {
-    submit_static_page_image_preview: '提交效果图',
-    poll_static_page_image_preview: '轮询效果图',
+    submit_static_page_image_preview: '提交可视化',
+    poll_static_page_image_preview: '轮询可视化',
     submit_static_page_publish: '提交页面发布',
     poll_static_page_publish: '轮询页面发布',
     submit_codex_fixed_task: '提交通用任务',

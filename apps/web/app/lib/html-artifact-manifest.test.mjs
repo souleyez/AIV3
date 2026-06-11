@@ -147,7 +147,7 @@ test('renders static page planning and code review templates', () => {
         draftFingerprint: 'design-abc123',
         finalRenderStatus: 'not_requested',
         renderModel: 'dom-text-svg-chart',
-        rule: '效果图只锁定视觉方向；最终 HTML 由 renderer 生成。',
+        rule: '可视化只锁定视觉方向；最终 HTML 由 renderer 生成。',
       },
       modules: [{
         id: 'risk',
@@ -228,7 +228,7 @@ test('renders static page planning and code review templates', () => {
   assert.match(staticPage.html, /gpt-image-2-cloudflare-queue/);
   assert.match(staticPage.html, /规划已变更/);
   assert.match(staticPage.html, /design-abc123/);
-  assert.match(staticPage.html, /效果图只锁定视觉方向/);
+  assert.match(staticPage.html, /可视化只锁定视觉方向/);
   assert.match(staticPage.html, /模板参考/);
   assert.match(staticPage.html, /管理后台仪表板/);
   assert.match(staticPage.html, /证据状态/);

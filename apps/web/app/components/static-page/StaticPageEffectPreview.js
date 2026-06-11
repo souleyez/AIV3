@@ -4,9 +4,9 @@ const JOB_LABELS = {
   idle: '待生成',
   queued: '资源排队中',
   running: '生成中',
-  preview_ready: '效果图已生成',
+  preview_ready: '可视化已生成',
   failed: '生成失败',
-  confirmed: '效果图已确认',
+  confirmed: '可视化已确认',
   stale: '规划已变更',
 };
 
@@ -43,7 +43,7 @@ export default function StaticPageEffectPreview({
   const hasPreview = jobStatus === 'preview_ready' || draft?.status === 'effect_confirmed';
   const queueMessage = imageJob.queueMessage || preview?.queueMessage || DEFAULT_QUEUE_MESSAGE;
   const failureMessage = jobStatus === 'failed'
-    ? (imageJob.queueMessage || '效果图生成失败，可以重新生成。')
+    ? (imageJob.queueMessage || '可视化生成失败，可以重新生成。')
     : '';
   const previewStale = draft?.previewContract?.status === 'stale' || jobStatus === 'stale';
 
@@ -67,7 +67,7 @@ export default function StaticPageEffectPreview({
     <section className={`static-page-effect-preview${compact ? ' compact' : ''}`}>
       <div className="static-page-effect-head">
         <div>
-          <span>效果图</span>
+          <span>可视化</span>
           <strong>{JOB_LABELS[jobStatus] || jobStatus}</strong>
         </div>
         {confirmed ? <em>已确认</em> : null}
@@ -82,7 +82,7 @@ export default function StaticPageEffectPreview({
 
       {jobStatus === 'failed' ? (
         <div className="static-page-failure-card">
-          <strong>效果图生成失败</strong>
+          <strong>可视化生成失败</strong>
           <span>{failureMessage}</span>
         </div>
       ) : null}
@@ -90,16 +90,16 @@ export default function StaticPageEffectPreview({
       {previewStale ? (
         <div className="static-page-stale-card">
           <strong>规划已经改过</strong>
-          <span>上一张效果图和最终静态页已失效，需要重新生成。</span>
+          <span>上一版可视化和最终静态页已失效，需要重新生成。</span>
         </div>
       ) : null}
 
       {hasPreview && preview ? (
         canRenderPreviewImage ? (
           <figure className="static-page-preview-image-card">
-            <img src={previewAssetKey} alt={preview.title || '静态页效果图'} loading="lazy" />
+            <img src={previewAssetKey} alt={preview.title || '静态页可视化'} loading="lazy" />
             <figcaption>
-              <span>{preview.title || '静态页效果图'}</span>
+              <span>{preview.title || '静态页可视化'}</span>
               <strong>{preview.subtitle || '由远程生图队列生成，将自动继续制作页面'}</strong>
             </figcaption>
           </figure>
@@ -116,7 +116,7 @@ export default function StaticPageEffectPreview({
         )
       ) : (
         <div className="static-page-preview-placeholder">
-          <strong>先生成一张效果图</strong>
+          <strong>先生成一版可视化</strong>
           <p>后端会通过 Codex 远程队列生成真实图片，等待中仍可继续修改规划。</p>
         </div>
       )}
@@ -124,12 +124,12 @@ export default function StaticPageEffectPreview({
       <div className="static-page-effect-actions">
         {jobStatus === 'idle' || jobStatus === 'failed' || jobStatus === 'stale' ? (
           <button type="button" className="primary-btn compact-action-btn" onClick={queuePreview}>
-            {jobStatus === 'idle' ? '生成效果图' : '重新生成效果图'}
+            {jobStatus === 'idle' ? '生成可视化' : '重新生成可视化'}
           </button>
         ) : null}
         {(jobStatus === 'queued' || jobStatus === 'running') && !isBackendJob ? (
           <button type="button" className="primary-btn compact-action-btn" onClick={finishMockPreview}>
-            查看模拟效果图
+            查看模拟可视化
           </button>
         ) : null}
         {hasPreview ? (

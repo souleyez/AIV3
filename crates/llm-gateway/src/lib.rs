@@ -2748,7 +2748,7 @@ fn extract_chat_completion_stream_finish_reason(value: &Value) -> Option<LlmFini
 }
 
 fn normalize_provider_output_text(value: &str) -> String {
-    strip_leading_reasoning_blocks(value)
+    value.to_string()
 }
 
 #[derive(Debug, Default)]
@@ -2761,7 +2761,7 @@ impl LeadingReasoningStreamFilter {
     fn new() -> Self {
         Self {
             buffer: String::new(),
-            stripping_leading_reasoning: true,
+            stripping_leading_reasoning: false,
         }
     }
 
@@ -2816,31 +2816,6 @@ impl LeadingReasoningStreamFilter {
             }
             return emitted;
         }
-    }
-}
-
-fn strip_leading_reasoning_blocks(value: &str) -> String {
-    let mut remaining = value;
-    let mut removed = false;
-
-    loop {
-        let trimmed = remaining.trim_start();
-        let lower = trimmed.to_ascii_lowercase();
-        let Some(after_open_tag) = lower.strip_prefix("<think>").map(|_| "<think>".len()) else {
-            break;
-        };
-        let Some(close_tag_offset) = lower[after_open_tag..].find("</think>") else {
-            break;
-        };
-        let close_tag_end = after_open_tag + close_tag_offset + "</think>".len();
-        remaining = &trimmed[close_tag_end..];
-        removed = true;
-    }
-
-    if removed {
-        remaining.trim_start().to_string()
-    } else {
-        value.to_string()
     }
 }
 
@@ -2928,10 +2903,6 @@ fn looks_like_openclaw_native_tool_failure(content: &str) -> bool {
     lower.contains("cannot read properties of undefined")
         || lower.contains("tool failed")
         || lower.contains("search failed")
-        || lower.contains("web search")
-            && (lower.contains("failed") || lower.contains("unavailable"))
-        || lower.contains("无法访问外部搜索")
-        || lower.contains("无法联网搜索")
         || lower.contains("工具调用失败")
 }
 
@@ -3878,7 +3849,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_compatible_provider_streaming_strips_leading_reasoning_deltas() {
+    fn openai_compatible_provider_streaming_preserves_leading_reasoning_deltas() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let addr = listener.local_addr().expect("addr");
         let server = thread::spawn(move || {
@@ -3941,15 +3912,22 @@ mod tests {
             vec![
                 LlmStreamDelta {
                     index: 0,
-                    delta: "公开".to_string(),
+                    delta: "<thi".to_string(),
                 },
                 LlmStreamDelta {
                     index: 1,
+                    delta: "nk>private Observation: secret</think>\n\n公开".to_string(),
+                },
+                LlmStreamDelta {
+                    index: 2,
                     delta: "回答".to_string(),
                 },
             ]
         );
-        assert_eq!(response.output_text, "公开回答");
+        assert_eq!(
+            response.output_text,
+            "<think>private Observation: secret</think>\n\n公开回答"
+        );
     }
 
     #[test]
@@ -3975,7 +3953,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_compatible_provider_strips_leading_reasoning_blocks() {
+    fn openai_compatible_provider_preserves_leading_reasoning_blocks() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let addr = listener.local_addr().expect("addr");
         let server = thread::spawn(move || {
@@ -4023,7 +4001,10 @@ mod tests {
             .expect("minimax-compatible provider should succeed");
 
         server.join().expect("server join");
-        assert_eq!(response.output_text, "MINIMAX_SMOKE_OK");
+        assert_eq!(
+            response.output_text,
+            "<think>private reasoning must not enter the user answer</think>\n\nMINIMAX_SMOKE_OK"
+        );
         assert_eq!(
             response.runtime.request_id.as_deref(),
             Some("chatcmpl_minimax_123")
@@ -4079,10 +4060,10 @@ mod tests {
     }
 
     #[test]
-    fn output_normalization_only_strips_leading_reasoning_blocks() {
+    fn output_normalization_preserves_reasoning_blocks() {
         assert_eq!(
             normalize_provider_output_text("<think>draft</think>\n\nFinal answer"),
-            "Final answer"
+            "<think>draft</think>\n\nFinal answer"
         );
         assert_eq!(
             normalize_provider_output_text("Keep inline <think>literal</think> text"),
@@ -4090,7 +4071,7 @@ mod tests {
         );
         assert_eq!(
             normalize_provider_output_text("<think>first</think>\n<think>second</think>\nAnswer"),
-            "Answer"
+            "<think>first</think>\n<think>second</think>\nAnswer"
         );
     }
 
@@ -4458,6 +4439,9 @@ mod tests {
         ));
         assert!(!looks_like_openclaw_retryable_bad_output(
             "这里是根据当前数据整理出的收入结论。"
+        ));
+        assert!(!looks_like_openclaw_retryable_bad_output(
+            "当前无法联网搜索，但可以先根据已有资料回答。"
         ));
     }
 

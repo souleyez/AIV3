@@ -282,7 +282,7 @@ const STATIC_PAGE_RENDER_SPEC = {
   },
   editableContent: ['title', 'content', 'dataBinding', 'visualization', 'chartRuntime', 'chartOptions', 'layout'],
   generationGuardrails: [
-    '效果图必须服从模块网格布局和移动端顺序',
+    '可视化必须服从模块网格布局和移动端顺序',
     '正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片',
     '复杂背景、纹理、装饰可以作为图片资产，核心数据表达必须可重新渲染',
     'ECharts 只允许纯 JSON 配置，不允许函数、HTML、远程 URL 或事件处理器字段',
@@ -453,7 +453,7 @@ function refreshStaticPageDesignSpec(draft, { markPreviewStale = false } = {}) {
       id: draft.imageJob?.id || previousContract.imageJobId || null,
       status: 'stale',
       queuePosition: null,
-      queueMessage: '规划已经改过，上一轮效果图任务已失效，需要重新生成。',
+      queueMessage: '规划已经改过，上一轮可视化任务已失效，需要重新生成。',
     };
   }
   return draft;
@@ -651,7 +651,7 @@ function analyzeStaticPageModuleBinding({
     status = 'partial';
     reason = 'matched_field_candidate_without_rows';
     chartDataFit = 'needs_sample_rows';
-    recommendedAction = '已匹配候选字段，但还缺少可渲染样本行；生成效果图前建议抽取或填写数据。';
+    recommendedAction = '已匹配候选字段，但还缺少可渲染样本行；生成可视化前建议抽取或填写数据。';
   } else if (!chartNeedsRows && (hasBinding || ['model', 'session', 'conversation_memory'].includes(sourceId))) {
     status = 'confirmed';
     reason = 'non_chart_binding_ready';
@@ -1468,7 +1468,7 @@ export function applyStaticPageOperation(draft, operation = {}) {
       imageJobId: next.imageJob.id,
       queuePosition: next.imageJob.queuePosition,
       failureReason: operation.status === 'failed'
-        ? (operation.queueMessage || next.imageJob.queueMessage || '效果图生成失败')
+        ? (operation.queueMessage || next.imageJob.queueMessage || '可视化生成失败')
         : undefined,
     });
   }
@@ -1682,15 +1682,15 @@ function staticPageDataQualityBlockReason(draft = {}, actionLabel, nextInstructi
 export function staticPagePreviewBlockReason(draft = {}) {
   return staticPageDataQualityBlockReason(
     draft,
-    '效果图生成要求',
-    '请先调整生图文案，或让 DataMax 检索/修复内容来源；只有缺少来源的模块会阻断效果图，缺少样本行的图表会先作为设计预览进入出图。',
+    '可视化生成要求',
+    '请先调整可视化文案，或让 DataMax 检索/修复内容来源；只有缺少来源的模块会阻断可视化，缺少样本行的图表会先作为设计预览进入出图。',
     { mode: 'preview' },
   );
 }
 
 export function staticPageFinalRenderBlockReason(draft = {}) {
   if (draft?.previewContract?.status === 'stale' || draft?.imageJob?.status === 'stale') {
-    return '规划已经改过，需要重新生成效果图。';
+    return '规划已经改过，需要重新生成可视化。';
   }
   const finalStatus = draft?.finalPage?.status || '';
   const retryableFinalStatus = finalStatus === 'failed' || finalStatus === 'cancelled';
@@ -1706,20 +1706,20 @@ export function staticPageFinalRenderBlockReason(draft = {}) {
     || draft?.status === 'preview_ready'
     || draft?.status === 'effect_confirmed';
   if (!previewReady && !retryableFinalStatus) {
-    return '先生成效果图，再按效果制作可交付静态页。';
+    return '先生成可视化，再按可视化制作可交付静态页。';
   }
   if (!['preview_ready', 'confirmed'].includes(effectivePreviewStatus) && !retryableFinalStatus) {
-    return '效果图状态未同步，请刷新或重新生成效果图。';
+    return '可视化状态未同步，请刷新或重新生成可视化。';
   }
   if (!draft?.previewImage?.assetKey && !draft?.previewContract?.assetKey) {
-    return '效果图资源缺失，请重新生成效果图。';
+    return '可视化资源缺失，请重新生成可视化。';
   }
   return '';
 }
 
 export function staticPageDirectHtmlBlockReason(draft = {}) {
   if (staticPageUsesTemplateOrStyleGuide(draft)) {
-    return '已引用模板或风格指南，需先用 GPT-Image2 生成视觉效果图，再按图和真实数据制作静态页。';
+    return '已引用模板或风格指南，需先用 GPT-Image2 生成视觉可视化，再按图和真实数据制作静态页。';
   }
   return '';
 }
@@ -2099,7 +2099,7 @@ function buildStaticPageImageBusinessRequirementLines(draft = {}) {
       ? '新世界/新百这版要服务店总：让店总快速看到哪些品牌店或门店快达到高分成线，便于运营助推。'
       : '',
     isTemplateOrStyleGuidePage
-      ? '已引用模板或风格指南：必须先把模板视觉语言交给 GPT-Image2 出效果图，再根据效果图制作最终 HTML；不要直接把风格指南翻译成低保真 HTML。'
+      ? '已引用模板或风格指南：必须先把模板视觉语言交给 GPT-Image2 出可视化，再根据可视化制作最终 HTML；不要直接把风格指南翻译成低保真 HTML。'
       : '',
     '如果数据来自快照表，KPI、排行、机会池和明细默认只取最新快照；只有趋势图可以按日期序列展开，禁止把多天快照重复累加成当前状态。',
     '金额单位必须先校验取数口径，再按数值展示：低于1亿用“万”，达到1亿才用“亿”，不要用改单位掩盖聚合错误。',
@@ -2118,7 +2118,7 @@ export function buildStaticPageImagePromptText(draft = {}) {
   const dataRequirementLines = buildStaticPageImageDataRequirementLines(draft);
   const productionRules = buildStaticPageImageProductionRules(draft);
   const lines = [
-    '请用 GPT-Image2 先生成一张 1536x1024 的中文企业静态页视觉效果图。',
+    '请用 GPT-Image2 先生成一张 1536x1024 的中文企业静态页可视化预览图。',
     `主题：${draft.objective || draft.title || '经营分析静态页'}`,
     `受众：${draft.audience || '客户决策层'}`,
     `风格：${staticPageStyleDirectionLabel(draft.styleDirection)}`,

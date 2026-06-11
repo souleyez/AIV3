@@ -390,6 +390,6 @@ test('startup briefing marks stale static page preview as non-exportable', () =>
   assert.equal(briefing.staticPageWorkspace.previewStale, true);
   assert.equal(briefing.staticPageWorkspace.canExportFinal, false);
   assert.equal(briefing.staticPageWorkspace.latestDrafts[0].status, 'stale');
-  assert.match(formatted, /旧效果图和最终页不能继续复用/);
+  assert.match(formatted, /旧可视化和最终页不能继续复用/);
   assert.doesNotMatch(formatted, /已可导出 index\.html/);
 });

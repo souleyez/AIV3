@@ -65,7 +65,7 @@ const RUNTIME_PHASES = [
 ];
 
 function renderParagraphs(content) {
-  const displayContent = stripThinkingBlocks(content);
+  const displayContent = exposeThinkingBlocks(content);
   const parts = displayContent
     .split(/\n{2,}/)
     .map((part) => part.trim())
@@ -82,10 +82,12 @@ function renderParagraphs(content) {
   ));
 }
 
-function stripThinkingBlocks(content) {
+function exposeThinkingBlocks(content) {
   const raw = String(content || '');
-  const withoutThinking = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  return withoutThinking || raw;
+  return raw
+    .replace(/<think>/gi, '思考：\n')
+    .replace(/<\/think>/gi, '\n')
+    .trim() || raw;
 }
 
 function buildMessageChips(message, { showExecutionObservability = false } = {}) {
@@ -337,6 +339,9 @@ export default function ChatPanel({
   const showRuntimeObservability = showExecutionObservability === true;
   const chatMessagesRef = useRef(null);
   const chatEndRef = useRef(null);
+  const messageScrollSignature = messages
+    .map((message) => `${message.id}:${String(message.content || '').length}`)
+    .join('|');
 
   useEffect(() => {
     if (showingHtmlArtifactWorkspace || showingStaticPageWorkspace) {
@@ -351,6 +356,7 @@ export default function ChatPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [
     messageLoading,
+    messageScrollSignature,
     messages.length,
     staticPageDraft?.id,
     staticPageDraft?.imageJob?.status,
@@ -507,9 +513,9 @@ export default function ChatPanel({
               type="button"
               onClick={() => onStartStaticPageDraft?.({ oneClick: true, openEditor: false, prompt: input.trim() })}
               disabled={submitting}
-              title="快速生成静态页效果图"
+              title="快速生成可视化页面"
             >
-              效果图
+              可视化
             </button>
           </div>
         </div>

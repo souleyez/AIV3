@@ -15,7 +15,12 @@ import {
 } from '../../../lib/admin-microsoft-auth';
 
 function redirectUrl(request, pathname, search = '') {
-  const url = new URL(pathname, request.url);
+  const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
+  const forwardedProto = request.headers.get('x-forwarded-proto') || request.nextUrl.protocol.replace(/:$/, '');
+  const origin = forwardedHost
+    ? `${forwardedProto}://${forwardedHost.split(',')[0].trim()}`
+    : request.url;
+  const url = new URL(pathname, origin);
   url.search = search;
   return url;
 }

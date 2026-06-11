@@ -205,6 +205,7 @@ const CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST: &str = "customer_complex_reques
 const CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST: &str = "customer_artifact_request";
 const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT: &str = "generated_static_page_edit";
 const CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH: &str = "generated_static_page_publish";
+const CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS: &str = "data_ingestion_analysis";
 const CODEX_CAPABILITY_V3_PRODUCT_CHANGE_REQUEST: &str = "v3_product_change_request";
 const ASSISTANT_RUN_EVIDENCE_DEFAULT_LIMIT: usize = 4;
 const ASSISTANT_RUN_EVIDENCE_MAX_LIMIT: usize = 8;
@@ -11141,7 +11142,7 @@ fn external_channel_public_text(text: &str) -> String {
         ("Cloudflare Codex", "DataMax 后台"),
         ("Cloudflare", "DataMax 后台"),
         ("Codex", "DataMax"),
-        ("效果图", "过程预览"),
+        ("效果图", "可视化预览"),
         ("生图", "页面生成"),
         ("视觉合同", "页面生成"),
     ] {
@@ -11628,7 +11629,7 @@ fn external_channel_static_page_sse_progress_text(
     }
     match status.as_str() {
         "static_page_effect_image_ready" => {
-            "页面过程预览已生成，DataMax 将继续生成最终静态页。".to_string()
+            "页面可视化预览已生成，DataMax 将继续生成最终静态页。".to_string()
         }
         "static_page_publish_queued" => {
             "下一步：DataMax 正在整理数据证据并生成最终静态页。".to_string()
@@ -12325,9 +12326,9 @@ async fn external_channel_static_page_sse_preview_ready_events(
         .as_deref()
         .and_then(external_channel_static_page_preview_public_url);
     let text = if let Some(preview_url) = preview_url.as_deref() {
-        format!("页面过程预览已生成：{preview_url}。下一步会继续生成最终静态页。")
+        format!("页面可视化预览已生成：{preview_url}。下一步会继续生成最终静态页。")
     } else {
-        "页面过程预览已生成。下一步会继续生成最终静态页。".to_string()
+        "页面可视化预览已生成。下一步会继续生成最终静态页。".to_string()
     };
     let mut encoded = sse_text_delta_events("external_channel.delta", &text);
     let data = json!({
@@ -32939,7 +32940,7 @@ fn external_channel_static_page_reply_from_events(
                 {
                     "DataMax 已复用已发布页面基线，正在准备发布最终静态页。"
                 } else {
-                    "DataMax 已完成页面过程预览，正在准备发布最终静态页。"
+                    "DataMax 已完成页面可视化预览，正在准备发布最终静态页。"
                 };
                 return Some(external_channel_task_status_reply_for_conversation(
                     conversation_external_id,
@@ -32983,7 +32984,7 @@ fn external_channel_static_page_reply_from_events(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
                     Some(
-                        "DataMax 页面过程预览生成遇到临时网络或服务波动，已保持任务并继续轮询。"
+                        "DataMax 页面可视化预览生成遇到临时网络或服务波动，已保持任务并继续轮询。"
                             .to_string(),
                     ),
                     Some(external_channel_static_page_card_with_template_payload(
@@ -33031,7 +33032,7 @@ fn external_channel_static_page_reply_from_events(
                     conversation_external_id,
                     "static_page_image_preview_running",
                     Some(
-                        "DataMax 页面过程预览正在生成，当前不会占用本地任务长时间等待。"
+                        "DataMax 页面可视化预览正在生成，当前不会占用本地任务长时间等待。"
                             .to_string(),
                     ),
                     Some(external_channel_static_page_card_with_template_payload(
@@ -33068,7 +33069,7 @@ fn external_channel_static_page_reply_from_events(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
                     Some(
-                        "DataMax 页面过程预览生成较慢或遇到临时问题，已自动进入重试队列。"
+                        "DataMax 页面可视化预览生成较慢或遇到临时问题，已自动进入重试队列。"
                             .to_string(),
                     ),
                     Some(external_channel_static_page_card_with_template_payload(
@@ -33104,7 +33105,7 @@ fn external_channel_static_page_reply_from_events(
                     conversation_external_id,
                     "static_page_image_preview_retrying",
                     Some(
-                        "DataMax 页面过程预览生成遇到临时问题，正在等待重试或人工接管。"
+                        "DataMax 页面可视化预览生成遇到临时问题，正在等待重试或人工接管。"
                             .to_string(),
                     ),
                     Some(external_channel_static_page_card_with_template_payload(
@@ -35915,6 +35916,88 @@ fn append_database_source_default_datasets_to_scope(
     set_payload_value(selected_scope, "datasets", Value::Array(datasets));
 }
 
+fn external_channel_static_page_report_scope(selected_scope: &Value) -> Value {
+    let Some(database_source_scope) = selected_scope.get("database_source_scope") else {
+        return selected_scope.clone();
+    };
+    let Some(bindings) = database_source_scope
+        .get("default_dataset_bindings")
+        .and_then(Value::as_array)
+    else {
+        return selected_scope.clone();
+    };
+
+    let mut report_datasets = Vec::new();
+    let mut database_source_ids = BTreeSet::new();
+    for binding in bindings {
+        let Some(dataset_id) = binding
+            .get("dataset_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let source_id = binding
+            .get("source_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(source_id) = source_id {
+            database_source_ids.insert(source_id.to_string());
+        }
+        let mut item = json!({
+            "type": "dataset",
+            "id": dataset_id,
+            "source": "database_source_default_dataset",
+            "report_scope": true,
+        });
+        if let Some(source_id) = source_id {
+            set_payload_value(&mut item, "database_source_id", json!(source_id));
+        }
+        report_datasets.push(item);
+    }
+
+    if report_datasets.is_empty() {
+        return selected_scope.clone();
+    }
+
+    if let Some(ids) = database_source_scope
+        .get("source_ids")
+        .and_then(Value::as_array)
+    {
+        for id in ids {
+            if let Some(id) = id.as_str().map(str::trim).filter(|value| !value.is_empty()) {
+                database_source_ids.insert(id.to_string());
+            }
+        }
+    }
+
+    let mut report_scope = json!({
+        "type": "external_channel_report",
+        "mode": "report_fixed_dataset",
+        "scope_source": "database_source_default_dataset_bindings",
+        "database_report_scope_policy": "fixed_dataset_independent_of_chat_selection",
+        "datasets": report_datasets,
+        "selected": report_datasets,
+        "database_source_scope": database_source_scope,
+        "database_source_ids": database_source_ids.into_iter().collect::<Vec<_>>(),
+    });
+
+    for key in [
+        "v3_system_user_id",
+        "answer_policy",
+        "user_context",
+        "external_user_context",
+    ] {
+        if let Some(value) = selected_scope.get(key) {
+            set_payload_value(&mut report_scope, key, value.clone());
+        }
+    }
+
+    report_scope
+}
+
 fn external_channel_static_page_template_reference_id(
     message: &ExternalBotMessageView,
     prompt: &str,
@@ -35956,14 +36039,11 @@ fn collect_external_static_page_database_source_ids(
     evidence_state: &Value,
 ) -> Vec<String> {
     let mut ids = BTreeSet::new();
-    if let Some(default_source_id) =
-        external_channel_default_source_id_from_config(&connection.config_redacted)
-    {
-        ids.insert(default_source_id);
-    }
-    ids.extend(external_channel_allowed_database_source_ids(
-        &connection.config_redacted,
-    ));
+    let mut selected_scope_database_ids = BTreeSet::new();
+    let fixed_report_scope = selected_scope
+        .get("database_report_scope_policy")
+        .and_then(Value::as_str)
+        == Some("fixed_dataset_independent_of_chat_selection");
 
     for key in [
         "database_source_id",
@@ -35976,26 +36056,51 @@ fn collect_external_static_page_database_source_ids(
             .and_then(Value::as_str)
             .and_then(non_empty_trimmed_string)
         {
-            ids.insert(value);
+            selected_scope_database_ids.insert(value);
         }
     }
+    for key in ["database_source_ids", "databaseSourceIds"] {
+        for raw in selected_scope
+            .get(key)
+            .cloned()
+            .map(external_string_ids_from_payload_value)
+            .unwrap_or_default()
+        {
+            if let Some(value) = non_empty_trimmed_string(&raw) {
+                selected_scope_database_ids.insert(value);
+            }
+        }
+    }
+    if !fixed_report_scope {
+        if let Some(default_source_id) =
+            external_channel_default_source_id_from_config(&connection.config_redacted)
+        {
+            ids.insert(default_source_id);
+        }
+        ids.extend(external_channel_allowed_database_source_ids(
+            &connection.config_redacted,
+        ));
+    }
+    ids.extend(selected_scope_database_ids);
 
-    for item in evidence_state
-        .get("supplied_items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if matches!(
-            item.get("type").and_then(Value::as_str),
-            Some("database_schema_context" | "database_aggregate")
-        ) {
-            if let Some(value) = item
-                .get("source_id")
-                .and_then(Value::as_str)
-                .and_then(non_empty_trimmed_string)
-            {
-                ids.insert(value);
+    if !fixed_report_scope {
+        for item in evidence_state
+            .get("supplied_items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("database_schema_context" | "database_aggregate")
+            ) {
+                if let Some(value) = item
+                    .get("source_id")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_trimmed_string)
+                {
+                    ids.insert(value);
+                }
             }
         }
     }
@@ -38906,9 +39011,9 @@ fn external_channel_static_page_pipeline_reply_text(
     template_reference: Option<&Value>,
 ) -> String {
     let task_clause = if codex_auto_publish_enabled {
-        "已创建静态页草稿并提交 Image2 效果图队列；效果图无需客户确认，生成后会继续进入固定 Cloudflare Codex 发布链路。"
+        "已创建静态页草稿并提交 Image2 可视化队列；可视化无需客户确认，生成后会继续进入固定 Cloudflare Codex 发布链路。"
     } else {
-        "已创建静态页草稿并提交 Image2 效果图队列；固定发布链路当前未启用或未加入 allowlist。"
+        "已创建静态页草稿并提交 Image2 可视化队列；固定发布链路当前未启用或未加入 allowlist。"
     };
     if let Some(label) = template_reference.and_then(external_static_page_template_reference_label)
     {
@@ -39224,9 +39329,12 @@ fn external_channel_data_ingestion_fixed_task(
             "platform": external_channel_platform_wire_value(&message.platform),
             "conversation_external_id": message.conversation_external_id,
             "message_external_id": message.message_external_id,
+            "target_dataset_required": true,
+            "target_dataset_resolution": "use_selected_dataset_when_available_or_propose_one_datamax_dataset_to_create_or_attach",
             "requested_outputs": [
                 "data_quality_report",
                 "field_mapping_plan",
+                "staging_spec",
                 "validation_checks",
                 "recommended_next_actions"
             ],
@@ -41747,10 +41855,11 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
 
     let recipient_delivery =
         external_channel_static_page_recipient_delivery(message, &assistant_request.prompt);
-    let selected_scope = assistant_request
+    let chat_selected_scope = assistant_request
         .selected_scope
         .clone()
         .unwrap_or_else(|| run.selected_scope.clone());
+    let selected_scope = external_channel_static_page_report_scope(&chat_selected_scope);
     let mut template_reference_id =
         external_channel_static_page_template_reference_id(message, &assistant_request.prompt);
     let template_stability_key =
@@ -41776,9 +41885,23 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
         "requested_skills": external_requested_skills_summary(&message.requested_skills),
         "database_source_ids": collect_external_static_page_database_source_ids(
             connection,
-            &run.selected_scope,
+            &selected_scope,
             &run.evidence_state,
         ),
+        "report_scope": {
+            "policy": selected_scope
+                .get("database_report_scope_policy")
+                .cloned()
+                .unwrap_or_else(|| json!("chat_selected_scope")),
+            "scope_source": selected_scope
+                .get("scope_source")
+                .cloned()
+                .unwrap_or_else(|| json!("assistant_selected_scope")),
+            "chat_scope_independent": selected_scope
+                .get("database_report_scope_policy")
+                .and_then(Value::as_str)
+                == Some("fixed_dataset_independent_of_chat_selection"),
+        },
         "recipient_delivery": recipient_delivery.clone(),
         "answer_policy": external_answer_policy_value(message),
     });
@@ -43329,9 +43452,9 @@ async fn maybe_enqueue_external_channel_static_page_pipeline(
             public_url,
         )
     } else if codex_auto_publish_enabled && gpt55_main_model_preferred {
-        "已创建静态页草稿并提交 GPT-Image-2 效果图队列；效果图无需客户确认，生成后会继续进入 Image2 视觉合同发布链路，由 GPT-5.5/Codex 依据效果图生成最终动态网站。".to_string()
+        "已创建静态页草稿并提交 GPT-Image-2 可视化队列；可视化无需客户确认，生成后会继续进入 Image2 视觉合同发布链路，由 GPT-5.5/Codex 依据可视化生成最终动态网站。".to_string()
     } else if codex_auto_publish_enabled {
-        "已创建静态页草稿并提交 GPT-Image-2 效果图队列；效果图无需客户确认，生成后会继续进入 Image2 视觉合同发布链路生成最终动态网站。".to_string()
+        "已创建静态页草稿并提交 GPT-Image-2 可视化队列；可视化无需客户确认，生成后会继续进入 Image2 视觉合同发布链路生成最终动态网站。".to_string()
     } else {
         external_channel_static_page_pipeline_reply_text(
             codex_auto_publish_enabled,
@@ -44000,7 +44123,7 @@ fn external_channel_model_tool_request(
 fn external_channel_model_tool_capability_guidance_lines() -> Vec<String> {
     vec![
         "外部通道可执行平台能力：宿主可在权限范围内执行产品级能力，但模型不能直接调用底层内部工具、原始接口、鉴权、URL 或请求字段；模型只表达目标能力，由宿主校验权限、排队、确认和执行。".to_string(),
-        "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/表/文件接入需求并生成待确认 staging plan；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
+        "能力目录：`static_page_artifact`=创建/复用/修改/发布静态页、可视化报表、经营看板、移动端报表；`data_ingestion_analysis`=分析第三方数据库/API/表/文件接入需求并生成待确认 staging plan，接入结果必须明确一个目标 DataMax 数据集或提出一个待创建/绑定的数据集；`document_processing`=文档入库、解析状态查询、深解析、重解析、VLM/OCR 升级解析或事实抽取排队；`collection_setup_analysis`=采集/资料库/数据集组织方案分析；`integration_setup_analysis`=第三方系统对接方案分析；`message_channel_outreach`=需要通过消息渠道主动发起对话或通知，但必须由宿主做权限和确认控制。".to_string(),
         "客户在线询问“能不能提供报表模板/有没有模板/给一份模板/按这个模板出报表”时，如果上下文指向报表、经营分析、看板、静态页或可视化产物，应视为 `static_page_artifact` 能力请求；不要只回复通用模板清单，宿主会先按客户本轮意向调整模板模块、字段组织和输出重点，再提供草稿或继续生成页面。".to_string(),
         "经营数据问题中提到取高、经营状况、风险识别、销售缺口、需要助推的门店、统计/汇总/排行、临时合同面积/坪效、客流统计/客流同比时，可能需要同步生成或更新经营报表；如果客户同时在问具体名单、原因或统计结论，仍必须正常回答客户问题，不要用“已收到/正在处理”截断答案，宿主会旁路挂载报表产物。".to_string(),
         "客户上传合同、客流表或模板文件并要求用于报表/静态页时，应把这些文件视为当前授权范围内的临时参考材料，用于补充坪效、客流同比、模板风格或模块排序；不要把它误判为 `document_processing`，除非用户明确要求解析状态、重解析、深解析或说资料无法读取。".to_string(),
@@ -48641,7 +48764,7 @@ async fn create_static_page_image_job_for_draft_with_options(
     let operation_summary = options
         .operation_summary
         .as_deref()
-        .unwrap_or("效果图任务已进入资源队列。");
+        .unwrap_or("可视化任务已进入资源队列。");
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
         &operations,
@@ -48774,13 +48897,13 @@ async fn confirm_static_page_image_job(
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
         &operations,
-        Some("效果图已确认，可以进入最终静态页渲染。"),
+        Some("可视化已确认，可以进入最终静态页渲染。"),
     );
     append_static_page_operations_metadata(
         &mut draft.draft_payload,
         &operations,
         None,
-        "效果图已确认，可以进入最终静态页渲染。",
+        "可视化已确认，可以进入最终静态页渲染。",
     );
     draft.status = StaticPageDraftStatus::Confirmed;
     let draft = state
@@ -48991,9 +49114,9 @@ async fn create_static_page_render_for_draft(
         }
     })];
     let render_summary = if request.direct_html {
-        "最终静态页已按快速 HTML 交付模式生成，未经过效果图确认。"
+        "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。"
     } else {
-        "最终静态页已根据效果图和模块规划生成。"
+        "最终静态页已根据可视化和模块规划生成。"
     };
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
@@ -49083,9 +49206,9 @@ async fn create_static_page_render_output_inline(
         }
     })];
     let render_summary = if direct_html {
-        "最终静态页已按快速 HTML 交付模式生成，未经过效果图确认。"
+        "最终静态页已按快速 HTML 交付模式生成，未经过可视化确认。"
     } else {
-        "最终静态页已根据效果图和模块规划生成。"
+        "最终静态页已根据可视化和模块规划生成。"
     };
     draft.draft_payload = apply_static_page_operations_to_payload(
         draft.draft_payload,
@@ -49716,7 +49839,7 @@ fn assistant_run_v3_awareness_lines() -> Vec<String> {
         "DataMax 认知：你正在 DataMax 中服务用户。DataMax 提供数据集、第三方知识库、权限、检索供料、受控动作、报表和静态页产物上下文。".to_string(),
         "DataMax 上下文是附加能力，不是能力限制；没有可见数据集或供料时，仍可保持通用模型水准回答普通问题。".to_string(),
         "DataMax 证据规则：涉及 DataMax 数据、文档、权限、工具结果或产物状态时，只能把已供给的 observation/证据当作事实；未供料时先说明“当前不可见/未供料”，再区分通用知识或推断。".to_string(),
-        "DataMax 搜索规则：外部/网页搜索（web_search）是计划中的 DataMax 受控只读能力；没有带来源和时间的 DataMax search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
+        "DataMax 搜索规则：外部/网页搜索（web_search）是 DataMax 受控只读能力；没有带来源和时间的 DataMax search evidence 时，不要声称已联网搜索或引用实时网页结果。".to_string(),
     ]
 }
 
@@ -49726,8 +49849,8 @@ fn assistant_run_v3_awareness_policy_value() -> Value {
         "additiveContextRule": "DataMax 上下文是附加能力，不是能力限制。即使当前没有可见数据集或供料，也可以保持通用模型水准回答普通问题。",
         "unavailableEvidenceRule": "涉及 DataMax 数据、文档、权限、工具结果或产物状态时，只有收到 DataMax observation/供料才能当作事实。未供料时先说明“当前不可见/未供料”，再区分通用判断。",
         "externalSearchPolicy": {
-            "status": "planned_v3_controlled_read_only",
-            "modelRule": "外部/网页搜索是计划中的 DataMax 受控只读能力；未收到带来源和时间的 DataMax search evidence 前，不要声称已联网搜索或引用实时网页结果。"
+            "status": "v3_controlled_read_only",
+            "modelRule": "外部/网页搜索是 DataMax 受控只读能力；未收到带来源和时间的 DataMax search evidence 前，不要声称已联网搜索或引用实时网页结果。"
         }
     })
 }
@@ -50208,7 +50331,7 @@ fn assistant_run_model_supply_bucket(item: &Value) -> &'static str {
             "database"
         }
         Some("conversation_memory_item") => "memory",
-        Some("retrieval_evidence") => "retrieval",
+        Some("retrieval_evidence" | "search_evidence") => "retrieval",
         _ => "other",
     }
 }
@@ -50238,6 +50361,7 @@ fn assistant_run_model_supply_item_for_context(item: &Value) -> Value {
             .unwrap_or_else(|| assistant_run_model_dataset_entity_scan_item(item)),
         Some("dataset_fact_snapshot") => assistant_run_model_dataset_fact_snapshot_item(item),
         Some("retrieval_evidence") => assistant_run_model_retrieval_evidence_item(item),
+        Some("search_evidence") => assistant_run_model_search_evidence_item(item),
         Some("document_parse_status") => assistant_run_model_document_parse_status_item(item),
         Some("database_schema_context") => assistant_run_model_database_schema_context_item(item),
         Some("database_aggregate") => assistant_run_model_database_aggregate_item(item),
@@ -50314,6 +50438,56 @@ fn assistant_run_model_retrieval_evidence_item(item: &Value) -> Value {
             assistant_run_model_compact_json_value(media_context, 360, 8),
         );
     }
+    Value::Object(output)
+}
+
+fn assistant_run_model_search_evidence_item(item: &Value) -> Value {
+    let mut output = Map::new();
+    assistant_run_model_copy_value(&mut output, item, "type");
+    assistant_run_model_copy_value(&mut output, item, "source");
+    assistant_run_model_copy_value(&mut output, item, "provider");
+    assistant_run_model_copy_value(&mut output, item, "rank");
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "title",
+        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "source_locator",
+        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "url",
+        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "summary",
+        ASSISTANT_RUN_MODEL_CONTEXT_SUMMARY_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_text(
+        &mut output,
+        item,
+        "content_excerpt",
+        ASSISTANT_RUN_MODEL_CONTEXT_EVIDENCE_TEXT_LIMIT,
+    );
+    assistant_run_model_copy_value(&mut output, item, "retrieved_at");
+    if let Some(contract) = item.get("evidence_contract") {
+        output.insert(
+            "evidence_contract".to_string(),
+            assistant_run_model_compact_json_value(contract, 260, 6),
+        );
+    }
+    output.insert(
+        "model_rule".to_string(),
+        json!("This is DataMax controlled web search evidence. It may be cited only with source URL/title and retrieved_at; do not infer facts beyond title, summary, and source."),
+    );
     Value::Object(output)
 }
 
@@ -55051,6 +55225,11 @@ fn assistant_run_customer_codex_sidecar_capability(
     ) {
         return Some(CODEX_CAPABILITY_CUSTOMER_ARTIFACT_REQUEST);
     }
+    if assistant_run_prompt_requests_data_ingestion_or_integration_sidecar(prompt)
+        && assistant_run_data_ingestion_sidecar_scope_has_source(selected_scope)
+    {
+        return Some(CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS);
+    }
     if assistant_run_prompt_requests_generated_static_page_publish(prompt, request, selected_scope)
     {
         return Some(CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH);
@@ -55128,12 +55307,114 @@ fn assistant_run_prompt_requests_v3_product_change(prompt: &str) -> bool {
     if !(has_v3_signal && has_change_signal) {
         return false;
     }
+    if assistant_run_prompt_requests_data_ingestion_or_integration_sidecar(prompt) {
+        return false;
+    }
     if assistant_run_prompt_mentions_customer_codex_artifact_surface(&compact, &lower)
         && !assistant_run_prompt_mentions_v3_product_system_surface(&compact, &lower)
     {
         return false;
     }
     true
+}
+
+fn assistant_run_prompt_requests_data_ingestion_or_integration_sidecar(prompt: &str) -> bool {
+    let forwarded_prompt = assistant_run_prompt_without_codex_forward_prefix(prompt);
+    let compact = forwarded_prompt
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return false;
+    }
+    let lower = compact.to_ascii_lowercase();
+    let has_data_ingestion_intent =
+        external_channel_message_requests_data_ingestion_analysis(forwarded_prompt)
+            || prompt_contains_any(
+                &compact,
+                &[
+                    "数据库接入",
+                    "数据库对接",
+                    "数据库API",
+                    "数据库接口",
+                    "业务库接入",
+                    "业务库对接",
+                    "建库",
+                    "建数据表",
+                    "数据表设计",
+                    "表结构设计",
+                    "字段清洗",
+                    "字段规范",
+                    "字段口径",
+                    "数据同步",
+                    "同步入库",
+                    "数据入库",
+                    "接口接入",
+                    "接口对接",
+                    "API接入",
+                    "API对接",
+                    "第三方系统对接",
+                    "业务系统对接",
+                    "OA对接",
+                    "ERP对接",
+                    "CRM对接",
+                    "MCP对接",
+                    "连接器",
+                    "connector",
+                ],
+            )
+            || ascii_prompt_contains_any(
+                &lower,
+                &[
+                    "databaseintegration",
+                    "databaseapi",
+                    "apiintegration",
+                    "apiconnector",
+                    "connector",
+                    "webhook",
+                    "etl",
+                    "schema",
+                ],
+            );
+    if !has_data_ingestion_intent {
+        return false;
+    }
+    let unsafe_product_change = prompt_contains_any(
+        &compact,
+        &[
+            "修改DataMax",
+            "改DataMax",
+            "修改V3",
+            "改V3",
+            "主站接口",
+            "公开接口",
+            "公开API",
+            "鉴权",
+            "认证",
+            "登录",
+            "部署",
+            "重启",
+            "发版",
+            "提交代码",
+            "数据库迁移",
+            "生产表写入",
+            "生产库写入",
+        ],
+    ) || ascii_prompt_contains_any(
+        &lower,
+        &[
+            "datamaxapi",
+            "v3api",
+            "publicapi",
+            "auth",
+            "login",
+            "deploy",
+            "restart",
+            "migration",
+            "productionwrite",
+        ],
+    );
+    !unsafe_product_change
 }
 
 fn assistant_run_prompt_mentions_customer_codex_artifact_surface(
@@ -55947,7 +56228,15 @@ fn assistant_run_customer_codex_sidecar_execution(
             evidence_state,
         )),
         local_thread_id,
-        fixed_task: None,
+        fixed_task: assistant_run_customer_codex_sidecar_fixed_task(
+            tenant_id,
+            assistant_run_id,
+            execution_id,
+            capability,
+            request,
+            selected_scope,
+            evidence_state,
+        ),
         task_memory_policy: CodexHostTaskMemoryPolicyView::task_scoped(
             assistant_run_id,
             execution_id,
@@ -55996,6 +56285,131 @@ fn assistant_run_customer_codex_sidecar_execution(
     };
     let initial_event = codex_host_fixed_task_created_event(&execution, assistant_run_id);
     Ok((execution, initial_event))
+}
+
+fn assistant_run_customer_codex_sidecar_fixed_task(
+    tenant_id: TenantId,
+    assistant_run_id: AssistantRunId,
+    execution_id: WorkflowExecutionId,
+    capability: &str,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    evidence_state: &Value,
+) -> Option<CodexHostFixedTaskTemplateContextView> {
+    if capability != CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS {
+        return None;
+    }
+    Some(assistant_run_data_ingestion_sidecar_fixed_task(
+        tenant_id,
+        assistant_run_id,
+        execution_id,
+        request,
+        selected_scope,
+        evidence_state,
+    ))
+}
+
+fn assistant_run_data_ingestion_sidecar_fixed_task(
+    tenant_id: TenantId,
+    assistant_run_id: AssistantRunId,
+    execution_id: WorkflowExecutionId,
+    request: &CreateAssistantRunRequest,
+    selected_scope: &Value,
+    evidence_state: &Value,
+) -> CodexHostFixedTaskTemplateContextView {
+    let forwarded_prompt = assistant_run_prompt_without_codex_forward_prefix(&request.prompt);
+    CodexHostFixedTaskTemplateContextView {
+        template_id: CodexHostFixedTaskTemplateIdView::DataIngestionAnalysis,
+        version: 1,
+        assistant_run_id: Some(assistant_run_id.to_string()),
+        draft_id: None,
+        case_id: Some(format!("assistant-run-data-ingestion-{execution_id}")),
+        dataset_scope: assistant_run_data_ingestion_sidecar_dataset_scope(
+            tenant_id,
+            selected_scope,
+        ),
+        requirements: json!({
+            "user_goal": truncate_assistant_supply_text(forwarded_prompt, 1200),
+            "intent": "data_ingestion_analysis",
+            "source": "v3_main_assistant_cc_sidecar",
+            "target_dataset_required": true,
+            "target_dataset_resolution": "use_selected_dataset_when_available_or_propose_one_datamax_dataset_to_create_or_attach",
+            "requested_outputs": [
+                "data_quality_report",
+                "field_mapping_plan",
+                "staging_spec",
+                "validation_checks",
+                "recommended_next_actions"
+            ],
+        }),
+        image2: Value::Null,
+        policies: json!({
+            "mode": "read_only_analysis_or_staging_spec",
+            "credential_policy": "do_not_request_or_emit_credentials",
+            "production_write_policy": "needs_human_confirmation",
+            "public_api_change_allowed": false,
+            "schema_change_allowed_without_confirmation": false
+        }),
+        low_quality_signals: Vec::new(),
+        user_question: Some(truncate_assistant_supply_text(forwarded_prompt, 1000)),
+        customer_answer: None,
+        evidence_summary: json!({
+            "source_visibility": "v3_main_assistant_selected_scope_only",
+            "supplied_item_count": assistant_run_evidence_supplied_count(evidence_state),
+            "supply_quality": evidence_state.get("supply_quality").cloned().unwrap_or(Value::Null),
+            "raw_credentials_supplied": false
+        }),
+        trace_summary: Value::Null,
+        allowed_write_scope: None,
+        human_review_policy:
+            CodexHostFixedTaskHumanReviewPolicyView::AutoForReadOnlyAnalysisOrStagingSpec,
+    }
+}
+
+fn assistant_run_data_ingestion_sidecar_dataset_scope(
+    tenant_id: TenantId,
+    selected_scope: &Value,
+) -> Value {
+    json!({
+        "tenant_id": tenant_id.to_string(),
+        "dataset_ids": selected_dataset_ids_from_scope(selected_scope)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        "database_source_ids": selected_string_ids_from_scope(
+            selected_scope,
+            &[
+                "database_source_ids",
+                "databaseSourceIds",
+                "database_sources",
+                "databaseSources",
+                "business_datasource_ids",
+                "businessDatasourceIds",
+                "businessDataSourceIds",
+                "source_ids",
+                "sourceIds"
+            ]
+        ),
+        "selected_document_ids": selected_document_ids_from_scope(selected_scope)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        "uploaded_file_ids": selected_string_ids_from_scope(
+            selected_scope,
+            &["uploaded_file_ids", "uploadedFiles", "files", "file_ids"]
+        ),
+        "table_ids": selected_string_ids_from_scope(
+            selected_scope,
+            &["table_ids", "tables", "selected_tables", "selectedTables"]
+        ),
+        "scope_source": "v3_main_assistant_selected_scope",
+    })
+}
+
+fn assistant_run_data_ingestion_sidecar_scope_has_source(selected_scope: &Value) -> bool {
+    let dataset_scope =
+        assistant_run_data_ingestion_sidecar_dataset_scope(TenantId::new(), selected_scope);
+    external_channel_data_ingestion_scope_has_source(&dataset_scope)
 }
 
 fn assistant_run_customer_codex_sidecar_workspace_seed(
@@ -56059,6 +56473,7 @@ fn assistant_run_customer_codex_sidecar_task(
 
 fn assistant_run_customer_codex_sidecar_route(capability: &str) -> &'static str {
     match capability {
+        CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS => "assistant_run_data_ingestion_analysis",
         CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => "assistant_run_generated_static_page_edit",
         CODEX_CAPABILITY_GENERATED_STATIC_PAGE_PUBLISH => {
             "assistant_run_generated_static_page_publish"
@@ -56070,6 +56485,9 @@ fn assistant_run_customer_codex_sidecar_route(capability: &str) -> &'static str 
 
 fn assistant_run_customer_codex_sidecar_permission_scope(capability: &str) -> &'static str {
     match capability {
+        CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS => {
+            "data-ingestion analysis and staging-spec planning with one target DataMax dataset identified or proposed; no V3 public API changes"
+        }
         CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => {
             "workspace-write only inside the isolated task workspace seeded from the current generated static page artifact; no V3 repo writes"
         }
@@ -56085,6 +56503,9 @@ fn assistant_run_customer_codex_sidecar_permission_scope(capability: &str) -> &'
 
 fn assistant_run_customer_codex_sidecar_capability_instructions(capability: &str) -> &'static str {
     match capability {
+        CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS => {
+            "Use the fixed data_ingestion_analysis template. Let Codex take over the customer's database/API integration request, but make sure the result identifies one target DataMax dataset or proposes one dataset to create/attach before continuing. Keep the existing safety boundary: do not request or emit credentials, do not change public APIs, and do not write production data without confirmation."
+        }
         CODEX_CAPABILITY_GENERATED_STATIC_PAGE_EDIT => {
             "Revise only the supplied V3-generated static page/customer artifact context. Read workspace-seed.json and, when present, existing-artifact/ as the current page copy. Produce a new package under the task workspace for DataMax validation; do not overwrite stable URLs or bypass DataMax publish checks. If you create files, write customer-artifact-manifest.json at the workspace root with artifacts[].path as workspace-relative paths plus title, kind, and mime_type."
         }
@@ -59797,7 +60218,7 @@ async fn mark_static_page_draft_generated_artifact_publish_queued(
     payload.insert("status".to_string(), json!("rendering"));
     payload.insert(
         "modelSummary".to_string(),
-        json!("页面过程预览已生成，DataMax 正在制作最终静态页。"),
+        json!("页面可视化预览已生成，DataMax 正在制作最终静态页。"),
     );
     payload.insert("finalPage".to_string(), Value::Object(final_page));
     payload.insert("updatedAt".to_string(), json!(now));
@@ -60357,7 +60778,7 @@ async fn mark_static_page_draft_generated_artifact_publish_failed(
     payload.insert("status".to_string(), json!("preview_ready"));
     payload.insert(
         "modelSummary".to_string(),
-        json!("页面过程预览已完成，但最终静态页发布失败；需要重试页面发布链路。"),
+        json!("页面可视化预览已完成，但最终静态页发布失败；需要重试页面发布链路。"),
     );
     payload.insert("finalPage".to_string(), Value::Object(final_page));
     payload.insert("updatedAt".to_string(), json!(now));
@@ -63854,7 +64275,7 @@ fn build_assistant_run_react_provider_input(
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "静态页修订发布严格受控：只有当当前打开产物是已发布静态页或带 publicUrl/finalPage 的静态页，且用户本轮明确要求修改/调整/修复/优化报表页面、改成某种风格、增加/去掉/移动模块，或刷新当前报表数据并发布新链接时，才允许用 publish_static_page_revision；arguments.instruction 必须保留用户本轮原始修订意图。泛泛查看、解释概念、仅问数据、仅问链接状态不得触发该动作；Host 会复用 existing_artifact 并通过固定 static_page_image2_data_publish 发布新产物，不要自己拼 codex_host_task。".to_string(),
         "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
-        "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
+        "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的可视化后再渲染最终页。".to_string(),
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
         "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 DataMax 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -63944,7 +64365,7 @@ fn build_assistant_run_react_continue_provider_input(
         "如果当前打开产物是静态页草稿，用户要求修改标题、内容、图表、数据绑定或布局时，优先用 update_static_page_module；Host 只会把操作应用到当前已持久化草稿。".to_string(),
         "静态页修订发布严格受控：只有当当前打开产物是已发布静态页或带 publicUrl/finalPage 的静态页，且用户本轮明确要求修改/调整/修复/优化报表页面、改成某种风格、增加/去掉/移动模块，或刷新当前报表数据并发布新链接时，才允许用 publish_static_page_revision；arguments.instruction 必须保留用户本轮原始修订意图。泛泛查看、解释概念、仅问数据、仅问链接状态不得触发该动作；Host 会复用 existing_artifact 并通过固定 static_page_image2_data_publish 发布新产物，不要自己拼 codex_host_task。".to_string(),
         "如果当前打开产物包含 structureSignals.sectionTitleHints，这些是供料给出的源文档结构线索；用于组织 docs-page 模块，但不要编造标题、接口细节或把标题当作完整内容。".to_string(),
-        "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的效果图后再渲染最终页。".to_string(),
+        "如果弱规划目录或当前打开产物显示静态页 previewStale=true 或 previewStatus=stale，禁止直接 render_static_page；应先 submit_static_page_image_preview，等用户确认新的可视化后再渲染最终页。".to_string(),
         "静态页缺证决策：如果当前打开产物包含 missingEvidence.status=needs_evidence，先处理缺证，不要直接 submit_static_page_image_preview 或 render_static_page，除非用户明确接受部分草稿。".to_string(),
         "缺证 recommended_action/recommendedAction 映射：retrieve_evidence -> retrieve_evidence；read_document_detail -> read_document_detail，document_id 必须来自选中范围、detailTargets 或 observation；static_page.update_draft/update_static_page_module -> update_static_page_module，用于修复模块数据或保留缺失说明。".to_string(),
         "OpenClaw 和 Codex Host 都是可选外挂能力；openclaw_memory_recall、openclaw_readonly_execution、codex_host_task 可能被 Host 拒绝，不能绕过 DataMax 选中范围、记忆、任务隔离和执行 allowlist。".to_string(),
@@ -65716,15 +66137,15 @@ fn assistant_run_codex_action_contracts(
         ),
         AssistantRunCodexActionContractView::new(
             "submit_static_page_image_preview",
-            "提交效果图生成",
-            "把当前静态页草稿提交到 DataMax 控制的效果图队列。",
+            "提交可视化生成",
+            "把当前静态页草稿提交到 DataMax 控制的可视化队列。",
             json!({"type": "object", "properties": {"draft_id": {"type": "string"}}}),
             true,
         ),
         AssistantRunCodexActionContractView::new(
             "render_static_page",
             "制作最终静态页",
-            "在已确认且未过期的效果图视觉合同下生成最终静态页。",
+            "在已确认且未过期的可视化视觉合同下生成最终静态页。",
             json!({"type": "object", "properties": {"draft_id": {"type": "string"}}}),
             true,
         ),
@@ -84055,7 +84476,7 @@ fn static_page_visual_bridge_payload(payload: &Value) -> Value {
     json!({
         "providerLane": "gpt-image-2-cloudflare-queue",
         "role": "effect_preview_reference_only",
-        "rule": "效果图只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。",
+        "rule": "可视化只锁定视觉方向和确认指纹；最终 HTML 由 Draft JSON、DataSnapshot、VisualSpec 和 renderer 生成。",
         "status": static_page_value_string(&preview_contract, &["status"])
             .or_else(|| static_page_value_string(&image_job, &["status"]))
             .unwrap_or_else(|| "not_requested".to_string()),
@@ -93658,7 +94079,7 @@ fn static_page_preview_data_quality_message(modules: &[Value]) -> String {
         .join("、");
     let suffix = format!(" {} 个模块", modules.len());
     format!(
-        "当前静态页还有{suffix}的数据绑定未达到效果图生成要求：{labels}。请先让 DataMax 补充样本行、重新匹配字段，或检索/修复模块数据。"
+        "当前静态页还有{suffix}的数据绑定未达到可视化生成要求：{labels}。请先让 DataMax 补充样本行、重新匹配字段，或检索/修复模块数据。"
     )
 }
 
@@ -94055,7 +94476,7 @@ fn build_static_page_render_spec() -> Value {
         },
         "editableContent": ["title", "content", "dataBinding", "visualization", "chartRuntime", "chartOptions", "layout"],
         "generationGuardrails": [
-            "效果图必须服从模块网格布局和移动端顺序",
+            "可视化必须服从模块网格布局和移动端顺序",
             "正文、指标、图表在最终静态页中必须是真 DOM 或 SVG，不允许只烘焙进图片",
             "复杂背景、纹理、装饰可以作为图片资产，核心数据表达必须可重新渲染",
             "ECharts 只允许纯 JSON 配置，不允许函数、HTML、远程 URL 或事件处理器字段",
@@ -95582,7 +96003,7 @@ fn static_page_module_binding_quality(
             "partial",
             "matched_field_candidate_without_rows",
             "needs_sample_rows",
-            "已匹配候选字段，但还缺少可渲染样本行；生成效果图前建议抽取或填写数据。",
+            "已匹配候选字段，但还缺少可渲染样本行；生成可视化前建议抽取或填写数据。",
         )
     } else if chart_needs_rows {
         (
@@ -100388,7 +100809,7 @@ mod tests {
             .expect("external request should include startup briefing");
         assert_eq!(
             startup_briefing["modelAwarenessPolicy"]["externalSearchPolicy"]["status"],
-            json!("planned_v3_controlled_read_only")
+            json!("v3_controlled_read_only")
         );
         assert!(
             startup_briefing["modelAwarenessPolicy"]["additiveContextRule"]
@@ -100998,7 +101419,7 @@ mod tests {
         assert!(text.contains("已收到模板参考"));
         assert!(text.contains("页面结构、版式风格和字段组织参考"));
         assert!(text.contains("事实内容仍以本会话已授权资料和检索证据为准"));
-        assert!(text.contains("效果图无需客户确认"));
+        assert!(text.contains("可视化无需客户确认"));
         assert!(!text.contains("第三方复杂静态页任务"));
     }
 
@@ -103164,7 +103585,7 @@ mod tests {
             30,
             "static_page",
             "static_page_preview_ready",
-            "页面过程预览已生成：https://v3.elepcloud.com/generated-artifacts/demo/preview.png",
+            "页面可视化预览已生成：https://v3.elepcloud.com/generated-artifacts/demo/preview.png",
             Some("https://v3.elepcloud.com/status/run-1".to_string()),
             None,
             json!({
@@ -103704,7 +104125,7 @@ mod tests {
         assert!(preview_body.contains("\"phase\":\"static_page\""));
         assert!(preview_body.contains("\"status\":\"static_page_preview_ready\""));
         assert!(preview_body.contains("preview.png"));
-        assert!(preview_body.contains("过程预览已生成"));
+        assert!(preview_body.contains("可视化预览已生成"));
         assert!(!preview_body.contains("Image2"));
         assert!(!preview_body.contains("image_job_id"));
 
@@ -106972,7 +107393,7 @@ mod tests {
             .text
             .as_deref()
             .unwrap_or_default()
-            .contains("效果图无需客户确认"));
+            .contains("可视化无需客户确认"));
 
         let events = state
             .storage
@@ -108407,6 +108828,75 @@ mod tests {
         assert_eq!(
             business_work_analysis_scope["datasets"][0]["id"],
             json!(dataset.id)
+        );
+    }
+
+    #[test]
+    fn external_channel_static_page_report_scope_uses_database_default_dataset_not_chat_scope() {
+        let chat_dataset_id = DatasetId::new();
+        let report_dataset_id = DatasetId::new();
+        let document_id = DocumentId::new();
+        let selected_scope = json!({
+            "type": "external_channel",
+            "dataset_external_ids": ["qa-temporary-group"],
+            "requested_dataset_external_ids": ["qa-temporary-group"],
+            "datasets": [{"type": "dataset", "id": chat_dataset_id}],
+            "documents": [{"type": "document", "id": document_id, "document_external_id": "qa-doc-1"}],
+            "database_source_ids": ["hy-sql-report"],
+            "database_source_scope": {
+                "source": "external_channel_allowed_database_sources",
+                "source_ids": ["hy-sql-report"],
+                "requested_business_datasource_ids": [],
+                "default_dataset_bindings": [{
+                    "source_id": "hy-sql-report",
+                    "dataset_id": report_dataset_id,
+                }],
+                "policy": "connection_allowed_database_sources_for_report_workflow",
+            },
+        });
+
+        let report_scope = external_channel_static_page_report_scope(&selected_scope);
+
+        assert_eq!(report_scope["mode"], json!("report_fixed_dataset"));
+        assert_eq!(
+            report_scope["database_report_scope_policy"],
+            json!("fixed_dataset_independent_of_chat_selection")
+        );
+        assert_eq!(
+            selected_dataset_ids_from_scope(&report_scope),
+            vec![report_dataset_id]
+        );
+        assert!(report_scope.get("dataset_external_ids").is_none());
+        assert!(report_scope.get("requested_dataset_external_ids").is_none());
+        assert!(report_scope.get("documents").is_none());
+
+        let key = static_page_dataset_artifact_key(
+            &report_scope,
+            &json!({"database_source_ids": ["hy-sql-report"]}),
+            "template:data-report",
+            Some("generic-chat-main"),
+        )
+        .expect("report scope should produce a stable artifact key");
+        assert!(key.contains(&format!("dataset_id:{report_dataset_id}")));
+        assert!(!key.contains(&format!("dataset_id:{chat_dataset_id}")));
+        assert!(!key.contains("qa-temporary-group"));
+        assert!(!key.contains("qa-doc-1"));
+
+        let connection = ExternalChannelConnectionSummary {
+            platform: ExternalChannelPlatformView::GenericChat,
+            status: "enabled".to_string(),
+            config_redacted: json!({
+                "default_source_id": "third-party-document-source",
+                "allowed_database_source_ids": ["hy-sql-report"]
+            }),
+        };
+        assert_eq!(
+            collect_external_static_page_database_source_ids(
+                &connection,
+                &report_scope,
+                &json!({"status": "empty"})
+            ),
+            vec!["hy-sql-report".to_string()]
         );
     }
 
@@ -116973,6 +117463,84 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_customer_codex_sidecar_routes_cc_data_ingestion_with_selected_source() {
+        let request = CreateAssistantRunRequest {
+            prompt: "cc 帮我做数据库 API 对接，先分析字段映射和 staging plan。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({
+                "database_source_ids": ["db-source-1"],
+                "table_ids": ["bi_contract_warning"]
+            })),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({
+            "database_source_ids": ["db-source-1"],
+            "table_ids": ["bi_contract_warning"]
+        });
+
+        assert!(!assistant_run_prompt_requests_v3_product_change(
+            &request.prompt
+        ));
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_keeps_data_ingestion_cc_readonly_without_source() {
+        let request = CreateAssistantRunRequest {
+            prompt: "cc 数据库 API 对接怎么做，先分析字段映射和 staging plan。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: None,
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({});
+
+        assert!(
+            assistant_run_prompt_requests_data_ingestion_or_integration_sidecar(&request.prompt)
+        );
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            Some(CODEX_CAPABILITY_CUSTOMER_COMPLEX_REQUEST)
+        );
+    }
+
+    #[test]
+    fn assistant_run_customer_codex_sidecar_blocks_datamax_public_api_change() {
+        let request = CreateAssistantRunRequest {
+            prompt: "cc 修改 DataMax 公开 API 请求字段，顺便做数据库 API 对接。".to_string(),
+            local_thread_id: None,
+            startup_briefing: None,
+            selected_scope: Some(json!({"database_source_ids": ["db-source-1"]})),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({"database_source_ids": ["db-source-1"]});
+
+        assert!(
+            !assistant_run_prompt_requests_data_ingestion_or_integration_sidecar(&request.prompt)
+        );
+        assert!(assistant_run_prompt_requests_v3_product_change(
+            &request.prompt
+        ));
+        assert_eq!(
+            assistant_run_customer_codex_sidecar_capability(&request, &selected_scope),
+            None
+        );
+    }
+
+    #[test]
     fn assistant_run_customer_codex_sidecar_ignores_report_context_business_analysis_without_cc() {
         let request = CreateAssistantRunRequest {
             prompt: "基于当前报表做一下新百经营分析，给管理层建议。".to_string(),
@@ -117208,6 +117776,111 @@ mod tests {
             .as_str()
             .expect("task")
             .contains("new generated static page"));
+    }
+
+    #[test]
+    fn assistant_run_data_ingestion_sidecar_embeds_fixed_task_context() {
+        let tenant_id = TenantId::new();
+        let assistant_run_id = AssistantRunId::new();
+        let request = CreateAssistantRunRequest {
+            prompt: "cc 帮我做数据库 API 对接，先分析字段映射和 staging plan。".to_string(),
+            local_thread_id: Some("thread-data-ingestion".to_string()),
+            startup_briefing: None,
+            selected_scope: Some(json!({
+                "databaseSources": [{"id": "source-db-1"}],
+                "selectedTables": [{"table_id": "bi_contract_warning"}],
+                "uploadedFiles": [{"file_id": "sample-file-1"}]
+            })),
+            scope_candidates: Vec::new(),
+            context_policy_hint: None,
+            current_artifact: None,
+            messages: Vec::new(),
+        };
+        let selected_scope = json!({
+            "databaseSources": [{"id": "source-db-1"}],
+            "selectedTables": [{"table_id": "bi_contract_warning"}],
+            "uploadedFiles": [{"file_id": "sample-file-1"}]
+        });
+        let evidence_state = json!({
+            "status": "supplied",
+            "items": [{"id": "schema-row"}],
+            "supply_quality": {"source": "database_schema"}
+        });
+
+        let (execution, initial_event) = assistant_run_customer_codex_sidecar_execution(
+            tenant_id,
+            &workflow_definitions::catalog(),
+            assistant_run_id,
+            request.local_thread_id.clone(),
+            CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS,
+            &request,
+            &selected_scope,
+            &evidence_state,
+        )
+        .expect("data-ingestion sidecar execution should build");
+
+        assert_eq!(
+            execution.context["capability"],
+            json!(CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS)
+        );
+        assert_eq!(
+            execution.context["codex_sidecar"]["route"],
+            json!("assistant_run_data_ingestion_analysis")
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["template_id"],
+            json!("data_ingestion_analysis")
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["requirements"]["target_dataset_required"],
+            json!(true)
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["requirements"]["target_dataset_resolution"],
+            json!("use_selected_dataset_when_available_or_propose_one_datamax_dataset_to_create_or_attach")
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["dataset_scope"]["tenant_id"],
+            json!(tenant_id.to_string())
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["dataset_scope"]["database_source_ids"],
+            json!(["source-db-1"])
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["dataset_scope"]["table_ids"],
+            json!(["bi_contract_warning"])
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["dataset_scope"]["uploaded_file_ids"],
+            json!(["sample-file-1"])
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["policies"]["mode"],
+            json!("read_only_analysis_or_staging_spec")
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["policies"]["public_api_change_allowed"],
+            json!(false)
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["policies"]
+                ["schema_change_allowed_without_confirmation"],
+            json!(false)
+        );
+        assert_eq!(
+            execution.context["fixed_task"]["human_review_policy"],
+            json!("auto_for_read_only_analysis_or_staging_spec")
+        );
+        assert!(execution.context["task"]
+            .as_str()
+            .expect("task")
+            .contains("fixed data_ingestion_analysis template"));
+        assert_eq!(initial_event.event_name, "codex_host_task.created");
+        assert_eq!(
+            initial_event.payload["capability"],
+            json!(CODEX_CAPABILITY_DATA_INGESTION_ANALYSIS)
+        );
     }
 
     #[test]
@@ -130157,6 +130830,45 @@ retrieve_evidence:
         assert!(!serialized.contains("raw_sql_debug"));
         assert!(!serialized.contains("raw_internal_blob"));
         assert!(serialized.contains("突发事件应急预防与处置"));
+    }
+
+    #[test]
+    fn assistant_run_model_context_preserves_web_search_evidence() {
+        let evidence = json!({
+            "status": "supplied",
+            "supplied_items": [{
+                "type": "search_evidence",
+                "source": "web_search",
+                "provider": "fixture",
+                "rank": 1,
+                "title": "DataMax 官方说明",
+                "source_locator": "https://example.com/datamax",
+                "url": "https://example.com/datamax",
+                "summary": "DataMax 提供企业数据接入、受控检索和报表能力。",
+                "content_excerpt": "DataMax 提供企业数据接入、受控检索和报表能力。",
+                "retrieved_at": "2026-06-11T08:00:00Z",
+                "evidence_contract": {
+                    "source_url": "https://example.com/datamax",
+                    "source_title": "DataMax 官方说明",
+                    "retrieved_at": "2026-06-11T08:00:00Z",
+                    "query_metadata": {
+                        "query_chars": 12,
+                        "raw_query_omitted": true
+                    }
+                }
+            }]
+        });
+
+        let model_state = assistant_run_model_evidence_state(&evidence);
+        let item = &model_state["supplied_items"][0];
+
+        assert_eq!(item["type"], json!("search_evidence"));
+        assert_eq!(item["provider"], json!("fixture"));
+        assert_eq!(item["url"], json!("https://example.com/datamax"));
+        assert_eq!(
+            item["evidence_contract"]["query_metadata"]["raw_query_omitted"],
+            json!(true)
+        );
     }
 
     #[test]

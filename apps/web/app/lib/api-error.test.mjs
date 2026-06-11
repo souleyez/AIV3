@@ -11,7 +11,7 @@ import {
 test('buildApiError preserves structured backend error details', () => {
   const error = buildApiError({
     code: 'static_page_preview_data_quality_gate',
-    message: '当前静态页还有 1 个模块的数据绑定未达到效果图生成要求。',
+    message: '当前静态页还有 1 个模块的数据绑定未达到可视化生成要求。',
     details: {
       attentionModuleCount: 1,
       attentionModules: [{
@@ -26,13 +26,13 @@ test('buildApiError preserves structured backend error details', () => {
   assert.equal(error.status, 400);
   assert.equal(error.code, 'static_page_preview_data_quality_gate');
   assert.equal(error.details.attentionModuleCount, 1);
-  assert.match(apiErrorMessage(error), /数据绑定未达到效果图生成要求/);
+  assert.match(apiErrorMessage(error), /数据绑定未达到可视化生成要求/);
 });
 
 test('staticPagePreviewGateErrorMessage can append module details when backend message is terse', () => {
   const error = buildApiError({
     code: 'static_page_preview_data_quality_gate',
-    message: '效果图未入队。',
+    message: '可视化未入队。',
     details: {
       attentionModules: [{
         moduleId: 'trend',
