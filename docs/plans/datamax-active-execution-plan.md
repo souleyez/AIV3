@@ -226,7 +226,8 @@ npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 -
 - 继续拆小 `crates/platform-api/src/lib.rs` 中高风险逻辑。
 - 前端按页面、hook、数据适配拆分 `HomePageClient.js`。
 - `scripts/README.md` 持续标注 self-test、preflight、live 的边界。
-- CI 最小矩阵覆盖 Rust fmt/test、Web build、外部报表 focus/export self-test、静态页 self-test、placeholder readiness self-test。
+- CI 最小矩阵已落到 `.github/workflows/datamax-ci.yml`，覆盖 Node smoke syntax/self-test、外部报表 focus/export、静态页/fallback、placeholder readiness、Web build、Rust fmt、模型网关最小测试和 static-page-worker 测试。
+- CI 首次 GitHub Actions 运行结果需要在推送后回看；如果失败，优先修 workflow 环境差异，不改线上接口。
 
 ## 7. 8 服务器发布流程
 
@@ -258,9 +259,9 @@ npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env 
 
 ## 8. 下一步队列
 
-1. 提交本次计划文档重建，只提交 `docs/plans/datamax-active-execution-plan.md`。
-2. 如用户要求收版：推 GitHub，8 服务器 `git pull --ff-only`；纯文档更新不重启服务。
-3. 补 P1-1：获取合法 operator 会话或运维安全回执后跑 authenticated model-gateway smoke。
-4. 部署窗口跑主站 20 路和第三方 20 路真实抽样，记录 p50、p95、max、失败原因。
-5. 跑真实静态页 5 路 live smoke，确认本地模板复用、后台预热、fallback 状态。
-6. P2 继续小样本 summary-only，不做真实历史 backfill 或对象清理，除非用户单独确认。
+1. 推送 CI 最小矩阵后回看首轮 GitHub Actions 结果，并把失败项或通过回执写入 validation。
+2. 补 P1-1：获取合法 operator 会话或运维安全回执后跑 authenticated model-gateway smoke。
+3. 部署窗口跑主站 20 路和第三方 20 路真实抽样，记录 p50、p95、max、失败原因。
+4. 跑真实静态页 5 路 live smoke，确认本地模板复用、后台预热、fallback 状态。
+5. P2 继续对象可达小样本 summary-only，扩大文档类型覆盖；不做真实历史 backfill 或对象清理，除非用户单独确认。
+6. 继续拆分 `platform-api` 和主站前端大文件，但每次只收可回归的小改动。

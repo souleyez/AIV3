@@ -1,0 +1,97 @@
+name: DataMax CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-credential-smoke:
+    name: No-Credential Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check smoke script syntax
+        run: |
+          node --check scripts/smoke/main-chat-20way.mjs
+          node --check scripts/smoke/external-channel-20way.mjs
+          node --check scripts/smoke/static-page-5way.mjs
+          node --check scripts/smoke/cloudflare-fallback-2way.mjs
+          node --check scripts/smoke/p2-summary-only-dry-run.mjs
+
+      - name: Run deterministic smoke self-tests
+        run: |
+          npm run smoke:external-report-focus -- --self-test
+          npm run smoke:external-report-export -- --self-test
+          npm run smoke:external-scoped-document-chat -- --self-test
+          npm run smoke:external-video-ppt -- --self-test
+          npm run smoke:main-chat-20way -- --self-test
+          npm run smoke:external-channel-20way -- --self-test
+          npm run smoke:static-page-5way -- --self-test
+          npm run smoke:cloudflare-fallback-2way -- --self-test
+          npm run smoke:p2-summary-only-dry-run -- --self-test
+          npm run smoke:production-placeholder-readiness -- --self-test --allow-not-ready --json-stdout
+
+      - name: Check generated public integration guide
+        run: npm run check:pure-third-party-guide-html
+
+      - name: Build web app
+        run: npm --prefix apps/web run build
+
+  rust-minimal:
+    name: Rust Minimal
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install native build tools
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Rust format
+        run: cargo fmt --check
+
+      - name: Model gateway tests
+        run: |
+          cargo test -p platform-api gateway_limiter --lib
+          cargo test -p platform-api model_gateway_profile --lib
+          cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib
+
+      - name: Static page worker tests
+        run: cargo test -p static-page-worker --lib

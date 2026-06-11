@@ -3563,3 +3563,38 @@ Data-ingestion external fixed-task smoke:
   - no build, restart, migration, source sync, ingestion, live third-party mutation, or static-page generation was performed;
   - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
   - 120 server was not touched.
+
+## 2026-06-12 P3 CI Minimal Matrix Baseline
+
+- Purpose:
+  - add a GitHub Actions baseline so no-credential smoke, web build, and selected Rust checks run before future merges;
+  - keep live production gates separate from deterministic self-tests.
+- Source state:
+  - repository did not previously contain a `.github` workflow directory;
+  - added `.github/workflows/datamax-ci.yml`.
+- CI coverage:
+  - Node 22 with pnpm install;
+  - smoke script syntax checks for main chat 20-way, external channel 20-way, static-page 5-way, Cloudflare fallback 2-way, and P2 summary-only dry-run;
+  - deterministic smoke self-tests for external report focus/export, scoped document chat, video/PPT handoff, main chat 20-way, external channel 20-way, static page 5-way, Cloudflare fallback 2-way, P2 summary-only dry-run, and production placeholder readiness;
+  - generated third-party guide HTML check;
+  - `apps/web` build;
+  - Rust format;
+  - selected model-gateway tests in `platform-api`;
+  - `static-page-worker` library tests.
+- Local validation before commit:
+  - `node --check` passed for the five CI-covered smoke scripts;
+  - all CI-covered deterministic Node smoke self-tests passed locally;
+  - `npm run check:pure-third-party-guide-html` passed;
+  - `npm --prefix apps/web run build` passed with existing Next.js warnings only;
+  - `cargo fmt --check` passed;
+  - selected local Rust tests were blocked on the Windows host because `clang` was not installed; the CI workflow installs `clang` on Ubuntu before running these tests.
+- Remaining CI gate:
+  - first GitHub Actions run after push still needs to be reviewed and recorded;
+  - if the workflow fails, treat it as an environment or coverage gap first, not as permission to change public third-party interfaces.
+- Safety:
+  - CI commands are no-credential or unit-test style checks;
+  - no live endpoint, production database, source database, object storage, static-page generation, source sync, ingestion, schema migration, or third-party mutation was performed;
+  - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no service was restarted;
+  - 120 server was not touched.
