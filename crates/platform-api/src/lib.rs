@@ -190,7 +190,9 @@ mod react_agent_tools;
 use auth_session_support::*;
 use external_channel_support::*;
 use external_observability::{
-    access_allowed as external_observability_access_allowed, EXTERNAL_OBSERVABILITY_ACCESS_HEADER,
+    access_allowed as external_observability_access_allowed,
+    require_external_integration_management_access as ensure_external_integration_management_allowed,
+    EXTERNAL_OBSERVABILITY_ACCESS_HEADER,
 };
 use model_gateway_admin::*;
 use model_gateway_runtime::*;
@@ -14538,18 +14540,6 @@ fn external_control_config_patch(action: &str, reason_present: bool, now: DateTi
             "secret_material_included": false,
         }
     })
-}
-
-fn ensure_external_integration_management_allowed(
-    headers: &HeaderMap,
-) -> std::result::Result<(), ApiError> {
-    if external_observability_access_allowed(headers) {
-        return Ok(());
-    }
-    Err(ApiError::unauthorized(
-        "external_observability_access_required",
-        "external integration management requires an observability access key".to_string(),
-    ))
 }
 
 fn external_channel_create_connection_id(
@@ -109905,6 +109895,13 @@ mod tests {
 
         let empty = HeaderMap::new();
         assert!(!external_observability_access_allowed(&empty));
+        let denied = ensure_external_integration_management_allowed(&empty)
+            .expect_err("management access should require a configured key");
+        assert_eq!(denied.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            denied.payload.code,
+            "external_observability_access_required"
+        );
 
         let mut wrong = HeaderMap::new();
         wrong.insert(
@@ -109919,6 +109916,7 @@ mod tests {
             HeaderValue::from_static("obs-secret"),
         );
         assert!(external_observability_access_allowed(&allowed));
+        assert!(ensure_external_integration_management_allowed(&allowed).is_ok());
 
         match previous {
             Some(value) => std::env::set_var("EXTERNAL_OBSERVABILITY_ACCESS_KEY", value),

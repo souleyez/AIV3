@@ -1,6 +1,8 @@
 use axum::http::HeaderMap;
 use sha2::{Digest, Sha256};
 
+use crate::ApiError;
+
 pub(crate) const EXTERNAL_OBSERVABILITY_ACCESS_HEADER: &str =
     "x-ai-data-platform-external-observability-key";
 
@@ -30,4 +32,16 @@ pub(crate) fn access_allowed(headers: &HeaderMap) -> bool {
         return false;
     };
     Sha256::digest(expected.as_bytes()) == Sha256::digest(actual.as_bytes())
+}
+
+pub(crate) fn require_external_integration_management_access(
+    headers: &HeaderMap,
+) -> std::result::Result<(), ApiError> {
+    if access_allowed(headers) {
+        return Ok(());
+    }
+    Err(ApiError::unauthorized(
+        "external_observability_access_required",
+        "external integration management requires an observability access key".to_string(),
+    ))
 }

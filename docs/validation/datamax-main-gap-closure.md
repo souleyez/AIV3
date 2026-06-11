@@ -3430,6 +3430,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P5 External Integration Management Access Wrapper Split
+
+- Purpose:
+  - continue the active plan's P5 engineering governance work after the initial observability module split;
+  - move the external integration management access wrapper into `crates/platform-api/src/external_observability.rs`;
+  - preserve the existing observability key requirement, error code, and error message.
+- Code changes:
+  - added `require_external_integration_management_access` to `external_observability.rs`;
+  - imported it back into `lib.rs` as `ensure_external_integration_management_allowed` so existing handlers keep their call shape;
+  - removed the duplicate wrapper function from `lib.rs`;
+  - extended `external_observability_access_requires_configured_header` to assert denied and allowed management-access behavior.
+- Local verification:
+  - `cargo test -p platform-api external_observability_access_requires_configured_header --lib`: passed, 1 test;
+  - `cargo test -p platform-api external_integration_retry_queues_external_action_dispatch_workflow --lib`: passed, 1 test;
+  - `cargo fmt --check`: passed after formatting import order;
+  - `git diff --check`: passed; Git emitted only expected Windows LF-to-CRLF warnings;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1 test;
+  - `npm --prefix apps/web run build`: passed; Next.js emitted the existing deprecated `middleware` convention and NFT tracing warnings.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, object file read, object file delete, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Cleanup Rebuild
 
 - Purpose:
