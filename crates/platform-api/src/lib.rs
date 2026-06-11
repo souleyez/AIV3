@@ -30587,6 +30587,253 @@ fn external_aigolf_course_map_segmentation_payload(
     })
 }
 
+fn external_aigolf_course_map_point(value: &Value) -> Option<[f64; 2]> {
+    let values = value.as_array()?;
+    let x = values.first()?.as_f64()?;
+    let y = values.get(1)?.as_f64()?;
+    Some([x, y])
+}
+
+fn external_aigolf_course_map_points(value: Option<&Value>) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .map(|points| {
+            points
+                .iter()
+                .filter_map(external_aigolf_course_map_point)
+                .map(|[x, y]| json!([x, y]))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn external_aigolf_course_map_hole_code(hole: &Map<String, Value>) -> Option<String> {
+    object_string(hole, &["holeCode", "hole_code", "code", "name"])
+}
+
+fn external_aigolf_course_map_normalize_hole(hole: &Value) -> Option<Value> {
+    let object = hole.as_object()?;
+    let hole_code = external_aigolf_course_map_hole_code(object)?;
+    let polygon_pixels = external_aigolf_course_map_points(
+        object
+            .get("polygonPixels")
+            .or_else(|| object.get("polygon_pixels"))
+            .or_else(|| object.get("polygon")),
+    );
+    if polygon_pixels.len() < 3 {
+        return None;
+    }
+    let center_pixel = object
+        .get("centerPixel")
+        .or_else(|| object.get("center_pixel"))
+        .and_then(external_aigolf_course_map_point)
+        .map(|[x, y]| json!([x, y]));
+    let confidence = object
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0);
+    let mut normalized = json!({
+        "holeCode": hole_code,
+        "polygonPixels": polygon_pixels,
+        "confidence": confidence,
+    });
+    if let Some(center_pixel) = center_pixel {
+        set_payload_value(&mut normalized, "centerPixel", center_pixel);
+    }
+    if let Some(notes) = object_string(object, &["notes", "note", "reason"]) {
+        set_payload_value(&mut normalized, "notes", json!(notes));
+    }
+    Some(normalized)
+}
+
+fn external_aigolf_course_map_result_candidate(raw_payload: &Value) -> &Value {
+    for key in [
+        "payload",
+        "result",
+        "data",
+        "structured_output",
+        "structuredOutput",
+    ] {
+        if let Some(candidate) = raw_payload.get(key).filter(|value| value.is_object()) {
+            return candidate;
+        }
+    }
+    raw_payload
+}
+
+fn external_aigolf_course_map_segmentation_payload_from_model(
+    skill: &ExternalRequestedSkillView,
+    message: &ExternalBotMessageView,
+    raw_payload: &Value,
+    failure_reason: Option<&str>,
+) -> Value {
+    let mut payload = external_aigolf_course_map_segmentation_payload(skill, message);
+    let candidate = external_aigolf_course_map_result_candidate(raw_payload);
+    let holes = candidate
+        .get("holes")
+        .and_then(Value::as_array)
+        .map(|holes| {
+            holes
+                .iter()
+                .filter_map(external_aigolf_course_map_normalize_hole)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut warnings = candidate
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(reason) = failure_reason {
+        warnings.push(format!("vlm_segmentation_unavailable:{reason}"));
+    }
+    if holes.is_empty() {
+        warnings.push("vlm_returned_no_valid_hole_polygons".to_string());
+    }
+    let status = candidate
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|status| matches!(*status, "completed" | "needs_review" | "failed"))
+        .unwrap_or(if holes.is_empty() {
+            "needs_review"
+        } else {
+            "completed"
+        });
+    set_payload_value(&mut payload, "status", json!(status));
+    set_payload_value(&mut payload, "holes", Value::Array(holes));
+    set_payload_value(&mut payload, "warnings", json!(warnings));
+    payload
+}
+
+fn external_aigolf_course_map_segmentation_prompt(
+    skill: &ExternalRequestedSkillView,
+    message: &ExternalBotMessageView,
+) -> String {
+    let arguments = skill
+        .arguments
+        .as_ref()
+        .map(|value| truncate_assistant_supply_text(&value.to_string(), 12000))
+        .unwrap_or_else(|| "{}".to_string());
+    let text = message.text.as_deref().unwrap_or_default();
+    format!(
+        "任务：识别高尔夫球场地图/航拍图中的球洞区域，输出严格 JSON。\n\
+         输出 schema 固定为 {AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA}。\n\
+         每个 holes[] 必须包含 holeCode、polygonPixels(至少3个[x,y])、confidence(0-1)，可选 centerPixel 和 notes。\n\
+         只能给人工复核初稿，不要声称已写生产围栏。\n\
+         用户文本：{text}\n\
+         输入参数 JSON：{arguments}"
+    )
+}
+
+async fn execute_external_aigolf_course_map_segmentation(
+    skill: &ExternalRequestedSkillView,
+    message: &ExternalBotMessageView,
+) -> std::result::Result<(Value, Value), ExternalImageStructuredExtractFailure> {
+    if let Some(scripted) = external_image_structured_extract_env_value(&[
+        "EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_RUNTIME_OUTPUT_JSON",
+    ]) {
+        let raw_payload = serde_json::from_str::<Value>(&scripted).map_err(|error| {
+            ExternalImageStructuredExtractFailure {
+                reason: format!("scripted_output_invalid_json:{error}"),
+                runtime: json!({
+                    "mode": "aigolf_course_map_segmentation",
+                    "lane": "external_channel",
+                    "provider": "scripted",
+                    "model": "aigolf-course-map-segmentation-scripted",
+                    "provider_failure": {
+                        "kind": "invalid_scripted_output",
+                        "message": error.to_string(),
+                    },
+                }),
+            }
+        })?;
+        return Ok((
+            raw_payload,
+            json!({
+                "mode": "aigolf_course_map_segmentation",
+                "lane": "external_channel",
+                "provider": "scripted",
+                "model": "aigolf-course-map-segmentation-scripted",
+                "status": "responded",
+            }),
+        ));
+    }
+
+    let Some(image_url) = external_image_structured_extract_first_image_url(message)
+        .or_else(|| external_aigolf_course_map_argument_image_ref(skill))
+    else {
+        return Err(ExternalImageStructuredExtractFailure {
+            reason: "course_map_image_url_missing".to_string(),
+            runtime: json!({
+                "mode": "aigolf_course_map_segmentation",
+                "lane": "external_channel",
+                "provider": "v3-control-plane",
+                "model": "none",
+                "provider_failure": {
+                    "kind": "missing_image_url",
+                    "message": "course map segmentation requires a public image URL",
+                },
+            }),
+        });
+    };
+    let Some(config) = external_image_structured_extract_runtime_config() else {
+        return Err(ExternalImageStructuredExtractFailure {
+            reason: "aigolf_course_map_vlm_runtime_unconfigured".to_string(),
+            runtime: json!({
+                "mode": "aigolf_course_map_segmentation",
+                "lane": "external_channel",
+                "provider": "v3-control-plane",
+                "model": "unconfigured",
+                "provider_failure": {
+                    "kind": "runtime_unconfigured",
+                    "message": "configure EXTERNAL_IMAGE_STRUCTURED_EXTRACT_* or ASSISTANT_RUN_RUNTIME_*",
+                },
+            }),
+        });
+    };
+    let started_at = Instant::now();
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_millis(config.timeout_ms))
+        .build()
+        .map_err(|error| ExternalImageStructuredExtractFailure {
+            reason: format!("aigolf_course_map_http_client_failed:{error}"),
+            runtime: external_image_structured_extract_failure_runtime(
+                &config,
+                "http_client_failed",
+                &error.to_string(),
+                started_at.elapsed().as_millis() as u64,
+            ),
+        })?;
+    let prompt = external_aigolf_course_map_segmentation_prompt(skill, message);
+    let raw_payload = external_image_structured_extract_call_provider_with_system(
+        &client,
+        &config,
+        &image_url,
+        "你是高尔夫球场地图视觉分割器。只输出 JSON，不要解释。不要写生产数据，只给人工复核的像素多边形初稿。",
+        prompt,
+        started_at,
+    )
+    .await?;
+    Ok((
+        raw_payload,
+        json!({
+            "mode": "aigolf_course_map_segmentation",
+            "lane": "external_channel",
+            "provider": config.provider_label,
+            "model": config.model,
+            "status": "responded",
+            "latency_ms": started_at.elapsed().as_millis() as u64,
+        }),
+    ))
+}
+
 fn external_aigolf_course_map_segmentation_reply_for_conversation(
     conversation_external_id: &str,
     payload: &Value,
@@ -30618,20 +30865,31 @@ async fn maybe_handle_external_channel_aigolf_requested_skill(
         return Ok(None);
     };
 
-    let payload = external_aigolf_course_map_segmentation_payload(skill, message);
+    let (payload, runtime_manifest) =
+        match execute_external_aigolf_course_map_segmentation(skill, message).await {
+            Ok((raw_payload, runtime_manifest)) => (
+                external_aigolf_course_map_segmentation_payload_from_model(
+                    skill,
+                    message,
+                    &raw_payload,
+                    None,
+                ),
+                runtime_manifest,
+            ),
+            Err(failure) => (
+                external_aigolf_course_map_segmentation_payload_from_model(
+                    skill,
+                    message,
+                    &Value::Null,
+                    Some(&failure.reason),
+                ),
+                failure.runtime,
+            ),
+        };
     let reply = external_aigolf_course_map_segmentation_reply_for_conversation(
         &message.conversation_external_id,
         &payload,
     );
-    let runtime_manifest = json!({
-        "mode": "aigolf_course_map_segmentation",
-        "lane": "external_channel",
-        "provider": "v3-control-plane",
-        "model_profile": "datamax_high_quality_paid_route",
-        "status": "needs_review",
-        "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
-        "provider_detail_policy": "do_not_expose_provider_or_model_name_to_integrator",
-    });
     let mut trail = value_array(execution_trail.clone());
     trail.push(json!({
         "status": "needs_review",
@@ -30970,6 +31228,44 @@ async fn external_image_structured_extract_call_provider(
 ) -> std::result::Result<Value, ExternalImageStructuredExtractFailure> {
     let request_payload =
         external_image_structured_extract_request_payload(config, image_url, prompt_text);
+    external_image_structured_extract_submit_provider_request(
+        client,
+        config,
+        request_payload,
+        started_at,
+    )
+    .await
+}
+
+async fn external_image_structured_extract_call_provider_with_system(
+    client: &reqwest::Client,
+    config: &ExternalImageStructuredExtractRuntimeConfig,
+    image_url: &str,
+    system_prompt: &str,
+    prompt_text: String,
+    started_at: Instant,
+) -> std::result::Result<Value, ExternalImageStructuredExtractFailure> {
+    let request_payload = external_image_structured_extract_request_payload_with_system(
+        config,
+        image_url,
+        system_prompt,
+        prompt_text,
+    );
+    external_image_structured_extract_submit_provider_request(
+        client,
+        config,
+        request_payload,
+        started_at,
+    )
+    .await
+}
+
+async fn external_image_structured_extract_submit_provider_request(
+    client: &reqwest::Client,
+    config: &ExternalImageStructuredExtractRuntimeConfig,
+    request_payload: Value,
+    started_at: Instant,
+) -> std::result::Result<Value, ExternalImageStructuredExtractFailure> {
     let response = client
         .post(&config.endpoint_url)
         .bearer_auth(&config.api_key)
@@ -31045,9 +31341,25 @@ async fn external_image_structured_extract_call_provider(
     })
 }
 
+const EXTERNAL_IMAGE_STRUCTURED_EXTRACT_SYSTEM_PROMPT: &str = "你是业务截图表格结构化抽取器。只输出 JSON，不要输出解释。必须先识别表头，再按图片从上到下逐行抽取订单/充值/支付记录。无法确定的字段填 null，不要编造，不要复用历史结果。";
+
 fn external_image_structured_extract_request_payload(
     config: &ExternalImageStructuredExtractRuntimeConfig,
     image_url: &str,
+    prompt_text: String,
+) -> Value {
+    external_image_structured_extract_request_payload_with_system(
+        config,
+        image_url,
+        EXTERNAL_IMAGE_STRUCTURED_EXTRACT_SYSTEM_PROMPT,
+        prompt_text,
+    )
+}
+
+fn external_image_structured_extract_request_payload_with_system(
+    config: &ExternalImageStructuredExtractRuntimeConfig,
+    image_url: &str,
+    system_prompt: &str,
     prompt_text: String,
 ) -> Value {
     let mut payload = json!({
@@ -31055,7 +31367,7 @@ fn external_image_structured_extract_request_payload(
         "messages": [
             {
                 "role": "system",
-                "content": "你是业务截图表格结构化抽取器。只输出 JSON，不要输出解释。必须先识别表头，再按图片从上到下逐行抽取订单/充值/支付记录。无法确定的字段填 null，不要编造，不要复用历史结果。"
+                "content": system_prompt
             },
             {
                 "role": "user",
@@ -111689,6 +112001,23 @@ mod tests {
     async fn external_aigolf_course_map_segmentation_returns_schema_card() {
         let _guard = shared_local_postgres_test_lock().lock().await;
         clear_assistant_openclaw_env();
+        let _scripted_segmentation = TestEnvVarRestore::set(
+            "EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_RUNTIME_OUTPUT_JSON",
+            r#"{
+                "schema": "aigolf.course_map_segmentation.v1",
+                "status": "needs_review",
+                "holes": [
+                    {
+                        "holeCode": "H01",
+                        "polygonPixels": [[120, 80], [420, 95], [405, 360], [128, 340]],
+                        "centerPixel": [260, 215],
+                        "confidence": 0.86,
+                        "notes": "scripted VLM draft for test"
+                    }
+                ],
+                "warnings": ["operator_review_required"]
+            }"#,
+        );
         let storage = match local_postgres_storage().await {
             Ok(storage) => storage,
             Err(reason) => {
@@ -111769,6 +112098,13 @@ mod tests {
         assert_eq!(card["type"], json!("aigolf_course_map_segmentation"));
         assert_eq!(card["schema"], json!("aigolf.course_map_segmentation.v1"));
         assert_ne!(card["type"], json!("v3_data_ingestion_analysis_result"));
+        assert_eq!(card["holes"][0]["holeCode"], json!("H01"));
+        assert_eq!(
+            card["holes"][0]["polygonPixels"],
+            json!([[120.0, 80.0], [420.0, 95.0], [405.0, 360.0], [128.0, 340.0]])
+        );
+        assert_eq!(card["holes"][0]["centerPixel"], json!([260.0, 215.0]));
+        assert_eq!(card["warnings"], json!(["operator_review_required"]));
 
         let events = storage
             .assistant_runs()
@@ -111794,6 +112130,10 @@ mod tests {
         assert_eq!(
             loaded.reply.card.as_ref().expect("loaded card")["schema"],
             json!("aigolf.course_map_segmentation.v1")
+        );
+        assert_eq!(
+            loaded.reply.card.as_ref().expect("loaded card")["holes"][0]["holeCode"],
+            json!("H01")
         );
     }
 
