@@ -32,52 +32,50 @@ use contracts::{
     AssistantRunCodexContextBudgetView, AssistantRunCodexContextPackageView,
     AssistantRunCodexToolOutputPolicyView, AssistantRunDetailView, AssistantRunEventView,
     AssistantRunExecutorTransportView, AssistantRunMessageView, AssistantRunView,
-    AuthAuditEventView, AuthSessionResponse, AuthSessionView, AuthUserView, BindEmailRequest,
-    BindEmailResponse, ChatMessageView, ChatSessionView, ClaimLocalDataRequest,
-    ClaimLocalDataResponse, CodexHostFixedTaskHumanReviewPolicyView,
-    CodexHostFixedTaskTemplateContextView, CodexHostFixedTaskTemplateIdView,
-    CodexHostFixedTaskWriteScopeView, CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView,
-    CodexHostTaskSafetyPolicyView, CompareDocumentsRequest, CompareDocumentsView,
-    ConfirmStaticPageImageJobRequest, ConfirmStaticPageImageJobResponse,
-    ContinueAssistantRunRequest, ContinueAssistantRunResponse, ConversationMemoryItemView,
-    CreateAssistantRunRequest, CreateAssistantRunResponse, CreateChatSessionRequest,
-    CreateChatSessionResponse, CreateConversationMemoryItemRequest, CreateDatasetOutputRequest,
-    CreateDatasetOutputResponse, CreateDatasetRequest, CreateDatasetSecretBindingRequest,
-    CreateDatasetSecretBindingResponse, CreateDocumentIngestResponse,
-    CreateExternalChannelConnectionRequest, CreateExternalDatabaseSourceRequest,
-    CreateExternalDatabaseSourceResponse, CreateExternalDocumentParseRequest,
-    CreateExternalDocumentParseResponse, CreateExternalSourceSyncRequest,
-    CreateExternalSourceSyncResponse, CreateMemoryDirectoryRefreshResponse,
-    CreateReportPlanResponse, CreateReportRenderRequest, CreateReportRenderResponse,
-    CreateStaticPageDraftRequest, CreateStaticPageDraftResponse, CreateStaticPageImageJobRequest,
-    CreateStaticPageImageJobResponse, CreateStaticPageRenderRequest,
-    CreateStaticPageRenderResponse, DatasetOutputView, DatasetSummary, DocumentChunkView,
-    DocumentDetailView, DocumentEnrichmentRunView, DocumentMediaDetailView, DocumentSummary,
-    ExternalActionConfirmationDecisionView, ExternalActionConfirmationRequestView,
-    ExternalActionConfirmationResponseView, ExternalActionResultCallbackRequestView,
-    ExternalActionResultCallbackResponseView, ExternalArtifactTemplateView,
-    ExternalAttachmentRefView, ExternalBotMessageView, ExternalBotReplyTypeView,
-    ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
-    ExternalConversationTestView, ExternalConversationTimelineEventView,
-    ExternalConversationTimelineResponse, ExternalDocumentParseDetailItemView,
-    ExternalDocumentParseDocumentView, ExternalIntegrationActionDispatchConfigRequest,
-    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
-    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
-    ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
-    ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
-    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactDataRefView,
-    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
-    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
-    InspectDatabaseSourceSchemaRequest, InspectDatabaseSourceSchemaResponse, KeyLoginRequest,
-    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
-    ListExternalIntegrationsResponse, ListStaticPageTemplatesResponse, LlmInvocationView,
-    LogoutResponse, MemoryDirectoryView, ModelGatewayExternalChannelRuntimeStatusView,
-    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
-    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
-    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
-    ModelGatewayRuntimeDatabasePoolStatusView, ModelGatewayRuntimeStatusView,
-    ModelGatewayRuntimeWorkerPoolStatusView, ModelGatewayStatusView, PlanReportRequest,
-    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
+    AuthAuditEventView, AuthSessionResponse, BindEmailRequest, BindEmailResponse, ChatMessageView,
+    ChatSessionView, ClaimLocalDataRequest, ClaimLocalDataResponse,
+    CodexHostFixedTaskHumanReviewPolicyView, CodexHostFixedTaskTemplateContextView,
+    CodexHostFixedTaskTemplateIdView, CodexHostFixedTaskWriteScopeView,
+    CodexHostTaskMemoryPolicyView, CodexHostTaskRequestView, CodexHostTaskSafetyPolicyView,
+    CompareDocumentsRequest, CompareDocumentsView, ConfirmStaticPageImageJobRequest,
+    ConfirmStaticPageImageJobResponse, ContinueAssistantRunRequest, ContinueAssistantRunResponse,
+    ConversationMemoryItemView, CreateAssistantRunRequest, CreateAssistantRunResponse,
+    CreateChatSessionRequest, CreateChatSessionResponse, CreateConversationMemoryItemRequest,
+    CreateDatasetOutputRequest, CreateDatasetOutputResponse, CreateDatasetRequest,
+    CreateDatasetSecretBindingRequest, CreateDatasetSecretBindingResponse,
+    CreateDocumentIngestResponse, CreateExternalChannelConnectionRequest,
+    CreateExternalDatabaseSourceRequest, CreateExternalDatabaseSourceResponse,
+    CreateExternalDocumentParseRequest, CreateExternalDocumentParseResponse,
+    CreateExternalSourceSyncRequest, CreateExternalSourceSyncResponse,
+    CreateMemoryDirectoryRefreshResponse, CreateReportPlanResponse, CreateReportRenderRequest,
+    CreateReportRenderResponse, CreateStaticPageDraftRequest, CreateStaticPageDraftResponse,
+    CreateStaticPageImageJobRequest, CreateStaticPageImageJobResponse,
+    CreateStaticPageRenderRequest, CreateStaticPageRenderResponse, DatasetOutputView,
+    DatasetSummary, DocumentChunkView, DocumentDetailView, DocumentEnrichmentRunView,
+    DocumentMediaDetailView, DocumentSummary, ExternalActionConfirmationDecisionView,
+    ExternalActionConfirmationRequestView, ExternalActionConfirmationResponseView,
+    ExternalActionResultCallbackRequestView, ExternalActionResultCallbackResponseView,
+    ExternalArtifactTemplateView, ExternalAttachmentRefView, ExternalBotMessageView,
+    ExternalBotReplyTypeView, ExternalBotReplyView, ExternalChannelEventResponse,
+    ExternalChannelPlatformView, ExternalConversationTestView,
+    ExternalConversationTimelineEventView, ExternalConversationTimelineResponse,
+    ExternalDocumentParseDetailItemView, ExternalDocumentParseDocumentView,
+    ExternalIntegrationActionDispatchConfigRequest, ExternalIntegrationAuditItemView,
+    ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
+    ExternalIntegrationControlResponse, ExternalIntegrationReplyDispatchConfigRequest,
+    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
+    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
+    HtmlArtifactDataRefView, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
+    HtmlArtifactOwnerScopeView, HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView,
+    HtmlArtifactTemplateIdView, InspectDatabaseSourceSchemaRequest,
+    InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
+    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
+    ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
+    ModelGatewayExternalChannelRuntimeStatusView, ModelGatewayLaneStatusView,
+    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
+    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
+    ModelGatewayProviderStatusView, ModelGatewayRuntimeStatusView, ModelGatewayStatusView,
+    PlanReportRequest, PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
     ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
     PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
@@ -98,20 +96,20 @@ use contracts::{
     WorkflowSignalRequest, WorkflowTaskView,
 };
 use domain_model::{
-    AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditEvent, AuthAuditOutcome,
-    AuthChallengePurpose, AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole,
-    ChatSession, ChatSessionId, ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle,
-    DatasetOutput, DatasetOutputId, DatasetVisibility, Document, DocumentChunk, DocumentChunkId,
-    DocumentId, DocumentLifecycle, EmailVerificationChallenge, HtmlArtifact, LlmInvocation,
-    LlmInvocationFinishReason, LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory,
-    MemoryDirectoryId, PublishedReport, PublishedReportId, PublishedReportVersion,
-    PublishedSurface, ReportPlan, ReportPlanAstVersion, ReportPlanId, ReportRenderOutput,
-    RetrievalEvidence, RetrievalEvidenceId, SecretBindingId, SecretScopeLevel, StaticPageDraft,
-    StaticPageDraftId, StaticPageDraftStatus, StaticPageImageJob, StaticPageImageJobId,
-    StaticPageImageJobStatus, StaticPageRenderOutput, StaticPageRenderOutputId,
-    StaticPageRenderOutputStatus, TenantId, ToolExecution, ToolExecutionSourceKind,
-    ToolExecutionStatus, User, UserId, UserSession, UserSessionId, WorkflowEventRecord,
-    WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus, WorkflowTask,
+    AssistantRun, AssistantRunEvent, AssistantRunId, AuthAuditOutcome, AuthChallengePurpose,
+    AuthSessionMethod, ChatMessage, ChatMessageId, ChatMessageRole, ChatSession, ChatSessionId,
+    ConversationMemoryItem, Dataset, DatasetId, DatasetLifecycle, DatasetOutput, DatasetOutputId,
+    DatasetVisibility, Document, DocumentChunk, DocumentChunkId, DocumentId, DocumentLifecycle,
+    EmailVerificationChallenge, HtmlArtifact, LlmInvocation, LlmInvocationFinishReason,
+    LlmInvocationMode, LlmInvocationSourceKind, MemoryDirectory, MemoryDirectoryId,
+    PublishedReport, PublishedReportId, PublishedReportVersion, PublishedSurface, ReportPlan,
+    ReportPlanAstVersion, ReportPlanId, ReportRenderOutput, RetrievalEvidence, RetrievalEvidenceId,
+    SecretBindingId, SecretScopeLevel, StaticPageDraft, StaticPageDraftId, StaticPageDraftStatus,
+    StaticPageImageJob, StaticPageImageJobId, StaticPageImageJobStatus, StaticPageRenderOutput,
+    StaticPageRenderOutputId, StaticPageRenderOutputStatus, TenantId, ToolExecution,
+    ToolExecutionSourceKind, ToolExecutionStatus, User, UserId, UserSession, UserSessionId,
+    WorkflowEventRecord, WorkflowExecution, WorkflowExecutionId, WorkflowKind, WorkflowStatus,
+    WorkflowTask,
 };
 use event_bus::{
     workflow_execution_transition_subject, workflow_task_enqueued_subject, EventBus, EventEnvelope,
@@ -143,7 +141,7 @@ use static_page_runtime::{
     sanitize_static_page_operations, StaticPageIntentOutcome, StaticPageIntentRequest,
 };
 use std::{
-    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet},
     convert::Infallible,
     fmt::Display,
     fs::{self, File},
@@ -157,16 +155,17 @@ use std::{
     },
     time::{Duration as StdDuration, Instant},
 };
+#[cfg(test)]
+use storage::NewModelGatewayProfile;
 use storage::{
-    configured_database_max_connections, DocumentEnrichmentRun, LexicalRetrievalQuery,
-    ModelGatewayProfile, ModelGatewayProfileUpdate, ModelGatewayProfileUsageSummary,
-    NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent, NewChatMessage, NewChatSession,
-    NewConversationMemoryItem, NewDataset, NewDatasetDocumentMembership, NewDocument,
-    NewHtmlArtifact, NewModelGatewayProfile, NewModelGatewayProfileEvent, NewPublishedReport,
-    NewPublishedReportVersion, NewReportPlan, NewSecretBinding, NewStaticPageDraft,
-    NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession, NewWorkflowTask, PgStorage,
+    DocumentEnrichmentRun, LexicalRetrievalQuery, ModelGatewayProfile,
+    ModelGatewayProfileUsageSummary, NewAssistantRun, NewAssistantRunEvent, NewAuthAuditEvent,
+    NewChatMessage, NewChatSession, NewConversationMemoryItem, NewDataset,
+    NewDatasetDocumentMembership, NewDocument, NewHtmlArtifact, NewModelGatewayProfileEvent,
+    NewPublishedReport, NewPublishedReportVersion, NewReportPlan, NewSecretBinding,
+    NewStaticPageDraft, NewStaticPageImageJob, NewStaticPageRenderOutput, NewUserSession,
+    NewWorkflowTask, PgStorage,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tool_registry::{
     bootstrap_default_tool_registry, ToolCliOutputMode, ToolDefinition, ToolInvocationMode,
 };
@@ -175,13 +174,23 @@ use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
 pub mod auth_email;
+mod auth_session_support;
+mod external_channel_support;
 pub mod external_feishu;
 pub mod external_wecom;
 pub mod fact_index;
+mod model_gateway_admin;
+mod model_gateway_runtime;
+mod model_gateway_status;
 mod react_agent_catalog;
 mod react_agent_contract;
 mod react_agent_tools;
 
+use auth_session_support::*;
+use external_channel_support::*;
+use model_gateway_admin::*;
+use model_gateway_runtime::*;
+use model_gateway_status::*;
 use react_agent_catalog::build_assistant_run_react_planning_catalog;
 use react_agent_contract::{
     parse_assistant_run_next_action, AssistantRunReActActionType as AssistantRunReactActionType,
@@ -549,719 +558,6 @@ impl Drop for ExternalConversationInFlightPermit {
             .expect("external conversation guard");
         active.remove(&self.key);
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-enum GatewayLimitError {
-    QueueFull,
-    QueueTimeout,
-    CircuitOpen,
-    RequestRateLimit,
-    TokenRateLimit,
-}
-
-#[allow(dead_code)]
-struct GatewayRuntimeLimiter {
-    lanes: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
-    profiles: Mutex<HashMap<String, Arc<GatewayLimitBucket>>>,
-    profile_rate_budgets: Mutex<HashMap<String, GatewayProfileRateBudget>>,
-    provider_stats: Mutex<HashMap<String, GatewayProviderRuntimeStats>>,
-    default_lane_max_concurrency: usize,
-    default_profile_max_concurrency: usize,
-    default_queue_limit: usize,
-    default_queue_timeout: StdDuration,
-    circuit_breaker_failure_threshold: u32,
-    circuit_breaker_cooldown: StdDuration,
-}
-
-#[derive(Clone, Debug, Default)]
-struct GatewayLimitBucketSnapshot {
-    max_concurrency: usize,
-    active: usize,
-    queued: usize,
-    queue_limit: usize,
-    queue_timeout_ms: u64,
-}
-
-#[derive(Clone, Debug, Default)]
-struct GatewayRateLimitBudgetSnapshot {
-    request_count: u64,
-    token_count: u64,
-}
-
-#[derive(Clone, Debug)]
-struct GatewayRateLimitReservation {
-    profile_id: String,
-    estimated_tokens: u64,
-}
-
-#[derive(Clone, Debug, Default)]
-struct GatewayProviderStatsSnapshot {
-    consecutive_failures: u32,
-    success_count: u64,
-    failure_count: u64,
-    timeout_count: u64,
-    rate_limit_count: u64,
-    p50_latency_ms: Option<u64>,
-    p95_latency_ms: Option<u64>,
-    circuit_open: bool,
-    opened_until: Option<DateTime<Utc>>,
-    last_success_at: Option<DateTime<Utc>>,
-    last_failure_at: Option<DateTime<Utc>>,
-    last_failure_reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct GatewayProviderRuntimeStats {
-    consecutive_failures: u32,
-    success_count: u64,
-    failure_count: u64,
-    timeout_count: u64,
-    rate_limit_count: u64,
-    latency_samples_ms: VecDeque<u64>,
-    opened_until: Option<Instant>,
-    opened_until_wall_time: Option<DateTime<Utc>>,
-    last_success_at: Option<DateTime<Utc>>,
-    last_failure_at: Option<DateTime<Utc>>,
-    last_failure_reason: Option<String>,
-}
-
-#[allow(dead_code)]
-impl GatewayRuntimeLimiter {
-    fn new() -> Self {
-        Self {
-            lanes: Mutex::new(HashMap::new()),
-            profiles: Mutex::new(HashMap::new()),
-            profile_rate_budgets: Mutex::new(HashMap::new()),
-            provider_stats: Mutex::new(HashMap::new()),
-            default_lane_max_concurrency: 64,
-            default_profile_max_concurrency: 16,
-            default_queue_limit: 256,
-            default_queue_timeout: StdDuration::from_millis(3_000),
-            circuit_breaker_failure_threshold: 3,
-            circuit_breaker_cooldown: StdDuration::from_secs(60),
-        }
-    }
-
-    #[cfg(test)]
-    fn for_test() -> Self {
-        Self::new()
-    }
-
-    #[cfg(test)]
-    fn with_lane_limit(self, lane: &str, max_concurrency: usize, queue_limit: usize) -> Self {
-        self.set_lane_limit(
-            lane,
-            max_concurrency,
-            queue_limit,
-            self.default_queue_timeout,
-        );
-        self
-    }
-
-    #[cfg(test)]
-    fn with_profile_limit(
-        self,
-        profile_id: &str,
-        max_concurrency: usize,
-        queue_limit: usize,
-    ) -> Self {
-        self.set_profile_limit(
-            profile_id,
-            max_concurrency,
-            queue_limit,
-            self.default_queue_timeout,
-        );
-        self
-    }
-
-    #[cfg(test)]
-    fn with_profile_rate_limit(
-        self,
-        profile_id: &str,
-        requests_per_minute: Option<u32>,
-        tokens_per_minute: Option<u32>,
-    ) -> Self {
-        self.ensure_profile_rate_limit(profile_id, requests_per_minute, tokens_per_minute);
-        self
-    }
-
-    #[cfg(test)]
-    fn with_circuit_breaker(mut self, failure_threshold: u32, cooldown: StdDuration) -> Self {
-        self.circuit_breaker_failure_threshold = failure_threshold.max(1);
-        self.circuit_breaker_cooldown = cooldown;
-        self
-    }
-
-    fn set_lane_limit(
-        &self,
-        lane: &str,
-        max_concurrency: usize,
-        queue_limit: usize,
-        queue_timeout: StdDuration,
-    ) {
-        let mut lanes = self.lanes.lock().expect("gateway lane limiter lock");
-        lanes.insert(
-            lane.to_string(),
-            Arc::new(GatewayLimitBucket::new(
-                max_concurrency,
-                queue_limit,
-                queue_timeout,
-            )),
-        );
-    }
-
-    fn set_profile_limit(
-        &self,
-        profile_id: &str,
-        max_concurrency: usize,
-        queue_limit: usize,
-        queue_timeout: StdDuration,
-    ) {
-        let mut profiles = self.profiles.lock().expect("gateway profile limiter lock");
-        profiles.insert(
-            profile_id.to_string(),
-            Arc::new(GatewayLimitBucket::new(
-                max_concurrency,
-                queue_limit,
-                queue_timeout,
-            )),
-        );
-    }
-
-    fn ensure_lane_limit(
-        &self,
-        lane: &str,
-        max_concurrency: Option<u32>,
-        queue_limit: Option<u32>,
-        queue_timeout_ms: Option<u64>,
-    ) {
-        let mut lanes = self.lanes.lock().expect("gateway lane limiter lock");
-        lanes.entry(lane.to_string()).or_insert_with(|| {
-            Arc::new(GatewayLimitBucket::new(
-                max_concurrency
-                    .map(|value| value as usize)
-                    .unwrap_or(self.default_lane_max_concurrency),
-                queue_limit
-                    .map(|value| value as usize)
-                    .unwrap_or(self.default_queue_limit),
-                queue_timeout_ms
-                    .map(StdDuration::from_millis)
-                    .unwrap_or(self.default_queue_timeout),
-            ))
-        });
-    }
-
-    fn ensure_profile_limit(
-        &self,
-        profile_id: &str,
-        max_concurrency: Option<u32>,
-        queue_limit: Option<u32>,
-        queue_timeout_ms: Option<u64>,
-    ) {
-        let mut profiles = self.profiles.lock().expect("gateway profile limiter lock");
-        profiles.entry(profile_id.to_string()).or_insert_with(|| {
-            Arc::new(GatewayLimitBucket::new(
-                max_concurrency
-                    .map(|value| value as usize)
-                    .unwrap_or(self.default_profile_max_concurrency),
-                queue_limit
-                    .map(|value| value as usize)
-                    .unwrap_or(self.default_queue_limit),
-                queue_timeout_ms
-                    .map(StdDuration::from_millis)
-                    .unwrap_or(self.default_queue_timeout),
-            ))
-        });
-    }
-
-    fn ensure_profile_rate_limit(
-        &self,
-        profile_id: &str,
-        requests_per_minute: Option<u32>,
-        tokens_per_minute: Option<u32>,
-    ) {
-        let mut budgets = self
-            .profile_rate_budgets
-            .lock()
-            .expect("gateway profile rate budget lock");
-        budgets
-            .entry(profile_id.to_string())
-            .or_default()
-            .configure(requests_per_minute, tokens_per_minute);
-    }
-
-    fn reserve_profile_rate_budget(
-        &self,
-        profile_id: &str,
-        estimated_tokens: u64,
-    ) -> Result<GatewayRateLimitReservation, GatewayLimitError> {
-        let mut budgets = self
-            .profile_rate_budgets
-            .lock()
-            .expect("gateway profile rate budget lock");
-        budgets.entry(profile_id.to_string()).or_default().reserve(
-            profile_id,
-            estimated_tokens,
-            Instant::now(),
-        )
-    }
-
-    fn record_profile_actual_token_usage(
-        &self,
-        reservation: &GatewayRateLimitReservation,
-        actual_tokens: u64,
-    ) {
-        let additional_tokens = actual_tokens.saturating_sub(reservation.estimated_tokens);
-        if additional_tokens == 0 {
-            return;
-        }
-        let mut budgets = self
-            .profile_rate_budgets
-            .lock()
-            .expect("gateway profile rate budget lock");
-        budgets
-            .entry(reservation.profile_id.clone())
-            .or_default()
-            .add_tokens(additional_tokens, Instant::now());
-    }
-
-    fn profile_rate_snapshot(&self, profile_id: &str) -> GatewayRateLimitBudgetSnapshot {
-        let mut budgets = self
-            .profile_rate_budgets
-            .lock()
-            .expect("gateway profile rate budget lock");
-        budgets
-            .entry(profile_id.to_string())
-            .or_default()
-            .snapshot(Instant::now())
-    }
-
-    fn would_throttle_lane_and_profile(
-        &self,
-        lane: &str,
-        profile_id: &str,
-        estimated_tokens: u64,
-    ) -> Option<GatewayLimitError> {
-        if self.provider_available(profile_id).is_none() {
-            return Some(GatewayLimitError::CircuitOpen);
-        }
-        let lane_snapshot = self.lane_snapshot(lane);
-        if lane_snapshot.active >= lane_snapshot.max_concurrency
-            && lane_snapshot.queued >= lane_snapshot.queue_limit
-        {
-            return Some(GatewayLimitError::QueueFull);
-        }
-        let profile_snapshot = self.profile_snapshot(profile_id);
-        if profile_snapshot.active >= profile_snapshot.max_concurrency
-            && profile_snapshot.queued >= profile_snapshot.queue_limit
-        {
-            return Some(GatewayLimitError::QueueFull);
-        }
-        let mut budgets = self
-            .profile_rate_budgets
-            .lock()
-            .expect("gateway profile rate budget lock");
-        budgets
-            .entry(profile_id.to_string())
-            .or_default()
-            .would_limit(estimated_tokens, Instant::now())
-    }
-
-    async fn acquire_lane(&self, lane: &str) -> Result<GatewayRuntimePermit, GatewayLimitError> {
-        let bucket = self.lane_bucket(lane);
-        let permit = bucket.acquire().await?;
-        Ok(GatewayRuntimePermit {
-            _lane: Some(permit),
-            _profile: None,
-        })
-    }
-
-    async fn acquire_profile(
-        &self,
-        profile_id: &str,
-    ) -> Result<GatewayRuntimePermit, GatewayLimitError> {
-        let bucket = self.profile_bucket(profile_id);
-        let permit = bucket.acquire().await?;
-        Ok(GatewayRuntimePermit {
-            _lane: None,
-            _profile: Some(permit),
-        })
-    }
-
-    async fn acquire_lane_and_profile(
-        &self,
-        lane: &str,
-        profile_id: &str,
-    ) -> Result<GatewayRuntimePermit, GatewayLimitError> {
-        let lane_bucket = self.lane_bucket(lane);
-        let profile_bucket = self.profile_bucket(profile_id);
-        let lane_permit = lane_bucket.acquire().await?;
-        let profile_permit = match profile_bucket.acquire().await {
-            Ok(permit) => permit,
-            Err(error) => {
-                drop(lane_permit);
-                return Err(error);
-            }
-        };
-        Ok(GatewayRuntimePermit {
-            _lane: Some(lane_permit),
-            _profile: Some(profile_permit),
-        })
-    }
-
-    fn provider_available(&self, profile_id: &str) -> Option<GatewayProviderStatsSnapshot> {
-        let now = Instant::now();
-        let mut stats_by_profile = self
-            .provider_stats
-            .lock()
-            .expect("gateway provider stats lock");
-        let Some(stats) = stats_by_profile.get_mut(profile_id) else {
-            return Some(GatewayProviderStatsSnapshot::default());
-        };
-        if stats.circuit_open(now) {
-            return None;
-        }
-        stats.clear_expired_circuit(now);
-        Some(stats.snapshot(now))
-    }
-
-    fn record_provider_success(&self, profile_id: &str, latency_ms: Option<u64>) {
-        let mut stats_by_profile = self
-            .provider_stats
-            .lock()
-            .expect("gateway provider stats lock");
-        stats_by_profile
-            .entry(profile_id.to_string())
-            .or_default()
-            .record_success(latency_ms);
-    }
-
-    fn record_provider_failure(&self, profile_id: &str, reason: &str) {
-        let now = Instant::now();
-        let now_wall_time = Utc::now();
-        let opened_until_wall_time = Duration::from_std(self.circuit_breaker_cooldown)
-            .ok()
-            .map(|duration| now_wall_time + duration);
-        let mut stats_by_profile = self
-            .provider_stats
-            .lock()
-            .expect("gateway provider stats lock");
-        stats_by_profile
-            .entry(profile_id.to_string())
-            .or_default()
-            .record_failure(
-                reason,
-                now,
-                now_wall_time,
-                self.circuit_breaker_failure_threshold,
-                self.circuit_breaker_cooldown,
-                opened_until_wall_time,
-            );
-    }
-
-    fn lane_snapshot(&self, lane: &str) -> GatewayLimitBucketSnapshot {
-        self.lane_bucket(lane).snapshot()
-    }
-
-    fn profile_snapshot(&self, profile_id: &str) -> GatewayLimitBucketSnapshot {
-        self.profile_bucket(profile_id).snapshot()
-    }
-
-    fn provider_stats_snapshot(&self, profile_id: &str) -> GatewayProviderStatsSnapshot {
-        let now = Instant::now();
-        let mut stats_by_profile = self
-            .provider_stats
-            .lock()
-            .expect("gateway provider stats lock");
-        let Some(stats) = stats_by_profile.get_mut(profile_id) else {
-            return GatewayProviderStatsSnapshot::default();
-        };
-        stats.clear_expired_circuit(now);
-        stats.snapshot(now)
-    }
-
-    fn lane_bucket(&self, lane: &str) -> Arc<GatewayLimitBucket> {
-        let mut lanes = self.lanes.lock().expect("gateway lane limiter lock");
-        lanes
-            .entry(lane.to_string())
-            .or_insert_with(|| {
-                Arc::new(GatewayLimitBucket::new(
-                    self.default_lane_max_concurrency,
-                    self.default_queue_limit,
-                    self.default_queue_timeout,
-                ))
-            })
-            .clone()
-    }
-
-    fn profile_bucket(&self, profile_id: &str) -> Arc<GatewayLimitBucket> {
-        let mut profiles = self.profiles.lock().expect("gateway profile limiter lock");
-        profiles
-            .entry(profile_id.to_string())
-            .or_insert_with(|| {
-                Arc::new(GatewayLimitBucket::new(
-                    self.default_profile_max_concurrency,
-                    self.default_queue_limit,
-                    self.default_queue_timeout,
-                ))
-            })
-            .clone()
-    }
-}
-
-impl GatewayProviderRuntimeStats {
-    fn circuit_open(&self, now: Instant) -> bool {
-        self.opened_until
-            .map(|opened_until| opened_until > now)
-            .unwrap_or(false)
-    }
-
-    fn clear_expired_circuit(&mut self, now: Instant) {
-        if self
-            .opened_until
-            .map(|opened_until| opened_until <= now)
-            .unwrap_or(false)
-        {
-            self.opened_until = None;
-            self.opened_until_wall_time = None;
-        }
-    }
-
-    fn record_success(&mut self, latency_ms: Option<u64>) {
-        self.consecutive_failures = 0;
-        self.success_count = self.success_count.saturating_add(1);
-        self.opened_until = None;
-        self.opened_until_wall_time = None;
-        self.last_success_at = Some(Utc::now());
-        if let Some(latency_ms) = latency_ms {
-            self.latency_samples_ms.push_back(latency_ms);
-            while self.latency_samples_ms.len() > 256 {
-                self.latency_samples_ms.pop_front();
-            }
-        }
-    }
-
-    fn record_failure(
-        &mut self,
-        reason: &str,
-        now: Instant,
-        now_wall_time: DateTime<Utc>,
-        failure_threshold: u32,
-        cooldown: StdDuration,
-        opened_until_wall_time: Option<DateTime<Utc>>,
-    ) {
-        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-        self.failure_count = self.failure_count.saturating_add(1);
-        if gateway_provider_failure_is_timeout(reason) {
-            self.timeout_count = self.timeout_count.saturating_add(1);
-        }
-        if gateway_provider_failure_is_rate_limit(reason) {
-            self.rate_limit_count = self.rate_limit_count.saturating_add(1);
-        }
-        self.last_failure_at = Some(now_wall_time);
-        self.last_failure_reason = Some(reason.to_string());
-        if self.consecutive_failures >= failure_threshold {
-            self.opened_until = Some(now + cooldown);
-            self.opened_until_wall_time = opened_until_wall_time;
-        }
-    }
-
-    fn snapshot(&self, now: Instant) -> GatewayProviderStatsSnapshot {
-        let circuit_open = self.circuit_open(now);
-        let mut latencies: Vec<u64> = self.latency_samples_ms.iter().copied().collect();
-        latencies.sort_unstable();
-        GatewayProviderStatsSnapshot {
-            consecutive_failures: self.consecutive_failures,
-            success_count: self.success_count,
-            failure_count: self.failure_count,
-            timeout_count: self.timeout_count,
-            rate_limit_count: self.rate_limit_count,
-            p50_latency_ms: percentile_latency(&latencies, 50),
-            p95_latency_ms: percentile_latency(&latencies, 95),
-            circuit_open,
-            opened_until: circuit_open
-                .then(|| self.opened_until_wall_time.clone())
-                .flatten(),
-            last_success_at: self.last_success_at.clone(),
-            last_failure_at: self.last_failure_at.clone(),
-            last_failure_reason: self.last_failure_reason.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct GatewayProfileRateBudget {
-    requests_per_minute: Option<u32>,
-    tokens_per_minute: Option<u32>,
-    window_started_at: Option<Instant>,
-    request_count: u32,
-    token_count: u64,
-}
-
-impl GatewayProfileRateBudget {
-    fn configure(&mut self, requests_per_minute: Option<u32>, tokens_per_minute: Option<u32>) {
-        self.requests_per_minute = requests_per_minute.filter(|value| *value > 0);
-        self.tokens_per_minute = tokens_per_minute.filter(|value| *value > 0);
-    }
-
-    fn reserve(
-        &mut self,
-        profile_id: &str,
-        estimated_tokens: u64,
-        now: Instant,
-    ) -> Result<GatewayRateLimitReservation, GatewayLimitError> {
-        self.reset_elapsed_window(now);
-        if let Some(limit) = self.requests_per_minute {
-            if self.request_count.saturating_add(1) > limit {
-                return Err(GatewayLimitError::RequestRateLimit);
-            }
-        }
-        let estimated_tokens = estimated_tokens.max(1);
-        if let Some(limit) = self.tokens_per_minute {
-            if self.token_count.saturating_add(estimated_tokens) > limit as u64 {
-                return Err(GatewayLimitError::TokenRateLimit);
-            }
-        }
-        self.request_count = self.request_count.saturating_add(1);
-        self.token_count = self.token_count.saturating_add(estimated_tokens);
-        Ok(GatewayRateLimitReservation {
-            profile_id: profile_id.to_string(),
-            estimated_tokens,
-        })
-    }
-
-    fn add_tokens(&mut self, additional_tokens: u64, now: Instant) {
-        self.reset_elapsed_window(now);
-        self.token_count = self.token_count.saturating_add(additional_tokens);
-    }
-
-    fn would_limit(&mut self, estimated_tokens: u64, now: Instant) -> Option<GatewayLimitError> {
-        self.reset_elapsed_window(now);
-        if let Some(limit) = self.requests_per_minute {
-            if self.request_count.saturating_add(1) > limit {
-                return Some(GatewayLimitError::RequestRateLimit);
-            }
-        }
-        if let Some(limit) = self.tokens_per_minute {
-            if self.token_count.saturating_add(estimated_tokens.max(1)) > limit as u64 {
-                return Some(GatewayLimitError::TokenRateLimit);
-            }
-        }
-        None
-    }
-
-    fn snapshot(&mut self, now: Instant) -> GatewayRateLimitBudgetSnapshot {
-        self.reset_elapsed_window(now);
-        GatewayRateLimitBudgetSnapshot {
-            request_count: self.request_count as u64,
-            token_count: self.token_count,
-        }
-    }
-
-    fn reset_elapsed_window(&mut self, now: Instant) {
-        let should_reset = self
-            .window_started_at
-            .map(|started_at| now.duration_since(started_at) >= StdDuration::from_secs(60))
-            .unwrap_or(true);
-        if should_reset {
-            self.window_started_at = Some(now);
-            self.request_count = 0;
-            self.token_count = 0;
-        }
-    }
-}
-
-fn percentile_latency(sorted_latencies: &[u64], percentile: usize) -> Option<u64> {
-    if sorted_latencies.is_empty() {
-        return None;
-    }
-    let percentile = percentile.min(100);
-    let index = ((sorted_latencies.len().saturating_sub(1)) * percentile + 99) / 100;
-    sorted_latencies.get(index).copied()
-}
-
-fn gateway_provider_failure_is_timeout(reason: &str) -> bool {
-    reason.contains("timeout")
-}
-
-fn gateway_provider_failure_is_rate_limit(reason: &str) -> bool {
-    reason.contains("429") || reason.contains("rate_limit") || reason.contains("too_many_requests")
-}
-
-#[allow(dead_code)]
-struct GatewayLimitBucket {
-    max_concurrency: usize,
-    semaphore: Arc<Semaphore>,
-    queue_limit: usize,
-    queue_timeout: StdDuration,
-    queued: AtomicUsize,
-}
-
-#[allow(dead_code)]
-impl GatewayLimitBucket {
-    fn new(max_concurrency: usize, queue_limit: usize, queue_timeout: StdDuration) -> Self {
-        let max_concurrency = max_concurrency.max(1);
-        Self {
-            max_concurrency,
-            semaphore: Arc::new(Semaphore::new(max_concurrency)),
-            queue_limit,
-            queue_timeout,
-            queued: AtomicUsize::new(0),
-        }
-    }
-
-    async fn acquire(&self) -> Result<OwnedSemaphorePermit, GatewayLimitError> {
-        if let Ok(permit) = self.semaphore.clone().try_acquire_owned() {
-            return Ok(permit);
-        }
-
-        if self.queue_limit == 0 {
-            return Err(GatewayLimitError::QueueFull);
-        }
-
-        let queued = self.queued.fetch_add(1, Ordering::AcqRel);
-        if queued >= self.queue_limit {
-            self.queued.fetch_sub(1, Ordering::AcqRel);
-            return Err(GatewayLimitError::QueueFull);
-        }
-
-        let permit_result =
-            tokio::time::timeout(self.queue_timeout, self.semaphore.clone().acquire_owned()).await;
-        self.queued.fetch_sub(1, Ordering::AcqRel);
-
-        match permit_result {
-            Ok(Ok(permit)) => Ok(permit),
-            Ok(Err(_closed)) => Err(GatewayLimitError::QueueFull),
-            Err(_elapsed) => Err(GatewayLimitError::QueueTimeout),
-        }
-    }
-
-    fn snapshot(&self) -> GatewayLimitBucketSnapshot {
-        let active = self
-            .max_concurrency
-            .saturating_sub(self.semaphore.available_permits().min(self.max_concurrency));
-        GatewayLimitBucketSnapshot {
-            max_concurrency: self.max_concurrency,
-            active,
-            queued: self.queued.load(Ordering::Acquire),
-            queue_limit: self.queue_limit,
-            queue_timeout_ms: self.queue_timeout.as_millis() as u64,
-        }
-    }
-}
-
-#[allow(dead_code)]
-struct GatewayRuntimePermit {
-    _lane: Option<OwnedSemaphorePermit>,
-    _profile: Option<OwnedSemaphorePermit>,
-}
-
-#[allow(dead_code)]
-struct GatewayModelPermit {
-    _runtime: Option<GatewayRuntimePermit>,
-    rate_reservation: Option<GatewayRateLimitReservation>,
 }
 
 pub fn router(
@@ -5274,28 +4570,6 @@ fn local_thread_id_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn validate_auth_email(email: &str) -> std::result::Result<String, ApiError> {
-    validate_required("email", email)?;
-    let normalized = auth_email::normalize_email(email);
-    let has_one_at = normalized.matches('@').count() == 1;
-    if !has_one_at || normalized.starts_with('@') || normalized.ends_with('@') {
-        return Err(ApiError::bad_request(
-            "invalid_email",
-            "email must be a valid address".to_string(),
-        ));
-    }
-    Ok(normalized)
-}
-
-fn email_auth_verify_creates_session_for_purpose(purpose: &AuthChallengePurpose) -> bool {
-    matches!(
-        purpose,
-        AuthChallengePurpose::AccountCreate
-            | AuthChallengePurpose::Login
-            | AuthChallengePurpose::RecoverKey
-    )
-}
-
 fn email_otp_service() -> std::result::Result<EmailOtpService, ApiError> {
     EmailOtpService::new(auth_env(
         "AUTH_EMAIL_OTP_PEPPER",
@@ -5406,40 +4680,14 @@ async fn enforce_email_challenge_rate_limit(
     Ok(())
 }
 
-fn auth_challenge_metadata(device_fingerprint: Option<&str>) -> Value {
-    let mut metadata = Map::new();
-    if let Some(device) = device_fingerprint.and_then(|value| {
-        let value = value.trim();
-        (!value.is_empty()).then(|| value.to_string())
-    }) {
-        metadata.insert("device_fingerprint".to_string(), json!(device));
-    }
-    Value::Object(metadata)
-}
-
 fn resend_after_seconds(created_at: DateTime<Utc>, now: DateTime<Utc>) -> Option<u32> {
     let resend_at = created_at + Duration::seconds(AUTH_EMAIL_RESEND_AFTER_SECONDS);
     let remaining = (resend_at - now).num_seconds();
     (remaining > 0).then_some(remaining as u32)
 }
 
-fn auth_env(key: &str, fallback: &str) -> String {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| {
-            let value = value.trim().to_string();
-            (!value.is_empty()).then_some(value)
-        })
-        .unwrap_or_else(|| fallback.to_string())
-}
-
 fn local_key_fingerprint(local_key: &str) -> String {
     sha256_hex([local_key.trim().as_bytes()])
-}
-
-fn auth_session_token_hash(session_token: &str) -> String {
-    let pepper = auth_env("AUTH_SESSION_PEPPER", DEFAULT_AUTH_SESSION_PEPPER);
-    sha256_hex([pepper.as_bytes(), b":", session_token.as_bytes()])
 }
 
 fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
@@ -5448,14 +4696,6 @@ fn sha256_hex<const N: usize>(parts: [&[u8]; N]) -> String {
         hasher.update(part);
     }
     format!("{:x}", hasher.finalize())
-}
-
-fn new_auth_session_token() -> String {
-    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
-}
-
-fn normalize_device_fingerprint(device_fingerprint: Option<String>) -> String {
-    trim_optional(device_fingerprint).unwrap_or_else(|| "unknown-device".to_string())
 }
 
 async fn create_auth_session(
@@ -5633,112 +4873,6 @@ fn model_gateway_builtin_operator_role(role: &str) -> bool {
     )
 }
 
-fn model_gateway_presets() -> Vec<ModelGatewayPresetView> {
-    vec![
-        ModelGatewayPresetView {
-            preset_id: "rightcode/gpt-5.5".to_string(),
-            display_name: "Right Code GPT-5.5 默认通道".to_string(),
-            provider_id: "rightcode".to_string(),
-            model_id: "gpt-5.5".to_string(),
-            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
-            wire_api: "chat_completions".to_string(),
-            base_url: Some("https://right.codes/codex/v1".to_string()),
-            api_path: Some("/chat/completions".to_string()),
-            max_concurrency: 20,
-            rpm_limit: Some(120),
-            tpm_limit: None,
-            timeout_ms: 20_000,
-            priority: 100,
-            capabilities: json!(["chat", "reasoning", "json_mode"]),
-        },
-        ModelGatewayPresetView {
-            preset_id: "openclaw/default".to_string(),
-            display_name: "OpenClaw 默认模型".to_string(),
-            provider_id: "openclaw".to_string(),
-            model_id: "default".to_string(),
-            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
-            wire_api: "openai-compatible".to_string(),
-            base_url: None,
-            api_path: Some("/v1/chat/completions".to_string()),
-            max_concurrency: 15,
-            rpm_limit: None,
-            tpm_limit: None,
-            timeout_ms: 30_000,
-            priority: 100,
-            capabilities: json!({
-                "chat": true,
-                "streaming": true,
-                "json_mode": true
-            }),
-        },
-        ModelGatewayPresetView {
-            preset_id: "minimax/MiniMax-M2.7".to_string(),
-            display_name: "MiniMax M2.7 快速通道".to_string(),
-            provider_id: "minimax".to_string(),
-            model_id: "MiniMax-M2.7".to_string(),
-            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
-            wire_api: "openai-compatible".to_string(),
-            base_url: None,
-            api_path: Some("/v1/chat/completions".to_string()),
-            max_concurrency: 5,
-            rpm_limit: None,
-            tpm_limit: None,
-            timeout_ms: 30_000,
-            priority: 80,
-            capabilities: json!({
-                "chat": true,
-                "streaming": true,
-                "json_mode": true,
-                "long_context": true
-            }),
-        },
-        ModelGatewayPresetView {
-            preset_id: "openai-compatible/chat".to_string(),
-            display_name: "OpenAI 兼容 Chat".to_string(),
-            provider_id: "openai-compatible".to_string(),
-            model_id: "chat".to_string(),
-            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
-            wire_api: "openai-compatible".to_string(),
-            base_url: None,
-            api_path: Some("/v1/chat/completions".to_string()),
-            max_concurrency: 5,
-            rpm_limit: None,
-            tpm_limit: None,
-            timeout_ms: 30_000,
-            priority: 60,
-            capabilities: json!({
-                "chat": true,
-                "streaming": true,
-                "json_mode": true
-            }),
-        },
-        ModelGatewayPresetView {
-            preset_id: "custom".to_string(),
-            display_name: "自定义 OpenAI 兼容端点".to_string(),
-            provider_id: "custom".to_string(),
-            model_id: "custom".to_string(),
-            lane: MODEL_GATEWAY_DEFAULT_LANE.to_string(),
-            wire_api: "openai-compatible".to_string(),
-            base_url: None,
-            api_path: Some("/v1/chat/completions".to_string()),
-            max_concurrency: 2,
-            rpm_limit: None,
-            tpm_limit: None,
-            timeout_ms: 30_000,
-            priority: 10,
-            capabilities: json!({
-                "chat": true
-            }),
-        },
-    ]
-}
-
-fn model_gateway_preset_by_id(preset_id: &str) -> Option<ModelGatewayPresetView> {
-    model_gateway_presets()
-        .into_iter()
-        .find(|preset| preset.preset_id == preset_id)
-}
-
 async fn list_model_gateway_presets(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5765,22 +4899,6 @@ async fn list_model_gateway_profiles(
             .map(model_gateway_profile_view)
             .collect(),
     ))
-}
-
-#[derive(Clone, Debug)]
-struct ModelGatewayStatusProviderSource {
-    profile_id: String,
-    display_name: String,
-    lane: String,
-    provider_id: String,
-    model_id: String,
-    wire_api: String,
-    source: String,
-    priority: i32,
-    enabled: bool,
-    max_concurrency: Option<u32>,
-    rpm_limit: Option<i32>,
-    tpm_limit: Option<i32>,
 }
 
 async fn get_model_gateway_status(
@@ -6125,41 +5243,6 @@ async fn model_gateway_runtime_status_view(
     })
 }
 
-fn model_gateway_runtime_worker_pool_status(
-    service: &str,
-    label: &str,
-    env_keys: &[&str],
-    default_concurrency: usize,
-    max_concurrency: usize,
-) -> ModelGatewayRuntimeWorkerPoolStatusView {
-    ModelGatewayRuntimeWorkerPoolStatusView {
-        service: service.to_string(),
-        label: label.to_string(),
-        concurrency: configured_worker_pool_concurrency(
-            env_keys,
-            default_concurrency,
-            max_concurrency,
-        ),
-        default_concurrency,
-        max_concurrency,
-        env_keys: env_keys.iter().map(|key| (*key).to_string()).collect(),
-    }
-}
-
-fn model_gateway_runtime_database_pool_status(
-    service: &str,
-    label: &str,
-    env_key: &str,
-) -> ModelGatewayRuntimeDatabasePoolStatusView {
-    ModelGatewayRuntimeDatabasePoolStatusView {
-        service: service.to_string(),
-        label: label.to_string(),
-        max_connections: configured_database_max_connections(env_key),
-        env_key: env_key.to_string(),
-        global_env_key: "PLATFORM_DATABASE_MAX_CONNECTIONS".to_string(),
-    }
-}
-
 async fn count_recent_pending_external_message_preclaims(
     state: &AppState,
 ) -> std::result::Result<u64, ApiError> {
@@ -6178,149 +5261,6 @@ async fn count_recent_pending_external_message_preclaims(
     .await
     .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
     Ok(count.max(0) as u64)
-}
-
-fn configured_worker_pool_concurrency(
-    env_keys: &[&str],
-    default_concurrency: usize,
-    max_concurrency: usize,
-) -> usize {
-    let values = env_keys
-        .iter()
-        .map(|key| std::env::var(key).ok())
-        .collect::<Vec<_>>();
-    parse_worker_pool_concurrency(
-        values.iter().map(|value| value.as_deref()),
-        default_concurrency,
-        max_concurrency,
-    )
-}
-
-fn parse_worker_pool_concurrency<'a>(
-    values: impl IntoIterator<Item = Option<&'a str>>,
-    default_concurrency: usize,
-    max_concurrency: usize,
-) -> usize {
-    values
-        .into_iter()
-        .flatten()
-        .find_map(|value| {
-            value
-                .trim()
-                .parse::<usize>()
-                .ok()
-                .filter(|value| *value > 0)
-        })
-        .unwrap_or(default_concurrency)
-        .min(max_concurrency)
-}
-
-fn model_gateway_status_source_from_record(
-    profile: ModelGatewayProfile,
-) -> ModelGatewayStatusProviderSource {
-    ModelGatewayStatusProviderSource {
-        profile_id: profile.profile_id,
-        display_name: profile.display_name,
-        lane: profile.lane,
-        provider_id: profile.provider_id,
-        model_id: profile.model_id,
-        wire_api: profile.wire_api,
-        source: "database".to_string(),
-        priority: profile.priority,
-        enabled: profile.enabled,
-        max_concurrency: model_gateway_i32_to_u32(profile.max_concurrency),
-        rpm_limit: profile.rpm_limit,
-        tpm_limit: profile.tpm_limit,
-    }
-}
-
-fn model_gateway_status_source_from_env_profile(
-    lane: &str,
-    profile: ModelProviderProfile,
-) -> ModelGatewayStatusProviderSource {
-    ModelGatewayStatusProviderSource {
-        profile_id: profile.profile_id.clone(),
-        display_name: profile.profile_id,
-        lane: lane.to_string(),
-        provider_id: profile.provider_id,
-        model_id: profile.model_id,
-        wire_api: profile.wire_api.as_str().to_string(),
-        source: "env".to_string(),
-        priority: profile.priority,
-        enabled: true,
-        max_concurrency: profile.rate_limit.concurrent_requests,
-        rpm_limit: model_gateway_u32_to_i32(profile.rate_limit.requests_per_minute),
-        tpm_limit: model_gateway_u32_to_i32(profile.rate_limit.tokens_per_minute),
-    }
-}
-
-fn model_gateway_i32_to_u32(value: Option<i32>) -> Option<u32> {
-    value
-        .and_then(|value| u32::try_from(value).ok())
-        .filter(|value| *value > 0)
-}
-
-fn model_gateway_u32_to_i32(value: Option<u32>) -> Option<i32> {
-    value.and_then(|value| i32::try_from(value).ok())
-}
-
-fn model_gateway_percent(numerator: i64, denominator: i64) -> Option<u32> {
-    if denominator <= 0 || numerator < 0 {
-        return None;
-    }
-    Some(((numerator * 100) / denominator).clamp(0, 100) as u32)
-}
-
-fn model_gateway_lane_active_source(
-    enabled_database_profile_count: usize,
-    env_profile_count: usize,
-) -> &'static str {
-    if enabled_database_profile_count > 0 {
-        return "database";
-    }
-    if env_profile_count > 0 {
-        return "env";
-    }
-    "none"
-}
-
-fn model_gateway_lane_active_profile_count(
-    active_source: &str,
-    enabled_database_profile_count: usize,
-    env_profile_count: usize,
-) -> usize {
-    match active_source {
-        "database" => enabled_database_profile_count,
-        "env" => env_profile_count,
-        _ => 0,
-    }
-}
-
-fn model_gateway_provider_source_eligible(
-    source: &ModelGatewayStatusProviderSource,
-    active_source: &str,
-) -> bool {
-    match source.source.as_str() {
-        "database" => source.enabled && active_source == "database",
-        "env" => active_source == "env",
-        _ => false,
-    }
-}
-
-fn model_gateway_provider_dormant_reason(
-    source: &ModelGatewayStatusProviderSource,
-    active_source: &str,
-) -> Option<&'static str> {
-    if model_gateway_provider_source_eligible(source, active_source) {
-        return None;
-    }
-    match source.source.as_str() {
-        "database" if !source.enabled => Some("profile_disabled"),
-        "database" => Some("lane_uses_env_profiles"),
-        "env" if active_source == "database" => Some("database_profiles_active"),
-        "env" => Some("lane_has_no_active_source"),
-        _ => Some("unknown_source"),
-    }
 }
 
 async fn create_model_gateway_profile(
@@ -6469,14 +5409,6 @@ async fn test_model_gateway_profile(
     }))
 }
 
-fn model_gateway_profile_requires_configured_auth_env(profile: &ModelGatewayProfile) -> bool {
-    let auth_mode = profile.auth_mode.trim().to_ascii_lowercase();
-    if auth_mode.is_empty() || auth_mode == "none" {
-        return false;
-    }
-    auth_mode == "env_key" || auth_mode.ends_with("_env") || auth_mode.contains("env_key")
-}
-
 async fn record_model_gateway_profile_test_event(
     state: &AppState,
     profile: &ModelGatewayProfile,
@@ -6542,333 +5474,6 @@ async fn run_model_gateway_profile_probe(
             "model gateway profile probe failed".to_string(),
         )
     })
-}
-
-fn model_gateway_new_profile_from_request(
-    request: ModelGatewayProfileCreateRequest,
-) -> std::result::Result<NewModelGatewayProfile, ApiError> {
-    let preset = request
-        .recommended_preset
-        .as_deref()
-        .and_then(model_gateway_preset_by_id);
-    let profile_id = validate_model_gateway_profile_id(&request.profile_id)?;
-    let display_name = validate_model_gateway_required_text("display_name", &request.display_name)?;
-    let lane = model_gateway_optional_text(request.lane)
-        .or_else(|| preset.as_ref().map(|preset| preset.lane.clone()))
-        .unwrap_or_else(|| MODEL_GATEWAY_DEFAULT_LANE.to_string());
-    let provider_id = model_gateway_optional_text(request.provider_id)
-        .or_else(|| preset.as_ref().map(|preset| preset.provider_id.clone()))
-        .unwrap_or_else(|| "custom".to_string());
-    let model_id = model_gateway_optional_text(request.model_id)
-        .or_else(|| preset.as_ref().map(|preset| preset.model_id.clone()))
-        .unwrap_or_else(|| "custom".to_string());
-    let wire_api = model_gateway_optional_text(request.wire_api)
-        .or_else(|| preset.as_ref().map(|preset| preset.wire_api.clone()))
-        .unwrap_or_else(|| "openai-compatible".to_string());
-    let capabilities = request
-        .capabilities
-        .or_else(|| preset.as_ref().map(|preset| preset.capabilities.clone()))
-        .unwrap_or_else(|| json!({}));
-
-    validate_model_gateway_numeric("max_concurrency", request.max_concurrency)?;
-    validate_model_gateway_numeric("rpm_limit", request.rpm_limit)?;
-    validate_model_gateway_numeric("tpm_limit", request.tpm_limit)?;
-    validate_model_gateway_numeric("timeout_ms", request.timeout_ms)?;
-
-    Ok(NewModelGatewayProfile {
-        id: Uuid::new_v4(),
-        profile_id,
-        display_name,
-        lane,
-        provider_id,
-        model_id,
-        base_url: model_gateway_optional_text(request.base_url),
-        api_path: model_gateway_optional_text(request.api_path)
-            .or_else(|| preset.as_ref().and_then(|preset| preset.api_path.clone())),
-        wire_api,
-        auth_mode: model_gateway_optional_text(request.auth_mode)
-            .unwrap_or_else(|| "env_key".to_string()),
-        auth_env_key_name: model_gateway_optional_text(request.auth_env_key_name),
-        recommended_preset: model_gateway_optional_text(request.recommended_preset)
-            .or_else(|| preset.as_ref().map(|preset| preset.preset_id.clone())),
-        max_concurrency: request
-            .max_concurrency
-            .or_else(|| preset.as_ref().map(|preset| preset.max_concurrency)),
-        rpm_limit: request
-            .rpm_limit
-            .or_else(|| preset.as_ref().and_then(|preset| preset.rpm_limit)),
-        tpm_limit: request
-            .tpm_limit
-            .or_else(|| preset.as_ref().and_then(|preset| preset.tpm_limit)),
-        timeout_ms: request
-            .timeout_ms
-            .or_else(|| preset.as_ref().map(|preset| preset.timeout_ms)),
-        priority: request
-            .priority
-            .or_else(|| preset.as_ref().map(|preset| preset.priority))
-            .unwrap_or(100),
-        enabled: request.enabled.unwrap_or(true),
-        capabilities,
-    })
-}
-
-fn model_gateway_update_from_request(
-    request: ModelGatewayProfileUpdateRequest,
-) -> std::result::Result<ModelGatewayProfileUpdate, ApiError> {
-    validate_model_gateway_numeric("max_concurrency", request.max_concurrency)?;
-    validate_model_gateway_numeric("rpm_limit", request.rpm_limit)?;
-    validate_model_gateway_numeric("tpm_limit", request.tpm_limit)?;
-    validate_model_gateway_numeric("timeout_ms", request.timeout_ms)?;
-
-    Ok(ModelGatewayProfileUpdate {
-        display_name: request
-            .display_name
-            .map(|value| validate_model_gateway_required_text("display_name", &value))
-            .transpose()?,
-        lane: request
-            .lane
-            .map(|value| validate_model_gateway_required_text("lane", &value))
-            .transpose()?,
-        provider_id: request
-            .provider_id
-            .map(|value| validate_model_gateway_required_text("provider_id", &value))
-            .transpose()?,
-        model_id: request
-            .model_id
-            .map(|value| validate_model_gateway_required_text("model_id", &value))
-            .transpose()?,
-        base_url: request.base_url.map(|value| value.trim().to_string()),
-        api_path: request.api_path.map(|value| value.trim().to_string()),
-        wire_api: request
-            .wire_api
-            .map(|value| validate_model_gateway_required_text("wire_api", &value))
-            .transpose()?,
-        auth_mode: request
-            .auth_mode
-            .map(|value| validate_model_gateway_required_text("auth_mode", &value))
-            .transpose()?,
-        auth_env_key_name: request
-            .auth_env_key_name
-            .map(|value| value.trim().to_string()),
-        recommended_preset: request
-            .recommended_preset
-            .map(|value| value.trim().to_string()),
-        max_concurrency: request.max_concurrency,
-        rpm_limit: request.rpm_limit,
-        tpm_limit: request.tpm_limit,
-        timeout_ms: request.timeout_ms,
-        priority: request.priority,
-        enabled: request.enabled,
-        capabilities: request.capabilities,
-    })
-}
-
-fn model_gateway_profile_view(profile: ModelGatewayProfile) -> ModelGatewayProfileView {
-    let has_secret = profile
-        .auth_env_key_name
-        .as_deref()
-        .map(model_gateway_auth_env_is_configured)
-        .unwrap_or(false);
-
-    ModelGatewayProfileView {
-        id: profile.id.to_string(),
-        profile_id: profile.profile_id,
-        display_name: profile.display_name,
-        lane: profile.lane,
-        provider_id: profile.provider_id,
-        model_id: profile.model_id,
-        base_url: profile.base_url.map(|url| redact_model_gateway_url(&url)),
-        api_path: profile.api_path,
-        wire_api: profile.wire_api,
-        auth_mode: profile.auth_mode,
-        auth_env_key_name: profile.auth_env_key_name,
-        has_secret,
-        recommended_preset: profile.recommended_preset,
-        max_concurrency: profile.max_concurrency,
-        rpm_limit: profile.rpm_limit,
-        tpm_limit: profile.tpm_limit,
-        timeout_ms: profile.timeout_ms,
-        priority: profile.priority,
-        enabled: profile.enabled,
-        capabilities: profile.capabilities,
-        created_at: profile.created_at,
-        updated_at: profile.updated_at,
-    }
-}
-
-fn model_gateway_optional_text(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn validate_model_gateway_profile_id(value: &str) -> std::result::Result<String, ApiError> {
-    let normalized = value.trim();
-    if normalized.is_empty() || normalized.len() > 128 {
-        return Err(ApiError::bad_request(
-            "invalid_model_gateway_profile_id",
-            "profile_id 不能为空，且长度不能超过 128".to_string(),
-        ));
-    }
-    if !normalized
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    {
-        return Err(ApiError::bad_request(
-            "invalid_model_gateway_profile_id",
-            "profile_id 只能包含字母、数字、短横线、下划线或点号".to_string(),
-        ));
-    }
-
-    Ok(normalized.to_string())
-}
-
-fn validate_model_gateway_required_text(
-    field: &'static str,
-    value: &str,
-) -> std::result::Result<String, ApiError> {
-    let normalized = value.trim();
-    if normalized.is_empty() {
-        return Err(ApiError::bad_request(
-            "validation_error",
-            format!("{field} is required"),
-        ));
-    }
-    Ok(normalized.to_string())
-}
-
-fn validate_model_gateway_numeric(
-    field: &'static str,
-    value: Option<i32>,
-) -> std::result::Result<(), ApiError> {
-    if value.is_some_and(|value| value <= 0) {
-        return Err(ApiError::bad_request(
-            "validation_error",
-            format!("{field} must be greater than 0"),
-        ));
-    }
-    Ok(())
-}
-
-fn model_gateway_auth_env_is_configured(env_key_name: &str) -> bool {
-    std::env::var(env_key_name)
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-}
-
-fn redact_model_gateway_url(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return url.to_string();
-    };
-    let Some(at_index) = rest.find('@') else {
-        return url.to_string();
-    };
-    let slash_index = rest.find('/').unwrap_or(rest.len());
-    if at_index > slash_index {
-        return url.to_string();
-    }
-    format!("{scheme}://[redacted]@{}", &rest[at_index + 1..])
-}
-
-fn model_gateway_profile_not_found(profile_id: &str) -> ApiError {
-    ApiError::not_found(
-        "model_gateway_profile_not_found",
-        format!("model gateway profile {profile_id} was not found"),
-    )
-}
-
-fn auth_session_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    raw.split(';').find_map(|entry| {
-        let (name, value) = entry.trim().split_once('=')?;
-        (name == AUTH_SESSION_COOKIE_NAME && !value.is_empty()).then(|| value.to_string())
-    })
-}
-
-fn set_session_cookie_headers(session_token: &str) -> std::result::Result<HeaderMap, ApiError> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&format!(
-            "{AUTH_SESSION_COOKIE_NAME}={session_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
-            AUTH_SESSION_TTL_DAYS * 24 * 60 * 60
-        ))
-        .map_err(|error| ApiError::internal("auth_cookie_invalid", error.to_string()))?,
-    );
-    Ok(headers)
-}
-
-fn clear_session_cookie_headers() -> std::result::Result<HeaderMap, ApiError> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&format!(
-            "{AUTH_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-        ))
-        .map_err(|error| ApiError::internal("auth_cookie_invalid", error.to_string()))?,
-    );
-    Ok(headers)
-}
-
-fn to_auth_user_view(user: &User, email_verified: bool) -> AuthUserView {
-    AuthUserView {
-        id: user.id,
-        email: user.email.clone(),
-        display_name: user.display_name.clone(),
-        email_verified,
-    }
-}
-
-fn to_auth_session_view(session: &UserSession, email: &str) -> AuthSessionView {
-    AuthSessionView {
-        id: session.id,
-        user_id: session.user_id,
-        email: email.to_string(),
-        auth_method: session.auth_method.clone(),
-        created_at: session.created_at,
-        expires_at: session.expires_at,
-    }
-}
-
-fn to_auth_audit_event_view(
-    event: AuthAuditEvent,
-    current_session_id: UserSessionId,
-) -> AuthAuditEventView {
-    AuthAuditEventView {
-        id: event.id,
-        event_name: event.event_name,
-        outcome: event.outcome,
-        email: event.email_normalized,
-        device_fingerprint: event.device_fingerprint,
-        current_session: event.session_id == Some(current_session_id),
-        details: safe_auth_audit_details(&event.metadata),
-        created_at: event.created_at,
-    }
-}
-
-fn safe_auth_audit_details(metadata: &Value) -> Value {
-    let Some(object) = metadata.as_object() else {
-        return json!({});
-    };
-
-    let mut details = Map::new();
-    for key in [
-        "purpose",
-        "reason",
-        "auth_method",
-        "reused",
-        "revoked",
-        "matched_binding_count",
-        "claimed_dataset_count",
-        "skipped_owned_dataset_count",
-        "attempt_count_before",
-    ] {
-        if let Some(value) = object.get(key) {
-            details.insert(key.to_string(), value.clone());
-        }
-    }
-    Value::Object(details)
 }
 
 fn merge_secret_binding_ids(
@@ -13884,12 +12489,6 @@ struct ExternalActionDispatchOutcome {
     status: String,
     external_request_id: Option<String>,
     failure_kind: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct ExternalActionDispatchAuth {
-    bearer_token: Option<String>,
-    signing_secret: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -23212,86 +21811,6 @@ fn external_action_dispatch_payload(record: &ExternalActionDispatchRecord) -> Va
     })
 }
 
-fn external_action_dispatch_auth_from_config(config: &Value) -> ExternalActionDispatchAuth {
-    ExternalActionDispatchAuth {
-        bearer_token: external_config_string(
-            config,
-            &[
-                "external_action_bearer_token",
-                "externalActionBearerToken",
-                "action_bearer_token",
-                "actionBearerToken",
-                "dispatch_bearer_token",
-                "dispatchBearerToken",
-            ],
-        ),
-        signing_secret: external_config_string(
-            config,
-            &[
-                "external_action_signing_secret",
-                "externalActionSigningSecret",
-                "action_signing_secret",
-                "actionSigningSecret",
-                "dispatch_signing_secret",
-                "dispatchSigningSecret",
-            ],
-        ),
-    }
-}
-
-fn external_channel_reply_specific_dispatch_auth_from_config(
-    config: &Value,
-) -> ExternalActionDispatchAuth {
-    ExternalActionDispatchAuth {
-        bearer_token: external_config_string(
-            config,
-            &[
-                "external_reply_bearer_token",
-                "externalReplyBearerToken",
-                "reply_dispatch_bearer_token",
-                "replyDispatchBearerToken",
-                "outbound_reply_bearer_token",
-                "outboundReplyBearerToken",
-            ],
-        ),
-        signing_secret: external_config_string(
-            config,
-            &[
-                "external_reply_signing_secret",
-                "externalReplySigningSecret",
-                "reply_dispatch_signing_secret",
-                "replyDispatchSigningSecret",
-                "outbound_reply_signing_secret",
-                "outboundReplySigningSecret",
-            ],
-        ),
-    }
-}
-
-fn external_channel_outbound_reply_dispatch_auth_from_config(
-    config: &Value,
-) -> ExternalActionDispatchAuth {
-    let reply_auth = external_channel_reply_specific_dispatch_auth_from_config(config);
-    let action_auth = external_action_dispatch_auth_from_config(config);
-    ExternalActionDispatchAuth {
-        bearer_token: reply_auth.bearer_token.or(action_auth.bearer_token),
-        signing_secret: reply_auth.signing_secret.or(action_auth.signing_secret),
-    }
-}
-
-fn external_action_dispatch_auth_configured(auth: &ExternalActionDispatchAuth) -> bool {
-    auth.bearer_token.is_some() || auth.signing_secret.is_some()
-}
-
-fn external_action_dispatch_auth_mode(auth: &ExternalActionDispatchAuth) -> &'static str {
-    match (auth.signing_secret.is_some(), auth.bearer_token.is_some()) {
-        (true, true) => "signature_and_bearer",
-        (true, false) => "signature",
-        (false, true) => "bearer",
-        (false, false) => "none",
-    }
-}
-
 fn external_action_dispatch_headers(
     connection_id: &str,
     url: &reqwest::Url,
@@ -24242,13 +22761,6 @@ fn authorization_bearer_token(headers: &HeaderMap) -> Option<&str> {
         return None;
     }
     Some(token)
-}
-
-fn external_channel_auth_failed() -> ApiError {
-    ApiError::unauthorized(
-        "external_channel_auth_failed",
-        "external channel bearer token is missing or invalid".to_string(),
-    )
 }
 
 fn constant_time_str_eq(left: &str, right: &str) -> bool {

@@ -15,6 +15,7 @@
     "smoke:model-gateway-operator": "node scripts/smoke/model-gateway-operator.mjs",
     "smoke:newbai-customer-answer": "node scripts/smoke/newbai-customer-answer.mjs",
     "smoke:newbai-customer-answer-live-capture": "node scripts/smoke/newbai-customer-answer-live-capture.mjs",
+    "smoke:production-placeholder-readiness": "node scripts/smoke/production-placeholder-readiness.mjs",
     "smoke:static-page-5way": "node scripts/smoke/static-page-5way.mjs",
     "smoke:customer-web-codex-executor": "bash scripts/run-customer-web-codex-executor-smoke.sh",
     "smoke:customer-web-codex-live": "node scripts/smoke/customer-web-codex-live.mjs",

@@ -58,6 +58,157 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - Queue snapshot showed no `queued`, `running`, or `retrying` tasks in the visible queues.
   - Historical failed tasks remain in `external_source`, `ingest`, `static_page_image_preview`, and `static_page_render`; these are not current backlog but should stay visible to operators.
 
+## 2026-06-11 Current P0 Baseline Refresh
+
+- Purpose:
+  - execute the first P0 batch from `docs/plans/datamax-active-execution-plan.md`;
+  - replace the stale plan entrypoint with one current active plan;
+  - record the current deployed baseline and the non-credential smoke results.
+- Source state:
+  - Local head: `376262f`.
+  - 8-server head: `376262ff5`.
+  - Active plan entrypoint: `docs/plans/datamax-active-execution-plan.md`.
+  - Archived old plans:
+    - `docs/archive/plans/datamax-active-execution-plan-20260611-pre-cleanup.md`;
+    - `docs/archive/plans/aiv3-rag-retrieval-executable-plan-20260611.md`.
+  - `docs/plans` now contains only `datamax-active-execution-plan.md`.
+- 8-server service state:
+  - `aiv3-platform-api.service`: active;
+  - `aiv3-web.service`: active;
+  - `aiv3-assistant-run-worker.service`: active;
+  - `aiv3-chat-session-worker.service`: active;
+  - `aiv3-static-page-worker.service`: active;
+  - `aiv3-codex-host-agent.service`: active.
+- Build/deploy note:
+  - the current 8-server deployed build used `CC=clang CXX=clang++` for Rust release builds because the default Alibaba GCC toolchain hits the known `aws-lc-sys` compiler guard;
+  - no 120-server action was taken.
+- Online read-only URL checks:
+  - `https://v3.elepcloud.com/`: HTTP 200, `text/html`;
+  - `https://doc.elepcloud.com/`: HTTP 200, `text/html`;
+  - `https://v3.elepcloud.com/external-integrations`: HTTP 200, `text/html`;
+  - `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html`: HTTP 200, `text/html`;
+  - `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/table-data.csv`: HTTP 200, `application/octet-stream`;
+  - `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/report.md`: HTTP 200, `application/octet-stream`.
+- Local non-credential smoke:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:customer-web-codex-live -- --preflight --allow-missing-gates --base-url https://v3.elepcloud.com`: completed preflight without live writes; expected status is not ready because controlled live inputs are missing;
+  - `node --test apps/web/app/lib/codex-customer-artifacts.test.mjs`: passed, 21/21 tests;
+  - `npm --prefix apps/web run build`: passed with existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `git diff --check`: passed.
+- Customer Web Codex readiness:
+  - local no-env readiness with `--allow-not-ready` returned `ready=false` because `/etc/aiv3/aiv3.env` is absent locally; this is expected for the Windows workspace;
+  - 8-server readiness using `/etc/aiv3/aiv3.env` returned `ready=true`;
+  - 8-server readiness details: provider `rightcode`, profile `rightcode-gpt-5-5-high`, profile env key kind `rightcode_main`, host kind `aiv3_server`, task workspace root configured outside the repo, required customer Codex capabilities present in both task allowlist and profile allowed capabilities;
+  - readiness output confirmed no provider key values, workspace path values, or env-file values were printed.
+- Model and main-site stability checks:
+  - `node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com --allow-missing-credentials`: completed as `pending=true`, `failed=false`; unauthenticated operator-gateway access remains protected and no credential bypass was added;
+  - 8-server env presence audit showed `RIGHTCODE_API_KEY_MAIN` configured and `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` configured through `/etc/aiv3/minimax.env`; only key presence and value-length buckets were printed, not values;
+  - `systemctl cat aiv3-platform-api.service` confirmed `EnvironmentFile=/etc/aiv3/aiv3.env` and `EnvironmentFile=/etc/aiv3/minimax.env` are both loaded by `platform-api`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 4/4 tests;
+  - code inspection confirmed the main chat panel scroll effect depends on message count, message content length signature, and loading state, so streaming deltas can trigger scroll-to-bottom without exposing raw provider payloads.
+- Shell-script portability fix:
+  - added `.gitattributes` with `*.sh text eol=lf`;
+  - normalized tracked shell scripts to LF so Windows checkout does not break bash with `pipefail\r`;
+  - this is a validation-infrastructure fix and does not change public API, auth, URLs, request fields, response fields, or customer behavior.
+- Placeholder/stub inventory:
+  - created `docs/operations/placeholder-stub-inventory.md`;
+  - classified dataset-output placeholder runtime as production `replace_required` unless explicitly configured as local/dev fallback;
+  - replaced report-planner source-side generic AST skeleton with deterministic business-template planning for Xinbai operations, take-high opportunity, risk focus, and generic dataset reports;
+  - classified video URL/PPT placeholder functions as safety guards rather than completed extractors;
+  - classified OpenClaw bridge stubs as `replace_required` behind feature flags;
+  - classified Codex/static-page anti-placeholder rules as protective `customer_hidden` behavior;
+  - no public API, auth, URL, request field, or response field was changed in this batch.
+- Production placeholder readiness:
+  - added `scripts/smoke/production-placeholder-readiness.mjs`;
+  - added `npm run smoke:production-placeholder-readiness`;
+  - added script documentation in `scripts/README.md`;
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed; fixtures covered provider-runtime ready, placeholder-runtime not-ready, missing-runtime not-ready, and report-planner source status `deterministic_business_template`;
+  - local no-env run with `--allow-not-ready --json-stdout` returned `ready=false` because `/etc/aiv3/aiv3.env` and `/etc/aiv3/minimax.env` are absent in the Windows workspace;
+  - the same local no-env run now returned `report_planner.ready=true` and `known_replace_required=[]`, proving the old planner skeleton is no longer detected in source;
+  - 8-server stdin execution of the same script against `/etc/aiv3/aiv3.env` and `/etc/aiv3/minimax.env` returned `ready=true`;
+  - 8-server dataset-output runtime checks passed: `DATASET_OUTPUT_RUNTIME_MODE`, `DATASET_OUTPUT_RUNTIME_PROVIDER`, and `DATASET_OUTPUT_RUNTIME_MODEL` are explicitly configured and not placeholder defaults;
+  - 8-server report-planner source check must be rerun after this source change is deployed; previous ready receipt predates the planner replacement;
+  - no raw env values, provider keys, or secret values were printed.
+- Report planner worker source regression:
+  - `cargo test -p report-planner-worker`: passed, 4/4 tests;
+  - coverage verifies take-high plans frontload `take_high_line_stores`, risk plans frontload `risk_warning`, operations plans default to monthly Xinbai ordering, and generic dataset plans contain no `placeholder` or `skeleton` language;
+  - `node --check scripts/smoke/production-placeholder-readiness.mjs`: passed.
+- Platform API split regression:
+  - first source-only `platform-api` split moved model-gateway runtime limiting into `crates/platform-api/src/model_gateway_runtime.rs`;
+  - moved internal limiter, queue/rate/circuit-breaker snapshots, provider failure helpers, and permit structs without changing public routes, auth, URLs, request fields, or response fields;
+  - second source-only `platform-api` split moved model-gateway admin helpers into `crates/platform-api/src/model_gateway_admin.rs`;
+  - moved preset list/lookup, profile create/update normalization, profile view redaction, auth-env presence check, validation helpers, and not-found helper without changing route handlers, operator auth, storage calls, URLs, request fields, or response fields;
+  - third source-only `platform-api` split moved model-gateway status/source helpers into `crates/platform-api/src/model_gateway_status.rs`;
+  - moved provider-source builders, numeric conversions, percentage helper, active-source counting, eligibility, and dormant-reason logic without changing `/v1/model-gateway/status`, operator auth, storage queries, runtime status collection, URLs, request fields, or response fields;
+  - fourth source-only `platform-api` split moved auth session/support helpers into `crates/platform-api/src/auth_session_support.rs`;
+  - moved email normalization validation, auth-purpose session decision, auth metadata construction, auth env fallback, session token hash/generation, device fingerprint fallback, session cookie helpers, auth session/user view mapping, and audit detail redaction whitelist without changing auth route handlers, DB/session storage calls, audit writes, cookie name/TTL, public routes, URLs, request fields, or response fields;
+  - fifth source-only `platform-api` split extended `crates/platform-api/src/model_gateway_status.rs`;
+  - moved runtime worker-pool status construction, runtime database-pool status construction, worker-pool env parsing, and worker concurrency clamp helper without changing `/v1/model-gateway/status`, external-channel runtime sampling, pending-preclaim DB query, public routes, URLs, auth behavior, request fields, or response fields;
+  - sixth source-only `platform-api` split added `crates/platform-api/src/external_channel_support.rs`;
+  - moved `ExternalActionDispatchAuth`, action dispatch auth config parsing, reply-specific dispatch auth config parsing, outbound reply auth fallback selection, auth configured/mode helpers, and external-channel auth failure construction without changing external-channel handlers, action dispatch HTTP signing/header construction, inbound bearer validation flow, DB queries, public routes, URLs, auth semantics, request fields, or response fields;
+  - `cargo fmt --check`: passed;
+  - local Windows `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests and compiled `platform-api`;
+  - local Windows `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests and compiled `platform-api`;
+  - local Windows `cargo test -p platform-api model_gateway_profile_presets --lib`: passed, 1/1 test and compiled `platform-api`;
+  - local Windows `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test and compiled `platform-api`;
+  - local Windows `cargo test -p platform-api parse_worker_pool_concurrency_prefers_first_valid_value_and_clamps --lib`: passed, 1/1 test and compiled `platform-api`;
+  - local Windows `cargo test -p platform-api auth_session_endpoint_returns_current_user --lib`: passed, 1/1 test and compiled `platform-api`;
+  - local Windows `cargo test -p platform-api auth_logout_revokes_session --lib`: passed, 1/1 test;
+  - local Windows `cargo test -p platform-api auth_audit_events_endpoint_returns_current_user_redacted_events --lib`: passed, 1/1 test;
+  - local Windows `cargo test -p platform-api auth_key_login_resolves_user_and_session --lib`: passed, 1/1 test;
+  - local Windows `cargo test -p platform-api external_action_dispatch_auth_uses_only_explicit_dispatch_credentials --lib`: passed, 1/1 test and compiled `platform-api`;
+  - local Windows `cargo test -p platform-api external_outbound_reply_dispatch_uses_reply_specific_endpoint_and_credentials --lib`: passed, 1/1 test;
+  - local Windows `cargo test -p platform-api external_action_dispatch_headers_include_bearer_and_signature --lib`: passed, 1/1 test;
+  - local Windows `cargo test -p platform-api external_channel_inbound_bearer_auth_accepts_only_configured_token --lib`: passed, 1/1 test;
+  - local Windows `git diff --check`: passed with Windows LF/CRLF warnings only;
+  - attempted `CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib` on Windows failed before compiling project code because local `clang` is not installed; rerun with clang vars on 8 server after deploy remains required for all platform-api split slices.
+- Browser-level main-site check:
+  - static source inspection confirms `ChatPanel` scrolls `.chat-messages` to `scrollHeight` and calls the bottom anchor whenever message count, message content-length signature, or loading state changes;
+  - `assistant-run-progress` and `local-chat-sessions` tests passed as listed above;
+  - Chromium headless DOM dump did not return usable output in the current Windows shell, so a true browser interaction/screenshot proof for auto-scroll and new-conversation behavior remains pending.
+- Pending credential/live checks:
+  - third-party ordinary live question requires an active third-party bearer/context;
+  - third-party scoped temporary document live question requires an active third-party bearer/context plus controlled document scope;
+  - third-party SSE streaming live check requires an active third-party bearer/context;
+  - third-party real report trigger live check requires an active third-party bearer/context;
+  - model-gateway operator smoke requires a legitimate operator session/cookie or approved operator-side receipt.
+  - main-site streaming live smoke requires a legitimate main-site cookie or bearer.
+
+## 2026-06-11 Local Release-Candidate Verification For Current Uncommitted Batch
+
+- Purpose:
+  - validate the current local batch before any commit, GitHub push, or 8-server deployment;
+  - cover the plan cleanup, placeholder readiness smoke, report planner deterministic business template, external report self-tests, customer Codex artifact UI helpers, and platform-api split slices.
+- Scope:
+  - local Windows workspace only;
+  - no deployment, no 8-server restart, no 120-server action;
+  - no third-party public URL, auth method, required request field, existing response field, status value, or header name was changed.
+- Plan/document checks:
+  - `rg --files docs/plans`: passed; `docs/plans` contains only `docs/plans/datamax-active-execution-plan.md`;
+  - old active/RAG plans remain archived under `docs/archive/plans/`.
+- Node and frontend checks:
+  - `npm run smoke:production-placeholder-readiness -- --self-test`: passed with `ready=true`, `dataset_output_ready=true`, and `report_planner_ready=true`;
+  - `npm run smoke:external-report-focus -- --self-test`: passed with `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed with `modeCount=2`, `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, and export files `table-data.csv`, `report.ppt`, `report.md`;
+  - `node --test apps/web/app/lib/codex-customer-artifacts.test.mjs`: passed, 21/21 tests; Node emitted the existing typeless-package warning only;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only.
+- Rust checks:
+  - `cargo test -p report-planner-worker`: passed, 4/4 tests;
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api auth_session_endpoint_returns_current_user --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api external_action_dispatch_auth_uses_only_explicit_dispatch_credentials --lib`: passed, 1/1 test;
+  - earlier in this batch, `cargo test -p platform-api external_outbound_reply_dispatch_uses_reply_specific_endpoint_and_credentials --lib`, `external_action_dispatch_headers_include_bearer_and_signature --lib`, and `external_channel_inbound_bearer_auth_accepts_only_configured_token --lib` also passed 1/1 each.
+- Hygiene checks:
+  - `cargo fmt --check`: passed after moving the `NewModelGatewayProfile` import to test-only scope;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Remaining production evidence:
+  - 8-server `CC=clang CXX=clang++` regression for the current source split batch is still required after a deploy approval;
+  - credential/live checks for third-party ordinary question, temporary-document scoped question, third-party SSE, real report trigger, main-site streaming, and authenticated model-gateway operator smoke remain pending credential/operator input.
+
 ## Gate Results
 
 | Gate | Status | Receipt |

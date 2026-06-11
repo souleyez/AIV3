@@ -93,7 +93,7 @@ async fn process_task(
         .await?
         .ok_or_else(|| anyhow!("report plan {} not found", report_plan_id))?;
 
-    let ast = build_placeholder_ast(&report_plan);
+    let ast = build_report_ast(&report_plan);
 
     let process_result: Result<()> = async {
         let ast_version = storage
@@ -190,35 +190,479 @@ async fn process_task(
     Ok(())
 }
 
-fn build_placeholder_ast(plan: &domain_model::ReportPlan) -> Value {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReportPlanFocus {
+    XinbaiOperations,
+    XinbaiTakeHighOpportunity,
+    XinbaiRisk,
+    GeneralDatasetReport,
+}
+
+impl ReportPlanFocus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::XinbaiOperations => "xinbai_operations",
+            Self::XinbaiTakeHighOpportunity => "xinbai_take_high_opportunity",
+            Self::XinbaiRisk => "xinbai_risk",
+            Self::GeneralDatasetReport => "general_dataset_report",
+        }
+    }
+
+    fn template_candidate(self) -> Option<&'static str> {
+        match self {
+            Self::XinbaiOperations | Self::XinbaiTakeHighOpportunity | Self::XinbaiRisk => {
+                Some("xinbai-functional-modular-template-20260604")
+            }
+            Self::GeneralDatasetReport => None,
+        }
+    }
+
+    fn is_xinbai(self) -> bool {
+        self.template_candidate().is_some()
+    }
+}
+
+fn build_report_ast(plan: &domain_model::ReportPlan) -> Value {
+    let focus = infer_report_plan_focus(plan);
+    let modules = match focus {
+        ReportPlanFocus::XinbaiOperations
+        | ReportPlanFocus::XinbaiTakeHighOpportunity
+        | ReportPlanFocus::XinbaiRisk => build_xinbai_modules(focus),
+        ReportPlanFocus::GeneralDatasetReport => build_general_dataset_modules(),
+    };
+
     json!({
-        "schema_version": "0.1.0",
+        "schema_version": "0.2.0",
         "planner": "report-planner-worker",
+        "planner_mode": "deterministic_business_template",
         "plan_id": plan.id,
+        "tenant_id": plan.tenant_id,
         "dataset_id": plan.dataset_id,
         "title": plan.title,
         "objective": plan.objective,
-        "modules": [
+        "theme_key": plan.theme_key,
+        "focus_key": focus.as_str(),
+        "template_candidate": focus.template_candidate(),
+        "layout_policy": {
+            "default_time_grain": if focus.is_xinbai() { "month" } else { "source_scope" },
+            "mobile_first": focus.is_xinbai(),
+            "module_priority": "focus_then_standard_operations",
+            "data_refresh": "bind_to_current_dataset_snapshot"
+        },
+        "quality_gates": [
             {
-                "kind": "hero",
-                "title": "Executive Summary",
-                "binding_slot": "summary.hero",
-                "notes": "Topline summary generated from dataset context and planner skeleton."
+                "code": "scope_bound_to_dataset",
+                "severity": "required",
+                "rule": "Only use data authorized for the report dataset and current workflow."
             },
             {
-                "kind": "timeline",
-                "title": "Evidence Timeline",
-                "binding_slot": "summary.timeline",
-                "notes": "Key evidence and milestones to be expanded by report runtime."
+                "code": "no_raw_secret_output",
+                "severity": "required",
+                "rule": "Do not expose credentials, connection strings, or private source URLs in rendered output."
             },
             {
-                "kind": "evidence_list",
-                "title": "Supporting Evidence",
-                "binding_slot": "summary.evidence",
-                "notes": "Primary supporting evidence placeholders for future retrieval binding."
+                "code": "export_manifest_required",
+                "severity": "warning",
+                "rule": "When a rendered report is published, expose table-data.csv, report.ppt, and report.md when available."
             }
-        ]
+        ],
+        "modules": modules
     })
+}
+
+fn infer_report_plan_focus(plan: &domain_model::ReportPlan) -> ReportPlanFocus {
+    let haystack = format!("{} {} {}", plan.title, plan.objective, plan.theme_key).to_lowercase();
+
+    if contains_any(
+        &haystack,
+        &[
+            "取高",
+            "销售缺口",
+            "助推",
+            "高分成",
+            "提成",
+            "take high",
+            "commission",
+        ],
+    ) {
+        return ReportPlanFocus::XinbaiTakeHighOpportunity;
+    }
+
+    if contains_any(
+        &haystack,
+        &[
+            "低活跃",
+            "风险",
+            "租售比",
+            "客流下降",
+            "无销售",
+            "risk",
+            "inactive",
+        ],
+    ) {
+        return ReportPlanFocus::XinbaiRisk;
+    }
+
+    if contains_any(
+        &haystack,
+        &[
+            "新百",
+            "新世界",
+            "经营",
+            "月报",
+            "门店",
+            "品牌",
+            "收入",
+            "销售",
+            "健康度",
+            "retail",
+            "operation",
+        ],
+    ) {
+        return ReportPlanFocus::XinbaiOperations;
+    }
+
+    ReportPlanFocus::GeneralDatasetReport
+}
+
+fn contains_any(haystack: &str, keywords: &[&str]) -> bool {
+    keywords.iter().any(|keyword| haystack.contains(keyword))
+}
+
+fn build_xinbai_modules(focus: ReportPlanFocus) -> Vec<Value> {
+    let modules = vec![
+        json!({
+            "kind": "global_filters",
+            "title": "筛选条件",
+            "binding_slot": "filters.global",
+            "purpose": "统一控制时间、分区、门店、品类与经营模式。",
+            "defaults": {
+                "time_range": "latest_month",
+                "business_mode": "all"
+            },
+            "controls": [
+                {"key": "time_range", "type": "month_or_range", "label": "时间"},
+                {"key": "region_or_store", "type": "compact_select", "label": "区域/门店"},
+                {"key": "category", "type": "select", "label": "品类"},
+                {"key": "business_mode", "type": "segmented", "label": "经营模式", "options": ["全部", "租赁", "联营", "自营"]}
+            ]
+        }),
+        json!({
+            "kind": "operating_overview",
+            "title": "经营总览",
+            "binding_slot": "operations.overview",
+            "purpose": "呈现收入、同比、取高达成、低活跃和新增风险的核心经营状态。",
+            "metrics": [
+                "total_revenue",
+                "revenue_yoy",
+                "last_month_take_high_store_count",
+                "current_month_expected_take_high_store_count",
+                "low_activity_store_count",
+                "new_low_activity_store_count"
+            ]
+        }),
+        json!({
+            "kind": "monthly_sales_trend",
+            "title": "月度销售趋势",
+            "binding_slot": "operations.sales_trend",
+            "purpose": "在同一张图展示总览、区域与门店销售趋势，并保持筛选口径一致。",
+            "chart": {
+                "type": "line",
+                "series_policy": "total_then_selected_region_or_store"
+            }
+        }),
+        json!({
+            "kind": "opportunity_category_share",
+            "title": "机会品类占比",
+            "binding_slot": "take_high.category_share",
+            "purpose": "展示取高中高机会店铺在当前筛选范围内的品类分布。",
+            "chart": {
+                "type": "pie",
+                "label_policy": "show_full_category_name_below_chart"
+            }
+        }),
+        json!({
+            "kind": "risk_category_share",
+            "title": "风险品类占比",
+            "binding_slot": "risk.category_share",
+            "purpose": "展示风险店铺在当前筛选范围内的品类分布。",
+            "chart": {
+                "type": "pie",
+                "label_policy": "show_full_category_name_below_chart"
+            }
+        }),
+        json!({
+            "kind": "operating_health_score",
+            "title": "经营健康度评分",
+            "binding_slot": "health.score_by_region_store",
+            "purpose": "按分区展示评分，支持展开到分店，并显示收入同比、客流同比和平均租售比。",
+            "ranking": {
+                "default_level": "region",
+                "primary_metric": "revenue_yoy_score",
+                "expandable_to": "store"
+            },
+            "fields": [
+                "region_or_store",
+                "revenue",
+                "revenue_yoy",
+                "traffic_yoy",
+                "traffic_mom",
+                "average_rent_sales_ratio",
+                "expected_take_high_store_count",
+                "expected_take_high_incremental_rent",
+                "risk_store_count",
+                "new_risk_store_count"
+            ]
+        }),
+        json!({
+            "kind": "take_high_line_stores",
+            "title": "取高线附近门店",
+            "binding_slot": "take_high.line_distance_stores",
+            "purpose": "合并未达线和已达线门店，按距离取高线绝对值由近到远排序。",
+            "chart": {
+                "type": "paired_bar",
+                "rank_by": "absolute_distance_to_take_high_line_asc",
+                "below_line_color": "blue",
+                "above_line_color": "green"
+            },
+            "fields": [
+                "store",
+                "brand",
+                "current_revenue",
+                "forecast_revenue",
+                "take_high_line_revenue",
+                "distance_to_take_high_line",
+                "needs_push"
+            ]
+        }),
+        json!({
+            "kind": "risk_warning",
+            "title": "风险提示",
+            "binding_slot": "risk.warning",
+            "purpose": "列出持续低活跃、最新低活跃、租售比风险和客流降低预警。",
+            "sections": [
+                "persistent_low_activity_brands",
+                "new_low_activity_brands_excluding_persistent",
+                "rent_sales_ratio_distribution",
+                "traffic_decline_warning"
+            ]
+        }),
+        json!({
+            "kind": "export_manifest",
+            "title": "导出文件",
+            "binding_slot": "exports.files",
+            "purpose": "发布后提供表格数据、PPT 和 Markdown 文本下载。",
+            "files": [
+                "table-data.csv",
+                "report.ppt",
+                "report.md"
+            ]
+        }),
+    ];
+
+    prioritize_modules(modules, xinbai_priority(focus))
+}
+
+fn xinbai_priority(focus: ReportPlanFocus) -> &'static [&'static str] {
+    match focus {
+        ReportPlanFocus::XinbaiTakeHighOpportunity => &[
+            "take_high_line_stores",
+            "opportunity_category_share",
+            "operating_overview",
+            "monthly_sales_trend",
+        ],
+        ReportPlanFocus::XinbaiRisk => &[
+            "risk_warning",
+            "risk_category_share",
+            "operating_health_score",
+            "operating_overview",
+        ],
+        ReportPlanFocus::XinbaiOperations => &[
+            "operating_overview",
+            "monthly_sales_trend",
+            "opportunity_category_share",
+            "risk_category_share",
+            "operating_health_score",
+        ],
+        ReportPlanFocus::GeneralDatasetReport => &[],
+    }
+}
+
+fn prioritize_modules(mut modules: Vec<Value>, priority: &[&str]) -> Vec<Value> {
+    let mut ordered = Vec::with_capacity(modules.len());
+
+    if let Some(module) = take_module_by_kind(&mut modules, "global_filters") {
+        ordered.push(module);
+    }
+
+    for kind in priority {
+        if let Some(module) = take_module_by_kind(&mut modules, kind) {
+            ordered.push(module);
+        }
+    }
+
+    ordered.extend(modules);
+    ordered
+}
+
+fn take_module_by_kind(modules: &mut Vec<Value>, kind: &str) -> Option<Value> {
+    modules
+        .iter()
+        .position(|module| module.get("kind").and_then(Value::as_str) == Some(kind))
+        .map(|index| modules.remove(index))
+}
+
+fn build_general_dataset_modules() -> Vec<Value> {
+    vec![
+        json!({
+            "kind": "scope_summary",
+            "title": "资料范围",
+            "binding_slot": "dataset.scope_summary",
+            "purpose": "说明本次报告使用的数据集、文档范围和时间口径。"
+        }),
+        json!({
+            "kind": "key_findings",
+            "title": "关键结论",
+            "binding_slot": "analysis.key_findings",
+            "purpose": "汇总对用户目标最相关的结论，并保留证据引用。"
+        }),
+        json!({
+            "kind": "data_quality",
+            "title": "数据质量",
+            "binding_slot": "dataset.quality",
+            "purpose": "列出缺失字段、异常日期、重复资料和需要人工确认的口径。"
+        }),
+        json!({
+            "kind": "evidence_table",
+            "title": "证据明细",
+            "binding_slot": "evidence.table",
+            "purpose": "按来源、字段、页码或记录定位展示支撑材料。"
+        }),
+        json!({
+            "kind": "recommended_actions",
+            "title": "建议动作",
+            "binding_slot": "analysis.actions",
+            "purpose": "给出下一步处理建议，区分可自动执行和需人工确认事项。"
+        }),
+        json!({
+            "kind": "export_manifest",
+            "title": "导出文件",
+            "binding_slot": "exports.files",
+            "purpose": "发布后提供可下载的报告附件。"
+        }),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use domain_model::{DatasetId, ReportPlan, ReportPlanId, ReportPlanStatus, TenantId};
+
+    fn sample_plan(title: &str, objective: &str, theme_key: &str) -> ReportPlan {
+        ReportPlan {
+            id: ReportPlanId::new(),
+            tenant_id: TenantId::new(),
+            dataset_id: DatasetId::new(),
+            owner_user_id: None,
+            title: title.to_string(),
+            objective: objective.to_string(),
+            status: ReportPlanStatus::Draft,
+            theme_key: theme_key.to_string(),
+            current_ast_version_id: None,
+            modules: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn module_kinds(ast: &Value) -> Vec<&str> {
+        ast.get("modules")
+            .and_then(Value::as_array)
+            .expect("ast should expose modules")
+            .iter()
+            .map(|module| {
+                module
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .expect("module should expose kind")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn take_high_plan_uses_xinbai_template_and_frontloads_take_high() {
+        let plan = sample_plan(
+            "最近可取高门店机会榜",
+            "按销售缺口和需助推门店生成经营报表",
+            "default-dark",
+        );
+
+        let ast = build_report_ast(&plan);
+        let kinds = module_kinds(&ast);
+
+        assert_eq!(ast["schema_version"], "0.2.0");
+        assert_eq!(ast["focus_key"], "xinbai_take_high_opportunity");
+        assert_eq!(
+            ast["template_candidate"],
+            "xinbai-functional-modular-template-20260604"
+        );
+        assert_eq!(kinds[0], "global_filters");
+        assert_eq!(kinds[1], "take_high_line_stores");
+        assert!(kinds.contains(&"opportunity_category_share"));
+        assert!(kinds.contains(&"export_manifest"));
+    }
+
+    #[test]
+    fn risk_plan_frontloads_risk_modules() {
+        let plan = sample_plan(
+            "低活跃品牌报表",
+            "识别租售比风险和客流下降门店",
+            "xinbai-mobile",
+        );
+
+        let ast = build_report_ast(&plan);
+        let kinds = module_kinds(&ast);
+
+        assert_eq!(ast["focus_key"], "xinbai_risk");
+        assert_eq!(kinds[0], "global_filters");
+        assert_eq!(kinds[1], "risk_warning");
+        assert_eq!(kinds[2], "risk_category_share");
+    }
+
+    #[test]
+    fn operations_plan_uses_monthly_default_and_operations_order() {
+        let plan = sample_plan("新世界百货经营月报", "查看整体经营状况和健康度", "default");
+
+        let ast = build_report_ast(&plan);
+        let kinds = module_kinds(&ast);
+
+        assert_eq!(ast["focus_key"], "xinbai_operations");
+        assert_eq!(ast["layout_policy"]["default_time_grain"], "month");
+        assert_eq!(kinds[0], "global_filters");
+        assert_eq!(kinds[1], "operating_overview");
+        assert_eq!(kinds[2], "monthly_sales_trend");
+    }
+
+    #[test]
+    fn general_plan_has_dataset_modules_without_skeleton_language() {
+        let plan = sample_plan(
+            "合同资料分析",
+            "整理合同条款、异常字段和建议动作",
+            "default",
+        );
+
+        let ast = build_report_ast(&plan);
+        let serialized = serde_json::to_string(&ast).expect("ast should serialize");
+        let kinds = module_kinds(&ast);
+
+        assert_eq!(ast["focus_key"], "general_dataset_report");
+        assert!(ast["template_candidate"].is_null());
+        assert_eq!(kinds[0], "scope_summary");
+        assert!(kinds.contains(&"evidence_table"));
+        assert!(!serialized.to_lowercase().contains("placeholder"));
+        assert!(!serialized.to_lowercase().contains("skeleton"));
+    }
 }
 
 async fn wait_for_next_task_signal(task_waker: &mut EventSubscription, poll_interval_ms: u64) {
