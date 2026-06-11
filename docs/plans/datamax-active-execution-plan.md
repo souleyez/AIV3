@@ -112,12 +112,16 @@ npm run validate:xinbai-report-template
 
 **待完成:**
 - 拿到合法 operator 会话或运维安全回执后，跑 authenticated model-gateway operator smoke。
-- 在部署窗口跑主站 20 路和第三方 20 路真实抽样。
 - 证明 RightCode 主力模型不可用或耗尽时能正确切 MiniMax fallback。
 
 **已补自检:**
 - `npm run smoke:main-chat-20way -- --self-test` 验证主站 20 路脚本的 payload、summary、percentile 和 poll-result fixture，不调用 DataMax。
 - `npm run smoke:external-channel-20way -- --self-test` 验证第三方 20 路脚本的 payload、SSE parser、summary 和 percentile fixture，不调用 DataMax。
+
+**已验证 live:**
+- 8 服务器主站 20 路真实抽样通过：`okCount=20`，`assistantMessageCount=20`，`p95LatencyMs=21073`。
+- 8 服务器第三方 20 路真实抽样通过：服务器侧加载 `generic-chat-main` active bearer 且不打印 token，`okCount=20`，`completedCount=20`，`p95LatencyMs=5537`。
+- 无凭证第三方调用返回 401 `external_channel_auth_failed`，未授权保护有效。
 
 **验证命令:**
 
@@ -143,11 +147,11 @@ node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.co
 - `npm run smoke:static-page-prewarm-observability -- --self-test`
 - `npm run smoke:cloudflare-fallback-2way -- --self-test`
 - `CC=clang CXX=clang++ cargo test -p static-page-worker --lib`
+- 8 服务器静态页 5 路 live smoke 通过：服务器侧加载 `generic-chat-main` active bearer 且不打印 token，5/5 accepted，5/5 artifact URL，全部复用 `xinbai-functional-modular-template-20260604`，artifact URL HTTP 200。
 
 **待完成:**
-- 部署窗口内跑真实 5 路静态页 live smoke。
 - 对低负载预热任务跑部署目标只读 queue-stats smoke，持续观察 queued、running、published、failed、skipped_existing_template、waiting_for_low_load。
-- 确认相同数据集组合或有交集的数据集组合优先复用模板。
+- queue-stats live smoke 需要合法 operator cookie/bearer；未授权管理面 401 保护已验证，不能用无凭证请求冒充 live 队列观测。
 
 **完成标准:** 用户要报表时优先复用模板；后台预热不主动打扰用户；失败状态可从管理台或 smoke receipt 追踪。
 
@@ -263,7 +267,7 @@ npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env 
 
 1. 恢复 GitHub Actions 账号额度后，重跑 DataMax CI 首轮真实 Actions，并把失败项或通过回执写入 validation。
 2. 补 P1-1：获取合法 operator 会话或运维安全回执后跑 authenticated model-gateway smoke。
-3. 部署窗口跑主站 20 路和第三方 20 路真实抽样，记录 p50、p95、max、失败原因。
-4. 跑真实静态页 5 路 live smoke，确认本地模板复用、后台预热、fallback 状态。
+3. 补 RightCode 主力模型不可用或耗尽时切 MiniMax fallback 的可观测验证。
+4. 跑低负载预热 queue-stats live smoke；需要合法 operator cookie/bearer 或运维侧回执。
 5. P2 继续对象可达小样本 summary-only，扩大文档类型覆盖；不做真实历史 backfill 或对象清理，除非用户单独确认。
 6. 继续拆分 `platform-api` 和主站前端大文件，但每次只收可回归的小改动。

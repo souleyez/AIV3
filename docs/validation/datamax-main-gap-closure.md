@@ -3736,3 +3736,54 @@ Data-ingestion external fixed-task smoke:
   - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 P1 Concurrent Live Smoke Refresh
+
+- Purpose:
+  - close the current active plan's P1 live-smoke gap for main-site 20-way chat, third-party 20-way chat, and static-page 5-way artifact delivery;
+  - keep authenticated third-party smoke credential handling server-side and non-printing.
+- Current state before live checks:
+  - 8 server repository `/srv/aiv3/repo` was at `f973298f6`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - local Windows Rust test attempts were blocked by missing `clang` for `ring` / `aws-lc-sys`, so Rust checks were run on the 8-server deployment environment.
+- Local self-tests:
+  - `npm run smoke:main-chat-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:external-channel-20way -- --self-test`: passed, `okCount=20`, `failedCount=0`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`.
+- 8-server Rust checks:
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib`: passed, 3/3;
+  - `CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1;
+  - `CC=clang CXX=clang++ cargo test -p static-page-worker --lib`: passed, 14/14.
+- Main-site live smoke:
+  - command: `npm run smoke:main-chat-20way -- --base-url https://doc.elepcloud.com --dataset-id c75ef99e-9369-4c65-bd53-e19e69d84f65 --concurrency 20 --timeout-ms 180000 --poll-timeout-ms 180000 --poll-interval-ms 5000`;
+  - result: `runId=20260611180322`, `okCount=20`, `failedCount=0`, `acceptedCount=20`, `assistantMessageCount=20`, `p50LatencyMs=15596`, `p95LatencyMs=21073`, `maxLatencyMs=25567`;
+  - receipt: `/srv/aiv3/repo/target/main-chat-20way-smoke/20260611180322.json`.
+- Third-party credential handling:
+  - an unauthenticated `external-channel-20way` probe returned HTTP 401 with `external_channel_auth_failed`, confirming the inbound bearer guard;
+  - server-side probe selected the latest enabled `generic-chat-main` inbound bearer from `external_channel_connections.config_redacted`;
+  - only token presence and length were printed (`has_token=true`, `token_len=53`);
+  - the token was injected only into child-process environment variables and was not printed or recorded.
+- Third-party 20-way live smoke:
+  - command shape: server-side active bearer loaded and not printed, then `npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 20 --timeout-ms 180000 --output-dir target/external-channel-20way-smoke-p1-live-20260612`;
+  - result: `runId=20260611180626`, `okCount=20`, `failedCount=0`, `completedCount=20`, `p50LatencyMs=2770`, `p95LatencyMs=5537`, `maxLatencyMs=13944`;
+  - receipt: `/srv/aiv3/repo/target/external-channel-20way-smoke-p1-live-20260612/20260611180626.json`;
+  - sampled stream events included `external_channel.started`, `external_channel.retrieval_started`, repeated `external_channel.delta`, `external_channel.completed`, and `done`.
+- Static-page 5-way live smoke:
+  - unauthenticated `static-page-5way` probe returned HTTP 401 with `external_channel_auth_failed`, confirming the same inbound bearer guard;
+  - command shape: server-side active bearer loaded and not printed, dataset scope `64fff6c8-10e2-4ee8-8243-23166cce3abc`, then `npm run smoke:static-page-5way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 5 --timeout-ms 180000 --poll-timeout-ms 300000 --poll-interval-ms 5000 --require-artifact --dataset-external-ids 64fff6c8-10e2-4ee8-8243-23166cce3abc --output-dir target/static-page-5way-smoke-p1-live-20260612`;
+  - result: `runId=20260611180726`, `okCount=5`, `failedCount=0`, `acceptedCount=5`, `artifactCount=5`, `p50LatencyMs=7485`, `p95LatencyMs=8623`, `maxLatencyMs=8623`;
+  - receipt: `/srv/aiv3/repo/target/static-page-5way-smoke-p1-live-20260612/20260611180726.json`;
+  - all five artifact URLs reused `https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html`;
+  - sampled artifact `HEAD` checks returned HTTP 200 with `text/html`.
+- Operator and queue-stats status:
+  - `node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com --allow-missing-credentials`: completed as `pending=true`, `failed=false`, `authMethod=none`, `credentialsProvided=false`;
+  - unauthenticated model-gateway status returned HTTP 401 `auth_session_required`;
+  - authenticated operator smoke and live static-page queue-stats observation remain pending until a legitimate operator cookie/bearer or operator-side receipt is available.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, or full customer document was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
