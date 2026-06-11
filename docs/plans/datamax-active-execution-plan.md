@@ -211,6 +211,8 @@ npm run smoke:static-page-5way -- --self-test
 
 **当前规则:** 只做 dry-run。
 
+**当前状态:** 已完成多类型、小型混合媒体和 doc-heavy 数据集 summary-only 扩样。最新 8 服务器 doc-heavy 样本 `826fb514-2e71-4a7b-9976-43f0199c6d61` limit5 dry-run 通过，派生 facts 137，未知 fact 类型 0，未写入、未入队。
+
 **验证命令:**
 
 ```bash

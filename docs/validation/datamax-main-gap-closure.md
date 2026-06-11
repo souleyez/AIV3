@@ -3418,6 +3418,39 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Doc-Heavy Summary-Only Dry-Run Expansion
+
+- Purpose:
+  - continue P2 summary-only expansion after closing P0 self-test batches;
+  - cover another document-heavy dataset with PDF, Markdown, and Word OpenXML content types;
+  - keep all actions non-mutating.
+- Candidate selection:
+  - selected dataset `826fb514-2e71-4a7b-9976-43f0199c6d61` from aggregate-only candidate output;
+  - aggregate shape: `document_count=25`, `object_key_count=25`, `content_type_count=3`;
+  - content-type distribution: `application/pdf=22`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document=2`, `text/markdown=1`;
+  - no document title, object key, source URL, document body, raw row, credential, bearer, provider payload, or private path was recorded.
+- 8-server dry-run:
+  - command: `npm run smoke:p2-summary-only-dry-run -- --dataset-id 826fb514-2e71-4a7b-9976-43f0199c6d61 --limit 5 --env-file /etc/aiv3/aiv3.env --output-dir target/p2-summary-only-dry-run-smoke-p2-20260612-doc-heavy`;
+  - result: `runId=20260611183721231-dvj68zd24f`, `ok=true`;
+  - fingerprint: `candidate_count=5`, `would_record_count=5`, `recorded_count=0`, `duplicate_count=0`, `skipped_count=0`, `summary_only=true`, `dry_run=true`;
+  - fact index: `document_count=5`, `derived_fact_count=137`, `inserted_fact_count=0`, `snapshot_updated=false`;
+  - fact types: `date_period=23`, `organization=29`, `procedure_step=51`, `section=31`, `time_threshold=3`;
+  - fact use policy: `report_aggregation=55`, `retrieval_enhancement=51`, `evidence_index_only=31`, `unknownFactTypes=[]`;
+  - enrichment: `document_count=5`, `missing_fingerprint_count=5`, `would_enqueue_count=0`, `enqueued_count=0`;
+  - receipt: `/srv/aiv3/repo/target/p2-summary-only-dry-run-smoke-p2-20260612-doc-heavy/20260611183721231-dvj68zd24f/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- Safety:
+  - all P2 runs used the fixed wrapper path with `--dry-run --summary-only`;
+  - no fingerprint records were written;
+  - no document facts were inserted and no dataset fact snapshot was updated;
+  - no enrichment runs were enqueued;
+  - no source object was deleted or cleaned;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Rebuild And Local Self-Test Refresh
 
 - Purpose:
