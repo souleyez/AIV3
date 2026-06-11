@@ -19957,6 +19957,7 @@ fn parse_external_bot_message_payload(
         })?;
     validate_and_normalize_external_artifact_request(&mut message)?;
     validate_and_normalize_external_requested_skills(&mut message.requested_skills)?;
+    validate_external_aigolf_requested_skills(&message)?;
     validate_and_normalize_external_answer_policy(&mut message)?;
     Ok(message)
 }
@@ -28559,6 +28560,246 @@ fn external_requested_skills_policy_value(skills: &[ExternalRequestedSkillView])
     })
 }
 
+const AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA: &str = "aigolf.course_map_segmentation.v1";
+
+fn external_requested_skill_compact_id(skill: &ExternalRequestedSkillView) -> String {
+    skill
+        .skill_id
+        .trim()
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | '_' | ' ' | '.'))
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn external_requested_skill_is_disabled(skill: &ExternalRequestedSkillView) -> bool {
+    external_requested_skill_mode(skill) == "disabled"
+}
+
+fn external_aigolf_skill_kind(skill: &ExternalRequestedSkillView) -> Option<&'static str> {
+    match external_requested_skill_compact_id(skill).as_str() {
+        "aigolfcoursemapsegmentation" | "aigolfmapsegmentation" => {
+            Some("aigolf_course_map_segmentation")
+        }
+        "aigolfholegeofencerefine" => Some("aigolf_hole_geofence_refine"),
+        "aigolfdispatchriskanalysis" => Some("aigolf_dispatch_risk_analysis"),
+        "aigolfscoreanomalyanalysis" => Some("aigolf_score_anomaly_analysis"),
+        "aigolfeventworkorderdraft" => Some("aigolf_event_work_order_draft"),
+        "aigolfsportcardgeneration" => Some("aigolf_sport_card_generation"),
+        _ => None,
+    }
+}
+
+fn object_nested_string(
+    object: &Map<String, Value>,
+    object_keys: &[&str],
+    string_keys: &[&str],
+) -> Option<String> {
+    object_keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_object)
+            .and_then(|nested| object_string(nested, string_keys))
+    })
+}
+
+fn external_aigolf_course_map_schema(skill: &ExternalRequestedSkillView) -> Option<String> {
+    let object = external_requested_skill_argument_object(skill)?;
+    object_string(
+        object,
+        &[
+            "schema",
+            "output_schema",
+            "outputSchema",
+            "expected_schema",
+            "expectedSchema",
+            "required_schema",
+            "requiredSchema",
+        ],
+    )
+    .or_else(|| {
+        object_nested_string(
+            object,
+            &["output", "result", "contract"],
+            &["schema", "outputSchema", "requiredSchema"],
+        )
+    })
+}
+
+fn external_aigolf_course_map_argument_image_ref(
+    skill: &ExternalRequestedSkillView,
+) -> Option<String> {
+    let object = external_requested_skill_argument_object(skill)?;
+    object_string(
+        object,
+        &[
+            "image_url",
+            "imageUrl",
+            "map_image_url",
+            "mapImageUrl",
+            "course_map_image_url",
+            "courseMapImageUrl",
+            "attachment_external_id",
+            "attachmentExternalId",
+            "map_attachment_external_id",
+            "mapAttachmentExternalId",
+        ],
+    )
+    .or_else(|| {
+        object_nested_string(
+            object,
+            &["map", "course_map", "courseMap", "image"],
+            &[
+                "url",
+                "image_url",
+                "imageUrl",
+                "map_image_url",
+                "mapImageUrl",
+                "attachment_external_id",
+                "attachmentExternalId",
+            ],
+        )
+    })
+}
+
+fn external_aigolf_course_map_skill_has_image_input(
+    skill: &ExternalRequestedSkillView,
+    message: &ExternalBotMessageView,
+) -> bool {
+    external_aigolf_course_map_argument_image_ref(skill).is_some()
+        || external_channel_message_has_image_attachment(message)
+}
+
+fn validate_external_aigolf_requested_skills(
+    message: &ExternalBotMessageView,
+) -> std::result::Result<(), ApiError> {
+    for (index, skill) in message.requested_skills.iter().enumerate() {
+        if external_requested_skill_is_disabled(skill) {
+            continue;
+        }
+        let Some(skill_kind) = external_aigolf_skill_kind(skill) else {
+            continue;
+        };
+        if skill_kind != "aigolf_course_map_segmentation" {
+            continue;
+        }
+
+        if let Some(schema) = external_aigolf_course_map_schema(skill) {
+            if schema != AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA {
+                return Err(external_requested_skills_bad_request(
+                    "aigolf_course_map_segmentation_unsupported_schema",
+                    format!(
+                        "requested_skills[{index}] aigolf_course_map_segmentation only accepts schema {AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA}"
+                    ),
+                ));
+            }
+        }
+
+        if !external_aigolf_course_map_skill_has_image_input(skill, message) {
+            return Err(external_requested_skills_bad_request(
+                "aigolf_course_map_segmentation_missing_image",
+                format!(
+                    "requested_skills[{index}] aigolf_course_map_segmentation requires an image attachment or map.imageUrl/mapImageUrl argument"
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn external_aigolf_requested_skill_policy(skills: &[ExternalRequestedSkillView]) -> Option<Value> {
+    let skill_policies = skills
+        .iter()
+        .filter(|skill| !external_requested_skill_is_disabled(skill))
+        .filter_map(|skill| {
+            let skill_kind = external_aigolf_skill_kind(skill)?;
+            let arguments = skill.arguments.clone().unwrap_or_else(|| json!({}));
+            let policy = if skill_kind == "aigolf_course_map_segmentation" {
+                json!({
+                    "skill_id": skill.skill_id.as_str(),
+                    "normalized_skill_id": skill_kind,
+                    "status": "enabled",
+                    "mode": external_requested_skill_mode(skill),
+                    "version": skill.version.as_deref(),
+                    "model_profile": "datamax_high_quality_paid_route",
+                    "provider_detail_policy": "do_not_expose_provider_or_model_name_to_integrator",
+                    "card_type": "aigolf_course_map_segmentation",
+                    "reply_card_type": "aigolf_course_map_segmentation",
+                    "required_schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+                    "input_contract": {
+                        "requires_image": true,
+                        "accepted_inputs": [
+                            "attachment_refs image/*",
+                            "requested_skills.arguments.map.imageUrl",
+                            "requested_skills.arguments.mapImageUrl"
+                        ],
+                        "operator_review_required": true
+                    },
+                    "output_contract": {
+                        "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+                        "structured_json_required": true,
+                        "card_type": "aigolf_course_map_segmentation",
+                        "business_rule": "Return a reviewable draft only. Do not apply production hole geofences directly.",
+                        "fields": {
+                            "holes": [{
+                                "holeNo": "number",
+                                "name": "optional string",
+                                "polygonPixels": [[0, 0]],
+                                "centerPixel": [0, 0],
+                                "confidence": "0..1",
+                                "warnings": ["optional string"]
+                            }],
+                            "image": {
+                                "width": "number when known",
+                                "height": "number when known"
+                            },
+                            "review": {
+                                "status": "ready_for_operator_review | needs_input | partial",
+                                "notes": ["string"]
+                            }
+                        }
+                    },
+                    "failure_contract": {
+                        "status": "needs_input",
+                        "message": "Ask for a clearer course map image or calibration points when segmentation is not possible.",
+                        "card_type": "aigolf_course_map_segmentation"
+                    },
+                    "arguments": arguments
+                })
+            } else {
+                json!({
+                    "skill_id": skill.skill_id.as_str(),
+                    "normalized_skill_id": skill_kind,
+                    "status": "unsupported_skill_not_enabled",
+                    "mode": external_requested_skill_mode(skill),
+                    "version": skill.version.as_deref(),
+                    "model_profile": "datamax_high_quality_paid_route_when_enabled",
+                    "provider_detail_policy": "do_not_expose_provider_or_model_name_to_integrator",
+                    "failure_contract": {
+                        "status": "unsupported_skill_not_enabled",
+                        "message": "This AI Golf skill is declared but not enabled in the current V3 routing release."
+                    },
+                    "arguments": arguments
+                })
+            };
+            Some(policy)
+        })
+        .collect::<Vec<_>>();
+
+    if skill_policies.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "source": "external_channel_requested_skills",
+        "domain": "aigolf",
+        "runtime_policy": "use_datamax_high_quality_paid_route_for_low_frequency_high_value_tasks",
+        "provider_detail_policy": "do_not_expose_provider_or_model_name_to_integrator",
+        "skills": skill_policies
+    }))
+}
+
 fn external_output_format_label(format: &str) -> &'static str {
     match format {
         "rich_text" => "富文本",
@@ -29347,6 +29588,7 @@ fn external_bot_message_to_assistant_run_request(
     let platform = external_channel_platform_wire_value(&message.platform);
     let message_type = external_message_type_wire_value(&message.message_type);
     let requested_skills_policy = external_requested_skills_policy_value(&message.requested_skills);
+    let aigolf_skill_policy = external_aigolf_requested_skill_policy(&message.requested_skills);
     let answer_policy = external_answer_policy_value(message);
     let mut selected_scope = json!({
         "type": "external_channel",
@@ -29392,6 +29634,23 @@ fn external_bot_message_to_assistant_run_request(
             "catalog_enforcement": "planned_connection_allowlist"
         }
     });
+    if let Some(aigolf_skill_policy) = aigolf_skill_policy {
+        set_payload_value(
+            &mut selected_scope,
+            "aigolf_skill_policy",
+            aigolf_skill_policy.clone(),
+        );
+        set_payload_value(
+            &mut startup_briefing,
+            "aigolfSkillPolicy",
+            aigolf_skill_policy.clone(),
+        );
+        set_payload_value(
+            &mut context_policy_hint,
+            "aigolf_skill_policy",
+            aigolf_skill_policy,
+        );
+    }
     if let Some(answer_policy) = answer_policy {
         set_payload_value(&mut selected_scope, "answer_policy", answer_policy.clone());
         set_payload_value(
@@ -99350,6 +99609,116 @@ mod tests {
         assert!(argument_keys.contains(&json!("do_not_log_secret")));
         assert!(argument_keys.contains(&json!("focus")));
         assert!(!serialized_summary.contains("token-like-value"));
+    }
+
+    #[test]
+    fn external_aigolf_course_map_segmentation_skill_injects_schema_policy() {
+        let mut message = sample_external_bot_message();
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "aigolf_course_map_segmentation".to_string(),
+            version: Some("2026-06-11".to_string()),
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "schema": "aigolf.course_map_segmentation.v1",
+                "map": {
+                    "imageUrl": "https://assets.example.com/course-map.png"
+                }
+            })),
+        }];
+
+        validate_external_aigolf_requested_skills(&message).expect("valid AI Golf map skill");
+        let request = external_bot_message_to_assistant_run_request("aigolf-main", &message);
+        let startup_briefing = request
+            .startup_briefing
+            .as_ref()
+            .expect("external request should include startup briefing");
+        assert_eq!(
+            startup_briefing["aigolfSkillPolicy"]["domain"],
+            json!("aigolf")
+        );
+        assert_eq!(
+            startup_briefing["aigolfSkillPolicy"]["skills"][0]["card_type"],
+            json!("aigolf_course_map_segmentation")
+        );
+        assert_eq!(
+            startup_briefing["aigolfSkillPolicy"]["skills"][0]["required_schema"],
+            json!("aigolf.course_map_segmentation.v1")
+        );
+        assert_eq!(
+            startup_briefing["aigolfSkillPolicy"]["skills"][0]["model_profile"],
+            json!("datamax_high_quality_paid_route")
+        );
+        assert_eq!(
+            request.selected_scope.as_ref().expect("selected scope")["aigolf_skill_policy"]
+                ["skills"][0]["reply_card_type"],
+            json!("aigolf_course_map_segmentation")
+        );
+        assert_eq!(
+            request
+                .context_policy_hint
+                .as_ref()
+                .expect("context policy")["aigolf_skill_policy"]["skills"][0]["output_contract"]
+                ["schema"],
+            json!("aigolf.course_map_segmentation.v1")
+        );
+
+        let input = build_assistant_run_provider_input(&request);
+        assert!(input.contains("aigolf_course_map_segmentation"));
+        assert!(input.contains("aigolf.course_map_segmentation.v1"));
+        assert!(!input.contains("GPT-"));
+    }
+
+    #[test]
+    fn external_aigolf_course_map_segmentation_requires_image_input() {
+        let mut message = sample_external_bot_message();
+        message.attachment_refs = Vec::new();
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "aigolf_course_map_segmentation".to_string(),
+            version: None,
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "schema": "aigolf.course_map_segmentation.v1"
+            })),
+        }];
+
+        let error = validate_external_aigolf_requested_skills(&message)
+            .expect_err("course map segmentation requires image input");
+        assert_eq!(
+            error.payload.code,
+            "external_channel_requested_skills_invalid"
+        );
+        assert_eq!(
+            error
+                .payload
+                .details
+                .as_ref()
+                .and_then(|value| value.get("reason"))
+                .and_then(Value::as_str),
+            Some("aigolf_course_map_segmentation_missing_image")
+        );
+    }
+
+    #[test]
+    fn external_aigolf_course_map_segmentation_accepts_image_attachment() {
+        let mut message = sample_external_bot_message();
+        message.attachment_refs = vec![ExternalAttachmentRefView {
+            attachment_external_id: "course-map-image-001".to_string(),
+            filename: Some("course-map.png".to_string()),
+            content_type: Some("image/png".to_string()),
+            size_bytes: Some(8192),
+            download_url_redacted: Some("https://assets.example.com/course-map.png".to_string()),
+        }];
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "AI Golf Course Map Segmentation".to_string(),
+            version: None,
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "schema": "aigolf.course_map_segmentation.v1"
+            })),
+        }];
+
+        validate_external_aigolf_requested_skills(&message)
+            .expect("image attachment should satisfy map input requirement");
     }
 
     #[test]
