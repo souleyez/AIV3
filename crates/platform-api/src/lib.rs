@@ -60,23 +60,24 @@ use contracts::{
     ExternalBotReplyView, ExternalChannelEventResponse, ExternalChannelPlatformView,
     ExternalConversationTestView, ExternalConversationTimelineEventView,
     ExternalConversationTimelineResponse, ExternalDocumentParseDetailItemView,
-    ExternalDocumentParseDocumentView, ExternalIntegrationAuditItemView,
-    ExternalIntegrationAuditResponse, ExternalIntegrationControlRequest,
-    ExternalIntegrationControlResponse, ExternalIntegrationReplyDispatchConfigRequest,
-    ExternalIntegrationSummaryView, ExternalMessageTypeView, ExternalRequestedSkillView,
-    GetDatabaseSourceStatusResponse, GetExternalDocumentParseDetailResponse, HealthResponse,
-    HtmlArtifactDataRefView, HtmlArtifactInteractionModeView, HtmlArtifactManifestView,
-    HtmlArtifactOwnerScopeView, HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView,
-    HtmlArtifactTemplateIdView, InspectDatabaseSourceSchemaRequest,
-    InspectDatabaseSourceSchemaResponse, KeyLoginRequest, KeyLoginResponse, KeyRotateRequest,
-    KeyRotateResponse, ListExternalConversationTestsResponse, ListExternalIntegrationsResponse,
-    ListStaticPageTemplatesResponse, LlmInvocationView, LogoutResponse, MemoryDirectoryView,
-    ModelGatewayExternalChannelRuntimeStatusView, ModelGatewayLaneStatusView,
-    ModelGatewayPresetView, ModelGatewayProfileCreateRequest, ModelGatewayProfileTestRequest,
-    ModelGatewayProfileTestResponse, ModelGatewayProfileUpdateRequest, ModelGatewayProfileView,
-    ModelGatewayProviderStatusView, ModelGatewayRuntimeDatabasePoolStatusView,
-    ModelGatewayRuntimeStatusView, ModelGatewayRuntimeWorkerPoolStatusView, ModelGatewayStatusView,
-    PlanReportRequest, PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
+    ExternalDocumentParseDocumentView, ExternalIntegrationActionDispatchConfigRequest,
+    ExternalIntegrationAuditItemView, ExternalIntegrationAuditResponse,
+    ExternalIntegrationControlRequest, ExternalIntegrationControlResponse,
+    ExternalIntegrationReplyDispatchConfigRequest, ExternalIntegrationSummaryView,
+    ExternalMessageTypeView, ExternalRequestedSkillView, GetDatabaseSourceStatusResponse,
+    GetExternalDocumentParseDetailResponse, HealthResponse, HtmlArtifactDataRefView,
+    HtmlArtifactInteractionModeView, HtmlArtifactManifestView, HtmlArtifactOwnerScopeView,
+    HtmlArtifactProvenanceView, HtmlArtifactSourceTypeView, HtmlArtifactTemplateIdView,
+    InspectDatabaseSourceSchemaRequest, InspectDatabaseSourceSchemaResponse, KeyLoginRequest,
+    KeyLoginResponse, KeyRotateRequest, KeyRotateResponse, ListExternalConversationTestsResponse,
+    ListExternalIntegrationsResponse, ListStaticPageTemplatesResponse, LlmInvocationView,
+    LogoutResponse, MemoryDirectoryView, ModelGatewayExternalChannelRuntimeStatusView,
+    ModelGatewayLaneStatusView, ModelGatewayPresetView, ModelGatewayProfileCreateRequest,
+    ModelGatewayProfileTestRequest, ModelGatewayProfileTestResponse,
+    ModelGatewayProfileUpdateRequest, ModelGatewayProfileView, ModelGatewayProviderStatusView,
+    ModelGatewayRuntimeDatabasePoolStatusView, ModelGatewayRuntimeStatusView,
+    ModelGatewayRuntimeWorkerPoolStatusView, ModelGatewayStatusView, PlanReportRequest,
+    PreviewDatabaseSourceTableRequest, PreviewDatabaseSourceTableResponse,
     ProfileDatabaseSourceRequest, ProfileDatabaseSourceResponse, PublishReportRequest,
     PublishReportResponse, PublishedReportDetailView, PublishedReportVersionView,
     PublishedReportView, RegisterDocumentRequest, RegisterDocumentResponse,
@@ -1407,6 +1408,10 @@ pub fn router(
         .route(
             "/v1/external/integrations/{integration_id}/reply-dispatch",
             axum::routing::post(configure_external_integration_reply_dispatch),
+        )
+        .route(
+            "/v1/external/integrations/{integration_id}/action-dispatch",
+            axum::routing::post(configure_external_integration_action_dispatch),
         )
         .route(
             "/v1/external/channels/{connection_id}/events",
@@ -15818,6 +15823,83 @@ async fn configure_external_integration_reply_dispatch(
     }))
 }
 
+async fn configure_external_integration_action_dispatch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(integration_id): Path<String>,
+    Json(request): Json<ExternalIntegrationActionDispatchConfigRequest>,
+) -> std::result::Result<Json<ExternalIntegrationControlResponse>, ApiError> {
+    validate_required("integration_id", &integration_id)?;
+    if !external_observability_access_allowed(&headers) {
+        return Err(ApiError::unauthorized(
+            "external_observability_access_required",
+            "external integration action dispatch configuration requires an observability access key"
+                .to_string(),
+        ));
+    }
+
+    let row = sqlx::query(
+        r#"
+        select config_redacted
+        from external_channel_connections
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&integration_id)
+    .fetch_optional(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+    let Some(row) = row else {
+        return Err(ApiError::not_found(
+            "external_channel_connection_not_found",
+            format!("external channel connection {integration_id} was not found"),
+        ));
+    };
+
+    let now = Utc::now();
+    let current_config = row.get::<Value, _>("config_redacted");
+    let prepared = apply_external_action_dispatch_config(current_config, &request, now)?;
+    sqlx::query(
+        r#"
+        update external_channel_connections
+        set config_redacted = $3,
+            updated_at = $4
+        where tenant_id = $1 and id = $2
+        "#,
+    )
+    .bind(state.tenant_id.0)
+    .bind(&integration_id)
+    .bind(prepared.config_redacted)
+    .bind(now)
+    .execute(state.storage.pool())
+    .await
+    .map_err(|error| ApiError::from_storage(anyhow::Error::new(error)))?;
+
+    Ok(Json(ExternalIntegrationControlResponse {
+        accepted: true,
+        integration_id,
+        integration_kind: "channel".to_string(),
+        action: "configure_action_dispatch".to_string(),
+        status: if prepared.cleared {
+            "action_dispatch_cleared".to_string()
+        } else {
+            "action_dispatch_ready".to_string()
+        },
+        message: if prepared.cleared {
+            "external action dispatch configuration cleared".to_string()
+        } else {
+            "external action dispatch configuration saved".to_string()
+        },
+        affected_action_count: 0,
+        sync_run_id: None,
+        workflow_execution: None,
+        enqueued_tasks: Vec::new(),
+        inbound_bearer_token: None,
+        token_expires_at: None,
+    }))
+}
+
 async fn external_channel_connection_exists(
     state: &AppState,
     integration_id: &str,
@@ -16131,6 +16213,12 @@ struct PreparedExternalReplyDispatchConfig {
     cleared: bool,
 }
 
+#[derive(Debug)]
+struct PreparedExternalActionDispatchConfig {
+    config_redacted: Value,
+    cleared: bool,
+}
+
 const EXTERNAL_REPLY_DISPATCH_URL_KEYS: &[&str] = &[
     "external_reply_dispatch_url",
     "externalReplyDispatchUrl",
@@ -16158,6 +16246,55 @@ const EXTERNAL_REPLY_DISPATCH_SIGNING_SECRET_KEYS: &[&str] = &[
     "replyDispatchSigningSecret",
     "outbound_reply_signing_secret",
     "outboundReplySigningSecret",
+];
+
+const EXTERNAL_ACTION_DISPATCH_URL_KEYS: &[&str] = &[
+    "artifact_action_dispatch_url",
+    "artifactActionDispatchUrl",
+    "artifact_dispatch_url",
+    "artifactDispatchUrl",
+    "business_action_dispatch_url",
+    "businessActionDispatchUrl",
+    "business_dispatch_url",
+    "businessDispatchUrl",
+    "external_action_dispatch_url",
+    "externalActionDispatchUrl",
+    "action_dispatch_url",
+    "actionDispatchUrl",
+];
+
+const EXTERNAL_ACTION_DISPATCH_BEARER_TOKEN_KEYS: &[&str] = &[
+    "artifact_action_bearer_token",
+    "artifactActionBearerToken",
+    "artifact_bearer_token",
+    "artifactBearerToken",
+    "business_action_bearer_token",
+    "businessActionBearerToken",
+    "business_bearer_token",
+    "businessBearerToken",
+    "external_action_bearer_token",
+    "externalActionBearerToken",
+    "action_bearer_token",
+    "actionBearerToken",
+    "dispatch_bearer_token",
+    "dispatchBearerToken",
+];
+
+const EXTERNAL_ACTION_DISPATCH_SIGNING_SECRET_KEYS: &[&str] = &[
+    "artifact_action_signing_secret",
+    "artifactActionSigningSecret",
+    "artifact_signing_secret",
+    "artifactSigningSecret",
+    "business_action_signing_secret",
+    "businessActionSigningSecret",
+    "business_signing_secret",
+    "businessSigningSecret",
+    "external_action_signing_secret",
+    "externalActionSigningSecret",
+    "action_signing_secret",
+    "actionSigningSecret",
+    "dispatch_signing_secret",
+    "dispatchSigningSecret",
 ];
 
 fn apply_external_reply_dispatch_config(
@@ -16246,6 +16383,96 @@ fn apply_external_reply_dispatch_config(
     })
 }
 
+fn apply_external_action_dispatch_config(
+    mut config: Value,
+    request: &ExternalIntegrationActionDispatchConfigRequest,
+    now: DateTime<Utc>,
+) -> std::result::Result<PreparedExternalActionDispatchConfig, ApiError> {
+    ensure_json_object(&mut config);
+    let reason_present = external_control_reason_present(request.reason.as_deref());
+    if request.clear_action_dispatch.unwrap_or(false) {
+        remove_payload_keys(&mut config, EXTERNAL_ACTION_DISPATCH_URL_KEYS);
+        remove_payload_keys(&mut config, EXTERNAL_ACTION_DISPATCH_BEARER_TOKEN_KEYS);
+        remove_payload_keys(&mut config, EXTERNAL_ACTION_DISPATCH_SIGNING_SECRET_KEYS);
+        set_payload_value(
+            &mut config,
+            "management_control",
+            json!({
+                "last_action": "clear_action_dispatch",
+                "reason_present": reason_present,
+                "updated_at": now,
+                "secret_material_included": false,
+            }),
+        );
+        return Ok(PreparedExternalActionDispatchConfig {
+            config_redacted: config,
+            cleared: true,
+        });
+    }
+
+    let Some(dispatch_url) = request
+        .action_dispatch_url
+        .as_deref()
+        .and_then(non_empty_trimmed_string)
+    else {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_url_required",
+            "action_dispatch_url is required unless clear_action_dispatch is true".to_string(),
+        ));
+    };
+    validate_external_action_dispatch_url(&dispatch_url)?;
+    let bearer_token = validate_external_action_dispatch_secret(
+        "action_bearer_token",
+        request.action_bearer_token.as_deref(),
+    )?;
+    let signing_secret = validate_external_action_dispatch_secret(
+        "action_signing_secret",
+        request.action_signing_secret.as_deref(),
+    )?;
+    let secret_material_included = bearer_token.is_some() || signing_secret.is_some();
+
+    remove_payload_keys(&mut config, EXTERNAL_ACTION_DISPATCH_URL_KEYS);
+    set_payload_value(
+        &mut config,
+        "external_action_dispatch_url",
+        json!(dispatch_url),
+    );
+    if let Some(token) = bearer_token {
+        remove_payload_keys(&mut config, EXTERNAL_ACTION_DISPATCH_BEARER_TOKEN_KEYS);
+        set_payload_value(&mut config, "dispatch_bearer_token", json!(token));
+    }
+    if let Some(secret) = signing_secret {
+        remove_payload_keys(&mut config, EXTERNAL_ACTION_DISPATCH_SIGNING_SECRET_KEYS);
+        set_payload_value(&mut config, "dispatch_signing_secret", json!(secret));
+    }
+
+    let auth = external_action_dispatch_auth_from_config(&config);
+    if !external_action_dispatch_auth_configured(&auth) {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_auth_required",
+            "action_bearer_token or action_signing_secret is required before external actions can be dispatched"
+                .to_string(),
+        ));
+    }
+
+    set_payload_value(
+        &mut config,
+        "management_control",
+        json!({
+            "last_action": "configure_action_dispatch",
+            "reason_present": reason_present,
+            "updated_at": now,
+            "secret_material_included": secret_material_included,
+        }),
+    );
+    set_payload_value(&mut config, "action_dispatch_updated_at", json!(now));
+
+    Ok(PreparedExternalActionDispatchConfig {
+        config_redacted: config,
+        cleared: false,
+    })
+}
+
 fn validate_external_reply_dispatch_url(value: &str) -> std::result::Result<(), ApiError> {
     if value.chars().count() > 2048 || value.chars().any(char::is_control) {
         return Err(ApiError::bad_request(
@@ -16279,6 +16506,50 @@ fn validate_external_reply_dispatch_secret(
         return Err(ApiError::bad_request(
             "external_reply_dispatch_secret_invalid",
             format!("{field} must be printable text within 4096 characters"),
+        ));
+    }
+    Ok(Some(value))
+}
+
+fn validate_external_action_dispatch_url(value: &str) -> std::result::Result<(), ApiError> {
+    if value.chars().count() > 2048 || value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_url_invalid",
+            "action_dispatch_url must be a printable URL within 2048 characters".to_string(),
+        ));
+    }
+    let url = reqwest::Url::parse(value).map_err(|error| {
+        ApiError::bad_request(
+            "external_action_dispatch_url_invalid",
+            format!("action_dispatch_url must be a valid URL: {error}"),
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_url_invalid",
+            "action_dispatch_url must use http or https and include a host".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_external_action_dispatch_secret(
+    field: &str,
+    value: Option<&str>,
+) -> std::result::Result<Option<String>, ApiError> {
+    let Some(value) = value.and_then(non_empty_trimmed_string) else {
+        return Ok(None);
+    };
+    if value == "[redacted]" || value.chars().count() < 8 || value.chars().count() > 4096 {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_secret_invalid",
+            format!("{field} must be a non-redacted secret between 8 and 4096 characters"),
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "external_action_dispatch_secret_invalid",
+            format!("{field} must not contain control characters"),
         ));
     }
     Ok(Some(value))
@@ -110543,6 +110814,107 @@ mod tests {
         .expect_err("auth should be required");
 
         assert_eq!(error.payload.code, "external_reply_dispatch_auth_required");
+    }
+
+    #[test]
+    fn external_action_dispatch_config_writes_canonical_endpoint_and_credentials() {
+        let now = Utc::now();
+        let prepared = apply_external_action_dispatch_config(
+            json!({
+                "actionDispatchUrl": "https://old.example.com/actions",
+                "actionBearerToken": "old-token",
+                "actionSigningSecret": "old-secret"
+            }),
+            &ExternalIntegrationActionDispatchConfigRequest {
+                reason: Some("configure aigolf callbacks".to_string()),
+                action_dispatch_url: Some("https://api.example.com/v3/actions".to_string()),
+                action_bearer_token: Some("new-action-token".to_string()),
+                action_signing_secret: Some("new-action-secret".to_string()),
+                clear_action_dispatch: None,
+            },
+            now,
+        )
+        .expect("action dispatch config should apply");
+        let config = prepared.config_redacted;
+        let auth = external_action_dispatch_auth_from_config(&config);
+        let text = config.to_string();
+
+        assert!(!prepared.cleared);
+        assert_eq!(
+            external_action_dispatch_url_from_config(&config, "external_business_action.invoke")
+                .as_deref(),
+            Some("https://api.example.com/v3/actions")
+        );
+        assert_eq!(auth.bearer_token.as_deref(), Some("new-action-token"));
+        assert_eq!(auth.signing_secret.as_deref(), Some("new-action-secret"));
+        assert!(config.get("actionDispatchUrl").is_none());
+        assert!(config.get("actionBearerToken").is_none());
+        assert!(config.get("actionSigningSecret").is_none());
+        assert_eq!(
+            config["management_control"]["last_action"],
+            json!("configure_action_dispatch")
+        );
+        assert_eq!(
+            config["management_control"]["secret_material_included"],
+            json!(true)
+        );
+        assert!(!text.contains("configure aigolf callbacks"));
+    }
+
+    #[test]
+    fn external_action_dispatch_config_clear_preserves_reply_dispatch_fields() {
+        let now = Utc::now();
+        let prepared = apply_external_action_dispatch_config(
+            json!({
+                "external_action_dispatch_url": "https://old.example.com/actions",
+                "dispatch_bearer_token": "action-token",
+                "dispatch_signing_secret": "action-secret",
+                "reply_dispatch_url": "https://reply.example.com/replies",
+                "reply_dispatch_bearer_token": "reply-token"
+            }),
+            &ExternalIntegrationActionDispatchConfigRequest {
+                reason: Some("clear action only".to_string()),
+                action_dispatch_url: None,
+                action_bearer_token: None,
+                action_signing_secret: None,
+                clear_action_dispatch: Some(true),
+            },
+            now,
+        )
+        .expect("action dispatch config should clear");
+        let config = prepared.config_redacted;
+
+        assert!(prepared.cleared);
+        assert!(config.get("external_action_dispatch_url").is_none());
+        assert!(config.get("dispatch_bearer_token").is_none());
+        assert!(config.get("dispatch_signing_secret").is_none());
+        assert_eq!(
+            config["reply_dispatch_url"],
+            json!("https://reply.example.com/replies")
+        );
+        assert_eq!(config["reply_dispatch_bearer_token"], json!("reply-token"));
+        assert_eq!(
+            config["management_control"]["last_action"],
+            json!("clear_action_dispatch")
+        );
+    }
+
+    #[test]
+    fn external_action_dispatch_config_requires_auth() {
+        let error = apply_external_action_dispatch_config(
+            json!({}),
+            &ExternalIntegrationActionDispatchConfigRequest {
+                reason: None,
+                action_dispatch_url: Some("https://api.example.com/v3/actions".to_string()),
+                action_bearer_token: None,
+                action_signing_secret: None,
+                clear_action_dispatch: None,
+            },
+            Utc::now(),
+        )
+        .expect_err("auth should be required");
+
+        assert_eq!(error.payload.code, "external_action_dispatch_auth_required");
     }
 
     #[test]

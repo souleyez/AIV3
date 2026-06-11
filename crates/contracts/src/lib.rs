@@ -961,6 +961,20 @@ pub struct ExternalIntegrationReplyDispatchConfigRequest {
     pub clear_reply_dispatch: Option<bool>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalIntegrationActionDispatchConfigRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_dispatch_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_bearer_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_signing_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_action_dispatch: Option<bool>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExternalIntegrationControlResponse {
     pub accepted: bool,
