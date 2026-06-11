@@ -3589,8 +3589,22 @@ Data-ingestion external fixed-task smoke:
   - `cargo fmt --check` passed;
   - selected local Rust tests were blocked on the Windows host because `clang` was not installed; the CI workflow installs `clang` on Ubuntu before running these tests.
 - Remaining CI gate:
-  - first GitHub Actions run after push still needs to be reviewed and recorded;
+  - GitHub Actions run `27365484456` on commit `20ef9adf3340af8a44eb1f5cd496805fd120aca0` did not start either job;
+  - GitHub annotation: the job was not started because recent account payments failed or the spending limit needs to be increased;
+  - no workflow step, build command, smoke command, or Rust test ran inside GitHub Actions for that run;
+  - after GitHub billing/spending-limit is corrected, the DataMax CI workflow needs to be rerun and recorded;
   - if the workflow fails, treat it as an environment or coverage gap first, not as permission to change public third-party interfaces.
+- 8-server equivalent verification:
+  - repository `/srv/aiv3/repo` fast-forwarded from `46658db87` to `20ef9adf3`;
+  - `command -v clang`: `/usr/bin/clang`;
+  - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib`: passed, 3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib`: passed, 5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1 test;
+  - `CC=clang CXX=clang++ cargo test -p static-page-worker --lib`: passed, 14 tests;
+  - services stayed active after the documentation/workflow sync: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`.
 - Safety:
   - CI commands are no-credential or unit-test style checks;
   - no live endpoint, production database, source database, object storage, static-page generation, source sync, ingestion, schema migration, or third-party mutation was performed;
