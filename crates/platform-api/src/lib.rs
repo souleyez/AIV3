@@ -20781,6 +20781,7 @@ fn normalize_external_payload_string_case(payload: &mut Value, key: &str) {
         .collect::<String>();
     let normalized = match (key, compact.as_str()) {
         ("platform", "genericchat") => "generic_chat".to_string(),
+        ("platform", "aigolf") => "generic_chat".to_string(),
         ("platform", "thirdparty") => "third_party".to_string(),
         ("platform", "wecom") => "we_com".to_string(),
         ("message_type", "unknown") => "unknown".to_string(),
@@ -109903,6 +109904,9 @@ mod tests {
             external_channel_platform_from_wire_value("generic_chat"),
             Some(ExternalChannelPlatformView::GenericChat)
         );
+        let mut payload = json!({"platform": "aigolf"});
+        normalize_external_payload_string_case(&mut payload, "platform");
+        assert_eq!(payload["platform"], json!("generic_chat"));
         assert_eq!(external_channel_platform_from_wire_value("wechat"), None);
     }
 
