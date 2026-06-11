@@ -127,6 +127,8 @@ CC=clang CXX=clang++ cargo test -p static-page-worker --lib
 
 **下一步:** 部署窗口内把这两个 self-test 在 8 服务器也跑一遍，再决定是否跑真实 5 路静态页 live smoke。
 
+**8 服务器验证:** 已在 `c14e97091` 通过 `static-page-5way --self-test` 和 `cloudflare-fallback-2way --self-test`；本批次未重启服务。
+
 ### P1-2 数据源页面和 CC 数据接入
 
 **目标:** 主站清楚表达接入能力；CC 模式或 Codex 执行器可以协助数据库/API 接入，但必须落到明确目标数据集。
@@ -139,8 +141,9 @@ CC=clang CXX=clang++ cargo test -p static-page-worker --lib
 - 本地 staging-sync smoke 已通过：data-ingestion analysis、staging plan、confirm/sync contract、external-source materialization、ingest、retrieval、live readiness self-test、公开第三方指南检查。
 
 **待补:**
-- 数据接入分析到 staging plan 的 8 服务器回归。
 - 数据库接入样例只读摘要，不展示 raw 连接串、密码、原始表 dump。
+
+**8 服务器验证:** 已在 `c14e97091` 通过 `run-data-ingestion-staging-sync-smoke.sh`、live readiness self-test 和公开第三方指南检查；本批次未重启服务。
 
 **验证命令:**
 
@@ -159,7 +162,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 
 **目标:** 第三方一次对话中传入的临时文档、数据集分组和额外文档权限，在同会话后续持续生效。
 
-**状态:** 本地 self-test 已通过；线上 live 回归沿用 P0 第三方凭据型 smoke，在部署窗口抽样执行。
+**状态:** 本地和 8 服务器 self-test 已通过；线上 live 回归沿用 P0 第三方凭据型 smoke，在部署窗口抽样执行。
 
 **规则:**
 - `dataset_external_ids` 是稳定业务分组权限，可多个。
@@ -276,8 +279,6 @@ npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env 
 
 1. 完成本轮计划文档重建、脚本 README 更新、两个 static/fallback self-test 验证，并写入 validation。
 2. 如果用户要求收版：提交、推 GitHub、8 服务器 pull；纯文档/smoke 脚本不重启服务，只跑 self-test。
-3. 补 P1-2 的 8 服务器回归：静态页 self-test、Cloudflare fallback self-test、data-ingestion staging-sync smoke；纯脚本/文档更新不重启服务。
-4. 补 P1-3 的 8 服务器 self-test/live 抽样：`external-scoped-document-chat` 和 `external-video-ppt`。
-5. 补 P1-4：拿到合法 operator 凭据或运维安全回执后跑 model-gateway authenticated smoke。
-6. 在部署窗口跑主站 20 路和第三方 20 路并发抽样，记录 p50/p95/max 和失败原因。
-7. 推进 P2：选对象可达的小样本，做 fingerprint、fact-index、document-enrichment 的 summary-only dry-run。
+3. 补 P1-4：拿到合法 operator 凭据或运维安全回执后跑 model-gateway authenticated smoke。
+4. 在部署窗口跑主站 20 路和第三方 20 路并发抽样，记录 p50/p95/max 和失败原因。
+5. 推进 P2：选对象可达的小样本，做 fingerprint、fact-index、document-enrichment 的 summary-only dry-run。

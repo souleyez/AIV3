@@ -3309,3 +3309,32 @@ Data-ingestion external fixed-task smoke:
   - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
   - no server was deployed or restarted;
   - 120 server was not touched.
+
+## 2026-06-12 8-Server Pull And Self-Test Verification For `c14e97091`
+
+- Purpose:
+  - publish the active-plan/self-test batch to GitHub and prove the new smoke entrypoints on 8 server without service restart.
+- GitHub and 8-server sync:
+  - local commit: `c14e970` (`Add DataMax plan smoke self-tests`);
+  - pushed `main` to GitHub: `b3eb6ab..c14e970`;
+  - 8-server `/srv/aiv3/repo` was clean at `b3eb6ab5a`, then fast-forwarded to `c14e97091`;
+  - post-pull `git status -sb`: `## main...origin/main`;
+  - no service restart was performed because the batch changed only docs and smoke scripts.
+- 8-server smoke/self-test verification:
+  - `node --check scripts/smoke/static-page-5way.mjs`, `cloudflare-fallback-2way.mjs`, and `external-scoped-document-chat.mjs`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, receipt `/srv/aiv3/repo/target/static-page-5way-smoke/20260611164158-self-test.json`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`, receipt `/srv/aiv3/repo/target/cloudflare-fallback-2way-smoke/20260611164158-self-test.json`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`, receipt `/srv/aiv3/repo/target/external-scoped-document-chat-smoke/20260611164200-self-test.json`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`, receipt `/srv/aiv3/repo/target/external-video-ppt-smoke/20260611164217-self-test.json`;
+  - `bash scripts/run-data-ingestion-staging-sync-smoke.sh`: passed, receipt `/srv/aiv3/repo/target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260611T164217Z.json`;
+  - child live-readiness self-test receipt `/srv/aiv3/repo/target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260611T164630Z.json`;
+  - `npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env --env-file /etc/aiv3/minimax.env --allow-not-ready --json-stdout`: passed with `ready=true`, `dataset_output.ready=true`, `report_planner.ready=true`, and raw env/provider values not printed;
+  - `npm run check:pure-third-party-guide-html`: passed.
+- 8-server service state:
+  - checked active after the no-restart pull/smoke batch: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, `aiv3-static-page-worker.service`, and `aiv3-codex-host-agent.service`.
+- Safety:
+  - no service was restarted;
+  - no live third-party mutation, production data ingestion, source sync, schema migration, customer database connection, or production write was performed;
+  - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
+  - no credential, bearer token, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - 120 server was not touched.
