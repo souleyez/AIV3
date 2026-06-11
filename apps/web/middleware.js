@@ -36,7 +36,7 @@ export function middleware(request) {
   }
 
   if (url.pathname === '/') {
-    url.pathname = '/external-integrations';
+    url.pathname = '/v3-landing';
     return NextResponse.rewrite(url);
   }
 
