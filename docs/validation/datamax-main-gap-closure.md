@@ -3504,3 +3504,32 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, production table, schema, or dataset-source mapping was changed;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 P2 Summary-Only Wrapper Self-Test
+
+- Purpose:
+  - replace ad-hoc SSH command strings for P2 parsing/fact-store dry-runs with a fixed smoke entrypoint;
+  - ensure future operators cannot accidentally use this wrapper for a real backfill.
+- Code changes:
+  - added `scripts/smoke/p2-summary-only-dry-run.mjs`;
+  - added `npm run smoke:p2-summary-only-dry-run`;
+  - documented the smoke in `scripts/README.md`;
+  - updated `docs/plans/datamax-active-execution-plan.md` with the fixed P2 entrypoint.
+- Wrapper behavior:
+  - runs `document-fingerprint-backfill`, `fact-index-backfill`, and `document-enrichment-backfill`;
+  - always passes `--dry-run --summary-only --pretty`;
+  - has no option to pass `--confirm-real-run`;
+  - can load a deployment env file without printing env values;
+  - writes sanitized stdout/stderr receipts and a machine-readable summary report.
+- Local verification:
+  - `node --check scripts/smoke/p2-summary-only-dry-run.mjs`: passed;
+  - `npm run smoke:p2-summary-only-dry-run -- --self-test`: passed, `ok=true`, checks `specCountIsThree`, `allSpecsAreDryRunSummaryOnly`, `limitScopeUsedWhenDocumentIdMissing`, `fixtureJsonParsedAfterNoticeLines`, `nonMutatingSummaryRecognized`, and `sanitizerRedactsSecrets` all true;
+  - local receipt `target/p2-summary-only-dry-run-smoke/20260611171920-self-test.json`.
+- Safety:
+  - local self-test did not call DataMax or backfill binaries;
+  - no env file was loaded in self-test;
+  - no live endpoint, production database, source database, object storage, or customer document was touched;
+  - no credential, bearer, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no server was deployed or restarted;
+  - 120 server was not touched.

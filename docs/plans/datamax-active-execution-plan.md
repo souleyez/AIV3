@@ -195,6 +195,15 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 
 **当前证据:** 8 服务器已完成同一数据集 limit5 summary-only dry-run：fingerprint `would_record_count=5` 且 `duplicate_count=5`，fact-index `derived_fact_count=281`，enrichment `would_enqueue_count=2`；均未写入、未入队。
 
+**固定入口:**
+
+```bash
+npm run smoke:p2-summary-only-dry-run -- --self-test
+npm run smoke:p2-summary-only-dry-run -- --dataset-id <dataset-uuid> --limit 5 --env-file /etc/aiv3/aiv3.env
+```
+
+该入口只封装 `document-fingerprint-backfill`、`fact-index-backfill`、`document-enrichment-backfill` 的 `--dry-run --summary-only --pretty` 路径，不提供 `--confirm-real-run`。
+
 ### P2-2 重复文档与对象治理
 
 **目标:** 8 服务器本地文档按解析内容和 fingerprint 去重，文档可归属多个数据集，不重复存储不可控副本。
