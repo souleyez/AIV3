@@ -27,6 +27,7 @@ import {
 } from './lib/api-error';
 import { buildAssistantRunProgress } from './lib/assistant-run-progress';
 import { buildAssistantStartupBriefing } from './lib/assistant-startup-briefing';
+import { formatRelativeTime } from './lib/formatters';
 import {
   isTerminalCodexCustomerTaskStatus,
   mergeCodexCustomerArtifactBundles,
@@ -58,6 +59,14 @@ import {
   isPublicUploadClassification,
   summarizeUploadClassification,
 } from './lib/upload-classifier';
+import {
+  isLocalChatSessionOptionId,
+  localChatSessionOptionId,
+  localThreadIdFromSessionOptionId,
+  normalizeLocalChatSessions,
+  shouldPersistLocalChatSession,
+  upsertLocalChatSession,
+} from './lib/local-chat-sessions';
 
 const DATASET_POLL_INTERVAL_MS = 5000;
 const MESSAGE_POLL_INTERVAL_MS = 3000;
@@ -72,6 +81,7 @@ const DEFAULT_FETCH_TIMEOUT_MS = 45000;
 const LOCAL_UPLOAD_TIMEOUT_MS = 180000;
 const UPLOAD_REGISTRATION_TIMEOUT_MS = 60000;
 const LOCAL_CHAT_STORAGE_KEY = 'aidp-v3-local-chat-messages';
+const LOCAL_CHAT_SESSIONS_STORAGE_KEY = 'aidp-v3-local-chat-sessions';
 const LOCAL_ACTIVITY_STORAGE_KEY = 'aidp-v3-local-activity-events';
 const LOCAL_THREAD_ID_STORAGE_KEY = 'aidp-v3-local-thread-id';
 const LOCAL_ASSISTANT_RUN_ID_STORAGE_KEY = 'aidp-v3-local-assistant-run-id';
@@ -133,6 +143,32 @@ function writeLocalThreadId(threadId) {
     window.localStorage.setItem(LOCAL_THREAD_ID_STORAGE_KEY, threadId);
   } catch {
     // The browser cache is a convenience; AssistantRun can still use the current in-memory thread.
+  }
+}
+
+function readLocalChatSessions() {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(LOCAL_CHAT_SESSIONS_STORAGE_KEY);
+    return normalizeLocalChatSessions(raw ? JSON.parse(raw) : []);
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalChatSessions(sessions) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(
+      LOCAL_CHAT_SESSIONS_STORAGE_KEY,
+      JSON.stringify(normalizeLocalChatSessions(sessions)),
+    );
+  } catch {
+    // The local conversation index is a convenience cache; the active chat still works in memory.
   }
 }
 
@@ -1593,6 +1629,9 @@ export default function HomePageClient() {
   const [draftSessionTitle, setDraftSessionTitle] = useState('');
   const [messages, setMessages] = useState([]);
   const [localMessages, setLocalMessages] = useState([]);
+  const [localThreadId, setLocalThreadId] = useState('');
+  const [localChatSessions, setLocalChatSessions] = useState([]);
+  const [localChatStorageReady, setLocalChatStorageReady] = useState(false);
   const [input, setInput] = useState('');
   const [datasetDraft, setDatasetDraft] = useState({ key: '', title: '', secret: '' });
   const [localSecretDraft, setLocalSecretDraft] = useState('');
@@ -1758,6 +1797,21 @@ export default function HomePageClient() {
     const firstUserMessage = visibleMessages.find((message) => message.role === 'user')?.content || '';
     return buildDefaultConversationTitle(input || firstUserMessage || '新对话', draftSessionStartedAt);
   }, [draftSessionStartedAt, draftSessionTitle, input, selectedSession, visibleMessages]);
+  const conversationMenuSessions = useMemo(() => {
+    const localSessionOptions = localChatSessions
+      .filter((session) => selectedSessionId || session.id !== localThreadId)
+      .map((session) => ({
+        id: localChatSessionOptionId(session.id),
+        title: session.title || '本地对话',
+        updated_at: session.updatedAt,
+        meta: session.updatedAt ? `本地 · ${formatRelativeTime(session.updatedAt)}` : '本地对话',
+        localOnly: true,
+      }));
+    return [
+      ...localSessionOptions,
+      ...sessions,
+    ];
+  }, [localChatSessions, localThreadId, selectedSessionId, sessions]);
   const assistantStartupBriefing = useMemo(
     () => buildAssistantStartupBriefing({
       datasets,
@@ -4148,9 +4202,82 @@ export default function HomePageClient() {
     }
   }
 
+  function buildCurrentLocalChatSessionSnapshot(overrides = {}) {
+    const threadId = overrides.threadId || localThreadId || readLocalThreadId();
+    const snapshotMessages = Array.isArray(overrides.messages) ? overrides.messages : localMessages;
+    const title = String(overrides.title || currentConversationTitle || '').trim();
+    const now = new Date().toISOString();
+    return {
+      id: threadId,
+      title: title || buildDefaultConversationTitle(
+        snapshotMessages.find((message) => message.role === 'user')?.content || '新对话',
+        draftSessionStartedAt,
+      ),
+      messages: snapshotMessages,
+      startedAt: overrides.startedAt || draftSessionStartedAt || now,
+      updatedAt: overrides.updatedAt || now,
+      assistantRunId: overrides.assistantRunId ?? lastAssistantRunId,
+    };
+  }
+
+  function persistCurrentLocalConversation(overrides = {}) {
+    if (selectedSessionId) {
+      return null;
+    }
+    const snapshot = buildCurrentLocalChatSessionSnapshot(overrides);
+    if (!shouldPersistLocalChatSession({
+      messages: snapshot.messages,
+      assistantRunId: snapshot.assistantRunId,
+      title: snapshot.title,
+    })) {
+      return null;
+    }
+    setLocalChatSessions((current) => {
+      const next = upsertLocalChatSession(current, snapshot);
+      writeLocalChatSessions(next);
+      return next;
+    });
+    return snapshot;
+  }
+
+  function loadLocalConversation(sessionId) {
+    const threadId = localThreadIdFromSessionOptionId(sessionId);
+    if (!threadId) {
+      return false;
+    }
+    if (!selectedSessionId && threadId !== localThreadId) {
+      persistCurrentLocalConversation();
+    }
+    const localSession = localChatSessions.find((session) => session.id === threadId);
+    if (!localSession) {
+      setError('本地对话缓存未找到，可能已被浏览器清理。');
+      return true;
+    }
+    writeLocalThreadId(threadId);
+    setLocalThreadId(threadId);
+    setDraftSessionStartedAt(localSession.startedAt || new Date().toISOString());
+    setDraftSessionTitle(localSession.title || '');
+    setComposingNewSession(false);
+    setSelectedSessionId(null);
+    setMessages([]);
+    setLocalMessages((localSession.messages || []).slice(-40));
+    setLastAssistantRunId(localSession.assistantRunId || '');
+    setAssistantRunProgress(null);
+    setCodexCustomerTasks([]);
+    setCodexCustomerArtifacts([]);
+    assistantRunCustomerCodexPollRef.current += 1;
+    setMobilePanel('chat');
+    setError('');
+    return true;
+  }
+
   function handleStartNewConversation() {
-    writeLocalThreadId(createLocalThreadId());
-    setDraftSessionStartedAt(new Date().toISOString());
+    persistCurrentLocalConversation();
+    const nextThreadId = createLocalThreadId();
+    const startedAt = new Date().toISOString();
+    writeLocalThreadId(nextThreadId);
+    setLocalThreadId(nextThreadId);
+    setDraftSessionStartedAt(startedAt);
     setDraftSessionTitle('');
     setBanner(
       selectedDatasetIds.length
@@ -4174,12 +4301,17 @@ export default function HomePageClient() {
     if (!sessionId) {
       return;
     }
+    if (isLocalChatSessionOptionId(sessionId)) {
+      loadLocalConversation(sessionId);
+      return;
+    }
     if (sessionId === 'draft') {
       if (selectedSessionId) {
         handleStartNewConversation();
       }
       return;
     }
+    persistCurrentLocalConversation();
     setComposingNewSession(false);
     setSelectedSessionId(sessionId);
     setMobilePanel('chat');
@@ -5045,16 +5177,33 @@ export default function HomePageClient() {
 
   useEffect(() => {
     if (typeof window === 'undefined') {
+      setLocalChatStorageReady(true);
       return;
     }
     try {
-      const raw = window.localStorage.getItem(LOCAL_CHAT_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(parsed)) {
-        setLocalMessages(parsed.slice(-40));
+      const threadId = readLocalThreadId();
+      setLocalThreadId(threadId);
+      const storedLocalSessions = readLocalChatSessions();
+      setLocalChatSessions(storedLocalSessions);
+      const currentLocalSession = storedLocalSessions.find((session) => session.id === threadId);
+      if (currentLocalSession) {
+        setLocalMessages((currentLocalSession.messages || []).slice(-40));
+        setDraftSessionStartedAt(currentLocalSession.startedAt || new Date().toISOString());
+        setDraftSessionTitle(currentLocalSession.title || '');
+        if (currentLocalSession.assistantRunId) {
+          setLastAssistantRunId(currentLocalSession.assistantRunId);
+        }
+      } else {
+        const raw = window.localStorage.getItem(LOCAL_CHAT_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) {
+          setLocalMessages(parsed.slice(-40));
+        }
       }
     } catch {
       setLocalMessages([]);
+    } finally {
+      setLocalChatStorageReady(true);
     }
   }, []);
 
@@ -5066,12 +5215,37 @@ export default function HomePageClient() {
     if (typeof window === 'undefined') {
       return;
     }
+    if (!localChatStorageReady) {
+      return;
+    }
     try {
       window.localStorage.setItem(LOCAL_CHAT_STORAGE_KEY, JSON.stringify(localMessages.slice(-40)));
     } catch {
       // Ignore cache write failures; chat can still continue in memory.
     }
-  }, [localMessages]);
+    if (!selectedSessionId) {
+      const snapshot = buildCurrentLocalChatSessionSnapshot({ threadId: localThreadId || readLocalThreadId() });
+      if (shouldPersistLocalChatSession({
+        messages: snapshot.messages,
+        assistantRunId: snapshot.assistantRunId,
+        title: snapshot.title,
+      })) {
+        setLocalChatSessions((current) => {
+          const next = upsertLocalChatSession(current, snapshot);
+          writeLocalChatSessions(next);
+          return next;
+        });
+      }
+    }
+  }, [
+    currentConversationTitle,
+    draftSessionStartedAt,
+    lastAssistantRunId,
+    localChatStorageReady,
+    localMessages,
+    localThreadId,
+    selectedSessionId,
+  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -5759,7 +5933,7 @@ export default function HomePageClient() {
           sidebarProps={sidebarProps}
           chatPanelProps={chatPanelProps}
           insightPanelProps={insightPanelProps}
-          sessions={sessions}
+          sessions={conversationMenuSessions}
           selectedSessionId={selectedSessionId}
           currentConversationTitle={currentConversationTitle}
           composingNewSession={composingNewSession}
@@ -5802,7 +5976,7 @@ export default function HomePageClient() {
           selectedDataset={selectedDataset}
           selectedDatasets={selectedDatasets}
           stats={stats}
-          sessions={sessions}
+          sessions={conversationMenuSessions}
           selectedSession={selectedSession}
           selectedSessionId={selectedSessionId}
           currentConversationTitle={currentConversationTitle}

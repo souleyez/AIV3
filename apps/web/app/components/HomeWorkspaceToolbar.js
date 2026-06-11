@@ -73,7 +73,7 @@ export default function HomeWorkspaceToolbar({
     ...sessions.map((session) => ({
       id: session.id,
       title: session.title || '未命名对话',
-      meta: session.updated_at ? formatRelativeTime(session.updated_at) : '最近更新',
+      meta: session.meta || (session.updated_at ? formatRelativeTime(session.updated_at) : '最近更新'),
       isDraft: false,
     })),
   ];
