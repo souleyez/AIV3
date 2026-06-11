@@ -249,6 +249,42 @@ This ledger records DataMax gap-closure evidence. The current active execution p
   - authenticated model-gateway operator checks still require a legitimate operator session/cookie or approved operator-side receipt;
   - no credential, cookie, bearer, provider key, env value, customer row, raw source payload, or private object path was recorded.
 
+## 2026-06-11 P0 Credentialed External-Channel Smoke Refresh
+
+- Purpose:
+  - close the current active plan's third-party live-smoke gap after deploy `8f31a4a77` and documentation sync `52f1e39`;
+  - verify ordinary third-party Q&A, third-party SSE streaming, static-page/report triggering, temporary document scope, and report export fields on `https://v3.elepcloud.com`.
+- Credential handling:
+  - 8-server env files did not define `EXTERNAL_CHANNEL_SMOKE_BEARER`, `EXTERNAL_CHANNEL_STREAMING_SMOKE_BEARER`, `EXTERNAL_SCOPED_DOCUMENT_SMOKE_BEARER`, `EXTERNAL_REPORT_EXPORT_SMOKE_BEARER`, `MODEL_GATEWAY_OPERATOR_SMOKE_COOKIE`, `MODEL_GATEWAY_OPERATOR_SMOKE_EMAIL`, or `MODEL_GATEWAY_OPERATOR_SMOKE_LOCAL_KEY`;
+  - the smoke runner selected the latest enabled `generic-chat-main` `inbound_bearer_token` server-side from `external_channel_connections.config_redacted`, injected it only into child-process environment variables, and sanitized stdout before returning;
+  - the token value was not printed, committed, written into this ledger, or recorded in smoke summaries.
+- Safe prechecks:
+  - `generic-chat-main` has enabled rows with `inbound_bearer_token` present; token-shape probe printed only presence, length, and masked-status booleans;
+  - no dedicated operator smoke credential file was found under `/etc/aiv3` or shallow smoke target paths;
+  - model-gateway operator authenticated smoke remains pending because no legitimate operator cookie/email/local-key is configured for this smoke path.
+- Third-party ordinary live smoke:
+  - command shape: server-side bearer loaded and not printed, `npm run smoke:external-channel-20way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --concurrency 3 --timeout-ms 120000 --output-dir target/external-channel-ordinary-smoke-52f1e39-small`;
+  - result: `runId=20260611155845`, `okCount=3`, `failedCount=0`, `completedCount=3`, `p95LatencyMs=11003`;
+  - receipt: `/srv/aiv3/repo/target/external-channel-ordinary-smoke-52f1e39-small/20260611155845.json`.
+- Third-party SSE/static-page live smoke:
+  - command shape: server-side bearer loaded and not printed, `npm run smoke:external-channel-streaming-10way -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --normal-count 2 --static-page-count 1 --reconnect-count 1 --timeout-ms 180000 --output-dir target/external-channel-streaming-smoke-52f1e39-small`;
+  - result: `runId=20260611155856`, `totalTaskCount=4`, `okCount=4`, `failedCount=0`, `normalOkCount=2`, `staticPageOkCount=1`, `reconnectOkCount=1`, `duplicateFinalMessageCount=0`, `artifactCount=1`, `continuePollingCount=0`, `p95LatencyMs=9725`;
+  - receipt: `/srv/aiv3/repo/target/external-channel-streaming-smoke-52f1e39-small/20260611155856.json`.
+- Third-party scoped temporary document live smoke:
+  - command shape: server-side bearer loaded and not printed, `npm run smoke:external-scoped-document-chat -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --source-id third-party-source-main --timeout-ms 180000 --parse-timeout-ms 240000 --output-dir target/external-scoped-document-chat-smoke-52f1e39`;
+  - result: `runId=20260611155933`, `ok=true`, `caseCount=4`;
+  - receipt: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-52f1e39/20260611155933.json`;
+  - markdown receipt: `/srv/aiv3/repo/target/external-scoped-document-chat-smoke-52f1e39/20260611155933.md`.
+- Third-party report export live smoke:
+  - command shape: server-side bearer loaded and not printed, `EXTERNAL_REPORT_EXPORT_SMOKE_DATASET_EXTERNAL_IDS=64fff6c8-10e2-4ee8-8243-23166cce3abc`, `EXTERNAL_REPORT_EXPORT_SMOKE_REQUIRE_TEXT_LINK=true`, then `npm run smoke:external-report-export -- --base-url https://v3.elepcloud.com --connection-id generic-chat-main --timeout-ms 180000 --output-dir target/external-report-export-smoke-52f1e39-live`;
+  - result: `runId=20260611160219`, `modeCount=2`, `okCount=2`, `failedCount=0`, `datasetExternalIdCount=1`, title `新世界百货经营管理月报表`, focus `取高机会`, `p95LatencyMs=16124`;
+  - the smoke checked JSON and SSE report surfaces, one customer-facing report link, card/export fields, and HTTP access for `table-data.csv`, `report.ppt`, and `report.md`;
+  - receipt: `/srv/aiv3/repo/target/external-report-export-smoke-52f1e39-live/20260611160219.json`.
+- Safety:
+  - no public third-party URL, auth method, required request field, existing response field, status value, or header name changed;
+  - no 120-server action was taken;
+  - no credential, cookie, bearer token, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, or full document body was recorded.
+
 ## Gate Results
 
 | Gate | Status | Receipt |
