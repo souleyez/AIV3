@@ -25,7 +25,7 @@ const PAGE_COPY = {
   },
   sources: {
     title: '数据源',
-    subtitle: '所有采集来源按文件、网页、音视频和未分类入口归档。',
+    subtitle: '统一展示网页采集、数据库接入、ERP 登录、API 对接、MCP 对接等资料接入方式和已接入数据。',
   },
   members: {
     title: '成员',
@@ -81,6 +81,124 @@ function sourceGroups(documents = []) {
     groups.get(kind).push(document);
   });
   return [...groups.entries()].map(([kind, items]) => ({ kind, items }));
+}
+
+const SOURCE_ACCESS_METHODS = [
+  {
+    title: '网页采集',
+    status: '可接入',
+    detail: '可把公开页面、业务后台页面、文档站和指定网页内容采集入库，后续进入问答、报表和静态页链路。',
+  },
+  {
+    title: '数据库接入',
+    status: '已接入',
+    detail: '支持配置数据库连接、读取表结构、生成语义画像，并同步到目标数据集用于经营分析和报表。',
+  },
+  {
+    title: 'ERP 登录',
+    status: '规划接入',
+    detail: '适合需要账号登录、页面跳转和权限隔离的 ERP/CRM/业务系统，接入后按授权范围采集业务数据。',
+  },
+  {
+    title: 'API 对接',
+    status: '可接入',
+    detail: '第三方系统可通过稳定接口推送文档、分组权限、临时附件和对话请求，DataMax 负责解析、检索和产物回传。',
+  },
+  {
+    title: 'MCP 对接',
+    status: '规划接入',
+    detail: '面向企业内部工具、知识库、工单和业务动作，把可调用能力作为工具暴露给本地智能体。',
+  },
+  {
+    title: '文件与模板',
+    status: '已接入',
+    detail: '支持 PDF、Word、Excel、CSV、图片、音视频和模板参考文件，入库后可用于问答、报表和页面生成。',
+  },
+];
+
+function latestDocumentUpdatedAt(items = []) {
+  const latest = items
+    .map((item) => new Date(item.updated_at || item.updatedAt || item.created_at || item.createdAt || 0).getTime())
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => right - left)[0];
+  return latest ? new Date(latest).toISOString() : '';
+}
+
+function AccessMethodGuide({ documents, datasets }) {
+  return (
+    <section className="directory-card source-guide-card">
+      <div className="directory-section-head">
+        <div>
+          <h3>接入方式</h3>
+          <p>按客户资料来源选择接入路径；接入后统一归档到数据集，供问答、报表和产物生成使用。</p>
+        </div>
+      </div>
+      <div className="source-method-grid">
+        {SOURCE_ACCESS_METHODS.map((item) => (
+          <article key={item.title} className="source-method-card">
+            <div>
+              <strong>{item.title}</strong>
+              <span>{item.status}</span>
+            </div>
+            <p>{item.detail}</p>
+          </article>
+        ))}
+      </div>
+      <div className="source-guide-summary" aria-label="当前接入概览">
+        <MiniMetric label="已接入文档" value={documents.length} />
+        <MiniMetric label="可归档数据集" value={datasets.length} />
+        <MiniMetric label="支持方式" value={SOURCE_ACCESS_METHODS.length} />
+      </div>
+    </section>
+  );
+}
+
+function ConnectedDataSummary({ groups, datasets, loading = false }) {
+  const total = groups.reduce((sum, group) => sum + group.items.length, 0);
+  return (
+    <section className="directory-card connected-source-card">
+      <div className="directory-section-head">
+        <div>
+          <h3>已接入数据</h3>
+          <p>{total ? `当前已归档 ${total} 个采集对象，可按类型展开查看。` : '暂无已接入数据，上传或采集完成后会显示在这里。'}</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="directory-empty">正在读取已接入数据。</div>
+      ) : groups.length ? (
+        <div className="connected-source-list">
+          {groups.map((group, index) => {
+            const latestUpdatedAt = latestDocumentUpdatedAt(group.items);
+            return (
+              <details className="connected-source-group" key={group.kind} open={index === 0}>
+                <summary>
+                  <div>
+                    <strong>{group.kind}</strong>
+                    <span>
+                      {group.items.length} 个对象
+                      {latestUpdatedAt ? ` · 最近更新 ${formatRelativeTime(latestUpdatedAt)}` : ''}
+                    </span>
+                  </div>
+                  <em>展开</em>
+                </summary>
+                <div className="directory-source-list connected-source-documents">
+                  {group.items.map((document) => (
+                    <article key={document.id}>
+                      <strong>{document.title || '未命名资料'}</strong>
+                      <span>{documentDatasetTitles(document, datasets)} · {formatRelativeTime(document.updated_at || document.updatedAt)}</span>
+                      <em>{truncateText(document.object_key || document.objectKey || document.external_id || document.id, 88)}</em>
+                    </article>
+                  ))}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="directory-empty">暂无采集源。上传文件、网页采集或业务系统同步完成后，会按类型进入这里。</div>
+      )}
+    </section>
+  );
 }
 
 function MiniMetric({ label, value }) {
@@ -887,34 +1005,13 @@ function DocumentDetailPage({
   );
 }
 
-function SourcesPage({ documents, datasets }) {
+function SourcesPage({ documents, datasets, documentsLoading = false }) {
   const groups = sourceGroups(documents);
   return (
     <div className="directory-grid-cards">
+      <AccessMethodGuide documents={documents} datasets={datasets} />
+      <ConnectedDataSummary groups={groups} datasets={datasets} loading={documentsLoading} />
       <DatabaseSourcePanel datasets={datasets} />
-      {groups.length ? groups.map((group) => (
-        <section className="directory-card" key={group.kind}>
-          <div className="directory-section-head">
-            <div>
-              <h3>{group.kind}</h3>
-              <p>{group.items.length} 个采集对象。</p>
-            </div>
-          </div>
-          <div className="directory-source-list">
-            {group.items.slice(0, 8).map((document) => (
-              <article key={document.id}>
-                <strong>{document.title}</strong>
-                <span>{documentDatasetTitles(document, datasets)} · {formatRelativeTime(document.updated_at)}</span>
-              </article>
-            ))}
-          </div>
-        </section>
-      )) : (
-        <section className="directory-card">
-          <h3>暂无采集源</h3>
-          <p>上传文件、网页采集或音视频后，会按类型进入这里。</p>
-        </section>
-      )}
     </div>
   );
 }
@@ -1083,7 +1180,7 @@ export default function WorkspaceDirectoryPanel({
           onToggleDocumentDatasetMembership={onToggleDocumentDatasetMembership}
         />
       ) : null}
-      {activePage === 'sources' ? <SourcesPage documents={documents} datasets={datasets} /> : null}
+      {activePage === 'sources' ? <SourcesPage documents={documents} datasets={datasets} documentsLoading={documentsLoading} /> : null}
       {activePage === 'members' ? <MembersPage accountStatusSummary={accountStatusSummary} /> : null}
       {activePage === 'audit' ? <AuditPage stats={stats} activityEvents={activityEvents} htmlArtifacts={htmlArtifacts} /> : null}
       {activePage === 'model-pool' ? <ModelPoolPanel accountStatusSummary={accountStatusSummary} /> : null}
