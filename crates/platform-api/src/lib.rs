@@ -191,9 +191,10 @@ mod react_agent_tools;
 use auth_session_support::*;
 use external_channel_support::*;
 use external_integration_summary::{
+    action_response_summary as external_action_response_summary,
+    action_result_payload_summary as external_action_result_payload_summary,
     has_redacted_value as external_integration_has_redacted_value,
     redacted_summary as external_integration_redacted_summary,
-    sensitive_key as external_integration_sensitive_key,
 };
 use external_observability::{
     access_allowed as external_observability_access_allowed,
@@ -20903,39 +20904,6 @@ fn external_action_result_callback_summary(
     })
 }
 
-fn external_action_result_payload_summary(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let sensitive_field_count = map
-                .keys()
-                .filter(|key| external_integration_sensitive_key(key))
-                .count();
-            json!({
-                "kind": "object",
-                "field_count": map.len(),
-                "sensitive_field_count": sensitive_field_count,
-            })
-        }
-        Value::Array(items) => json!({
-            "kind": "array",
-            "item_count": items.len(),
-        }),
-        Value::String(text) => json!({
-            "kind": "string",
-            "length_chars": text.chars().count(),
-        }),
-        Value::Number(_) => json!({
-            "kind": "number",
-        }),
-        Value::Bool(_) => json!({
-            "kind": "boolean",
-        }),
-        Value::Null => json!({
-            "kind": "null",
-        }),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn plan_and_record_external_action_run(
     state: &AppState,
@@ -22272,43 +22240,6 @@ fn external_action_response_request_id(response: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn external_action_response_summary(response: Option<&Value>, response_text: &str) -> Value {
-    if let Some(response) = response {
-        return json!({
-            "json": external_action_redacted_response_summary(response),
-        });
-    }
-    json!({
-        "text_chars": response_text.chars().count(),
-        "body_redacted": true,
-    })
-}
-
-fn external_action_redacted_response_summary(response: &Value) -> Value {
-    match response {
-        Value::Object(map) => {
-            let mut summary = Map::new();
-            for key in [
-                "external_request_id",
-                "externalRequestId",
-                "request_id",
-                "requestId",
-                "status",
-                "code",
-            ] {
-                if let Some(value) = map.get(key) {
-                    summary.insert(key.to_string(), value.clone());
-                }
-            }
-            if map.contains_key("message") {
-                summary.insert("message_present".to_string(), json!(true));
-            }
-            Value::Object(summary)
-        }
-        _ => Value::Null,
-    }
 }
 
 async fn ingest_feishu_channel_callback(
