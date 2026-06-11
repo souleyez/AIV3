@@ -29,6 +29,7 @@ function parseArgs(argv) {
     tenantExternalId: process.env.STATIC_PAGE_5WAY_TENANT_EXTERNAL_ID || 'tenant-ext-smoke',
     botExternalId: process.env.STATIC_PAGE_5WAY_BOT_EXTERNAL_ID || 'bot-v3',
     outputDir: process.env.STATIC_PAGE_5WAY_OUTPUT_DIR || 'target/static-page-5way-smoke',
+    selfTest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -72,6 +73,8 @@ function parseArgs(argv) {
     } else if (arg === '--output-dir') {
       args.outputDir = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -128,6 +131,7 @@ Optional:
   --poll-timeout-ms 300000    poll status URLs for up to 5 minutes
   --require-artifact          fail unless a final artifact URL is observed
   --dataset-external-ids a,b  scope the static page to dataset groups
+  --self-test                 run deterministic fixture checks without calling DataMax
 `);
 }
 
@@ -339,8 +343,108 @@ function sleep(ms) {
   });
 }
 
+async function runSelfTest(args) {
+  const runId = `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-self-test`;
+  const fixtureArgs = {
+    ...args,
+    baseUrl: 'https://v3.elepcloud.com',
+    connectionId: DEFAULT_CONNECTION_ID,
+    concurrency: DEFAULT_CONCURRENCY,
+    requireArtifact: false,
+    pollTimeoutMs: 0,
+    datasetExternalIds: ['dataset-a', 'dataset-b'],
+    documentExternalIds: ['document-extra'],
+  };
+  const payloads = Array.from({ length: fixtureArgs.concurrency }, (_, index) => buildPayload(fixtureArgs, index, runId));
+  const published = {
+    assistant_run_id: 'run-static-page-published',
+    reply: {
+      reply_type: 'artifact_link',
+      task_status: 'static_page_published',
+      artifact_links: [
+        'https://v3.elepcloud.com/generated-artifacts/database-static-pages/self-test/index.html',
+      ],
+      card: {
+        public_url: 'https://v3.elepcloud.com/generated-artifacts/database-static-pages/self-test/index.html',
+      },
+    },
+  };
+  const queued = {
+    assistant_run_id: 'run-static-page-queued',
+    reply: {
+      reply_type: 'task_accepted',
+      task_status: 'static_page_queued',
+      card: {
+        status_url: '/v1/external/channels/generic-chat-main/assistant-runs/run-static-page-queued/reply',
+      },
+    },
+  };
+  const failed = {
+    assistant_run_id: 'run-static-page-failed',
+    reply: {
+      reply_type: 'task_failed',
+      task_status: 'static_page_failed',
+      card: {
+        status: 'failed',
+      },
+    },
+  };
+  const checks = {
+    defaultConcurrencyIsFive: fixtureArgs.concurrency === 5,
+    payloadCountMatchesConcurrency: payloads.length === 5,
+    payloadsRequestStaticPageArtifact: payloads.every((payload) => (
+      payload.render_mode === 'artifact'
+        && payload.artifact_type === 'static_page'
+        && payload.output_format === 'rich_text'
+        && payload.dataset_external_ids.length === 2
+        && payload.available_document_external_ids.length === 1
+    )),
+    artifactUrlDetected: firstArtifactUrl(published)?.endsWith('/index.html') === true,
+    statusUrlResolved: statusUrlFromResponse(queued, fixtureArgs.baseUrl, fixtureArgs.connectionId)
+      === 'https://v3.elepcloud.com/v1/external/channels/generic-chat-main/assistant-runs/run-static-page-queued/reply',
+    terminalFailureDetected: isTerminalFailure(failed) === true,
+  };
+  const ok = Object.values(checks).every(Boolean);
+  const summary = {
+    runId,
+    selfTest: true,
+    ok,
+    baseUrl: fixtureArgs.baseUrl,
+    connectionId: fixtureArgs.connectionId,
+    concurrency: fixtureArgs.concurrency,
+    checks,
+    generatedAt: new Date().toISOString(),
+  };
+  const report = {
+    summary,
+    payloadShape: {
+      count: payloads.length,
+      first: {
+        platform: payloads[0]?.platform,
+        render_mode: payloads[0]?.render_mode,
+        artifact_type: payloads[0]?.artifact_type,
+        dataset_external_ids_count: payloads[0]?.dataset_external_ids?.length || 0,
+        available_document_external_ids_count: payloads[0]?.available_document_external_ids?.length || 0,
+      },
+    },
+  };
+  const outputDir = join(process.cwd(), args.outputDir);
+  await mkdir(outputDir, { recursive: true });
+  const reportPath = join(outputDir, `${runId}.json`);
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify(summary, null, 2));
+  console.log(`report=${reportPath}`);
+  if (!ok) {
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
   const runId = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const results = await Promise.all(
     Array.from({ length: args.concurrency }, (_, index) => postOne(args, index, runId)),

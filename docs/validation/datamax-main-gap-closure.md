@@ -3204,3 +3204,108 @@ Data-ingestion external fixed-task smoke:
   - no document title, document body, external URL, local path, raw row, database URL, credential, bearer token, provider payload, cookie, local key, or secret env value was recorded;
   - no public API, third-party URL, auth method, required request field, existing response field, production table, schema, or dataset-source mapping was changed;
   - 120 server was not touched.
+
+## 2026-06-12 Active Plan Rebuild And Static Smoke Self-Test Support
+
+- Purpose:
+  - rebuild `docs/plans/datamax-active-execution-plan.md` as the single active DataMax plan;
+  - move detailed evidence expectations out of the plan and keep validation receipts in `docs/validation/`;
+  - make the static-page 5-way and Cloudflare fallback 2-way smoke commands usable as deterministic local self-tests.
+- Plan/document state:
+  - `rg --files docs/plans` returned only `docs/plans/datamax-active-execution-plan.md`;
+  - the plan now has stable sections for usage rules, current baseline, current non-goals, P0 release gates, P1 near-term work, P2 parsing/fact-store work, P3 engineering governance, 8-server release flow, and the next execution queue;
+  - `scripts/README.md` documents `npm run smoke:static-page-5way -- --self-test` and `npm run smoke:cloudflare-fallback-2way -- --self-test`.
+- Code change:
+  - `scripts/smoke/static-page-5way.mjs` now accepts `--self-test` and validates deterministic fixture coverage for five static-page artifact requests, scoped dataset/document payload shape, artifact URL extraction, status URL resolution, and terminal failure detection;
+  - `scripts/smoke/cloudflare-fallback-2way.mjs` now accepts `--self-test`, shares summary construction between live and fixture paths, validates Codex host concurrency and watched queue caps from fixtures, and uses `summary.ok` for the live command exit decision.
+- Local verification:
+  - `node --check scripts\smoke\static-page-5way.mjs`: passed;
+  - `node --check scripts\smoke\cloudflare-fallback-2way.mjs`: passed;
+  - `npm run smoke:static-page-5way -- --self-test`: passed with `ok=true`, `concurrency=5`, all fixture checks true, receipt `target/static-page-5way-smoke/20260611162402-self-test.json`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed with `ok=true`, `codexConcurrency=2`, `maxRunning=2`, `watchedQueueCount=2`, receipt `target/cloudflare-fallback-2way-smoke/20260611162402-self-test.json`;
+  - `cargo test -p static-page-worker --lib`: passed, 14/14 tests;
+  - `.\scripts\run-cloudflare-codex-fixed-task-smoke.ps1 -Local -PlanOnly -Case data-ingestion-analysis -Json`: passed, report `target/cloudflare-codex-fixed-task-smoke/cloudflare-codex-fixed-task-smoke-20260611T162452Z.json`, covering contracts, codex-host-agent, platform-api data ingestion, and platform-api fixed-task tests;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - no live DataMax endpoint was called by the two new self-tests;
+  - no server was deployed or restarted;
+  - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
+  - no credential, bearer token, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - 120 server was not touched.
+
+## 2026-06-12 P1 Data-Ingestion Local Closure
+
+- Purpose:
+  - close the local P1-2 plan gate for CC-mode data ingestion, target-dataset constraints, staging-plan output safety, and staging-sync smoke coverage.
+- Targeted CC/data-ingestion checks:
+  - `cargo test -p platform-api assistant_run_customer_codex_sidecar --lib`: passed, 24/24 tests; covered CC data-ingestion routing with selected source and read-only handling without source;
+  - `cargo test -p platform-api assistant_run_data_ingestion_sidecar_embeds_fixed_task_context --lib`: passed, 1/1 test; covered fixed-task context with `target_dataset_required`;
+  - `cargo test -p platform-api external_source_sync_mysql_requires_effective_target_dataset --lib`: passed, 1/1 test; covered MySQL source sync refusing to proceed without an effective target dataset.
+- Live-readiness self-test:
+  - `bash scripts/run-data-ingestion-staging-live-smoke.sh --self-test`: passed;
+  - receipt JSON `target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260611T162729Z.json`;
+  - receipt Markdown `target/data-ingestion-staging-live-smoke/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260611T162729Z.md`.
+- Full staging-sync smoke:
+  - first run passed all Rust/data-ingestion checks but failed at the public guide check because `docs/integrations/pure-third-party-integration-guide.zh-CN.html` was stale;
+  - ran `npm run build:pure-third-party-guide-html`, which regenerated the published third-party guide HTML/Markdown copies from existing sources;
+  - `npm run check:pure-third-party-guide-html`: passed after regeneration;
+  - reran `bash scripts/run-data-ingestion-staging-sync-smoke.sh`: passed;
+  - final receipt JSON `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260611T163245Z.json`;
+  - final receipt Markdown `target/data-ingestion-staging-sync-smoke/data-ingestion-staging-sync-smoke-20260611T163245Z.md`;
+  - live self-test child receipt `target/data-ingestion-staging-sync-smoke/live-self-test/data-ingestion-staging-live-smoke-hy-sql-traffic-area-20260611T163309Z.json`.
+- Smoke coverage:
+  - platform-api data-ingestion analysis, staging plan, confirm, and sync contract: 18/18 tests passed;
+  - platform-api ExternalSourceSync contract: 6/6 tests passed;
+  - external-source-worker source materialization: 11/11 tests passed;
+  - ingest-worker source document ingestion: 48/48 plus follow-up 16/16 tests passed;
+  - retrieval-worker source indexing and enrichment helper tests passed;
+  - pure third-party guide HTML contract passed.
+- Safety:
+  - no production data ingestion, source sync, schema migration, customer database connection, or production write was performed;
+  - no server was deployed or restarted;
+  - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed by the data-ingestion code path;
+  - regenerated third-party guide files were produced from existing source docs and verified by the guide checker;
+  - no credential, bearer token, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - 120 server was not touched.
+
+## 2026-06-12 P1 Scoped Document Self-Test Support
+
+- Purpose:
+  - make the P1-3 plan command executable without a live bearer or DataMax endpoint;
+  - verify third-party scoped document payload/parser contracts locally before deployment-window live sampling.
+- Code change:
+  - `scripts/smoke/external-scoped-document-chat.mjs` now supports `--self-test`;
+  - self-test validates deterministic fixtures for `dataset_external_ids`, `available_document_external_ids`, same-`conversation_external_id` follow-up without repeated scope fields, changed-conversation isolation, attachment filename refs, parse-ready chunk/evidence checks, terminal parse failure detection, reply token checks, and Markdown rendering;
+  - `scripts/README.md` documents the new `--self-test` mode.
+- Local verification:
+  - `node --check scripts\smoke\external-scoped-document-chat.mjs`: passed;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed with `ok=true`, receipt `target/external-scoped-document-chat-smoke/20260611163606-self-test.json`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed with `ok=true`, receipt `target/external-video-ppt-smoke/20260611163606-self-test.json`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- Safety:
+  - the new scoped-document self-test does not call DataMax, does not start a fixture HTTP server, and does not require a bearer;
+  - no production document registration, parse, source sync, static page generation, or third-party live message was performed;
+  - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
+  - no credential, bearer token, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - 120 server was not touched.
+
+## 2026-06-12 P1 Model-Gateway Local Gate Refresh
+
+- Purpose:
+  - refresh the P1-4 local model-gateway/concurrency gate while keeping authenticated operator checks credential-scoped.
+- Local verification:
+  - `cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `cargo test -p platform-api parse_worker_pool_concurrency_prefers_first_valid_value_and_clamps --lib`: passed, 1/1 test;
+  - `node scripts/smoke/model-gateway-operator.mjs --base-url https://v3.elepcloud.com --allow-missing-credentials --output-dir target/model-gateway-operator-smoke-p1-local`: completed with `ready=false`, `pending=true`, `failed=false`, `authMethod=none`, `credentialsProvided=false`;
+  - local report `target/model-gateway-operator-smoke-p1-local/20260611163732.json`.
+- Current authenticated gate:
+  - authenticated model-gateway operator smoke remains pending until a legitimate operator session/cookie/local-key or sanitized operator-side receipt is available;
+  - no bypass or test-only public management path was added.
+- Safety:
+  - no provider key, bearer, cookie, database URL, raw env value, or provider payload was printed or recorded;
+  - no model profile was created, edited, deleted, or probed with a real secret;
+  - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
+  - no server was deployed or restarted;
+  - 120 server was not touched.

@@ -38,6 +38,7 @@ function parseArgs(argv) {
     senderExternalId:
       process.env.EXTERNAL_SCOPED_DOCUMENT_SMOKE_SENDER_EXTERNAL_ID ||
       'user-scoped-document-smoke',
+    selfTest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -78,6 +79,8 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--allow-missing-bearer') {
       args.allowMissingBearer = true;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -86,7 +89,7 @@ function parseArgs(argv) {
     }
   }
 
-  if (!args.allowMissingBearer && !args.bearer) {
+  if (!args.selfTest && !args.allowMissingBearer && !args.bearer) {
     throw new Error('--bearer is required unless --allow-missing-bearer is set');
   }
   if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 1000) {
@@ -122,6 +125,9 @@ Environment aliases:
   EXTERNAL_SCOPED_DOCUMENT_SMOKE_CONNECTION_ID
   EXTERNAL_SCOPED_DOCUMENT_SMOKE_BEARER
   EXTERNAL_SCOPED_DOCUMENT_SMOKE_SOURCE_ID
+
+Use --self-test for deterministic offline payload and parser checks without
+calling DataMax or requiring a bearer.
 `);
 }
 
@@ -493,8 +499,168 @@ function summarizeCase(caseId, payload, response, expectedTokens = []) {
   };
 }
 
+async function runSelfTest(args) {
+  const runId = `${makeRunId()}-self-test`;
+  const fixtures = buildFixtures(runId);
+  const primaryConversationId = `conv-scoped-${runId}`;
+  const isolatedConversationId = `conv-scoped-isolated-${runId}`;
+  const attachmentConversationId = `conv-scoped-attachment-${runId}`;
+  const extraDocumentExternalId = fixtures.documents.find((item) => item.key === 'extra').documentExternalId;
+
+  const datasetUnionPayload = buildMessagePayload(args, runId, 'dataset-union', {
+    conversationExternalId: primaryConversationId,
+    datasetExternalIds: [fixtures.datasetExternalId],
+    documentExternalIds: [extraDocumentExternalId],
+    text: 'self-test dataset union',
+  });
+  const followupPayload = buildMessagePayload(args, runId, 'same-conversation-followup', {
+    conversationExternalId: primaryConversationId,
+    text: 'self-test follow-up inherits scope',
+  });
+  const isolatedPayload = buildMessagePayload(args, runId, 'isolated-conversation-no-scope', {
+    conversationExternalId: isolatedConversationId,
+    text: 'self-test isolated scope',
+  });
+  const attachmentPayload = buildMessagePayload(args, runId, 'attachment-title-scope', {
+    conversationExternalId: attachmentConversationId,
+    attachmentRefs: [fixtures.attachmentRef],
+    text: 'self-test attachment scope',
+  });
+
+  const readyStatus = parseDetailReady({
+    parse_status: 'parsed',
+    model_status: 'indexed',
+    chunk_count: 2,
+    retrieval_evidence_count: 2,
+  });
+  const failedStatus = parseDetailReady({
+    parse_status: 'failed',
+    model_status: 'failed',
+    chunk_count: 0,
+    retrieval_evidence_count: 0,
+  });
+  const datasetUnionResponse = {
+    assistant_run_id: 'run-self-test-dataset-union',
+    reply: {
+      reply_type: 'answered',
+      task_status: 'answered',
+      text: `${fixtures.expected.alphaToken}\n${fixtures.expected.betaToken}\n${fixtures.expected.extraToken}`,
+    },
+  };
+  const isolatedResponse = {
+    assistant_run_id: 'run-self-test-isolated',
+    reply: {
+      reply_type: 'answered',
+      task_status: 'answered',
+      text: '当前会话没有可见授权资料。',
+    },
+  };
+  const cases = [
+    summarizeCase('dataset-union', datasetUnionPayload, datasetUnionResponse, [
+      fixtures.expected.alphaToken,
+      fixtures.expected.betaToken,
+      fixtures.expected.extraToken,
+    ]),
+    summarizeCase('isolated-conversation-no-scope', isolatedPayload, isolatedResponse, [
+      fixtures.expected.extraToken,
+    ]),
+  ];
+  const markdown = renderMarkdown({
+    ok: true,
+    runId,
+    baseUrl: args.baseUrl,
+    connectionId: args.connectionId,
+    sourceId: args.sourceId,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    fixtureSummary: {
+      datasetExternalId: fixtures.datasetExternalId,
+      extraDatasetExternalId: fixtures.extraDatasetExternalId,
+      attachmentDatasetExternalId: fixtures.attachmentDatasetExternalId,
+      documentCount: fixtures.documents.length,
+    },
+    parseReady: [
+      {
+        key: 'alpha',
+        documentExternalId: fixtures.documents[0].documentExternalId,
+        ...readyStatus,
+      },
+    ],
+    cases,
+  });
+  const checks = {
+    fixtureDocumentCount: fixtures.documents.length === 4,
+    datasetUnionUsesDatasetExternalIds:
+      datasetUnionPayload.dataset_external_ids.length === 1
+      && datasetUnionPayload.dataset_external_ids[0] === fixtures.datasetExternalId,
+    datasetUnionUsesAvailableDocumentExternalIds:
+      datasetUnionPayload.available_document_external_ids.length === 1
+      && datasetUnionPayload.available_document_external_ids[0] === extraDocumentExternalId,
+    sameConversationFollowupCarriesNoRepeatedScope:
+      followupPayload.conversation_external_id === primaryConversationId
+      && followupPayload.dataset_external_ids.length === 0
+      && followupPayload.available_document_external_ids.length === 0,
+    isolatedConversationIsDifferent:
+      isolatedPayload.conversation_external_id !== primaryConversationId
+      && isolatedPayload.dataset_external_ids.length === 0
+      && isolatedPayload.available_document_external_ids.length === 0,
+    attachmentRefCarriesFilename:
+      attachmentPayload.attachment_refs.length === 1
+      && attachmentPayload.attachment_refs[0].filename === fixtures.attachmentRef.filename,
+    parseReadyRequiresChunksAndEvidence: readyStatus.ready === true && readyStatus.failed === false,
+    parseFailedDetected: failedStatus.ready === false && failedStatus.failed === true,
+    replyTextIncludesExpectedUnionTokens:
+      cases[0].expectedTokenHits.every((hit) => hit.present === true),
+    isolatedReplyDoesNotLeakExtraToken:
+      cases[1].expectedTokenHits.every((hit) => hit.present === false),
+    markdownRendered: markdown.includes('# External Scoped Document Chat Smoke'),
+  };
+  const ok = Object.values(checks).every(Boolean);
+  const summary = {
+    smoke: 'external-scoped-document-chat',
+    selfTest: true,
+    ok,
+    runId,
+    baseUrl: args.baseUrl,
+    connectionId: args.connectionId,
+    sourceId: args.sourceId,
+    checks,
+    payloadShape: {
+      datasetUnion: {
+        datasetExternalIdCount: datasetUnionPayload.dataset_external_ids.length,
+        availableDocumentExternalIdCount: datasetUnionPayload.available_document_external_ids.length,
+      },
+      sameConversationFollowup: {
+        conversationExternalId: followupPayload.conversation_external_id,
+        datasetExternalIdCount: followupPayload.dataset_external_ids.length,
+        availableDocumentExternalIdCount: followupPayload.available_document_external_ids.length,
+      },
+      isolatedConversation: {
+        conversationExternalId: isolatedPayload.conversation_external_id,
+        datasetExternalIdCount: isolatedPayload.dataset_external_ids.length,
+        availableDocumentExternalIdCount: isolatedPayload.available_document_external_ids.length,
+      },
+      attachment: {
+        attachmentRefCount: attachmentPayload.attachment_refs.length,
+      },
+    },
+    generatedAt: new Date().toISOString(),
+  };
+  await mkdir(args.outputDir, { recursive: true });
+  const reportPath = join(args.outputDir, `${runId}.json`);
+  await writeFile(reportPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify({ ok, selfTest: true, runId, reportPath }, null, 2));
+  if (!ok) {
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
   const runId = makeRunId();
   const startedAt = new Date().toISOString();
   const fixtures = buildFixtures(runId);

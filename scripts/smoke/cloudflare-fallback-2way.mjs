@@ -18,6 +18,7 @@ function parseArgs(argv) {
     minExpected: Number(process.env.CLOUDFLARE_FALLBACK_SMOKE_MIN_EXPECTED || DEFAULT_MIN_EXPECTED),
     queueFilter: process.env.CLOUDFLARE_FALLBACK_SMOKE_QUEUE_FILTER || 'codex,static_page_publish',
     outputDir: process.env.CLOUDFLARE_FALLBACK_SMOKE_OUTPUT_DIR || 'target/cloudflare-fallback-2way-smoke',
+    selfTest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -47,6 +48,8 @@ function parseArgs(argv) {
     } else if (arg === '--output-dir') {
       args.outputDir = requireValue(arg, next);
       index += 1;
+    } else if (arg === '--self-test') {
+      args.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -84,6 +87,7 @@ function printHelp() {
 
 This is a read-only guard smoke. It verifies the Codex host worker cap and
 checks current workflow queue running counts for Cloudflare/static-page publish queues.
+Use --self-test to run deterministic fixture checks without calling DataMax.
 `);
 }
 
@@ -127,17 +131,11 @@ function queueMatches(queue, filters) {
   return filters.some((filter) => value.includes(filter));
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const headers = requestHeaders(args);
-  const base = normalizeBaseUrl(args.baseUrl);
+function buildSummary(args, { statusResult, queueResult }) {
   const filters = args.queueFilter
     .split(',')
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
-
-  const statusResult = await requestJson(`${base}/v1/model-gateway/status`, headers, args.timeoutMs);
-  const queueResult = await requestJson(`${base}/v1/workflow-tasks/queue-stats?limit=500`, headers, args.timeoutMs);
   const codexWorker = (statusResult.data?.runtime?.worker_pools || [])
     .find((pool) => pool.service === 'codex-host-agent') || null;
   const codexConcurrency = Number(codexWorker?.concurrency || 0);
@@ -180,16 +178,80 @@ async function main() {
     statusBodyPrefix: statusResult.text.slice(0, 300),
     queueBodyPrefix: queueResult.text.slice(0, 300),
   };
+  return { summary, report };
+}
 
+async function writeReport(args, report) {
   const outputDir = join(process.cwd(), args.outputDir);
   await mkdir(outputDir, { recursive: true });
-  const reportPath = join(outputDir, `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}.json`);
+  const reportPath = join(outputDir, `${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}${args.selfTest ? '-self-test' : ''}.json`);
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  return reportPath;
+}
+
+async function runSelfTest(args) {
+  const fixtureStatus = {
+    response: { ok: true, status: 200 },
+    text: '{"runtime":{"worker_pools":[{"service":"codex-host-agent","concurrency":2}]}}',
+    data: {
+      runtime: {
+        worker_pools: [
+          { service: 'codex-host-agent', concurrency: 2 },
+          { service: 'static-page-worker', concurrency: 5 },
+        ],
+      },
+    },
+  };
+  const fixtureQueues = {
+    response: { ok: true, status: 200 },
+    text: '{"queues":[]}',
+    data: {
+      queues: [
+        { logical_queue: 'codex', running: 2, queued: 0, retrying: 0, task_count: 12 },
+        { logicalQueue: 'static_page_publish', running: 1, queued: 0, retrying: 0, taskCount: 8 },
+        { logical_queue: 'external_source', running: 7, queued: 0, retrying: 0, task_count: 20 },
+      ],
+    },
+  };
+  const fixtureArgs = {
+    ...args,
+    maxAllowed: DEFAULT_MAX_ALLOWED,
+    minExpected: DEFAULT_MIN_EXPECTED,
+    queueFilter: 'codex,static_page_publish',
+    selfTest: true,
+  };
+  const { summary, report } = buildSummary(fixtureArgs, {
+    statusResult: fixtureStatus,
+    queueResult: fixtureQueues,
+  });
+  summary.selfTest = true;
+  report.summary = summary;
+  const reportPath = await writeReport(fixtureArgs, report);
+  console.log(JSON.stringify(summary, null, 2));
+  console.log(`report=${reportPath}`);
+  if (!summary.ok) {
+    process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.selfTest) {
+    await runSelfTest(args);
+    return;
+  }
+  const headers = requestHeaders(args);
+  const base = normalizeBaseUrl(args.baseUrl);
+  const statusResult = await requestJson(`${base}/v1/model-gateway/status`, headers, args.timeoutMs);
+  const queueResult = await requestJson(`${base}/v1/workflow-tasks/queue-stats?limit=500`, headers, args.timeoutMs);
+  const { summary, report } = buildSummary(args, { statusResult, queueResult });
+
+  const reportPath = await writeReport(args, report);
 
   console.log(JSON.stringify(summary, null, 2));
   console.log(`report=${reportPath}`);
 
-  if (!ok) {
+  if (!summary.ok) {
     process.exitCode = 1;
   }
 }
