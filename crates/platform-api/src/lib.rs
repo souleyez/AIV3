@@ -21811,6 +21811,27 @@ async fn ingest_external_channel_message_with_connection_inner(
         ));
     }
 
+    if let Some(reply) = maybe_handle_external_channel_aigolf_requested_skill(
+        state,
+        connection_id,
+        run.id,
+        &run.execution_trail,
+        &message,
+        now,
+    )
+    .await?
+    {
+        return Ok((
+            StatusCode::ACCEPTED,
+            ExternalChannelEventResponse {
+                accepted: true,
+                assistant_run_id: Some(run.id),
+                idempotency_key: message.idempotency_key.clone(),
+                reply,
+            },
+        ));
+    }
+
     if let Some(reply) = maybe_enqueue_external_channel_data_ingestion_analysis(
         state,
         connection_id,
@@ -28833,6 +28854,10 @@ fn external_requested_skills_policy_value(skills: &[ExternalRequestedSkillView])
 }
 
 const AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA: &str = "aigolf.course_map_segmentation.v1";
+const EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME: &str =
+    "assistant_run.aigolf_course_map_segmentation_needs_review";
+const EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_ARTIFACT_TYPE: &str =
+    "aigolf_course_map_segmentation";
 
 fn external_requested_skill_compact_id(skill: &ExternalRequestedSkillView) -> String {
     skill
@@ -28940,6 +28965,16 @@ fn external_aigolf_course_map_skill_has_image_input(
 ) -> bool {
     external_aigolf_course_map_argument_image_ref(skill).is_some()
         || external_channel_message_has_image_attachment(message)
+}
+
+fn external_aigolf_course_map_segmentation_skill(
+    message: &ExternalBotMessageView,
+) -> Option<&ExternalRequestedSkillView> {
+    message
+        .requested_skills
+        .iter()
+        .filter(|skill| !external_requested_skill_is_disabled(skill))
+        .find(|skill| external_aigolf_skill_kind(skill) == Some("aigolf_course_map_segmentation"))
 }
 
 fn validate_external_aigolf_requested_skills(
@@ -30192,6 +30227,9 @@ fn external_channel_reply_from_run_and_events(
     );
     static_page_reply
         .or_else(|| {
+            external_channel_aigolf_skill_reply_from_events(events, conversation_external_id)
+        })
+        .or_else(|| {
             external_channel_data_ingestion_analysis_reply_from_events(
                 events,
                 conversation_external_id,
@@ -30480,6 +30518,190 @@ struct ExternalImageStructuredExtractRuntimeConfig {
 struct ExternalImageStructuredExtractFailure {
     reason: String,
     runtime: Value,
+}
+
+fn external_aigolf_course_map_control_point_count(skill: &ExternalRequestedSkillView) -> usize {
+    let Some(arguments) = external_requested_skill_argument_object(skill) else {
+        return 0;
+    };
+    arguments
+        .get("calibration")
+        .and_then(Value::as_object)
+        .and_then(|calibration| calibration.get("controlPoints"))
+        .or_else(|| arguments.get("controlPoints"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn external_aigolf_course_map_image_url_present(
+    skill: &ExternalRequestedSkillView,
+    message: &ExternalBotMessageView,
+) -> bool {
+    external_aigolf_course_map_argument_image_ref(skill)
+        .map(|value| value.starts_with("https://") || value.starts_with("http://"))
+        .unwrap_or(false)
+        || external_image_structured_extract_first_image_url(message).is_some()
+}
+
+fn external_aigolf_course_map_segmentation_payload(
+    skill: &ExternalRequestedSkillView,
+    message: &ExternalBotMessageView,
+) -> Value {
+    let image_ref = external_aigolf_course_map_argument_image_ref(skill);
+    let image_url_present = external_aigolf_course_map_image_url_present(skill, message);
+    let control_point_count = external_aigolf_course_map_control_point_count(skill);
+    let mut warnings = vec![
+        "ai_segmentation_worker_not_enabled_yet".to_string(),
+        "operator_review_required_before_publish".to_string(),
+    ];
+    if !image_url_present {
+        warnings.push("image_download_url_missing_or_not_public".to_string());
+    }
+    if control_point_count < 4 {
+        warnings.push("calibration_control_points_fewer_than_4".to_string());
+    }
+
+    json!({
+        "type": EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_ARTIFACT_TYPE,
+        "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+        "status": "needs_review",
+        "holes": [],
+        "warnings": warnings,
+        "input_summary": {
+            "image_ref_present": image_ref.is_some(),
+            "image_url_present": image_url_present,
+            "attachment_count": message.attachment_refs.len(),
+            "attachments": external_image_structured_extract_attachment_summaries(message),
+            "control_point_count": control_point_count,
+            "requested_skill_id": skill.skill_id.clone(),
+            "requested_skill_version": skill.version.clone(),
+        },
+        "production_write_allowed": false,
+        "operator_review_required": true,
+        "next_actions": [
+            "provide_public_course_map_image_url",
+            "confirm_at_least_4_calibration_control_points",
+            "rerun_vlm_segmentation_before_geofence_publish"
+        ],
+    })
+}
+
+fn external_aigolf_course_map_segmentation_reply_for_conversation(
+    conversation_external_id: &str,
+    payload: &Value,
+) -> ExternalBotReplyView {
+    ExternalBotReplyView {
+        target_conversation_external_id: conversation_external_id.to_string(),
+        reply_type: ExternalBotReplyTypeView::Card,
+        text: Some(
+            "DataMax 已接收 AI Golf 球场地图分割任务，并返回可复核的结构化初稿。".to_string(),
+        ),
+        card: Some(payload.clone()),
+        artifact_links: Vec::new(),
+        task_status: Some("aigolf_course_map_segmentation_needs_review".to_string()),
+        requires_confirmation: false,
+        action_id: None,
+        confirmation_id: None,
+    }
+}
+
+async fn maybe_handle_external_channel_aigolf_requested_skill(
+    state: &AppState,
+    connection_id: &str,
+    run_id: AssistantRunId,
+    execution_trail: &Value,
+    message: &ExternalBotMessageView,
+    now: DateTime<Utc>,
+) -> std::result::Result<Option<ExternalBotReplyView>, ApiError> {
+    let Some(skill) = external_aigolf_course_map_segmentation_skill(message) else {
+        return Ok(None);
+    };
+
+    let payload = external_aigolf_course_map_segmentation_payload(skill, message);
+    let reply = external_aigolf_course_map_segmentation_reply_for_conversation(
+        &message.conversation_external_id,
+        &payload,
+    );
+    let runtime_manifest = json!({
+        "mode": "aigolf_course_map_segmentation",
+        "lane": "external_channel",
+        "provider": "v3-control-plane",
+        "model_profile": "datamax_high_quality_paid_route",
+        "status": "needs_review",
+        "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+        "provider_detail_policy": "do_not_expose_provider_or_model_name_to_integrator",
+    });
+    let mut trail = value_array(execution_trail.clone());
+    trail.push(json!({
+        "status": "needs_review",
+        "label": "AI Golf 球场地图分割结构化初稿",
+        "schema": AIGOLF_COURSE_MAP_SEGMENTATION_SCHEMA,
+        "at": now,
+    }));
+    let output_artifacts = json!([{
+        "type": EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_ARTIFACT_TYPE,
+        "source": "external_channel_requested_skill",
+        "content": reply.text.clone().unwrap_or_default(),
+        "payload": payload.clone(),
+    }]);
+
+    state
+        .storage
+        .assistant_runs()
+        .update_runtime_manifest(state.tenant_id, run_id, &runtime_manifest)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .update_execution_trail(state.tenant_id, run_id, &Value::Array(trail))
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .attach_output_artifacts(state.tenant_id, run_id, &output_artifacts)
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME.to_string(),
+                payload: json!({
+                    "channel_connection_id": connection_id,
+                    "reply": reply.clone(),
+                    "payload": payload,
+                    "runtime": runtime_manifest,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+    state
+        .storage
+        .assistant_runs()
+        .append_event(
+            state.tenant_id,
+            run_id,
+            &NewAssistantRunEvent {
+                event_name: "assistant_run.completed".to_string(),
+                payload: json!({
+                    "service_lane": "external_channel",
+                    "runtime": runtime_manifest,
+                }),
+                created_at: now,
+            },
+        )
+        .await
+        .map_err(ApiError::from_storage)?;
+
+    Ok(Some(reply))
 }
 
 async fn maybe_handle_external_channel_image_structured_extract(
@@ -31864,6 +32086,29 @@ fn external_channel_image_structured_extract_reply_from_events(
                     conversation_external_id,
                     payload,
                     true,
+                )
+            })
+        })
+}
+
+fn external_channel_aigolf_skill_reply_from_events(
+    events: &[AssistantRunEvent],
+    conversation_external_id: &str,
+) -> Option<ExternalBotReplyView> {
+    let event = events
+        .iter()
+        .rev()
+        .find(|event| event.event_name == EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME)?;
+    event
+        .payload
+        .get("reply")
+        .cloned()
+        .and_then(|reply| serde_json::from_value::<ExternalBotReplyView>(reply).ok())
+        .or_else(|| {
+            event.payload.get("payload").map(|payload| {
+                external_aigolf_course_map_segmentation_reply_for_conversation(
+                    conversation_external_id,
+                    payload,
                 )
             })
         })
@@ -100008,6 +100253,61 @@ mod tests {
     }
 
     #[test]
+    fn external_aigolf_course_map_segmentation_event_restores_schema_card() {
+        let mut message = sample_external_bot_message();
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "aigolf_course_map_segmentation".to_string(),
+            version: Some("2026-06-11".to_string()),
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "schema": "aigolf.course_map_segmentation.v1",
+                "map": { "imageUrl": "https://cdn.example.com/course-map.png" },
+                "calibration": {
+                    "controlPoints": [
+                        { "pixelX": 0, "pixelY": 0, "latitude": 22.0, "longitude": 114.0 },
+                        { "pixelX": 1000, "pixelY": 0, "latitude": 22.0, "longitude": 114.01 },
+                        { "pixelX": 1000, "pixelY": 800, "latitude": 21.99, "longitude": 114.01 },
+                        { "pixelX": 0, "pixelY": 800, "latitude": 21.99, "longitude": 114.0 }
+                    ]
+                }
+            })),
+        }];
+        let skill = external_aigolf_course_map_segmentation_skill(&message).expect("AI Golf skill");
+        let payload = external_aigolf_course_map_segmentation_payload(skill, &message);
+        let reply = external_aigolf_course_map_segmentation_reply_for_conversation(
+            &message.conversation_external_id,
+            &payload,
+        );
+        let run_id = AssistantRunId::new();
+        let events = vec![static_page_reply_test_event(
+            run_id,
+            1,
+            EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME,
+            json!({
+                "reply": reply,
+                "payload": payload,
+            }),
+        )];
+
+        let restored = external_channel_aigolf_skill_reply_from_events(
+            &events,
+            &message.conversation_external_id,
+        )
+        .expect("AI Golf reply should restore from event");
+        assert_eq!(restored.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(
+            restored.task_status.as_deref(),
+            Some("aigolf_course_map_segmentation_needs_review")
+        );
+        let card = restored.card.as_ref().expect("card");
+        assert_eq!(card["type"], json!("aigolf_course_map_segmentation"));
+        assert_eq!(card["schema"], json!("aigolf.course_map_segmentation.v1"));
+        assert_eq!(card["status"], json!("needs_review"));
+        assert_eq!(card["holes"], json!([]));
+        assert_eq!(card["production_write_allowed"], json!(false));
+    }
+
+    #[test]
     fn external_answer_policy_is_normalized_and_supplied_to_model() {
         let mut message = sample_external_bot_message();
         message.default_prompt = Some("  请面向业务用户，用本轮文档回答。  ".to_string());
@@ -111382,6 +111682,118 @@ mod tests {
         assert_eq!(
             loaded.reply.task_status.as_deref(),
             Some("login_gated_video_source_not_supported")
+        );
+    }
+
+    #[tokio::test]
+    async fn external_aigolf_course_map_segmentation_returns_schema_card() {
+        let _guard = shared_local_postgres_test_lock().lock().await;
+        clear_assistant_openclaw_env();
+        let storage = match local_postgres_storage().await {
+            Ok(storage) => storage,
+            Err(reason) => {
+                eprintln!("skipping AI Golf course map segmentation endpoint test: {reason}");
+                clear_assistant_openclaw_env();
+                return;
+            }
+        };
+        reset_and_sync_test_storage(&storage).await;
+        let tenant = storage
+            .ensure_tenant(
+                &format!("generic-chat-aigolf-map-{}", Uuid::new_v4()),
+                "Generic Chat AI Golf Course Map Test",
+            )
+            .await
+            .expect("tenant should exist");
+        let state = AppState::new(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+        insert_generic_external_channel_connection(&state, "generic-chat-main").await;
+        let app = router(
+            storage.clone(),
+            workflow_definitions::catalog(),
+            tenant.id,
+            EventBus::Disabled,
+        );
+
+        let mut message = sample_external_bot_message();
+        message.message_external_id = "msg-aigolf-map-001".to_string();
+        message.idempotency_key = "generic:tenant-ext-001:msg-aigolf-map-001".to_string();
+        message.text = Some(
+            "AI Golf smoke: validate course map segmentation routing and schema policy."
+                .to_string(),
+        );
+        message.attachment_refs = vec![ExternalAttachmentRefView {
+            attachment_external_id: "course-map-image-001".to_string(),
+            filename: Some("course-map.png".to_string()),
+            content_type: Some("image/png".to_string()),
+            size_bytes: Some(8192),
+            download_url_redacted: Some("https://assets.example.com/course-map.png".to_string()),
+        }];
+        message.requested_skills = vec![ExternalRequestedSkillView {
+            skill_id: "aigolf_course_map_segmentation".to_string(),
+            version: Some("2026-06-11".to_string()),
+            mode: Some("required".to_string()),
+            arguments: Some(json!({
+                "schema": "aigolf.course_map_segmentation.v1",
+                "calibration": {
+                    "controlPoints": [
+                        { "pixelX": 0, "pixelY": 0, "latitude": 22.0, "longitude": 114.0 },
+                        { "pixelX": 1000, "pixelY": 0, "latitude": 22.0, "longitude": 114.01 },
+                        { "pixelX": 1000, "pixelY": 800, "latitude": 21.99, "longitude": 114.01 },
+                        { "pixelX": 0, "pixelY": 800, "latitude": 21.99, "longitude": 114.0 }
+                    ]
+                }
+            })),
+        }];
+
+        let response = post_json_request(
+            app.clone(),
+            "/v1/external/channels/generic-chat-main/events",
+            &message,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let first: ExternalChannelEventResponse = read_json_response(response).await;
+        let run_id = first.assistant_run_id.expect("assistant run id");
+        assert_eq!(first.reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(
+            first.reply.task_status.as_deref(),
+            Some("aigolf_course_map_segmentation_needs_review")
+        );
+        let card = first.reply.card.as_ref().expect("AI Golf card");
+        assert_eq!(card["type"], json!("aigolf_course_map_segmentation"));
+        assert_eq!(card["schema"], json!("aigolf.course_map_segmentation.v1"));
+        assert_ne!(card["type"], json!("v3_data_ingestion_analysis_result"));
+
+        let events = storage
+            .assistant_runs()
+            .list_events(tenant.id, run_id)
+            .await
+            .expect("events should be queryable");
+        assert!(events
+            .iter()
+            .any(|event| event.event_name == EXTERNAL_AIGOLF_COURSE_MAP_SEGMENTATION_EVENT_NAME));
+        assert!(!events
+            .iter()
+            .any(|event| event.event_name.contains("data_ingestion_analysis")));
+
+        let loaded = get_request(
+            app,
+            &format!("/v1/external/channels/generic-chat-main/assistant-runs/{run_id}/reply"),
+            None,
+        )
+        .await;
+        assert_eq!(loaded.status(), StatusCode::OK);
+        let loaded: ExternalChannelEventResponse = read_json_response(loaded).await;
+        assert_eq!(loaded.reply.reply_type, ExternalBotReplyTypeView::Card);
+        assert_eq!(
+            loaded.reply.card.as_ref().expect("loaded card")["schema"],
+            json!("aigolf.course_map_segmentation.v1")
         );
     }
 
