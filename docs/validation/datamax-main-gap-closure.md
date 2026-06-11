@@ -3370,6 +3370,33 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P0-2 Report Trigger And Export Self-Test Refresh
+
+- Purpose:
+  - verify the current Xinbai report trigger/focus/export path after completing the P2 fingerprint inventory batch;
+  - confirm that report routing still keeps normal-answer behavior and does not steal business-metric explanation questions;
+  - confirm the primary Xinbai artifact and export files are available on the 8-server public artifact path.
+- Local verification:
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, report `target/external-report-focus-smoke/external-report-focus-self-test-20260611183039.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `runId=20260611183039`, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, expected focus `取高机会`, primary template `xinbai-functional-modular-template-20260604`, required exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run validate:xinbai-report-template`: passed locally against `target/database-static-pages/xinbai-functional-modular-template-20260604`, files checked `index.html`, `data.json`, `data-snapshot.json`, `manifest.json`, `table-data.csv`, `report.ppt`, `report.md`, `manifest features=99`, `stores=77`, `opportunities=60`, `lowActivity=40`.
+- 8-server verification:
+  - repository head was `419c7a614`;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `runId=20260611183058`, `modeCount=2`, `okCount=2`, `failedCount=0`, expected title `新世界百货经营管理月报表`, expected focus `取高机会`;
+  - default `npm run validate:xinbai-report-template` on 8 server failed because the deployment artifact is not stored under repo `target/database-static-pages/...`;
+  - rerun with deployment paths passed: `npm run validate:xinbai-report-template -- --artifact-dir /srv/aiv3/shared/objects/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604 --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html`;
+  - public artifact validation checked 7 files: `index.html`, `data.json`, `data-snapshot.json`, `manifest.json`, `table-data.csv`, `report.ppt`, and `report.md`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no live third-party customer message was sent in this batch;
+  - no source database write, schema migration, source sync, object cleanup, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Rebuild And Local Self-Test Refresh
 
 - Purpose:

@@ -83,9 +83,11 @@ systemctl is-active aiv3-platform-api.service aiv3-web.service aiv3-assistant-ru
 - 回执不含 DB URL、token、原始 URL、content hash、文档标题、对象路径或正文。
 - validation 记录 post-sync run id 和服务器 commit。
 
-### P0-2 稳定第三方报表触发
+### P0-2 已完成自测：稳定第三方报表触发
 
 **原因:** 客户可见问题集中在“要求报表但没有触发”和“触发报表后截断正常回答”。
+
+**状态:** 本地和 8 服务器自测已通过；8 服务器 Rust 路由测试、触发/误触发 guard、导出字段和 public artifact 校验均通过。后续遇到新的客户失败样例时按本节重跑针对性 live smoke。
 
 **范围:**
 - 触发词放宽只限新百经营报表域。
@@ -116,6 +118,7 @@ npm run smoke:external-report-focus -- --self-test
 npm run smoke:external-report-export -- --self-test
 CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib
 npm run validate:xinbai-report-template
+npm run validate:xinbai-report-template -- --artifact-dir /srv/aiv3/shared/objects/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604 --public-url https://v3.elepcloud.com/generated-artifacts/database-static-pages/xinbai-functional-modular-template-20260604/index.html
 ```
 
 **完成标准:**
@@ -294,4 +297,4 @@ npm run smoke:production-placeholder-readiness -- --env-file /etc/aiv3/aiv3.env 
 
 ## 8. 下一步建议
 
-下一步优先做 P0-2：稳定第三方新百报表触发，确认触发报表时不截断正常回答、链接不重复、焦点模块前置。随后如果能拿到合法 operator 凭证或运维脱敏回执，就补 P1-1/P1-2；如果 operator 仍卡住，就继续做 P2 summary-only 扩样，因为这条线安全、可独立推进，也不依赖外部权限。
+下一步优先做 P0-3：主站聊天体验回归，确认未登录直接问答、长回复自动滚动、新建对话保留会话、进度展示不泄露原始 provider payload。随后如果能拿到合法 operator 凭证或运维脱敏回执，就补 P1-1/P1-2；如果 operator 仍卡住，就继续做 P2 summary-only 扩样，因为这条线安全、可独立推进，也不依赖外部权限。
