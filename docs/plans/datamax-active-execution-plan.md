@@ -271,6 +271,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: external integration management access wrapper 已并入 `external_observability` 模块；错误码、提示文本和授权判断保持不变。
 - 2026-06-12: external integration JSON 脱敏 helper 已拆到 `external_integration_summary` 模块；敏感字段规则、递归脱敏和 redacted 标准化保持不变。
 - 2026-06-12: external action 响应/结果 payload 摘要 helper 已并入 `external_integration_summary` 模块；白名单响应字段、body redacted 标记和结果形状摘要保持不变。
+- 2026-06-12: external action/artifact/search/audit 聚合摘要 helper 已并入 `external_integration_summary` 模块；signal 优先级和安全字段摘要保持不变。
 
 **Regression commands:**
 
