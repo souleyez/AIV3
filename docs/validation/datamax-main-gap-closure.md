@@ -3451,6 +3451,40 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Fingerprint Inventory Missing-Object Reason Aggregates
+
+- Purpose:
+  - close the active plan's P2-2 item for missing-object reason classification at aggregate level;
+  - keep the inventory read-only and non-mutating;
+  - distinguish missing locator, remote locator requiring fetch, and local locator requiring a future filesystem probe without printing object paths or URLs.
+- Code changes:
+  - `scripts/smoke/document-fingerprint-inventory.mjs` now includes `object_locator_reason_counts`;
+  - it also includes `fingerprint_gap_reason_counts` for documents missing `content_sha256`;
+  - `scripts/README.md` documents that the smoke does not probe the filesystem, download remote objects, delete files, or write database rows;
+  - `docs/plans/datamax-active-execution-plan.md` now marks missing-object reason aggregation as available and leaves object cleanup dry-run as the remaining P2-2 gap.
+- Local verification:
+  - `node --check scripts/smoke/document-fingerprint-inventory.mjs`: passed;
+  - `npm run smoke:document-fingerprint-inventory -- --self-test --pretty`: passed, `runId=20260611184201978-emcnhzbck-self-test`, `ok=true`;
+  - self-test checks included `redactionContract=true`, `aggregateOnlyShape=true`, `noFilesystemCheck=true`, and `missingObjectReasonsAggregateOnly=true`;
+  - `git diff --check`: passed with Windows LF/CRLF warnings only.
+- 8-server live verification before commit:
+  - executed the enhanced script over SSH stdin against `/srv/aiv3/repo` with `--env-file /etc/aiv3/aiv3.env --dataset-limit 20`;
+  - result: `runId=20260611184221179-dvxa1kch34`, `ok=true`;
+  - overall: `document_count=2637`, `dataset_count=58`, `locator_present_count=2637`, `fingerprinted_document_count=32`, `canonical_document_reference_count=32`;
+  - `objectLocatorReasonCounts`: `local_locator_candidate_unprobed=2634`, `remote_locator_unprobed=3`;
+  - `fingerprintGapReasonCounts`: `local_locator_requires_filesystem_probe=2602`, `remote_locator_requires_fetch=3`;
+  - receipt: `/srv/aiv3/repo/target/document-fingerprint-inventory-smoke-p2-reason-20260612-stdin/20260611184221179-dvxa1kch34/report.json`;
+  - redaction grep over the receipt found no database URL, bearer, provider key pattern, raw URL, or 64-character hash value.
+- Safety:
+  - the smoke still executes one fixed aggregate SELECT through `psql`;
+  - no filesystem path was probed, read, deleted, or printed;
+  - no remote object was downloaded or retried;
+  - no database row was written, updated, or deleted;
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 Active Plan Rebuild And Local Self-Test Refresh
 
 - Purpose:

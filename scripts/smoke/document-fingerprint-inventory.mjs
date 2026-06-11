@@ -197,6 +197,47 @@ object_locator_classification as (
   ) as value
   from active_documents
 ),
+object_locator_reason_counts as (
+  select coalesce(jsonb_object_agg(reason, count order by reason), '{}'::jsonb) as value
+  from (
+    select
+      case
+        when object_locator is null then 'missing_locator'
+        when lower(object_locator) like 'http://%'
+          or lower(object_locator) like 'https://%'
+          or lower(object_locator) like 's3://%'
+          or lower(object_locator) like 'cos://%'
+          or lower(object_locator) like 'oss://%'
+          or lower(object_locator) like 'gs://%'
+          then 'remote_locator_unprobed'
+        else 'local_locator_candidate_unprobed'
+      end as reason,
+      count(*)::bigint as count
+    from active_documents
+    group by 1
+  ) grouped
+),
+fingerprint_gap_reason_counts as (
+  select coalesce(jsonb_object_agg(reason, count order by reason), '{}'::jsonb) as value
+  from (
+    select
+      case
+        when object_locator is null then 'missing_locator'
+        when lower(object_locator) like 'http://%'
+          or lower(object_locator) like 'https://%'
+          or lower(object_locator) like 's3://%'
+          or lower(object_locator) like 'cos://%'
+          or lower(object_locator) like 'oss://%'
+          or lower(object_locator) like 'gs://%'
+          then 'remote_locator_requires_fetch'
+        else 'local_locator_requires_filesystem_probe'
+      end as reason,
+      count(*)::bigint as count
+    from active_documents
+    where content_sha256 is null
+    group by 1
+  ) grouped
+),
 dataset_rows as (
   select
     dataset_id,
@@ -240,6 +281,8 @@ select jsonb_build_object(
   'content_hash_groups', (select row_to_json(duplicate_summary)::jsonb from duplicate_summary),
   'fingerprint_table', (select row_to_json(fingerprint_table_summary)::jsonb from fingerprint_table_summary),
   'object_locator_classification', (select value from object_locator_classification),
+  'object_locator_reason_counts', (select value from object_locator_reason_counts),
+  'fingerprint_gap_reason_counts', (select value from fingerprint_gap_reason_counts),
   'dataset_limit', ${datasetLimit},
   'datasets', coalesce((
     select jsonb_agg(
@@ -318,6 +361,8 @@ function validateReport(report) {
   assert.equal(report.redaction.raw_document_text_included, false);
   assert.equal(report.redaction.credential_values_included, false);
   assert.equal(report.object_locator_classification.filesystem_checked, false);
+  assert.ok(report.object_locator_reason_counts && typeof report.object_locator_reason_counts === 'object');
+  assert.ok(report.fingerprint_gap_reason_counts && typeof report.fingerprint_gap_reason_counts === 'object');
   assert.ok(Number(report.overall.document_count) >= 0);
   assert.ok(Array.isArray(report.datasets));
 
@@ -371,6 +416,15 @@ function fixtureReport() {
       local_locator_candidate_count: 5,
       filesystem_checked: false,
     },
+    object_locator_reason_counts: {
+      local_locator_candidate_unprobed: 5,
+      missing_locator: 1,
+      remote_locator_unprobed: 2,
+    },
+    fingerprint_gap_reason_counts: {
+      local_locator_requires_filesystem_probe: 2,
+      missing_locator: 1,
+    },
     dataset_limit: 20,
     datasets: [
       {
@@ -412,6 +466,7 @@ async function runSelfTest(args) {
       redactionContract: true,
       aggregateOnlyShape: true,
       noFilesystemCheck: true,
+      missingObjectReasonsAggregateOnly: true,
     },
     reportPath,
   };
@@ -476,6 +531,8 @@ async function runLive(args) {
     dedupStateCounts: report.dedup_state_counts,
     contentHashGroups: report.content_hash_groups,
     objectLocatorClassification: report.object_locator_classification,
+    objectLocatorReasonCounts: report.object_locator_reason_counts,
+    fingerprintGapReasonCounts: report.fingerprint_gap_reason_counts,
   };
 }
 
