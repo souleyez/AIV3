@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const EXTERNAL_OBSERVABILITY_HOSTS = new Set([
+const ADMIN_CONSOLE_HOSTS = new Set([
   'v3.elepcloud.com',
 ]);
 
@@ -9,9 +9,7 @@ function hostWithoutPort(request) {
 }
 
 function isExternalObservationAllowedPath(pathname) {
-  return pathname === '/external-integrations'
-    || pathname.startsWith('/external-integrations/')
-    || pathname.startsWith('/v1/')
+  return pathname.startsWith('/v1/')
     || pathname.startsWith('/api/v3/')
     || pathname.startsWith('/_next/')
     || pathname === '/favicon.ico'
@@ -20,21 +18,30 @@ function isExternalObservationAllowedPath(pathname) {
 }
 
 export function middleware(request) {
-  if (!EXTERNAL_OBSERVABILITY_HOSTS.has(hostWithoutPort(request))) {
+  if (!ADMIN_CONSOLE_HOSTS.has(hostWithoutPort(request))) {
     return NextResponse.next();
   }
 
   const url = request.nextUrl.clone();
   if (url.pathname === '/') {
-    url.pathname = '/external-integrations';
-    return NextResponse.rewrite(url);
+    url.pathname = '/admin';
+    return NextResponse.redirect(url);
   }
 
-  if (isExternalObservationAllowedPath(url.pathname)) {
+  if (
+    url.pathname.startsWith('/admin')
+    || url.pathname === '/external-integrations/access'
+    || isExternalObservationAllowedPath(url.pathname)
+  ) {
     return NextResponse.next();
   }
 
-  url.pathname = '/external-integrations';
+  if (url.pathname === '/external-integrations') {
+    url.pathname = '/admin/external-integrations';
+    return NextResponse.redirect(url);
+  }
+
+  url.pathname = '/';
   url.search = '';
   return NextResponse.redirect(url);
 }

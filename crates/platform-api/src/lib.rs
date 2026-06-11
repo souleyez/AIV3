@@ -53516,7 +53516,6 @@ fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> boo
         "[/tool_call]",
         "<tool_call",
         "</tool_call",
-        "observation",
         "execution_trail",
         "react_trace",
         "tool_trace",
@@ -53543,6 +53542,20 @@ fn assistant_run_react_output_contains_internal_marker(output_text: &str) -> boo
     ]
     .iter()
     .any(|marker| normalized.contains(marker))
+        || [
+            "[observation]",
+            "[/observation]",
+            "<observation",
+            "</observation",
+            "\"observation\"",
+            "\"observations\"",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+        || normalized.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("observation:") || line.starts_with("observations:")
+        })
 }
 
 fn assistant_run_sanitize_customer_facing_output_artifacts(
@@ -117460,6 +117473,23 @@ mod tests {
         assert!(!sanitized.contains("parse_degraded"));
         assert!(!sanitized.contains("low_text_coverage"));
         assert!(sanitized.contains("解析质量较低"));
+    }
+
+    #[test]
+    fn assistant_run_sanitizer_allows_plain_observation_word() {
+        let answer = "My observation is that DataMax can answer ordinary host questions without tool output.";
+        let sanitized = assistant_run_sanitize_customer_facing_answer_text(answer);
+
+        assert_eq!(sanitized, answer);
+    }
+
+    #[test]
+    fn assistant_run_sanitizer_blocks_structural_observation_marker() {
+        let sanitized = assistant_run_sanitize_customer_facing_answer_text(
+            "Observation: {\"items\":[{\"summary\":\"内部供料\"}]}",
+        );
+
+        assert!(sanitized.contains("内部检索指令"));
     }
 
     #[test]

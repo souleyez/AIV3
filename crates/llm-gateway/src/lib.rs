@@ -2003,6 +2003,7 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
         let mut finish_reason = None;
         let mut usage = None;
         let mut chunk_index = 0;
+        let mut reasoning_filter = LeadingReasoningStreamFilter::new();
         loop {
             line.clear();
             let read = reader.read_line(&mut line).map_err(|error| {
@@ -2047,13 +2048,22 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
             if let Some(delta) = extract_chat_completion_stream_delta(&value) {
                 if !delta.is_empty() {
                     output_text.push_str(&delta);
-                    on_delta(LlmStreamDelta {
-                        index: chunk_index,
-                        delta,
-                    })?;
-                    chunk_index += 1;
+                    for delta in reasoning_filter.push(&delta) {
+                        on_delta(LlmStreamDelta {
+                            index: chunk_index,
+                            delta,
+                        })?;
+                        chunk_index += 1;
+                    }
                 }
             }
+        }
+        for delta in reasoning_filter.finish() {
+            on_delta(LlmStreamDelta {
+                index: chunk_index,
+                delta,
+            })?;
+            chunk_index += 1;
         }
 
         let output_text = normalize_provider_output_text(&output_text);
@@ -2739,6 +2749,74 @@ fn extract_chat_completion_stream_finish_reason(value: &Value) -> Option<LlmFini
 
 fn normalize_provider_output_text(value: &str) -> String {
     strip_leading_reasoning_blocks(value)
+}
+
+#[derive(Debug, Default)]
+struct LeadingReasoningStreamFilter {
+    buffer: String,
+    stripping_leading_reasoning: bool,
+}
+
+impl LeadingReasoningStreamFilter {
+    fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            stripping_leading_reasoning: true,
+        }
+    }
+
+    fn push(&mut self, delta: &str) -> Vec<String> {
+        if !self.stripping_leading_reasoning {
+            return vec![delta.to_string()];
+        }
+        self.buffer.push_str(delta);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> Vec<String> {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, finish: bool) -> Vec<String> {
+        if !self.stripping_leading_reasoning {
+            return Vec::new();
+        }
+        let mut emitted = Vec::new();
+        const THINK_OPEN: &str = "<think>";
+        const THINK_CLOSE: &str = "</think>";
+        loop {
+            let trimmed = self.buffer.trim_start();
+            if trimmed.is_empty() {
+                if finish {
+                    self.buffer.clear();
+                    self.stripping_leading_reasoning = false;
+                }
+                return emitted;
+            }
+            let normalized = trimmed.to_ascii_lowercase();
+            if normalized.starts_with(THINK_OPEN) {
+                let content_start = THINK_OPEN.len();
+                let Some(close_offset) = normalized[content_start..].find(THINK_CLOSE) else {
+                    if finish {
+                        self.buffer.clear();
+                        self.stripping_leading_reasoning = false;
+                    }
+                    return emitted;
+                };
+                let close_end = content_start + close_offset + THINK_CLOSE.len();
+                self.buffer = trimmed[close_end..].trim_start().to_string();
+                continue;
+            }
+            if !finish && THINK_OPEN.starts_with(&normalized) {
+                return emitted;
+            }
+            self.stripping_leading_reasoning = false;
+            if !self.buffer.is_empty() {
+                emitted.push(std::mem::take(&mut self.buffer));
+            }
+            return emitted;
+        }
+    }
 }
 
 fn strip_leading_reasoning_blocks(value: &str) -> String {
@@ -3797,6 +3875,81 @@ mod tests {
                 total_tokens: 12,
             })
         );
+    }
+
+    #[test]
+    fn openai_compatible_provider_streaming_strips_leading_reasoning_deltas() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let request = read_http_request(&mut stream);
+            assert!(request.contains("\"stream\":true"));
+            let body = [
+                r#"data: {"id":"chatcmpl_stream_reasoning","choices":[{"delta":{"content":"<thi"},"finish_reason":null}]}"#,
+                "",
+                r#"data: {"id":"chatcmpl_stream_reasoning","choices":[{"delta":{"content":"nk>private Observation: secret</think>\n\n公开"},"finish_reason":null}]}"#,
+                "",
+                r#"data: {"id":"chatcmpl_stream_reasoning","choices":[{"delta":{"content":"回答"},"finish_reason":null}]}"#,
+                "",
+                r#"data: {"id":"chatcmpl_stream_reasoning","choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+                "",
+                "data: [DONE]",
+                "",
+            ]
+            .join("\n");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+
+        let provider = OpenAiCompatibleLlmProvider::new(
+            "minimax_openai_compatible",
+            OpenAiCompatibleLlmProviderConfig {
+                api_base_url: format!("http://{addr}"),
+                api_path: "/v1/chat/completions".to_string(),
+                api_key: None,
+                timeout_ms: None,
+                reasoning_effort: None,
+                reasoning_wire_field: OpenAiCompatibleReasoningWireField::default(),
+            },
+        )
+        .expect("provider");
+        let mut chunks = Vec::new();
+        let response = provider
+            .complete_streaming(
+                &LlmRequest {
+                    model: "MiniMax-M3".to_string(),
+                    lane: Some(MODEL_LANE_ASSISTANT_CHAT.to_string()),
+                    system_prompt_key: None,
+                    input: "请回答。".to_string(),
+                },
+                &mut |delta| {
+                    chunks.push(delta);
+                    Ok(())
+                },
+            )
+            .expect("streaming provider should succeed");
+
+        server.join().expect("server join");
+
+        assert_eq!(
+            chunks,
+            vec![
+                LlmStreamDelta {
+                    index: 0,
+                    delta: "公开".to_string(),
+                },
+                LlmStreamDelta {
+                    index: 1,
+                    delta: "回答".to_string(),
+                },
+            ]
+        );
+        assert_eq!(response.output_text, "公开回答");
     }
 
     #[test]
