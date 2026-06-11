@@ -3640,6 +3640,11 @@ Data-ingestion external fixed-task smoke:
 - Remaining live gate:
   - deployment-target live/read-only queue-stats check still needs an operator cookie or bearer for `https://v3.elepcloud.com`;
   - true static-page 5-way live smoke remains pending a controlled production window and scope.
+- 8-server verification:
+  - repository `/srv/aiv3/repo` fast-forwarded to `f33a392f8`;
+  - `node --check scripts/smoke/static-page-prewarm-observability.mjs`: passed;
+  - `npm run smoke:static-page-prewarm-observability -- --self-test`: passed, `ok=true`, required statuses all observed; receipt `/srv/aiv3/repo/target/static-page-prewarm-observability-smoke/20260611174245-self-test.json`;
+  - services stayed active after the smoke-only sync: `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service`.
 - Safety:
   - self-test did not call DataMax or any live endpoint;
   - live mode is read-only and only queries workflow queue stats when credentials are supplied;
