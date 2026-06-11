@@ -3369,3 +3369,43 @@ Data-ingestion external fixed-task smoke:
   - no public API, third-party URL, auth method, required request field, existing response field, production table, schema, or dataset-source mapping was changed;
   - no service was restarted;
   - 120 server was not touched.
+
+## 2026-06-12 Active Plan Rebuild And Local Self-Test Refresh
+
+- Purpose:
+  - rebuild the single active plan into a shorter executable document;
+  - keep `docs/plans/` at one active plan file;
+  - refresh non-credential P0/P1 self-tests after the plan rewrite.
+- Source state:
+  - active plan: `docs/plans/datamax-active-execution-plan.md`;
+  - plan commit: `bcd8baa` (`Rebuild DataMax active execution plan`);
+  - local `HEAD` and `origin/main` both resolved to `bcd8baa` after push;
+  - `docs/plans` contains only `datamax-active-execution-plan.md`.
+- Plan structure after rebuild:
+  - maintenance rules and safety boundaries;
+  - current production baseline;
+  - P0 release regression gates;
+  - P1 near-term gaps;
+  - P2 parsing and enterprise fact-store work;
+  - P3 engineering governance;
+  - 8-server release process;
+  - next execution queue.
+- Local verification:
+  - `git diff --check -- docs/plans/datamax-active-execution-plan.md`: passed; Git emitted only the expected Windows LF-to-CRLF warning;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`, receipt `target/external-report-focus-smoke/external-report-focus-self-test-20260611170142.json`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, `failedCount=0`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`, receipt `target/external-report-export-smoke/20260611170142-self-test.json`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`, receipt `target/external-scoped-document-chat-smoke/20260611170153-self-test.json`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`, receipt `target/external-video-ppt-smoke/20260611170153-self-test.json`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`, receipt `target/static-page-5way-smoke/20260611170153-self-test.json`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, `codexConcurrency=2`, `maxRunning=2`, receipt `target/cloudflare-fallback-2way-smoke/20260611170153-self-test.json`.
+- Current remaining gates:
+  - authenticated model-gateway operator smoke still requires a legitimate operator session/cookie/local-key or sanitized operator-side receipt;
+  - true main-site 20-way and third-party 20-way live sampling remain pending deployment window and production-safe credentials;
+  - true static-page 5-way live smoke remains pending a controlled live window;
+  - real P2 historical backfill or object cleanup remains blocked on explicit approval and must default to dry-run/summary-only.
+- Safety:
+  - no server was deployed or restarted;
+  - no live third-party mutation, production data ingestion, source sync, schema migration, customer database connection, or production write was performed;
+  - no third-party public URL, auth method, required request field, existing response field, public status value, production schema, or production data mapping was changed;
+  - no credential, bearer token, cookie, database URL, provider payload, raw customer row, source path, or full customer document was recorded;
+  - 120 server was not touched.
