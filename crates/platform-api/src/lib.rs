@@ -172,6 +172,7 @@ use uuid::Uuid;
 use workflow_engine::{WorkflowCatalog, WorkflowRuntimeState, WorkflowSignal};
 use zip::ZipArchive;
 
+mod assistant_scope_summary;
 pub mod auth_email;
 mod auth_session_support;
 mod chat_message_model_facing;
@@ -212,6 +213,7 @@ mod text_normalization;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 
+use assistant_scope_summary::*;
 use auth_session_support::*;
 use chat_message_model_facing::*;
 use chat_session_model_facing::*;
@@ -3079,207 +3081,6 @@ async fn enrich_visible_datasets_for_scope_planning(
         enriched.push(dataset);
     }
     Ok(enriched)
-}
-
-fn assistant_scope_document_word_count(document: &Document, chunks: &[DocumentChunk]) -> usize {
-    let chunk_tokens = chunks
-        .iter()
-        .map(|chunk| chunk.token_count.max(0) as usize)
-        .sum::<usize>();
-    if chunk_tokens > 0 {
-        return chunk_tokens;
-    }
-    for key in [
-        "estimated_word_count",
-        "estimatedWordCount",
-        "word_count",
-        "wordCount",
-    ] {
-        if let Some(value) = document.metadata.get(key).and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_str()?.parse::<u64>().ok())
-        }) {
-            return value as usize;
-        }
-    }
-    0
-}
-
-fn assistant_scope_document_title_hint(document: &Document) -> Option<String> {
-    let raw_title = document.title.trim();
-    let raw = if raw_title.is_empty() {
-        let filename = document
-            .object_key
-            .rsplit('/')
-            .next()
-            .unwrap_or(&document.object_key)
-            .rsplit('\\')
-            .next()
-            .unwrap_or(&document.object_key);
-        filename.trim()
-    } else {
-        raw_title
-    };
-    let without_extension = raw
-        .rsplit_once('.')
-        .and_then(|(stem, extension)| {
-            let stem = stem.trim();
-            let extension = extension.trim();
-            if stem.is_empty() || extension.is_empty() || extension.chars().any(char::is_whitespace)
-            {
-                None
-            } else {
-                Some(stem)
-            }
-        })
-        .unwrap_or(raw);
-    let normalized =
-        without_extension.trim_matches(|ch: char| ch.is_whitespace() || ".-_".contains(ch));
-    if normalized.is_empty() {
-        None
-    } else {
-        Some(normalized.chars().take(80).collect())
-    }
-}
-
-fn assistant_scope_document_parse_status(document: &Document, chunks: &[DocumentChunk]) -> String {
-    if let Some(value) = document_metadata_parse_status(document) {
-        return value;
-    }
-    if let Some(parse_status) = extract_media_metadata_from_chunks(chunks).and_then(|metadata| {
-        metadata
-            .get("parse_status")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-    }) {
-        return parse_status;
-    }
-    document.lifecycle.as_str().to_string()
-}
-
-fn document_metadata_parse_status(document: &Document) -> Option<String> {
-    for key in ["parse_status", "parseStatus", "status"] {
-        if let Some(value) = document
-            .metadata
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-fn assistant_scope_content_kind(content_type: &str) -> &'static str {
-    let lower = content_type.trim().to_ascii_lowercase();
-    if lower.starts_with("audio/") {
-        "audio"
-    } else if lower.starts_with("video/") {
-        "video"
-    } else if lower.starts_with("image/") {
-        "image"
-    } else if lower.contains("pdf") {
-        "pdf"
-    } else if lower.contains("spreadsheet") || lower.contains("excel") || lower.contains("csv") {
-        "spreadsheet"
-    } else if lower.contains("presentation") || lower.contains("powerpoint") {
-        "presentation"
-    } else if lower.starts_with("text/") || lower.contains("document") || lower.contains("word") {
-        "text"
-    } else {
-        "other"
-    }
-}
-
-fn assistant_scope_collect_material_hints(
-    document: &Document,
-    chunks: &[DocumentChunk],
-    material_hints: &mut BTreeSet<String>,
-) {
-    match infer_media_kind_from_content_type(&document.content_type) {
-        "audio" | "video" => {
-            material_hints.insert("audio_video".to_string());
-        }
-        _ => {}
-    }
-    if let Some(media_metadata) = extract_media_metadata_from_chunks(chunks) {
-        material_hints.insert("audio_video".to_string());
-        if media_metadata
-            .get("transcript_segments")
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-        {
-            material_hints.insert("transcript_possible".to_string());
-        }
-        if media_metadata
-            .get("scenes")
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-        {
-            material_hints.insert("scene_possible".to_string());
-        }
-        if media_metadata
-            .get("keyframe_ocr_snippets")
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-        {
-            material_hints.insert("keyframe_ocr_possible".to_string());
-        }
-    }
-}
-
-fn assistant_scope_collect_document_understanding_hints(
-    chunks: &[DocumentChunk],
-    noun_term_hints: &mut BTreeSet<String>,
-    section_title_hints: &mut BTreeSet<String>,
-    understanding_strategy_hints: &mut BTreeSet<String>,
-) {
-    for chunk in chunks {
-        for term in document_chunk_noun_terms(chunk).into_iter().take(16) {
-            noun_term_hints.insert(term);
-            if noun_term_hints.len() >= 64 {
-                break;
-            }
-        }
-        for hint in document_chunk_section_title_hints(chunk)
-            .into_iter()
-            .take(8)
-        {
-            section_title_hints.insert(hint);
-            if section_title_hints.len() >= 64 {
-                break;
-            }
-        }
-        if let Some(strategy) = chunk
-            .metadata
-            .get("understanding")
-            .and_then(|value| value.get("strategy"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            understanding_strategy_hints.insert(strategy.to_string());
-        }
-        if noun_term_hints.len() >= 64
-            && section_title_hints.len() >= 64
-            && understanding_strategy_hints.len() >= 8
-        {
-            break;
-        }
-    }
-}
-
-fn assistant_scope_count_summary(counts: &BTreeMap<String, usize>) -> String {
-    counts
-        .iter()
-        .map(|(key, count)| format!("{key}:{count}"))
-        .collect::<Vec<_>>()
-        .join("，")
 }
 
 async fn load_visible_dataset(

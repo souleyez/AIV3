@@ -384,6 +384,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-13: `resource_access` report/static-page owner visibility helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
 - 2026-06-13: `crates/platform-api/src/lib.rs` dataset summary 和 metadata 读取 helper 已拆到 `dataset_summary_support` 模块并补模块单测；DatasetSummary 字段映射、snake/camel alias、字符串 trim、数组/嵌套列表收集和 limit 语义保持不变。
 - 2026-06-13: `dataset_summary_support` dataset summary helper 拆分已提交并同步 8 服务器；远端 `cargo check`、关联 Rust 回归、Web build、release build、health/ready、第三方报表/导出/临时文档/静态页并发/Cloudflare 兜底 smoke 和主站流式/本地会话 Node 回归均通过。
+- 2026-06-13: `crates/platform-api/src/lib.rs` assistant scope 文档摘要 helper 已拆到 `assistant_scope_summary` 模块并补模块单测；word count、标题 fallback、parse status 优先级、content kind、媒体 hint、结构理解 hint 和计数摘要语义保持不变。
 
 **Regression commands:**
 
