@@ -314,6 +314,7 @@ bash scripts/run-data-ingestion-staging-sync-smoke.sh
 - 2026-06-12: `HomePageClient.js` 报表 shelf 选择提示文案和本地消息构造 helper 已并入 `apps/web/app/lib/report-template-utils.js`，并补充 Node 单测；标题清洗、报表后缀补全、最后一条去重、metadata 和 40 条截断语义保持不变。
 - 2026-06-12: `HomePageClient.js` assistant-run 流式占位消息、流式内容和 final 内容合成 helper 已并入 `apps/web/app/lib/assistant-stream-content.js`，并补充 Node 单测；占位文案、空 final fallback、流式文本优先级、status fallback 和生成产物链接只补一次语义保持不变。
 - 2026-06-12: `HomePageClient.js` 本地消息追加、内容替换和 40 条截断 helper 已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；本地消息 shape、空追加引用、流式中间更新不截断、final 更新截断和缓存读写截断语义保持不变。
+- 2026-06-12: `HomePageClient.js` 本地对话 snapshot 构造 helper 已并入 `apps/web/app/lib/local-chat-sessions.js`，并补充 Node 单测；thread fallback、标题 fallback、首条用户消息标题、started/updated 时间和 assistantRunId 传递语义保持不变。
 
 **Regression commands:**
 

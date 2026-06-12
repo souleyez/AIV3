@@ -4,6 +4,7 @@ import {
   LOCAL_CHAT_MESSAGES_STORAGE_KEY,
   LOCAL_CHAT_SESSIONS_STORAGE_KEY,
   appendLocalChatMessages,
+  buildLocalChatSessionSnapshot,
   createLocalMessage,
   isLocalChatSessionOptionId,
   limitLocalChatMessages,
@@ -105,6 +106,51 @@ test('local chat message list helpers append, replace, and preserve the 40 messa
   const unboundedReplace = replaceLocalChatMessageContent(messages, 'm-40', 'streaming', { limit: false });
   assert.equal(unboundedReplace.length, 41);
   assert.equal(unboundedReplace.at(-1).content, 'streaming');
+});
+
+test('buildLocalChatSessionSnapshot preserves local conversation snapshot semantics', () => {
+  const snapshot = buildLocalChatSessionSnapshot({
+    fallbackThreadId: 'thread-1',
+    messages: [
+      { id: 'm1', role: 'assistant', content: '提示' },
+      { id: 'm2', role: 'user', content: '最近低活跃品牌报表' },
+    ],
+    fallbackStartedAt: '2026-06-12T08:09:00+08:00',
+    now: '2026-06-12T08:10:00+08:00',
+    assistantRunId: 'run-1',
+  });
+
+  assert.deepEqual(snapshot, {
+    id: 'thread-1',
+    title: '06-12 08:09 · 最近低活跃品牌报表',
+    messages: [
+      { id: 'm1', role: 'assistant', content: '提示' },
+      { id: 'm2', role: 'user', content: '最近低活跃品牌报表' },
+    ],
+    startedAt: '2026-06-12T08:09:00+08:00',
+    updatedAt: '2026-06-12T08:10:00+08:00',
+    assistantRunId: 'run-1',
+  });
+
+  assert.equal(
+    buildLocalChatSessionSnapshot({
+      threadId: 'thread-explicit',
+      fallbackThreadId: 'thread-fallback',
+      title: '  手工标题  ',
+      messages: [],
+      startedAt: '2026-06-12T08:00:00+08:00',
+      updatedAt: '2026-06-12T08:01:00+08:00',
+    }).title,
+    '手工标题',
+  );
+
+  const generatedTimeSnapshot = buildLocalChatSessionSnapshot({
+    threadId: 'thread-now',
+    messages: [],
+    now: '2026-06-12T08:11:00+08:00',
+  });
+  assert.equal(generatedTimeSnapshot.startedAt, '2026-06-12T08:11:00+08:00');
+  assert.equal(generatedTimeSnapshot.updatedAt, '2026-06-12T08:11:00+08:00');
 });
 
 test('local chat sessions normalize, dedupe, and sort by update time', () => {

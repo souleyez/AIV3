@@ -168,6 +168,7 @@ import {
 } from './lib/ui-notice-message';
 import {
   appendLocalChatMessages,
+  buildLocalChatSessionSnapshot,
   createLocalMessage,
   isLocalChatSessionOptionId,
   limitLocalChatMessages,
@@ -2301,21 +2302,17 @@ export default function HomePageClient() {
   }
 
   function buildCurrentLocalChatSessionSnapshot(overrides = {}) {
-    const threadId = overrides.threadId || localThreadId || readLocalThreadId();
-    const snapshotMessages = Array.isArray(overrides.messages) ? overrides.messages : localMessages;
-    const title = String(overrides.title || currentConversationTitle || '').trim();
-    const now = new Date().toISOString();
-    return {
-      id: threadId,
-      title: title || buildDefaultConversationTitle(
-        snapshotMessages.find((message) => message.role === 'user')?.content || '新对话',
-        draftSessionStartedAt,
-      ),
-      messages: snapshotMessages,
-      startedAt: overrides.startedAt || draftSessionStartedAt || now,
-      updatedAt: overrides.updatedAt || now,
+    return buildLocalChatSessionSnapshot({
+      threadId: overrides.threadId,
+      fallbackThreadId: localThreadId || readLocalThreadId(),
+      messages: Array.isArray(overrides.messages) ? overrides.messages : localMessages,
+      title: overrides.title,
+      currentTitle: currentConversationTitle,
+      startedAt: overrides.startedAt,
+      fallbackStartedAt: draftSessionStartedAt,
+      updatedAt: overrides.updatedAt,
       assistantRunId: overrides.assistantRunId ?? lastAssistantRunId,
-    };
+    });
   }
 
   function persistCurrentLocalConversation(overrides = {}) {

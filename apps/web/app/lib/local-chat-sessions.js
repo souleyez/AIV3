@@ -1,3 +1,5 @@
+import { buildDefaultConversationTitle } from './conversation-title.js';
+
 export const LOCAL_CHAT_SESSION_OPTION_PREFIX = 'local-chat:';
 export const LOCAL_CHAT_MESSAGES_STORAGE_KEY = 'aidp-v3-local-chat-messages';
 export const LOCAL_CHAT_SESSIONS_STORAGE_KEY = 'aidp-v3-local-chat-sessions';
@@ -80,6 +82,23 @@ export function replaceLocalChatMessageContent(messages, messageId, content, opt
       : message,
   );
   return options.limit === false ? updated : limitLocalChatMessages(updated, options);
+}
+
+export function buildLocalChatSessionSnapshot(options = {}) {
+  const messages = Array.isArray(options.messages) ? options.messages : [];
+  const generatedNow = options.now || new Date().toISOString();
+  const startedAt = options.startedAt || options.fallbackStartedAt || generatedNow;
+  const updatedAt = options.updatedAt || generatedNow;
+  const explicitTitle = String(options.title || options.currentTitle || '').trim();
+  const firstUserMessage = messages.find((message) => message?.role === 'user')?.content || '新对话';
+  return {
+    id: options.threadId || options.fallbackThreadId || '',
+    title: explicitTitle || buildDefaultConversationTitle(firstUserMessage, startedAt),
+    messages,
+    startedAt,
+    updatedAt,
+    assistantRunId: options.assistantRunId ?? '',
+  };
 }
 
 export function normalizeLocalChatSession(session, options = {}) {
