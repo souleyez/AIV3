@@ -19,6 +19,7 @@ use crate::{
     },
     external_channel_public_text::{
         external_channel_public_status, external_channel_public_stream_text,
+        external_channel_public_text,
     },
     external_channel_static_page_enrich_report_card,
     sse_support::sse_json_event,
@@ -605,6 +606,32 @@ pub(crate) fn external_channel_completed_stream_data(
     })
 }
 
+pub(crate) fn external_channel_response_needs_input(
+    response: &ExternalChannelEventResponse,
+) -> bool {
+    response.reply.task_status.as_deref() == Some("needs_input")
+        || response
+            .reply
+            .card
+            .as_ref()
+            .and_then(|card| card.get("status"))
+            .and_then(Value::as_str)
+            == Some("needs_input")
+}
+
+pub(crate) fn external_channel_needs_input_sse_text(
+    response: &ExternalChannelEventResponse,
+) -> String {
+    response
+        .reply
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(external_channel_public_text)
+        .unwrap_or_else(|| "还需要补充信息后继续处理。".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,5 +986,106 @@ mod tests {
         assert_eq!(data["status"], json!("static_page_stable_artifact_reused"));
         assert_eq!(data["text"], json!("本轮处理已返回当前结果。"));
         assert_eq!(data["reply_type"], json!("artifact_link"));
+    }
+
+    #[test]
+    fn response_needs_input_checks_task_status_or_card_status() {
+        let from_task_status = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: None,
+            idempotency_key: "idem-3".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: None,
+                card: Some(json!({"status": "processing"})),
+                artifact_links: Vec::new(),
+                task_status: Some("needs_input".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+        let from_card_status = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: None,
+            idempotency_key: "idem-4".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: None,
+                card: Some(json!({"status": "needs_input"})),
+                artifact_links: Vec::new(),
+                task_status: Some("processing".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+        let processing = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: None,
+            idempotency_key: "idem-5".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: None,
+                card: Some(json!({"status": "processing"})),
+                artifact_links: Vec::new(),
+                task_status: Some("processing".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        assert!(external_channel_response_needs_input(&from_task_status));
+        assert!(external_channel_response_needs_input(&from_card_status));
+        assert!(!external_channel_response_needs_input(&processing));
+    }
+
+    #[test]
+    fn needs_input_sse_text_sanitizes_text_or_uses_default() {
+        let with_text = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: None,
+            idempotency_key: "idem-6".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: Some("  Cloudflare Codex 需要确认  ".to_string()),
+                card: None,
+                artifact_links: Vec::new(),
+                task_status: Some("needs_input".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+        let empty_text = ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: None,
+            idempotency_key: "idem-7".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: Some("   ".to_string()),
+                card: None,
+                artifact_links: Vec::new(),
+                task_status: Some("needs_input".to_string()),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
+        };
+
+        assert_eq!(
+            external_channel_needs_input_sse_text(&with_text),
+            "DataMax 后台 需要确认"
+        );
+        assert_eq!(
+            external_channel_needs_input_sse_text(&empty_text),
+            "还需要补充信息后继续处理。"
+        );
     }
 }

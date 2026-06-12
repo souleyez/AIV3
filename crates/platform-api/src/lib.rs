@@ -5465,28 +5465,6 @@ fn external_channel_response_is_static_page_pipeline(
         .unwrap_or(false)
 }
 
-fn external_channel_response_needs_input(response: &ExternalChannelEventResponse) -> bool {
-    response.reply.task_status.as_deref() == Some("needs_input")
-        || response
-            .reply
-            .card
-            .as_ref()
-            .and_then(|card| card.get("status"))
-            .and_then(Value::as_str)
-            == Some("needs_input")
-}
-
-fn external_channel_needs_input_sse_text(response: &ExternalChannelEventResponse) -> String {
-    response
-        .reply
-        .text
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(external_channel_public_text)
-        .unwrap_or_else(|| "还需要补充信息后继续处理。".to_string())
-}
-
 fn external_channel_static_page_sse_status(response: &ExternalChannelEventResponse) -> String {
     let raw_status = response
         .reply
