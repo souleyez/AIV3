@@ -176,6 +176,7 @@ pub mod auth_email;
 mod auth_session_support;
 mod chat_message_model_facing;
 mod chat_session_model_facing;
+mod chat_session_titles;
 mod dataset_output_model_facing;
 mod document_compare_model_facing;
 mod document_detail_model_facing;
@@ -207,6 +208,7 @@ mod workflow_runtime_summary;
 use auth_session_support::*;
 use chat_message_model_facing::*;
 use chat_session_model_facing::*;
+use chat_session_titles::*;
 use dataset_output_model_facing::*;
 use document_compare_model_facing::*;
 use document_detail_model_facing::*;
@@ -87106,56 +87108,6 @@ fn trim_optional(value: Option<String>) -> Option<String> {
 fn non_empty_trimmed_string(value: &str) -> Option<String> {
     let trimmed = value.trim().to_string();
     (!trimmed.is_empty()).then_some(trimmed)
-}
-
-fn derive_chat_session_title(prompt: &str) -> String {
-    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-    let total_chars = normalized.chars().count();
-    let mut title = normalized.chars().take(72).collect::<String>();
-    if total_chars > 72 {
-        title.push_str("...");
-    }
-
-    if title.is_empty() {
-        "Untitled chat session".to_string()
-    } else {
-        title
-    }
-}
-
-fn derive_chat_session_report_plan_title(session: &ChatSession) -> String {
-    let base = session.title.trim();
-    if base.is_empty() {
-        return "Dataset Report".to_string();
-    }
-
-    let lowercase = base.to_ascii_lowercase();
-    if lowercase.contains("report") {
-        base.to_string()
-    } else {
-        format!("{base} Report")
-    }
-}
-
-fn derive_chat_session_report_plan_objective(session: &ChatSession) -> String {
-    let prompt = session
-        .session_manifest
-        .as_object()
-        .and_then(|manifest| {
-            manifest
-                .get("last_prompt")
-                .and_then(Value::as_str)
-                .or_else(|| manifest.get("initial_prompt").and_then(Value::as_str))
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(session.title.trim());
-
-    if prompt.is_empty() {
-        "Turn the current dataset context into a report-ready output.".to_string()
-    } else {
-        format!("Turn the current dataset context into a report-ready output for: {prompt}")
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
