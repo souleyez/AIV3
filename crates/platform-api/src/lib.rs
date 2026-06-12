@@ -189,6 +189,7 @@ mod external_message_summary;
 mod external_observability;
 pub mod external_wecom;
 pub mod fact_index;
+mod lifecycle_updates;
 mod model_facing_document_focus;
 mod model_facing_format;
 mod model_facing_handoff;
@@ -244,6 +245,7 @@ use external_observability::{
     access_allowed as external_observability_access_allowed,
     require_external_integration_management_access as ensure_external_integration_management_allowed,
 };
+use lifecycle_updates::*;
 use model_facing_format::*;
 #[cfg(test)]
 use model_facing_policy::build_model_facing_summary;
@@ -3470,38 +3472,6 @@ fn assistant_scope_count_summary(counts: &BTreeMap<String, usize>) -> String {
         .map(|(key, count)| format!("{key}:{count}"))
         .collect::<Vec<_>>()
         .join("，")
-}
-
-fn parse_dataset_lifecycle_update(
-    lifecycle: Option<String>,
-) -> std::result::Result<Option<DatasetLifecycle>, ApiError> {
-    lifecycle
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            DatasetLifecycle::from_str(&normalized).ok_or_else(|| {
-                ApiError::bad_request(
-                    "validation_error",
-                    format!("unsupported dataset lifecycle: {value}"),
-                )
-            })
-        })
-        .transpose()
-}
-
-fn parse_document_lifecycle_update(
-    lifecycle: Option<String>,
-) -> std::result::Result<Option<DocumentLifecycle>, ApiError> {
-    lifecycle
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            DocumentLifecycle::from_str(&normalized).ok_or_else(|| {
-                ApiError::bad_request(
-                    "validation_error",
-                    format!("unsupported document lifecycle: {value}"),
-                )
-            })
-        })
-        .transpose()
 }
 
 fn dataset_not_found_error(dataset_id: DatasetId) -> ApiError {
