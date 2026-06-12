@@ -211,6 +211,7 @@ mod report_render_output_asset;
 mod request_scope_headers;
 mod resource_access;
 mod text_normalization;
+mod workflow_context_support;
 mod workflow_runtime_model_facing;
 mod workflow_runtime_summary;
 
@@ -279,6 +280,7 @@ use report_render_output_asset::*;
 use request_scope_headers::*;
 use resource_access::*;
 use text_normalization::*;
+use workflow_context_support::*;
 use workflow_runtime_model_facing::*;
 pub use workflow_runtime_summary::{
     render_dataset_output_runtime_summary, render_execution_scope_runtime_summary,
@@ -3599,13 +3601,6 @@ async fn load_external_channel_assistant_run_for_owner_or_operator(
         return Err(assistant_run_not_found_error(run_id));
     }
     Ok((run, Some(user.id), true))
-}
-
-fn workflow_context_uuid(context: &Value, key: &str) -> Option<Uuid> {
-    context
-        .get(key)
-        .and_then(Value::as_str)
-        .and_then(|raw| Uuid::parse_str(raw).ok())
 }
 
 async fn ensure_workflow_execution_visible_for_user(
