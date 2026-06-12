@@ -7645,6 +7645,32 @@ Data-ingestion external fixed-task smoke:
   - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`, max allowed fallback concurrency `2`;
   - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
   - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only.
+- 8-server post-sync verification:
+  - local commit `2198105` was pushed to GitHub `main`;
+  - `/srv/aiv3/repo` fast-forwarded from `45ca71ba9` to `219810544`;
+  - `cargo fmt --check`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api request_scope_headers --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api create_dataset --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api report_plan_routes_hide_owned_public_dataset_plan_from_other_users --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo check -p platform-api`: passed;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_limiter --lib`: passed, 3/3 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api model_gateway_profile --lib`: passed, 5/5 tests;
+  - `CC=clang CXX=clang++ cargo test -p platform-api gateway_status_exposes_lane_and_provider_counts_without_secrets --lib`: passed, 1/1 test;
+  - `CC=clang CXX=clang++ cargo test -p platform-api external_channel_static_page_artifact --lib`: passed, 16/16 tests;
+  - `npm --prefix apps/web run build`: passed with the existing Next middleware deprecation warning and Turbopack NFT trace warning only;
+  - `CC=clang CXX=clang++ cargo build -p platform-api --release`: passed;
+  - `aiv3-platform-api.service` was restarted after the successful release build;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active`;
+  - `GET /healthz` and `GET /readyz` on the local API port returned `ok`/`ready` after restart;
+  - `npm run smoke:external-report-focus -- --self-test`: passed, `reportCases=7`, `ordinaryGuards=4`;
+  - `npm run smoke:external-report-export -- --self-test`: passed, `modeCount=2`, `okCount=2`, title `新世界百货经营管理月报表`, focus `取高机会`, exports `table-data.csv`, `report.ppt`, `report.md`;
+  - `npm run smoke:external-scoped-document-chat -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:external-video-ppt -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:static-page-5way -- --self-test`: passed, `ok=true`;
+  - `npm run smoke:cloudflare-fallback-2way -- --self-test`: passed, `ok=true`;
+  - `node --test apps/web/app/lib/assistant-run-progress.test.mjs`: passed, 26/26 tests with the existing module-type warning only;
+  - `node --test apps/web/app/lib/local-chat-sessions.test.mjs`: passed, 16/16 tests with the existing module-type warning only;
+  - the final remote repository status was verified with `git status -sb` because the remote Git version rejected `git status --short --branch`; it reported `## main...origin/main`.
 - Safety:
   - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
   - no source database write, schema migration, source sync, object cleanup, P2 real backfill, static-page generation, or production data mutation was performed;
