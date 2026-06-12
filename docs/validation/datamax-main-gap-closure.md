@@ -3481,6 +3481,49 @@ Data-ingestion external fixed-task smoke:
   - no service was restarted;
   - 120 server was not touched.
 
+## 2026-06-12 P2 Object Governance Read-Only Refresh
+
+- Purpose:
+  - refresh P2-2 fingerprint/object governance evidence from the current 8-server database state;
+  - keep all operations read-only, aggregate-only, and redacted.
+- Local state:
+  - local head before this validation receipt: `b10ba69`;
+  - `docs/plans/` contains exactly one active plan file;
+  - known external integration HTML line-ending/stat noise and archived performance-plan line-ending noise were left uncommitted.
+- Safety contract:
+  - `scripts/README.md` documents `document-fingerprint-inventory`, `document-object-cleanup-plan`, and `document-object-filesystem-preflight` as read-only entrypoints;
+  - inventory and cleanup-plan execute fixed aggregate SELECTs and do not probe filesystems, download remote objects, delete files, or write database rows;
+  - filesystem preflight executes a fixed SELECT, keeps candidate locators in memory only, performs bounded `stat()` only, and does not print paths or read file content.
+- Local self-tests:
+  - `npm run smoke:document-fingerprint-inventory -- --self-test --pretty`: passed, checks `redactionContract`, `aggregateOnlyShape`, `noFilesystemCheck`, and `missingObjectReasonsAggregateOnly`;
+  - `npm run smoke:document-object-cleanup-plan -- --self-test --pretty`: passed, checks `redactionContract`, `aggregateOnlyImpact`, `cleanupDisabled`, and `rollbackPlanPresent`;
+  - `npm run smoke:document-object-filesystem-preflight -- --self-test --pretty`: passed, checks `redactionContract`, `statOnly`, `noPathValues`, `traversalBlocked`, and `cleanupDisabled`.
+- 8-server read-only live smoke:
+  - repository head: `b10ba69c6e9beeba44754437c0b5939d7babb26a`;
+  - `npm run smoke:document-fingerprint-inventory -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20 --pretty`: passed, `ok=true`;
+  - current aggregate inventory: `dataset_count=58`, `document_count=2637`, `locator_present_count=2637`, `fingerprinted_document_count=32`, `canonical_document_reference_count=32`;
+  - current dedup state counts: `unknown=2605`, `canonical=32`;
+  - current content hash group counts: `distinct_hash_group_count=32`, `repeated_hash_group_count=0`, `duplicate_document_candidate_count=0`;
+  - current object locator classification: `filesystem_checked=false`, `empty_locator_count=0`, `remote_locator_count=3`, `local_locator_candidate_count=2634`;
+  - current fingerprint gap reason counts: `remote_locator_requires_fetch=3`, `local_locator_requires_filesystem_probe=2602`;
+  - `npm run smoke:document-object-cleanup-plan -- --env-file /etc/aiv3/aiv3.env --dataset-limit 20 --pretty`: passed, `ok=true`;
+  - cleanup plan aggregate result: `blocked_count=2637`, `document_count=2637`, `dataset_count=58`, `no_cleanup_count=0`, `review_index_mapping_candidate_count=0`, `review_object_cleanup_candidate_count=0`;
+  - cleanup blocker classes: `blocked_remote_locator=3`, `blocked_canonical_document=32`, `blocked_missing_fingerprint=2602`;
+  - cleanup rollback requirements are present: operator approval, redacted manifest, object backup or retention window, database snapshot or reversible mapping plan, and post-cleanup verification commands;
+  - `npm run smoke:document-object-filesystem-preflight -- --env-file /etc/aiv3/aiv3.env --probe-limit 200 --pretty`: passed, `ok=true`;
+  - filesystem preflight aggregate input: `document_count=2637`, `local_missing_fingerprint_count=2602`, `remote_missing_fingerprint_count=3`, `missing_locator_fingerprint_count=0`, `probe_limit=200`, `probed_count=200`;
+  - filesystem preflight aggregate result: `root_configured=true`, `root_value_included=false`, `file_missing=143`, `file_found=57`, `relative_under_root=142`, `absolute_direct=58`, `file_found_count=57`, `total_bytes=69424609`, `max_bytes=33717070`;
+  - `aiv3-platform-api.service`, `aiv3-web.service`, `aiv3-assistant-run-worker.service`, `aiv3-chat-session-worker.service`, and `aiv3-static-page-worker.service` were all `active` after the read-only checks.
+- Receipt redaction check:
+  - scanned the three generated report JSON files without printing matched values;
+  - `databaseUrl=0`, `bearer=0`, `providerKey=0`, `rawUrl=0`, `sha256Hex=0`, `windowsPath=0`.
+- Safety:
+  - no public API, third-party URL, auth method, required request field, existing response field, schema, or production data mapping was changed;
+  - no source database write, schema migration, source sync, object cleanup, object file read, object file delete, P2 real backfill, or production data mutation was performed;
+  - no credential, bearer, cookie, provider key, database URL, raw customer row, raw source payload, raw provider payload, local object path, object key, document title, content hash, or full document body was recorded;
+  - no service was restarted;
+  - 120 server was not touched.
+
 ## 2026-06-12 P0/P3 Post SSE Extraction Regression
 
 - Purpose:
