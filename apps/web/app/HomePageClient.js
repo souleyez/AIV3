@@ -36,6 +36,7 @@ import {
   normalizeCodexCustomerTasksFromAssistantRunResponse,
   promptMayUseCustomerCodex,
 } from './lib/codex-customer-artifacts';
+import { buildDefaultConversationTitle } from './lib/conversation-title';
 import { planAssistantScope, selectPlannerDatasetIds } from './lib/scope-planner';
 import {
   applyStaticPageOperation,
@@ -89,30 +90,6 @@ const LOCAL_SECRET_BINDING_IDS_STORAGE_KEY = 'aidp-v3-secret-binding-ids';
 const LOCAL_SECRET_VALUE_STORAGE_KEY = 'aidp-v3-local-secret-value';
 const LOCAL_ACCOUNT_EMAIL_STORAGE_KEY = 'aidp-v3-account-email';
 const STATIC_PAGE_QUEUE_MESSAGE = '资源正在排队，可以联系商务开通高级用户跳过等待。';
-
-function compactConversationSummary(value, maxLength = 28) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!text) {
-    return '新对话';
-  }
-  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
-}
-
-function formatConversationTitleTime(value = new Date()) {
-  const date = value instanceof Date ? value : new Date(value);
-  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(safeDate).replace(/\//g, '-');
-}
-
-function buildDefaultConversationTitle(prompt, startedAt = new Date()) {
-  return `${formatConversationTitleTime(startedAt)} · ${compactConversationSummary(prompt)}`;
-}
 
 function readLocalThreadId() {
   if (typeof window === 'undefined') {
