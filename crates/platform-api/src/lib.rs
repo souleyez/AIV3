@@ -5281,12 +5281,6 @@ fn external_channel_reply_is_static_page_like(reply: &ExternalBotReplyView) -> b
             .unwrap_or(false)
 }
 
-fn external_channel_static_page_provisional_existing_artifact(card: Option<&Value>) -> bool {
-    card.and_then(|card| card.get("provisional_existing_artifact"))
-        .and_then(Value::as_bool)
-        == Some(true)
-}
-
 fn external_channel_static_page_baseline_public_url(payload: &Value) -> Option<String> {
     external_channel_public_artifact_url_from_value(payload).or_else(|| {
         [
@@ -5447,109 +5441,6 @@ fn external_channel_static_page_reply_with_public_artifact_terminal(
             .or_insert_with(|| json!([public_url]));
     }
     reply
-}
-
-fn external_channel_response_is_static_page_pipeline(
-    response: &ExternalChannelEventResponse,
-) -> bool {
-    response
-        .reply
-        .card
-        .as_ref()
-        .and_then(|card| card.get("type"))
-        .and_then(Value::as_str)
-        .map(|card_type| {
-            card_type.starts_with("v3_static_page_image2")
-                || card_type == "v3_static_page_image2_pipeline"
-        })
-        .unwrap_or(false)
-}
-
-fn external_channel_static_page_sse_status(response: &ExternalChannelEventResponse) -> String {
-    let raw_status = response
-        .reply
-        .card
-        .as_ref()
-        .and_then(|card| card.get("status"))
-        .and_then(Value::as_str)
-        .or(response.reply.task_status.as_deref())
-        .unwrap_or("processing")
-        .to_string();
-    if !external_channel_static_page_provisional_existing_artifact(response.reply.card.as_ref())
-        && external_channel_public_artifact_url_from_reply(&response.reply).is_some()
-    {
-        "static_page_published".to_string()
-    } else if external_channel_static_page_cancelled_should_continue(
-        &raw_status,
-        response.reply.card.as_ref(),
-    ) {
-        "static_page_continue_polling".to_string()
-    } else {
-        raw_status
-    }
-}
-
-fn external_channel_static_page_sse_progress_key(
-    response: &ExternalChannelEventResponse,
-) -> String {
-    let status = external_channel_static_page_sse_status(response);
-    let card = response.reply.card.as_ref();
-    let public_url = card
-        .and_then(|card| {
-            card.get("public_url")
-                .or_else(|| card.get("generated_artifact_url"))
-                .or_else(|| card.get("artifact_public_url"))
-        })
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let preview = card
-        .and_then(|card| {
-            card.get("preview_asset_key")
-                .or_else(|| card.get("preview_url"))
-                .or_else(|| card.get("render_asset_url"))
-        })
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let runtime = card
-        .and_then(|card| card.get("runtime_event"))
-        .and_then(|event| {
-            event
-                .get("heartbeat_count")
-                .or_else(|| event.get("elapsed_ms"))
-                .or_else(|| event.get("reason"))
-        })
-        .map(Value::to_string)
-        .unwrap_or_default();
-    format!("{status}|{public_url}|{preview}|{runtime}")
-}
-
-fn external_channel_static_page_sse_is_terminal(response: &ExternalChannelEventResponse) -> bool {
-    let status = external_channel_static_page_sse_status(response);
-    matches!(
-        status.as_str(),
-        "static_page_published"
-            | "static_page_stable_artifact_reused"
-            | "static_page_publish_cancelled"
-            | "static_page_publish_failed"
-            | "static_page_publish_needs_human"
-    )
-}
-
-fn external_channel_static_page_sse_event_name(status: &str) -> &'static str {
-    match status {
-        "static_page_effect_image_ready" => "external_channel.static_page_preview_ready",
-        "static_page_published" | "static_page_stable_artifact_reused" => {
-            "external_channel.static_page_published"
-        }
-        "static_page_publish_failed"
-        | "static_page_publish_cancelled"
-        | "static_page_publish_needs_human" => "external_channel.static_page_issue",
-        "static_page_continue_polling" => "external_channel.static_page_continue_polling",
-        "static_page_publish_queued"
-        | "static_page_publish_running"
-        | "static_page_publish_retrying" => "external_channel.static_page_publish_progress",
-        _ => "external_channel.static_page_progress",
-    }
 }
 
 fn external_channel_static_page_sse_progress_text(

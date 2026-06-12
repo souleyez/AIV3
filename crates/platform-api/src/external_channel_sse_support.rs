@@ -9,6 +9,7 @@ use crate::{
     codex_host_fixed_task_public_artifact_url_allowed,
     external_channel_public_artifact::{
         external_channel_public_artifact_url_from_links_value,
+        external_channel_public_artifact_url_from_reply,
         external_channel_public_artifact_url_from_value,
     },
     external_channel_public_card::{
@@ -153,6 +154,14 @@ pub(crate) fn external_channel_status_is_continuable(status: &str) -> bool {
             | "static_page_publish_running"
             | "static_page_publish_retrying"
     )
+}
+
+pub(crate) fn external_channel_static_page_provisional_existing_artifact(
+    card: Option<&Value>,
+) -> bool {
+    card.and_then(|card| card.get("provisional_existing_artifact"))
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 pub(crate) fn external_channel_value_is_true(value: &Value) -> bool {
@@ -632,6 +641,113 @@ pub(crate) fn external_channel_needs_input_sse_text(
         .unwrap_or_else(|| "还需要补充信息后继续处理。".to_string())
 }
 
+pub(crate) fn external_channel_response_is_static_page_pipeline(
+    response: &ExternalChannelEventResponse,
+) -> bool {
+    response
+        .reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("type"))
+        .and_then(Value::as_str)
+        .map(|card_type| {
+            card_type.starts_with("v3_static_page_image2")
+                || card_type == "v3_static_page_image2_pipeline"
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn external_channel_static_page_sse_status(
+    response: &ExternalChannelEventResponse,
+) -> String {
+    let raw_status = response
+        .reply
+        .card
+        .as_ref()
+        .and_then(|card| card.get("status"))
+        .and_then(Value::as_str)
+        .or(response.reply.task_status.as_deref())
+        .unwrap_or("processing")
+        .to_string();
+    if !external_channel_static_page_provisional_existing_artifact(response.reply.card.as_ref())
+        && external_channel_public_artifact_url_from_reply(&response.reply).is_some()
+    {
+        "static_page_published".to_string()
+    } else if external_channel_static_page_cancelled_should_continue(
+        &raw_status,
+        response.reply.card.as_ref(),
+    ) {
+        "static_page_continue_polling".to_string()
+    } else {
+        raw_status
+    }
+}
+
+pub(crate) fn external_channel_static_page_sse_progress_key(
+    response: &ExternalChannelEventResponse,
+) -> String {
+    let status = external_channel_static_page_sse_status(response);
+    let card = response.reply.card.as_ref();
+    let public_url = card
+        .and_then(|card| {
+            card.get("public_url")
+                .or_else(|| card.get("generated_artifact_url"))
+                .or_else(|| card.get("artifact_public_url"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let preview = card
+        .and_then(|card| {
+            card.get("preview_asset_key")
+                .or_else(|| card.get("preview_url"))
+                .or_else(|| card.get("render_asset_url"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let runtime = card
+        .and_then(|card| card.get("runtime_event"))
+        .and_then(|event| {
+            event
+                .get("heartbeat_count")
+                .or_else(|| event.get("elapsed_ms"))
+                .or_else(|| event.get("reason"))
+        })
+        .map(Value::to_string)
+        .unwrap_or_default();
+    format!("{status}|{public_url}|{preview}|{runtime}")
+}
+
+pub(crate) fn external_channel_static_page_sse_is_terminal(
+    response: &ExternalChannelEventResponse,
+) -> bool {
+    let status = external_channel_static_page_sse_status(response);
+    matches!(
+        status.as_str(),
+        "static_page_published"
+            | "static_page_stable_artifact_reused"
+            | "static_page_publish_cancelled"
+            | "static_page_publish_failed"
+            | "static_page_publish_needs_human"
+    )
+}
+
+pub(crate) fn external_channel_static_page_sse_event_name(status: &str) -> &'static str {
+    match status {
+        "static_page_effect_image_ready" => "external_channel.static_page_preview_ready",
+        "static_page_published" | "static_page_stable_artifact_reused" => {
+            "external_channel.static_page_published"
+        }
+        "static_page_publish_failed"
+        | "static_page_publish_cancelled"
+        | "static_page_publish_needs_human" => "external_channel.static_page_issue",
+        "static_page_continue_polling" => "external_channel.static_page_continue_polling",
+        "static_page_publish_queued"
+        | "static_page_publish_running"
+        | "static_page_publish_retrying" => "external_channel.static_page_publish_progress",
+        _ => "external_channel.static_page_progress",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,6 +769,29 @@ mod tests {
             event_name: event_name.to_string(),
             payload,
             created_at: chrono::Utc::now(),
+        }
+    }
+
+    fn external_channel_response(
+        card: Option<Value>,
+        task_status: Option<&str>,
+        artifact_links: Vec<String>,
+    ) -> ExternalChannelEventResponse {
+        ExternalChannelEventResponse {
+            accepted: true,
+            assistant_run_id: None,
+            idempotency_key: "idem-static-page".to_string(),
+            reply: ExternalBotReplyView {
+                target_conversation_external_id: "conv-1".to_string(),
+                reply_type: ExternalBotReplyTypeView::TaskStatus,
+                text: None,
+                card,
+                artifact_links,
+                task_status: task_status.map(ToOwned::to_owned),
+                requires_confirmation: false,
+                action_id: None,
+                confirmation_id: None,
+            },
         }
     }
 
@@ -1086,6 +1225,111 @@ mod tests {
         assert_eq!(
             external_channel_needs_input_sse_text(&empty_text),
             "还需要补充信息后继续处理。"
+        );
+    }
+
+    #[test]
+    fn static_page_pipeline_detection_matches_image2_card_type() {
+        let image2_pipeline = external_channel_response(
+            Some(json!({"type": "v3_static_page_image2_pipeline"})),
+            None,
+            Vec::new(),
+        );
+        let image2_step = external_channel_response(
+            Some(json!({"type": "v3_static_page_image2_effect_image"})),
+            None,
+            Vec::new(),
+        );
+        let non_pipeline = external_channel_response(
+            Some(json!({"type": "v3_static_page_report"})),
+            None,
+            Vec::new(),
+        );
+
+        assert!(external_channel_response_is_static_page_pipeline(
+            &image2_pipeline
+        ));
+        assert!(external_channel_response_is_static_page_pipeline(
+            &image2_step
+        ));
+        assert!(!external_channel_response_is_static_page_pipeline(
+            &non_pipeline
+        ));
+    }
+
+    #[test]
+    fn static_page_sse_status_promotes_public_artifact_unless_provisional() {
+        let public_url = "https://v3.elepcloud.com/generated-artifacts/demo/index.html";
+        let published = external_channel_response(
+            Some(json!({
+                "status": "static_page_publish_running",
+                "public_url": public_url,
+            })),
+            None,
+            Vec::new(),
+        );
+        let provisional = external_channel_response(
+            Some(json!({
+                "status": "static_page_publish_running",
+                "public_url": public_url,
+                "provisional_existing_artifact": true,
+            })),
+            None,
+            Vec::new(),
+        );
+        let cancelled_but_running = external_channel_response(
+            Some(json!({
+                "status": "static_page_publish_cancelled",
+                "runtime_event": {"status": "running"},
+            })),
+            None,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            external_channel_static_page_sse_status(&published),
+            "static_page_published"
+        );
+        assert!(external_channel_static_page_sse_is_terminal(&published));
+        assert_eq!(
+            external_channel_static_page_sse_status(&provisional),
+            "static_page_publish_running"
+        );
+        assert!(!external_channel_static_page_sse_is_terminal(&provisional));
+        assert_eq!(
+            external_channel_static_page_sse_status(&cancelled_but_running),
+            "static_page_continue_polling"
+        );
+    }
+
+    #[test]
+    fn static_page_sse_progress_key_and_event_name_keep_wire_values() {
+        let response = external_channel_response(
+            Some(json!({
+                "status": "static_page_effect_image_ready",
+                "public_url": "https://v3.elepcloud.com/generated-artifacts/demo/index.html",
+                "preview_asset_key": "preview/demo.png",
+                "runtime_event": {"heartbeat_count": 3},
+            })),
+            None,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            external_channel_static_page_sse_progress_key(&response),
+            "static_page_published|https://v3.elepcloud.com/generated-artifacts/demo/index.html|preview/demo.png|3"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_event_name("static_page_effect_image_ready"),
+            "external_channel.static_page_preview_ready"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_event_name("static_page_publish_running"),
+            "external_channel.static_page_publish_progress"
+        );
+        assert_eq!(
+            external_channel_static_page_sse_event_name("static_page_publish_failed"),
+            "external_channel.static_page_issue"
         );
     }
 }
